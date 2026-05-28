@@ -717,6 +717,7 @@ fn native_review_class_id(entry: &NativeScriptletEntry) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ccs::legacy_scriptlets::EffectReplacement;
     use crate::packages::native_abi::*;
     use crate::packages::traits::{Dependency, PackageFile, Scriptlet, ScriptletPhase};
 
@@ -890,6 +891,140 @@ mod tests {
                 crate::ccs::convert::effects::ScriptletClassification::Known { .. }
             )
         }));
+    }
+
+    #[test]
+    fn conversion_integration_reports_complete_payload_backed_helpers() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut metadata = make_test_metadata();
+        metadata.scriptlets = vec![Scriptlet {
+            phase: ScriptletPhase::PostInstall,
+            interpreter: "/bin/sh".to_string(),
+            content: "\
+/sbin/ldconfig
+systemctl daemon-reload
+systemctl enable demo.service
+systemd-tmpfiles --create /usr/lib/tmpfiles.d/demo.conf
+systemd-sysusers /usr/lib/sysusers.d/demo.conf
+update-mime-database /usr/share/mime
+"
+            .to_string(),
+            flags: None,
+        }];
+        let mut files = make_test_files();
+        files.extend([
+            ExtractedFile {
+                path: "/usr/lib/systemd/system/demo.service".to_string(),
+                content: b"[Service]\nExecStart=/usr/bin/demo\n".to_vec(),
+                size: 32,
+                mode: 0o644,
+                sha256: None,
+                symlink_target: None,
+            },
+            ExtractedFile {
+                path: "/usr/lib/tmpfiles.d/demo.conf".to_string(),
+                content: b"d /run/demo 0755 root root -\n".to_vec(),
+                size: 28,
+                mode: 0o644,
+                sha256: None,
+                symlink_target: None,
+            },
+            ExtractedFile {
+                path: "/usr/lib/sysusers.d/demo.conf".to_string(),
+                content: b"u demo - \"Demo User\" /run/demo -\n".to_vec(),
+                size: 32,
+                mode: 0o644,
+                sha256: None,
+                symlink_target: None,
+            },
+            ExtractedFile {
+                path: "/usr/share/mime/packages/demo.xml".to_string(),
+                content: b"<mime-info/>".to_vec(),
+                size: 12,
+                mode: 0o644,
+                sha256: None,
+                symlink_target: None,
+            },
+        ]);
+        let converter = passive_test_converter(temp_dir.path());
+
+        let result = converter
+            .convert(&metadata, &files, "rpm", "sha256:test")
+            .expect("conversion succeeds");
+
+        let complete_effects = result
+            .scriptlet_classification
+            .entries
+            .iter()
+            .filter_map(|entry| match &entry.classification {
+                ScriptletClassification::Known { effects, .. } => Some(effects),
+                _ => None,
+            })
+            .flatten()
+            .filter(|effect| effect.replacement == EffectReplacement::Complete)
+            .count();
+
+        assert_eq!(
+            complete_effects, 6,
+            "all 6 known helper invocations should be complete"
+        );
+        assert!(result.build_result.manifest.legacy_scriptlets.is_none());
+        assert!(
+            result
+                .detected_hooks
+                .systemd
+                .iter()
+                .any(|hook| hook.unit == "demo.service")
+        );
+    }
+
+    #[test]
+    fn conversion_integration_reviews_deb_private_helpers_without_manifest_changes() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut metadata = make_test_metadata();
+        metadata.scriptlets = vec![Scriptlet {
+            phase: ScriptletPhase::PostInstall,
+            interpreter: "/bin/sh".to_string(),
+            content: "deb-systemd-helper enable demo.service\ndebconf-communicate demo\n"
+                .to_string(),
+            flags: None,
+        }];
+        let files = make_test_files();
+        let converter = passive_test_converter(temp_dir.path());
+
+        let result = converter
+            .convert(&metadata, &files, "deb", "sha256:test")
+            .expect("conversion succeeds");
+
+        assert!(
+            result
+                .scriptlet_classification
+                .entries
+                .iter()
+                .any(|entry| matches!(
+                    &entry.classification,
+                    ScriptletClassification::Review {
+                        reason_code,
+                        class_id,
+                    } if reason_code == "review-class-deb-systemd-helper"
+                        && class_id.as_deref() == Some("deb-systemd-helper")
+                ))
+        );
+        assert!(
+            result
+                .scriptlet_classification
+                .entries
+                .iter()
+                .any(|entry| matches!(
+                    &entry.classification,
+                    ScriptletClassification::Review {
+                        reason_code,
+                        class_id,
+                    } if reason_code == "review-class-debconf"
+                        && class_id.as_deref() == Some("debconf")
+                ))
+        );
+        assert!(result.build_result.manifest.legacy_scriptlets.is_none());
     }
 
     #[test]
