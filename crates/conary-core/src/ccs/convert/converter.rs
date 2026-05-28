@@ -622,6 +622,7 @@ mod tests {
                 content: "getent passwd testuser || useradd -r testuser".to_string(),
                 flags: None,
             }],
+            native_scriptlet_abi: Vec::new(),
             config_files: vec![],
         }
     }

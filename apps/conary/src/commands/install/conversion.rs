@@ -381,6 +381,7 @@ pub async fn try_convert_to_ccs(
         dependencies: pkg.dependencies().to_vec(),
         provides: pkg.provides().to_vec(),
         scriptlets: pkg.scriptlets().to_vec(),
+        native_scriptlet_abi: pkg.native_scriptlet_abi().to_vec(),
         config_files: Vec::new(),
     };
 

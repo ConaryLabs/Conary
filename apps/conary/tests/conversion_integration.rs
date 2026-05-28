@@ -41,6 +41,7 @@ fn create_test_metadata(name: &str) -> PackageMetadata {
         dependencies: vec![],
         provides: vec![],
         scriptlets: vec![],
+        native_scriptlet_abi: vec![],
         config_files: vec![],
     }
 }
@@ -118,6 +119,7 @@ fn create_server_package() -> (PackageMetadata, Vec<ExtractedFile>) {
                 flags: None,
             },
         ],
+        native_scriptlet_abi: vec![],
         config_files: vec![ConfigFileInfo {
             path: "/etc/myserver/myserver.conf".to_string(),
             noreplace: true,
@@ -229,6 +231,7 @@ systemctl disable complex.service || true
                 flags: None,
             },
         ],
+        native_scriptlet_abi: vec![],
         config_files: vec![],
     };
 
@@ -547,6 +550,7 @@ fn test_nginx_wellknown_inference_during_conversion() {
         dependencies: vec![],
         provides: vec![],
         scriptlets: vec![],
+        native_scriptlet_abi: vec![],
         config_files: vec![],
     };
 
@@ -741,6 +745,7 @@ fn test_file_permissions_preserved() {
         dependencies: vec![],
         provides: vec![],
         scriptlets: vec![],
+        native_scriptlet_abi: vec![],
         config_files: vec![],
     };
 
@@ -805,6 +810,7 @@ fn test_empty_package_conversion() {
         dependencies: vec![],
         provides: vec![],
         scriptlets: vec![],
+        native_scriptlet_abi: vec![],
         config_files: vec![],
     };
 
@@ -855,6 +861,7 @@ fn test_large_file_handling() {
         dependencies: vec![],
         provides: vec![],
         scriptlets: vec![],
+        native_scriptlet_abi: vec![],
         config_files: vec![],
     };
 

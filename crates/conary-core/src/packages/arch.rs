@@ -419,6 +419,7 @@ impl PackageFormat for ArchPackage {
             dependencies,
             provides,
             scriptlets,
+            native_scriptlet_abi: Vec::new(),
             config_files,
         };
 
