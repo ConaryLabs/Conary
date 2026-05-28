@@ -1094,7 +1094,7 @@ update-mime-database /usr/share/mime
     }
 
     #[test]
-    fn parsed_native_abi_body_is_classified_when_flattened_scriptlets_are_empty() {
+    fn parsed_native_abi_body_uses_adapter_classification_when_flattened_scriptlets_are_empty() {
         let temp_dir = tempfile::tempdir().unwrap();
         let mut metadata = make_test_metadata();
         metadata.scriptlets.clear();
@@ -1120,8 +1120,13 @@ update-mime-database /usr/share/mime
                     &entry.classification,
                     crate::ccs::convert::effects::ScriptletClassification::Known {
                         reason_code,
+                        effects,
                         ..
-                    } if reason_code == "known-helper-requires-adapter-coverage"
+                    } if reason_code == "helper-complete-ldconfig"
+                        && effects.iter().any(|effect| {
+                            effect.adapter_id.as_deref() == Some("ldconfig/v2")
+                                && effect.replacement == EffectReplacement::Complete
+                        })
                 )
         }));
     }
