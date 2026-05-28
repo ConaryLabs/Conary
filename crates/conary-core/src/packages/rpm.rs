@@ -9,8 +9,13 @@ use crate::packages::archive_utils::{check_file_size, is_regular_file_mode, norm
 use crate::packages::common::PackageMetadata;
 use crate::packages::cpio::CpioReader;
 use crate::packages::traits::{
-    ConfigFileInfo, Dependency, DependencyType, ExtractedFile, PackageFile, PackageFormat,
-    Scriptlet, ScriptletPhase,
+    ConfigFileInfo, Dependency, DependencyType, ExtractedFile, NativeArgumentContract,
+    NativeArgumentValue, NativeInvocationContract, NativeLifecyclePath, NativeRootExpectation,
+    NativeScriptletBody, NativeScriptletEntry, NativeScriptletFormat, NativeScriptletKind,
+    NativeScriptletMetadata, NativeScriptletSupport, NativeStdinContract, NativeTransactionOrder,
+    NativeTransactionPosition, PackageFile, PackageFormat, RpmNativeScriptletMetadata,
+    RpmScriptletFlagsMetadata, RpmScriptletSlot, RpmTriggerAction, RpmTriggerCondition,
+    RpmTriggerFamily, RpmTriggerMetadata, Scriptlet, ScriptletPhase,
 };
 use rpm::Package;
 use std::collections::HashMap;
@@ -83,6 +88,428 @@ impl RpmPackage {
         );
 
         scriptlets
+    }
+
+    fn rpm_scriptlet_program(scriptlet: &rpm::Scriptlet) -> (String, Vec<String>) {
+        let mut program = scriptlet.program.clone().unwrap_or_default().into_iter();
+        let interpreter = program.next().unwrap_or_else(|| "/bin/sh".to_string());
+        let args = program.collect();
+        (interpreter, args)
+    }
+
+    fn rpm_scriptlet_flags_metadata(flags: rpm::ScriptletFlags) -> RpmScriptletFlagsMetadata {
+        let mut names = Vec::new();
+        if flags.contains(rpm::ScriptletFlags::EXPAND) {
+            names.push("EXPAND".to_string());
+        }
+        if flags.contains(rpm::ScriptletFlags::QFORMAT) {
+            names.push("QFORMAT".to_string());
+        }
+        if flags.contains(rpm::ScriptletFlags::CRITICAL) {
+            names.push("CRITICAL".to_string());
+        }
+
+        RpmScriptletFlagsMetadata {
+            names,
+            raw_bits: flags.bits(),
+        }
+    }
+
+    fn rpm_trigger_action(flags: rpm::DependencyFlags) -> RpmTriggerAction {
+        if flags.contains(rpm::DependencyFlags::TRIGGERPREIN) {
+            RpmTriggerAction::PreInstall
+        } else if flags.contains(rpm::DependencyFlags::TRIGGERIN) {
+            RpmTriggerAction::Install
+        } else if flags.contains(rpm::DependencyFlags::TRIGGERUN) {
+            RpmTriggerAction::Uninstall
+        } else if flags.contains(rpm::DependencyFlags::TRIGGERPOSTUN) {
+            RpmTriggerAction::PostUninstall
+        } else {
+            RpmTriggerAction::Unknown {
+                raw_flags: flags.bits(),
+            }
+        }
+    }
+
+    fn rpm_trigger_comparison(flags: rpm::DependencyFlags) -> Option<String> {
+        let operator = flags_to_operator(flags).trim();
+        if operator.is_empty() {
+            None
+        } else {
+            Some(operator.to_string())
+        }
+    }
+
+    fn extract_native_scriptlet_abi(pkg: &Package) -> Vec<NativeScriptletEntry> {
+        let mut entries = Vec::new();
+
+        Self::add_rpm_scriptlet_entry(
+            &mut entries,
+            "%pre",
+            RpmScriptletSlot::Pre,
+            NativeLifecyclePath::PreInstall,
+            Some(ScriptletPhase::PreInstall),
+            pkg.metadata.get_pre_install_script(),
+        );
+        Self::add_rpm_scriptlet_entry(
+            &mut entries,
+            "%post",
+            RpmScriptletSlot::Post,
+            NativeLifecyclePath::PostInstall,
+            Some(ScriptletPhase::PostInstall),
+            pkg.metadata.get_post_install_script(),
+        );
+        Self::add_rpm_scriptlet_entry(
+            &mut entries,
+            "%preun",
+            RpmScriptletSlot::PreUn,
+            NativeLifecyclePath::PreRemove,
+            Some(ScriptletPhase::PreRemove),
+            pkg.metadata.get_pre_uninstall_script(),
+        );
+        Self::add_rpm_scriptlet_entry(
+            &mut entries,
+            "%postun",
+            RpmScriptletSlot::PostUn,
+            NativeLifecyclePath::PostRemove,
+            Some(ScriptletPhase::PostRemove),
+            pkg.metadata.get_post_uninstall_script(),
+        );
+        Self::add_rpm_scriptlet_entry(
+            &mut entries,
+            "%pretrans",
+            RpmScriptletSlot::PreTrans,
+            NativeLifecyclePath::PreTransaction,
+            Some(ScriptletPhase::PreTransaction),
+            pkg.metadata.get_pre_trans_script(),
+        );
+        Self::add_rpm_scriptlet_entry(
+            &mut entries,
+            "%posttrans",
+            RpmScriptletSlot::PostTrans,
+            NativeLifecyclePath::PostTransaction,
+            Some(ScriptletPhase::PostTransaction),
+            pkg.metadata.get_post_trans_script(),
+        );
+        Self::add_rpm_scriptlet_entry(
+            &mut entries,
+            "%preuntrans",
+            RpmScriptletSlot::PreUnTrans,
+            NativeLifecyclePath::PreUntransaction,
+            None,
+            pkg.metadata.get_pre_untrans_script(),
+        );
+        Self::add_rpm_scriptlet_entry(
+            &mut entries,
+            "%postuntrans",
+            RpmScriptletSlot::PostUnTrans,
+            NativeLifecyclePath::PostUntransaction,
+            None,
+            pkg.metadata.get_post_untrans_script(),
+        );
+        Self::add_rpm_scriptlet_entry(
+            &mut entries,
+            "%verify",
+            RpmScriptletSlot::Verify,
+            NativeLifecyclePath::Verify,
+            None,
+            pkg.metadata.get_verify_script(),
+        );
+
+        Self::add_rpm_triggers(
+            &mut entries,
+            RpmTriggerFamily::Package,
+            pkg.metadata.get_triggers(),
+        );
+        Self::add_rpm_triggers(
+            &mut entries,
+            RpmTriggerFamily::File,
+            pkg.metadata.get_file_triggers(),
+        );
+        Self::add_rpm_triggers(
+            &mut entries,
+            RpmTriggerFamily::TransactionFile,
+            pkg.metadata.get_trans_file_triggers(),
+        );
+
+        entries
+    }
+
+    fn rpm_scriptlet_invocation() -> NativeInvocationContract {
+        NativeInvocationContract {
+            args: vec![NativeArgumentContract {
+                index: 1,
+                name: "package-instance-count".to_string(),
+                value: NativeArgumentValue::PackageInstanceCount,
+                required: true,
+            }],
+            environment: Vec::new(),
+            stdin: NativeStdinContract::None,
+            root: NativeRootExpectation::PackageManagerDefault,
+        }
+    }
+
+    fn rpm_lifecycle_paths_for_slot(
+        slot: RpmScriptletSlot,
+        primary: NativeLifecyclePath,
+    ) -> Vec<NativeLifecyclePath> {
+        match slot {
+            RpmScriptletSlot::Pre => vec![
+                NativeLifecyclePath::PreInstall,
+                NativeLifecyclePath::PreUpgrade,
+            ],
+            RpmScriptletSlot::Post => vec![
+                NativeLifecyclePath::PostInstall,
+                NativeLifecyclePath::PostUpgrade,
+            ],
+            RpmScriptletSlot::PreUn => vec![
+                NativeLifecyclePath::PreRemove,
+                NativeLifecyclePath::PreUpgrade,
+            ],
+            RpmScriptletSlot::PostUn => vec![
+                NativeLifecyclePath::PostRemove,
+                NativeLifecyclePath::PostUpgrade,
+            ],
+            _ => vec![primary],
+        }
+    }
+
+    fn rpm_order_for_lifecycle(lifecycle: NativeLifecyclePath) -> NativeTransactionOrder {
+        NativeTransactionOrder::new(match lifecycle {
+            NativeLifecyclePath::PreInstall
+            | NativeLifecyclePath::PreUpgrade
+            | NativeLifecyclePath::PreRemove => NativeTransactionPosition::BeforePayload,
+            NativeLifecyclePath::PostInstall
+            | NativeLifecyclePath::PostUpgrade
+            | NativeLifecyclePath::PostRemove => NativeTransactionPosition::AfterPayload,
+            NativeLifecyclePath::PreTransaction => NativeTransactionPosition::BeforeTransaction,
+            NativeLifecyclePath::PostTransaction => NativeTransactionPosition::AfterTransaction,
+            NativeLifecyclePath::PreUntransaction | NativeLifecyclePath::PostUntransaction => {
+                NativeTransactionPosition::Untransaction
+            }
+            NativeLifecyclePath::Verify => NativeTransactionPosition::Verification,
+            _ => NativeTransactionPosition::ControlArtifact,
+        })
+    }
+
+    fn add_rpm_scriptlet_entry(
+        entries: &mut Vec<NativeScriptletEntry>,
+        native_slot: &str,
+        slot: RpmScriptletSlot,
+        lifecycle: NativeLifecyclePath,
+        compatibility_phase: Option<ScriptletPhase>,
+        scriptlet: std::result::Result<rpm::Scriptlet, rpm::Error>,
+    ) {
+        let Ok(scriptlet) = scriptlet else {
+            return;
+        };
+        if scriptlet.script.trim().is_empty() {
+            return;
+        }
+
+        let (interpreter, interpreter_args) = Self::rpm_scriptlet_program(&scriptlet);
+        let support = if slot == RpmScriptletSlot::Verify {
+            NativeScriptletSupport::DeferredReview {
+                reason_code: "rpm-verify-scriptlet-deferred".to_string(),
+            }
+        } else {
+            NativeScriptletSupport::Parsed
+        };
+
+        entries.push(NativeScriptletEntry {
+            id: format!("rpm:{native_slot}"),
+            format: NativeScriptletFormat::Rpm,
+            kind: NativeScriptletKind::Executable,
+            native_slot: native_slot.to_string(),
+            primary_lifecycle: lifecycle,
+            compatibility_phase,
+            lifecycle_paths: Self::rpm_lifecycle_paths_for_slot(slot, lifecycle),
+            interpreter: Some(interpreter),
+            interpreter_args,
+            body: NativeScriptletBody::from_bytes(scriptlet.script.as_bytes().to_vec()),
+            invocation: Self::rpm_scriptlet_invocation(),
+            order: Self::rpm_order_for_lifecycle(lifecycle),
+            support,
+            metadata: NativeScriptletMetadata::Rpm(RpmNativeScriptletMetadata {
+                slot,
+                scriptlet_flags: scriptlet.flags.map(Self::rpm_scriptlet_flags_metadata),
+                trigger: None,
+            }),
+        });
+    }
+
+    fn rpm_trigger_invocation(
+        family: RpmTriggerFamily,
+        action: RpmTriggerAction,
+    ) -> NativeInvocationContract {
+        let mut args = vec![NativeArgumentContract {
+            index: 1,
+            name: "triggered-package-count".to_string(),
+            value: NativeArgumentValue::TriggerCount,
+            required: true,
+        }];
+        if family != RpmTriggerFamily::TransactionFile {
+            args.push(NativeArgumentContract {
+                index: 2,
+                name: "triggering-package-count".to_string(),
+                value: NativeArgumentValue::TriggerCount,
+                required: true,
+            });
+        }
+
+        NativeInvocationContract {
+            args,
+            environment: Vec::new(),
+            stdin: Self::rpm_trigger_stdin(family, action),
+            root: NativeRootExpectation::PackageManagerDefault,
+        }
+    }
+
+    fn rpm_trigger_stdin(
+        family: RpmTriggerFamily,
+        action: RpmTriggerAction,
+    ) -> NativeStdinContract {
+        match (family, action) {
+            (RpmTriggerFamily::File, _) => NativeStdinContract::Paths,
+            (RpmTriggerFamily::TransactionFile, RpmTriggerAction::Install)
+            | (RpmTriggerFamily::TransactionFile, RpmTriggerAction::Uninstall) => {
+                NativeStdinContract::Paths
+            }
+            (RpmTriggerFamily::TransactionFile, RpmTriggerAction::PostUninstall) => {
+                NativeStdinContract::None
+            }
+            _ => NativeStdinContract::None,
+        }
+    }
+
+    fn rpm_trigger_order(
+        family: RpmTriggerFamily,
+        action: RpmTriggerAction,
+    ) -> NativeTransactionOrder {
+        NativeTransactionOrder::new(match (family, action) {
+            (RpmTriggerFamily::TransactionFile, RpmTriggerAction::Uninstall) => {
+                NativeTransactionPosition::BeforeTransaction
+            }
+            (RpmTriggerFamily::TransactionFile, RpmTriggerAction::Install)
+            | (RpmTriggerFamily::TransactionFile, RpmTriggerAction::PostUninstall) => {
+                NativeTransactionPosition::AfterTransaction
+            }
+            _ => NativeTransactionPosition::Trigger,
+        })
+    }
+
+    fn add_rpm_triggers(
+        entries: &mut Vec<NativeScriptletEntry>,
+        family: RpmTriggerFamily,
+        triggers: std::result::Result<Vec<rpm::Trigger>, rpm::Error>,
+    ) {
+        let Ok(triggers) = triggers else {
+            return;
+        };
+
+        for (trigger_index, trigger) in triggers.into_iter().enumerate() {
+            let native_slot = Self::rpm_trigger_slot_name(family, &trigger);
+            let primary_action = trigger
+                .conditions
+                .first()
+                .map(|condition| Self::rpm_trigger_action(condition.flags))
+                .unwrap_or(RpmTriggerAction::Unknown { raw_flags: 0 });
+            let mut program = trigger.program.clone().into_iter();
+            let interpreter = program.next().unwrap_or_else(|| "/bin/sh".to_string());
+            let interpreter_args = program.collect();
+            let lifecycle = match family {
+                RpmTriggerFamily::Package => NativeLifecyclePath::Trigger,
+                RpmTriggerFamily::File => NativeLifecyclePath::FileTrigger,
+                RpmTriggerFamily::TransactionFile => NativeLifecyclePath::TransactionFileTrigger,
+            };
+            let file_globs = if family == RpmTriggerFamily::File
+                || family == RpmTriggerFamily::TransactionFile
+            {
+                trigger
+                    .conditions
+                    .iter()
+                    .map(|condition| condition.name.clone())
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            let conditions = trigger
+                .conditions
+                .iter()
+                .map(|condition| RpmTriggerCondition {
+                    name: condition.name.clone(),
+                    action: Self::rpm_trigger_action(condition.flags),
+                    version: if condition.version.is_empty() {
+                        None
+                    } else {
+                        Some(condition.version.clone())
+                    },
+                    comparison: Self::rpm_trigger_comparison(condition.flags),
+                    raw_flags: condition.flags.bits(),
+                })
+                .collect();
+
+            entries.push(NativeScriptletEntry {
+                id: format!("rpm:{native_slot}:{trigger_index}"),
+                format: NativeScriptletFormat::Rpm,
+                kind: NativeScriptletKind::Executable,
+                native_slot,
+                primary_lifecycle: lifecycle,
+                compatibility_phase: None,
+                lifecycle_paths: vec![lifecycle],
+                interpreter: Some(interpreter),
+                interpreter_args,
+                body: NativeScriptletBody::from_bytes(trigger.script.as_bytes().to_vec()),
+                invocation: Self::rpm_trigger_invocation(family, primary_action),
+                order: Self::rpm_trigger_order(family, primary_action),
+                support: NativeScriptletSupport::DeferredReview {
+                    reason_code: match family {
+                        RpmTriggerFamily::Package => "rpm-trigger-semantics-deferred",
+                        RpmTriggerFamily::File => "rpm-file-trigger-semantics-deferred",
+                        RpmTriggerFamily::TransactionFile => {
+                            "rpm-trans-file-trigger-semantics-deferred"
+                        }
+                    }
+                    .to_string(),
+                },
+                metadata: NativeScriptletMetadata::Rpm(RpmNativeScriptletMetadata {
+                    slot: RpmScriptletSlot::Trigger,
+                    scriptlet_flags: None,
+                    trigger: Some(RpmTriggerMetadata {
+                        family,
+                        conditions,
+                        file_globs,
+                    }),
+                }),
+            });
+        }
+    }
+
+    fn rpm_trigger_slot_name(family: RpmTriggerFamily, trigger: &rpm::Trigger) -> String {
+        let action = trigger
+            .conditions
+            .first()
+            .map(|condition| Self::rpm_trigger_action(condition.flags));
+        match (family, action) {
+            (RpmTriggerFamily::Package, Some(RpmTriggerAction::PreInstall)) => "%triggerprein",
+            (RpmTriggerFamily::Package, Some(RpmTriggerAction::Install)) => "%triggerin",
+            (RpmTriggerFamily::Package, Some(RpmTriggerAction::Uninstall)) => "%triggerun",
+            (RpmTriggerFamily::Package, Some(RpmTriggerAction::PostUninstall)) => "%triggerpostun",
+            (RpmTriggerFamily::File, Some(RpmTriggerAction::Install)) => "%filetriggerin",
+            (RpmTriggerFamily::File, Some(RpmTriggerAction::Uninstall)) => "%filetriggerun",
+            (RpmTriggerFamily::File, Some(RpmTriggerAction::PostUninstall)) => "%filetriggerpostun",
+            (RpmTriggerFamily::TransactionFile, Some(RpmTriggerAction::Install)) => {
+                "%transfiletriggerin"
+            }
+            (RpmTriggerFamily::TransactionFile, Some(RpmTriggerAction::Uninstall)) => {
+                "%transfiletriggerun"
+            }
+            (RpmTriggerFamily::TransactionFile, Some(RpmTriggerAction::PostUninstall)) => {
+                "%transfiletriggerpostun"
+            }
+            _ => "%trigger",
+        }
+        .to_string()
     }
 
     /// Extract file list from RPM package with detailed metadata
@@ -269,6 +696,7 @@ impl PackageFormat for RpmPackage {
 
         // Extract scriptlets and config files using package metadata
         let scriptlets = Self::extract_scriptlets(&pkg);
+        let native_scriptlet_abi = Self::extract_native_scriptlet_abi(&pkg);
         let config_files = Self::extract_config_files(&pkg);
 
         debug!(
@@ -291,7 +719,7 @@ impl PackageFormat for RpmPackage {
             dependencies,
             provides,
             scriptlets,
-            native_scriptlet_abi: Vec::new(),
+            native_scriptlet_abi,
             config_files,
         };
 
@@ -479,6 +907,10 @@ impl PackageFormat for RpmPackage {
         self.meta.scriptlets()
     }
 
+    fn native_scriptlet_abi(&self) -> &[NativeScriptletEntry] {
+        self.meta.native_scriptlet_abi()
+    }
+
     fn config_files(&self) -> &[ConfigFileInfo] {
         self.meta.config_files()
     }
@@ -514,6 +946,10 @@ impl RpmPackage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::packages::traits::{
+        NativeArgumentValue, NativeLifecyclePath, NativeScriptletMetadata, NativeStdinContract,
+        RpmTriggerAction,
+    };
 
     #[test]
     fn test_to_trove_conversion() {
@@ -576,5 +1012,179 @@ mod tests {
         ));
         assert!(is_ignored_rpm_requirement_name("/bin/sh"));
         assert!(!is_ignored_rpm_requirement_name("openssl-libs"));
+    }
+
+    #[test]
+    fn rpm_program_vector_splits_interpreter_and_args() {
+        let scriptlet = rpm::Scriptlet::new("echo posttrans").prog(vec![
+            "/usr/lib/rpm/lua",
+            "--",
+            "script.lua",
+        ]);
+
+        let (interpreter, args) = RpmPackage::rpm_scriptlet_program(&scriptlet);
+
+        assert_eq!(interpreter, "/usr/lib/rpm/lua");
+        assert_eq!(args, vec!["--".to_string(), "script.lua".to_string()]);
+    }
+
+    #[test]
+    fn rpm_scriptlet_flags_preserve_names_and_bits() {
+        let flags = RpmPackage::rpm_scriptlet_flags_metadata(rpm::ScriptletFlags::EXPAND);
+
+        assert!(flags.names.contains(&"EXPAND".to_string()));
+        assert_eq!(flags.raw_bits, rpm::ScriptletFlags::EXPAND.bits());
+    }
+
+    #[test]
+    fn rpm_trigger_action_and_comparison_are_split_from_raw_flags() {
+        let flags = rpm::DependencyFlags::TRIGGERPOSTUN | rpm::DependencyFlags::LE;
+
+        assert_eq!(
+            RpmPackage::rpm_trigger_action(flags),
+            RpmTriggerAction::PostUninstall
+        );
+        assert_eq!(
+            RpmPackage::rpm_trigger_comparison(flags),
+            Some("<=".to_string())
+        );
+
+        let unknown = RpmPackage::rpm_trigger_action(rpm::DependencyFlags::from_bits_retain(0));
+        assert_eq!(
+            unknown,
+            RpmTriggerAction::Unknown {
+                raw_flags: rpm::DependencyFlags::from_bits_retain(0).bits(),
+            }
+        );
+    }
+
+    #[test]
+    fn rpm_native_abi_preserves_untransaction_verify_and_all_trigger_actions() {
+        let mut builder = rpm::PackageBuilder::new(
+            "native-abi-fixture",
+            "1.0.0",
+            "MIT",
+            "x86_64",
+            "native abi fixture",
+        );
+        builder
+            .pre_install_script("echo pre")
+            .post_install_script("echo post")
+            .pre_uninstall_script("echo preun")
+            .post_uninstall_script("echo postun")
+            .pre_trans_script("echo pretrans")
+            .post_trans_script("echo posttrans")
+            .pre_untrans_script("echo preuntrans")
+            .post_untrans_script("echo postuntrans")
+            .verify_script("echo verify")
+            .trigger_prein("bash", None, "echo triggerprein")
+            .trigger_in(
+                "bash",
+                Some((rpm::DependencyFlags::GREATER, "5.0")),
+                "echo triggerin",
+            )
+            .trigger_un("bash", None, "echo triggerun")
+            .trigger_postun("bash", None, "echo triggerpostun")
+            .file_trigger_in("/usr/lib", None, "echo filetriggerin")
+            .file_trigger_un("/usr/lib", None, "echo filetriggerun")
+            .file_trigger_postun("/usr/lib", None, "echo filetriggerpostun")
+            .trans_file_trigger_in("/usr/bin", None, "echo transfiletriggerin")
+            .trans_file_trigger_un("/usr/bin", None, "echo transfiletriggerun")
+            .trans_file_trigger_postun("/usr/bin", None, "echo transfiletriggerpostun");
+
+        let package = builder.build().expect("fixture rpm package");
+        let entries = RpmPackage::extract_native_scriptlet_abi(&package);
+        let slots: Vec<_> = entries
+            .iter()
+            .map(|entry| entry.native_slot.as_str())
+            .collect();
+
+        for slot in [
+            "%pre",
+            "%post",
+            "%preun",
+            "%postun",
+            "%pretrans",
+            "%posttrans",
+            "%preuntrans",
+            "%postuntrans",
+            "%verify",
+            "%triggerprein",
+            "%triggerin",
+            "%triggerun",
+            "%triggerpostun",
+            "%filetriggerin",
+            "%filetriggerun",
+            "%filetriggerpostun",
+            "%transfiletriggerin",
+            "%transfiletriggerun",
+            "%transfiletriggerpostun",
+        ] {
+            assert!(slots.contains(&slot), "missing native slot {slot}");
+        }
+
+        let verify = entries
+            .iter()
+            .find(|entry| entry.native_slot == "%verify")
+            .expect("verify entry");
+        assert_eq!(verify.primary_lifecycle, NativeLifecyclePath::Verify);
+        assert_eq!(verify.compatibility_phase, None);
+        assert_eq!(
+            verify.support.reason_code(),
+            Some("rpm-verify-scriptlet-deferred")
+        );
+
+        let pre = entries
+            .iter()
+            .find(|entry| entry.native_slot == "%pre")
+            .expect("pre entry");
+        assert_eq!(
+            pre.lifecycle_paths,
+            vec![
+                NativeLifecyclePath::PreInstall,
+                NativeLifecyclePath::PreUpgrade
+            ]
+        );
+        assert_eq!(
+            pre.invocation.args[0].value,
+            NativeArgumentValue::PackageInstanceCount
+        );
+
+        let preun = entries
+            .iter()
+            .find(|entry| entry.native_slot == "%preun")
+            .expect("preun entry");
+        assert_eq!(
+            preun.lifecycle_paths,
+            vec![
+                NativeLifecyclePath::PreRemove,
+                NativeLifecyclePath::PreUpgrade
+            ]
+        );
+
+        let file_trigger = entries
+            .iter()
+            .find(|entry| entry.native_slot == "%filetriggerin")
+            .expect("file trigger entry");
+        assert_eq!(file_trigger.invocation.stdin, NativeStdinContract::Paths);
+        let NativeScriptletMetadata::Rpm(meta) = &file_trigger.metadata else {
+            panic!("expected rpm metadata");
+        };
+        let trigger = meta.trigger.as_ref().expect("trigger metadata");
+        assert_eq!(trigger.file_globs, vec!["/usr/lib".to_string()]);
+
+        let trans_postun = entries
+            .iter()
+            .find(|entry| entry.native_slot == "%transfiletriggerpostun")
+            .expect("transaction file trigger postun entry");
+        assert_eq!(trans_postun.invocation.stdin, NativeStdinContract::None);
+        assert_eq!(trans_postun.invocation.args.len(), 1);
+        let NativeScriptletMetadata::Rpm(meta) = &trans_postun.metadata else {
+            panic!("expected rpm metadata");
+        };
+        assert_eq!(
+            meta.trigger.as_ref().expect("trigger metadata").file_globs,
+            vec!["/usr/bin".to_string()]
+        );
     }
 }
