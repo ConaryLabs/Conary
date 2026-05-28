@@ -488,6 +488,7 @@ mod tests {
 
     #[test]
     fn restore_pre_install_refuses_no_generation_before_scriptlets() {
+        let _mount_skip = crate::commands::composefs_ops::test_mount_skip_clear_guard();
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("root");
         let db_path = temp.path().join("conary.db");
