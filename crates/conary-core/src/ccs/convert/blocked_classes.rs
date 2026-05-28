@@ -188,6 +188,29 @@ impl Default for BlockedClassRegistry {
                 &[],
                 "Model DEB helper state explicitly or require same-family review policy.",
             ),
+            review_class(
+                "tmpfiles-noncreate",
+                "tmpfiles cleanup, removal, boot-only, user, purge, replace, or stdin forms need lifecycle-specific review.",
+                "review-class-tmpfiles-noncreate",
+                &[],
+                &[
+                    "systemd-tmpfiles *--remove*",
+                    "systemd-tmpfiles *--clean*",
+                    "systemd-tmpfiles *--purge*",
+                    "systemd-tmpfiles *--boot*",
+                    "systemd-tmpfiles *--user*",
+                    "systemd-tmpfiles *--replace*",
+                ],
+                "Add tmpfiles lifecycle semantics and remove/purge ordering tests.",
+            ),
+            review_class(
+                "sysusers-nonstandard",
+                "sysusers root, replace, or stdin forms need explicit target-root and input modeling.",
+                "review-class-sysusers-nonstandard",
+                &[],
+                &["systemd-sysusers *--replace*", "systemd-sysusers *--root*"],
+                "Add sysusers root/input modeling before claiming replacement.",
+            ),
             blocked_metadata_class(
                 "rpm-verify",
                 BlockedClassOutcome::Review,
@@ -358,9 +381,39 @@ fn invocation_form(invocation: &CommandInvocation) -> String {
 }
 
 fn form_matches(pattern: &str, form: &str) -> bool {
-    pattern
-        .strip_suffix('*')
-        .map_or_else(|| pattern == form, |prefix| form.starts_with(prefix))
+    if !pattern.contains('*') {
+        return pattern == form;
+    }
+
+    let parts: Vec<&str> = pattern.split('*').collect();
+    let mut position = 0;
+
+    for (index, part) in parts.iter().enumerate() {
+        if part.is_empty() {
+            continue;
+        }
+        if index == 0 && !pattern.starts_with('*') {
+            if !form[position..].starts_with(part) {
+                return false;
+            }
+            position += part.len();
+        } else if index == parts.len() - 1 && !pattern.ends_with('*') {
+            if !form.ends_with(part) {
+                return false;
+            }
+            let start = form.len() - part.len();
+            if start < position {
+                return false;
+            }
+            position = form.len();
+        } else if let Some(offset) = form[position..].find(part) {
+            position += offset + part.len();
+        } else {
+            return false;
+        }
+    }
+
+    true
 }
 
 #[cfg(test)]
@@ -489,6 +542,57 @@ mod tests {
         assert_eq!(
             preset_all.unwrap().reason_code,
             "review-class-systemd-runtime-action"
+        );
+    }
+
+    #[test]
+    fn blocked_classes_review_tmpfiles_and_sysusers_unsupported_forms() {
+        let registry = BlockedClassRegistry::default();
+
+        let tmpfiles_remove =
+            registry.match_invocation(&invocation("systemd-tmpfiles", &["--remove"]));
+        assert_eq!(
+            tmpfiles_remove.unwrap().reason_code,
+            "review-class-tmpfiles-noncreate"
+        );
+
+        let tmpfiles_boot =
+            registry.match_invocation(&invocation("systemd-tmpfiles", &["--boot", "--create"]));
+        assert_eq!(
+            tmpfiles_boot.unwrap().reason_code,
+            "review-class-tmpfiles-noncreate"
+        );
+
+        let tmpfiles_create_boot =
+            registry.match_invocation(&invocation("systemd-tmpfiles", &["--create", "--boot"]));
+        assert_eq!(
+            tmpfiles_create_boot.unwrap().reason_code,
+            "review-class-tmpfiles-noncreate"
+        );
+
+        let sysusers_replace = registry.match_invocation(&invocation(
+            "systemd-sysusers",
+            &["--replace=/usr/lib/sysusers.d/demo.conf"],
+        ));
+        assert_eq!(
+            sysusers_replace.unwrap().reason_code,
+            "review-class-sysusers-nonstandard"
+        );
+
+        let sysusers_root =
+            registry.match_invocation(&invocation("systemd-sysusers", &["--root=/tmp/root"]));
+        assert_eq!(
+            sysusers_root.unwrap().reason_code,
+            "review-class-sysusers-nonstandard"
+        );
+
+        let sysusers_late_root = registry.match_invocation(&invocation(
+            "systemd-sysusers",
+            &["/usr/lib/sysusers.d/demo.conf", "--root=/tmp/root"],
+        ));
+        assert_eq!(
+            sysusers_late_root.unwrap().reason_code,
+            "review-class-sysusers-nonstandard"
         );
     }
 }

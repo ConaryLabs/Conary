@@ -11,6 +11,8 @@ const PARTIAL_COVERAGE_REASON: &str = "known-helper-partial-coverage";
 const LDCONFIG_COMPLETE_REASON: &str = "helper-complete-ldconfig";
 const SYSTEMD_DAEMON_RELOAD_COMPLETE_REASON: &str = "helper-complete-systemd-daemon-reload";
 const SYSTEMD_UNIT_STATE_COMPLETE_REASON: &str = "helper-complete-systemd-unit-state";
+const TMPFILES_CREATE_COMPLETE_REASON: &str = "helper-complete-tmpfiles-create";
+const SYSUSERS_COMPLETE_REASON: &str = "helper-complete-sysusers";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BootstrapAdapterEvidence {
@@ -116,6 +118,8 @@ impl Default for AdapterRegistry {
             Box::new(LdconfigAdapter),
             Box::new(SystemdDaemonReloadAdapter),
             Box::new(SystemdUnitStateAdapter),
+            Box::new(SystemdTmpfilesCreateAdapter),
+            Box::new(SystemdSysusersAdapter),
         ];
         assert_unique_adapter_ids(&adapters);
 
@@ -209,6 +213,8 @@ struct NativeFreeAdapter;
 struct LdconfigAdapter;
 struct SystemdDaemonReloadAdapter;
 struct SystemdUnitStateAdapter;
+struct SystemdTmpfilesCreateAdapter;
+struct SystemdSysusersAdapter;
 
 impl ScriptletEffectAdapter for NativeFreeAdapter {
     fn id(&self) -> &'static str {
@@ -354,6 +360,72 @@ impl ScriptletEffectAdapter for SystemdUnitStateAdapter {
     }
 }
 
+impl ScriptletEffectAdapter for SystemdTmpfilesCreateAdapter {
+    fn id(&self) -> &'static str {
+        "systemd-tmpfiles-create/v1"
+    }
+
+    fn digest(&self) -> String {
+        crate::hash::sha256_prefixed(b"systemd-tmpfiles-create/v1:tmpfiles:payload-gated")
+    }
+
+    fn command_names(&self) -> &'static [&'static str] {
+        &["systemd-tmpfiles"]
+    }
+
+    fn matches(&self, input: AdapterInput<'_>) -> bool {
+        input.invocation.command == "systemd-tmpfiles"
+            && tmpfiles_create_configs(&input.invocation.argv, input.payload).is_some()
+    }
+
+    fn classify(&self, input: AdapterInput<'_>) -> ScriptletClassification {
+        let configs = tmpfiles_create_configs(&input.invocation.argv, input.payload)
+            .expect("matches() must ensure tmpfiles configs");
+        known_effect_classification(
+            self,
+            input.invocation,
+            "tmpfiles",
+            EffectReplacement::Complete,
+            configs.first().cloned(),
+            TMPFILES_CREATE_COMPLETE_REASON,
+            configs_extra(configs),
+        )
+    }
+}
+
+impl ScriptletEffectAdapter for SystemdSysusersAdapter {
+    fn id(&self) -> &'static str {
+        "systemd-sysusers/v1"
+    }
+
+    fn digest(&self) -> String {
+        crate::hash::sha256_prefixed(b"systemd-sysusers/v1:sysusers:payload-gated")
+    }
+
+    fn command_names(&self) -> &'static [&'static str] {
+        &["systemd-sysusers"]
+    }
+
+    fn matches(&self, input: AdapterInput<'_>) -> bool {
+        input.invocation.command == "systemd-sysusers"
+            && sysusers_configs(&input.invocation.argv, input.payload).is_some()
+    }
+
+    fn classify(&self, input: AdapterInput<'_>) -> ScriptletClassification {
+        let configs = sysusers_configs(&input.invocation.argv, input.payload)
+            .expect("matches() must ensure sysusers configs");
+        known_effect_classification(
+            self,
+            input.invocation,
+            "sysusers",
+            EffectReplacement::Complete,
+            configs.first().cloned(),
+            SYSUSERS_COMPLETE_REASON,
+            configs_extra(configs),
+        )
+    }
+}
+
 fn is_simple_ldconfig_form(argv: &[String]) -> bool {
     argv.is_empty()
         || matches!(
@@ -397,6 +469,69 @@ fn systemd_unit_state_parts(argv: &[String]) -> Option<(&str, Vec<&str>)> {
     }
 
     Some((action, units))
+}
+
+fn tmpfiles_create_configs(argv: &[String], payload: &PayloadHints) -> Option<Vec<String>> {
+    let mut saw_create = false;
+    let mut configs = Vec::new();
+
+    for arg in argv {
+        match arg.as_str() {
+            "--create" => {
+                if saw_create {
+                    return None;
+                }
+                saw_create = true;
+            }
+            path if path.ends_with(".conf") && !path.starts_with('-') => {
+                configs.push(path.to_string());
+            }
+            _ => return None,
+        }
+    }
+
+    if !saw_create {
+        return None;
+    }
+    payload_gated_configs(configs, &payload.tmpfiles_configs)
+}
+
+fn sysusers_configs(argv: &[String], payload: &PayloadHints) -> Option<Vec<String>> {
+    let mut configs = Vec::new();
+
+    for arg in argv {
+        match arg.as_str() {
+            "-" => return None,
+            path if path.ends_with(".conf") && !path.starts_with('-') => {
+                configs.push(path.to_string());
+            }
+            _ if arg.starts_with('-') => return None,
+            _ => return None,
+        }
+    }
+
+    payload_gated_configs(configs, &payload.sysusers_configs)
+}
+
+fn payload_gated_configs(
+    explicit_configs: Vec<String>,
+    packaged_configs: &BTreeSet<String>,
+) -> Option<Vec<String>> {
+    if explicit_configs.is_empty() {
+        return (!packaged_configs.is_empty()).then(|| packaged_configs.iter().cloned().collect());
+    }
+
+    explicit_configs
+        .iter()
+        .all(|config| packaged_configs.contains(config))
+        .then_some(explicit_configs)
+}
+
+fn configs_extra(configs: Vec<String>) -> BTreeMap<String, toml::Value> {
+    BTreeMap::from([(
+        "configs".to_string(),
+        toml::Value::Array(configs.into_iter().map(toml::Value::String).collect()),
+    )])
 }
 
 fn known_effect_classification(
@@ -523,12 +658,14 @@ mod tests {
         let ids = registry.adapter_ids();
 
         assert_eq!(
-            &ids[..4],
+            &ids[..6],
             &[
                 "native-free/v1",
                 "ldconfig/v2",
                 "systemd-daemon-reload/v2",
                 "systemd-unit-state/v1",
+                "systemd-tmpfiles-create/v1",
+                "systemd-sysusers/v1",
             ]
         );
 
@@ -702,5 +839,104 @@ mod tests {
         assert_eq!(reason_code, "helper-complete-systemd-unit-state");
         assert_eq!(effects[0].replacement, EffectReplacement::Complete);
         assert_eq!(effects[0].path.as_deref(), Some("demo.service"));
+    }
+
+    #[test]
+    fn tmpfiles_create_is_complete_with_packaged_config() {
+        let registry = AdapterRegistry::default();
+        let mut payload = PayloadHints::default();
+        payload
+            .tmpfiles_configs
+            .insert("/usr/lib/tmpfiles.d/demo.conf".to_string());
+
+        let classification = registry.classify_invocation_with_context(AdapterInput {
+            invocation: &invocation(
+                "systemd-tmpfiles",
+                &["--create", "/usr/lib/tmpfiles.d/demo.conf"],
+            ),
+            payload: &payload,
+        });
+
+        let ScriptletClassification::Known {
+            reason_code,
+            effects,
+        } = classification
+        else {
+            panic!("tmpfiles create should be known");
+        };
+        assert_eq!(reason_code, "helper-complete-tmpfiles-create");
+        assert_eq!(effects[0].replacement, EffectReplacement::Complete);
+        assert_eq!(effects[0].kind, "tmpfiles");
+    }
+
+    #[test]
+    fn tmpfiles_remove_and_boot_are_review() {
+        let registry = AdapterRegistry::default();
+        let payload = PayloadHints::default();
+
+        for argv in [
+            vec!["--remove"],
+            vec!["--boot", "--create"],
+            vec!["--create", "--boot"],
+        ] {
+            let classification = registry.classify_invocation_with_context(AdapterInput {
+                invocation: &invocation("systemd-tmpfiles", &argv),
+                payload: &payload,
+            });
+            assert!(matches!(
+                classification,
+                ScriptletClassification::Review { reason_code, class_id }
+                    if reason_code == "review-class-tmpfiles-noncreate"
+                        && class_id.as_deref() == Some("tmpfiles-noncreate")
+            ));
+        }
+    }
+
+    #[test]
+    fn sysusers_is_complete_with_packaged_config() {
+        let registry = AdapterRegistry::default();
+        let mut payload = PayloadHints::default();
+        payload
+            .sysusers_configs
+            .insert("/usr/lib/sysusers.d/demo.conf".to_string());
+
+        let classification = registry.classify_invocation_with_context(AdapterInput {
+            invocation: &invocation("systemd-sysusers", &["/usr/lib/sysusers.d/demo.conf"]),
+            payload: &payload,
+        });
+
+        let ScriptletClassification::Known {
+            reason_code,
+            effects,
+        } = classification
+        else {
+            panic!("sysusers should be known");
+        };
+        assert_eq!(reason_code, "helper-complete-sysusers");
+        assert_eq!(effects[0].replacement, EffectReplacement::Complete);
+        assert_eq!(effects[0].kind, "sysusers");
+    }
+
+    #[test]
+    fn sysusers_replace_and_root_are_review() {
+        let registry = AdapterRegistry::default();
+        let payload = PayloadHints::default();
+
+        for argv in [
+            vec!["--replace=/usr/lib/sysusers.d/demo.conf"],
+            vec!["--root=/tmp/root"],
+            vec!["/usr/lib/sysusers.d/demo.conf", "--root=/tmp/root"],
+        ] {
+            let classification = registry.classify_invocation_with_context(AdapterInput {
+                invocation: &invocation("systemd-sysusers", &argv),
+                payload: &payload,
+            });
+            assert!(matches!(
+                classification,
+                ScriptletClassification::Review { reason_code, class_id }
+                    if reason_code == "review-class-sysusers-nonstandard"
+                        && class_id.as_deref() == Some("sysusers-nonstandard")
+            ));
+        }
     }
 }
