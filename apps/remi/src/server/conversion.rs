@@ -2148,6 +2148,7 @@ mod tests {
             inferred_capabilities: None,
             inference_error: None,
             legacy_provenance: None,
+            scriptlet_classification: Default::default(),
         }
     }
 
