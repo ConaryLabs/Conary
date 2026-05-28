@@ -1093,6 +1093,7 @@ impl ConversionService {
                 .collect(),
             provides: pkg.provides().to_vec(),
             scriptlets: pkg.scriptlets().to_vec(),
+            native_scriptlet_abi: pkg.native_scriptlet_abi().to_vec(),
             config_files: pkg.config_files().to_vec(),
         }
     }

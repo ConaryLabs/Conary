@@ -5,6 +5,8 @@
 use crate::db::models::Trove;
 use crate::error::Result;
 
+pub use crate::packages::native_abi::*;
+
 /// Metadata about a file within a package
 #[derive(Debug, Clone)]
 pub struct PackageFile {
@@ -162,6 +164,14 @@ pub trait PackageFormat {
     /// Returns a slice of Scriptlet containing phase, interpreter, and content.
     /// Default implementation returns empty slice for formats that don't support scriptlets.
     fn scriptlets(&self) -> &[Scriptlet] {
+        &[]
+    }
+
+    /// Get byte-preserving native package-manager scriptlet ABI entries.
+    ///
+    /// Defaults to an empty slice for package formats or test doubles that do
+    /// not expose native ABI metadata.
+    fn native_scriptlet_abi(&self) -> &[NativeScriptletEntry] {
         &[]
     }
 

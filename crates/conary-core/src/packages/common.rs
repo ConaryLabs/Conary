@@ -6,7 +6,9 @@
 //! and ensuring consistent behavior.
 
 use crate::db::models::{Trove, TroveType};
-use crate::packages::traits::{ConfigFileInfo, Dependency, PackageFile, Scriptlet};
+use crate::packages::traits::{
+    ConfigFileInfo, Dependency, NativeScriptletEntry, PackageFile, Scriptlet,
+};
 use std::path::{Path, PathBuf};
 
 /// Maximum size for a single file during package extraction (512 MB).
@@ -48,6 +50,8 @@ pub struct PackageMetadata {
     pub provides: Vec<Dependency>,
     /// Install/remove scriptlets
     pub scriptlets: Vec<Scriptlet>,
+    /// Byte-preserving native package-manager scriptlet ABI entries.
+    pub native_scriptlet_abi: Vec<NativeScriptletEntry>,
     /// Configuration files with special handling
     pub config_files: Vec<ConfigFileInfo>,
 }
@@ -65,6 +69,7 @@ impl PackageMetadata {
             dependencies: Vec::new(),
             provides: Vec::new(),
             scriptlets: Vec::new(),
+            native_scriptlet_abi: Vec::new(),
             config_files: Vec::new(),
         }
     }
@@ -109,6 +114,11 @@ impl PackageMetadata {
         &self.scriptlets
     }
 
+    /// Get byte-preserving native package-manager scriptlet ABI entries.
+    pub fn native_scriptlet_abi(&self) -> &[NativeScriptletEntry] {
+        &self.native_scriptlet_abi
+    }
+
     /// Get the configuration files
     pub fn config_files(&self) -> &[ConfigFileInfo] {
         &self.config_files
@@ -149,6 +159,7 @@ mod tests {
         assert!(meta.architecture().is_none());
         assert!(meta.description().is_none());
         assert!(meta.files().is_empty());
+        assert!(meta.native_scriptlet_abi().is_empty());
     }
 
     #[test]

@@ -291,6 +291,7 @@ impl PackageFormat for RpmPackage {
             dependencies,
             provides,
             scriptlets,
+            native_scriptlet_abi: Vec::new(),
             config_files,
         };
 
