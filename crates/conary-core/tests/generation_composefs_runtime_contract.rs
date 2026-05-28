@@ -418,26 +418,58 @@ fn release_generation_commands_do_not_expose_live_switch_as_normal_activation() 
 fn composefs_apply_publishes_next_boot_generation_without_live_mounting() {
     let composefs_ops_rs = fs::read_to_string(app_source("commands/composefs_ops.rs"))
         .expect("failed to read commands/composefs_ops.rs");
+    let build_body = composefs_ops_rs
+        .split("pub(crate) fn build_generation_for_publication")
+        .nth(1)
+        .and_then(|rest| rest.split("pub(crate) fn publish_generation_link").next())
+        .expect("failed to isolate build_generation_for_publication body");
+    let publish_body = composefs_ops_rs
+        .split("pub(crate) fn publish_generation_link")
+        .nth(1)
+        .and_then(|rest| {
+            rest.split("pub(crate) fn mark_generation_state_active")
+                .next()
+        })
+        .expect("failed to isolate publish_generation_link body");
     let rebuild_body = composefs_ops_rs
         .split("pub fn rebuild_and_mount")
         .nth(1)
+        .and_then(|rest| rest.split("fn forced_generation_rebuild_failure").next())
         .expect("failed to isolate rebuild_and_mount body");
 
     assert!(
-        rebuild_body
-            .contains("enable_generation_rootfs_verity(&gen_dir, &build_result.image_path)"),
+        build_body.contains("enable_generation_rootfs_verity(&gen_dir, &build_result.image_path)"),
         "runtime package mutation must preserve the fs-verity enablement step before generation selection"
     );
     assert!(
-        rebuild_body.contains("update_current_symlink(runtime_root.root(), gen_num)"),
+        publish_body.contains("update_current_symlink(runtime_root.root(), gen_num)"),
         "runtime package mutation must publish the generated artifact by updating /conary/current"
     );
+    let build_step = rebuild_body
+        .find("build_generation_for_publication(conn, db_path, summary, prev_etc_snapshot)?")
+        .expect("rebuild_and_mount must build the inactive generation artifact first");
+    let publish_step = rebuild_body
+        .find("publish_generation_link(db_path, built.generation_number)?")
+        .expect("rebuild_and_mount must publish the selected generation link");
+    let active_step = rebuild_body
+        .find("mark_generation_state_active(conn, built.generation_number)?")
+        .expect("rebuild_and_mount must mark the generation state active after publication");
     assert!(
-        !rebuild_body.contains("mount_generation("),
+        build_step < publish_step && publish_step < active_step,
+        "runtime package mutation must build, publish, then mark active in order"
+    );
+    assert!(
+        !build_body.contains("mount_generation(")
+            && !publish_body.contains("mount_generation(")
+            && !rebuild_body.contains("mount_generation("),
         "runtime package mutation must not attempt live composefs remounts; activation is atomic next-boot selection"
     );
     assert!(
-        !rebuild_body.contains("mount_etc_overlay(")
+        !build_body.contains("mount_etc_overlay(")
+            && !publish_body.contains("mount_etc_overlay(")
+            && !rebuild_body.contains("mount_etc_overlay(")
+            && !build_body.contains("Path::new(\"/etc\")")
+            && !publish_body.contains("Path::new(\"/etc\")")
             && !rebuild_body.contains("Path::new(\"/etc\")"),
         "runtime package mutation must not remount the live /etc overlay during package installs or removes"
     );
