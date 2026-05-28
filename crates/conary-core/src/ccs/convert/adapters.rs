@@ -7,7 +7,10 @@ use crate::ccs::convert::payload_hints::PayloadHints;
 use crate::ccs::legacy_scriptlets::{EffectConfidence, EffectReplacement, EffectSource};
 use std::collections::{BTreeMap, BTreeSet};
 
-const KNOWN_HELPER_REASON: &str = "known-helper-requires-adapter-coverage";
+const PARTIAL_COVERAGE_REASON: &str = "known-helper-partial-coverage";
+const LDCONFIG_COMPLETE_REASON: &str = "helper-complete-ldconfig";
+const SYSTEMD_DAEMON_RELOAD_COMPLETE_REASON: &str = "helper-complete-systemd-daemon-reload";
+const SYSTEMD_UNIT_STATE_COMPLETE_REASON: &str = "helper-complete-systemd-unit-state";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BootstrapAdapterEvidence {
@@ -112,7 +115,7 @@ impl Default for AdapterRegistry {
             Box::new(NativeFreeAdapter),
             Box::new(LdconfigAdapter),
             Box::new(SystemdDaemonReloadAdapter),
-            Box::new(SystemdEnableDisableAdapter),
+            Box::new(SystemdUnitStateAdapter),
         ];
         assert_unique_adapter_ids(&adapters);
 
@@ -205,7 +208,7 @@ impl AdapterRegistry {
 struct NativeFreeAdapter;
 struct LdconfigAdapter;
 struct SystemdDaemonReloadAdapter;
-struct SystemdEnableDisableAdapter;
+struct SystemdUnitStateAdapter;
 
 impl ScriptletEffectAdapter for NativeFreeAdapter {
     fn id(&self) -> &'static str {
@@ -231,11 +234,11 @@ impl ScriptletEffectAdapter for NativeFreeAdapter {
 
 impl ScriptletEffectAdapter for LdconfigAdapter {
     fn id(&self) -> &'static str {
-        "ldconfig/v1"
+        "ldconfig/v2"
     }
 
     fn digest(&self) -> String {
-        crate::hash::sha256_prefixed(b"ldconfig/v1:dynamic-linker-cache:none")
+        crate::hash::sha256_prefixed(b"ldconfig/v2:dynamic-linker-cache:complete")
     }
 
     fn command_names(&self) -> &'static [&'static str] {
@@ -243,7 +246,7 @@ impl ScriptletEffectAdapter for LdconfigAdapter {
     }
 
     fn matches(&self, input: AdapterInput<'_>) -> bool {
-        input.invocation.command == "ldconfig"
+        input.invocation.command == "ldconfig" && is_simple_ldconfig_form(&input.invocation.argv)
     }
 
     fn classify(&self, input: AdapterInput<'_>) -> ScriptletClassification {
@@ -251,19 +254,24 @@ impl ScriptletEffectAdapter for LdconfigAdapter {
             self,
             input.invocation,
             "dynamic-linker-cache",
-            EffectReplacement::None,
+            EffectReplacement::Complete,
             None,
+            LDCONFIG_COMPLETE_REASON,
+            BTreeMap::from([(
+                "cache".to_string(),
+                toml::Value::String("ld.so.cache".to_string()),
+            )]),
         )
     }
 }
 
 impl ScriptletEffectAdapter for SystemdDaemonReloadAdapter {
     fn id(&self) -> &'static str {
-        "systemd-daemon-reload/v1"
+        "systemd-daemon-reload/v2"
     }
 
     fn digest(&self) -> String {
-        crate::hash::sha256_prefixed(b"systemd-daemon-reload/v1:systemd-daemon-reload:none")
+        crate::hash::sha256_prefixed(b"systemd-daemon-reload/v2:systemd-daemon-reload:complete")
     }
 
     fn command_names(&self) -> &'static [&'static str] {
@@ -272,11 +280,7 @@ impl ScriptletEffectAdapter for SystemdDaemonReloadAdapter {
 
     fn matches(&self, input: AdapterInput<'_>) -> bool {
         input.invocation.command == "systemctl"
-            && input
-                .invocation
-                .argv
-                .first()
-                .is_some_and(|action| action == "daemon-reload")
+            && is_systemd_daemon_reload_form(&input.invocation.argv)
     }
 
     fn classify(&self, input: AdapterInput<'_>) -> ScriptletClassification {
@@ -284,19 +288,21 @@ impl ScriptletEffectAdapter for SystemdDaemonReloadAdapter {
             self,
             input.invocation,
             "systemd-daemon-reload",
-            EffectReplacement::None,
+            EffectReplacement::Complete,
             None,
+            SYSTEMD_DAEMON_RELOAD_COMPLETE_REASON,
+            BTreeMap::new(),
         )
     }
 }
 
-impl ScriptletEffectAdapter for SystemdEnableDisableAdapter {
+impl ScriptletEffectAdapter for SystemdUnitStateAdapter {
     fn id(&self) -> &'static str {
-        "systemd-enable-disable/v1"
+        "systemd-unit-state/v1"
     }
 
     fn digest(&self) -> String {
-        crate::hash::sha256_prefixed(b"systemd-enable-disable/v1:systemd-unit-enable-disable:none")
+        crate::hash::sha256_prefixed(b"systemd-unit-state/v1:systemd-unit-state:payload-gated")
     }
 
     fn command_names(&self) -> &'static [&'static str] {
@@ -305,25 +311,92 @@ impl ScriptletEffectAdapter for SystemdEnableDisableAdapter {
 
     fn matches(&self, input: AdapterInput<'_>) -> bool {
         input.invocation.command == "systemctl"
-            && input
-                .invocation
-                .argv
-                .first()
-                .is_some_and(|action| matches!(action.as_str(), "enable" | "disable"))
-            && input.invocation.argv.len() > 1
+            && systemd_unit_state_parts(&input.invocation.argv).is_some()
     }
 
     fn classify(&self, input: AdapterInput<'_>) -> ScriptletClassification {
         let invocation = input.invocation;
-        let action = invocation
-            .argv
-            .first()
-            .map(String::as_str)
-            .unwrap_or("enable");
+        let (action, units) = systemd_unit_state_parts(&invocation.argv)
+            .expect("matches() must ensure systemd unit state args");
         let kind = format!("systemd-unit-{action}");
-        let unit = invocation.argv.get(1).cloned();
-        known_effect_classification(self, invocation, &kind, EffectReplacement::None, unit)
+        let all_units_are_packaged = units
+            .iter()
+            .all(|unit| input.payload.systemd_units.contains(*unit));
+        let replacement = if all_units_are_packaged {
+            EffectReplacement::Complete
+        } else {
+            EffectReplacement::Partial
+        };
+        let reason_code = if all_units_are_packaged {
+            SYSTEMD_UNIT_STATE_COMPLETE_REASON
+        } else {
+            PARTIAL_COVERAGE_REASON
+        };
+        let extra = BTreeMap::from([(
+            "units".to_string(),
+            toml::Value::Array(
+                units
+                    .iter()
+                    .map(|unit| toml::Value::String((*unit).to_string()))
+                    .collect(),
+            ),
+        )]);
+
+        known_effect_classification(
+            self,
+            invocation,
+            &kind,
+            replacement,
+            units.first().map(|unit| (*unit).to_string()),
+            reason_code,
+            extra,
+        )
     }
+}
+
+fn is_simple_ldconfig_form(argv: &[String]) -> bool {
+    argv.is_empty()
+        || matches!(
+            argv,
+            [arg] if matches!(arg.as_str(), "-v" | "--verbose")
+        )
+}
+
+fn is_systemd_daemon_reload_form(argv: &[String]) -> bool {
+    matches!(
+        argv,
+        [action] if action == "daemon-reload"
+    ) || matches!(
+        argv,
+        [scope, action] if scope == "--system" && action == "daemon-reload"
+    )
+}
+
+fn systemd_unit_state_parts(argv: &[String]) -> Option<(&str, Vec<&str>)> {
+    let action = argv.first()?.as_str();
+    if !matches!(action, "enable" | "disable" | "preset") {
+        return None;
+    }
+    if argv.iter().any(|arg| {
+        matches!(
+            arg.as_str(),
+            "--now" | "--user" | "--global" | "--runtime" | "preset-all"
+        )
+    }) {
+        return None;
+    }
+
+    let units: Vec<&str> = argv
+        .iter()
+        .skip(1)
+        .map(String::as_str)
+        .filter(|arg| !arg.starts_with('-'))
+        .collect();
+    if units.is_empty() {
+        return None;
+    }
+
+    Some((action, units))
 }
 
 fn known_effect_classification(
@@ -332,9 +405,11 @@ fn known_effect_classification(
     kind: &str,
     replacement: EffectReplacement,
     path: Option<String>,
+    reason_code: &str,
+    extra: BTreeMap<String, toml::Value>,
 ) -> ScriptletClassification {
     ScriptletClassification::Known {
-        reason_code: KNOWN_HELPER_REASON.to_string(),
+        reason_code: reason_code.to_string(),
         effects: vec![ScriptletEffectEvidence {
             kind: kind.to_string(),
             source: effect_source(invocation.source),
@@ -345,8 +420,8 @@ fn known_effect_classification(
             command: Some(invocation.command.clone()),
             args: invocation.argv.clone(),
             path,
-            reason_code: Some(KNOWN_HELPER_REASON.to_string()),
-            extra: BTreeMap::new(),
+            reason_code: Some(reason_code.to_string()),
+            extra,
         }],
     }
 }
@@ -378,6 +453,7 @@ mod tests {
     use crate::ccs::convert::command_evidence::{CommandEvidenceSource, CommandInvocation};
     use crate::ccs::convert::effects::ScriptletClassification;
     use crate::ccs::convert::payload_hints::PayloadHints;
+    use crate::ccs::legacy_scriptlets::EffectReplacement;
 
     fn invocation(command: &str, argv: &[&str]) -> CommandInvocation {
         CommandInvocation {
@@ -396,7 +472,7 @@ mod tests {
     }
 
     #[test]
-    fn adapter_registry_classifies_known_helpers_without_complete_replacement() {
+    fn adapter_registry_classifies_safe_helpers_with_complete_replacement() {
         let registry = AdapterRegistry::default();
 
         let classification = registry.classify_invocation(&invocation("ldconfig", &[]));
@@ -408,12 +484,9 @@ mod tests {
         else {
             panic!("ldconfig should be known");
         };
-        assert_eq!(reason_code, "known-helper-requires-adapter-coverage");
-        assert_eq!(effects[0].adapter_id.as_deref(), Some("ldconfig/v1"));
-        assert_ne!(
-            effects[0].replacement,
-            crate::ccs::legacy_scriptlets::EffectReplacement::Complete
-        );
+        assert_eq!(reason_code, "helper-complete-ldconfig");
+        assert_eq!(effects[0].adapter_id.as_deref(), Some("ldconfig/v2"));
+        assert_eq!(effects[0].replacement, EffectReplacement::Complete);
     }
 
     #[test]
@@ -450,12 +523,12 @@ mod tests {
         let ids = registry.adapter_ids();
 
         assert_eq!(
-            ids,
-            vec![
+            &ids[..4],
+            &[
                 "native-free/v1",
-                "ldconfig/v1",
-                "systemd-daemon-reload/v1",
-                "systemd-enable-disable/v1",
+                "ldconfig/v2",
+                "systemd-daemon-reload/v2",
+                "systemd-unit-state/v1",
             ]
         );
 
@@ -519,5 +592,115 @@ mod tests {
         };
         assert_eq!(effects[0].command.as_deref(), Some("systemctl"));
         assert_eq!(effects[0].args, vec!["enable", "demo.service"]);
+    }
+
+    #[test]
+    fn ldconfig_complete_only_for_simple_cache_refresh_forms() {
+        let registry = AdapterRegistry::default();
+        let payload = PayloadHints::default();
+
+        let complete = registry.classify_invocation_with_context(AdapterInput {
+            invocation: &invocation("ldconfig", &[]),
+            payload: &payload,
+        });
+        let ScriptletClassification::Known {
+            reason_code,
+            effects,
+        } = complete
+        else {
+            panic!("simple ldconfig should be known");
+        };
+        assert_eq!(reason_code, "helper-complete-ldconfig");
+        assert_eq!(effects[0].replacement, EffectReplacement::Complete);
+        assert_eq!(effects[0].kind, "dynamic-linker-cache");
+
+        let review = registry.classify_invocation_with_context(AdapterInput {
+            invocation: &invocation("ldconfig", &["-p"]),
+            payload: &payload,
+        });
+        assert!(matches!(
+            review,
+            ScriptletClassification::Review { reason_code, class_id }
+                if reason_code == "review-class-ldconfig-nonstandard"
+                    && class_id.as_deref() == Some("ldconfig-nonstandard")
+        ));
+    }
+
+    #[test]
+    fn systemd_daemon_reload_is_complete_but_runtime_actions_are_review() {
+        let registry = AdapterRegistry::default();
+        let payload = PayloadHints::default();
+
+        let reload = registry.classify_invocation_with_context(AdapterInput {
+            invocation: &invocation("systemctl", &["daemon-reload"]),
+            payload: &payload,
+        });
+        let ScriptletClassification::Known {
+            reason_code,
+            effects,
+        } = reload
+        else {
+            panic!("daemon-reload should be known");
+        };
+        assert_eq!(reason_code, "helper-complete-systemd-daemon-reload");
+        assert_eq!(effects[0].replacement, EffectReplacement::Complete);
+
+        let system_scope = registry.classify_invocation_with_context(AdapterInput {
+            invocation: &invocation("systemctl", &["--system", "daemon-reload"]),
+            payload: &payload,
+        });
+        assert!(matches!(
+            system_scope,
+            ScriptletClassification::Known { reason_code, .. }
+                if reason_code == "helper-complete-systemd-daemon-reload"
+        ));
+
+        let restart = registry.classify_invocation_with_context(AdapterInput {
+            invocation: &invocation("systemctl", &["restart", "demo.service"]),
+            payload: &payload,
+        });
+        assert!(matches!(
+            restart,
+            ScriptletClassification::Review { reason_code, class_id }
+                if reason_code == "review-class-systemd-runtime-action"
+                    && class_id.as_deref() == Some("systemd-runtime-action")
+        ));
+    }
+
+    #[test]
+    fn systemd_unit_state_requires_payload_evidence_for_complete() {
+        let registry = AdapterRegistry::default();
+        let empty_payload = PayloadHints::default();
+
+        let partial = registry.classify_invocation_with_context(AdapterInput {
+            invocation: &invocation("systemctl", &["enable", "demo.service"]),
+            payload: &empty_payload,
+        });
+        let ScriptletClassification::Known {
+            reason_code,
+            effects,
+        } = partial
+        else {
+            panic!("systemctl enable should be known");
+        };
+        assert_eq!(reason_code, "known-helper-partial-coverage");
+        assert_eq!(effects[0].replacement, EffectReplacement::Partial);
+
+        let mut payload = PayloadHints::default();
+        payload.systemd_units.insert("demo.service".to_string());
+        let complete = registry.classify_invocation_with_context(AdapterInput {
+            invocation: &invocation("systemctl", &["preset", "demo.service"]),
+            payload: &payload,
+        });
+        let ScriptletClassification::Known {
+            reason_code,
+            effects,
+        } = complete
+        else {
+            panic!("systemctl preset should be known");
+        };
+        assert_eq!(reason_code, "helper-complete-systemd-unit-state");
+        assert_eq!(effects[0].replacement, EffectReplacement::Complete);
+        assert_eq!(effects[0].path.as_deref(), Some("demo.service"));
     }
 }
