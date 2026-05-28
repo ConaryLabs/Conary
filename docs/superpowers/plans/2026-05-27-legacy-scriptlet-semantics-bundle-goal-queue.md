@@ -169,6 +169,11 @@ git diff --check
 
 ## Goal 3a: Adapter Registry And Blocked-Class Registry Infrastructure
 
+Design and detailed plan:
+
+- `docs/superpowers/specs/2026-05-28-legacy-scriptlet-adapter-registry-blocked-classes-design.md`
+- `docs/superpowers/plans/2026-05-28-legacy-scriptlet-adapter-registry-blocked-classes-plan.md`
+
 Recommended objective:
 
 ```text
