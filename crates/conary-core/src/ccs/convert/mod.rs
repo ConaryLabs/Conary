@@ -24,6 +24,7 @@
 
 mod analyzer;
 pub mod capture;
+pub mod command_evidence;
 mod converter;
 mod fidelity;
 pub mod legacy_provenance;
