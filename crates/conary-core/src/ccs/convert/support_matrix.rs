@@ -102,6 +102,18 @@ fn adapter_entry(adapter_id: &'static str) -> SupportMatrixEntry {
             "systemd sysusers is complete only when every explicit config path is shipped by the package.",
             &["adapter-sysusers"],
         ),
+        "alternatives-registration/v1" => (
+            Some("update-alternatives|alternatives"),
+            "helper-complete-alternatives-registration",
+            "Alternatives install/remove registration is complete when the command shape is parseable and non-interactive.",
+            &["adapter-alternatives-registration"],
+        ),
+        "cache-refresh/v1" => (
+            Some("cache refresh helpers"),
+            "helper-complete-cache-refresh",
+            "Known cache refresh helpers are complete only with payload-backed cache input evidence.",
+            &["adapter-cache-refresh"],
+        ),
         _ => panic!("missing support matrix adapter row definition for {adapter_id}"),
     };
 
@@ -146,6 +158,10 @@ fn fixture_names_for_class(class_id: &str) -> &'static [&'static str] {
         "deb-systemd-helper" => &["review-class-deb-systemd-helper"],
         "tmpfiles-noncreate" => &["review-class-tmpfiles-noncreate"],
         "sysusers-nonstandard" => &["review-class-sysusers-nonstandard"],
+        "gconf-schema" => &["review-class-gconf-schema"],
+        "install-info" => &["review-class-install-info"],
+        "alternatives-interactive-or-broad" => &["review-class-alternatives-interactive-or-broad"],
+        "cache-refresh-nonstandard" => &["review-class-cache-refresh-nonstandard"],
         "rpm-verify" => &["review-class-rpm-verify"],
         "rpm-trigger" => &["review-class-rpm-trigger"],
         "deb-trigger" => &["review-class-deb-trigger"],

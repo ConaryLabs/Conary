@@ -211,6 +211,60 @@ impl Default for BlockedClassRegistry {
                 &["systemd-sysusers *--replace*", "systemd-sysusers *--root*"],
                 "Add sysusers root/input modeling before claiming replacement.",
             ),
+            review_class(
+                "gconf-schema",
+                "GConf schema installation mutates an obsolete desktop configuration registry.",
+                "review-class-gconf-schema",
+                &["gconftool", "gconftool-2"],
+                &[],
+                "Migrate obsolete GConf schemas to GSettings XML schemas and glib-compile-schemas.",
+            ),
+            review_class(
+                "install-info",
+                "GNU Info directory registration is a common documentation index mutation that is not yet modeled.",
+                "review-class-install-info",
+                &["install-info"],
+                &[],
+                "Model Info manual registration as a declarative documentation index/cache effect.",
+            ),
+            review_class(
+                "alternatives-interactive-or-broad",
+                "Interactive or broad alternatives commands can alter administrator choice state.",
+                "review-class-alternatives-interactive-or-broad",
+                &[],
+                &[
+                    "update-alternatives *--config*",
+                    "update-alternatives *--set*",
+                    "update-alternatives *--auto*",
+                    "update-alternatives *--all*",
+                    "update-alternatives *--remove-all*",
+                    "alternatives *--config*",
+                    "alternatives *--set*",
+                    "alternatives *--auto*",
+                    "alternatives *--all*",
+                    "alternatives *--remove-all*",
+                ],
+                "Model administrator alternatives state before claiming replacement.",
+            ),
+            review_class(
+                "cache-refresh-nonstandard",
+                "Cache refresh command uses nonstandard paths or options outside the bootstrap adapter contract.",
+                "review-class-cache-refresh-nonstandard",
+                &[],
+                &[
+                    "update-mime-database */opt*",
+                    "update-mime-database */usr/local*",
+                    "update-desktop-database */opt*",
+                    "update-desktop-database */usr/local*",
+                    "gtk-update-icon-cache */opt*",
+                    "gtk-update-icon-cache */usr/local*",
+                    "glib-compile-schemas */opt*",
+                    "glib-compile-schemas */usr/local*",
+                    "fc-cache */opt*",
+                    "fc-cache */usr/local*",
+                ],
+                "Add a cache-specific adapter rule for the nonstandard path or keep package review-only.",
+            ),
             blocked_metadata_class(
                 "rpm-verify",
                 BlockedClassOutcome::Review,
@@ -594,5 +648,22 @@ mod tests {
             sysusers_late_root.unwrap().reason_code,
             "review-class-sysusers-nonstandard"
         );
+    }
+
+    #[test]
+    fn blocked_classes_review_gconf_and_install_info_helpers() {
+        let registry = BlockedClassRegistry::default();
+
+        let gconf = registry.match_invocation(&invocation(
+            "gconftool-2",
+            &["--makefile-install-rule", "/etc/gconf/schemas/demo.schemas"],
+        ));
+        assert_eq!(gconf.unwrap().reason_code, "review-class-gconf-schema");
+
+        let info = registry.match_invocation(&invocation(
+            "install-info",
+            &["/usr/share/info/demo.info.gz", "/usr/share/info/dir"],
+        ));
+        assert_eq!(info.unwrap().reason_code, "review-class-install-info");
     }
 }
