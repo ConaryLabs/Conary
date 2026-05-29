@@ -5,6 +5,7 @@
 //! The index is used by clients to discover available packages without
 //! querying the server for each package individually.
 
+use crate::server::conversion::ScriptletPackageMetadata;
 use crate::server::handlers::human_bytes;
 use anyhow::{Context, Result};
 use chrono::Utc;
@@ -58,6 +59,9 @@ pub struct VersionEntry {
     pub converted_at: Option<String>,
     /// SHA-256 checksum of original package
     pub original_checksum: String,
+    /// Passive legacy scriptlet metadata for converted package versions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scriptlets: Option<ScriptletPackageMetadata>,
 }
 
 /// Index generation configuration
@@ -248,6 +252,7 @@ fn get_packages_for_distro(
                 fidelity: conv.conversion_fidelity.clone(),
                 converted_at: conv.converted_at.clone(),
                 original_checksum: conv.original_checksum.clone(),
+                scriptlets: Some(ScriptletPackageMetadata::from(&conv.scriptlet_summary())),
             }
         } else {
             // Not yet converted - still include in index as "pending"
@@ -257,6 +262,7 @@ fn get_packages_for_distro(
                 fidelity: "pending".to_string(),
                 converted_at: None,
                 original_checksum: String::new(),
+                scriptlets: None,
             }
         };
 
@@ -292,6 +298,7 @@ fn get_packages_for_distro(
                     fidelity: conv.conversion_fidelity.clone(),
                     converted_at: conv.converted_at.clone(),
                     original_checksum: conv.original_checksum.clone(),
+                    scriptlets: Some(ScriptletPackageMetadata::from(&conv.scriptlet_summary())),
                 });
             }
         }
@@ -394,6 +401,7 @@ fn sign_index(index_path: &Path, key_path: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use conary_core::ccs::convert::ScriptletBundleSummary;
 
     #[test]
     fn test_distro_to_format() {
@@ -433,6 +441,7 @@ mod tests {
                         fidelity: "high".to_string(),
                         converted_at: Some("2026-01-16T12:00:00Z".to_string()),
                         original_checksum: "sha256:abc123".to_string(),
+                        scriptlets: None,
                     }],
                 },
             )]),
@@ -446,5 +455,58 @@ mod tests {
         let parsed: RepositoryIndex = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.distro, "arch");
         assert_eq!(parsed.package_count, 1);
+    }
+
+    #[test]
+    fn generated_index_includes_scriptlets_without_private_path() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conary_core::db::schema::migrate(&conn).unwrap();
+
+        let mut converted = ConvertedPackage::new_server(
+            "fedora".to_string(),
+            "pkg".to_string(),
+            "1.0".to_string(),
+            "rpm".to_string(),
+            "sha256:source".to_string(),
+            "high".to_string(),
+            &["sha256:chunk".to_string()],
+            3,
+            "sha256:content".to_string(),
+            "/cache/pkg.ccs".to_string(),
+        );
+        converted
+            .set_scriptlet_metadata(&ScriptletBundleSummary {
+                scriptlet_fidelity: "review-required".to_string(),
+                target_compatibility: "review-required".to_string(),
+                publication_status: "private-review".to_string(),
+                review_reason_codes: vec!["review-class-debconf".to_string()],
+                review_artifact_path: Some("/tmp/private-review-secret".to_string()),
+                ..ScriptletBundleSummary::default()
+            })
+            .unwrap();
+        let converted = vec![converted];
+
+        let packages = get_packages_for_distro(&conn, "fedora", &converted).unwrap();
+        let version = packages.get("pkg").unwrap().versions.first().unwrap();
+        let scriptlets = version.scriptlets.as_ref().unwrap();
+
+        assert_eq!(scriptlets.scriptlet_fidelity, "review-required");
+        assert!(scriptlets.review_artifact_available);
+
+        let index = RepositoryIndex {
+            version: 1,
+            distro: "fedora".to_string(),
+            generated_at: "2026-01-16T12:00:00Z".to_string(),
+            package_count: packages.len(),
+            chunk_count: 1,
+            total_chunk_bytes: 3,
+            total_size_human: "3 B".to_string(),
+            packages,
+        };
+        let json = serde_json::to_string(&index).unwrap();
+
+        assert!(json.contains("\"scriptlets\""));
+        assert!(!json.contains("review_artifact_path"));
+        assert!(!json.contains("private-review-secret"));
     }
 }

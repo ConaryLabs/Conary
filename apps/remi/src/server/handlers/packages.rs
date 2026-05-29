@@ -6,6 +6,7 @@
 //! - If not converted: return 202 Accepted with job ID for polling
 
 use crate::server::ServerState;
+use crate::server::conversion::ScriptletPackageMetadata;
 use crate::server::jobs::{JobId, JobStatus};
 use axum::{
     Json,
@@ -39,6 +40,8 @@ pub struct PackageManifest {
     pub total_size: u64,
     /// SHA-256 of the complete reassembled content
     pub content_hash: String,
+    /// Passive legacy scriptlet metadata summary.
+    pub scriptlets: ScriptletPackageMetadata,
 }
 
 #[derive(Serialize)]
@@ -243,6 +246,7 @@ fn check_converted(
                         offset: i as u64,
                     })
                     .collect();
+                let scriptlet_summary = converted.scriptlet_summary();
 
                 return Ok(Some(PackageManifest {
                     name: converted.package_name.unwrap_or_else(|| name.to_string()),
@@ -258,6 +262,7 @@ fn check_converted(
                     chunks,
                     total_size: converted.total_size.unwrap_or(0) as u64,
                     content_hash: converted.content_hash.unwrap_or_default(),
+                    scriptlets: ScriptletPackageMetadata::from(&scriptlet_summary),
                 }));
             }
         }
@@ -751,7 +756,53 @@ pub async fn get_delta(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use conary_core::ccs::convert::ScriptletBundleSummary;
     use conary_core::db::models::{CONVERSION_VERSION, ConvertedPackage};
+
+    #[test]
+    fn package_manifest_includes_scriptlets_without_private_path() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let db_path = temp.path().join("remi.db");
+        conary_core::db::init(&db_path).unwrap();
+        let ccs_path = temp.path().join("cache/packages/pkg-1.0-x86_64.ccs");
+        std::fs::create_dir_all(ccs_path.parent().unwrap()).unwrap();
+        std::fs::write(&ccs_path, b"ccs").unwrap();
+
+        let conn = conary_core::db::open(&db_path).unwrap();
+        let mut converted = ConvertedPackage::new_server(
+            "fedora".to_string(),
+            "pkg".to_string(),
+            "1.0".to_string(),
+            "rpm".to_string(),
+            "sha256:source".to_string(),
+            "high".to_string(),
+            &["sha256:chunk".to_string()],
+            3,
+            "sha256:content".to_string(),
+            ccs_path.to_string_lossy().to_string(),
+        );
+        converted.package_architecture = Some("x86_64".to_string());
+        let summary = ScriptletBundleSummary {
+            scriptlet_fidelity: "review-required".to_string(),
+            target_compatibility: "review-required".to_string(),
+            publication_status: "private-review".to_string(),
+            review_reason_codes: vec!["review-class-debconf".to_string()],
+            review_artifact_path: Some("/tmp/private-review-secret".to_string()),
+            ..ScriptletBundleSummary::default()
+        };
+        converted.set_scriptlet_metadata(&summary).unwrap();
+        converted.insert(&conn).unwrap();
+
+        let manifest = check_converted(&db_path, "fedora", "pkg", Some("1.0"), Some("x86_64"))
+            .unwrap()
+            .unwrap();
+        let json = serde_json::to_string(&manifest).unwrap();
+
+        assert_eq!(manifest.scriptlets.scriptlet_fidelity, "review-required");
+        assert!(manifest.scriptlets.review_artifact_available);
+        assert!(!json.contains("review_artifact_path"));
+        assert!(!json.contains("private-review-secret"));
+    }
 
     #[test]
     fn converted_ccs_path_for_download_rejects_stale_conversion_records() {

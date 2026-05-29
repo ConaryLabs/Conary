@@ -246,10 +246,13 @@ pub async fn auth_middleware(
         .extensions_mut()
         .insert(TokenName(token_record.name.clone()));
 
-    // Update last_used_at in background, debounced to avoid excessive DB writes.
-    // Only touch if the last touch was more than TOUCH_DEBOUNCE_SECS ago.
     let bg_db_path = db_path;
     let bg_id = token_record.id;
+    let response = next.run(request).await;
+
+    // Update last_used_at in background, debounced to avoid excessive DB writes.
+    // Defer the touch until after the handler finishes so admin write endpoints
+    // do not race their own authentication bookkeeping on the same SQLite DB.
     let should_touch = {
         let mut cache = TOUCH_CACHE.lock().unwrap_or_else(|e| e.into_inner());
         let now = Instant::now();
@@ -286,7 +289,7 @@ pub async fn auth_middleware(
         });
     }
 
-    next.run(request).await
+    response
 }
 
 /// Build a JSON error response with the given status code, message, and error code.
