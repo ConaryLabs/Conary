@@ -6,6 +6,7 @@
 //! in the `delta_manifests` table for fast lookup.
 
 use anyhow::{Context, Result};
+use conary_core::db::models::CONVERSION_VERSION;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -79,8 +80,9 @@ fn get_version_chunks(
             "SELECT chunk_hashes_json, COALESCE(total_size, 0)
              FROM converted_packages
              WHERE distro = ?1 AND package_name = ?2 AND package_version = ?3
+               AND conversion_version >= ?4
              LIMIT 1",
-            params![distro, package_name, version],
+            params![distro, package_name, version, CONVERSION_VERSION],
             |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
         )
         .optional()?;
@@ -239,11 +241,14 @@ pub fn compute_deltas_for_package(
     // Get all converted versions for this package (unordered from DB).
     let mut stmt = conn.prepare(
         "SELECT DISTINCT package_version FROM converted_packages
-         WHERE distro = ?1 AND package_name = ?2 AND package_version IS NOT NULL",
+         WHERE distro = ?1 AND package_name = ?2 AND package_version IS NOT NULL
+           AND conversion_version >= ?3",
     )?;
 
     let mut versions: Vec<String> = stmt
-        .query_map(params![distro, package_name], |row| row.get(0))?
+        .query_map(params![distro, package_name, CONVERSION_VERSION], |row| {
+            row.get(0)
+        })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
 
     // Sort with scheme-aware comparison instead of lexicographic ordering.
@@ -285,6 +290,33 @@ pub fn compute_deltas_for_package(
     Ok(deltas)
 }
 
+fn versions_have_current_conversions(
+    conn: &Connection,
+    distro: &str,
+    package_name: &str,
+    from_version: &str,
+    to_version: &str,
+) -> Result<bool> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(DISTINCT package_version)
+         FROM converted_packages
+         WHERE distro = ?1
+           AND package_name = ?2
+           AND package_version IN (?3, ?4)
+           AND conversion_version >= ?5",
+        params![
+            distro,
+            package_name,
+            from_version,
+            to_version,
+            CONVERSION_VERSION
+        ],
+        |row| row.get(0),
+    )?;
+
+    Ok(count == 2)
+}
+
 /// Look up a pre-computed delta manifest.
 pub fn get_delta(
     conn: &Connection,
@@ -323,6 +355,10 @@ pub fn get_delta(
 
     match row {
         Some((id, distro, pkg, from_v, to_v, new_json, rem_json, dl_size, full_size, computed)) => {
+            if !versions_have_current_conversions(conn, &distro, &pkg, &from_v, &to_v)? {
+                return Ok(None);
+            }
+
             let new_chunks: Vec<String> = serde_json::from_str(&new_json).unwrap_or_default();
             let removed_chunks: Vec<String> = serde_json::from_str(&rem_json).unwrap_or_default();
 
@@ -346,7 +382,7 @@ pub fn get_delta(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use conary_core::db::models::ConvertedPackage;
+    use conary_core::db::models::{CONVERSION_VERSION, ConvertedPackage};
     use conary_core::db::schema;
     use tempfile::NamedTempFile;
 
@@ -366,6 +402,26 @@ mod tests {
         chunks: &[&str],
         total_size: i64,
     ) {
+        insert_converted_with_conversion_version(
+            conn,
+            distro,
+            name,
+            version,
+            chunks,
+            total_size,
+            CONVERSION_VERSION,
+        );
+    }
+
+    fn insert_converted_with_conversion_version(
+        conn: &Connection,
+        distro: &str,
+        name: &str,
+        version: &str,
+        chunks: &[&str],
+        total_size: i64,
+        conversion_version: i32,
+    ) {
         let chunk_strings: Vec<String> = chunks.iter().map(|s| (*s).to_string()).collect();
         let mut pkg = ConvertedPackage::new_server(
             distro.to_string(),
@@ -379,6 +435,7 @@ mod tests {
             format!("sha256:content-{name}-{version}"),
             format!("/data/{name}-{version}.ccs"),
         );
+        pkg.conversion_version = conversion_version;
         pkg.insert(conn).unwrap();
     }
 
@@ -489,6 +546,41 @@ mod tests {
     }
 
     #[test]
+    fn cached_delta_requires_current_source_and_target_conversions() {
+        let (_temp, conn) = create_test_db();
+        insert_converted_with_conversion_version(
+            &conn,
+            "fedora",
+            "nginx",
+            "1.0",
+            &["chunkA"],
+            1000,
+            CONVERSION_VERSION - 1,
+        );
+        insert_converted(&conn, "fedora", "nginx", "2.0", &["chunkB"], 1000);
+        conn.execute(
+            "INSERT INTO delta_manifests
+             (distro, package_name, from_version, to_version, new_chunks, removed_chunks, download_size, full_size)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                "fedora",
+                "nginx",
+                "1.0",
+                "2.0",
+                "[\"chunkB\"]",
+                "[\"chunkA\"]",
+                1000_i64,
+                1000_i64
+            ],
+        )
+        .unwrap();
+
+        let cached = get_delta(&conn, "fedora", "nginx", "1.0", "2.0").unwrap();
+
+        assert!(cached.is_none());
+    }
+
+    #[test]
     fn test_compute_deltas_for_package() {
         let (_temp, conn) = create_test_db();
 
@@ -503,6 +595,48 @@ mod tests {
         assert_eq!(deltas[0].to_version, "2.0");
         assert_eq!(deltas[1].from_version, "2.0");
         assert_eq!(deltas[1].to_version, "3.0");
+    }
+
+    #[test]
+    fn version_chunks_ignore_stale_converted_rows() {
+        let (_temp, conn) = create_test_db();
+        insert_converted_with_conversion_version(
+            &conn,
+            "fedora",
+            "nginx",
+            "1.0",
+            &["staleA"],
+            1000,
+            CONVERSION_VERSION - 1,
+        );
+
+        let (chunks, size) = get_version_chunks(&conn, "fedora", "nginx", "1.0").unwrap();
+
+        assert!(chunks.is_empty());
+        assert_eq!(size, 0);
+    }
+
+    #[test]
+    fn compute_deltas_for_package_excludes_stale_versions() {
+        let (_temp, conn) = create_test_db();
+
+        insert_converted_with_conversion_version(
+            &conn,
+            "fedora",
+            "nginx",
+            "1.0",
+            &["staleA"],
+            1000,
+            CONVERSION_VERSION - 1,
+        );
+        insert_converted(&conn, "fedora", "nginx", "2.0", &["chunkA"], 1000);
+        insert_converted(&conn, "fedora", "nginx", "3.0", &["chunkA", "chunkB"], 2000);
+
+        let deltas = compute_deltas_for_package(&conn, "fedora", "nginx").unwrap();
+
+        assert_eq!(deltas.len(), 1);
+        assert_eq!(deltas[0].from_version, "2.0");
+        assert_eq!(deltas[0].to_version, "3.0");
     }
 
     #[test]

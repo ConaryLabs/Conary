@@ -20,6 +20,7 @@ use axum::{
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
 };
+use conary_core::db::models::CONVERSION_VERSION;
 use rusqlite::Connection;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -580,11 +581,15 @@ fn build_tags_list(
     let mut stmt = conn.prepare(
         "SELECT DISTINCT package_version FROM converted_packages
          WHERE distro = ?1 AND package_name = ?2 AND package_version IS NOT NULL
+           AND conversion_version >= ?3
          ORDER BY package_version",
     )?;
 
     let tags: Vec<String> = stmt
-        .query_map(rusqlite::params![distro, package], |row| row.get(0))?
+        .query_map(
+            rusqlite::params![distro, package, CONVERSION_VERSION],
+            |row| row.get(0),
+        )?
         .collect::<rusqlite::Result<Vec<_>>>()?;
 
     Ok(tags)
@@ -597,11 +602,12 @@ fn build_catalog(db_path: &std::path::Path) -> Result<OciCatalog, anyhow::Error>
     let mut stmt = conn.prepare(
         "SELECT DISTINCT distro, package_name FROM converted_packages
          WHERE distro IS NOT NULL AND package_name IS NOT NULL
+           AND conversion_version >= ?1
          ORDER BY distro, package_name",
     )?;
 
     let repositories: Vec<String> = stmt
-        .query_map([], |row| {
+        .query_map(rusqlite::params![CONVERSION_VERSION], |row| {
             let distro: String = row.get(0)?;
             let name: String = row.get(1)?;
             Ok(format!("conary/{}/{}", distro, name))
@@ -632,7 +638,7 @@ fn strip_digest_prefix(digest: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use conary_core::db::models::ConvertedPackage;
+    use conary_core::db::models::{CONVERSION_VERSION, ConvertedPackage};
     use conary_core::db::schema;
     use tempfile::NamedTempFile;
 
@@ -663,6 +669,29 @@ mod tests {
             format!("sha256:content-{}-{}", name, version),
             format!("/data/{}-{}.ccs", name, version),
         );
+        pkg.insert(conn).unwrap();
+    }
+
+    fn insert_stale_converted_package(
+        conn: &Connection,
+        distro: &str,
+        name: &str,
+        version: &str,
+        chunks: &[String],
+    ) {
+        let mut pkg = ConvertedPackage::new_server(
+            distro.to_string(),
+            name.to_string(),
+            version.to_string(),
+            "rpm".to_string(),
+            format!("sha256:test-{}-{}", name, version),
+            "high".to_string(),
+            chunks,
+            4096,
+            format!("sha256:content-{}-{}", name, version),
+            format!("/data/{}-{}.ccs", name, version),
+        );
+        pkg.conversion_version = CONVERSION_VERSION - 1;
         pkg.insert(conn).unwrap();
     }
 
@@ -783,6 +812,29 @@ mod tests {
     }
 
     #[test]
+    fn oci_tags_ignore_stale_converted_rows() {
+        let (temp_file, conn) = create_test_db();
+
+        insert_stale_converted_package(
+            &conn,
+            "fedora",
+            "nginx",
+            "1.24.0-1.fc44",
+            &["stale-chunk".to_string()],
+        );
+        insert_converted_package(
+            &conn,
+            "fedora",
+            "nginx",
+            "1.25.0-1.fc44",
+            &["current-chunk".to_string()],
+        );
+
+        let tags = build_tags_list(temp_file.path(), "fedora", "nginx").unwrap();
+        assert_eq!(tags, vec!["1.25.0-1.fc44"]);
+    }
+
+    #[test]
     fn test_build_catalog() {
         let (temp_file, conn) = create_test_db();
 
@@ -799,6 +851,29 @@ mod tests {
                 "conary/fedora/nginx",
             ]
         );
+    }
+
+    #[test]
+    fn oci_catalog_ignores_stale_converted_rows() {
+        let (temp_file, conn) = create_test_db();
+
+        insert_stale_converted_package(
+            &conn,
+            "fedora",
+            "stale-only",
+            "1.0.0",
+            &["stale-chunk".to_string()],
+        );
+        insert_converted_package(
+            &conn,
+            "fedora",
+            "current",
+            "1.0.0",
+            &["current-chunk".to_string()],
+        );
+
+        let catalog = build_catalog(temp_file.path()).unwrap();
+        assert_eq!(catalog.repositories, vec!["conary/fedora/current"]);
     }
 
     #[test]
@@ -872,6 +947,30 @@ mod tests {
             &chunk_cache,
         )
         .unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn oci_manifest_ignores_stale_converted_rows() {
+        let (temp_file, conn) = create_test_db();
+        insert_stale_converted_package(
+            &conn,
+            "fedora",
+            "nginx",
+            "1.24.0",
+            &["stale-chunk".to_string()],
+        );
+
+        let chunk_dir = tempfile::tempdir().unwrap();
+        let chunk_cache = crate::server::ChunkCache::new(
+            chunk_dir.path().to_path_buf(),
+            1024 * 1024 * 1024,
+            30,
+            temp_file.path().to_path_buf(),
+        );
+
+        let result =
+            build_manifest(temp_file.path(), "fedora", "nginx", "1.24.0", &chunk_cache).unwrap();
         assert!(result.is_none());
     }
 }
