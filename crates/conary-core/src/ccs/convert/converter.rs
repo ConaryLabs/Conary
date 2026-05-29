@@ -20,6 +20,10 @@ use crate::ccs::convert::fidelity::{FidelityLevel, FidelityReport};
 use crate::ccs::convert::legacy_provenance::LegacyProvenance;
 use crate::ccs::convert::mock::CapturedIntent;
 use crate::ccs::convert::payload_hints::PayloadHints;
+use crate::ccs::convert::scriptlet_bundle::{
+    ScriptletBundleInput, ScriptletBundleSummary, build_legacy_scriptlet_bundle,
+};
+use crate::ccs::legacy_scriptlets::LegacyScriptletBundle;
 use crate::ccs::manifest::{
     Capability, CcsManifest, Components, Config, Hooks, Package, PackageDep, Platform, Provides,
     Redirects, Requires, Service, ServiceAction, Suggests, User,
@@ -93,12 +97,19 @@ pub struct ConversionResult {
     pub legacy_provenance: Option<LegacyProvenance>,
     /// Passive scriptlet classification evidence for later migration gates.
     pub scriptlet_classification: ScriptletClassificationReport,
+    /// Passive legacy scriptlet bundle embedded into the generated manifest.
+    pub legacy_scriptlets: Option<LegacyScriptletBundle>,
+    /// Compact passive scriptlet metadata derived from the embedded bundle.
+    pub scriptlet_metadata: ScriptletBundleSummary,
 }
 
 /// Converts legacy packages (RPM/DEB/Arch) to CCS format
 pub struct LegacyConverter {
     options: ConversionOptions,
     analyzer: ScriptletAnalyzer,
+    source_distro: Option<String>,
+    source_release: Option<String>,
+    conversion_tool: String,
 }
 
 impl LegacyConverter {
@@ -107,12 +118,33 @@ impl LegacyConverter {
         Self {
             options,
             analyzer: ScriptletAnalyzer::new(),
+            source_distro: None,
+            source_release: None,
+            conversion_tool: "conary".to_string(),
         }
     }
 
     /// Create a converter with default options
     pub fn with_defaults() -> Self {
         Self::new(ConversionOptions::default())
+    }
+
+    /// Attach source distro context for passive scriptlet bundle metadata.
+    pub fn with_source_distro(mut self, distro: impl Into<String>) -> Self {
+        self.source_distro = Some(distro.into());
+        self
+    }
+
+    /// Attach source release context for passive scriptlet bundle metadata.
+    pub fn with_source_release(mut self, release: impl Into<String>) -> Self {
+        self.source_release = Some(release.into());
+        self
+    }
+
+    /// Override the conversion tool name recorded in passive scriptlet bundles.
+    pub fn with_conversion_tool(mut self, tool: impl Into<String>) -> Self {
+        self.conversion_tool = tool.into();
+        self
     }
 
     /// Convert a legacy package to CCS format
@@ -281,6 +313,29 @@ impl LegacyConverter {
             .as_ref()
             .map(InferredCapabilities::to_declaration);
 
+        let scriptlet_bundle = build_legacy_scriptlet_bundle(ScriptletBundleInput {
+            source_metadata: metadata,
+            final_metadata: &final_metadata,
+            source_files: files,
+            final_files: &final_files,
+            source_format: format,
+            source_distro: self.source_distro.as_deref(),
+            source_release: self.source_release.as_deref(),
+            source_arch: metadata.architecture.as_deref(),
+            source_checksum: Some(checksum),
+            classification: &scriptlet_classification,
+            conversion_tool: self.conversion_tool.as_str(),
+            conversion_tool_version: env!("CARGO_PKG_VERSION"),
+        })
+        .map_err(|error| ConversionError::ManifestError(error.to_string()))?;
+
+        scriptlet_bundle
+            .bundle
+            .validate()
+            .map_err(|error| ConversionError::ManifestError(error.to_string()))?;
+
+        manifest.legacy_scriptlets = Some(scriptlet_bundle.bundle.clone());
+
         // Step 5: Create temporary directory with file structure
         let temp_dir = TempDir::new()
             .map_err(|e| ConversionError::IoError(format!("Failed to create temp dir: {}", e)))?;
@@ -354,6 +409,8 @@ impl LegacyConverter {
             inference_error,
             legacy_provenance,
             scriptlet_classification,
+            legacy_scriptlets: Some(scriptlet_bundle.bundle),
+            scriptlet_metadata: scriptlet_bundle.summary,
         })
     }
 
@@ -864,7 +921,89 @@ mod tests {
                 .iter()
                 .any(|entry| entry.entry_id.contains("scriptlet"))
         );
-        assert!(result.build_result.manifest.legacy_scriptlets.is_none());
+        result
+            .build_result
+            .manifest
+            .legacy_scriptlets
+            .as_ref()
+            .expect("conversion should embed passive scriptlet bundle")
+            .validate()
+            .unwrap();
+    }
+
+    #[test]
+    fn conversion_result_embeds_legacy_scriptlet_bundle() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut metadata = make_test_metadata();
+        metadata.scriptlets = vec![Scriptlet {
+            phase: ScriptletPhase::PostInstall,
+            interpreter: "/bin/sh".to_string(),
+            content: "/sbin/ldconfig\n".to_string(),
+            flags: None,
+        }];
+
+        let converter = passive_test_converter(temp_dir.path());
+
+        let result = converter
+            .convert(
+                &metadata,
+                &make_test_files(),
+                "rpm",
+                "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            )
+            .unwrap();
+
+        let bundle = result
+            .build_result
+            .manifest
+            .legacy_scriptlets
+            .as_ref()
+            .unwrap();
+        assert_eq!(bundle.source_package, metadata.name);
+        assert_eq!(
+            result
+                .legacy_scriptlets
+                .as_ref()
+                .unwrap()
+                .evidence_digest
+                .as_deref(),
+            bundle.evidence_digest.as_deref()
+        );
+        assert_eq!(
+            result.scriptlet_metadata.evidence_digest.as_deref(),
+            bundle.evidence_digest.as_deref()
+        );
+        bundle.validate().unwrap();
+    }
+
+    #[test]
+    fn remi_converter_context_flows_into_bundle_metadata() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let metadata = make_test_metadata();
+        let converter = passive_test_converter(temp_dir.path())
+            .with_source_distro("fedora")
+            .with_source_release("44")
+            .with_conversion_tool("remi");
+
+        let result = converter
+            .convert(
+                &metadata,
+                &make_test_files(),
+                "rpm",
+                "not-a-real-prefixed-sha",
+            )
+            .unwrap();
+
+        let bundle = result
+            .build_result
+            .manifest
+            .legacy_scriptlets
+            .as_ref()
+            .unwrap();
+        assert_eq!(bundle.source_distro.as_deref(), Some("fedora"));
+        assert_eq!(bundle.source_release.as_deref(), Some("44"));
+        assert_eq!(bundle.conversion_tool, "remi");
+        assert_eq!(bundle.source_checksum, None);
     }
 
     #[test]
@@ -974,7 +1113,14 @@ update-mime-database /usr/share/mime
             complete_effects, 6,
             "all 6 known helper invocations should be complete"
         );
-        assert!(result.build_result.manifest.legacy_scriptlets.is_none());
+        result
+            .build_result
+            .manifest
+            .legacy_scriptlets
+            .as_ref()
+            .expect("conversion should embed passive scriptlet bundle")
+            .validate()
+            .unwrap();
         assert!(
             result
                 .detected_hooks
@@ -1030,7 +1176,14 @@ update-mime-database /usr/share/mime
                         && class_id.as_deref() == Some("debconf")
                 ))
         );
-        assert!(result.build_result.manifest.legacy_scriptlets.is_none());
+        let bundle = result
+            .build_result
+            .manifest
+            .legacy_scriptlets
+            .as_ref()
+            .expect("conversion should embed passive scriptlet bundle");
+        assert_eq!(bundle.scriptlet_fidelity.as_str(), "review-required");
+        bundle.validate().unwrap();
     }
 
     #[test]
