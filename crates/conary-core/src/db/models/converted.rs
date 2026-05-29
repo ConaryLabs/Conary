@@ -9,15 +9,16 @@
 //! - Store detected hooks extracted from scriptlets
 //! - Re-convert when conversion algorithm is upgraded
 
+use crate::ccs::convert::ScriptletBundleSummary;
 use crate::error::Result;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
 /// Current conversion algorithm version
 /// Bump this when making changes that require re-conversion of existing packages.
 ///
-/// v3 invalidates Remi artifacts produced before RPM symlink targets and
-/// architecture-specific CCS filenames were enforced in the server cache.
-pub const CONVERSION_VERSION: i32 = 3;
+/// v4 invalidates Remi artifacts produced before passive legacy scriptlet
+/// bundles and scriptlet metadata were embedded in converted CCS manifests.
+pub const CONVERSION_VERSION: i32 = 4;
 
 /// A converted package record
 #[derive(Debug, Clone)]
@@ -69,6 +70,24 @@ pub struct ConvertedPackage {
     pub content_hash: Option<String>,
     /// Path to the CCS package file
     pub ccs_path: Option<String>,
+
+    // Passive legacy scriptlet metadata fields (v70)
+    /// Aggregate scriptlet fidelity from passive bundle construction.
+    pub scriptlet_fidelity: String,
+    /// Aggregate target compatibility from passive bundle construction.
+    pub target_compatibility: String,
+    /// Passive publication status. Goal 4 stores this only; it is not enforced.
+    pub publication_status: String,
+    /// Digest of normalized scriptlet evidence.
+    pub evidence_digest: Option<String>,
+    /// Digest of curated review evidence, when available.
+    pub curation_evidence_digest: Option<String>,
+    /// JSON array of blocked scriptlet reason codes for cheap filtering.
+    pub blocked_reason_codes_json: String,
+    /// JSON-encoded internal scriptlet summary for API/index projection.
+    pub scriptlet_summary_json: String,
+    /// Local review artifact path, never exposed directly by public APIs.
+    pub review_artifact_path: Option<String>,
 }
 
 impl ConvertedPackage {
@@ -78,7 +97,10 @@ impl ConvertedPackage {
          enhancement_version, inferred_caps_json, extracted_provenance_json, \
          enhancement_status, enhancement_error, enhancement_attempted_at, \
          package_name, package_version, distro, chunk_hashes_json, total_size, \
-         content_hash, ccs_path, package_architecture";
+         content_hash, ccs_path, package_architecture, scriptlet_fidelity, \
+         target_compatibility, publication_status, evidence_digest, \
+         curation_evidence_digest, blocked_reason_codes_json, \
+         scriptlet_summary_json, review_artifact_path";
 
     /// Create a new converted package record
     pub fn new(
@@ -111,6 +133,14 @@ impl ConvertedPackage {
             total_size: None,
             content_hash: None,
             ccs_path: None,
+            scriptlet_fidelity: "unknown".to_string(),
+            target_compatibility: "unknown".to_string(),
+            publication_status: "public".to_string(),
+            evidence_digest: None,
+            curation_evidence_digest: None,
+            blocked_reason_codes_json: "[]".to_string(),
+            scriptlet_summary_json: "{}".to_string(),
+            review_artifact_path: None,
         }
     }
 
@@ -153,6 +183,14 @@ impl ConvertedPackage {
             total_size: Some(total_size),
             content_hash: Some(content_hash),
             ccs_path: Some(ccs_path),
+            scriptlet_fidelity: "unknown".to_string(),
+            target_compatibility: "unknown".to_string(),
+            publication_status: "public".to_string(),
+            evidence_digest: None,
+            curation_evidence_digest: None,
+            blocked_reason_codes_json: "[]".to_string(),
+            scriptlet_summary_json: "{}".to_string(),
+            review_artifact_path: None,
         }
     }
 
@@ -183,6 +221,14 @@ impl ConvertedPackage {
             content_hash: row.get(19)?,
             ccs_path: row.get(20)?,
             package_architecture: row.get(21)?,
+            scriptlet_fidelity: row.get(22)?,
+            target_compatibility: row.get(23)?,
+            publication_status: row.get(24)?,
+            evidence_digest: row.get(25)?,
+            curation_evidence_digest: row.get(26)?,
+            blocked_reason_codes_json: row.get(27)?,
+            scriptlet_summary_json: row.get(28)?,
+            review_artifact_path: row.get(29)?,
         })
     }
 
@@ -191,8 +237,10 @@ impl ConvertedPackage {
         conn.execute(
             "INSERT INTO converted_packages (trove_id, original_format, original_checksum, conversion_version, conversion_fidelity, detected_hooks,
                 enhancement_version, inferred_caps_json, extracted_provenance_json, enhancement_status,
-                package_name, package_version, distro, chunk_hashes_json, total_size, content_hash, ccs_path, package_architecture)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+                package_name, package_version, distro, chunk_hashes_json, total_size, content_hash, ccs_path, package_architecture,
+                scriptlet_fidelity, target_compatibility, publication_status, evidence_digest, curation_evidence_digest,
+                blocked_reason_codes_json, scriptlet_summary_json, review_artifact_path)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)",
             params![
                 self.trove_id,
                 &self.original_format,
@@ -212,6 +260,14 @@ impl ConvertedPackage {
                 &self.content_hash,
                 &self.ccs_path,
                 &self.package_architecture,
+                &self.scriptlet_fidelity,
+                &self.target_compatibility,
+                &self.publication_status,
+                &self.evidence_digest,
+                &self.curation_evidence_digest,
+                &self.blocked_reason_codes_json,
+                &self.scriptlet_summary_json,
+                &self.review_artifact_path,
             ],
         )?;
 
@@ -262,6 +318,56 @@ impl ConvertedPackage {
     /// Check if a package needs re-conversion (algorithm upgraded)
     pub fn needs_reconversion(&self) -> bool {
         self.conversion_version < CONVERSION_VERSION
+    }
+
+    /// Store passive scriptlet metadata generated during conversion.
+    pub fn set_scriptlet_metadata(
+        &mut self,
+        summary: &ScriptletBundleSummary,
+    ) -> serde_json::Result<()> {
+        self.scriptlet_fidelity = summary.scriptlet_fidelity.clone();
+        self.target_compatibility = summary.target_compatibility.clone();
+        self.publication_status = summary.publication_status.clone();
+        self.evidence_digest = summary.evidence_digest.clone();
+        self.curation_evidence_digest = summary.curation_evidence_digest.clone();
+        self.blocked_reason_codes_json = serde_json::to_string(&summary.blocked_reason_codes)?;
+        self.scriptlet_summary_json = serde_json::to_string(summary)?;
+        self.review_artifact_path = summary.review_artifact_path.clone();
+        Ok(())
+    }
+
+    /// Recover the passive scriptlet summary, using scalar columns when the
+    /// JSON blob is missing or malformed.
+    pub fn scriptlet_summary(&self) -> ScriptletBundleSummary {
+        match serde_json::from_str::<ScriptletBundleSummary>(&self.scriptlet_summary_json) {
+            Ok(mut summary) => {
+                summary.scriptlet_fidelity = self.scriptlet_fidelity.clone();
+                summary.target_compatibility = self.target_compatibility.clone();
+                summary.publication_status = self.publication_status.clone();
+                summary.evidence_digest = self.evidence_digest.clone();
+                summary.curation_evidence_digest = self.curation_evidence_digest.clone();
+                summary.review_artifact_path = self.review_artifact_path.clone();
+                summary
+            }
+            Err(error) => {
+                tracing::warn!(
+                    "failed to parse converted package scriptlet summary JSON: {}",
+                    error
+                );
+                let mut summary = ScriptletBundleSummary {
+                    scriptlet_fidelity: self.scriptlet_fidelity.clone(),
+                    target_compatibility: self.target_compatibility.clone(),
+                    publication_status: self.publication_status.clone(),
+                    evidence_digest: self.evidence_digest.clone(),
+                    curation_evidence_digest: self.curation_evidence_digest.clone(),
+                    review_artifact_path: self.review_artifact_path.clone(),
+                    ..ScriptletBundleSummary::default()
+                };
+                summary.blocked_reason_codes =
+                    serde_json::from_str(&self.blocked_reason_codes_json).unwrap_or_default();
+                summary
+            }
+        }
     }
 
     /// List all converted packages with a specific fidelity level
@@ -351,6 +457,33 @@ impl ConvertedPackage {
                     .optional()?
             }
         };
+        Ok(result)
+    }
+
+    /// Find a server-side conversion by content hash, accepting both raw and
+    /// OCI-style `sha256:` references.
+    pub fn find_by_content_hash_identity(
+        conn: &Connection,
+        distro: &str,
+        package: &str,
+        content_hash: &str,
+    ) -> Result<Option<Self>> {
+        let normalized_hash = content_hash.strip_prefix("sha256:").unwrap_or(content_hash);
+        let prefixed_hash = format!("sha256:{normalized_hash}");
+        let sql = format!(
+            "SELECT {} FROM converted_packages \
+             WHERE distro = ?1 AND package_name = ?2 \
+             AND (content_hash = ?3 OR content_hash = ?4) \
+             ORDER BY converted_at DESC LIMIT 1",
+            Self::COLUMNS
+        );
+        let result = conn
+            .query_row(
+                &sql,
+                params![distro, package, normalized_hash, prefixed_hash],
+                Self::from_row,
+            )
+            .optional()?;
         Ok(result)
     }
 
@@ -450,7 +583,102 @@ impl ConvertedPackage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ccs::convert::ScriptletBundleSummary;
     use crate::db::testing::create_test_db;
+
+    #[test]
+    fn converted_package_defaults_scriptlet_metadata() {
+        let converted = ConvertedPackage::new(
+            "rpm".to_string(),
+            "sha256:source".to_string(),
+            "high".to_string(),
+        );
+
+        assert_eq!(converted.scriptlet_fidelity, "unknown");
+        assert_eq!(converted.target_compatibility, "unknown");
+        assert_eq!(converted.publication_status, "public");
+        assert_eq!(converted.blocked_reason_codes_json, "[]");
+        assert_eq!(converted.scriptlet_summary_json, "{}");
+        assert_eq!(converted.review_artifact_path, None);
+    }
+
+    #[test]
+    fn converted_package_round_trips_scriptlet_metadata() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::db::schema::migrate(&conn).unwrap();
+        let mut converted = ConvertedPackage::new_server(
+            "fedora".to_string(),
+            "gtk3".to_string(),
+            "3.24.0-1.fc44".to_string(),
+            "rpm".to_string(),
+            "sha256:source".to_string(),
+            "high".to_string(),
+            &["sha256:chunk".to_string()],
+            42,
+            "sha256:content".to_string(),
+            "/tmp/gtk3.ccs".to_string(),
+        );
+        let summary = ScriptletBundleSummary {
+            scriptlet_fidelity: "review-required".to_string(),
+            target_compatibility: "review-required".to_string(),
+            publication_status: "private-review".to_string(),
+            evidence_digest: Some(crate::hash::sha256_prefixed(b"evidence")),
+            blocked_reason_codes: vec!["blocked-class-network".to_string()],
+            review_reason_codes: vec!["review-class-debconf".to_string()],
+            unknown_commands: vec!["custom-helper".to_string()],
+            blocked_classes: vec!["network".to_string()],
+            ..ScriptletBundleSummary::default()
+        };
+        converted.set_scriptlet_metadata(&summary).unwrap();
+        converted.insert(&conn).unwrap();
+
+        let found = ConvertedPackage::find_by_package_identity_with_arch(
+            &conn,
+            "fedora",
+            "gtk3",
+            Some("3.24.0-1.fc44"),
+            None,
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(found.scriptlet_fidelity, "review-required");
+        assert_eq!(found.target_compatibility, "review-required");
+        assert_eq!(found.publication_status, "private-review");
+        assert_eq!(
+            found.blocked_reason_codes_json,
+            "[\"blocked-class-network\"]"
+        );
+        assert!(found.scriptlet_summary_json.contains("custom-helper"));
+    }
+
+    #[test]
+    fn scriptlet_summary_recovers_from_malformed_json_with_scalar_fields() {
+        let mut converted = ConvertedPackage::new(
+            "rpm".to_string(),
+            "sha256:source".to_string(),
+            "high".to_string(),
+        );
+        converted.scriptlet_fidelity = "blocked".to_string();
+        converted.target_compatibility = "blocked".to_string();
+        converted.publication_status = "blocked".to_string();
+        converted.evidence_digest = Some(crate::hash::sha256_prefixed(b"fallback-evidence"));
+        converted.blocked_reason_codes_json = "[\"blocked-class-network\"]".to_string();
+        converted.scriptlet_summary_json = "{not valid json".to_string();
+
+        let summary = converted.scriptlet_summary();
+
+        assert_eq!(summary.scriptlet_fidelity, "blocked");
+        assert_eq!(summary.target_compatibility, "blocked");
+        assert_eq!(summary.publication_status, "blocked");
+        assert_eq!(
+            summary.evidence_digest,
+            Some(crate::hash::sha256_prefixed(b"fallback-evidence"))
+        );
+        assert_eq!(summary.blocked_reason_codes, vec!["blocked-class-network"]);
+        assert!(summary.review_reason_codes.is_empty());
+        assert!(summary.unknown_commands.is_empty());
+    }
 
     #[test]
     fn test_converted_package_crud() {

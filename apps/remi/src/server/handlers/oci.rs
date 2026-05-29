@@ -477,48 +477,16 @@ fn build_manifest(
     let converted = if let Some(ver) = version {
         ConvertedPackage::find_by_package_identity(&conn, distro, package, Some(ver))?
     } else {
-        // Find by content hash digest
-        let hash = reference;
-        conn.query_row(
-            "SELECT id, trove_id, original_format, original_checksum, conversion_version,
-                    conversion_fidelity, detected_hooks, converted_at,
-                    enhancement_version, inferred_caps_json, extracted_provenance_json,
-                    enhancement_status, enhancement_error, enhancement_attempted_at,
-                    package_name, package_version, distro, chunk_hashes_json,
-                    total_size, content_hash, ccs_path, package_architecture
-             FROM converted_packages
-             WHERE distro = ?1 AND package_name = ?2 AND content_hash = ?3",
-            rusqlite::params![distro, package, hash],
-            |row| {
-                // Re-use the same field order as ConvertedPackage::from_row
-                Ok(ConvertedPackage {
-                    id: row.get(0)?,
-                    trove_id: row.get(1)?,
-                    original_format: row.get(2)?,
-                    original_checksum: row.get(3)?,
-                    conversion_version: row.get(4)?,
-                    conversion_fidelity: row.get(5)?,
-                    detected_hooks: row.get(6)?,
-                    converted_at: row.get(7)?,
-                    enhancement_version: row.get(8).unwrap_or(0),
-                    inferred_caps_json: row.get(9).ok(),
-                    extracted_provenance_json: row.get(10).ok(),
-                    enhancement_status: row.get(11).unwrap_or_else(|_| "pending".to_string()),
-                    enhancement_error: row.get(12).ok(),
-                    enhancement_attempted_at: row.get(13).ok(),
-                    package_name: row.get(14).ok(),
-                    package_version: row.get(15).ok(),
-                    distro: row.get(16).ok(),
-                    chunk_hashes_json: row.get(17).ok(),
-                    total_size: row.get(18).ok(),
-                    content_hash: row.get(19).ok(),
-                    ccs_path: row.get(20).ok(),
-                    package_architecture: row.get(21).ok(),
-                })
-            },
-        )
-        .optional()?
+        ConvertedPackage::find_by_content_hash_identity(&conn, distro, package, reference)?
     };
+
+    let converted = converted.and_then(|converted| {
+        if converted.needs_reconversion() {
+            None
+        } else {
+            Some(converted)
+        }
+    });
 
     let converted = match converted {
         Some(c) => c,
@@ -660,8 +628,6 @@ fn strip_digest_prefix(digest: &str) -> Option<&str> {
         None
     }
 }
-
-use rusqlite::OptionalExtension;
 
 #[cfg(test)]
 mod tests {
