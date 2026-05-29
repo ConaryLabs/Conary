@@ -2149,6 +2149,8 @@ mod tests {
             inference_error: None,
             legacy_provenance: None,
             scriptlet_classification: Default::default(),
+            legacy_scriptlets: None,
+            scriptlet_metadata: conary_core::ccs::convert::ScriptletBundleSummary::default(),
         }
     }
 
