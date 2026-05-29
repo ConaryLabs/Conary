@@ -12,7 +12,7 @@ use axum::{
     http::{StatusCode, header},
     response::{IntoResponse, Response},
 };
-use conary_core::db::models::DownloadCount;
+use conary_core::db::models::{CONVERSION_VERSION, DownloadCount};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -291,8 +291,8 @@ fn query_package_detail(
     let converted = conn
         .query_row(
             "SELECT COUNT(*) FROM converted_packages
-             WHERE distro = ?1 AND package_name = ?2",
-            rusqlite::params![distro, name],
+             WHERE distro = ?1 AND package_name = ?2 AND conversion_version >= ?3",
+            rusqlite::params![distro, name, CONVERSION_VERSION],
             |row| row.get::<_, i64>(0),
         )
         .unwrap_or(0)
@@ -345,7 +345,8 @@ fn query_versions_internal(
 
     let placeholders = repo_ids_placeholders(repo_ids.len());
     let distro_idx = repo_ids.len() + 1;
-    let name_idx = repo_ids.len() + 2;
+    let conversion_version_idx = repo_ids.len() + 2;
+    let name_idx = repo_ids.len() + 3;
     let sql = format!(
         "SELECT rp.version, rp.architecture, rp.size,
                 CASE WHEN cp.id IS NOT NULL THEN 1 ELSE 0 END as is_converted
@@ -353,6 +354,8 @@ fn query_versions_internal(
          LEFT JOIN converted_packages cp
              ON cp.package_name = rp.name AND cp.distro = ?{distro_idx}
                 AND cp.package_version = rp.version
+                AND cp.package_architecture IS rp.architecture
+                AND cp.conversion_version >= ?{conversion_version_idx}
          WHERE rp.repository_id IN ({placeholders}) AND rp.name = ?{name_idx}
          ORDER BY rp.synced_at DESC"
     );
@@ -360,6 +363,7 @@ fn query_versions_internal(
     let mut params: Vec<Box<dyn rusqlite::types::ToSql>> =
         repo_ids.iter().map(|id| Box::new(*id) as _).collect();
     params.push(Box::new(distro.to_string()));
+    params.push(Box::new(CONVERSION_VERSION));
     params.push(Box::new(name.to_string()));
 
     let mut stmt = conn.prepare(&sql)?;
@@ -600,8 +604,9 @@ fn query_overview(db_path: &std::path::Path) -> anyhow::Result<OverviewStats> {
 
     // Total converted packages
     let total_converted: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM converted_packages WHERE distro IS NOT NULL",
-        [],
+        "SELECT COUNT(*) FROM converted_packages
+         WHERE distro IS NOT NULL AND conversion_version >= ?1",
+        [CONVERSION_VERSION],
         |row| row.get(0),
     )?;
 
@@ -767,4 +772,134 @@ fn repo_ids_placeholders(count: usize) -> String {
         .map(|i| format!("?{i}"))
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use conary_core::db::models::{CONVERSION_VERSION, ConvertedPackage};
+    use conary_core::db::schema;
+    use tempfile::NamedTempFile;
+
+    fn create_test_db() -> (NamedTempFile, Connection) {
+        let temp_file = NamedTempFile::new().unwrap();
+        let conn = Connection::open(temp_file.path()).unwrap();
+        conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
+        schema::migrate(&conn).unwrap();
+        (temp_file, conn)
+    }
+
+    fn seed_repository_package(
+        conn: &Connection,
+        distro: &str,
+        name: &str,
+        version: &str,
+        architecture: Option<&str>,
+    ) {
+        conn.execute(
+            "INSERT INTO repositories (name, url, enabled)
+             VALUES (?1, ?2, 1)",
+            rusqlite::params![distro, format!("https://example.invalid/{distro}")],
+        )
+        .unwrap();
+        let repository_id = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO repository_packages
+             (repository_id, name, version, architecture, description, checksum, size, download_url, dependencies)
+             VALUES (?1, ?2, ?3, ?4, 'test package', 'sha256:repo', 3, 'https://example.invalid/pkg.rpm', '[]')",
+            rusqlite::params![repository_id, name, version, architecture],
+        )
+        .unwrap();
+    }
+
+    fn insert_converted(
+        conn: &Connection,
+        distro: &str,
+        name: &str,
+        version: &str,
+        architecture: Option<&str>,
+        conversion_version: i32,
+    ) {
+        let mut converted = ConvertedPackage::new_server(
+            distro.to_string(),
+            name.to_string(),
+            version.to_string(),
+            "rpm".to_string(),
+            format!("sha256:source-{name}-{version}"),
+            "high".to_string(),
+            &[],
+            3,
+            format!("sha256:content-{name}-{version}"),
+            format!("/tmp/{name}-{version}.ccs"),
+        );
+        converted.package_architecture = architecture.map(str::to_string);
+        converted.conversion_version = conversion_version;
+        converted.insert(conn).unwrap();
+    }
+
+    #[test]
+    fn package_detail_ignores_stale_converted_rows() {
+        let (temp_file, conn) = create_test_db();
+        seed_repository_package(&conn, "fedora", "pkg", "1.0", Some("x86_64"));
+        insert_converted(
+            &conn,
+            "fedora",
+            "pkg",
+            "1.0",
+            Some("x86_64"),
+            CONVERSION_VERSION - 1,
+        );
+
+        let detail = query_package_detail(temp_file.path(), "fedora", "pkg")
+            .unwrap()
+            .unwrap();
+
+        assert!(!detail.converted);
+        assert!(detail.versions.iter().all(|version| !version.converted));
+    }
+
+    #[test]
+    fn package_versions_require_matching_architecture_for_converted_status() {
+        let (temp_file, conn) = create_test_db();
+        seed_repository_package(&conn, "fedora", "pkg", "1.0", Some("aarch64"));
+        insert_converted(
+            &conn,
+            "fedora",
+            "pkg",
+            "1.0",
+            Some("x86_64"),
+            CONVERSION_VERSION,
+        );
+
+        let versions = query_versions(temp_file.path(), "fedora", "pkg").unwrap();
+
+        assert_eq!(versions.len(), 1);
+        assert_eq!(versions[0].architecture.as_deref(), Some("aarch64"));
+        assert!(!versions[0].converted);
+    }
+
+    #[test]
+    fn overview_ignores_stale_converted_rows() {
+        let (temp_file, conn) = create_test_db();
+        insert_converted(
+            &conn,
+            "fedora",
+            "stale",
+            "1.0",
+            Some("x86_64"),
+            CONVERSION_VERSION - 1,
+        );
+        insert_converted(
+            &conn,
+            "fedora",
+            "current",
+            "1.0",
+            Some("x86_64"),
+            CONVERSION_VERSION,
+        );
+
+        let overview = query_overview(temp_file.path()).unwrap();
+
+        assert_eq!(overview.total_converted, 1);
+    }
 }
