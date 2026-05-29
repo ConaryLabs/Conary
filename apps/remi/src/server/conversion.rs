@@ -9,7 +9,10 @@ use crate::server::conversion_timing::{
     ConversionPhase, ConversionPhaseTiming, ConversionSkippedPhase, ConversionTimingReport,
 };
 use anyhow::{Context, Result, anyhow};
-use conary_core::ccs::convert::{ConversionOptions, ConversionResult, LegacyConverter};
+use conary_core::ccs::convert::{
+    ConversionOptions, ConversionResult, LegacyConverter, ScriptletBundleSummary,
+    ScriptletDecisionCountsSummary,
+};
 use conary_core::db::models::{ConvertedPackage, RepositoryPackage, RepositoryProvide};
 use conary_core::filesystem::path::sanitize_filename;
 use conary_core::packages::arch::ArchPackage;
@@ -18,6 +21,7 @@ use conary_core::packages::deb::DebPackage;
 use conary_core::packages::rpm::RpmPackage;
 use conary_core::packages::traits::{Dependency, DependencyType, PackageFormat};
 use conary_core::repository::download_package;
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -44,11 +48,46 @@ pub struct ServerConversionResult {
     pub ccs_path: PathBuf,
     /// Whether this result came from a cold conversion or a hot existing CCS artifact.
     pub cache_state: String,
+    /// Passive legacy scriptlet summary for public metadata surfaces.
+    pub scriptlets: ScriptletPackageMetadata,
     /// Phase timing report for this conversion, when collected.
     pub timing: Option<ConversionTimingReport>,
 }
 
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ScriptletPackageMetadata {
+    pub scriptlet_fidelity: String,
+    pub target_compatibility: String,
+    pub publication_status: String,
+    pub evidence_digest: Option<String>,
+    pub curation_evidence_digest: Option<String>,
+    pub decision_counts: ScriptletDecisionCountsSummary,
+    pub blocked_reason_codes: Vec<String>,
+    pub review_reason_codes: Vec<String>,
+    pub unknown_commands: Vec<String>,
+    pub blocked_classes: Vec<String>,
+    pub review_artifact_available: bool,
+}
+
+impl From<&ScriptletBundleSummary> for ScriptletPackageMetadata {
+    fn from(summary: &ScriptletBundleSummary) -> Self {
+        Self {
+            scriptlet_fidelity: summary.scriptlet_fidelity.clone(),
+            target_compatibility: summary.target_compatibility.clone(),
+            publication_status: summary.publication_status.clone(),
+            evidence_digest: summary.evidence_digest.clone(),
+            curation_evidence_digest: summary.curation_evidence_digest.clone(),
+            decision_counts: summary.decision_counts,
+            blocked_reason_codes: summary.blocked_reason_codes.clone(),
+            review_reason_codes: summary.review_reason_codes.clone(),
+            unknown_commands: summary.unknown_commands.clone(),
+            blocked_classes: summary.blocked_classes.clone(),
+            review_artifact_available: summary.review_artifact_path.is_some(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
 pub struct ConversionBenchmarkEvidence {
     pub distro: String,
     pub package: String,
@@ -649,7 +688,9 @@ impl ConversionService {
             ..Default::default()
         };
 
-        let converter = LegacyConverter::new(options);
+        let converter = LegacyConverter::new(options)
+            .with_source_distro(distro)
+            .with_conversion_tool("remi");
         if metadata.scriptlets.is_empty() {
             skipped_phases.push(ConversionSkippedPhase {
                 phase: ConversionPhase::Capture,
@@ -663,8 +704,7 @@ impl ConversionService {
         }
         skipped_phases.push(ConversionSkippedPhase {
             phase: ConversionPhase::AdapterDispatch,
-            reason: "adapter registry not implemented; analyzer timing is included in legacy converter timing"
-                .to_string(),
+            reason: "adapter dispatch timing is included in legacy converter timing".to_string(),
         });
 
         let started = Instant::now();
@@ -744,6 +784,7 @@ impl ConversionService {
             final_ccs_path.to_string_lossy().to_string(),
         );
         converted.detected_hooks = Some(serde_json::to_string(&conversion_result.detected_hooks)?);
+        converted.set_scriptlet_metadata(&conversion_result.scriptlet_metadata)?;
         converted.package_architecture = package_architecture;
         converted.insert(&conn)?;
 
@@ -761,6 +802,7 @@ impl ConversionService {
             content_hash,
             ccs_path: final_ccs_path,
             cache_state: "cold".to_string(),
+            scriptlets: ScriptletPackageMetadata::from(&conversion_result.scriptlet_metadata),
             timing: None,
         })
     }
@@ -1207,6 +1249,8 @@ impl ConversionService {
             .and_then(|json| serde_json::from_str(json).ok())
             .unwrap_or_default();
 
+        let scriptlet_summary = existing.scriptlet_summary();
+
         Ok(ServerConversionResult {
             name,
             version,
@@ -1222,6 +1266,7 @@ impl ConversionService {
                 .unwrap_or_else(|| existing.original_checksum.clone()),
             ccs_path,
             cache_state: "hot".to_string(),
+            scriptlets: ScriptletPackageMetadata::from(&scriptlet_summary),
             timing: None,
         })
     }
@@ -1302,6 +1347,7 @@ impl ConversionService {
             content_hash,
             ccs_path: final_ccs_path,
             cache_state: "recipe".to_string(),
+            scriptlets: ScriptletPackageMetadata::from(&ScriptletBundleSummary::default()),
             timing: None,
         })
     }
@@ -2154,6 +2200,86 @@ mod tests {
         }
     }
 
+    #[test]
+    fn persisted_conversion_records_scriptlet_metadata() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let db_path = temp.path().join("remi.db");
+        conary_core::db::init(&db_path).unwrap();
+        let chunk_dir = temp.path().join("chunks");
+        let cache_dir = temp.path().join("cache");
+        let output_ccs = temp.path().join("out/test.ccs");
+        std::fs::create_dir_all(output_ccs.parent().unwrap()).unwrap();
+        std::fs::write(&output_ccs, b"ccs payload").unwrap();
+        let service = ConversionService::new(chunk_dir, cache_dir, db_path.clone(), None);
+        let metadata = PackageMetadata::new(
+            PathBuf::from("/tmp/test.rpm"),
+            "test".to_string(),
+            "1.0".to_string(),
+        );
+        let mut result = make_conversion_result(Default::default());
+        result.package_path = Some(output_ccs);
+        result.scriptlet_metadata = ScriptletBundleSummary {
+            scriptlet_fidelity: "review-required".to_string(),
+            target_compatibility: "review-required".to_string(),
+            publication_status: "private-review".to_string(),
+            evidence_digest: Some(conary_core::hash::sha256_prefixed(b"remi-scriptlets")),
+            blocked_reason_codes: vec!["blocked-class-network".to_string()],
+            review_reason_codes: vec!["review-class-debconf".to_string()],
+            unknown_commands: vec!["custom-helper".to_string()],
+            blocked_classes: vec!["network".to_string()],
+            review_artifact_path: Some("/tmp/review-artifact.json".to_string()),
+            ..ScriptletBundleSummary::default()
+        };
+        let mut repo_pkg = RepositoryPackage::new(
+            1,
+            "test".to_string(),
+            "1.0".to_string(),
+            "sha256:repo".to_string(),
+            11,
+            "https://example.invalid/test.rpm".to_string(),
+        );
+        repo_pkg.architecture = Some("x86_64".to_string());
+        let input = PersistConversionInput {
+            distro: "fedora".to_string(),
+            metadata,
+            format: "rpm",
+            original_checksum: "sha256:source".to_string(),
+            conversion_result: result,
+            repo_pkg: repo_pkg.clone(),
+            chunk_hashes: vec!["sha256:chunk".to_string()],
+        };
+
+        let server_result = service.persist_conversion_result(input).unwrap();
+
+        assert_eq!(
+            server_result.scriptlets.scriptlet_fidelity,
+            "review-required"
+        );
+        assert!(server_result.scriptlets.review_artifact_available);
+        let conn = conary_core::db::open(&db_path).unwrap();
+        let converted = ConvertedPackage::find_by_package_identity_with_arch(
+            &conn,
+            "fedora",
+            "test",
+            Some("1.0"),
+            Some("x86_64"),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(converted.scriptlet_fidelity, "review-required");
+        assert_eq!(converted.publication_status, "private-review");
+        assert_eq!(
+            converted.blocked_reason_codes_json,
+            "[\"blocked-class-network\"]"
+        );
+
+        let hot = service
+            .build_result_from_existing(&converted, "fedora", &repo_pkg)
+            .unwrap();
+        assert_eq!(hot.scriptlets.scriptlet_fidelity, "review-required");
+        assert!(hot.scriptlets.review_artifact_available);
+    }
+
     #[tokio::test]
     async fn test_store_chunks_writes_files() {
         let temp_dir = tempfile::TempDir::new().unwrap();
@@ -2413,6 +2539,7 @@ mod tests {
             content_hash: "sha256:test".to_string(),
             ccs_path: PathBuf::from("/tmp/nginx.ccs"),
             cache_state: "cold".to_string(),
+            scriptlets: ScriptletPackageMetadata::from(&ScriptletBundleSummary::default()),
             timing: Some(timing),
         };
 
@@ -2430,6 +2557,7 @@ mod tests {
             content_hash: "sha256:deadbeef".to_string(),
             ccs_path: PathBuf::from("/data/nginx.ccs"),
             cache_state: "cold".to_string(),
+            scriptlets: ScriptletPackageMetadata::from(&ScriptletBundleSummary::default()),
             timing: None,
         };
         // Verify Debug is implemented (would fail to compile otherwise)
