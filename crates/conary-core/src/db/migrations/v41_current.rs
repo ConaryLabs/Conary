@@ -1026,6 +1026,32 @@ pub fn migrate_v69(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Version 70: Passive legacy scriptlet bundle metadata for converted packages
+pub fn migrate_v70(conn: &Connection) -> Result<()> {
+    debug!("Migrating to schema version 70");
+
+    conn.execute_batch(
+        "
+        ALTER TABLE converted_packages ADD COLUMN scriptlet_fidelity TEXT NOT NULL DEFAULT 'unknown';
+        ALTER TABLE converted_packages ADD COLUMN target_compatibility TEXT NOT NULL DEFAULT 'unknown';
+        ALTER TABLE converted_packages ADD COLUMN publication_status TEXT NOT NULL DEFAULT 'public';
+        ALTER TABLE converted_packages ADD COLUMN evidence_digest TEXT;
+        ALTER TABLE converted_packages ADD COLUMN curation_evidence_digest TEXT;
+        ALTER TABLE converted_packages ADD COLUMN blocked_reason_codes_json TEXT NOT NULL DEFAULT '[]';
+        ALTER TABLE converted_packages ADD COLUMN scriptlet_summary_json TEXT NOT NULL DEFAULT '{}';
+        ALTER TABLE converted_packages ADD COLUMN review_artifact_path TEXT;
+
+        CREATE INDEX idx_converted_packages_scriptlet_fidelity
+            ON converted_packages(scriptlet_fidelity);
+        CREATE INDEX idx_converted_packages_publication_status
+            ON converted_packages(publication_status);
+        ",
+    )?;
+
+    info!("Schema version 70 applied successfully (passive scriptlet metadata)");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -11,7 +11,7 @@ use rusqlite::Connection;
 use tracing::info;
 
 /// Current schema version
-pub const SCHEMA_VERSION: i32 = 69;
+pub const SCHEMA_VERSION: i32 = 70;
 
 /// Initialize the schema version tracking table
 fn init_schema_version(conn: &Connection) -> Result<()> {
@@ -193,6 +193,7 @@ fn apply_migration(conn: &Connection, version: i32) -> Result<()> {
         67 => migrations::migrate_v67(conn),
         68 => migrations::migrate_v68(conn),
         69 => migrations::migrate_v69(conn),
+        70 => migrations::migrate_v70(conn),
         _ => Err(crate::error::Error::InitError(format!(
             "Unknown migration version: {}",
             version
@@ -329,6 +330,43 @@ mod tests {
         assert!(columns.contains(&"build_artifact_hash".to_string()));
         assert!(columns.contains(&"build_artifact_path".to_string()));
         assert!(columns.contains(&"build_artifact_size".to_string()));
+    }
+
+    #[test]
+    fn migration_adds_scriptlet_metadata_columns_to_converted_packages() {
+        let (_temp, conn) = create_test_db_at_version(69);
+        conn.execute(
+            "INSERT INTO converted_packages (original_format, original_checksum, conversion_version, conversion_fidelity, enhancement_version, enhancement_status)
+             VALUES ('rpm', 'sha256:old', 3, 'high', 0, 'pending')",
+            [],
+        )
+        .unwrap();
+
+        migrate(&conn).unwrap();
+
+        let row = conn
+            .query_row(
+                "SELECT scriptlet_fidelity, target_compatibility, publication_status, blocked_reason_codes_json, scriptlet_summary_json
+                 FROM converted_packages
+                 WHERE original_checksum = 'sha256:old'",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                    ))
+                },
+            )
+            .unwrap();
+
+        assert_eq!(row.0, "unknown");
+        assert_eq!(row.1, "unknown");
+        assert_eq!(row.2, "public");
+        assert_eq!(row.3, "[]");
+        assert_eq!(row.4, "{}");
     }
 
     #[test]
