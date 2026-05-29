@@ -288,12 +288,12 @@ result. The artifact is operator evidence, not a public package asset.
 Store artifacts under a private cache subtree such as:
 
 ```text
-<cache_dir>/scriptlet-review/<distro>/<package>/<version>/<evidence-digest>.json
+<cache_dir>/scriptlet-review/<distro>/<package>/<version>/<arch-or-noarch>/<evidence-digest>.json
 ```
 
-Use sanitized path components and write atomically through a temporary file plus
-rename. The path is stored only in `converted_packages.review_artifact_path` and
-never appears in public JSON.
+Use sanitized path components and write atomically through a temporary file in
+the review root plus rename. The path is stored only in
+`converted_packages.review_artifact_path` and never appears in public JSON.
 
 The artifact schema should be explicit and versioned:
 
@@ -307,7 +307,7 @@ pub struct ScriptletReviewArtifact {
     pub original_format: String,
     pub publication: PublicationGateReport,
     pub conversion_fidelity: String,
-    pub conversion_version: i64,
+    pub conversion_version: i32,
     pub ccs_content_hash: String,
     pub ccs_total_size: u64,
     pub created_at: String,
@@ -333,15 +333,22 @@ Add an admin-only route for review artifact retrieval. The exact route can
 follow existing admin handler conventions, for example:
 
 ```text
-GET /v1/admin/packages/:distro/:package/review-artifact?version=...&arch=...
+GET /v1/admin/packages/:distro/:package/scriptlet-review?version=...&arch=...
 ```
 
 Rules:
 
 - require the existing admin scope check;
+- require `version` as a query parameter, not a path segment, because native
+  package versions may contain characters such as `:`, `~`, or `+`;
 - locate the current non-stale converted row by package identity and optional
-  architecture;
+  architecture through the same architecture-aware lookup used by package
+  serving;
+- if `arch` is omitted and more than one row matches the package/version, return
+  `409` with an ambiguity message instead of picking the newest row;
 - return `404` when no converted row exists or the row has no artifact;
+- return `404` when the stored artifact path points to a file that no longer
+  exists;
 - return `409` when the row needs reconversion;
 - return `200 application/json` with artifact bytes when present;
 - never read arbitrary paths from user input;
@@ -386,7 +393,7 @@ Publication refusals are successful terminal conversion outcomes, not
 Use one outer type for both fresh conversions and hot-cache hits, for example:
 
 ```rust
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum ServerConversionOutcome {
     Ready(ServerConversionResult),
     ReviewRequired(ServerConversionResult),
@@ -430,17 +437,21 @@ Implementation requirements for `apps/remi/src/server/handlers/admin/packages.rs
 2. if the bundle is present, validate it through the manifest/archive validation
    path before trusting its fields;
 3. call the public bundle-summary conversion helper;
-4. call `ConvertedPackage::set_scriptlet_metadata()` before inserting the row;
-5. if the summary is not public-ready, write the private review artifact under
+4. derive `package.platform.arch` when present, pass it through the
+   architecture-aware converted-package identity lookup, and store it on
+   `ConvertedPackage.package_architecture` so review-artifact lookup and
+   replacement semantics stay aligned for uploaded multilib CCS artifacts;
+5. call `ConvertedPackage::set_scriptlet_metadata()` before inserting the row;
+6. if the summary is not public-ready, write the private review artifact under
    the configured review root and populate `review_artifact_path` before the DB
    transaction commits;
-6. expand `atomic_replace_record()` to accept the optional scriptlet summary,
-   publication report, and review artifact path, then set the metadata inside the
-   transaction before `insert()`;
-7. if review artifact writing succeeds but the DB transaction fails, delete the
+7. expand `atomic_replace_record()` to accept the optional architecture and the
+   scriptlet summary after `review_artifact_path` has been populated, then set
+   architecture and metadata inside the transaction before `insert()`;
+8. if review artifact writing succeeds but the DB transaction fails, delete the
    newly written review artifact or leave it only as an unreachable temporary
    file under the review root; it must not be referenced by any committed row;
-8. preserve the existing staged-file and atomic replacement behavior so the DB
+9. preserve the existing staged-file and atomic replacement behavior so the DB
    row never points at bytes that were not successfully staged.
 
 ## Jobs
@@ -486,7 +497,8 @@ status is `ready`.
 
 `GET /v1/jobs/:job_id` should return:
 
-- `status = "ready"` and a manifest only for public-ready results;
+- `status = "ready"` and a manifest with sanitized scriptlet metadata only for
+  public-ready results;
 - `status = "review-required"` plus the publication report for private-review
   or local-only results;
 - `status = "blocked"` plus the publication report for blocked results;
@@ -551,11 +563,13 @@ instead of a file stream for review-required or blocked results.
 ### Raw Chunk And OCI Blob Streaming
 
 Content-addressed chunk endpoints can also expose converted package bytes when a
-client already knows a hash. Goal 5 must make those endpoints reachability-aware:
+client already knows a hash. Goal 5 must make those endpoints converted-row
+reachability-aware without turning Remi's general CAS into a converted-package
+only store:
 
 - `/v1/chunks/{hash}` `GET` and `HEAD` may serve or acknowledge a local chunk
-  only when that hash is reachable from at least one current public-ready
-  converted row;
+  when that hash is not referenced by any current converted row, or when it is
+  reachable from at least one current public-ready converted row;
 - `/v1/chunks/batch` must omit or mark unavailable any hash that is only
   reachable from stale or non-public rows;
 - `/v1/chunks/find-missing` must not report non-public-only local chunks as
@@ -568,6 +582,19 @@ allowed because the bytes are already publicly reachable through the public row.
 If the hash is reachable only from non-public or stale rows, public endpoints
 should return the same shape they use for missing chunks/blobs, preferably `404`,
 so the response does not leak that a private artifact exists.
+
+Chunks with no converted-package reference, or chunks explicitly protected by the
+generic `chunk_access` cache bookkeeping for non-converted workflows, remain
+servable according to the existing CAS rules. The gate is about preventing
+non-public converted-package bytes from leaking, not about reclassifying every
+CAS object as a package artifact.
+
+The chunk/blob reachability helper must be cheap enough for hot public paths. It
+should query only candidate rows whose `chunk_hashes_json` appears to contain the
+requested hash and only select the minimal columns needed to evaluate the
+health-aware public-ready predicate. A SQL text prefilter is only a narrowing
+hint; the helper must still parse `chunk_hashes_json` and perform exact hash
+matching in Rust before deciding that a converted row references the chunk.
 
 This rule is stricter than simply filtering manifests and indexes: public
 metadata must not advertise non-public hashes, and public blob/chunk handlers
