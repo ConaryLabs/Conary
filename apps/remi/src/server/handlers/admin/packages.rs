@@ -431,7 +431,7 @@ pub async fn upload_package(
 #[cfg(test)]
 mod tests {
     use crate::server::handlers::admin::test_helpers::{rebuild_app, test_app};
-    use axum::body::Body;
+    use axum::body::{Body, to_bytes};
     use axum::http::{Method, Request, StatusCode};
     use flate2::Compression;
     use flate2::write::GzEncoder;
@@ -472,6 +472,17 @@ mod tests {
             .expect("finish gzip")
     }
 
+    async fn assert_status(response: axum::response::Response, expected: StatusCode) {
+        let status = response.status();
+        if status != expected {
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            panic!(
+                "unexpected status {status}, expected {expected}; body: {}",
+                String::from_utf8_lossy(&body)
+            );
+        }
+    }
+
     #[tokio::test]
     async fn test_upload_package_registers_converted_record() {
         let (app, db_path) = test_app().await;
@@ -487,7 +498,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(response.status(), StatusCode::CREATED);
+        assert_status(response, StatusCode::CREATED).await;
 
         let conn = conary_core::db::open(&db_path).unwrap();
         let found = conary_core::db::models::ConvertedPackage::find_by_package_identity(
@@ -522,7 +533,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::CREATED);
+        assert_status(response, StatusCode::CREATED).await;
 
         let app2 = rebuild_app(&db_path);
         let response = app2
@@ -536,7 +547,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::CREATED);
+        assert_status(response, StatusCode::CREATED).await;
 
         let conn = conary_core::db::open(&db_path).unwrap();
         assert!(
