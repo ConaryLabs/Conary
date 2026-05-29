@@ -977,6 +977,36 @@ mod tests {
     }
 
     #[test]
+    fn converted_ccs_archive_round_trip_preserves_legacy_scriptlet_bundle() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut metadata = make_test_metadata();
+        metadata.scriptlets = vec![Scriptlet {
+            phase: ScriptletPhase::PostInstall,
+            interpreter: "/bin/sh".to_string(),
+            content: "/sbin/ldconfig\n".to_string(),
+            flags: None,
+        }];
+        let converter = passive_test_converter(temp_dir.path());
+
+        let result = converter
+            .convert(
+                &metadata,
+                &make_test_files(),
+                "rpm",
+                "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            )
+            .unwrap();
+        let package_path = result.package_path.as_ref().unwrap();
+
+        let file = std::fs::File::open(package_path).unwrap();
+        let archive = crate::ccs::archive_reader::read_ccs_archive(file).unwrap();
+        let bundle = archive.manifest.legacy_scriptlets.as_ref().unwrap();
+
+        assert_eq!(bundle.source_package, metadata.name);
+        bundle.validate().unwrap();
+    }
+
+    #[test]
     fn remi_converter_context_flows_into_bundle_metadata() {
         let temp_dir = tempfile::tempdir().unwrap();
         let metadata = make_test_metadata();

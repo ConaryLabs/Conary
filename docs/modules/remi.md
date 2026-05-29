@@ -5,6 +5,23 @@ upstream RPM, DEB, and Arch packages into CCS artifacts, stores converted
 content in the local content-addressed store, and can write chunks through to R2
 when configured.
 
+## Passive Scriptlet Metadata
+
+Goal 4 conversions embed a passive `legacy_scriptlets` bundle in the generated
+CCS manifest and store aggregate scriptlet metadata on `converted_packages`.
+Those database fields record fidelity, target compatibility, publication
+status, evidence digests, blocked/review reason codes, and sanitized summary
+counts for converted artifacts.
+
+Public package detail, metadata, and generated-index responses expose this
+information through a sanitized `scriptlets` object. Local
+`review_artifact_path` values remain private server state and are represented
+publicly only as `review_artifact_available`.
+
+Goal 4 does not enforce publication policy. Remi records `publication_status`
+for auditing and future gating work, but package downloads and publication
+responses are not rejected because of that value in this goal.
+
 ## Conversion Benchmark Evidence
 
 Remi includes a local benchmark command for measuring cold-path conversion cost
