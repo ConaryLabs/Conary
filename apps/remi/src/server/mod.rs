@@ -38,6 +38,7 @@ pub mod metrics;
 mod negative_cache;
 pub mod popularity;
 mod prewarm;
+pub mod publication;
 pub mod r2;
 pub mod rate_limit;
 mod routes;

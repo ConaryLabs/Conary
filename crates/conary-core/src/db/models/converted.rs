@@ -90,6 +90,12 @@ pub struct ConvertedPackage {
     pub review_artifact_path: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScriptletSummaryForPublication {
+    pub summary: ScriptletBundleSummary,
+    pub valid: bool,
+}
+
 impl ConvertedPackage {
     /// Column list for SELECT queries.
     const COLUMNS: &'static str = "id, trove_id, original_format, original_checksum, \
@@ -370,6 +376,81 @@ impl ConvertedPackage {
         }
     }
 
+    pub fn scriptlet_publication_status(&self) -> &str {
+        self.publication_status.as_str()
+    }
+
+    pub fn scriptlet_summary_for_publication(&self) -> ScriptletSummaryForPublication {
+        let value = match serde_json::from_str::<serde_json::Value>(&self.scriptlet_summary_json) {
+            Ok(value) => value,
+            Err(_) => {
+                return ScriptletSummaryForPublication {
+                    summary: self.scriptlet_summary(),
+                    valid: false,
+                };
+            }
+        };
+
+        let shape_valid = self.summary_json_shape_valid_for_publication(&value);
+        let summary = self.scriptlet_summary();
+        let status_matches = value
+            .get("publication_status")
+            .and_then(|value| value.as_str())
+            .map(|status| status == self.publication_status)
+            .unwrap_or_else(|| self.is_default_scriptlet_publication_shape(&value));
+
+        ScriptletSummaryForPublication {
+            summary,
+            valid: shape_valid && status_matches,
+        }
+    }
+
+    pub fn is_scriptlet_public_ready(&self) -> bool {
+        let publication = self.scriptlet_summary_for_publication();
+        publication.valid && publication.summary.publication_status == "public"
+    }
+
+    pub fn parsed_chunk_hashes(&self) -> Vec<String> {
+        self.chunk_hashes_json
+            .as_deref()
+            .and_then(|json| serde_json::from_str::<Vec<String>>(json).ok())
+            .unwrap_or_default()
+    }
+
+    fn summary_json_shape_valid_for_publication(&self, value: &serde_json::Value) -> bool {
+        if self.is_default_scriptlet_publication_shape(value) {
+            return true;
+        }
+
+        let Some(object) = value.as_object() else {
+            return false;
+        };
+
+        [
+            "scriptlet_fidelity",
+            "target_compatibility",
+            "publication_status",
+            "decision_counts",
+            "blocked_reason_codes",
+            "review_reason_codes",
+            "unknown_commands",
+            "blocked_classes",
+        ]
+        .iter()
+        .all(|key| object.contains_key(*key))
+    }
+
+    fn is_default_scriptlet_publication_shape(&self, value: &serde_json::Value) -> bool {
+        value.as_object().is_some_and(|object| object.is_empty())
+            && self.scriptlet_fidelity == "unknown"
+            && self.target_compatibility == "unknown"
+            && self.publication_status == "public"
+            && self.evidence_digest.is_none()
+            && self.curation_evidence_digest.is_none()
+            && json_string_array_is_empty(&self.blocked_reason_codes_json)
+            && self.review_artifact_path.is_none()
+    }
+
     /// List all converted packages with a specific fidelity level
     pub fn find_by_fidelity(conn: &Connection, fidelity: &str) -> Result<Vec<Self>> {
         let sql = format!(
@@ -580,6 +661,13 @@ impl ConvertedPackage {
     }
 }
 
+fn json_string_array_is_empty(value: &str) -> bool {
+    match serde_json::from_str::<Vec<String>>(value) {
+        Ok(values) => values.is_empty(),
+        Err(_) => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -678,6 +766,81 @@ mod tests {
         assert_eq!(summary.blocked_reason_codes, vec!["blocked-class-network"]);
         assert!(summary.review_reason_codes.is_empty());
         assert!(summary.unknown_commands.is_empty());
+    }
+
+    #[test]
+    fn scriptlet_summary_for_publication_accepts_constructor_default_shape() {
+        let converted = ConvertedPackage::new_server(
+            "fedora".to_string(),
+            "plain".to_string(),
+            "1.0".to_string(),
+            "ccs".to_string(),
+            "upload:fedora:abc".to_string(),
+            "full".to_string(),
+            &["abc".to_string()],
+            3,
+            "abc".to_string(),
+            "/tmp/plain.ccs".to_string(),
+        );
+
+        let publication = converted.scriptlet_summary_for_publication();
+
+        assert!(publication.valid);
+        assert_eq!(publication.summary.publication_status, "public");
+        assert!(converted.is_scriptlet_public_ready());
+    }
+
+    #[test]
+    fn scriptlet_summary_for_publication_rejects_default_json_with_scriptlet_evidence() {
+        let mut converted = ConvertedPackage::new(
+            "rpm".to_string(),
+            "sha256:source".to_string(),
+            "high".to_string(),
+        );
+        converted.scriptlet_fidelity = "blocked".to_string();
+        converted.target_compatibility = "blocked".to_string();
+        converted.publication_status = "public".to_string();
+        converted.evidence_digest = Some(crate::hash::sha256_prefixed(b"evidence"));
+        converted.scriptlet_summary_json = "{}".to_string();
+
+        let publication = converted.scriptlet_summary_for_publication();
+
+        assert!(!publication.valid);
+        assert!(!converted.is_scriptlet_public_ready());
+    }
+
+    #[test]
+    fn scriptlet_summary_for_publication_rejects_partial_and_malformed_json() {
+        let mut converted = ConvertedPackage::new(
+            "rpm".to_string(),
+            "sha256:source".to_string(),
+            "high".to_string(),
+        );
+        converted.scriptlet_summary_json = r#"{"publication_status":"public"}"#.to_string();
+        assert!(!converted.scriptlet_summary_for_publication().valid);
+
+        converted.scriptlet_summary_json = "{not valid json".to_string();
+        assert!(!converted.scriptlet_summary_for_publication().valid);
+    }
+
+    #[test]
+    fn scriptlet_public_ready_requires_valid_summary_and_public_status() {
+        let mut converted = ConvertedPackage::new(
+            "rpm".to_string(),
+            "sha256:source".to_string(),
+            "high".to_string(),
+        );
+        let summary = ScriptletBundleSummary {
+            scriptlet_fidelity: "review-required".to_string(),
+            target_compatibility: "review-required".to_string(),
+            publication_status: "private-review".to_string(),
+            review_reason_codes: vec!["review-class-debconf".to_string()],
+            ..ScriptletBundleSummary::default()
+        };
+        converted.set_scriptlet_metadata(&summary).unwrap();
+
+        assert!(converted.scriptlet_summary_for_publication().valid);
+        assert!(!converted.is_scriptlet_public_ready());
     }
 
     #[test]

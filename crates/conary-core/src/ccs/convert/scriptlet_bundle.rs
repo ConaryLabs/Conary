@@ -85,6 +85,12 @@ impl Default for ScriptletBundleSummary {
     }
 }
 
+impl ScriptletBundleSummary {
+    pub fn from_bundle(bundle: &LegacyScriptletBundle, evidence_digest: Option<String>) -> Self {
+        summary_from_bundle(bundle, evidence_digest)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct ScriptletDecisionCountsSummary {
     pub replaced: u32,
@@ -1840,6 +1846,28 @@ mod tests {
             conversion_tool: "remi",
             conversion_tool_version: "0.1.0",
         })
+    }
+
+    #[test]
+    fn scriptlet_bundle_summary_from_bundle_is_public_api() {
+        let metadata = package_metadata("public-api", "1.0");
+        let classification = ScriptletClassificationReport::default();
+        let build = bundle_for_metadata(&metadata, &[], &classification).unwrap();
+
+        let summary = ScriptletBundleSummary::from_bundle(
+            &build.bundle,
+            Some(crate::hash::sha256_prefixed(b"x")),
+        );
+
+        assert_eq!(
+            summary.publication_status,
+            build.bundle.publication_status.as_str()
+        );
+        assert_eq!(
+            summary.evidence_digest,
+            Some(crate::hash::sha256_prefixed(b"x"))
+        );
+        assert_eq!(summary.review_artifact_path, None);
     }
 
     fn native_entry_with_body(bytes: Vec<u8>) -> NativeScriptletEntry {
