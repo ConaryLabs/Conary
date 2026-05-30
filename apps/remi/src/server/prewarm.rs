@@ -132,7 +132,8 @@ pub async fn run_prewarm(config: &PrewarmConfig) -> Result<PrewarmResult> {
             )
             .await
         {
-            Ok(conv_result) => {
+            Ok(outcome) => {
+                let conv_result = outcome.into_result();
                 info!(
                     "Converted {} {}: {} chunks, {} bytes",
                     pkg.name,

@@ -8,6 +8,7 @@
 use crate::server::ServerState;
 use crate::server::conversion::ScriptletPackageMetadata;
 use crate::server::jobs::{JobId, JobStatus};
+use crate::server::publication::{PublicationRefusal, refusal_response};
 use axum::{
     Json,
     extract::{Path, Query, State},
@@ -345,7 +346,9 @@ async fn run_conversion(state: Arc<RwLock<ServerState>>, job_id: JobId) {
     {
         let mut state_guard = state.write().await;
         match result {
-            Ok(conversion_result) => {
+            Ok(outcome) => {
+                let status = outcome.job_status();
+                let conversion_result = outcome.into_result();
                 tracing::info!(
                     "Conversion complete: {}:{} -> {} chunks (job {})",
                     job.distro,
@@ -360,10 +363,12 @@ async fn run_conversion(state: Arc<RwLock<ServerState>>, job_id: JobId) {
                     content_hash: conversion_result.content_hash,
                     ccs_path: conversion_result.ccs_path,
                     actual_version: conversion_result.version,
+                    scriptlets: conversion_result.scriptlets,
+                    publication: conversion_result.publication,
                 };
                 state_guard
                     .job_manager
-                    .complete_with_result(&job_id, job_result);
+                    .complete_with_result(&job_id, status, job_result);
             }
             Err(e) => {
                 tracing::error!(
@@ -446,6 +451,41 @@ pub async fn download_package(
                     .await;
                 }
                 // Result missing or file deleted - fall through to filesystem lookup
+            }
+            crate::server::jobs::JobStatus::ReviewRequired => {
+                if let Some(report) = job
+                    .result
+                    .as_ref()
+                    .and_then(|result| result.publication.clone())
+                {
+                    return refusal_response(
+                        PublicationRefusal::ReviewRequired(report),
+                        &distro,
+                        &name,
+                        query.version.as_deref(),
+                    );
+                }
+                return (StatusCode::CONFLICT, "Conversion requires scriptlet review")
+                    .into_response();
+            }
+            crate::server::jobs::JobStatus::Blocked => {
+                if let Some(report) = job
+                    .result
+                    .as_ref()
+                    .and_then(|result| result.publication.clone())
+                {
+                    return refusal_response(
+                        PublicationRefusal::Blocked(report),
+                        &distro,
+                        &name,
+                        query.version.as_deref(),
+                    );
+                }
+                return (
+                    StatusCode::FORBIDDEN,
+                    "Conversion blocked by scriptlet policy",
+                )
+                    .into_response();
             }
             crate::server::jobs::JobStatus::Failed(error) => {
                 // Conversion failed - return error

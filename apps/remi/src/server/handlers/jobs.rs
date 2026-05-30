@@ -27,6 +27,8 @@ pub struct JobStatusResponse {
     pub progress: Option<u8>,
     /// Error message if failed
     pub error: Option<String>,
+    /// Publication refusal report for review-required or blocked jobs.
+    pub publication: Option<crate::server::publication::PublicationGateReport>,
     /// Manifest data if ready
     pub manifest: Option<serde_json::Value>,
 }
@@ -62,6 +64,8 @@ pub async fn get_job_status(
         JobStatus::Pending => "pending",
         JobStatus::Converting => "converting",
         JobStatus::Ready => "ready",
+        JobStatus::ReviewRequired => "review-required",
+        JobStatus::Blocked => "blocked",
         JobStatus::Failed(_) => "failed",
     };
 
@@ -69,6 +73,10 @@ pub async fn get_job_status(
         JobStatus::Failed(msg) => Some(msg.clone()),
         _ => None,
     };
+    let publication = job
+        .result
+        .as_ref()
+        .and_then(|result| result.publication.clone());
 
     // Include manifest if ready and result is available
     let manifest = if matches!(job.status, JobStatus::Ready) {
@@ -86,7 +94,8 @@ pub async fn get_job_status(
                     })
                 }).collect::<Vec<_>>(),
                 "total_size": r.total_size,
-                "content_hash": r.content_hash
+                "content_hash": r.content_hash,
+                "scriptlets": &r.scriptlets
             })
         })
     } else {
@@ -102,6 +111,7 @@ pub async fn get_job_status(
         architecture: job.architecture,
         progress: job.progress,
         error,
+        publication,
         manifest,
     })
     .into_response()
