@@ -12,9 +12,10 @@ use axum::{
     http::{StatusCode, header},
     response::{IntoResponse, Response},
 };
-use conary_core::db::models::{CONVERSION_VERSION, DownloadCount};
+use conary_core::db::models::{ConvertedPackage, DownloadCount};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -287,16 +288,7 @@ fn query_package_detail(
     // Get all versions
     let versions = query_versions_internal(&conn, distro, name)?;
 
-    // Check if converted
-    let converted = conn
-        .query_row(
-            "SELECT COUNT(*) FROM converted_packages
-             WHERE distro = ?1 AND package_name = ?2 AND conversion_version >= ?3",
-            rusqlite::params![distro, name, CONVERSION_VERSION],
-            |row| row.get::<_, i64>(0),
-        )
-        .unwrap_or(0)
-        > 0;
+    let converted = versions.iter().any(|version| version.converted);
 
     // Get download counts
     let (download_count, download_count_30d) =
@@ -344,35 +336,29 @@ fn query_versions_internal(
     }
 
     let placeholders = repo_ids_placeholders(repo_ids.len());
-    let distro_idx = repo_ids.len() + 1;
-    let conversion_version_idx = repo_ids.len() + 2;
-    let name_idx = repo_ids.len() + 3;
+    let name_idx = repo_ids.len() + 1;
+    let converted_keys = public_ready_converted_keys(conn, distro, name)?;
     let sql = format!(
-        "SELECT rp.version, rp.architecture, rp.size,
-                CASE WHEN cp.id IS NOT NULL THEN 1 ELSE 0 END as is_converted
+        "SELECT rp.version, rp.architecture, rp.size
          FROM repository_packages rp
-         LEFT JOIN converted_packages cp
-             ON cp.package_name = rp.name AND cp.distro = ?{distro_idx}
-                AND cp.package_version = rp.version
-                AND cp.package_architecture IS rp.architecture
-                AND cp.conversion_version >= ?{conversion_version_idx}
          WHERE rp.repository_id IN ({placeholders}) AND rp.name = ?{name_idx}
          ORDER BY rp.synced_at DESC"
     );
 
     let mut params: Vec<Box<dyn rusqlite::types::ToSql>> =
         repo_ids.iter().map(|id| Box::new(*id) as _).collect();
-    params.push(Box::new(distro.to_string()));
-    params.push(Box::new(CONVERSION_VERSION));
     params.push(Box::new(name.to_string()));
 
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(rusqlite::params_from_iter(&params), |row| {
+        let version: String = row.get(0)?;
+        let architecture: Option<String> = row.get(1)?;
+        let converted = converted_keys.contains(&(version.clone(), architecture.clone()));
         Ok(VersionSummary {
-            version: row.get(0)?,
-            architecture: row.get(1)?,
+            version,
+            architecture,
             size: row.get(2)?,
-            converted: row.get::<_, i64>(3).map(|c| c != 0)?,
+            converted,
         })
     })?;
 
@@ -602,13 +588,15 @@ fn query_overview(db_path: &std::path::Path) -> anyhow::Result<OverviewStats> {
         |row| row.get(0),
     )?;
 
-    // Total converted packages
-    let total_converted: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM converted_packages
-         WHERE distro IS NOT NULL AND conversion_version >= ?1",
-        [CONVERSION_VERSION],
-        |row| row.get(0),
-    )?;
+    // Total public-ready converted packages.
+    let total_converted = ConvertedPackage::list_all(&conn)?
+        .into_iter()
+        .filter(|converted| {
+            converted.distro.is_some()
+                && !converted.needs_reconversion()
+                && converted.is_scriptlet_public_ready()
+        })
+        .count() as i64;
 
     // Count distinct distro families from enabled repositories.
     // Multiple repos can serve the same distro (e.g., arch-core, arch-extra,
@@ -774,9 +762,29 @@ fn repo_ids_placeholders(count: usize) -> String {
         .join(", ")
 }
 
+type ConvertedVersionKey = (String, Option<String>);
+
+fn public_ready_converted_keys(
+    conn: &Connection,
+    distro: &str,
+    name: &str,
+) -> anyhow::Result<HashSet<ConvertedVersionKey>> {
+    let mut keys = HashSet::new();
+    for converted in ConvertedPackage::find_publication_candidates(conn, distro, Some(name))? {
+        if !converted.is_scriptlet_public_ready() {
+            continue;
+        }
+        if let Some(version) = converted.package_version {
+            keys.insert((version, converted.package_architecture));
+        }
+    }
+    Ok(keys)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use conary_core::ccs::convert::ScriptletBundleSummary;
     use conary_core::db::models::{CONVERSION_VERSION, ConvertedPackage};
     use conary_core::db::schema;
     use tempfile::NamedTempFile;
@@ -797,12 +805,18 @@ mod tests {
         architecture: Option<&str>,
     ) {
         conn.execute(
-            "INSERT INTO repositories (name, url, enabled)
+            "INSERT OR IGNORE INTO repositories (name, url, enabled)
              VALUES (?1, ?2, 1)",
             rusqlite::params![distro, format!("https://example.invalid/{distro}")],
         )
         .unwrap();
-        let repository_id = conn.last_insert_rowid();
+        let repository_id: i64 = conn
+            .query_row(
+                "SELECT id FROM repositories WHERE name = ?1",
+                [distro],
+                |row| row.get(0),
+            )
+            .unwrap();
         conn.execute(
             "INSERT INTO repository_packages
              (repository_id, name, version, architecture, description, checksum, size, download_url, dependencies)
@@ -834,6 +848,38 @@ mod tests {
         );
         converted.package_architecture = architecture.map(str::to_string);
         converted.conversion_version = conversion_version;
+        converted.insert(conn).unwrap();
+    }
+
+    fn insert_private_review_conversion(
+        conn: &Connection,
+        distro: &str,
+        name: &str,
+        version: &str,
+        architecture: Option<&str>,
+    ) {
+        let mut converted = ConvertedPackage::new_server(
+            distro.to_string(),
+            name.to_string(),
+            version.to_string(),
+            "rpm".to_string(),
+            format!("sha256:source-{name}-{version}"),
+            "high".to_string(),
+            &[],
+            3,
+            format!("sha256:content-{name}-{version}"),
+            format!("/tmp/{name}-{version}.ccs"),
+        );
+        converted.package_architecture = architecture.map(str::to_string);
+        converted
+            .set_scriptlet_metadata(&ScriptletBundleSummary {
+                publication_status: "private-review".to_string(),
+                scriptlet_fidelity: "review-required".to_string(),
+                target_compatibility: "review-required".to_string(),
+                review_reason_codes: vec!["review-class-debconf".to_string()],
+                ..Default::default()
+            })
+            .unwrap();
         converted.insert(conn).unwrap();
     }
 
@@ -901,5 +947,41 @@ mod tests {
         let overview = query_overview(temp_file.path()).unwrap();
 
         assert_eq!(overview.total_converted, 1);
+    }
+
+    #[test]
+    fn package_detail_counts_only_public_ready_conversions() {
+        let (temp_file, conn) = create_test_db();
+        seed_repository_package(&conn, "fedora", "pkg", "1.0", Some("x86_64"));
+        seed_repository_package(&conn, "fedora", "pkg", "2.0", Some("x86_64"));
+
+        insert_converted(
+            &conn,
+            "fedora",
+            "pkg",
+            "1.0",
+            Some("x86_64"),
+            CONVERSION_VERSION,
+        );
+        insert_private_review_conversion(&conn, "fedora", "pkg", "2.0", Some("x86_64"));
+
+        let detail = query_package_detail(temp_file.path(), "fedora", "pkg")
+            .unwrap()
+            .unwrap();
+        let versions = query_versions(temp_file.path(), "fedora", "pkg").unwrap();
+        let overview = query_overview(temp_file.path()).unwrap();
+
+        assert!(detail.converted);
+        assert_eq!(overview.total_converted, 1);
+        assert!(
+            versions
+                .iter()
+                .any(|version| version.version == "1.0" && version.converted)
+        );
+        assert!(
+            versions
+                .iter()
+                .any(|version| version.version == "2.0" && !version.converted)
+        );
     }
 }

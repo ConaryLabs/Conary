@@ -6,7 +6,7 @@
 
 use crate::server::conversion::ConversionService;
 use anyhow::{Context, Result};
-use conary_core::db::models::{CONVERSION_VERSION, RepositoryPackage};
+use conary_core::db::models::{CONVERSION_VERSION, ConvertedPackage, RepositoryPackage};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tracing::{debug, info, warn};
@@ -112,13 +112,29 @@ pub async fn run_prewarm(config: &PrewarmConfig) -> Result<PrewarmResult> {
     for pkg in packages.iter().take(config.max_packages) {
         result.packages_processed += 1;
 
-        // Check if already converted
-        if is_already_converted_async(&config.db_path, &pkg.name, &pkg.version, &config.distro)
-            .await?
+        // Check if already converted or terminal behind the publication gate.
+        match existing_conversion_state_async(
+            &config.db_path,
+            &pkg.name,
+            &pkg.version,
+            &config.distro,
+        )
+        .await?
         {
-            debug!("Skipping {} {} - already converted", pkg.name, pkg.version);
-            result.packages_skipped += 1;
-            continue;
+            ExistingConversionState::PublicReady => {
+                debug!("Skipping {} {} - already converted", pkg.name, pkg.version);
+                result.packages_skipped += 1;
+                continue;
+            }
+            ExistingConversionState::NonPublicTerminal => {
+                debug!(
+                    "Skipping {} {} - conversion requires scriptlet review",
+                    pkg.name, pkg.version
+                );
+                result.packages_skipped += 1;
+                continue;
+            }
+            ExistingConversionState::MissingOrStale => {}
         }
 
         info!("Converting {} {}...", pkg.name, pkg.version);
@@ -304,28 +320,34 @@ fn load_popularity_data(path: &str) -> Result<Vec<PackagePopularity>> {
 /// which are set by server-side conversions (trove_id may be None for those).
 /// Falls back to the trove join for client-side conversions that only have
 /// trove_id.
-fn is_already_converted(
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExistingConversionState {
+    MissingOrStale,
+    PublicReady,
+    NonPublicTerminal,
+}
+
+fn existing_conversion_state(
     conn: &rusqlite::Connection,
     name: &str,
     version: &str,
     distro: &str,
-) -> Result<bool> {
+) -> Result<ExistingConversionState> {
     // First check by structured identity (covers server-side conversions
     // where trove_id is NULL).
-    let count: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM converted_packages
-             WHERE package_name = ?1
-               AND package_version = ?2
-               AND distro = ?3
-               AND conversion_version >= ?4",
-            rusqlite::params![name, version, distro, CONVERSION_VERSION],
-            |row| row.get(0),
-        )
-        .unwrap_or(0);
+    let mut saw_non_public = false;
+    for converted in ConvertedPackage::find_publication_candidates(conn, distro, Some(name))? {
+        if converted.package_version.as_deref() != Some(version) {
+            continue;
+        }
+        if converted.is_scriptlet_public_ready() {
+            return Ok(ExistingConversionState::PublicReady);
+        }
+        saw_non_public = true;
+    }
 
-    if count > 0 {
-        return Ok(true);
+    if saw_non_public {
+        return Ok(ExistingConversionState::NonPublicTerminal);
     }
 
     // Fall back to trove join for client-side conversions.
@@ -341,15 +363,19 @@ fn is_already_converted(
         )
         .unwrap_or(0);
 
-    Ok(trove_count > 0)
+    if trove_count > 0 {
+        Ok(ExistingConversionState::PublicReady)
+    } else {
+        Ok(ExistingConversionState::MissingOrStale)
+    }
 }
 
-async fn is_already_converted_async(
+async fn existing_conversion_state_async(
     db_path: &str,
     name: &str,
     version: &str,
     distro: &str,
-) -> Result<bool> {
+) -> Result<ExistingConversionState> {
     let db_path = db_path.to_string();
     let name = name.to_string();
     let version = version.to_string();
@@ -357,7 +383,7 @@ async fn is_already_converted_async(
 
     tokio::task::spawn_blocking(move || {
         let conn = conary_core::db::open(&db_path)?;
-        is_already_converted(&conn, &name, &version, &distro)
+        existing_conversion_state(&conn, &name, &version, &distro)
     })
     .await
     .map_err(|e| anyhow::anyhow!("prewarm cache lookup task panicked: {e}"))?
@@ -411,6 +437,8 @@ pub async fn run_prewarm_background(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use conary_core::ccs::convert::ScriptletBundleSummary;
+    use conary_core::db::models::{CONVERSION_VERSION, ConvertedPackage};
 
     #[test]
     fn test_prewarm_result_serialization() {
@@ -470,6 +498,64 @@ mod tests {
         assert_eq!(result[0].score, 1000);
         assert_eq!(result[1].name, "curl");
         assert_eq!(result[1].score, 800);
+    }
+
+    #[test]
+    fn prewarm_treats_non_public_current_rows_as_terminal_not_public_ready() {
+        use conary_core::db::schema;
+        use tempfile::NamedTempFile;
+
+        let temp_file = NamedTempFile::new().unwrap();
+        let conn = rusqlite::Connection::open(temp_file.path()).unwrap();
+        conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
+        schema::migrate(&conn).unwrap();
+
+        let mut stale = ConvertedPackage::new_server(
+            "fedora".to_string(),
+            "pkg".to_string(),
+            "1.0".to_string(),
+            "rpm".to_string(),
+            "sha256:pkg-1.0-source".to_string(),
+            "high".to_string(),
+            &[],
+            3,
+            "sha256:pkg-1.0-content".to_string(),
+            "/tmp/pkg-1.0.ccs".to_string(),
+        );
+        stale.conversion_version = CONVERSION_VERSION - 1;
+        stale.insert(&conn).unwrap();
+
+        let mut private = ConvertedPackage::new_server(
+            "fedora".to_string(),
+            "pkg".to_string(),
+            "2.0".to_string(),
+            "rpm".to_string(),
+            "sha256:pkg-2.0-source".to_string(),
+            "high".to_string(),
+            &[],
+            3,
+            "sha256:pkg-2.0-content".to_string(),
+            "/tmp/pkg-2.0.ccs".to_string(),
+        );
+        private
+            .set_scriptlet_metadata(&ScriptletBundleSummary {
+                publication_status: "private-review".to_string(),
+                scriptlet_fidelity: "review-required".to_string(),
+                target_compatibility: "review-required".to_string(),
+                review_reason_codes: vec!["review-class-debconf".to_string()],
+                ..Default::default()
+            })
+            .unwrap();
+        private.insert(&conn).unwrap();
+
+        assert_eq!(
+            existing_conversion_state(&conn, "pkg", "1.0", "fedora").unwrap(),
+            ExistingConversionState::MissingOrStale
+        );
+        assert_eq!(
+            existing_conversion_state(&conn, "pkg", "2.0", "fedora").unwrap(),
+            ExistingConversionState::NonPublicTerminal
+        );
     }
 
     #[test]

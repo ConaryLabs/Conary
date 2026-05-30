@@ -127,7 +127,9 @@ fn generate_index_for_distro(config: &IndexGenConfig, distro: &str) -> Result<In
     // Get all converted packages
     let converted = ConvertedPackage::list_all(&conn)?
         .into_iter()
-        .filter(|converted| !converted.needs_reconversion())
+        .filter(|converted| {
+            !converted.needs_reconversion() && converted.is_scriptlet_public_ready()
+        })
         .collect::<Vec<_>>();
     debug!("Found {} converted packages total", converted.len());
 
@@ -192,6 +194,13 @@ fn get_packages_for_distro(
     distro: &str,
     converted: &[ConvertedPackage],
 ) -> Result<HashMap<String, PackageIndexEntry>> {
+    let public_ready = converted
+        .iter()
+        .filter(|converted| {
+            !converted.needs_reconversion() && converted.is_scriptlet_public_ready()
+        })
+        .collect::<Vec<_>>();
+
     // Query repository_packages for this distribution
     let mut stmt = conn.prepare(
         "SELECT rp.name, rp.version, r.name as repo_name, rp.checksum
@@ -216,6 +225,9 @@ fn get_packages_for_distro(
     // structured identity fields (package_name/package_version/distro).
     let checksum_map: HashMap<&str, &ConvertedPackage> = converted
         .iter()
+        .filter(|converted| {
+            !converted.needs_reconversion() && converted.is_scriptlet_public_ready()
+        })
         .map(|c| (c.original_checksum.as_str(), c))
         .collect();
 
@@ -236,8 +248,9 @@ fn get_packages_for_distro(
         // Check if this version is converted. Try structured identity fields
         // first (set for server-side conversions), then fall back to checksum
         // matching for legacy converted rows that lack structured fields.
-        let converted_info = converted
+        let converted_info = public_ready
             .iter()
+            .copied()
             .find(|c| {
                 c.package_name.as_deref() == Some(name.as_str())
                     && c.package_version.as_deref() == Some(version.as_str())
@@ -272,7 +285,7 @@ fn get_packages_for_distro(
     // Also add packages from converted_packages that match this distro,
     // using the structured identity fields (package_name, package_version,
     // distro) instead of parsing detected_hooks JSON.
-    for conv in converted {
+    for conv in public_ready {
         // Match on the structured distro field first; fall back to format
         // matching for legacy records that predate the identity fields.
         let matches_distro = conv.distro.as_deref().map_or_else(
@@ -458,7 +471,7 @@ mod tests {
     }
 
     #[test]
-    fn generated_index_includes_scriptlets_without_private_path() {
+    fn generated_index_includes_public_scriptlets_without_private_path() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conary_core::db::schema::migrate(&conn).unwrap();
 
@@ -476,10 +489,9 @@ mod tests {
         );
         converted
             .set_scriptlet_metadata(&ScriptletBundleSummary {
-                scriptlet_fidelity: "review-required".to_string(),
-                target_compatibility: "review-required".to_string(),
-                publication_status: "private-review".to_string(),
-                review_reason_codes: vec!["review-class-debconf".to_string()],
+                scriptlet_fidelity: "fully-replaced".to_string(),
+                target_compatibility: "fully-compatible".to_string(),
+                publication_status: "public".to_string(),
                 review_artifact_path: Some("/tmp/private-review-secret".to_string()),
                 ..ScriptletBundleSummary::default()
             })
@@ -490,7 +502,7 @@ mod tests {
         let version = packages.get("pkg").unwrap().versions.first().unwrap();
         let scriptlets = version.scriptlets.as_ref().unwrap();
 
-        assert_eq!(scriptlets.scriptlet_fidelity, "review-required");
+        assert_eq!(scriptlets.scriptlet_fidelity, "fully-replaced");
         assert!(scriptlets.review_artifact_available);
 
         let index = RepositoryIndex {
@@ -508,5 +520,41 @@ mod tests {
         assert!(json.contains("\"scriptlets\""));
         assert!(!json.contains("review_artifact_path"));
         assert!(!json.contains("private-review-secret"));
+    }
+
+    #[test]
+    fn generated_index_omits_converted_only_non_public_rows() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conary_core::db::schema::migrate(&conn).unwrap();
+
+        let mut converted = ConvertedPackage::new_server(
+            "fedora".to_string(),
+            "private-only".to_string(),
+            "1.0".to_string(),
+            "rpm".to_string(),
+            "sha256:private-only-source".to_string(),
+            "high".to_string(),
+            &["sha256:private-only-chunk".to_string()],
+            42,
+            "sha256:private-only-content".to_string(),
+            "/tmp/private-only.ccs".to_string(),
+        );
+        converted
+            .set_scriptlet_metadata(&ScriptletBundleSummary {
+                publication_status: "blocked".to_string(),
+                scriptlet_fidelity: "blocked".to_string(),
+                target_compatibility: "blocked".to_string(),
+                blocked_reason_codes: vec!["blocked-class-network".to_string()],
+                ..Default::default()
+            })
+            .unwrap();
+
+        let packages = get_packages_for_distro(&conn, "fedora", &[converted]).unwrap();
+
+        assert!(
+            packages
+                .values()
+                .all(|package| package.name != "private-only")
+        );
     }
 }
