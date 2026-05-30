@@ -8,7 +8,10 @@
 use crate::server::ServerState;
 use crate::server::conversion::ScriptletPackageMetadata;
 use crate::server::jobs::{JobId, JobStatus};
-use crate::server::publication::{PublicationRefusal, refusal_response};
+use crate::server::publication::{
+    PublicationDecision, PublicationGateReport, PublicationRefusal, classify_converted_package,
+    refusal_response,
+};
 use axum::{
     Json,
     extract::{Path, Query, State},
@@ -62,6 +65,20 @@ pub struct ConversionAccepted {
     pub eta_seconds: Option<u32>,
 }
 
+enum ConvertedManifestLookup {
+    Ready(PackageManifest),
+    ReviewRequired(PublicationGateReport),
+    Blocked(PublicationGateReport),
+    Missing,
+}
+
+enum ConvertedDownloadLookup {
+    Ready(std::path::PathBuf),
+    ReviewRequired(PublicationGateReport),
+    Blocked(PublicationGateReport),
+    Missing,
+}
+
 /// GET /v1/:distro/packages/:name
 ///
 /// Returns package metadata and chunk list.
@@ -99,8 +116,24 @@ pub async fn get_package(
     })
     .await
     {
-        Ok(Ok(Some(manifest))) => return Json(manifest).into_response(),
-        Ok(Ok(None)) => {}
+        Ok(Ok(ConvertedManifestLookup::Ready(manifest))) => return Json(manifest).into_response(),
+        Ok(Ok(ConvertedManifestLookup::ReviewRequired(report))) => {
+            return refusal_response(
+                PublicationRefusal::ReviewRequired(report),
+                &distro,
+                &name,
+                query.version.as_deref(),
+            );
+        }
+        Ok(Ok(ConvertedManifestLookup::Blocked(report))) => {
+            return refusal_response(
+                PublicationRefusal::Blocked(report),
+                &distro,
+                &name,
+                query.version.as_deref(),
+            );
+        }
+        Ok(Ok(ConvertedManifestLookup::Missing)) => {}
         Ok(Err(e)) => {
             tracing::error!("Database error checking conversion: {}", e);
             return (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response();
@@ -197,7 +230,7 @@ fn check_converted(
     name: &str,
     version: Option<&str>,
     architecture: Option<&str>,
-) -> Result<Option<PackageManifest>, anyhow::Error> {
+) -> Result<ConvertedManifestLookup, anyhow::Error> {
     use conary_core::db::models::ConvertedPackage;
 
     // Open database connection (use open_fast to skip migrations on every request)
@@ -214,7 +247,7 @@ fn check_converted(
 
     if let Some(converted) = existing {
         if converted.needs_reconversion() {
-            return Ok(None);
+            return Ok(ConvertedManifestLookup::Missing);
         }
         // Check if the CCS file still exists
         if let Some(ccs_path_str) = &converted.ccs_path {
@@ -248,8 +281,9 @@ fn check_converted(
                     })
                     .collect();
                 let scriptlet_summary = converted.scriptlet_summary();
+                let decision = classify_converted_package(&converted);
 
-                return Ok(Some(PackageManifest {
+                let manifest = PackageManifest {
                     name: converted.package_name.unwrap_or_else(|| name.to_string()),
                     version: converted.package_version.unwrap_or_else(|| {
                         tracing::warn!(
@@ -264,12 +298,22 @@ fn check_converted(
                     total_size: converted.total_size.unwrap_or(0) as u64,
                     content_hash: converted.content_hash.unwrap_or_default(),
                     scriptlets: ScriptletPackageMetadata::from(&scriptlet_summary),
-                }));
+                };
+
+                return match decision {
+                    PublicationDecision::Ready => Ok(ConvertedManifestLookup::Ready(manifest)),
+                    PublicationDecision::ReviewRequired(report) => {
+                        Ok(ConvertedManifestLookup::ReviewRequired(report))
+                    }
+                    PublicationDecision::Blocked(report) => {
+                        Ok(ConvertedManifestLookup::Blocked(report))
+                    }
+                };
             }
         }
     }
 
-    Ok(None)
+    Ok(ConvertedManifestLookup::Missing)
 }
 
 /// Run the actual conversion in a background task
@@ -538,8 +582,24 @@ pub async fn download_package(
     })
     .await
     {
-        Ok(Ok(Some(path))) => path,
-        Ok(Ok(None)) => {
+        Ok(Ok(ConvertedDownloadLookup::Ready(path))) => path,
+        Ok(Ok(ConvertedDownloadLookup::ReviewRequired(report))) => {
+            return refusal_response(
+                PublicationRefusal::ReviewRequired(report),
+                &distro,
+                &name,
+                query.version.as_deref(),
+            );
+        }
+        Ok(Ok(ConvertedDownloadLookup::Blocked(report))) => {
+            return refusal_response(
+                PublicationRefusal::Blocked(report),
+                &distro,
+                &name,
+                query.version.as_deref(),
+            );
+        }
+        Ok(Ok(ConvertedDownloadLookup::Missing)) => {
             return get_package(State(state), Path((distro, name)), Query(query)).await;
         }
         Ok(Err(e)) => {
@@ -571,7 +631,7 @@ fn converted_ccs_path_for_download(
     name: &str,
     version: Option<&str>,
     architecture: Option<&str>,
-) -> Result<Option<std::path::PathBuf>, anyhow::Error> {
+) -> Result<ConvertedDownloadLookup, anyhow::Error> {
     use conary_core::db::models::ConvertedPackage;
 
     let conn = conary_core::db::open_fast(db_path)?;
@@ -583,22 +643,28 @@ fn converted_ccs_path_for_download(
         architecture,
     )?
     else {
-        return Ok(None);
+        return Ok(ConvertedDownloadLookup::Missing);
     };
 
     if converted.needs_reconversion() {
-        return Ok(None);
+        return Ok(ConvertedDownloadLookup::Missing);
     }
 
-    let Some(ccs_path) = converted.ccs_path else {
-        return Ok(None);
+    let Some(ccs_path) = &converted.ccs_path else {
+        return Ok(ConvertedDownloadLookup::Missing);
     };
 
     let ccs_path = std::path::PathBuf::from(ccs_path);
     if ccs_path.exists() {
-        Ok(Some(ccs_path))
+        match classify_converted_package(&converted) {
+            PublicationDecision::Ready => Ok(ConvertedDownloadLookup::Ready(ccs_path)),
+            PublicationDecision::ReviewRequired(report) => {
+                Ok(ConvertedDownloadLookup::ReviewRequired(report))
+            }
+            PublicationDecision::Blocked(report) => Ok(ConvertedDownloadLookup::Blocked(report)),
+        }
     } else {
-        Ok(None)
+        Ok(ConvertedDownloadLookup::Missing)
     }
 }
 
@@ -800,7 +866,7 @@ mod tests {
     use conary_core::db::models::{CONVERSION_VERSION, ConvertedPackage};
 
     #[test]
-    fn package_manifest_includes_scriptlets_without_private_path() {
+    fn package_publication_manifest_includes_scriptlets_without_private_path() {
         let temp = tempfile::TempDir::new().unwrap();
         let db_path = temp.path().join("remi.db");
         conary_core::db::init(&db_path).unwrap();
@@ -823,25 +889,102 @@ mod tests {
         );
         converted.package_architecture = Some("x86_64".to_string());
         let summary = ScriptletBundleSummary {
-            scriptlet_fidelity: "review-required".to_string(),
-            target_compatibility: "review-required".to_string(),
-            publication_status: "private-review".to_string(),
-            review_reason_codes: vec!["review-class-debconf".to_string()],
+            scriptlet_fidelity: "native-free".to_string(),
+            target_compatibility: "compatible".to_string(),
+            publication_status: "public".to_string(),
             review_artifact_path: Some("/tmp/private-review-secret".to_string()),
             ..ScriptletBundleSummary::default()
         };
         converted.set_scriptlet_metadata(&summary).unwrap();
         converted.insert(&conn).unwrap();
 
-        let manifest = check_converted(&db_path, "fedora", "pkg", Some("1.0"), Some("x86_64"))
+        let manifest = match check_converted(&db_path, "fedora", "pkg", Some("1.0"), Some("x86_64"))
             .unwrap()
-            .unwrap();
+        {
+            ConvertedManifestLookup::Ready(manifest) => manifest,
+            _ => panic!("public converted row should return a manifest"),
+        };
         let json = serde_json::to_string(&manifest).unwrap();
 
-        assert_eq!(manifest.scriptlets.scriptlet_fidelity, "review-required");
+        assert_eq!(manifest.scriptlets.scriptlet_fidelity, "native-free");
         assert!(manifest.scriptlets.review_artifact_available);
         assert!(!json.contains("review_artifact_path"));
         assert!(!json.contains("private-review-secret"));
+    }
+
+    #[test]
+    fn check_converted_returns_review_refusal_for_current_private_row() {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("test.db");
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conary_core::db::schema::migrate(&conn).unwrap();
+        let ccs_path = temp.path().join("pkg.ccs");
+        std::fs::write(&ccs_path, b"fake ccs").unwrap();
+
+        let mut converted = ConvertedPackage::new_server(
+            "fedora".to_string(),
+            "pkg".to_string(),
+            "1.0".to_string(),
+            "rpm".to_string(),
+            "sha256:source".to_string(),
+            "high".to_string(),
+            &["abc".to_string()],
+            8,
+            "sha256:content".to_string(),
+            ccs_path.to_string_lossy().to_string(),
+        );
+        converted
+            .set_scriptlet_metadata(&ScriptletBundleSummary {
+                publication_status: "private-review".to_string(),
+                scriptlet_fidelity: "review-required".to_string(),
+                target_compatibility: "review-required".to_string(),
+                review_reason_codes: vec!["review-class-debconf".to_string()],
+                ..Default::default()
+            })
+            .unwrap();
+        converted.insert(&conn).unwrap();
+
+        let lookup = check_converted(&db_path, "fedora", "pkg", Some("1.0"), None).unwrap();
+
+        assert!(matches!(lookup, ConvertedManifestLookup::ReviewRequired(_)));
+    }
+
+    #[test]
+    fn converted_download_lookup_refuses_blocked_rows() {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("test.db");
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conary_core::db::schema::migrate(&conn).unwrap();
+        let ccs_path = temp.path().join("pkg.ccs");
+        std::fs::write(&ccs_path, b"fake ccs").unwrap();
+
+        let mut converted = ConvertedPackage::new_server(
+            "fedora".to_string(),
+            "pkg".to_string(),
+            "1.0".to_string(),
+            "rpm".to_string(),
+            "sha256:source".to_string(),
+            "high".to_string(),
+            &["abc".to_string()],
+            8,
+            "sha256:content".to_string(),
+            ccs_path.to_string_lossy().to_string(),
+        );
+        converted
+            .set_scriptlet_metadata(&ScriptletBundleSummary {
+                publication_status: "blocked".to_string(),
+                scriptlet_fidelity: "blocked".to_string(),
+                target_compatibility: "blocked".to_string(),
+                blocked_reason_codes: vec!["blocked-class-network".to_string()],
+                ..Default::default()
+            })
+            .unwrap();
+        converted.insert(&conn).unwrap();
+
+        let lookup =
+            converted_ccs_path_for_download(&db_path, "fedora", "pkg", Some("1.0"), None).unwrap();
+
+        assert!(matches!(lookup, ConvertedDownloadLookup::Blocked(_)));
     }
 
     #[test]
@@ -882,6 +1025,6 @@ mod tests {
         )
         .unwrap();
 
-        assert!(resolved.is_none());
+        assert!(matches!(resolved, ConvertedDownloadLookup::Missing));
     }
 }
