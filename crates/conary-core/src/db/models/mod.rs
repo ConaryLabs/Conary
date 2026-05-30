@@ -69,7 +69,7 @@ pub use collection::CollectionMember;
 pub use component::Component;
 pub use component_dependency::{ComponentDepType, ComponentDependency, ComponentProvide};
 pub use config::{ConfigBackup, ConfigFile, ConfigSource, ConfigStatus};
-pub use converted::{CONVERSION_VERSION, ConvertedPackage};
+pub use converted::{CONVERSION_VERSION, ConvertedPackage, ScriptletSummaryForPublication};
 pub use delta::{DeltaStats, PackageDelta};
 pub use dependency::DependencyEntry;
 pub use derived::{DerivedOverride, DerivedPackage, DerivedPatch, DerivedStatus, VersionPolicy};
