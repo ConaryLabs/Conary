@@ -6,7 +6,7 @@
 //! in the `delta_manifests` table for fast lookup.
 
 use anyhow::{Context, Result};
-use conary_core::db::models::CONVERSION_VERSION;
+use conary_core::db::models::ConvertedPackage;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -75,30 +75,51 @@ fn get_version_chunks(
     package_name: &str,
     version: &str,
 ) -> Result<(Vec<String>, u64)> {
-    let row: Option<(String, i64)> = conn
-        .query_row(
-            "SELECT chunk_hashes_json, COALESCE(total_size, 0)
-             FROM converted_packages
-             WHERE distro = ?1 AND package_name = ?2 AND package_version = ?3
-               AND conversion_version >= ?4
-             LIMIT 1",
-            params![distro, package_name, version, CONVERSION_VERSION],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
-        )
-        .optional()?;
-
-    match row {
-        Some((json, total_size)) => {
+    match find_public_ready_conversion(conn, distro, package_name, version)? {
+        Some(converted) => {
+            let json = converted
+                .chunk_hashes_json
+                .unwrap_or_else(|| "[]".to_string());
             let hashes: Vec<String> = serde_json::from_str(&json).with_context(|| {
                 format!(
                     "Failed to parse chunk_hashes_json for {}/{}/{}",
                     distro, package_name, version
                 )
             })?;
-            Ok((hashes, total_size as u64))
+            Ok((hashes, converted.total_size.unwrap_or(0).max(0) as u64))
         }
         None => Ok((Vec::new(), 0)),
     }
+}
+
+fn find_public_ready_conversion(
+    conn: &Connection,
+    distro: &str,
+    package_name: &str,
+    version: &str,
+) -> Result<Option<ConvertedPackage>> {
+    Ok(
+        ConvertedPackage::find_publication_candidates(conn, distro, Some(package_name))?
+            .into_iter()
+            .find(|converted| {
+                converted.package_version.as_deref() == Some(version)
+                    && converted.is_scriptlet_public_ready()
+            }),
+    )
+}
+
+fn public_ready_versions(
+    conn: &Connection,
+    distro: &str,
+    package_name: &str,
+) -> Result<HashSet<String>> {
+    Ok(
+        ConvertedPackage::find_publication_candidates(conn, distro, Some(package_name))?
+            .into_iter()
+            .filter(|converted| converted.is_scriptlet_public_ready())
+            .filter_map(|converted| converted.package_version)
+            .collect(),
+    )
 }
 
 /// Look up chunk sizes from the chunk_access table.
@@ -238,18 +259,10 @@ pub fn compute_deltas_for_package(
         VersionScheme::Rpm
     });
 
-    // Get all converted versions for this package (unordered from DB).
-    let mut stmt = conn.prepare(
-        "SELECT DISTINCT package_version FROM converted_packages
-         WHERE distro = ?1 AND package_name = ?2 AND package_version IS NOT NULL
-           AND conversion_version >= ?3",
-    )?;
-
-    let mut versions: Vec<String> = stmt
-        .query_map(params![distro, package_name, CONVERSION_VERSION], |row| {
-            row.get(0)
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
+    // Get all public-ready converted versions for this package.
+    let mut versions: Vec<String> = public_ready_versions(conn, distro, package_name)?
+        .into_iter()
+        .collect();
 
     // Sort with scheme-aware comparison instead of lexicographic ordering.
     versions
@@ -297,24 +310,8 @@ fn versions_have_current_conversions(
     from_version: &str,
     to_version: &str,
 ) -> Result<bool> {
-    let count: i64 = conn.query_row(
-        "SELECT COUNT(DISTINCT package_version)
-         FROM converted_packages
-         WHERE distro = ?1
-           AND package_name = ?2
-           AND package_version IN (?3, ?4)
-           AND conversion_version >= ?5",
-        params![
-            distro,
-            package_name,
-            from_version,
-            to_version,
-            CONVERSION_VERSION
-        ],
-        |row| row.get(0),
-    )?;
-
-    Ok(count == 2)
+    let versions = public_ready_versions(conn, distro, package_name)?;
+    Ok(versions.contains(from_version) && versions.contains(to_version))
 }
 
 /// Look up a pre-computed delta manifest.
@@ -382,6 +379,7 @@ pub fn get_delta(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use conary_core::ccs::convert::ScriptletBundleSummary;
     use conary_core::db::models::{CONVERSION_VERSION, ConvertedPackage};
     use conary_core::db::schema;
     use tempfile::NamedTempFile;
@@ -436,6 +434,38 @@ mod tests {
             format!("/data/{name}-{version}.ccs"),
         );
         pkg.conversion_version = conversion_version;
+        pkg.insert(conn).unwrap();
+    }
+
+    fn insert_private_review_conversion(
+        conn: &Connection,
+        distro: &str,
+        name: &str,
+        version: &str,
+        chunks: &[&str],
+        total_size: i64,
+    ) {
+        let chunk_strings: Vec<String> = chunks.iter().map(|s| (*s).to_string()).collect();
+        let mut pkg = ConvertedPackage::new_server(
+            distro.to_string(),
+            name.to_string(),
+            version.to_string(),
+            "rpm".to_string(),
+            format!("sha256:{name}-{version}"),
+            "high".to_string(),
+            &chunk_strings,
+            total_size,
+            format!("sha256:content-{name}-{version}"),
+            format!("/data/{name}-{version}.ccs"),
+        );
+        pkg.set_scriptlet_metadata(&ScriptletBundleSummary {
+            publication_status: "private-review".to_string(),
+            scriptlet_fidelity: "review-required".to_string(),
+            target_compatibility: "review-required".to_string(),
+            review_reason_codes: vec!["review-class-debconf".to_string()],
+            ..Default::default()
+        })
+        .unwrap();
         pkg.insert(conn).unwrap();
     }
 
@@ -637,6 +667,26 @@ mod tests {
         assert_eq!(deltas.len(), 1);
         assert_eq!(deltas[0].from_version, "2.0");
         assert_eq!(deltas[0].to_version, "3.0");
+    }
+
+    #[test]
+    fn delta_manifests_ignore_non_public_conversions() {
+        let (_temp, conn) = create_test_db();
+        insert_private_review_conversion(&conn, "fedora", "nginx", "1.0", &["privateA"], 1000);
+        insert_converted(&conn, "fedora", "nginx", "2.0", &["chunkA"], 1000);
+        insert_converted(&conn, "fedora", "nginx", "3.0", &["chunkA", "chunkB"], 2000);
+
+        let (chunks, size) = get_version_chunks(&conn, "fedora", "nginx", "1.0").unwrap();
+        let deltas = compute_deltas_for_package(&conn, "fedora", "nginx").unwrap();
+
+        assert!(chunks.is_empty());
+        assert_eq!(size, 0);
+        assert_eq!(deltas.len(), 1);
+        assert_eq!(deltas[0].from_version, "2.0");
+        assert_eq!(deltas[0].to_version, "3.0");
+        assert!(
+            !versions_have_current_conversions(&conn, "fedora", "nginx", "1.0", "2.0").unwrap()
+        );
     }
 
     #[test]

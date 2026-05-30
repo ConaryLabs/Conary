@@ -13,7 +13,7 @@
 
 use crate::server::handlers::sparse::{SparseIndexEntry, SparseVersionEntry};
 use anyhow::{Context, Result};
-use conary_core::db::models::CONVERSION_VERSION;
+use conary_core::db::models::ConvertedPackage;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::sync::Arc;
@@ -358,23 +358,17 @@ fn build_local_sparse_entry(
         return Ok(None);
     }
 
-    // Build converted lookup keyed by version and architecture. Stale rows are
-    // hidden so a conversion-version bump does not keep advertising old
-    // converted-only identities to clients.
-    let mut converted_stmt = conn.prepare(
-        "SELECT package_version, package_architecture, content_hash FROM converted_packages
-         WHERE distro = ?1 AND package_name = ?2
-         AND package_version IS NOT NULL
-         AND conversion_version >= ?3",
-    )?;
-
     let mut converted_map = HashMap::new();
-    let mut rows = converted_stmt.query(rusqlite::params![distro, name, CONVERSION_VERSION])?;
-    while let Some(row) = rows.next()? {
-        let version: String = row.get(0)?;
-        let architecture: Option<String> = row.get(1)?;
-        let content_hash: Option<String> = row.get(2)?;
-        converted_map.insert((version, architecture), content_hash);
+    for converted in ConvertedPackage::find_publication_candidates(conn, distro, Some(name))? {
+        if !converted.is_scriptlet_public_ready() {
+            continue;
+        }
+        if let Some(version) = converted.package_version {
+            converted_map.insert(
+                (version, converted.package_architecture),
+                converted.content_hash,
+            );
+        }
     }
 
     let versions = packages
@@ -404,6 +398,8 @@ fn build_local_sparse_entry(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use conary_core::ccs::convert::ScriptletBundleSummary;
+    use conary_core::db::models::{ConvertedPackage, Repository, RepositoryPackage};
 
     fn make_version(ver: &str, converted: bool) -> SparseVersionEntry {
         SparseVersionEntry {
@@ -427,6 +423,64 @@ mod tests {
             distro: distro.to_string(),
             versions,
         }
+    }
+
+    fn create_test_db() -> (tempfile::NamedTempFile, rusqlite::Connection) {
+        let temp_file = tempfile::NamedTempFile::new().unwrap();
+        let conn = rusqlite::Connection::open(temp_file.path()).unwrap();
+        conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
+        conary_core::db::schema::migrate(&conn).unwrap();
+        (temp_file, conn)
+    }
+
+    fn insert_repo(conn: &rusqlite::Connection, name: &str, distro: &str) -> i64 {
+        let mut repo = Repository::new(name.to_string(), "https://example.com".to_string());
+        repo.default_strategy_distro = Some(distro.to_string());
+        repo.insert(conn).unwrap()
+    }
+
+    fn insert_package(conn: &rusqlite::Connection, repo_id: i64, name: &str, version: &str) {
+        let mut pkg = RepositoryPackage::new(
+            repo_id,
+            name.to_string(),
+            version.to_string(),
+            format!("sha256:{name}-{version}"),
+            1024,
+            format!("https://example.com/{name}-{version}.rpm"),
+        );
+        pkg.architecture = Some("x86_64".to_string());
+        pkg.insert(conn).unwrap();
+    }
+
+    fn insert_private_review_conversion(
+        conn: &rusqlite::Connection,
+        distro: &str,
+        package: &str,
+        version: &str,
+    ) {
+        let mut converted = ConvertedPackage::new_server(
+            distro.to_string(),
+            package.to_string(),
+            version.to_string(),
+            "rpm".to_string(),
+            format!("sha256:{package}-{version}-source"),
+            "high".to_string(),
+            &[format!("sha256:{package}-{version}-chunk")],
+            42,
+            format!("sha256:{package}-{version}-content"),
+            format!("/tmp/{package}-{version}.ccs"),
+        );
+        converted.package_architecture = Some("x86_64".to_string());
+        converted
+            .set_scriptlet_metadata(&ScriptletBundleSummary {
+                publication_status: "private-review".to_string(),
+                scriptlet_fidelity: "review-required".to_string(),
+                target_compatibility: "review-required".to_string(),
+                review_reason_codes: vec!["review-class-debconf".to_string()],
+                ..Default::default()
+            })
+            .unwrap();
+        converted.insert(conn).unwrap();
     }
 
     #[test]
@@ -516,6 +570,22 @@ mod tests {
         assert_eq!(merged.versions[0].version, "1.0");
         assert_eq!(merged.versions[1].version, "2.0");
         assert_eq!(merged.versions[2].version, "3.0");
+    }
+
+    #[test]
+    fn federated_sparse_hides_non_public_content_hash() {
+        let (_temp_file, conn) = create_test_db();
+        let repo_id = insert_repo(&conn, "fedora-base", "fedora");
+        insert_package(&conn, repo_id, "gtk3", "3.24.0");
+        insert_private_review_conversion(&conn, "fedora", "gtk3", "3.24.0");
+
+        let entry = build_local_sparse_entry(&conn, "fedora", "gtk3")
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(entry.versions.len(), 1);
+        assert!(!entry.versions[0].converted);
+        assert!(entry.versions[0].content_hash.is_none());
     }
 
     #[tokio::test]

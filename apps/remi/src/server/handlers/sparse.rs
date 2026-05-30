@@ -11,7 +11,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use conary_core::db::models::{CONVERSION_VERSION, RepositoryPackage};
+use conary_core::db::models::{ConvertedPackage, RepositoryPackage};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -244,24 +244,17 @@ fn build_sparse_entry(
         return Ok(None);
     }
 
-    // Build converted lookup keyed by version and architecture. Stale
-    // conversion-version rows are intentionally hidden so clients do not choose
-    // an old converted-only identity that cannot be regenerated from current
-    // repository metadata.
-    let mut converted_stmt = conn.prepare(
-        "SELECT package_version, package_architecture, content_hash FROM converted_packages
-         WHERE distro = ?1 AND package_name = ?2
-         AND package_version IS NOT NULL
-         AND conversion_version >= ?3",
-    )?;
-
     let mut converted_map = std::collections::HashMap::new();
-    let mut rows = converted_stmt.query(rusqlite::params![distro, name, CONVERSION_VERSION])?;
-    while let Some(row) = rows.next()? {
-        let version: String = row.get(0)?;
-        let architecture: Option<String> = row.get(1)?;
-        let content_hash: Option<String> = row.get(2)?;
-        converted_map.insert((version, architecture), content_hash);
+    for converted in ConvertedPackage::find_publication_candidates(&conn, distro, Some(name))? {
+        if !converted.is_scriptlet_public_ready() {
+            continue;
+        }
+        if let Some(version) = converted.package_version {
+            converted_map.insert(
+                (version, converted.package_architecture),
+                converted.content_hash,
+            );
+        }
     }
 
     // Build version entries
@@ -367,7 +360,8 @@ use super::find_repository_for_distro;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use conary_core::db::models::{ConvertedPackage, Repository};
+    use conary_core::ccs::convert::ScriptletBundleSummary;
+    use conary_core::db::models::{CONVERSION_VERSION, ConvertedPackage, Repository};
     use conary_core::db::schema;
     use tempfile::NamedTempFile;
 
@@ -397,6 +391,38 @@ mod tests {
         pkg.architecture = Some("x86_64".to_string());
         pkg.dependencies = Some(r#"["glibc","openssl"]"#.to_string());
         pkg.insert(conn).unwrap();
+    }
+
+    fn insert_private_review_conversion(
+        conn: &Connection,
+        distro: &str,
+        package: &str,
+        version: &str,
+        content_hash: &str,
+    ) {
+        let mut converted = ConvertedPackage::new_server(
+            distro.to_string(),
+            package.to_string(),
+            version.to_string(),
+            "rpm".to_string(),
+            format!("sha256:{package}-{version}-source"),
+            "high".to_string(),
+            &[format!("sha256:{package}-{version}-chunk")],
+            42,
+            content_hash.to_string(),
+            format!("/tmp/{package}-{version}.ccs"),
+        );
+        converted.package_architecture = Some("x86_64".to_string());
+        converted
+            .set_scriptlet_metadata(&ScriptletBundleSummary {
+                publication_status: "private-review".to_string(),
+                scriptlet_fidelity: "review-required".to_string(),
+                target_compatibility: "review-required".to_string(),
+                review_reason_codes: vec!["review-class-debconf".to_string()],
+                ..Default::default()
+            })
+            .unwrap();
+        converted.insert(conn).unwrap();
     }
 
     #[test]
@@ -567,6 +593,28 @@ mod tests {
 
         assert_eq!(entry.versions.len(), 1);
         assert_eq!(entry.versions[0].architecture.as_deref(), Some("x86_64"));
+        assert!(!entry.versions[0].converted);
+        assert!(entry.versions[0].content_hash.is_none());
+    }
+
+    #[test]
+    fn sparse_entry_hides_non_public_content_hash() {
+        let (temp_file, conn) = create_test_db();
+        let repo_id = insert_repo(&conn, "fedora-base", "fedora");
+        insert_package(&conn, repo_id, "gtk3", "3.24.0", 1024);
+        insert_private_review_conversion(
+            &conn,
+            "fedora",
+            "gtk3",
+            "3.24.0",
+            "sha256:private-content",
+        );
+
+        let entry = build_sparse_entry(temp_file.path(), "fedora", "gtk3")
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(entry.versions.len(), 1);
         assert!(!entry.versions[0].converted);
         assert!(entry.versions[0].content_hash.is_none());
     }

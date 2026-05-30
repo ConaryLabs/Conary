@@ -8,8 +8,7 @@ use axum::{
     http::{StatusCode, header},
     response::{IntoResponse, Response},
 };
-use conary_core::ccs::convert::ScriptletBundleSummary;
-use conary_core::db::models::{CONVERSION_VERSION, RepositoryPackage};
+use conary_core::db::models::{ConvertedPackage, RepositoryPackage};
 use rusqlite::Connection;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
@@ -249,42 +248,25 @@ fn load_converted_metadata_rows(
     conn: &Connection,
     distro: &str,
 ) -> Result<Vec<ConvertedMetadataRow>, anyhow::Error> {
-    let mut stmt = conn.prepare(
-        "SELECT package_name, package_version, package_architecture, original_format,
-                scriptlet_fidelity, target_compatibility, publication_status,
-                evidence_digest, curation_evidence_digest, blocked_reason_codes_json,
-                scriptlet_summary_json, review_artifact_path
-         FROM converted_packages
-         WHERE distro = ?1
-           AND package_name IS NOT NULL
-           AND package_version IS NOT NULL
-           AND conversion_version >= ?2",
-    )?;
-
     let mut packages = Vec::new();
-    let mut rows = stmt.query(rusqlite::params![distro, CONVERSION_VERSION])?;
-
-    while let Some(row) = rows.next()? {
-        let name: String = row.get(0)?;
-        let version: String = row.get(1)?;
-        let architecture: Option<String> = row.get(2)?;
-        let original_format: String = row.get(3)?;
-        let scriptlet_summary = scriptlet_summary_from_columns(ScriptletSummaryColumns {
-            scriptlet_fidelity: row.get(4)?,
-            target_compatibility: row.get(5)?,
-            publication_status: row.get(6)?,
-            evidence_digest: row.get(7)?,
-            curation_evidence_digest: row.get(8)?,
-            blocked_reason_codes_json: row.get(9)?,
-            scriptlet_summary_json: row.get(10)?,
-            review_artifact_path: row.get(11)?,
-        });
+    for converted in ConvertedPackage::find_publication_candidates(conn, distro, None)? {
+        let Some(name) = converted.package_name.clone() else {
+            continue;
+        };
+        let Some(version) = converted.package_version.clone() else {
+            continue;
+        };
+        let architecture = converted.package_architecture.clone();
 
         // Pre-architecture Remi conversion records cannot be addressed safely
         // once native metadata has multilib packages and epoch-aware versions.
         // Keep uploaded CCS fixtures visible, but do not advertise ambiguous
         // repo-derived conversions as installable repository metadata.
-        if architecture.is_none() && original_format != "ccs" {
+        if architecture.is_none() && converted.original_format != "ccs" {
+            continue;
+        }
+
+        if !converted.is_scriptlet_public_ready() {
             continue;
         }
 
@@ -292,47 +274,11 @@ fn load_converted_metadata_rows(
             name,
             version,
             architecture,
-            scriptlets: ScriptletPackageMetadata::from(&scriptlet_summary),
+            scriptlets: ScriptletPackageMetadata::from(&converted.scriptlet_summary()),
         });
     }
 
     Ok(packages)
-}
-
-struct ScriptletSummaryColumns {
-    scriptlet_fidelity: String,
-    target_compatibility: String,
-    publication_status: String,
-    evidence_digest: Option<String>,
-    curation_evidence_digest: Option<String>,
-    blocked_reason_codes_json: String,
-    scriptlet_summary_json: String,
-    review_artifact_path: Option<String>,
-}
-
-fn scriptlet_summary_from_columns(columns: ScriptletSummaryColumns) -> ScriptletBundleSummary {
-    let mut summary =
-        match serde_json::from_str::<ScriptletBundleSummary>(&columns.scriptlet_summary_json) {
-            Ok(summary) => summary,
-            Err(error) => {
-                tracing::warn!(
-                    "failed to parse converted package scriptlet summary JSON: {}",
-                    error
-                );
-                ScriptletBundleSummary {
-                    blocked_reason_codes: serde_json::from_str(&columns.blocked_reason_codes_json)
-                        .unwrap_or_default(),
-                    ..ScriptletBundleSummary::default()
-                }
-            }
-        };
-    summary.scriptlet_fidelity = columns.scriptlet_fidelity;
-    summary.target_compatibility = columns.target_compatibility;
-    summary.publication_status = columns.publication_status;
-    summary.evidence_digest = columns.evidence_digest;
-    summary.curation_evidence_digest = columns.curation_evidence_digest;
-    summary.review_artifact_path = columns.review_artifact_path;
-    summary
 }
 
 fn metadata_with_scriptlets(
@@ -421,6 +367,32 @@ mod tests {
         conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
         schema::migrate(&conn).unwrap();
         (temp_file, conn)
+    }
+
+    fn insert_converted_with_summary(
+        conn: &Connection,
+        distro: &str,
+        package: &str,
+        version: &str,
+        architecture: Option<&str>,
+        original_format: &str,
+        summary: ScriptletBundleSummary,
+    ) {
+        let mut converted = ConvertedPackage::new_server(
+            distro.to_string(),
+            package.to_string(),
+            version.to_string(),
+            original_format.to_string(),
+            format!("sha256:{package}-{version}-source"),
+            "high".to_string(),
+            &[format!("sha256:{package}-{version}-chunk")],
+            42,
+            format!("sha256:{package}-{version}-content"),
+            format!("/tmp/{package}-{version}.ccs"),
+        );
+        converted.package_architecture = architecture.map(str::to_string);
+        converted.set_scriptlet_metadata(&summary).unwrap();
+        converted.insert(conn).unwrap();
     }
 
     #[test]
@@ -691,7 +663,7 @@ mod tests {
     }
 
     #[test]
-    fn metadata_merges_scriptlet_metadata_for_repo_backed_and_converted_only_rows() {
+    fn metadata_merges_public_scriptlet_metadata_for_repo_backed_and_converted_only_rows() {
         let (temp_file, conn) = create_test_db();
 
         let mut repo = Repository::new("fedora".to_string(), "https://example.com".to_string());
@@ -757,10 +729,9 @@ mod tests {
         );
         converted_only
             .set_scriptlet_metadata(&ScriptletBundleSummary {
-                scriptlet_fidelity: "review-required".to_string(),
-                target_compatibility: "review-required".to_string(),
-                publication_status: "private-review".to_string(),
-                review_reason_codes: vec!["review-class-debconf".to_string()],
+                scriptlet_fidelity: "fully-replaced".to_string(),
+                target_compatibility: "fully-compatible".to_string(),
+                publication_status: "public".to_string(),
                 review_artifact_path: Some("/tmp/private-review-secret".to_string()),
                 ..ScriptletBundleSummary::default()
             })
@@ -807,7 +778,7 @@ mod tests {
             converted_only_scriptlets
                 .get("scriptlet_fidelity")
                 .and_then(serde_json::Value::as_str),
-            Some("review-required")
+            Some("fully-replaced")
         );
         let converted_only_json = serde_json::to_string(converted_only).unwrap();
         assert!(!converted_only_json.contains("review_artifact_path"));
@@ -820,6 +791,91 @@ mod tests {
             .unwrap();
         assert!(!unconverted.converted);
         assert!(unconverted.metadata.is_none());
+    }
+
+    #[test]
+    fn metadata_hides_non_public_scriptlet_rows() {
+        let (temp_file, conn) = create_test_db();
+        let mut repo = Repository::new("fedora".to_string(), "https://example.com".to_string());
+        repo.default_strategy_distro = Some("fedora".to_string());
+        let repo_id = repo.insert(&conn).unwrap();
+
+        let mut repo_pkg = RepositoryPackage::new(
+            repo_id,
+            "gtk3".to_string(),
+            "3.24.0".to_string(),
+            "sha256:repo".to_string(),
+            1024,
+            "https://example.com/gtk3.rpm".to_string(),
+        );
+        repo_pkg.architecture = Some("x86_64".to_string());
+        repo_pkg.insert(&conn).unwrap();
+
+        insert_converted_with_summary(
+            &conn,
+            "fedora",
+            "gtk3",
+            "3.24.0",
+            Some("x86_64"),
+            "rpm",
+            ScriptletBundleSummary {
+                publication_status: "private-review".to_string(),
+                scriptlet_fidelity: "review-required".to_string(),
+                target_compatibility: "review-required".to_string(),
+                review_reason_codes: vec!["review-class-debconf".to_string()],
+                ..Default::default()
+            },
+        );
+
+        let metadata = build_metadata(temp_file.path(), "fedora").unwrap();
+        let pkg = metadata
+            .packages
+            .iter()
+            .find(|pkg| pkg.name == "gtk3")
+            .unwrap();
+
+        assert!(!pkg.converted);
+        assert_eq!(metadata.converted_count, 0);
+        assert!(
+            pkg.metadata
+                .as_ref()
+                .and_then(|value| value.get("scriptlets"))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn metadata_omits_converted_only_non_public_rows() {
+        let (temp_file, conn) = create_test_db();
+        let mut repo = Repository::new("fedora".to_string(), "https://example.com".to_string());
+        repo.default_strategy_distro = Some("fedora".to_string());
+        repo.insert(&conn).unwrap();
+
+        insert_converted_with_summary(
+            &conn,
+            "fedora",
+            "private-only",
+            "1.0",
+            Some("x86_64"),
+            "ccs",
+            ScriptletBundleSummary {
+                publication_status: "blocked".to_string(),
+                scriptlet_fidelity: "blocked".to_string(),
+                target_compatibility: "blocked".to_string(),
+                blocked_reason_codes: vec!["blocked-class-network".to_string()],
+                ..Default::default()
+            },
+        );
+
+        let metadata = build_metadata(temp_file.path(), "fedora").unwrap();
+
+        assert!(
+            metadata
+                .packages
+                .iter()
+                .all(|pkg| pkg.name != "private-only")
+        );
+        assert_eq!(metadata.converted_count, 0);
     }
 
     #[test]

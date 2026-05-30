@@ -6,8 +6,9 @@
 //! autocomplete suggestions.
 
 use anyhow::{Context, Result};
-use conary_core::db::models::CONVERSION_VERSION;
+use conary_core::db::models::ConvertedPackage;
 use serde::Serialize;
+use std::collections::HashSet;
 use std::path::Path;
 use tantivy::collector::TopDocs;
 use tantivy::query::{BooleanQuery, Occur, QueryParser, RegexQuery, TermQuery};
@@ -227,26 +228,19 @@ impl SearchEngine {
         // Clear existing index
         writer.delete_all_documents()?;
 
-        // Query latest version of each package per distro, joined with conversion status.
+        // Query latest version of each package per distro. Conversion status is
+        // derived from full converted rows so scriptlet publication summary
+        // health participates in the public-ready decision.
         // Uses a subquery to find the most recently synced row per (name, repo).
         // COALESCE(r.default_strategy_distro, r.name) matches the distro slug
         // stored in converted_packages (which may differ from the repo name).
+        let public_ready = public_ready_search_keys(&conn)?;
         let mut stmt = conn.prepare(
             "SELECT rp.name, rp.version,
                     COALESCE(r.default_strategy_distro, r.name) as distro,
-                    rp.description, rp.dependencies, rp.size,
-                    CASE WHEN cp.id IS NOT NULL THEN 1 ELSE 0 END as is_converted
+                    rp.description, rp.dependencies, rp.size, rp.architecture
              FROM repository_packages rp
              JOIN repositories r ON rp.repository_id = r.id
-             LEFT JOIN converted_packages cp
-                 ON cp.package_name = rp.name
-                    AND cp.distro = COALESCE(r.default_strategy_distro, r.name)
-                    AND cp.package_version = rp.version
-                    AND (
-                        cp.package_architecture = rp.architecture
-                        OR cp.package_architecture IS NULL
-                    )
-                    AND cp.conversion_version >= ?1
              WHERE r.enabled = 1
                AND rp.size > 0
                AND rp.id = (
@@ -259,15 +253,30 @@ impl SearchEngine {
         )?;
 
         let mut count = 0;
-        let rows = stmt.query_map([CONVERSION_VERSION], |row| {
+        let rows = stmt.query_map([], |row| {
+            let name: String = row.get(0)?;
+            let version: String = row.get(1)?;
+            let distro: String = row.get(2)?;
+            let architecture: Option<String> = row.get(6)?;
+            let converted = public_ready.contains(&SearchConversionKey {
+                distro: distro.clone(),
+                name: name.clone(),
+                version: version.clone(),
+                architecture: architecture.clone(),
+            }) || public_ready.contains(&SearchConversionKey {
+                distro: distro.clone(),
+                name: name.clone(),
+                version: version.clone(),
+                architecture: None,
+            });
             Ok(PackageSearchDoc {
-                name: row.get(0)?,
-                version: row.get(1)?,
-                distro: row.get(2)?,
+                name,
+                version,
+                distro,
                 description: row.get(3)?,
                 dependencies: row.get(4)?,
                 size: row.get::<_, i64>(5).map(|s| s as u64)?,
-                converted: row.get::<_, i64>(6).map(|c| c != 0)?,
+                converted,
             })
         })?;
 
@@ -410,6 +419,31 @@ impl SearchEngine {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct SearchConversionKey {
+    distro: String,
+    name: String,
+    version: String,
+    architecture: Option<String>,
+}
+
+fn public_ready_search_keys(conn: &rusqlite::Connection) -> Result<HashSet<SearchConversionKey>> {
+    Ok(ConvertedPackage::list_all(conn)?
+        .into_iter()
+        .filter(|converted| {
+            !converted.needs_reconversion() && converted.is_scriptlet_public_ready()
+        })
+        .filter_map(|converted| {
+            Some(SearchConversionKey {
+                distro: converted.distro?,
+                name: converted.package_name?,
+                version: converted.package_version?,
+                architecture: converted.package_architecture,
+            })
+        })
+        .collect())
+}
+
 /// Escape regex special characters in a string
 fn regex_escape(s: &str) -> String {
     let mut escaped = String::with_capacity(s.len() * 2);
@@ -428,12 +462,71 @@ fn regex_escape(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use conary_core::ccs::convert::ScriptletBundleSummary;
+    use conary_core::db::models::{ConvertedPackage, Repository, RepositoryPackage};
     use tempfile::TempDir;
 
     fn create_test_engine() -> (TempDir, SearchEngine) {
         let dir = TempDir::new().unwrap();
         let engine = SearchEngine::new(dir.path()).unwrap();
         (dir, engine)
+    }
+
+    fn create_test_db() -> (tempfile::NamedTempFile, rusqlite::Connection) {
+        let temp_file = tempfile::NamedTempFile::new().unwrap();
+        let conn = rusqlite::Connection::open(temp_file.path()).unwrap();
+        conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
+        conary_core::db::schema::migrate(&conn).unwrap();
+        (temp_file, conn)
+    }
+
+    fn insert_repo_package(conn: &rusqlite::Connection, distro: &str, name: &str, version: &str) {
+        let mut repo = Repository::new(format!("{distro}-base"), "https://example.com".to_string());
+        repo.default_strategy_distro = Some(distro.to_string());
+        let repo_id = repo.insert(conn).unwrap();
+
+        let mut pkg = RepositoryPackage::new(
+            repo_id,
+            name.to_string(),
+            version.to_string(),
+            format!("sha256:{name}-{version}"),
+            1024,
+            format!("https://example.com/{name}-{version}.rpm"),
+        );
+        pkg.architecture = Some("x86_64".to_string());
+        pkg.description = Some("test package".to_string());
+        pkg.insert(conn).unwrap();
+    }
+
+    fn insert_private_review_conversion(
+        conn: &rusqlite::Connection,
+        distro: &str,
+        package: &str,
+        version: &str,
+    ) {
+        let mut converted = ConvertedPackage::new_server(
+            distro.to_string(),
+            package.to_string(),
+            version.to_string(),
+            "rpm".to_string(),
+            format!("sha256:{package}-{version}-source"),
+            "high".to_string(),
+            &[format!("sha256:{package}-{version}-chunk")],
+            42,
+            format!("sha256:{package}-{version}-content"),
+            format!("/tmp/{package}-{version}.ccs"),
+        );
+        converted.package_architecture = Some("x86_64".to_string());
+        converted
+            .set_scriptlet_metadata(&ScriptletBundleSummary {
+                publication_status: "private-review".to_string(),
+                scriptlet_fidelity: "review-required".to_string(),
+                target_compatibility: "review-required".to_string(),
+                review_reason_codes: vec!["review-class-debconf".to_string()],
+                ..Default::default()
+            })
+            .unwrap();
+        converted.insert(conn).unwrap();
     }
 
     #[test]
@@ -544,6 +637,23 @@ mod tests {
         // Should have the updated version (old one deleted by name_exact match)
         assert!(!results.is_empty());
         assert!(results[0].converted);
+    }
+
+    #[test]
+    fn search_rebuild_marks_non_public_rows_unconverted() {
+        let (db_file, _) = create_test_db();
+        let conn = rusqlite::Connection::open(db_file.path()).unwrap();
+        insert_repo_package(&conn, "fedora", "gtk3", "3.24.0");
+        insert_private_review_conversion(&conn, "fedora", "gtk3", "3.24.0");
+        drop(conn);
+
+        let (_dir, engine) = create_test_engine();
+        engine.rebuild_from_db(db_file.path()).unwrap();
+
+        let results = engine.search("gtk3", Some("fedora"), 10).unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert!(!results[0].converted);
     }
 
     #[test]

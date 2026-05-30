@@ -478,6 +478,47 @@ impl ConvertedPackage {
         Ok(results)
     }
 
+    /// Find current converted package candidates for publication filtering.
+    ///
+    /// This intentionally returns full rows so callers can apply the
+    /// health-aware scriptlet publication predicate instead of relying on the
+    /// scalar `publication_status` column alone.
+    pub fn find_publication_candidates(
+        conn: &Connection,
+        distro: &str,
+        package_name: Option<&str>,
+    ) -> Result<Vec<Self>> {
+        let sql = if package_name.is_some() {
+            format!(
+                "SELECT {} FROM converted_packages
+                 WHERE distro = ?1 AND package_name = ?2
+                   AND conversion_version >= ?3",
+                Self::COLUMNS
+            )
+        } else {
+            format!(
+                "SELECT {} FROM converted_packages
+                 WHERE distro = ?1 AND conversion_version >= ?2",
+                Self::COLUMNS
+            )
+        };
+
+        let rows = if let Some(package_name) = package_name {
+            let mut stmt = conn.prepare(&sql)?;
+            stmt.query_map(
+                params![distro, package_name, CONVERSION_VERSION],
+                Self::from_row,
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+        } else {
+            let mut stmt = conn.prepare(&sql)?;
+            stmt.query_map(params![distro, CONVERSION_VERSION], Self::from_row)?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+        };
+
+        Ok(rows)
+    }
+
     /// Find a converted package by distro, name, and version (server-side lookup)
     pub fn find_by_package_identity(
         conn: &Connection,
