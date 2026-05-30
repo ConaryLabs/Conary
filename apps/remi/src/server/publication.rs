@@ -1,7 +1,8 @@
 // apps/remi/src/server/publication.rs
 //! Publication policy for legacy scriptlet conversion results.
 
-use crate::server::conversion::ScriptletPackageMetadata;
+use crate::server::conversion::{ScriptletPackageMetadata, ServerConversionResult};
+use crate::server::jobs::JobStatus;
 use axum::{
     Json,
     http::StatusCode,
@@ -11,6 +12,7 @@ use conary_core::ccs::convert::ScriptletBundleSummary;
 use conary_core::db::models::{ConvertedPackage, ScriptletSummaryForPublication};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PublicationDecision {
@@ -50,6 +52,71 @@ pub struct PublicationRefusalResponse {
     pub package: String,
     pub version: Option<String>,
     pub scriptlets: PublicationGateReport,
+}
+
+#[derive(Debug)]
+pub enum ServerConversionOutcome {
+    Ready(ServerConversionResult),
+    ReviewRequired(ServerConversionResult),
+    Blocked(ServerConversionResult),
+}
+
+impl ServerConversionOutcome {
+    pub fn into_result(self) -> ServerConversionResult {
+        match self {
+            Self::Ready(result) | Self::ReviewRequired(result) | Self::Blocked(result) => result,
+        }
+    }
+
+    pub fn result(&self) -> &ServerConversionResult {
+        match self {
+            Self::Ready(result) | Self::ReviewRequired(result) | Self::Blocked(result) => result,
+        }
+    }
+
+    pub fn result_mut(&mut self) -> &mut ServerConversionResult {
+        match self {
+            Self::Ready(result) | Self::ReviewRequired(result) | Self::Blocked(result) => result,
+        }
+    }
+
+    pub fn job_status(&self) -> JobStatus {
+        match self {
+            Self::Ready(_) => JobStatus::Ready,
+            Self::ReviewRequired(_) => JobStatus::ReviewRequired,
+            Self::Blocked(_) => JobStatus::Blocked,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ScriptletReviewArtifact {
+    pub schema: &'static str,
+    pub distro: String,
+    pub package: String,
+    pub version: String,
+    pub architecture: Option<String>,
+    pub original_format: String,
+    pub publication: PublicationGateReport,
+    pub conversion_fidelity: String,
+    pub conversion_version: i32,
+    pub ccs_content_hash: String,
+    pub ccs_total_size: u64,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReviewArtifactInput<'a> {
+    pub distro: &'a str,
+    pub package: &'a str,
+    pub version: &'a str,
+    pub architecture: Option<&'a str>,
+    pub original_format: &'a str,
+    pub conversion_fidelity: &'a str,
+    pub conversion_version: i32,
+    pub ccs_content_hash: &'a str,
+    pub ccs_total_size: u64,
+    pub publication: PublicationGateReport,
 }
 
 pub fn classify_converted_package(converted: &ConvertedPackage) -> PublicationDecision {
@@ -157,6 +224,48 @@ pub fn public_metadata(summary: &ScriptletBundleSummary) -> ScriptletPackageMeta
     ScriptletPackageMetadata::from(summary)
 }
 
+pub fn review_artifact_root(cache_dir: &Path) -> PathBuf {
+    cache_dir.join("scriptlet-review")
+}
+
+pub fn write_review_artifact(
+    cache_dir: &Path,
+    input: ReviewArtifactInput<'_>,
+) -> anyhow::Result<PathBuf> {
+    let digest = input
+        .publication
+        .evidence_digest
+        .as_deref()
+        .unwrap_or("missing-evidence-digest")
+        .replace(':', "-");
+    let dir = review_artifact_root(cache_dir)
+        .join(sanitize_component(input.distro))
+        .join(sanitize_component(input.package))
+        .join(sanitize_component(input.version))
+        .join(sanitize_component(input.architecture.unwrap_or("noarch")));
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join(format!("{digest}.json"));
+    let temp_path = dir.join(format!("{digest}.json.tmp"));
+    let artifact = ScriptletReviewArtifact {
+        schema: "conary.remi.scriptlet-review.v1",
+        distro: input.distro.to_string(),
+        package: input.package.to_string(),
+        version: input.version.to_string(),
+        architecture: input.architecture.map(str::to_string),
+        original_format: input.original_format.to_string(),
+        publication: input.publication,
+        conversion_fidelity: input.conversion_fidelity.to_string(),
+        conversion_version: input.conversion_version,
+        ccs_content_hash: input.ccs_content_hash.to_string(),
+        ccs_total_size: input.ccs_total_size,
+        created_at: chrono::Utc::now().to_rfc3339(),
+    };
+    let bytes = serde_json::to_vec_pretty(&artifact)?;
+    std::fs::write(&temp_path, bytes)?;
+    std::fs::rename(&temp_path, &path)?;
+    Ok(path)
+}
+
 fn push_reason(reasons: &mut Vec<String>, seen: &mut BTreeSet<String>, reason: String) {
     if seen.insert(reason.clone()) {
         reasons.push(reason);
@@ -182,6 +291,19 @@ fn message_for_status(status: &str, valid: bool) -> &'static str {
         "private-review" => "Converted package requires scriptlet review before public serving",
         _ => "Converted package is not public-ready",
     }
+}
+
+fn sanitize_component(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-') {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]

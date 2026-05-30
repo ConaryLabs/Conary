@@ -8,6 +8,10 @@ use crate::server::R2Store;
 use crate::server::conversion_timing::{
     ConversionPhase, ConversionPhaseTiming, ConversionSkippedPhase, ConversionTimingReport,
 };
+use crate::server::publication::{
+    PublicationDecision, PublicationRefusal, ReviewArtifactInput, ServerConversionOutcome,
+    classify_converted_package, decision_refusal, write_review_artifact,
+};
 use anyhow::{Context, Result, anyhow};
 use conary_core::ccs::convert::{
     ConversionOptions, ConversionResult, LegacyConverter, ScriptletBundleSummary,
@@ -50,6 +54,8 @@ pub struct ServerConversionResult {
     pub cache_state: String,
     /// Passive legacy scriptlet summary for public metadata surfaces.
     pub scriptlets: ScriptletPackageMetadata,
+    /// Publication refusal report for review-required or blocked results.
+    pub publication: Option<crate::server::publication::PublicationGateReport>,
     /// Phase timing report for this conversion, when collected.
     pub timing: Option<ConversionTimingReport>,
 }
@@ -265,7 +271,7 @@ impl ConversionService {
         package_name: &str,
         version: Option<&str>,
         architecture: Option<&str>,
-    ) -> Result<ServerConversionResult> {
+    ) -> Result<ServerConversionOutcome> {
         let mut timing = ConversionTimingReport::new(distro, package_name, version);
         let result = self
             .convert_package_async_inner(distro, package_name, version, architecture, &mut timing)
@@ -275,7 +281,7 @@ impl ConversionService {
             Ok(mut result) => {
                 timing.finish(true);
                 Self::log_conversion_timing(&timing);
-                result.timing = Some(timing);
+                result.result_mut().timing = Some(timing);
                 Ok(result)
             }
             Err(err) => {
@@ -397,18 +403,21 @@ impl ConversionService {
             .convert_package_async(distro, package_name, version, architecture)
             .await
         {
-            Ok(result) => Ok(ConversionBenchmarkEvidence {
-                distro: distro.to_string(),
-                package: package_name.to_string(),
-                version: Some(result.version),
-                scan_only: false,
-                cache_state: result.cache_state,
-                r2_configured: self.r2_store.is_some(),
-                timing: result.timing,
-                scriptlet_summary: None,
-                converted: true,
-                error: None,
-            }),
+            Ok(outcome) => {
+                let result = outcome.into_result();
+                Ok(ConversionBenchmarkEvidence {
+                    distro: distro.to_string(),
+                    package: package_name.to_string(),
+                    version: Some(result.version),
+                    scan_only: false,
+                    cache_state: result.cache_state,
+                    r2_configured: self.r2_store.is_some(),
+                    timing: result.timing,
+                    scriptlet_summary: None,
+                    converted: true,
+                    error: None,
+                })
+            }
             Err(err) => Ok(ConversionBenchmarkEvidence {
                 distro: distro.to_string(),
                 package: package_name.to_string(),
@@ -431,7 +440,7 @@ impl ConversionService {
         version: Option<&str>,
         architecture: Option<&str>,
         timing: &mut ConversionTimingReport,
-    ) -> Result<ServerConversionResult> {
+    ) -> Result<ServerConversionOutcome> {
         // Refuse to convert critical system packages
         Self::ensure_package_name_not_critical(package_name)?;
 
@@ -604,7 +613,7 @@ impl ConversionService {
         distro: &str,
         repo_pkg: &RepositoryPackage,
         original_checksum: &str,
-    ) -> Result<Option<ServerConversionResult>> {
+    ) -> Result<Option<ServerConversionOutcome>> {
         let service = self.clone();
         let distro = distro.to_string();
         let repo_pkg = repo_pkg.clone();
@@ -735,7 +744,7 @@ impl ConversionService {
     fn persist_conversion_result(
         &self,
         input: PersistConversionInput,
-    ) -> Result<ServerConversionResult> {
+    ) -> Result<ServerConversionOutcome> {
         let PersistConversionInput {
             distro,
             metadata,
@@ -786,6 +795,33 @@ impl ConversionService {
         converted.detected_hooks = Some(serde_json::to_string(&conversion_result.detected_hooks)?);
         converted.set_scriptlet_metadata(&conversion_result.scriptlet_metadata)?;
         converted.package_architecture = package_architecture;
+        let decision = classify_converted_package(&converted);
+        if let Some(refusal) = decision_refusal(decision) {
+            let mut report = match refusal {
+                PublicationRefusal::ReviewRequired(report)
+                | PublicationRefusal::Blocked(report) => report,
+            };
+            report.review_artifact_available = true;
+            let conversion_fidelity = conversion_result.fidelity.level.to_string();
+            let artifact_path = write_review_artifact(
+                &self.cache_dir,
+                ReviewArtifactInput {
+                    distro: &distro,
+                    package: &metadata.name,
+                    version: &metadata.version,
+                    architecture: converted.package_architecture.as_deref(),
+                    original_format: &conversion_result.original_format,
+                    conversion_fidelity: &conversion_fidelity,
+                    conversion_version: conary_core::db::models::CONVERSION_VERSION,
+                    ccs_content_hash: &content_hash,
+                    ccs_total_size: total_size,
+                    publication: report,
+                },
+            )?;
+            let mut summary = conversion_result.scriptlet_metadata.clone();
+            summary.review_artifact_path = Some(artifact_path.to_string_lossy().to_string());
+            converted.set_scriptlet_metadata(&summary)?;
+        }
         converted.insert(&conn)?;
 
         info!(
@@ -793,18 +829,20 @@ impl ConversionService {
             distro, metadata.name, metadata.version
         );
 
-        Ok(ServerConversionResult {
+        let result = ServerConversionResult {
             name: metadata.name,
             version: metadata.version,
-            distro,
+            distro: distro.clone(),
             chunk_hashes,
             total_size,
             content_hash,
             ccs_path: final_ccs_path,
             cache_state: "cold".to_string(),
-            scriptlets: ScriptletPackageMetadata::from(&conversion_result.scriptlet_metadata),
+            scriptlets: ScriptletPackageMetadata::from(&converted.scriptlet_summary()),
+            publication: None,
             timing: None,
-        })
+        };
+        Ok(Self::outcome_from_converted_result(&converted, result))
     }
 
     /// Find a package in the repository metadata.
@@ -1219,7 +1257,7 @@ impl ConversionService {
         existing: &ConvertedPackage,
         distro: &str,
         repo_pkg: &RepositoryPackage,
-    ) -> Result<ServerConversionResult> {
+    ) -> Result<ServerConversionOutcome> {
         // Use server-side fields from ConvertedPackage if available, else fallback to repo_pkg
         let name = existing
             .package_name
@@ -1251,7 +1289,7 @@ impl ConversionService {
 
         let scriptlet_summary = existing.scriptlet_summary();
 
-        Ok(ServerConversionResult {
+        let result = ServerConversionResult {
             name,
             version,
             distro: existing
@@ -1267,8 +1305,27 @@ impl ConversionService {
             ccs_path,
             cache_state: "hot".to_string(),
             scriptlets: ScriptletPackageMetadata::from(&scriptlet_summary),
+            publication: None,
             timing: None,
-        })
+        };
+        Ok(Self::outcome_from_converted_result(existing, result))
+    }
+
+    fn outcome_from_converted_result(
+        converted: &ConvertedPackage,
+        mut result: ServerConversionResult,
+    ) -> ServerConversionOutcome {
+        match classify_converted_package(converted) {
+            PublicationDecision::Ready => ServerConversionOutcome::Ready(result),
+            PublicationDecision::ReviewRequired(report) => {
+                result.publication = Some(report);
+                ServerConversionOutcome::ReviewRequired(result)
+            }
+            PublicationDecision::Blocked(report) => {
+                result.publication = Some(report);
+                ServerConversionOutcome::Blocked(result)
+            }
+        }
     }
 
     /// Build a package from a recipe URL
@@ -1348,6 +1405,7 @@ impl ConversionService {
             ccs_path: final_ccs_path,
             cache_state: "recipe".to_string(),
             scriptlets: ScriptletPackageMetadata::from(&ScriptletBundleSummary::default()),
+            publication: None,
             timing: None,
         })
     }
@@ -2039,9 +2097,10 @@ mod tests {
             .find_package(&conn, "fedora", "nginx", None, None)
             .unwrap();
 
-        let result = service
+        let outcome = service
             .build_result_from_existing(&existing, "fedora", &repo_pkg)
             .unwrap();
+        let result = outcome.result();
 
         assert_eq!(result.name, "nginx");
         assert_eq!(result.version, "1.24.0");
@@ -2088,9 +2147,10 @@ mod tests {
             .find_package(&conn, "fedora", "curl", None, None)
             .unwrap();
 
-        let result = service
+        let outcome = service
             .build_result_from_existing(&existing, "fedora", &repo_pkg)
             .unwrap();
+        let result = outcome.result();
 
         // Should return empty chunk list, not panic
         assert!(result.chunk_hashes.is_empty());
@@ -2249,7 +2309,8 @@ mod tests {
             chunk_hashes: vec!["sha256:chunk".to_string()],
         };
 
-        let server_result = service.persist_conversion_result(input).unwrap();
+        let server_outcome = service.persist_conversion_result(input).unwrap();
+        let server_result = server_outcome.result();
 
         assert_eq!(
             server_result.scriptlets.scriptlet_fidelity,
@@ -2276,8 +2337,11 @@ mod tests {
         let hot = service
             .build_result_from_existing(&converted, "fedora", &repo_pkg)
             .unwrap();
-        assert_eq!(hot.scriptlets.scriptlet_fidelity, "review-required");
-        assert!(hot.scriptlets.review_artifact_available);
+        assert_eq!(
+            hot.result().scriptlets.scriptlet_fidelity,
+            "review-required"
+        );
+        assert!(hot.result().scriptlets.review_artifact_available);
     }
 
     #[tokio::test]
@@ -2540,10 +2604,36 @@ mod tests {
             ccs_path: PathBuf::from("/tmp/nginx.ccs"),
             cache_state: "cold".to_string(),
             scriptlets: ScriptletPackageMetadata::from(&ScriptletBundleSummary::default()),
+            publication: None,
             timing: Some(timing),
         };
 
         assert_eq!(result.timing.unwrap().phases[0].duration_ms, 7);
+    }
+
+    #[test]
+    fn server_conversion_outcome_reports_terminal_state() {
+        use crate::server::jobs::JobStatus;
+        use crate::server::publication::ServerConversionOutcome;
+
+        let result = ServerConversionResult {
+            name: "pkg".to_string(),
+            version: "1.0".to_string(),
+            distro: "fedora".to_string(),
+            chunk_hashes: Vec::new(),
+            total_size: 0,
+            content_hash: "sha256:test".to_string(),
+            ccs_path: std::path::PathBuf::from("/tmp/pkg.ccs"),
+            cache_state: "cold".to_string(),
+            scriptlets: ScriptletPackageMetadata::from(&ScriptletBundleSummary::default()),
+            publication: None,
+            timing: None,
+        };
+
+        assert!(matches!(
+            ServerConversionOutcome::Ready(result).job_status(),
+            JobStatus::Ready
+        ));
     }
 
     #[test]
@@ -2558,6 +2648,7 @@ mod tests {
             ccs_path: PathBuf::from("/data/nginx.ccs"),
             cache_state: "cold".to_string(),
             scriptlets: ScriptletPackageMetadata::from(&ScriptletBundleSummary::default()),
+            publication: None,
             timing: None,
         };
         // Verify Debug is implemented (would fail to compile otherwise)
