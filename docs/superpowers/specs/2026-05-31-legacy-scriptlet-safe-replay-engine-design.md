@@ -10,9 +10,9 @@ artifacts. Goal 6 makes `conary install`, `conary ccs install`, update, remove,
 batch, restore-aware install, and rollback paths read those bundles and enforce
 their decisions before any live mutation.
 
-The work is safety-first. A package that has `review` or `blocked` bundle
-entries must fail before hooks, file deployment, DB writes, generation
-publication, or remove mutation. A package that needs raw native scriptlet
+The work is safety-first. A package that has `review`, `blocked`, or unknown
+bundle entries must fail before hooks, file deployment, DB writes, generation
+publication, or remove mutation. A lifecycle that needs raw native scriptlet
 replay must also fail unless an explicit local feature gate is enabled and the
 bundle's target compatibility check passes. Cross-distro raw replay is denied
 by default.
@@ -52,6 +52,7 @@ Read these first when implementing:
 - `apps/conary/src/commands/install/conversion.rs`
 - `apps/conary/src/commands/install/batch.rs`
 - `apps/conary/src/commands/install/restore.rs`
+- `apps/conary/src/commands/collection.rs`
 - `apps/conary/src/commands/remove.rs`
 - `apps/conary/src/commands/update.rs`
 - `apps/conary/src/commands/state.rs`
@@ -92,7 +93,7 @@ Relevant current code facts:
   target-root execution, protected live-root sandbox preflight, per-scriptlet
   timeout, and post-commit warning classification, but it does not yet expose a
   bundle-entry execution API that preserves `native_invocation`,
-  `interpreter_args`, `stdin`, or entry-specific sandbox floors.
+  `interpreter_args`, stdin contracts, or entry-specific sandbox floors.
 
 ## Scope
 
@@ -114,7 +115,8 @@ Goal 6 includes:
   mutation;
 - raw replay only for `legacy` entries whose target compatibility and feature
   gate both pass;
-- continued execution of generated CCS hooks for `replaced` entries;
+- continued execution of generated CCS hooks for `replaced` entries when such
+  hooks were actually materialized by conversion;
 - audit metadata that records target ID, bundle evidence digest, policy
   decisions, feature-gate usage, and any foreign replay override;
 - tests proving same-source dry-run/install/remove planning works and
@@ -140,12 +142,20 @@ Goal 6 excludes:
 Bundle consumption has two independent gates:
 
 1. **Admission gate:** Is this bundle safe to install/remove/update at all?
-   `review` and `blocked` entries fail here. So do malformed bundles and target
-   compatibility states that are `review-required`, `blocked`, or unknown.
+   `review`, `blocked`, and unknown entries anywhere in the bundle fail here,
+   before lifecycle selection. So do malformed bundles and target compatibility
+   states that are `review-required`, `blocked`, or unknown. Unsupported raw
+   trigger and file-trigger replay also fails here unless the entry is already
+   `replaced`.
 2. **Execution gate:** Is raw native replay allowed for this accepted entry at
    this lifecycle point? `legacy` entries require the local feature gate,
    compatible target metadata, sandbox preflight, and native-compatible
    invocation arguments. `replaced` entries do not replay raw script bodies.
+
+The execution gate is lifecycle-scoped. A fresh install should not execute or
+require feature-gate approval for a future `post-remove` legacy entry, but the
+installed bundle must be persisted so the later remove operation can enforce
+that lifecycle before mutation.
 
 The admission gate always runs before:
 
@@ -200,6 +210,12 @@ Add these flags to:
 - rollback commands that mutate installed troves, if they are allowed to replay
   legacy entries in Goal 6.
 
+`conary ccs install` should also gain `--no-scripts` parity with
+`conary install path.ccs`, or the implementation must explicitly document that
+operators should use the root `install` command when they need hook suppression
+semantics for a CCS archive. Prefer adding the flag for consistency because the
+transaction options already carry `no_scripts`.
+
 Internal callers, including model apply, batch install, conversion install, and
 restore paths, should carry the same option struct and default both flags to
 false. Automation must opt in intentionally.
@@ -210,10 +226,12 @@ restores a trove with an installed legacy bundle must either receive the same
 before DB, CAS, generation, or live-root mutation. Goal 6 should not silently
 skip raw replay during rollback and still claim a semantically complete revert.
 
-Autoremove should be all-or-nothing. If any package in the autoremove set has
-an installed legacy bundle requiring raw replay and `--allow-legacy-replay` is
-not set, refuse the entire autoremove before removing any package. Do not
-silently skip only the legacy-bearing packages.
+Autoremove should be all-or-nothing for legacy replay gates. It currently uses
+a fixed-point loop where removing one orphan may reveal another orphan. Goal 6
+must compute the candidate closure without mutation, or conservatively preflight
+each round before deleting any package in that round and stop before the first
+mutation if a legacy replay refusal appears. Do not silently skip only the
+legacy-bearing packages.
 
 Keep the existing `--sandbox=auto|always|never` surface, but bundle replay may
 raise the effective sandbox floor. The caller can ask for stricter sandboxing
@@ -368,7 +386,7 @@ Entry decisions are enforced before lifecycle execution:
 
 | entry decision | Goal 6 behavior |
 | --- | --- |
-| `replaced` | Never replay the raw body. Let the corresponding CCS declarative hooks/effects run through existing CCS hook paths. |
+| `replaced` | Never replay the raw body. Let materialized CCS declarative hooks run through existing hook paths; otherwise treat the entry as satisfied by the adapter/payload evidence that made it `replaced`. |
 | `legacy` | Replay the raw body only if admission, feature gate, target compatibility, and sandbox/native invocation preflight all pass. |
 | `review` | Refuse the package operation before mutation. |
 | `blocked` | Refuse the package operation before mutation. |
@@ -379,6 +397,12 @@ body is not executed. If an entry is `legacy`, only that entry's raw body is
 executed. Generated hooks may still run for different `replaced` entries in the
 same phase, but the planner must never schedule a raw body and a generated hook
 for the same entry ID.
+
+Goal 6 must not synthesize new runtime actions for passive complete effects.
+Some bootstrap adapters classify derived cache refreshes, system metadata
+reloads, or payload-backed declarations as `replaced` without generating a CCS
+hook. Those entries are satisfied by the conversion evidence and installed
+payload, not by a new replay step in Goal 6.
 
 Current CCS hooks are phase-level rather than entry-linked, so Goal 6 must not
 claim ordering precision it cannot enforce. The planner should build a small
@@ -425,18 +449,19 @@ arguments from the current `ExecutionMode` and operation context, including the
 actual old version, new version, and native count/state arguments where the
 package family expects them.
 
-`entry.native_invocation.args` must not blindly override runtime-derived
-arguments. It may be used only when:
+`entry.native_invocation.args` is a contract projection, not literal argv.
+Goal 4 stores stable strings such as `1:old-version=old-version`,
+`2:new-version=new-version`, or `1:count=package-instance-count`. The replay
+runner must parse those contracts, derive the actual argv values from runtime
+state, and never pass the contract strings themselves to the scriptlet. Raw
+contract values (`raw:<value>`) may become literal arguments only when they are
+state-independent and valid for the selected lifecycle.
 
-- it exactly matches the runtime-derived arguments for that lifecycle;
-- it contains explicit placeholders such as `{{OLD_VERSION}}`,
-  `{{NEW_VERSION}}`, `{{PACKAGE_VERSION}}`, or `{{RPM_COUNT}}` that can be
-  interpolated from the runtime operation context; or
-- it represents validated non-lifecycle custom arguments for a family-specific
-  invocation that does not depend on installed state.
-
-If static bundle args conflict with runtime-derived lifecycle args and cannot
-be interpolated safely, preflight refuses with a typed static-args conflict.
+If a contract is malformed, names a value that Goal 6 cannot supply, or
+conflicts with package-format `ExecutionMode` rules, preflight refuses with a
+typed args-contract conflict. Placeholder interpolation for future/manual
+bundle formats is out of scope unless the implementation adds it explicitly and
+tests it.
 
 For Arch `.INSTALL` functions, the bundle's `arch_install.called_function`
 should be authoritative when present. If it is absent, use the current Arch
@@ -522,6 +547,12 @@ only indicator of raw replay need: Goal 4-produced bundles may still be
 `fully-replaced`, `review-required`, or another non-`legacy-replay` value.
 Planner code should inspect entry decisions or decision counts directly.
 
+The `replay_enabled` column is install-time audit metadata, not a durable
+permission grant. Every later operation that would execute a `legacy` entry
+must still receive current `LegacyReplayOptions` and pass the execution gate.
+Do not let a previous install-time flag silently authorize future remove,
+upgrade, restore, or rollback replay.
+
 Future goals may add an index on `(source_package, source_version)` for global
 policy queries over installed bundles. Goal 6 only needs trove-ID lookup, so
 the package index is intentionally deferred.
@@ -540,8 +571,10 @@ Responsibilities:
 - build source and target IDs;
 - evaluate package-level target compatibility;
 - evaluate bundle foreign replay policy and host policy;
-- select entries for a lifecycle event;
-- reject review/blocked/unknown entries;
+- reject review/blocked/unknown entries across the whole bundle before
+  selecting lifecycle entries;
+- reject unsupported raw trigger/file-trigger entries before mutation;
+- select accepted entries for a lifecycle event;
 - determine whether raw replay is required;
 - compute the sandbox floor and timeout for each planned legacy entry;
 - produce structured refusal reasons.
@@ -575,7 +608,7 @@ pub enum LegacyReplayRefusalKind {
     ForeignReplayOverrideRequired,
     SandboxRequirementUnsupported,
     TriggerReplayUnsupported,
-    StaticInvocationArgsConflict,
+    NativeArgsContractUnsupported,
     UnsatisfiedTransactionOrder,
     RollbackReplayUnavailable,
     TimeoutOutOfRange,
@@ -601,7 +634,7 @@ pub struct LegacyScriptletExecution<'a> {
     pub body_encoding: Option<&'a str>,
     pub native_args: &'a [String],
     pub native_environment: &'a [String],
-    pub stdin: Option<&'a str>,
+    pub stdin_contract: Option<&'a str>,
     pub timeout_ms: u64,
 }
 ```
@@ -631,33 +664,40 @@ Execution differences from existing flattened scriptlets:
 - apply `timeout_ms` from the entry;
 - prepend `interpreter_args` before the temporary script path where the
   interpreter supports it;
-- derive native lifecycle args from `ExecutionMode` and runtime old/new package
-  context, using `native_invocation.args` only when it matches, interpolates, or
-  safely augments those runtime args as described in Lifecycle Mapping;
-- parse `native_invocation.environment` as `KEY=VALUE`, reject malformed names,
-  and reject dangerous environment keys such as `LD_PRELOAD`, `LD_LIBRARY_PATH`,
-  `BASH_ENV`, `ENV`, `PYTHONPATH`, and `PATH` unless a later capability design
-  permits them;
+- parse `native_invocation.args` as argument contracts, derive native lifecycle
+  argv from `ExecutionMode` and runtime old/new package context, and reject
+  unsupported contract values instead of passing contract strings through;
+- parse `native_invocation.environment` as `KEY=VALUE` or a `KEY` contract.
+  Reject malformed names. A bare `KEY` means the native ABI expected the
+  package manager to provide a value; Goal 6 should refuse it unless the runner
+  has an explicit runtime value for that key. Reject dangerous environment keys
+  such as `LD_PRELOAD`, `LD_LIBRARY_PATH`, `BASH_ENV`, `ENV`, `PYTHONPATH`, and
+  `PATH` unless a later capability design permits them;
 - provide a fixed safe execution `PATH`, such as `/usr/sbin:/usr/bin:/sbin:/bin`,
   rather than accepting a bundle-supplied override in Goal 6;
-- support `stdin` by piping it to the child when present instead of always
-  using `Stdio::null()`;
-- reject `native_invocation.chroot` in Goal 6 unless it is empty or `/`,
-  because Conary already controls the target root boundary;
+- treat `native_invocation.stdin` as a contract string, not literal input
+  content. `None` means `Stdio::null()`. Contracts such as `debconf`, `paths`,
+  or `unknown` are refused in Goal 6 unless a lifecycle-specific implementation
+  explicitly supports them;
+- treat `native_invocation.chroot` as a native root expectation contract.
+  `install-root` and `package-manager-default` may map to Conary's effective
+  target root. `host-root` and `unknown` are refused in Goal 6 unless a later
+  compatibility design explicitly supports them;
 - keep protected live-root sandbox setup failures fatal.
 
-If the implementation cost of interpreter args/stdin/env support is too high
-for the first slice, the plan may split executor work into two commits. It must
-not silently ignore fields from a `legacy` entry and still claim exact replay.
-Ignoring an unsupported native invocation field should be a preflight refusal.
+If the implementation cost of interpreter args/stdin-contract/env support is
+too high for the first slice, the plan may split executor work into two commits.
+It must not silently ignore fields from a `legacy` entry and still claim exact
+replay. Ignoring an unsupported native invocation field should be a preflight
+refusal.
 
 The first executor slice should be explicit rather than hidden inside the
 current `Scriptlet` trait path:
 
 1. expose a public body-decoding helper on `LegacyScriptletEntry`;
 2. implement `preflight_legacy_entry()` as a standalone validation path for
-   interpreter args, stdin, native environment, chroot, dynamic args, and
-   timeout before touching the filesystem;
+   interpreter args, stdin contracts, native environment, chroot, dynamic args,
+   and timeout before touching the filesystem;
 3. factor the existing executor internals only as needed so
    `execute_legacy_entry_with_outcome()` can share process setup with flattened
    scriptlets without pretending that bundle-only fields were honored.
@@ -693,9 +733,9 @@ Direct CCS install flow should become:
    return without mutation;
 8. validate payload paths and file ownership;
 9. run pre-mutation legacy entries that are planned for raw replay;
-10. run existing CCS pre-hooks for replaced behavior;
+10. run existing CCS pre-hooks for materialized replaced behavior;
 11. execute the DB/CAS/generation transaction and persist the accepted bundle;
-12. run existing CCS post-hooks;
+12. run existing CCS post-hooks for materialized replaced behavior;
 13. run post-commit legacy entries that are planned for raw replay;
 14. append scriptlet warning/audit metadata;
 15. run triggers and finish.
@@ -728,10 +768,31 @@ Batch and restore flows are not allowed to bypass this gate. In particular:
 - `apps/conary/src/commands/state.rs` restore orchestration must thread
   `LegacyReplayOptions` through the prepared install path instead of defaulting
   to permissive behavior;
+- collection install and collection update paths must propagate
+  `LegacyReplayOptions`, `--no-scripts`, and sandbox choices into every member
+  install/update rather than dropping them at the group boundary;
+- automation plan execution must propagate `LegacyReplayOptions` into planned
+  install and remove operations, defaulting to disabled unless the automation
+  caller explicitly opts in;
 - rollback helpers in `apps/conary/src/commands/system.rs` must preflight any
   trove removal/restoration that has an installed bundle before deleting or
   restoring rows. If the rollback command does not expose the explicit replay
   flags in Goal 6, it must refuse operations that require raw legacy replay.
+
+Update has an extra mutation-order trap: `cmd_update()` currently creates an
+update summary changeset before invoking `cmd_install()` for each selected
+package. Goal 6 must either preflight the selected update packages' bundles
+before that changeset is inserted, or move the changeset creation until after
+bundle admission succeeds. A legacy replay refusal from update must not leave a
+new changeset row behind merely because preflight happened inside the later
+install call.
+
+For multi-package operations such as batch install, collection install,
+collection update, update-all, and autoremove, bundle admission should be
+planned for the whole candidate set before the first package mutates state. If
+one member is refused for legacy replay policy, fail the operation before
+partially applying earlier members unless the command already has an explicit
+best-effort/partial mode with clear audit output.
 
 Model apply and replatforming should default `LegacyReplayOptions` to disabled.
 If that causes a replatform install to fail, the error must name the package,
@@ -863,7 +924,10 @@ checks:
   explicitly a skip only for dry-run tests;
 - requested sandbox mode satisfies bundle sandbox requirements;
 - bundle does not require network access;
-- `native_invocation.chroot` is absent or `/`;
+- `native_invocation.chroot` is absent, `install-root`, or
+  `package-manager-default`; `host-root` and `unknown` are refused in Goal 6;
+- `native_invocation.stdin` is absent/none; `debconf`, `paths`, and `unknown`
+  stdin contracts are refused in Goal 6;
 - unsupported lifecycle types (`trigger`, `file-trigger`) are refused unless
   the entry is `replaced`;
 - timeout is at least 1000 ms and no more than 300000 ms for Goal 6 replay;
@@ -894,14 +958,19 @@ Core tests:
 - `cargo test -p conary-core scriptlet`
   - legacy execution input derives runtime upgrade/remove args from
     `ExecutionMode` and old/new package versions;
-  - static `native_invocation.args` that conflict with runtime lifecycle args
-    refuse unless placeholders can be interpolated;
-  - interpreter args/stdin/env preflight refuses unsupported unsafe fields;
+  - `native_invocation.args` contract strings are parsed into runtime argv and
+    unsupported or malformed contracts are refused;
+  - interpreter args/stdin-contract/env preflight refuses unsupported unsafe
+    fields;
   - `PATH` overrides are rejected and the executor supplies a fixed safe path;
   - timeout from bundle entry is used;
   - sandbox floor cannot be lowered by caller.
 - `cargo test -p conary-core legacy_replay`
   - `review` and `blocked` entries refuse before execution planning;
+  - `review`, `blocked`, and unknown decisions in any bundle entry refuse
+    admission even if the entry is outside the current lifecycle;
+  - a future-lifecycle `legacy` entry does not execute during the current
+    lifecycle but is persisted for later enforcement;
   - `legacy` entries require `--allow-legacy-replay`;
   - `replaced` entries never schedule raw replay;
   - mixed generated-hook/raw-pre ordering refuses when
@@ -943,6 +1012,11 @@ Conary integration tests:
 - remove of an installed bundle fixture consults the stored bundle;
 - batch install refuses review/blocked/required-legacy bundles before file
   storage or pre-install execution;
+- collection install/update and automation plan execution propagate replay
+  options to every member operation;
+- multi-package operations refuse legacy policy failures before partially
+  applying earlier members, unless an explicit best-effort mode is documented;
+- update refuses legacy replay before creating its update summary changeset;
 - state restore refuses review/blocked/required-legacy bundles before
   `run_pre_install_phase()` or `install_inner()`;
 - rollback refuses or gates trove removal/restoration with installed legacy
@@ -1023,6 +1097,7 @@ Likely modify:
 - `apps/conary/src/commands/install/conversion.rs`
 - `apps/conary/src/commands/install/batch.rs`
 - `apps/conary/src/commands/install/restore.rs`
+- `apps/conary/src/commands/collection.rs`
 - `apps/conary/src/commands/remove.rs`
 - `apps/conary/src/commands/update.rs`
 - `apps/conary/src/commands/state.rs`
@@ -1051,6 +1126,10 @@ Likely modify:
 - `apps/conary/src/commands/install/conversion.rs` must thread replay options
   from the caller into the `CcsTransactionInstallOptions` literal used after a
   native package is converted to CCS.
+- `PreparedPackage` and related batch structs must gain fields for accepted
+  legacy replay plans and old installed bundle plans; storing only
+  `pkg.scriptlets()` is insufficient for bundle-carrying CCS packages because
+  `CcsPackage::scriptlets()` is empty.
 - Batch, restore, and rollback call paths should get explicit tests because
   they do not all flow through the exact same direct CCS transaction boundary.
 - The installed-bundle cascade regression test should mirror the real
@@ -1064,9 +1143,9 @@ Likely modify:
    must use a small phase scheduler when `transaction_order` can be represented
    or fail closed when it cannot.
 2. **`ScriptletExecutor` fidelity.**
-   The current executor derives runtime args and ignores stdin/env fields. Goal
-   6 must preserve runtime upgrade/remove arguments and must not claim exact
-   legacy replay while silently ignoring bundle invocation fields.
+   The current executor derives runtime args and ignores stdin-contract/env
+   fields. Goal 6 must preserve runtime upgrade/remove arguments and must not
+   claim exact legacy replay while silently ignoring bundle invocation fields.
 3. **Remove trap.**
    If installed bundles are not persisted atomically with the trove, or if
    remove/upgrade try to query the bundle after cascade deletion, remove and
@@ -1080,10 +1159,10 @@ Likely modify:
    `source_distro = "fedora", source_release = "44"` must normalize to the
    same target ID.
 6. **Feature-gate propagation.**
-   The flags must reach direct install, converted install, update, batch,
-   model-apply, remove, autoremove, restore, and rollback paths consistently.
-   Missing one path creates either an accidental bypass or an accidental
-   refusal.
+   The flags must reach direct install, converted install, update,
+   collection/group operations, batch, automation, model-apply, remove,
+   autoremove, restore, and rollback paths consistently. Missing one path
+   creates either an accidental bypass or an accidental refusal.
 7. **Bundle storage size.**
    Storing full bundle TOML in SQLite is acceptable for Goal 6, but packages
    with many native trigger entries can produce large rows. Future goals can
@@ -1132,10 +1211,12 @@ Ask implementation-readiness reviewers to check:
 7. Are there CLI/internal call sites missing from the feature-gate propagation
    list?
 8. Can `ScriptletExecutor` support native invocation args, interpreter args,
-   stdin, environment, and timeout without unsafe shortcuts, especially runtime
-   upgrade/remove arguments?
+   stdin contracts, environment, and timeout without unsafe shortcuts,
+   especially runtime upgrade/remove arguments?
 9. Do dry-run tests prove preflight behavior without depending on root/chroot?
 10. Does any path allow `review`, `blocked`, or unknown bundle entries to
     mutate DB or files before refusal?
 11. Are batch, restore, and rollback paths fully covered by the same gate, or
     do any bypass direct CCS install preflight?
+12. Do multi-package operations preflight all candidate packages before the
+    first mutation, so legacy replay refusals cannot leave partial state?
