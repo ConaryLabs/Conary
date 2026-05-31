@@ -9,7 +9,9 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use conary_core::ccs::convert::ScriptletBundleSummary;
-use conary_core::db::models::{ConvertedPackage, ScriptletSummaryForPublication};
+use conary_core::db::models::{
+    ChunkPublicationState, ConvertedPackage, ScriptletSummaryForPublication,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -222,6 +224,14 @@ pub fn report_from_summary(
 
 pub fn public_metadata(summary: &ScriptletBundleSummary) -> ScriptletPackageMetadata {
     ScriptletPackageMetadata::from(summary)
+}
+
+pub fn local_chunk_servable_by_public_gate(db_path: &Path, hash: &str) -> anyhow::Result<bool> {
+    let conn = crate::server::open_runtime_db(db_path)?;
+    Ok(!matches!(
+        ConvertedPackage::chunk_publication_state(&conn, hash)?,
+        ChunkPublicationState::NonPublicOnly
+    ))
 }
 
 pub fn review_artifact_root(cache_dir: &Path) -> PathBuf {

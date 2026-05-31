@@ -69,6 +69,27 @@ fn chunk_not_found() -> Response {
     (StatusCode::NOT_FOUND, "Chunk not found").into_response()
 }
 
+async fn chunk_allowed_by_public_gate(
+    db_path: std::path::PathBuf,
+    hash: String,
+) -> std::result::Result<bool, Response> {
+    match tokio::task::spawn_blocking(move || {
+        crate::server::publication::local_chunk_servable_by_public_gate(&db_path, &hash)
+    })
+    .await
+    {
+        Ok(Ok(value)) => Ok(value),
+        Ok(Err(error)) => {
+            tracing::error!("Failed to check chunk publication reachability: {error}");
+            Err((StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response())
+        }
+        Err(error) => {
+            tracing::error!("Chunk reachability task failed: {error}");
+            Err((StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response())
+        }
+    }
+}
+
 /// HEAD /v1/chunks/:hash
 ///
 /// Check if a chunk exists without transferring data.
@@ -85,6 +106,16 @@ pub async fn head_chunk(
         return (StatusCode::BAD_REQUEST, "Invalid chunk hash format").into_response();
     }
     let hash = normalize_hash(&hash);
+
+    let db_path = {
+        let state = state.read().await;
+        state.config.db_path.clone()
+    };
+    match chunk_allowed_by_public_gate(db_path, hash.clone()).await {
+        Ok(true) => {}
+        Ok(false) => return chunk_not_found(),
+        Err(response) => return response,
+    }
 
     let state = state.read().await;
 
@@ -170,6 +201,16 @@ pub async fn get_chunk(
         return (StatusCode::BAD_REQUEST, "Invalid chunk hash format").into_response();
     }
     let hash = normalize_hash(&hash);
+
+    let db_path = {
+        let state_guard = state.read().await;
+        state_guard.config.db_path.clone()
+    };
+    match chunk_allowed_by_public_gate(db_path, hash.clone()).await {
+        Ok(true) => {}
+        Ok(false) => return chunk_not_found(),
+        Err(response) => return response,
+    }
 
     let state_guard = state.read().await;
 
@@ -544,7 +585,14 @@ pub async fn find_missing(
             .into_response();
     }
 
-    let state = state.read().await;
+    let (db_path, bloom_filter, chunk_cache) = {
+        let state = state.read().await;
+        (
+            state.config.db_path.clone(),
+            state.bloom_filter.clone(),
+            state.chunk_cache.clone(),
+        )
+    };
 
     let mut missing = Vec::new();
     let mut found = Vec::new();
@@ -557,8 +605,17 @@ pub async fn find_missing(
         }
         let hash = normalize_hash(raw_hash);
 
+        match chunk_allowed_by_public_gate(db_path.clone(), hash.clone()).await {
+            Ok(true) => {}
+            Ok(false) => {
+                missing.push(hash);
+                continue;
+            }
+            Err(response) => return response,
+        }
+
         // Use Bloom filter for quick rejection
-        if let Some(ref bloom) = state.bloom_filter
+        if let Some(ref bloom) = bloom_filter
             && !bloom.might_contain(&hash)
         {
             missing.push(hash);
@@ -566,7 +623,7 @@ pub async fn find_missing(
         }
 
         // Check disk
-        let path = state.chunk_cache.chunk_path(&hash);
+        let path = chunk_cache.chunk_path(&hash);
         if path.exists() {
             found.push(hash);
         } else {
@@ -635,7 +692,14 @@ pub async fn batch_fetch(
     const MAX_BATCH_BYTES: u64 = 256 * 1024 * 1024;
 
     let format = request.format.as_deref().unwrap_or("multipart");
-    let state = state.read().await;
+    let (db_path, chunk_cache, metrics) = {
+        let state = state.read().await;
+        (
+            state.config.db_path.clone(),
+            state.chunk_cache.clone(),
+            state.metrics.clone(),
+        )
+    };
 
     // Collect chunk data with aggregate size cap
     let mut chunks_data: Vec<(String, Vec<u8>)> = Vec::new();
@@ -650,7 +714,16 @@ pub async fn batch_fetch(
         }
         let hash = normalize_hash(raw_hash);
 
-        let path = state.chunk_cache.chunk_path(&hash);
+        match chunk_allowed_by_public_gate(db_path.clone(), hash.clone()).await {
+            Ok(true) => {}
+            Ok(false) => {
+                missing.push(hash);
+                continue;
+            }
+            Err(response) => return response,
+        }
+
+        let path = chunk_cache.chunk_path(&hash);
         match tokio::fs::read(&path).await {
             Ok(data) => {
                 total_bytes += data.len() as u64;
@@ -666,8 +739,8 @@ pub async fn batch_fetch(
                     )
                         .into_response();
                 }
-                state.metrics.record_hit();
-                state.metrics.record_bytes_served(data.len() as u64);
+                metrics.record_hit();
+                metrics.record_bytes_served(data.len() as u64);
                 chunks_data.push((hash.clone(), data));
             }
             Err(_) => {
@@ -930,6 +1003,65 @@ pub(crate) fn extract_hash_from_path(path: &std::path::Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use conary_core::ccs::convert::ScriptletBundleSummary;
+    use conary_core::db::models::{ChunkAccess, ConvertedPackage};
+
+    const PRIVATE_HASH: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    fn private_review_summary() -> ScriptletBundleSummary {
+        ScriptletBundleSummary {
+            publication_status: "private-review".to_string(),
+            scriptlet_fidelity: "review-required".to_string(),
+            target_compatibility: "review-required".to_string(),
+            review_reason_codes: vec!["review-class-debconf".to_string()],
+            ..Default::default()
+        }
+    }
+
+    async fn chunk_state_with_db(
+        hash: &str,
+        rows: Vec<ScriptletBundleSummary>,
+    ) -> (Arc<RwLock<crate::server::ServerState>>, tempfile::TempDir) {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("test.db");
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conary_core::db::schema::migrate(&conn).unwrap();
+
+        let chunk_dir = temp.path().join("chunks");
+        let cache_dir = temp.path().join("cache");
+        let chunk_path = crate::server::handlers::cas_object_path(&chunk_dir, hash);
+        std::fs::create_dir_all(chunk_path.parent().unwrap()).unwrap();
+        std::fs::write(&chunk_path, b"chunk bytes").unwrap();
+
+        for (index, summary) in rows.into_iter().enumerate() {
+            let mut converted = ConvertedPackage::new_server(
+                "fedora".to_string(),
+                format!("pkg-{index}"),
+                "1.0".to_string(),
+                "rpm".to_string(),
+                format!("sha256:source-{index}"),
+                "high".to_string(),
+                &[hash.to_string()],
+                11,
+                format!("sha256:content-{index}"),
+                format!("/tmp/pkg-{index}.ccs"),
+            );
+            converted.set_scriptlet_metadata(&summary).unwrap();
+            converted.insert(&conn).unwrap();
+        }
+
+        let config = crate::server::ServerConfig {
+            db_path,
+            chunk_dir,
+            cache_dir,
+            enable_bloom_filter: false,
+            upstream_url: None,
+            ..Default::default()
+        };
+        std::fs::create_dir_all(&config.cache_dir).unwrap();
+        let state = crate::server::ServerState::new(config).expect("test server state");
+        (Arc::new(RwLock::new(state)), temp)
+    }
 
     #[test]
     fn test_parse_range_header_closed_range() {
@@ -1051,5 +1183,82 @@ mod tests {
 
         let path = Path::new("/ab/cdef");
         assert_eq!(extract_hash_from_path(path), Some("abcdef".to_string()));
+    }
+
+    #[tokio::test]
+    async fn get_chunk_returns_not_found_for_non_public_only_hash() {
+        let (state, _temp) =
+            chunk_state_with_db(PRIVATE_HASH, vec![private_review_summary()]).await;
+
+        let response = get_chunk(
+            State(state),
+            Path(PRIVATE_HASH.to_string()),
+            HeaderMap::new(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn head_chunk_returns_not_found_for_non_public_only_hash() {
+        let (state, _temp) =
+            chunk_state_with_db(PRIVATE_HASH, vec![private_review_summary()]).await;
+
+        let response = head_chunk(State(state), Path(PRIVATE_HASH.to_string())).await;
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn get_chunk_allows_hash_shared_with_public_ready_row() {
+        let (state, _temp) = chunk_state_with_db(
+            PRIVATE_HASH,
+            vec![private_review_summary(), ScriptletBundleSummary::default()],
+        )
+        .await;
+
+        let response = get_chunk(
+            State(state),
+            Path(PRIVATE_HASH.to_string()),
+            HeaderMap::new(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn head_chunk_allows_hash_shared_with_public_ready_row() {
+        let (state, _temp) = chunk_state_with_db(
+            PRIVATE_HASH,
+            vec![private_review_summary(), ScriptletBundleSummary::default()],
+        )
+        .await;
+
+        let response = head_chunk(State(state), Path(PRIVATE_HASH.to_string())).await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn get_chunk_allows_unreferenced_protected_local_cache_hash() {
+        let (state, _temp) = chunk_state_with_db(PRIVATE_HASH, Vec::new()).await;
+        {
+            let state_guard = state.read().await;
+            let conn = rusqlite::Connection::open(&state_guard.config.db_path).unwrap();
+            let mut chunk = ChunkAccess::new(PRIVATE_HASH.to_string(), 11);
+            chunk.protected = true;
+            chunk.upsert(&conn).unwrap();
+        }
+
+        let response = get_chunk(
+            State(state),
+            Path(PRIVATE_HASH.to_string()),
+            HeaderMap::new(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
     }
 }

@@ -95,6 +95,27 @@ fn oci_error_response(status: StatusCode, code: &str, message: &str) -> Response
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
+async fn blob_allowed_by_public_gate(
+    db_path: std::path::PathBuf,
+    hash: String,
+) -> std::result::Result<bool, Response> {
+    match tokio::task::spawn_blocking(move || {
+        crate::server::publication::local_chunk_servable_by_public_gate(&db_path, &hash)
+    })
+    .await
+    {
+        Ok(Ok(value)) => Ok(value),
+        Ok(Err(error)) => {
+            tracing::error!("Failed to check OCI blob publication reachability: {error}");
+            Err((StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response())
+        }
+        Err(error) => {
+            tracing::error!("OCI blob reachability task failed: {error}");
+            Err((StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response())
+        }
+    }
+}
+
 /// GET /v2/ - OCI version check
 ///
 /// Required by OCI spec. Returns empty JSON with 200 status.
@@ -335,8 +356,20 @@ async fn get_blob_inner(state: Arc<RwLock<ServerState>>, _name: &str, digest: &s
     // Normalize hash to lowercase to prevent cache bypass with mixed-case digests
     let hash = super::chunks::normalize_hash(hash);
 
-    let state_guard = state.read().await;
-    let chunk_path = state_guard.chunk_cache.chunk_path(&hash);
+    let (db_path, chunk_path) = {
+        let state_guard = state.read().await;
+        (
+            state_guard.config.db_path.clone(),
+            state_guard.chunk_cache.chunk_path(&hash),
+        )
+    };
+    match blob_allowed_by_public_gate(db_path, hash.clone()).await {
+        Ok(true) => {}
+        Ok(false) => {
+            return oci_error_response(StatusCode::NOT_FOUND, "BLOB_UNKNOWN", "Blob not found");
+        }
+        Err(response) => return response,
+    }
 
     // Check if it exists on disk
     match tokio::fs::File::open(&chunk_path).await {
@@ -386,8 +419,21 @@ async fn head_blob_inner(state: Arc<RwLock<ServerState>>, _name: &str, digest: &
         }
     };
 
-    let state_guard = state.read().await;
-    let chunk_path = state_guard.chunk_cache.chunk_path(hash);
+    let hash = super::chunks::normalize_hash(hash);
+    let (db_path, chunk_path) = {
+        let state_guard = state.read().await;
+        (
+            state_guard.config.db_path.clone(),
+            state_guard.chunk_cache.chunk_path(&hash),
+        )
+    };
+    match blob_allowed_by_public_gate(db_path, hash).await {
+        Ok(true) => {}
+        Ok(false) => {
+            return oci_error_response(StatusCode::NOT_FOUND, "BLOB_UNKNOWN", "Blob not found");
+        }
+        Err(response) => return response,
+    }
 
     match tokio::fs::metadata(&chunk_path).await {
         Ok(metadata) => Response::builder()
@@ -716,6 +762,63 @@ mod tests {
         pkg.insert(conn).unwrap();
     }
 
+    const OCI_TEST_HASH: &str = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+
+    fn private_review_summary() -> ScriptletBundleSummary {
+        ScriptletBundleSummary {
+            publication_status: "private-review".to_string(),
+            scriptlet_fidelity: "review-required".to_string(),
+            target_compatibility: "review-required".to_string(),
+            review_reason_codes: vec!["review-class-debconf".to_string()],
+            ..Default::default()
+        }
+    }
+
+    async fn oci_blob_state_with_db(
+        hash: &str,
+        rows: Vec<ScriptletBundleSummary>,
+    ) -> (Arc<RwLock<crate::server::ServerState>>, tempfile::TempDir) {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("test.db");
+        let conn = Connection::open(&db_path).unwrap();
+        schema::migrate(&conn).unwrap();
+
+        let chunk_dir = temp.path().join("chunks");
+        let cache_dir = temp.path().join("cache");
+        let chunk_path = crate::server::handlers::cas_object_path(&chunk_dir, hash);
+        std::fs::create_dir_all(chunk_path.parent().unwrap()).unwrap();
+        std::fs::write(&chunk_path, b"blob bytes").unwrap();
+
+        for (index, summary) in rows.into_iter().enumerate() {
+            let mut converted = ConvertedPackage::new_server(
+                "fedora".to_string(),
+                format!("pkg-{index}"),
+                "1.0".to_string(),
+                "rpm".to_string(),
+                format!("sha256:source-{index}"),
+                "high".to_string(),
+                &[hash.to_string()],
+                10,
+                format!("sha256:content-{index}"),
+                format!("/tmp/pkg-{index}.ccs"),
+            );
+            converted.set_scriptlet_metadata(&summary).unwrap();
+            converted.insert(&conn).unwrap();
+        }
+
+        let config = crate::server::ServerConfig {
+            db_path,
+            chunk_dir,
+            cache_dir,
+            enable_bloom_filter: false,
+            upstream_url: None,
+            ..Default::default()
+        };
+        std::fs::create_dir_all(&config.cache_dir).unwrap();
+        let state = crate::server::ServerState::new(config).expect("test server state");
+        (Arc::new(RwLock::new(state)), temp)
+    }
+
     #[test]
     fn test_parse_oci_name_namespaced() {
         let (distro, pkg) = parse_oci_name("conary/fedora/nginx").unwrap();
@@ -1028,5 +1131,41 @@ mod tests {
         assert!(tags.is_empty());
         assert!(catalog.repositories.is_empty());
         assert!(manifest.is_none());
+    }
+
+    #[tokio::test]
+    async fn oci_blob_returns_not_found_for_non_public_only_hash() {
+        let (state, _temp) =
+            oci_blob_state_with_db(OCI_TEST_HASH, vec![private_review_summary()]).await;
+        let digest = format!("sha256:{OCI_TEST_HASH}");
+
+        let response = get_blob_inner(state, "conary/fedora/pkg", &digest).await;
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn oci_head_blob_returns_not_found_for_non_public_only_hash() {
+        let (state, _temp) =
+            oci_blob_state_with_db(OCI_TEST_HASH, vec![private_review_summary()]).await;
+        let digest = format!("sha256:{OCI_TEST_HASH}");
+
+        let response = head_blob_inner(state, "conary/fedora/pkg", &digest).await;
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn oci_blob_allows_hash_shared_with_public_ready_row() {
+        let (state, _temp) = oci_blob_state_with_db(
+            OCI_TEST_HASH,
+            vec![private_review_summary(), ScriptletBundleSummary::default()],
+        )
+        .await;
+        let digest = format!("sha256:{OCI_TEST_HASH}");
+
+        let response = get_blob_inner(state, "conary/fedora/pkg", &digest).await;
+
+        assert_eq!(response.status(), StatusCode::OK);
     }
 }

@@ -96,6 +96,13 @@ pub struct ScriptletSummaryForPublication {
     pub valid: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChunkPublicationState {
+    NoConvertedReference,
+    PublicReady,
+    NonPublicOnly,
+}
+
 impl ConvertedPackage {
     /// Column list for SELECT queries.
     const COLUMNS: &'static str = "id, trove_id, original_format, original_checksum, \
@@ -391,13 +398,14 @@ impl ConvertedPackage {
             }
         };
 
-        let shape_valid = self.summary_json_shape_valid_for_publication(&value);
+        let columns = self.publication_columns();
+        let shape_valid = columns.summary_json_shape_valid_for_publication(&value);
         let summary = self.scriptlet_summary();
         let status_matches = value
             .get("publication_status")
             .and_then(|value| value.as_str())
             .map(|status| status == self.publication_status)
-            .unwrap_or_else(|| self.is_default_scriptlet_publication_shape(&value));
+            .unwrap_or_else(|| columns.is_default_scriptlet_publication_shape(&value));
 
         ScriptletSummaryForPublication {
             summary,
@@ -417,38 +425,60 @@ impl ConvertedPackage {
             .unwrap_or_default()
     }
 
-    fn summary_json_shape_valid_for_publication(&self, value: &serde_json::Value) -> bool {
-        if self.is_default_scriptlet_publication_shape(value) {
-            return true;
+    /// Classify whether a CAS chunk is reachable from current public-ready
+    /// conversions, current non-public conversions only, or no conversions.
+    pub fn chunk_publication_state(conn: &Connection, hash: &str) -> Result<ChunkPublicationState> {
+        let bare_hash = hash.strip_prefix("sha256:").unwrap_or(hash);
+        let prefixed_hash = format!("sha256:{bare_hash}");
+        let bare_pattern = format!("%\"{bare_hash}\"%");
+        let prefixed_pattern = format!("%\"{prefixed_hash}\"%");
+
+        let mut stmt = conn.prepare(
+            "SELECT chunk_hashes_json,
+                    scriptlet_fidelity, target_compatibility, publication_status,
+                    evidence_digest, curation_evidence_digest, blocked_reason_codes_json,
+                    scriptlet_summary_json, review_artifact_path
+             FROM converted_packages
+             WHERE conversion_version >= ?1
+               AND chunk_hashes_json IS NOT NULL
+               AND (chunk_hashes_json LIKE ?2 OR chunk_hashes_json LIKE ?3)",
+        )?;
+        let rows = stmt
+            .query_map(
+                params![CONVERSION_VERSION, bare_pattern, prefixed_pattern],
+                ChunkPublicationCandidate::from_row,
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        let mut saw_converted_reference = false;
+        for candidate in rows {
+            if !candidate.references_hash(hash) {
+                continue;
+            }
+
+            saw_converted_reference = true;
+            if candidate.is_scriptlet_public_ready() {
+                return Ok(ChunkPublicationState::PublicReady);
+            }
         }
 
-        let Some(object) = value.as_object() else {
-            return false;
-        };
-
-        [
-            "scriptlet_fidelity",
-            "target_compatibility",
-            "publication_status",
-            "decision_counts",
-            "blocked_reason_codes",
-            "review_reason_codes",
-            "unknown_commands",
-            "blocked_classes",
-        ]
-        .iter()
-        .all(|key| object.contains_key(*key))
+        Ok(if saw_converted_reference {
+            ChunkPublicationState::NonPublicOnly
+        } else {
+            ChunkPublicationState::NoConvertedReference
+        })
     }
 
-    fn is_default_scriptlet_publication_shape(&self, value: &serde_json::Value) -> bool {
-        value.as_object().is_some_and(|object| object.is_empty())
-            && self.scriptlet_fidelity == "unknown"
-            && self.target_compatibility == "unknown"
-            && self.publication_status == "public"
-            && self.evidence_digest.is_none()
-            && self.curation_evidence_digest.is_none()
-            && json_string_array_is_empty(&self.blocked_reason_codes_json)
-            && self.review_artifact_path.is_none()
+    fn publication_columns(&self) -> ScriptletPublicationColumns<'_> {
+        ScriptletPublicationColumns {
+            scriptlet_fidelity: &self.scriptlet_fidelity,
+            target_compatibility: &self.target_compatibility,
+            publication_status: &self.publication_status,
+            evidence_digest: self.evidence_digest.as_deref(),
+            curation_evidence_digest: self.curation_evidence_digest.as_deref(),
+            blocked_reason_codes_json: &self.blocked_reason_codes_json,
+            review_artifact_path: self.review_artifact_path.as_deref(),
+        }
     }
 
     /// List all converted packages with a specific fidelity level
@@ -702,6 +732,124 @@ impl ConvertedPackage {
     }
 }
 
+struct ChunkPublicationCandidate {
+    chunk_hashes_json: Option<String>,
+    scriptlet_fidelity: String,
+    target_compatibility: String,
+    publication_status: String,
+    evidence_digest: Option<String>,
+    curation_evidence_digest: Option<String>,
+    blocked_reason_codes_json: String,
+    scriptlet_summary_json: String,
+    review_artifact_path: Option<String>,
+}
+
+impl ChunkPublicationCandidate {
+    fn from_row(row: &Row) -> rusqlite::Result<Self> {
+        Ok(Self {
+            chunk_hashes_json: row.get(0)?,
+            scriptlet_fidelity: row.get(1)?,
+            target_compatibility: row.get(2)?,
+            publication_status: row.get(3)?,
+            evidence_digest: row.get(4)?,
+            curation_evidence_digest: row.get(5)?,
+            blocked_reason_codes_json: row.get(6)?,
+            scriptlet_summary_json: row.get(7)?,
+            review_artifact_path: row.get(8)?,
+        })
+    }
+
+    fn references_hash(&self, hash: &str) -> bool {
+        let bare_hash = hash.strip_prefix("sha256:").unwrap_or(hash);
+        let prefixed_hash = format!("sha256:{bare_hash}");
+        self.chunk_hashes_json
+            .as_deref()
+            .and_then(|json| serde_json::from_str::<Vec<String>>(json).ok())
+            .unwrap_or_default()
+            .into_iter()
+            .any(|chunk_hash| chunk_hash == bare_hash || chunk_hash == prefixed_hash)
+    }
+
+    fn is_scriptlet_public_ready(&self) -> bool {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&self.scriptlet_summary_json)
+        else {
+            return false;
+        };
+        self.publication_columns()
+            .summary_json_valid_for_publication(&value)
+            && self.publication_status == "public"
+    }
+
+    fn publication_columns(&self) -> ScriptletPublicationColumns<'_> {
+        ScriptletPublicationColumns {
+            scriptlet_fidelity: &self.scriptlet_fidelity,
+            target_compatibility: &self.target_compatibility,
+            publication_status: &self.publication_status,
+            evidence_digest: self.evidence_digest.as_deref(),
+            curation_evidence_digest: self.curation_evidence_digest.as_deref(),
+            blocked_reason_codes_json: &self.blocked_reason_codes_json,
+            review_artifact_path: self.review_artifact_path.as_deref(),
+        }
+    }
+}
+
+struct ScriptletPublicationColumns<'a> {
+    scriptlet_fidelity: &'a str,
+    target_compatibility: &'a str,
+    publication_status: &'a str,
+    evidence_digest: Option<&'a str>,
+    curation_evidence_digest: Option<&'a str>,
+    blocked_reason_codes_json: &'a str,
+    review_artifact_path: Option<&'a str>,
+}
+
+impl ScriptletPublicationColumns<'_> {
+    fn summary_json_valid_for_publication(&self, value: &serde_json::Value) -> bool {
+        let shape_valid = self.summary_json_shape_valid_for_publication(value);
+        let status_matches = value
+            .get("publication_status")
+            .and_then(|value| value.as_str())
+            .map(|status| status == self.publication_status)
+            .unwrap_or_else(|| self.is_default_scriptlet_publication_shape(value));
+
+        shape_valid && status_matches
+    }
+
+    fn summary_json_shape_valid_for_publication(&self, value: &serde_json::Value) -> bool {
+        if self.is_default_scriptlet_publication_shape(value) {
+            return true;
+        }
+
+        let Some(object) = value.as_object() else {
+            return false;
+        };
+
+        [
+            "scriptlet_fidelity",
+            "target_compatibility",
+            "publication_status",
+            "decision_counts",
+            "blocked_reason_codes",
+            "review_reason_codes",
+            "unknown_commands",
+            "blocked_classes",
+        ]
+        .iter()
+        .all(|key| object.contains_key(*key))
+    }
+
+    fn is_default_scriptlet_publication_shape(&self, value: &serde_json::Value) -> bool {
+        value.as_object().is_some_and(|object| object.is_empty())
+            && self.scriptlet_fidelity == "unknown"
+            && self.target_compatibility == "unknown"
+            && self.publication_status == "public"
+            && self.evidence_digest.is_none()
+            && self.curation_evidence_digest.is_none()
+            && json_string_array_is_empty(self.blocked_reason_codes_json)
+            && self.review_artifact_path.is_none()
+    }
+}
+
 fn json_string_array_is_empty(value: &str) -> bool {
     match serde_json::from_str::<Vec<String>>(value) {
         Ok(values) => values.is_empty(),
@@ -882,6 +1030,75 @@ mod tests {
 
         assert!(converted.scriptlet_summary_for_publication().valid);
         assert!(!converted.is_scriptlet_public_ready());
+    }
+
+    #[test]
+    fn chunk_public_ready_lookup_requires_at_least_one_public_row() {
+        let (_temp, conn) = create_test_db();
+        let shared_hash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let mut private = ConvertedPackage::new_server(
+            "fedora".to_string(),
+            "private".to_string(),
+            "1.0".to_string(),
+            "rpm".to_string(),
+            "sha256:private".to_string(),
+            "high".to_string(),
+            &[shared_hash.to_string()],
+            10,
+            "sha256:private-content".to_string(),
+            "/tmp/private.ccs".to_string(),
+        );
+        private
+            .set_scriptlet_metadata(&ScriptletBundleSummary {
+                publication_status: "private-review".to_string(),
+                scriptlet_fidelity: "review-required".to_string(),
+                target_compatibility: "review-required".to_string(),
+                review_reason_codes: vec!["review-class-debconf".to_string()],
+                ..Default::default()
+            })
+            .unwrap();
+        private.insert(&conn).unwrap();
+
+        assert_eq!(
+            ConvertedPackage::chunk_publication_state(&conn, shared_hash).unwrap(),
+            ChunkPublicationState::NonPublicOnly,
+        );
+
+        let mut public = ConvertedPackage::new_server(
+            "fedora".to_string(),
+            "public".to_string(),
+            "1.0".to_string(),
+            "rpm".to_string(),
+            "sha256:public".to_string(),
+            "high".to_string(),
+            &[shared_hash.to_string()],
+            10,
+            "sha256:public-content".to_string(),
+            "/tmp/public.ccs".to_string(),
+        );
+        public
+            .set_scriptlet_metadata(&ScriptletBundleSummary::default())
+            .unwrap();
+        public.insert(&conn).unwrap();
+
+        assert_eq!(
+            ConvertedPackage::chunk_publication_state(&conn, shared_hash).unwrap(),
+            ChunkPublicationState::PublicReady,
+        );
+    }
+
+    #[test]
+    fn chunk_publication_state_allows_unreferenced_cas_hashes() {
+        let (_temp, conn) = create_test_db();
+
+        assert_eq!(
+            ConvertedPackage::chunk_publication_state(
+                &conn,
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            )
+            .unwrap(),
+            ChunkPublicationState::NoConvertedReference,
+        );
     }
 
     #[test]
