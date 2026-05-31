@@ -44,6 +44,10 @@ pub fn create_admin_router(state: Arc<RwLock<ServerState>>) -> Router {
             "/v1/admin/packages/{distro}",
             post(admin_handlers::upload_package),
         )
+        .route(
+            "/v1/admin/packages/{distro}/{package}/scriptlet-review",
+            get(admin_handlers::get_scriptlet_review_artifact),
+        )
         .route_layer(middleware::from_fn(require_localhost))
         .with_state(state)
 }
@@ -70,6 +74,10 @@ pub fn create_external_admin_router(
         .route(
             "/v1/admin/packages/{distro}",
             post(admin_handlers::upload_package),
+        )
+        .route(
+            "/v1/admin/packages/{distro}/{package}/scriptlet-review",
+            get(admin_handlers::get_scriptlet_review_artifact),
         )
         .route("/v1/admin/repos", get(admin_handlers::list_repos))
         .route("/v1/admin/repos", post(admin_handlers::create_repo))
