@@ -13,14 +13,22 @@ Those database fields record fidelity, target compatibility, publication
 status, evidence digests, blocked/review reason codes, and sanitized summary
 counts for converted artifacts.
 
-Public package detail, metadata, and generated-index responses expose this
-information through a sanitized `scriptlets` object. Local
-`review_artifact_path` values remain private server state and are represented
-publicly only as `review_artifact_available`.
+Public package detail, metadata, and generated-index responses expose public
+rows through a sanitized `scriptlets` object. Local `review_artifact_path`
+values remain private server state and are represented publicly only as
+`review_artifact_available`.
 
-Goal 4 does not enforce publication policy. Remi records `publication_status`
-for auditing and future gating work, but package downloads and publication
-responses are not rejected because of that value in this goal.
+### Legacy Scriptlet Publication Gate
+
+Remi treats legacy scriptlet metadata embedded during conversion as an active
+serving gate. Converted rows whose scriptlet summary is valid and has
+`publication_status = "public"` may be advertised, indexed, and served. Rows
+with `private-review`, `blocked`, `local-only`, malformed summary JSON, or
+non-default scriptlet evidence without an explicit summary are terminal
+review/blocked conversion outcomes and are not public-ready.
+
+This gate is publication-only. It does not replay scriptlets, promote reviewed
+packages, or change client install/update/remove behavior.
 
 ## Conversion Benchmark Evidence
 

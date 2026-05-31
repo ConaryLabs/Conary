@@ -42,6 +42,18 @@ struct ReviewArtifactRow {
     review_artifact_path: Option<String>,
 }
 
+struct AtomicReplaceInput {
+    db_path: PathBuf,
+    distro: String,
+    package_name: String,
+    package_version: String,
+    package_architecture: Option<String>,
+    content_hash: String,
+    size: i64,
+    final_ccs_path: String,
+    scriptlet_summary: ScriptletBundleSummary,
+}
+
 #[derive(Serialize)]
 struct PublishPackageResponse {
     distro: String,
@@ -77,27 +89,19 @@ fn chunk_path(chunk_dir: &FsPath, hash: &str) -> PathBuf {
 /// Returns the old `ConvertedPackage` (if any) so the caller can clean up stale
 /// files on disk *after* the transaction commits.
 async fn atomic_replace_record(
-    db_path: PathBuf,
-    distro: String,
-    package_name: String,
-    package_version: String,
-    package_architecture: Option<String>,
-    content_hash: String,
-    size: i64,
-    final_ccs_path: String,
-    scriptlet_summary: ScriptletBundleSummary,
+    input: AtomicReplaceInput,
 ) -> anyhow::Result<Option<conary_core::db::models::ConvertedPackage>> {
     tokio::task::spawn_blocking(move || {
-        let mut conn = crate::server::open_runtime_db(&db_path)?;
+        let mut conn = crate::server::open_runtime_db(&input.db_path)?;
         conary_core::db::transaction(&mut conn, |tx| {
             // Find existing record (if any) before deleting
             let existing =
                 conary_core::db::models::ConvertedPackage::find_by_package_identity_with_arch(
                     tx,
-                    &distro,
-                    &package_name,
-                    Some(&package_version),
-                    package_architecture.as_deref(),
+                    &input.distro,
+                    &input.package_name,
+                    Some(&input.package_version),
+                    input.package_architecture.as_deref(),
                 )?;
 
             // Delete old record inside the transaction
@@ -110,19 +114,19 @@ async fn atomic_replace_record(
 
             // Insert new record inside the same transaction
             let mut converted = conary_core::db::models::ConvertedPackage::new_server(
-                distro.clone(),
-                package_name.clone(),
-                package_version.clone(),
+                input.distro.clone(),
+                input.package_name.clone(),
+                input.package_version.clone(),
                 "ccs".to_string(),
-                format!("upload:{}:{}", distro, content_hash),
+                format!("upload:{}:{}", input.distro, input.content_hash),
                 "full".to_string(),
-                std::slice::from_ref(&content_hash),
-                size,
-                content_hash.clone(),
-                final_ccs_path,
+                std::slice::from_ref(&input.content_hash),
+                input.size,
+                input.content_hash.clone(),
+                input.final_ccs_path,
             );
-            converted.package_architecture = package_architecture;
-            converted.set_scriptlet_metadata(&scriptlet_summary)?;
+            converted.package_architecture = input.package_architecture;
+            converted.set_scriptlet_metadata(&input.scriptlet_summary)?;
             converted.insert(tx)?;
 
             Ok(existing)
@@ -558,17 +562,17 @@ pub async fn upload_package(
     // This way, if the final rename fails, the DB points at the staged file
     // which actually contains the correct new bytes (not the old content).
     let staged_path_str = staged_path.to_string_lossy().to_string();
-    let existing = match atomic_replace_record(
-        db_path.clone(),
-        distro.clone(),
-        package_name.clone(),
-        package_version.clone(),
-        package_architecture.clone(),
-        content_hash.clone(),
-        size as i64,
-        staged_path_str.clone(),
-        scriptlet_summary.clone(),
-    )
+    let existing = match atomic_replace_record(AtomicReplaceInput {
+        db_path: db_path.clone(),
+        distro: distro.clone(),
+        package_name: package_name.clone(),
+        package_version: package_version.clone(),
+        package_architecture: package_architecture.clone(),
+        content_hash: content_hash.clone(),
+        size: size as i64,
+        final_ccs_path: staged_path_str.clone(),
+        scriptlet_summary: scriptlet_summary.clone(),
+    })
     .await
     {
         Ok(existing) => existing,
