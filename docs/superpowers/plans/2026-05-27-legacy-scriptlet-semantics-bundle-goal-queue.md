@@ -285,6 +285,15 @@ git diff --check
 
 ## Goal 5: Review, Blocked, And Publication Gate
 
+Status: implemented on the Goal 5 publication-gate branch. Final merge range
+will be recorded during the merge/push/cleanup turn after Task 7 verification
+passes.
+
+Design and detailed plan:
+
+- `docs/superpowers/specs/2026-05-28-legacy-scriptlet-publication-gate-design.md`
+- `docs/superpowers/plans/2026-05-28-legacy-scriptlet-publication-gate-plan.md`
+
 Recommended objective:
 
 ```text
