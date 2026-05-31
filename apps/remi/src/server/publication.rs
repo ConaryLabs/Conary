@@ -276,6 +276,12 @@ pub fn write_review_artifact(
     Ok(path)
 }
 
+pub fn validate_review_artifact_path(cache_dir: &Path, path: &Path) -> anyhow::Result<bool> {
+    let canonical_root = review_artifact_root(cache_dir).canonicalize()?;
+    let canonical_path = path.canonicalize()?;
+    Ok(canonical_path.starts_with(canonical_root))
+}
+
 fn push_reason(reasons: &mut Vec<String>, seen: &mut BTreeSet<String>, reason: String) {
     if seen.insert(reason.clone()) {
         reasons.push(reason);
