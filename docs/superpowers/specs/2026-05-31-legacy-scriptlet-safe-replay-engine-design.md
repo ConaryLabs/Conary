@@ -192,7 +192,8 @@ changeset audit metadata. It is ignored for `strict` and insufficient for
 Add these flags to:
 
 - `conary install`;
-- `conary update`;
+- `conary update`, which should also gain `--no-scripts` so update can express
+  the same `NoScriptsWouldSkipRequiredReplay` semantics as install;
 - `conary remove`;
 - `conary autoremove`;
 - `conary ccs install`;
@@ -208,6 +209,11 @@ restores a trove with an installed legacy bundle must either receive the same
 `LegacyReplayOptions` and enforce the same planner decisions, or fail closed
 before DB, CAS, generation, or live-root mutation. Goal 6 should not silently
 skip raw replay during rollback and still claim a semantically complete revert.
+
+Autoremove should be all-or-nothing. If any package in the autoremove set has
+an installed legacy bundle requiring raw replay and `--allow-legacy-replay` is
+not set, refuse the entire autoremove before removing any package. Do not
+silently skip only the legacy-bearing packages.
 
 Keep the existing `--sandbox=auto|always|never` surface, but bundle replay may
 raise the effective sandbox floor. The caller can ask for stricter sandboxing
@@ -273,6 +279,8 @@ Target resolution order:
 - `fedora-44` becomes `rpm/fedora/44/<arch>`;
 - `ubuntu-26.04` becomes `deb/ubuntu/26.04/<arch>`;
 - `arch` becomes `arch/arch/rolling/<arch>`;
+- Arch bundle source IDs normalize `source_release = None` or an empty release
+  to `rolling` when `source_distro = "arch"`;
 - generic family names such as `fedora`, `ubuntu`, `debian`, or `arch` map to
   their package format and distro family, but release is taken from host
   `/etc/os-release` only when the host identity matches that family;
@@ -316,6 +324,7 @@ pub struct LegacyReplayPlan {
     pub source_target_id: String,
     pub bundle_evidence_digest: Option<String>,
     pub lifecycle_entries: Vec<PlannedLegacyEntry>,
+    pub sandbox_floor: SandboxMode,
     pub ccs_hooks_allowed: bool,
     pub raw_replay_required: bool,
 }
@@ -501,6 +510,22 @@ the transaction commits. For upgrade, delete of the old trove may cascade the
 old bundle only after old pre-remove and post-remove plans have both been built
 from the installed old bundle and copied into the upgrade execution state.
 
+For bundle-carrying CCS packages, the installed bundle row is the authority for
+remove and upgrade replay decisions. Do not also insert flattened
+`ScriptletEntry` rows for lifecycle entries covered by `legacy_scriptlets`; that
+would create a double-execution hazard when remove code consults both stores.
+Native non-CCS package installs continue to populate the existing `scriptlets`
+table as they do today.
+
+Store `scriptlet_fidelity` as-is from the bundle summary. Do not use it as the
+only indicator of raw replay need: Goal 4-produced bundles may still be
+`fully-replaced`, `review-required`, or another non-`legacy-replay` value.
+Planner code should inspect entry decisions or decision counts directly.
+
+Future goals may add an index on `(source_package, source_version)` for global
+policy queries over installed bundles. Goal 6 only needs trove-ID lookup, so
+the package index is intentionally deferred.
+
 ## Replay Planner Module
 
 Add a core module that plans but does not touch the filesystem:
@@ -553,6 +578,7 @@ pub enum LegacyReplayRefusalKind {
     StaticInvocationArgsConflict,
     UnsatisfiedTransactionOrder,
     RollbackReplayUnavailable,
+    TimeoutOutOfRange,
     MalformedBundle,
 }
 ```
@@ -571,7 +597,7 @@ pub struct LegacyScriptletExecution<'a> {
     pub phase: &'a str,
     pub interpreter: &'a str,
     pub interpreter_args: &'a [String],
-    pub body: Cow<'a, str>,
+    pub body: String,
     pub body_encoding: Option<&'a str>,
     pub native_args: &'a [String],
     pub native_environment: &'a [String],
@@ -625,6 +651,17 @@ for the first slice, the plan may split executor work into two commits. It must
 not silently ignore fields from a `legacy` entry and still claim exact replay.
 Ignoring an unsupported native invocation field should be a preflight refusal.
 
+The first executor slice should be explicit rather than hidden inside the
+current `Scriptlet` trait path:
+
+1. expose a public body-decoding helper on `LegacyScriptletEntry`;
+2. implement `preflight_legacy_entry()` as a standalone validation path for
+   interpreter args, stdin, native environment, chroot, dynamic args, and
+   timeout before touching the filesystem;
+3. factor the existing executor internals only as needed so
+   `execute_legacy_entry_with_outcome()` can share process setup with flattened
+   scriptlets without pretending that bundle-only fields were honored.
+
 ## Install Integration
 
 Add `LegacyReplayOptions` to:
@@ -663,6 +700,12 @@ Direct CCS install flow should become:
 14. append scriptlet warning/audit metadata;
 15. run triggers and finish.
 
+The legacy preflight in step 6 must be inserted before the existing
+`opts.dry_run` early return in
+`apps/conary/src/commands/install/mod.rs::install_ccs_package_transactionally`.
+Dry-run should print or otherwise report the `LegacyReplayPreflight` outcome,
+then return without persisting the installed bundle or mutating DB/files.
+
 The exact placement of steps 9 and 10 should be revisited during implementation
 review against fixtures. The invariant is that all preflight happens before any
 pre-hook or raw pre script mutates state.
@@ -690,6 +733,11 @@ Batch and restore flows are not allowed to bypass this gate. In particular:
   restoring rows. If the rollback command does not expose the explicit replay
   flags in Goal 6, it must refuse operations that require raw legacy replay.
 
+Model apply and replatforming should default `LegacyReplayOptions` to disabled.
+If that causes a replatform install to fail, the error must name the package,
+the required replay entries, and the safer operator choices, such as selecting
+a different target distro or waiting for adapter coverage.
+
 ## Remove And Upgrade Integration
 
 Remove must not rely on the original CCS archive. It should look up
@@ -707,6 +755,13 @@ Remove must not rely on the original CCS archive. It should look up
    publication, without querying the installed-bundle table again;
 9. append warnings/audit metadata.
 
+The concrete insertion point is before flattened scriptlet lookup and
+execution. After `cmd_remove()` resolves the installed package and rejects
+pinned or blocked system packages, `prepare_remove()` should load and preflight
+the installed bundle before calling `ScriptletEntry::find_by_trove()` for the
+legacy flattened path. A bundle admission failure must return before any
+pre-remove scriptlet, file deletion, DB deletion, or generation publication.
+
 For upgrade, the new package bundle and the old installed bundle both matter:
 
 - new bundle: preflight and execute new pre/post install or upgrade entries;
@@ -714,6 +769,13 @@ For upgrade, the new package bundle and the old installed bundle both matter:
   upgrade-removal mode from an in-memory plan built before old trove deletion
   cascades the old bundle row;
 - the new bundle is persisted with the new trove in the same transaction.
+
+For upgrades, old-bundle lookup, pre-remove preflight, and old pre-remove
+execution must happen before `Trove::delete()` in
+`install_inner_with_stored_files()`. The implementation should place the
+old-bundle planning hook after upgrade status is known in
+`install_ccs_package_transactionally()` and before payload extraction/dry-run
+summary paths can return.
 
 This avoids a trap where a package installs with accepted legacy replay but its
 remove path later lacks the bundle needed to replay or reject safely.
@@ -741,7 +803,12 @@ even when no raw replay happened:
         "phase": "post-install",
         "decision": "legacy",
         "effective_sandbox": "protected-live-root",
-        "timeout_ms": 60000
+        "timeout_ms": 60000,
+        "outcome": {
+          "exit_code": 0,
+          "signal": null,
+          "duration_ms": 1234
+        }
       }
     ]
   }
@@ -750,9 +817,9 @@ even when no raw replay happened:
 
 For refused dry-run or preflight failures, the error text is enough for CLI
 users, but tests should assert no DB mutation occurred. For real operations
-that pass preflight but produce post-commit scriptlet failures, use the existing
-scriptlet warning metadata shape and include the bundle entry ID in the warning
-message.
+that pass preflight, outcome may be populated after execution. Post-commit
+scriptlet failures should still use the existing scriptlet warning metadata
+shape and include the bundle entry ID in the warning message.
 
 Goal 7 can add durable curation/override audit tables. Goal 6 only needs enough
 metadata to make local changesets explain why replay did or did not run.
@@ -769,6 +836,17 @@ Bundle-aware behavior:
   `NoScriptsWouldSkipRequiredReplay`;
 - any `review` or `blocked` entry: refuse before mutation regardless of
   `--no-scripts`.
+
+For a mixed bundle, evaluate the current lifecycle. If any selected entry
+requires raw legacy replay, `--no-scripts` refuses the whole operation rather
+than suppressing that replay. If the selected lifecycle has only `replaced` or
+native-free behavior, `--no-scripts` behaves as a hook-suppression request and
+does not bypass bundle admission.
+
+The refusal should be actionable: name the package, list the lifecycle entries
+that require raw replay, state that `--no-scripts` cannot skip required legacy
+behavior, and suggest rerunning with explicit replay flags only when the target
+is compatible.
 
 This preserves safety and avoids installing a package whose conversion evidence
 says raw scriptlet behavior is required while explicitly skipping that behavior.
@@ -788,7 +866,7 @@ checks:
 - `native_invocation.chroot` is absent or `/`;
 - unsupported lifecycle types (`trigger`, `file-trigger`) are refused unless
   the entry is `replaced`;
-- timeout is non-zero and within bundle validation limits;
+- timeout is at least 1000 ms and no more than 300000 ms for Goal 6 replay;
 - dangerous native environment variables are absent, including `PATH`
   overrides in Goal 6.
 
@@ -808,6 +886,8 @@ Core tests:
   - `fedora-44` maps to `rpm/fedora/44/<arch>`;
   - `ubuntu-26.04` maps to `deb/ubuntu/26.04/<arch>`;
   - `arch` maps to `arch/arch/rolling/<arch>`;
+  - an Arch source bundle with `source_release = None` normalizes to
+    `arch/arch/rolling/<arch>`;
   - generic pins such as `fedora` do not fabricate a release when host
     `/etc/os-release` is unavailable or mismatched;
   - unknown target IDs deny raw replay.
@@ -836,6 +916,10 @@ Database tests:
 - migration v71 creates `installed_legacy_scriptlet_bundles`;
 - model round-trips a complete `LegacyScriptletBundle`;
 - malformed stored TOML or digest mismatch is rejected;
+- malformed stored TOML errors are propagated in remove/upgrade planning rather
+  than panicking;
+- bundle-level and entry-level unknown `extra` fields survive the installed
+  bundle model TOML round trip;
 - deleting a trove cascades installed bundle state;
 - remove/upgrade can read, decode, and carry the old bundle plan before old
   trove deletion, and post-remove uses the in-memory plan after cascade;
@@ -851,6 +935,11 @@ Conary integration tests:
   not mutate DB;
 - same-source `legacy` fixture install with the feature gate persists the
   installed bundle row;
+- upgrade from an old legacy-bundle package to a new legacy-bundle package runs
+  old pre-remove replay before new install replay and persists the new bundle;
+- failed upgrade rolls back the old trove and old installed bundle row;
+- remove after deleting the original CCS archive still uses the installed
+  bundle row;
 - remove of an installed bundle fixture consults the stored bundle;
 - batch install refuses review/blocked/required-legacy bundles before file
   storage or pre-install execution;
@@ -859,14 +948,33 @@ Conary integration tests:
 - rollback refuses or gates trove removal/restoration with installed legacy
   bundles before deleting/restoring rows;
 - cross-distro raw replay is rejected under default strict policy;
+- strict host policy rejects foreign replay even when both operator flags are
+  supplied;
 - `replaced` fixture runs only CCS declarative hooks and does not replay raw
   body;
 - `--no-scripts` cannot bypass required legacy replay.
+
+Goal 6 tests that require `decision = "legacy"` entries should use synthetic
+bundle fixtures. Goal 4 intentionally did not emit `legacy` decisions from the
+conversion pipeline, so Goal 6 should not broaden converter classification just
+to make fixtures appear organically. Real corpus promotion to legacy replay can
+be handled in a later compatibility/curation goal.
+
+The goal queue's broad `ccs_install` target is superseded by the more specific
+`bundle_replay` and `foreign_replay` integration test modules in this design.
+Existing `ccs_install` tests may still run as regression coverage. When new
+Goal 6 integration tests are files under `apps/conary/tests/`, use cargo's
+`--test` form for exact-file verification.
 
 Use test-only runners or injected `LegacyReplayRunner` traits where needed.
 Tests should not require actual host mutation or root-only chroot execution.
 They should assert the planned calls and persisted state. Separate sandbox
 tests can cover `ScriptletExecutor` preflight behavior.
+
+`live_host_safety` remains a regression target for mutation-boundary safety.
+Bundle-specific host-policy mapping should live in `target_compatibility` or
+`legacy_replay` tests unless the implementation actually adds logic to
+`apps/conary/src/live_host_safety.rs`.
 
 Golden fixture plan for Goal 8a:
 
@@ -935,6 +1043,14 @@ Likely modify:
   (dry-run and real install) and
   `apps/conary/src/commands/install/conversion.rs`. The implementation plan
   must update those call sites in the same commit as the struct change.
+- Adding `LegacyReplayOptions` to `InstallOptions` will break direct struct
+  literals in dispatch/update flows, model apply replatform calls, conversion
+  install plumbing, and tests. The implementation plan should inventory these
+  with `rg "InstallOptions \\{" apps/conary crates` and default both replay
+  flags to false at every internal call site.
+- `apps/conary/src/commands/install/conversion.rs` must thread replay options
+  from the caller into the `CcsTransactionInstallOptions` literal used after a
+  native package is converted to CCS.
 - Batch, restore, and rollback call paths should get explicit tests because
   they do not all flow through the exact same direct CCS transaction boundary.
 - The installed-bundle cascade regression test should mirror the real
@@ -968,6 +1084,10 @@ Likely modify:
    model-apply, remove, autoremove, restore, and rollback paths consistently.
    Missing one path creates either an accidental bypass or an accidental
    refusal.
+7. **Bundle storage size.**
+   Storing full bundle TOML in SQLite is acceptable for Goal 6, but packages
+   with many native trigger entries can produce large rows. Future goals can
+   normalize or compress this state if installed-bundle queries become hot.
 
 ## Verification
 
@@ -978,8 +1098,8 @@ cargo test -p conary ccs_install
 cargo test -p conary-core scriptlet
 cargo test -p conary-core legacy_replay
 cargo test -p conary-core target_compatibility
-cargo test -p conary bundle_replay
-cargo test -p conary foreign_replay
+cargo test -p conary --test bundle_replay
+cargo test -p conary --test foreign_replay
 cargo test -p conary live_host_safety
 cargo test -p conary remove
 cargo test -p conary update
