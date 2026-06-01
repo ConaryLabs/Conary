@@ -11,7 +11,7 @@ use rusqlite::Connection;
 use tracing::info;
 
 /// Current schema version
-pub const SCHEMA_VERSION: i32 = 70;
+pub const SCHEMA_VERSION: i32 = 71;
 
 /// Initialize the schema version tracking table
 fn init_schema_version(conn: &Connection) -> Result<()> {
@@ -194,6 +194,7 @@ fn apply_migration(conn: &Connection, version: i32) -> Result<()> {
         68 => migrations::migrate_v68(conn),
         69 => migrations::migrate_v69(conn),
         70 => migrations::migrate_v70(conn),
+        71 => migrations::migrate_v71(conn),
         _ => Err(crate::error::Error::InitError(format!(
             "Unknown migration version: {}",
             version
@@ -367,6 +368,102 @@ mod tests {
         assert_eq!(row.2, "public");
         assert_eq!(row.3, "[]");
         assert_eq!(row.4, "{}");
+    }
+
+    #[test]
+    fn migration_v71_creates_installed_legacy_scriptlet_bundles_table() {
+        let (_temp, conn) = create_test_db_at_version(70);
+
+        migrate(&conn).unwrap();
+
+        assert_eq!(get_schema_version(&conn).unwrap(), SCHEMA_VERSION);
+        assert_eq!(SCHEMA_VERSION, 71);
+
+        let columns: Vec<(String, String, bool)> = conn
+            .prepare("PRAGMA table_info(installed_legacy_scriptlet_bundles)")
+            .unwrap()
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i32>(3)? != 0,
+                ))
+            })
+            .unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap();
+        let column_names: Vec<&str> = columns.iter().map(|(name, _, _)| name.as_str()).collect();
+
+        for required in [
+            "id",
+            "trove_id",
+            "source_format",
+            "source_family",
+            "source_distro",
+            "source_release",
+            "source_arch",
+            "source_package",
+            "source_version",
+            "target_id",
+            "target_compatibility",
+            "foreign_replay_policy",
+            "scriptlet_fidelity",
+            "publication_status",
+            "evidence_digest",
+            "replay_policy",
+            "replay_enabled",
+            "bundle_toml",
+            "installed_changeset_id",
+            "installed_at",
+        ] {
+            assert!(
+                column_names.contains(&required),
+                "missing installed bundle column {required}"
+            );
+        }
+
+        assert!(
+            columns
+                .iter()
+                .any(|(name, ty, required)| name == "trove_id" && ty == "INTEGER" && *required)
+        );
+        assert!(
+            columns
+                .iter()
+                .any(|(name, ty, required)| name == "bundle_toml" && ty == "TEXT" && *required)
+        );
+
+        let indexes: Vec<String> = conn
+            .prepare("PRAGMA index_list(installed_legacy_scriptlet_bundles)")
+            .unwrap()
+            .query_map([], |row| row.get(1))
+            .unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap();
+        assert!(indexes.contains(&"idx_installed_legacy_scriptlet_bundles_trove".to_string()));
+        assert!(indexes.contains(&"idx_installed_legacy_scriptlet_bundles_evidence".to_string()));
+
+        let fks: Vec<(String, String, String)> = conn
+            .prepare("PRAGMA foreign_key_list(installed_legacy_scriptlet_bundles)")
+            .unwrap()
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(6)?,
+                ))
+            })
+            .unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap();
+        assert!(fks.iter().any(|(from, table, on_delete)| {
+            from == "trove_id" && table == "troves" && on_delete.eq_ignore_ascii_case("CASCADE")
+        }));
+        assert!(fks.iter().any(|(from, table, on_delete)| {
+            from == "installed_changeset_id"
+                && table == "changesets"
+                && on_delete.eq_ignore_ascii_case("SET NULL")
+        }));
     }
 
     #[test]
