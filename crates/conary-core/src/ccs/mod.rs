@@ -19,6 +19,7 @@ pub mod export;
 pub mod hooks;
 pub mod inspector;
 pub mod legacy;
+pub mod legacy_replay;
 pub mod legacy_scriptlets;
 pub mod lockfile;
 pub mod manifest;
