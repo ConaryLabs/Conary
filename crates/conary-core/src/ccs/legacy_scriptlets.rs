@@ -550,16 +550,7 @@ impl LegacyScriptletEntry {
         validate_sha256("entry.body_sha256", &self.body_sha256)?;
         validate_optional_sha256("entry.evidence_digest", self.evidence_digest.as_deref())?;
 
-        let body_bytes = self.body_bytes()?;
-        let actual = crate::hash::sha256_prefixed(&body_bytes);
-        if !actual.eq_ignore_ascii_case(&self.body_sha256) {
-            bail!(
-                "entry '{}' body_sha256 mismatch: expected {}, got {}",
-                self.id,
-                self.body_sha256,
-                actual
-            );
-        }
+        self.body_bytes()?;
 
         for effect in &self.effects {
             effect.validate(&self.id)?;
@@ -574,8 +565,8 @@ impl LegacyScriptletEntry {
         Ok(())
     }
 
-    fn body_bytes(&self) -> anyhow::Result<Vec<u8>> {
-        match self.body_encoding.as_deref().unwrap_or("utf-8") {
+    pub fn body_bytes(&self) -> anyhow::Result<Vec<u8>> {
+        let body_bytes = match self.body_encoding.as_deref().unwrap_or("utf-8") {
             "utf-8" => Ok(self.body.as_bytes().to_vec()),
             "base64" => {
                 use base64::Engine as _;
@@ -590,7 +581,19 @@ impl LegacyScriptletEntry {
                 self.id,
                 other
             ),
+        }?;
+
+        let actual = crate::hash::sha256_prefixed(&body_bytes);
+        if !actual.eq_ignore_ascii_case(&self.body_sha256) {
+            bail!(
+                "entry '{}' body_sha256 mismatch: expected {}, got {}",
+                self.id,
+                self.body_sha256,
+                actual
+            );
         }
+
+        Ok(body_bytes)
     }
 }
 
@@ -1099,6 +1102,49 @@ review = 0
         bundle.entries[0].body_sha256 = crate::hash::sha256_prefixed(body_bytes);
 
         bundle.validate().expect("base64 body hash validates");
+    }
+
+    #[test]
+    fn legacy_scriptlet_entry_body_bytes_returns_utf8_body() {
+        let entry = sample_entry("rpm:%post", ScriptletDecision::Legacy, "echo hello\n");
+
+        assert_eq!(
+            entry.body_bytes().expect("body bytes"),
+            b"echo hello\n".to_vec()
+        );
+    }
+
+    #[test]
+    fn legacy_scriptlet_entry_body_bytes_decodes_base64_body() {
+        let mut entry = sample_entry("rpm:%post", ScriptletDecision::Legacy, "");
+        let body_bytes = b"\xff\x00native bytes\n";
+        use base64::Engine as _;
+        entry.body = base64::engine::general_purpose::STANDARD.encode(body_bytes);
+        entry.body_encoding = Some("base64".to_string());
+        entry.body_sha256 = crate::hash::sha256_prefixed(body_bytes);
+
+        assert_eq!(entry.body_bytes().expect("body bytes"), body_bytes);
+    }
+
+    #[test]
+    fn legacy_scriptlet_entry_body_bytes_rejects_hash_mismatch() {
+        let mut entry = sample_entry("rpm:%post", ScriptletDecision::Legacy, "echo hello\n");
+        entry.body_sha256 =
+            "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".to_string();
+
+        let error = entry.body_bytes().expect_err("hash mismatch must fail");
+
+        assert!(error.to_string().contains("body_sha256 mismatch"));
+    }
+
+    #[test]
+    fn legacy_scriptlet_entry_body_bytes_rejects_unknown_encoding() {
+        let mut entry = sample_entry("rpm:%post", ScriptletDecision::Legacy, "echo hello\n");
+        entry.body_encoding = Some("rot13".to_string());
+
+        let error = entry.body_bytes().expect_err("unknown encoding must fail");
+
+        assert!(error.to_string().contains("body_encoding"));
     }
 
     #[test]

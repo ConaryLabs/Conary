@@ -2,6 +2,7 @@
 
 //! Shared distro family and repository version-scheme inference.
 
+use crate::ccs::legacy_scriptlets::{LegacyScriptletBundle, SourceFormat};
 use crate::db::models::Repository;
 use crate::repository::dependency_model::RepositoryDependencyFlavor;
 use crate::repository::registry::{RepositoryFormat, detect_repository_format};
@@ -30,6 +31,46 @@ pub struct SupportedDistro {
     pub display_name: &'static str,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplayTarget<'a> {
+    pub format: &'a str,
+    pub distro: &'a str,
+    pub release: &'a str,
+    pub arch: &'a str,
+}
+
+impl ReplayTarget<'_> {
+    #[must_use]
+    pub fn to_id(&self) -> String {
+        replay_target_id(self)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplayTargetOwned {
+    pub format: String,
+    pub distro: String,
+    pub release: String,
+    pub arch: String,
+}
+
+impl ReplayTargetOwned {
+    #[must_use]
+    pub fn as_target(&self) -> ReplayTarget<'_> {
+        ReplayTarget {
+            format: &self.format,
+            distro: &self.distro,
+            release: &self.release,
+            arch: &self.arch,
+        }
+    }
+
+    #[must_use]
+    pub fn to_id(&self) -> String {
+        self.as_target().to_id()
+    }
+}
+
 /// Return the user-facing distro catalog supported by this release.
 #[must_use]
 pub fn supported_user_distros() -> &'static [SupportedDistro] {
@@ -54,6 +95,96 @@ pub fn flavor_from_distro_name(name: &str) -> Option<RepositoryDependencyFlavor>
         "ubuntu-26.04" | "ubuntu" => Some(RepositoryDependencyFlavor::Deb),
         "arch" => Some(RepositoryDependencyFlavor::Arch),
         _ => None,
+    }
+}
+
+#[must_use]
+pub fn replay_target_id(target: &ReplayTarget<'_>) -> String {
+    format!(
+        "{}/{}/{}/{}",
+        target.format, target.distro, target.release, target.arch
+    )
+}
+
+#[must_use]
+pub fn replay_target_from_distro_id(distro_id: &str, arch: &str) -> Option<ReplayTargetOwned> {
+    let distro_id = distro_id.trim().to_ascii_lowercase();
+    let arch = arch.trim();
+    if distro_id.is_empty() || arch.is_empty() {
+        return None;
+    }
+
+    let (format, distro, release) = match distro_id.as_str() {
+        "arch" => ("arch", "arch", "rolling"),
+        "fedora" => ("rpm", "fedora", "unknown"),
+        "ubuntu" => ("deb", "ubuntu", "unknown"),
+        "debian" => ("deb", "debian", "unknown"),
+        value => {
+            if let Some(release) = value.strip_prefix("fedora-") {
+                ("rpm", "fedora", release)
+            } else if let Some(release) = value.strip_prefix("ubuntu-") {
+                ("deb", "ubuntu", release)
+            } else if let Some(release) = value.strip_prefix("debian-") {
+                ("deb", "debian", release)
+            } else {
+                return None;
+            }
+        }
+    };
+
+    if release.trim().is_empty() {
+        return None;
+    }
+
+    Some(ReplayTargetOwned {
+        format: format.to_string(),
+        distro: distro.to_string(),
+        release: release.to_string(),
+        arch: arch.to_string(),
+    })
+}
+
+#[must_use]
+pub fn source_target_from_bundle(bundle: &LegacyScriptletBundle) -> ReplayTargetOwned {
+    let format = match &bundle.source_format {
+        SourceFormat::Rpm => "rpm".to_string(),
+        SourceFormat::Deb => "deb".to_string(),
+        SourceFormat::Arch => "arch".to_string(),
+        SourceFormat::Unknown(value) => value.trim().to_ascii_lowercase(),
+    };
+    let distro = bundle
+        .source_distro
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(&bundle.source_family)
+        .trim()
+        .to_ascii_lowercase();
+    let release = bundle
+        .source_release
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            if distro == "arch" {
+                "rolling".to_string()
+            } else {
+                "unknown".to_string()
+            }
+        });
+    let arch = bundle
+        .source_arch
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("unknown")
+        .to_string();
+
+    ReplayTargetOwned {
+        format,
+        distro,
+        release,
+        arch,
     }
 }
 
@@ -194,6 +325,44 @@ mod tests {
             assert_eq!(flavor_from_distro_name(name), Some(flavor));
             assert_eq!(version_scheme_from_distro_name(name), Some(scheme));
         }
+    }
+
+    #[test]
+    fn replay_target_ids_normalize_known_distro_pins() {
+        assert_eq!(
+            replay_target_from_distro_id("fedora-44", "x86_64")
+                .expect("fedora target")
+                .to_id(),
+            "rpm/fedora/44/x86_64"
+        );
+        assert_eq!(
+            replay_target_from_distro_id("ubuntu-26.04", "x86_64")
+                .expect("ubuntu target")
+                .to_id(),
+            "deb/ubuntu/26.04/x86_64"
+        );
+        assert_eq!(
+            replay_target_from_distro_id("debian-13", "aarch64")
+                .expect("debian target")
+                .to_id(),
+            "deb/debian/13/aarch64"
+        );
+        assert_eq!(
+            replay_target_from_distro_id("arch", "x86_64")
+                .expect("arch target")
+                .to_id(),
+            "arch/arch/rolling/x86_64"
+        );
+    }
+
+    #[test]
+    fn replay_target_for_generic_family_keeps_release_unknown() {
+        assert_eq!(
+            replay_target_from_distro_id("fedora", "x86_64")
+                .expect("generic fedora target")
+                .to_id(),
+            "rpm/fedora/unknown/x86_64"
+        );
     }
 
     #[test]
