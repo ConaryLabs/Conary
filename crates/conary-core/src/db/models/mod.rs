@@ -38,6 +38,7 @@ mod download_stats;
 mod file_entry;
 mod flavor;
 mod generation_publication;
+mod installed_legacy_scriptlet_bundle;
 mod label;
 mod metadata;
 mod provenance;
@@ -82,6 +83,7 @@ pub use flavor::Flavor;
 pub use generation_publication::{
     GenerationPublication, GenerationPublicationPhase, GenerationPublicationStatus,
 };
+pub use installed_legacy_scriptlet_bundle::InstalledLegacyScriptletBundle;
 pub use label::{LabelEntry, LabelPathEntry, add_to_path, get_label_path, remove_from_path};
 pub use metadata::{MetadataTable, get_metadata, set_metadata};
 pub use provenance::Provenance;

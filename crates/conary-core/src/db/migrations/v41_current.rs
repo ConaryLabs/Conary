@@ -1052,6 +1052,47 @@ pub fn migrate_v70(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Version 71: Installed legacy scriptlet bundle state for safe replay
+pub fn migrate_v71(conn: &Connection) -> Result<()> {
+    debug!("Migrating to schema version 71");
+
+    conn.execute_batch(
+        "
+        CREATE TABLE installed_legacy_scriptlet_bundles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            trove_id INTEGER NOT NULL UNIQUE REFERENCES troves(id) ON DELETE CASCADE,
+            source_format TEXT NOT NULL,
+            source_family TEXT NOT NULL,
+            source_distro TEXT,
+            source_release TEXT,
+            source_arch TEXT,
+            source_package TEXT NOT NULL,
+            source_version TEXT NOT NULL,
+            target_id TEXT NOT NULL,
+            target_compatibility TEXT NOT NULL,
+            foreign_replay_policy TEXT NOT NULL,
+            scriptlet_fidelity TEXT NOT NULL,
+            publication_status TEXT NOT NULL,
+            evidence_digest TEXT,
+            replay_policy TEXT NOT NULL,
+            replay_enabled INTEGER NOT NULL DEFAULT 0,
+            bundle_toml TEXT NOT NULL,
+            installed_changeset_id INTEGER REFERENCES changesets(id) ON DELETE SET NULL,
+            installed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX idx_installed_legacy_scriptlet_bundles_trove
+            ON installed_legacy_scriptlet_bundles(trove_id);
+
+        CREATE INDEX idx_installed_legacy_scriptlet_bundles_evidence
+            ON installed_legacy_scriptlet_bundles(evidence_digest);
+        ",
+    )?;
+
+    info!("Schema version 71 applied successfully (installed legacy scriptlet bundles)");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
