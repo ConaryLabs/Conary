@@ -23,6 +23,7 @@ pub enum LegacyBundleFixture {
     UnknownDecision,
     SameSourceLegacyPostInstall,
     FutureLegacyPostRemove,
+    FutureLegacyPreAndPostRemove,
     RawTriggerLegacy,
     UnsupportedNativeInvocation,
 }
@@ -38,6 +39,7 @@ impl LegacyBundleFixture {
             Self::UnknownDecision => "legacy-fixture-unknown",
             Self::SameSourceLegacyPostInstall => "legacy-fixture-post",
             Self::FutureLegacyPostRemove => "legacy-fixture-remove",
+            Self::FutureLegacyPreAndPostRemove => "legacy-fixture-remove-both",
             Self::RawTriggerLegacy => "legacy-fixture-trigger",
             Self::UnsupportedNativeInvocation => "legacy-fixture-unsupported-native",
         }
@@ -109,6 +111,24 @@ pub fn synthetic_legacy_bundle(case: LegacyBundleFixture) -> Option<LegacyScript
                 ScriptletDecision::Legacy,
                 "echo replay-post-remove\n",
             )],
+        )),
+        LegacyBundleFixture::FutureLegacyPreAndPostRemove => Some(bundle_fixture(
+            case,
+            ScriptletFidelity::LegacyReplay,
+            vec![
+                entry_fixture(
+                    "rpm:%preun",
+                    LifecyclePath::PreRemove,
+                    ScriptletDecision::Legacy,
+                    "echo replay-pre-remove\n",
+                ),
+                entry_fixture(
+                    "rpm:%postun",
+                    LifecyclePath::PostRemove,
+                    ScriptletDecision::Legacy,
+                    "echo replay-post-remove\n",
+                ),
+            ],
         )),
         LegacyBundleFixture::RawTriggerLegacy => {
             let mut entry = entry_fixture(
@@ -248,7 +268,7 @@ fn entry_fixture(
         body: body.to_string(),
         body_encoding: None,
         native_invocation: NativeInvocation {
-            args: vec!["1".to_string()],
+            args: vec![],
             environment: vec!["RPM_INSTALL_PREFIX=/".to_string()],
             stdin: None,
             chroot: None,

@@ -25,6 +25,7 @@ fn synthetic_legacy_bundle_fixtures_cover_task5_matrix() {
         LegacyBundleFixture::UnknownDecision,
         LegacyBundleFixture::SameSourceLegacyPostInstall,
         LegacyBundleFixture::FutureLegacyPostRemove,
+        LegacyBundleFixture::FutureLegacyPreAndPostRemove,
         LegacyBundleFixture::RawTriggerLegacy,
         LegacyBundleFixture::UnsupportedNativeInvocation,
     ];
@@ -78,6 +79,14 @@ fn synthetic_legacy_bundle_fixtures_cover_task5_matrix() {
                 LegacyBundleFixture::FutureLegacyPostRemove => {
                     assert_eq!(decisions, vec![ScriptletDecision::Legacy]);
                     assert_eq!(bundle.entries[0].phase, LifecyclePath::PostRemove);
+                }
+                LegacyBundleFixture::FutureLegacyPreAndPostRemove => {
+                    assert_eq!(
+                        decisions,
+                        vec![ScriptletDecision::Legacy, ScriptletDecision::Legacy]
+                    );
+                    assert_eq!(bundle.entries[0].phase, LifecyclePath::PreRemove);
+                    assert_eq!(bundle.entries[1].phase, LifecyclePath::PostRemove);
                 }
                 LegacyBundleFixture::RawTriggerLegacy => {
                     assert_eq!(decisions, vec![ScriptletDecision::Legacy]);
@@ -264,15 +273,104 @@ fn remove_refuses_installed_legacy_bundle_without_replay_flag_before_mutation() 
 }
 
 #[test]
-fn remove_with_replay_flag_still_fails_closed_until_remove_runner_is_wired() {
+fn remove_no_scripts_refuses_required_installed_replay_before_mutation() {
+    let fixture = InstallFixture::new(LegacyBundleFixture::FutureLegacyPostRemove);
+    let output = fixture.run_install(&[]);
+    assert_success(&output);
+
+    let output = fixture.run_remove(
+        "legacy-fixture-remove",
+        &["--allow-legacy-replay", "--no-scripts"],
+    );
+
+    assert_failure(&output);
+    assert_contains(&output, "NoScriptsWouldSkipRequiredReplay");
+    let conn = db::open(&fixture.db_path).expect("open db");
+    assert_eq!(table_count(&conn, "changesets"), 1);
+    assert_eq!(table_count(&conn, "troves"), 1);
+    assert_eq!(table_count(&conn, "installed_legacy_scriptlet_bundles"), 1);
+}
+
+#[test]
+fn remove_with_replay_flag_executes_post_remove_plan_from_memory() {
     let fixture = InstallFixture::new(LegacyBundleFixture::FutureLegacyPostRemove);
     let output = fixture.run_install(&[]);
     assert_success(&output);
 
     let output = fixture.run_remove("legacy-fixture-remove", &["--allow-legacy-replay"]);
 
+    assert_success(&output);
+    let conn = db::open(&fixture.db_path).expect("open db");
+    assert_eq!(table_count(&conn, "changesets"), 2);
+    assert_eq!(table_count(&conn, "troves"), 0);
+    assert_eq!(table_count(&conn, "installed_legacy_scriptlet_bundles"), 0);
+
+    let metadata = changeset_metadata(&conn, 2);
+    let audit = metadata
+        .get("legacy_scriptlet_replay")
+        .expect("remove changeset has legacy replay audit");
+    let planned_entries = audit["planned_entries"]
+        .as_array()
+        .expect("planned entries array");
+    assert_eq!(planned_entries.len(), 1);
+    assert_eq!(planned_entries[0]["entry_id"], "rpm:%postun");
+    assert_eq!(planned_entries[0]["phase"], "post-remove");
+    assert_eq!(planned_entries[0]["raw_replay_required"], true);
+    assert_eq!(planned_entries[0]["outcome"]["phase"], "post-remove");
+    assert_eq!(planned_entries[0]["outcome"]["status"], "skipped");
+}
+
+#[test]
+fn remove_with_replay_flag_does_not_need_original_ccs_archive() {
+    let fixture = InstallFixture::new(LegacyBundleFixture::FutureLegacyPostRemove);
+    let output = fixture.run_install(&[]);
+    assert_success(&output);
+    fixture.delete_package_archive();
+
+    let output = fixture.run_remove("legacy-fixture-remove", &["--allow-legacy-replay"]);
+
+    assert_success(&output);
+    let conn = db::open(&fixture.db_path).expect("open db");
+    assert_eq!(table_count(&conn, "troves"), 0);
+    assert_eq!(table_count(&conn, "installed_legacy_scriptlet_bundles"), 0);
+}
+
+#[test]
+fn remove_replays_pre_and_post_remove_plans_once_in_audit() {
+    let fixture = InstallFixture::new(LegacyBundleFixture::FutureLegacyPreAndPostRemove);
+    let output = fixture.run_install(&[]);
+    assert_success(&output);
+
+    let output = fixture.run_remove("legacy-fixture-remove-both", &["--allow-legacy-replay"]);
+
+    assert_success(&output);
+    let conn = db::open(&fixture.db_path).expect("open db");
+    let metadata = changeset_metadata(&conn, 2);
+    let planned_entries = metadata["legacy_scriptlet_replay"]["planned_entries"]
+        .as_array()
+        .expect("planned entries array");
+    assert_eq!(planned_entries.len(), 2);
+    assert_eq!(planned_entries[0]["entry_id"], "rpm:%preun");
+    assert_eq!(planned_entries[0]["phase"], "pre-remove");
+    assert_eq!(planned_entries[0]["outcome"]["phase"], "pre-remove");
+    assert_eq!(planned_entries[0]["outcome"]["status"], "skipped");
+    assert_eq!(planned_entries[1]["entry_id"], "rpm:%postun");
+    assert_eq!(planned_entries[1]["phase"], "post-remove");
+    assert_eq!(planned_entries[1]["outcome"]["phase"], "post-remove");
+    assert_eq!(planned_entries[1]["outcome"]["status"], "skipped");
+}
+
+#[test]
+fn remove_malformed_installed_bundle_fails_before_mutation() {
+    let fixture = InstallFixture::new(LegacyBundleFixture::FutureLegacyPostRemove);
+    let output = fixture.run_install(&[]);
+    assert_success(&output);
+    fixture.corrupt_installed_bundle_toml();
+
+    let output = fixture.run_remove("legacy-fixture-remove", &["--allow-legacy-replay"]);
+
     assert_failure(&output);
-    assert_contains(&output, "legacy remove replay execution is not wired yet");
+    assert_contains(&output, "installed legacy scriptlet bundle is malformed");
     let conn = db::open(&fixture.db_path).expect("open db");
     assert_eq!(table_count(&conn, "changesets"), 1);
     assert_eq!(table_count(&conn, "troves"), 1);
@@ -386,6 +484,19 @@ impl InstallFixture {
         run_conary(&args)
     }
 
+    fn delete_package_archive(&self) {
+        std::fs::remove_file(&self.package_path).expect("remove package archive");
+    }
+
+    fn corrupt_installed_bundle_toml(&self) {
+        let conn = db::open(&self.db_path).expect("open db");
+        conn.execute(
+            "UPDATE installed_legacy_scriptlet_bundles SET bundle_toml = ?1",
+            ["this is not valid = ["],
+        )
+        .expect("corrupt bundle toml");
+    }
+
     fn assert_no_install_mutation(&self) {
         let conn = db::open(&self.db_path).expect("open db");
         for table in [
@@ -481,9 +592,17 @@ fn single_trove_id(conn: &rusqlite::Connection) -> i64 {
 }
 
 fn single_changeset_metadata(conn: &rusqlite::Connection) -> serde_json::Value {
+    changeset_metadata(conn, 1)
+}
+
+fn changeset_metadata(conn: &rusqlite::Connection, changeset_id: i64) -> serde_json::Value {
     let raw: Option<String> = conn
-        .query_row("SELECT metadata FROM changesets", [], |row| row.get(0))
-        .expect("single changeset metadata");
+        .query_row(
+            "SELECT metadata FROM changesets WHERE id = ?1",
+            [changeset_id],
+            |row| row.get(0),
+        )
+        .expect("changeset metadata");
     let raw = raw.expect("changeset metadata should be present");
     serde_json::from_str(&raw).expect("changeset metadata is JSON")
 }

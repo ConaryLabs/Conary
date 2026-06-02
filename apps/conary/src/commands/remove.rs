@@ -12,12 +12,13 @@ use conary_core::ccs::legacy_replay::{
     HostForeignReplayPolicy, LegacyReplayLifecycle, LegacyReplayPlan, LegacyReplayPolicyInput,
     LegacyReplayPreflight, LegacyReplayRefusal, plan_legacy_replay,
 };
-use conary_core::ccs::legacy_scriptlets::LegacyScriptletBundle;
+use conary_core::ccs::legacy_scriptlets::{LegacyScriptletBundle, LifecyclePath, SourceFormat};
 use conary_core::db::models::{FileEntry, InstalledLegacyScriptletBundle, ScriptletEntry, Trove};
 use conary_core::repository::distro::source_target_from_bundle;
 use conary_core::scriptlet::{
-    ExecutionMode, PackageFormat as ScriptletPackageFormat, SandboxMode, ScriptletExecutor,
-    ScriptletFailureKind, ScriptletOutcome,
+    ExecutionMode, LegacyInvocationRuntime, LegacyScriptletExecution,
+    PackageFormat as ScriptletPackageFormat, SandboxMode, ScriptletExecutor, ScriptletFailureKind,
+    ScriptletOutcome,
 };
 use conary_core::transaction::{TransactionConfig, TransactionEngine};
 use std::collections::HashSet;
@@ -35,6 +36,10 @@ pub(crate) struct RemoveInnerResult {
     removed_count: usize,
     dirs_removed: usize,
     #[allow(dead_code)]
+    planned_pre_remove: Option<LegacyReplayPlan>,
+    legacy_bundle: Option<LegacyScriptletBundle>,
+    legacy_pre_outcomes: Vec<ScriptletOutcome>,
+    legacy_audit_context: Option<LegacyRemoveReplayAuditContext>,
     planned_post_remove: Option<LegacyReplayPlan>,
 }
 
@@ -47,7 +52,22 @@ struct PreparedRemove {
     dirs_removed: usize,
     #[allow(dead_code)]
     planned_pre_remove: Option<LegacyReplayPlan>,
+    legacy_bundle: Option<LegacyScriptletBundle>,
+    legacy_pre_outcomes: Vec<ScriptletOutcome>,
+    legacy_audit_context: Option<LegacyRemoveReplayAuditContext>,
     planned_post_remove: Option<LegacyReplayPlan>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LegacyRemoveReplayAuditContext {
+    target_id: String,
+    source_target_id: String,
+    target_compatibility: String,
+    foreign_replay_policy: String,
+    host_policy: HostForeignReplayPolicy,
+    feature_gate_enabled: bool,
+    foreign_override: bool,
+    evidence_digest: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -409,11 +429,53 @@ fn run_post_remove_scriptlet(
     progress: &RemoveProgress,
 ) -> Result<()> {
     // Execute post-remove scriptlet (best effort - warn on failure, don't abort)
-    if no_scripts || remove_result.stored_scriptlets.is_empty() {
+    if no_scripts {
+        return Ok(());
+    }
+
+    let has_legacy_post = remove_result
+        .planned_post_remove
+        .as_ref()
+        .is_some_and(|plan| !plan.lifecycle_entries.is_empty());
+    let post = remove_result
+        .stored_scriptlets
+        .iter()
+        .find(|s| s.phase == "post-remove");
+    if !has_legacy_post && post.is_none() {
         return Ok(());
     }
 
     progress.set_phase(RemovePhase::PostScript);
+
+    let legacy_post_outcomes = execute_legacy_remove_replay_plan_entries(
+        Path::new(root),
+        &remove_result.trove.name,
+        &remove_result.trove.version,
+        remove_result.legacy_bundle.as_ref(),
+        remove_result.planned_post_remove.as_ref(),
+        sandbox_mode,
+    )?;
+    let legacy_post_warnings =
+        legacy_post_replay_warnings(&remove_result.trove.name, &legacy_post_outcomes)?;
+    if !legacy_post_warnings.is_empty() {
+        crate::commands::append_scriptlet_warning_metadata(
+            conn,
+            remove_result.changeset_id,
+            legacy_post_warnings,
+        )?;
+    }
+    if let Some(audit) = build_legacy_replay_audit_for_remove(
+        remove_result,
+        &remove_result.legacy_pre_outcomes,
+        &legacy_post_outcomes,
+    ) {
+        crate::commands::append_legacy_replay_audit_metadata(
+            conn,
+            remove_result.changeset_id,
+            audit,
+        )?;
+    }
+
     let executor = ScriptletExecutor::new(
         Path::new(root),
         &remove_result.trove.name,
@@ -422,11 +484,7 @@ fn run_post_remove_scriptlet(
     )
     .with_sandbox_mode(sandbox_mode);
 
-    if let Some(post) = remove_result
-        .stored_scriptlets
-        .iter()
-        .find(|s| s.phase == "post-remove")
-    {
+    if let Some(post) = post {
         info!("Running post-remove scriptlet...");
         match executor.execute_entry_with_outcome(post, &ExecutionMode::Remove) {
             ScriptletOutcome::Success { .. } | ScriptletOutcome::Skipped { .. } => {}
@@ -473,6 +531,233 @@ fn scriptlet_warning_from_failure(
         failure.effective_sandbox.as_str(),
         format!("{context}: {}", failure.message),
     )
+}
+
+fn execute_legacy_remove_replay_plan_entries(
+    root: &Path,
+    package_name: &str,
+    package_version: &str,
+    bundle: Option<&LegacyScriptletBundle>,
+    plan: Option<&LegacyReplayPlan>,
+    sandbox_mode: SandboxMode,
+) -> Result<Vec<ScriptletOutcome>> {
+    let Some(plan) = plan else {
+        return Ok(Vec::new());
+    };
+    if plan.lifecycle_entries.is_empty() {
+        return Ok(Vec::new());
+    }
+    let bundle = bundle.context("legacy remove replay plan exists without an installed bundle")?;
+    let format = legacy_source_scriptlet_format(&bundle.source_format)?;
+    let executor = ScriptletExecutor::new(root, package_name, package_version, format)
+        .with_sandbox_mode(sandbox_mode);
+    let mode = ExecutionMode::Remove;
+    let runtime = LegacyInvocationRuntime {
+        mode: &mode,
+        old_version: Some(package_version),
+        new_version: None,
+        package_instance_count: Some(0),
+    };
+
+    let mut outcomes = Vec::with_capacity(plan.lifecycle_entries.len());
+    for planned in &plan.lifecycle_entries {
+        let entry = bundle
+            .entries
+            .iter()
+            .find(|entry| entry.id == planned.entry_id)
+            .with_context(|| {
+                format!(
+                    "legacy remove replay plan references missing bundle entry {}",
+                    planned.entry_id
+                )
+            })?;
+        let execution = LegacyScriptletExecution {
+            entry_id: &entry.id,
+            phase: legacy_lifecycle_phase_name(&entry.phase),
+            interpreter: &entry.interpreter,
+            interpreter_args: &entry.interpreter_args,
+            body: entry.body.clone(),
+            body_sha256: entry.body_sha256.clone(),
+            body_encoding: entry.body_encoding.as_deref(),
+            native_args: &entry.native_invocation.args,
+            native_environment: &entry.native_invocation.environment,
+            stdin_contract: entry.native_invocation.stdin.as_deref(),
+            chroot_contract: entry.native_invocation.chroot.as_deref(),
+            timeout_ms: entry.timeout_ms,
+        };
+        outcomes.push(executor.execute_legacy_entry_with_outcome(&execution, &runtime));
+    }
+
+    Ok(outcomes)
+}
+
+fn require_legacy_replay_success(outcomes: &[ScriptletOutcome]) -> Result<()> {
+    for outcome in outcomes {
+        outcome.clone().into_result()?;
+    }
+    Ok(())
+}
+
+fn legacy_post_replay_warnings(
+    package_name: &str,
+    outcomes: &[ScriptletOutcome],
+) -> Result<Vec<crate::commands::ScriptletWarning>> {
+    let mut warnings = Vec::new();
+
+    for outcome in outcomes {
+        match outcome {
+            ScriptletOutcome::Success { .. } | ScriptletOutcome::Skipped { .. } => {}
+            ScriptletOutcome::Failure(failure)
+                if failure.failure_kind == ScriptletFailureKind::ScriptExited =>
+            {
+                warnings.push(scriptlet_warning_from_failure(
+                    package_name,
+                    failure.clone(),
+                    "legacy post-remove scriptlet failed after package files were removed",
+                ));
+            }
+            ScriptletOutcome::Failure(failure) => {
+                return Err(anyhow::anyhow!(
+                    "legacy post-remove scriptlet failed after commit with a non-degradable failure: {}",
+                    failure.message
+                ));
+            }
+        }
+    }
+
+    Ok(warnings)
+}
+
+fn build_legacy_replay_audit_for_remove(
+    remove_result: &RemoveInnerResult,
+    pre_outcomes: &[ScriptletOutcome],
+    post_outcomes: &[ScriptletOutcome],
+) -> Option<crate::commands::LegacyReplayAudit> {
+    let context = remove_result.legacy_audit_context.as_ref()?;
+    let mut planned_entries = Vec::new();
+    planned_entries.extend(legacy_replay_planned_entries_for_audit(
+        remove_result.planned_pre_remove.as_ref(),
+        pre_outcomes,
+    ));
+    planned_entries.extend(legacy_replay_planned_entries_for_audit(
+        remove_result.planned_post_remove.as_ref(),
+        post_outcomes,
+    ));
+
+    Some(crate::commands::LegacyReplayAudit {
+        bundle_present: true,
+        target_id: context.target_id.clone(),
+        source_target_id: context.source_target_id.clone(),
+        target_compatibility: context.target_compatibility.clone(),
+        foreign_replay_policy: context.foreign_replay_policy.clone(),
+        host_policy: host_foreign_replay_policy_name(context.host_policy).to_string(),
+        feature_gate: if context.feature_gate_enabled {
+            "enabled".to_string()
+        } else {
+            "disabled".to_string()
+        },
+        foreign_override: context.foreign_override,
+        evidence_digest: context.evidence_digest.clone(),
+        planned_entries,
+    })
+}
+
+fn legacy_replay_planned_entries_for_audit(
+    plan: Option<&LegacyReplayPlan>,
+    outcomes: &[ScriptletOutcome],
+) -> Vec<crate::commands::LegacyReplayPlannedEntryAudit> {
+    let Some(plan) = plan else {
+        return Vec::new();
+    };
+
+    plan.lifecycle_entries
+        .iter()
+        .enumerate()
+        .map(
+            |(index, entry)| crate::commands::LegacyReplayPlannedEntryAudit {
+                entry_id: entry.entry_id.clone(),
+                native_slot: entry.native_slot.clone(),
+                phase: legacy_lifecycle_phase_name(&entry.phase).to_string(),
+                timeout_ms: entry.timeout_ms,
+                raw_replay_required: plan.raw_replay_required,
+                outcome: outcomes.get(index).map(legacy_replay_outcome_audit),
+            },
+        )
+        .collect()
+}
+
+fn legacy_replay_outcome_audit(
+    outcome: &ScriptletOutcome,
+) -> crate::commands::LegacyReplayOutcomeAudit {
+    match outcome {
+        ScriptletOutcome::Skipped {
+            phase,
+            requested_sandbox_mode,
+            effective_sandbox,
+        } => crate::commands::LegacyReplayOutcomeAudit {
+            status: "skipped".to_string(),
+            phase: phase.clone(),
+            requested_sandbox_mode: requested_sandbox_mode.as_str().to_string(),
+            effective_sandbox: effective_sandbox.as_str().to_string(),
+            failure_kind: None,
+            message: None,
+        },
+        ScriptletOutcome::Success {
+            phase,
+            requested_sandbox_mode,
+            effective_sandbox,
+        } => crate::commands::LegacyReplayOutcomeAudit {
+            status: "success".to_string(),
+            phase: phase.clone(),
+            requested_sandbox_mode: requested_sandbox_mode.as_str().to_string(),
+            effective_sandbox: effective_sandbox.as_str().to_string(),
+            failure_kind: None,
+            message: None,
+        },
+        ScriptletOutcome::Failure(failure) => crate::commands::LegacyReplayOutcomeAudit {
+            status: "failure".to_string(),
+            phase: failure.phase.clone(),
+            requested_sandbox_mode: failure.requested_sandbox_mode.as_str().to_string(),
+            effective_sandbox: failure.effective_sandbox.as_str().to_string(),
+            failure_kind: Some(failure.failure_kind.as_str().to_string()),
+            message: Some(failure.message.clone()),
+        },
+    }
+}
+
+fn legacy_source_scriptlet_format(source_format: &SourceFormat) -> Result<ScriptletPackageFormat> {
+    match source_format {
+        SourceFormat::Rpm => Ok(ScriptletPackageFormat::Rpm),
+        SourceFormat::Deb => Ok(ScriptletPackageFormat::Deb),
+        SourceFormat::Arch => Ok(ScriptletPackageFormat::Arch),
+        SourceFormat::Unknown(value) => {
+            anyhow::bail!("legacy replay source format is unknown: {value}")
+        }
+    }
+}
+
+fn legacy_lifecycle_phase_name(phase: &LifecyclePath) -> &'static str {
+    match phase {
+        LifecyclePath::PreInstall => "pre-install",
+        LifecyclePath::PostInstall => "post-install",
+        LifecyclePath::PreUpgrade => "pre-upgrade",
+        LifecyclePath::PostUpgrade => "post-upgrade",
+        LifecyclePath::PreRemove => "pre-remove",
+        LifecyclePath::PostRemove => "post-remove",
+        LifecyclePath::PreTransaction => "pre-transaction",
+        LifecyclePath::PostTransaction => "post-transaction",
+        LifecyclePath::Trigger => "trigger",
+        LifecyclePath::FileTrigger => "file-trigger",
+        LifecyclePath::Unknown(_) => "unknown",
+    }
+}
+
+fn host_foreign_replay_policy_name(policy: HostForeignReplayPolicy) -> &'static str {
+    match policy {
+        HostForeignReplayPolicy::Strict => "strict",
+        HostForeignReplayPolicy::Guarded => "guarded",
+        HostForeignReplayPolicy::Permissive => "permissive",
+    }
 }
 
 fn print_remove_summary(remove_result: &RemoveInnerResult, stats: &crate::commands::LiveRootStats) {
@@ -595,6 +880,15 @@ fn prepare_remove(
         .first()
         .and_then(|s| ScriptletPackageFormat::parse(&s.package_format))
         .unwrap_or(ScriptletPackageFormat::Rpm);
+    let legacy_pre_outcomes = execute_legacy_remove_replay_plan_entries(
+        Path::new(root),
+        &trove.name,
+        &trove.version,
+        legacy_replay.bundle.as_ref(),
+        legacy_replay.planned_pre_remove.as_ref(),
+        scriptlet_options.sandbox_mode,
+    )?;
+    require_legacy_replay_success(&legacy_pre_outcomes)?;
 
     // NOTE: Known limitation -- if the pre-remove scriptlet partially executes
     // and then fails, there is no automatic recovery. This is consistent with
@@ -664,14 +958,19 @@ fn prepare_remove(
         removed_count: regular_files.len(),
         dirs_removed: directories.len(),
         planned_pre_remove: legacy_replay.planned_pre_remove,
+        legacy_bundle: legacy_replay.bundle,
+        legacy_pre_outcomes,
+        legacy_audit_context: legacy_replay.audit_context,
         planned_post_remove: legacy_replay.planned_post_remove,
     })
 }
 
 #[derive(Debug, Default)]
 struct PreparedLegacyRemoveReplay {
+    bundle: Option<LegacyScriptletBundle>,
     planned_pre_remove: Option<LegacyReplayPlan>,
     planned_post_remove: Option<LegacyReplayPlan>,
+    audit_context: Option<LegacyRemoveReplayAuditContext>,
 }
 
 fn load_installed_legacy_remove_plan(
@@ -703,10 +1002,22 @@ fn plan_installed_legacy_remove_replay(
     };
     let pre = plan_legacy_replay(Some(bundle), LegacyReplayLifecycle::RemovePre, &input)?;
     let post = plan_legacy_replay(Some(bundle), LegacyReplayLifecycle::RemovePost, &input)?;
+    let target_id = target.to_id();
 
     Ok(PreparedLegacyRemoveReplay {
+        bundle: Some(bundle.clone()),
         planned_pre_remove: remove_plan_from_preflight(pre)?,
         planned_post_remove: remove_plan_from_preflight(post)?,
+        audit_context: Some(LegacyRemoveReplayAuditContext {
+            target_id: target_id.clone(),
+            source_target_id: target_id,
+            target_compatibility: bundle.target_compatibility.as_str().to_string(),
+            foreign_replay_policy: bundle.foreign_replay_policy.as_str().to_string(),
+            host_policy: HostForeignReplayPolicy::Strict,
+            feature_gate_enabled: scriptlet_options.legacy_replay.allow_legacy_replay,
+            foreign_override: scriptlet_options.legacy_replay.allow_foreign_legacy_replay,
+            evidence_digest: bundle.evidence_digest.clone(),
+        }),
     })
 }
 
@@ -715,17 +1026,8 @@ fn remove_plan_from_preflight(
 ) -> Result<Option<LegacyReplayPlan>> {
     match preflight {
         LegacyReplayPreflight::NativeFree => Ok(None),
-        LegacyReplayPreflight::FullyReplaced(plan) => Ok(Some(plan)),
-        LegacyReplayPreflight::RequiresReplay(plan) => {
-            let entry = plan
-                .lifecycle_entries
-                .first()
-                .map(|entry| format!(" entry={}", entry.entry_id))
-                .unwrap_or_default();
-            anyhow::bail!(
-                "legacy remove replay execution is not wired yet{entry}; raw replay remains fail-closed until the post-remove runner is integrated"
-            )
-        }
+        LegacyReplayPreflight::FullyReplaced(plan)
+        | LegacyReplayPreflight::RequiresReplay(plan) => Ok(Some(plan)),
         LegacyReplayPreflight::Refused(refusal) => Err(legacy_replay_refusal_error(refusal)),
     }
 }
@@ -797,6 +1099,10 @@ fn commit_remove_db(
         scriptlet_format: prepared.scriptlet_format,
         removed_count: prepared.removed_count,
         dirs_removed: prepared.dirs_removed,
+        planned_pre_remove: prepared.planned_pre_remove,
+        legacy_bundle: prepared.legacy_bundle,
+        legacy_pre_outcomes: prepared.legacy_pre_outcomes,
+        legacy_audit_context: prepared.legacy_audit_context,
         planned_post_remove: prepared.planned_post_remove,
     })
 }
@@ -1199,6 +1505,9 @@ mod tests {
             removed_count: 0,
             dirs_removed: 0,
             planned_pre_remove: None,
+            legacy_bundle: None,
+            legacy_pre_outcomes: Vec::new(),
+            legacy_audit_context: None,
             planned_post_remove: Some(planned_post_remove.clone()),
         };
         let tx = conn.unchecked_transaction().unwrap();

@@ -443,6 +443,22 @@ impl ScriptletExecutor {
                 )
             }
         } else {
+            let interpreter_check_path = executor
+                .root
+                .join(execution.interpreter.trim_start_matches('/'));
+            if !interpreter_check_path.exists() {
+                warn!(
+                    "Interpreter {} not found in target root {}, skipping {} legacy scriptlet",
+                    execution.interpreter,
+                    executor.root.display(),
+                    execution.phase
+                );
+                return ScriptletOutcome::Skipped {
+                    phase: execution.phase.to_string(),
+                    requested_sandbox_mode,
+                    effective_sandbox,
+                };
+            }
             executor.execute_in_target(
                 execution.phase,
                 execution.interpreter,
@@ -1839,6 +1855,31 @@ mod tests {
 
         assert!(
             matches!(outcome, ScriptletOutcome::Success { .. }),
+            "{outcome:?}"
+        );
+    }
+
+    #[test]
+    fn legacy_execution_skips_target_root_when_interpreter_is_absent() {
+        let root = tempfile::tempdir().expect("target root");
+        let executor = ScriptletExecutor::new(root.path(), "test-pkg", "1.0.0", PackageFormat::Rpm)
+            .with_sandbox_mode(SandboxMode::None);
+        let mode = ExecutionMode::Remove;
+        let runtime = LegacyInvocationRuntime {
+            mode: &mode,
+            old_version: Some("1.0.0"),
+            new_version: None,
+            package_instance_count: Some(0),
+        };
+        let execution = LegacyScriptletExecution {
+            phase: "post-remove",
+            ..legacy_execution_with_contracts(&[])
+        };
+
+        let outcome = executor.execute_legacy_entry_with_outcome(&execution, &runtime);
+
+        assert!(
+            matches!(outcome, ScriptletOutcome::Skipped { .. }),
             "{outcome:?}"
         );
     }
