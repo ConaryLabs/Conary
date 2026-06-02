@@ -155,6 +155,18 @@ pub enum CcsCommands {
         #[arg(long)]
         no_deps: bool,
 
+        /// Suppress hooks where safe; does not bypass required legacy replay
+        #[arg(long)]
+        no_scripts: bool,
+
+        /// Allow same-source raw legacy scriptlet replay when the bundle, target, sandbox, and local policy all pass
+        #[arg(long)]
+        allow_legacy_replay: bool,
+
+        /// Additionally allow explicitly compatible foreign raw replay only under permissive host policy
+        #[arg(long)]
+        allow_foreign_legacy_replay: bool,
+
         /// Allow reinstalling an already-installed package at the same version
         #[arg(long)]
         reinstall: bool,

@@ -17,7 +17,7 @@ pub use build::cmd_ccs_build;
 pub use enhance::cmd_ccs_enhance;
 pub use init::cmd_ccs_init;
 pub use inspect::{cmd_ccs_inspect, cmd_ccs_verify};
-pub use install::cmd_ccs_install;
+pub use install::{cmd_ccs_install, cmd_ccs_install_with_replay_options};
 pub(crate) use install::{
     enforce_ccs_capability_policy, normalize_ccs_extracted_files, normalize_ccs_package_path,
     validate_ccs_payload_paths,
