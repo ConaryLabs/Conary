@@ -579,6 +579,7 @@ pub async fn cmd_model_apply(opts: ApplyOptions<'_>) -> Result<()> {
             false,
             false,
             crate::commands::SandboxMode::Always,
+            crate::commands::LegacyReplayOptions::default(),
         )
         .await
         {

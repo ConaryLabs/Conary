@@ -30,6 +30,7 @@ pub(crate) struct PreparedInstall {
     old_trove_to_upgrade: Option<Trove>,
     semantics: InstallSemantics,
     _temp_dir: Option<TempDir>,
+    legacy_replay: super::LegacyReplayOptions,
 }
 
 pub(crate) struct PreparedInstallExecution {
@@ -39,6 +40,7 @@ pub(crate) struct PreparedInstallExecution {
     root: String,
     no_scripts: bool,
     sandbox_mode: SandboxMode,
+    legacy_replay: super::LegacyReplayOptions,
 }
 
 #[derive(Debug, Default)]
@@ -174,6 +176,7 @@ pub(crate) async fn prepare_install_for_restore(
         selection_reason,
         allow_downgrade,
         from_distro,
+        legacy_replay,
         ..
     } = opts;
 
@@ -261,6 +264,7 @@ pub(crate) async fn prepare_install_for_restore(
         old_trove_to_upgrade,
         semantics,
         _temp_dir: resolved._temp_dir,
+        legacy_replay,
     })
 }
 
@@ -293,6 +297,7 @@ pub(crate) fn run_pre_install_for_prepared(
         &scriptlet_ctx,
         &progress,
     )?;
+    let legacy_replay = prepared.legacy_replay;
 
     Ok(PreparedInstallExecution {
         prepared,
@@ -301,6 +306,7 @@ pub(crate) fn run_pre_install_for_prepared(
         root: root.to_string(),
         no_scripts,
         sandbox_mode,
+        legacy_replay,
     })
 }
 
@@ -322,6 +328,7 @@ pub(crate) fn install_prepared_inner(
         execution_path: PackageExecutionPath::GenerationAware,
         defer_generation: false,
         repository_provenance: None,
+        legacy_replay: execution.legacy_replay,
     };
     install_inner(
         tx,
@@ -444,6 +451,7 @@ mod tests {
             old_trove_to_upgrade: None,
             semantics: InstallSemantics::legacy(PackageFormatType::Rpm),
             _temp_dir: None,
+            legacy_replay: crate::commands::LegacyReplayOptions::default(),
         }
     }
 

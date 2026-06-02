@@ -24,8 +24,8 @@ use super::scriptlets::{
     run_pre_install, to_scriptlet_format,
 };
 use super::{
-    InstallSemantics, PackageExecutionPath, PackageFormatType, RepositoryInstallProvenance,
-    detect_package_format,
+    InstallSemantics, LegacyReplayOptions, PackageExecutionPath, PackageFormatType,
+    RepositoryInstallProvenance, detect_package_format,
 };
 use anyhow::{Context, Result};
 use conary_core::components::{ComponentClassifier, ComponentType, should_run_scriptlets};
@@ -140,7 +140,13 @@ impl PreparedPackage {
 /// # Usage
 ///
 /// ```ignore
-/// let installer = BatchInstaller::new(db_path, root, sandbox_mode, no_scripts);
+/// let installer = BatchInstaller::new(
+///     db_path,
+///     root,
+///     sandbox_mode,
+///     no_scripts,
+///     LegacyReplayOptions::default(),
+/// );
 /// installer.install_batch(packages)?;
 /// ```
 pub struct BatchInstaller<'a> {
@@ -148,6 +154,7 @@ pub struct BatchInstaller<'a> {
     root: &'a str,
     sandbox_mode: SandboxMode,
     no_scripts: bool,
+    legacy_replay: LegacyReplayOptions,
     preflighted_execution_path: Option<PackageExecutionPath>,
 }
 
@@ -158,12 +165,14 @@ impl<'a> BatchInstaller<'a> {
         root: &'a str,
         sandbox_mode: SandboxMode,
         no_scripts: bool,
+        legacy_replay: LegacyReplayOptions,
     ) -> Self {
         Self {
             db_path,
             root,
             sandbox_mode,
             no_scripts,
+            legacy_replay,
             preflighted_execution_path: None,
         }
     }
@@ -193,6 +202,7 @@ impl<'a> BatchInstaller<'a> {
         if packages.is_empty() {
             return Ok(());
         }
+        let _legacy_replay = self.legacy_replay;
 
         let package_count = packages.len();
         let main_pkg_name = packages
@@ -1153,7 +1163,13 @@ mod tests {
             repository_provenance: None,
         };
 
-        let installer = BatchInstaller::new("/tmp/test.db", "/", SandboxMode::None, true);
+        let installer = BatchInstaller::new(
+            "/tmp/test.db",
+            "/",
+            SandboxMode::None,
+            true,
+            LegacyReplayOptions::default(),
+        );
         let conn = rusqlite::Connection::open_in_memory().unwrap();
 
         let plan = installer.plan_batch(&[pkg1, pkg2], &conn).unwrap();
@@ -1405,9 +1421,14 @@ mod tests {
             b"batch-live",
             vec![],
         );
-        let installer =
-            BatchInstaller::new(&db_path_string, &root_string, SandboxMode::Always, true)
-                .with_preflighted_execution_path(PackageExecutionPath::MutableLiveRoot);
+        let installer = BatchInstaller::new(
+            &db_path_string,
+            &root_string,
+            SandboxMode::Always,
+            true,
+            LegacyReplayOptions::default(),
+        )
+        .with_preflighted_execution_path(PackageExecutionPath::MutableLiveRoot);
 
         installer.install_batch(vec![package]).unwrap();
 
@@ -1451,9 +1472,14 @@ mod tests {
             noreplace: true,
             ghost: false,
         }];
-        let installer =
-            BatchInstaller::new(&db_path_string, &root_string, SandboxMode::Always, true)
-                .with_preflighted_execution_path(PackageExecutionPath::MutableLiveRoot);
+        let installer = BatchInstaller::new(
+            &db_path_string,
+            &root_string,
+            SandboxMode::Always,
+            true,
+            LegacyReplayOptions::default(),
+        )
+        .with_preflighted_execution_path(PackageExecutionPath::MutableLiveRoot);
 
         installer.install_batch(vec![package]).unwrap();
 
@@ -1489,9 +1515,14 @@ mod tests {
             "/usr/bin/batch-link",
             "batch-target",
         );
-        let installer =
-            BatchInstaller::new(&db_path_string, &root_string, SandboxMode::Always, true)
-                .with_preflighted_execution_path(PackageExecutionPath::MutableLiveRoot);
+        let installer = BatchInstaller::new(
+            &db_path_string,
+            &root_string,
+            SandboxMode::Always,
+            true,
+            LegacyReplayOptions::default(),
+        )
+        .with_preflighted_execution_path(PackageExecutionPath::MutableLiveRoot);
 
         installer.install_batch(vec![package]).unwrap();
 
@@ -1545,9 +1576,14 @@ mod tests {
         );
         let db_path_string = db_path.to_string_lossy().into_owned();
         let root_string = root.to_string_lossy().into_owned();
-        let installer =
-            BatchInstaller::new(&db_path_string, &root_string, SandboxMode::Always, false)
-                .with_preflighted_execution_path(PackageExecutionPath::MutableLiveRoot);
+        let installer = BatchInstaller::new(
+            &db_path_string,
+            &root_string,
+            SandboxMode::Always,
+            false,
+            LegacyReplayOptions::default(),
+        )
+        .with_preflighted_execution_path(PackageExecutionPath::MutableLiveRoot);
 
         let error = installer.install_batch(vec![package]).unwrap_err();
 

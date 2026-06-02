@@ -111,7 +111,7 @@ pub use federation::{
     cmd_federation_add_peer, cmd_federation_enable_peer, cmd_federation_peers,
     cmd_federation_remove_peer, cmd_federation_stats, cmd_federation_status, cmd_federation_test,
 };
-pub use install::{DepMode, InstallOptions, cmd_install};
+pub use install::{DepMode, InstallOptions, LegacyReplayOptions, cmd_install};
 pub use label::{
     cmd_label_add, cmd_label_delegate, cmd_label_link, cmd_label_list, cmd_label_path,
     cmd_label_query, cmd_label_remove, cmd_label_set, cmd_label_show,

@@ -129,6 +129,7 @@ async fn execute_planned_op(
                     yes: true,
                     from_distro: None,
                     repository_provenance: None,
+                    legacy_replay: super::LegacyReplayOptions::default(),
                 },
             )
             .await
@@ -147,6 +148,7 @@ async fn execute_planned_op(
                 no_scripts,
                 super::SandboxMode::Always,
                 false,
+                super::LegacyReplayOptions::default(),
             )
             .await
         }

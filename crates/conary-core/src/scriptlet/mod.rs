@@ -1170,6 +1170,7 @@ impl ScriptletExecutor {
         self.execute_direct_with_options(phase, interpreter, &[], content, args, env, self.timeout)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn execute_direct_with_options(
         &self,
         phase: &str,
