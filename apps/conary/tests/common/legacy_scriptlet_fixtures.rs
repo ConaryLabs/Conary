@@ -140,8 +140,8 @@ pub fn synthetic_legacy_bundle(case: LegacyBundleFixture) -> Option<LegacyScript
         }
         LegacyBundleFixture::UnsupportedNativeInvocation => {
             let mut entry = entry_fixture(
-                "rpm:%post",
-                LifecyclePath::PostInstall,
+                "rpm:%pre",
+                LifecyclePath::PreInstall,
                 ScriptletDecision::Legacy,
                 "cat >/var/lib/fixture/state\n",
             );
