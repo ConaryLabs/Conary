@@ -8,7 +8,13 @@ use super::{
     resolve_installed_package,
 };
 use anyhow::{Context, Result};
-use conary_core::db::models::{FileEntry, ScriptletEntry, Trove};
+use conary_core::ccs::legacy_replay::{
+    HostForeignReplayPolicy, LegacyReplayLifecycle, LegacyReplayPlan, LegacyReplayPolicyInput,
+    LegacyReplayPreflight, LegacyReplayRefusal, plan_legacy_replay,
+};
+use conary_core::ccs::legacy_scriptlets::LegacyScriptletBundle;
+use conary_core::db::models::{FileEntry, InstalledLegacyScriptletBundle, ScriptletEntry, Trove};
+use conary_core::repository::distro::source_target_from_bundle;
 use conary_core::scriptlet::{
     ExecutionMode, PackageFormat as ScriptletPackageFormat, SandboxMode, ScriptletExecutor,
     ScriptletFailureKind, ScriptletOutcome,
@@ -28,6 +34,8 @@ pub(crate) struct RemoveInnerResult {
     scriptlet_format: ScriptletPackageFormat,
     removed_count: usize,
     dirs_removed: usize,
+    #[allow(dead_code)]
+    planned_post_remove: Option<LegacyReplayPlan>,
 }
 
 struct PreparedRemove {
@@ -37,6 +45,30 @@ struct PreparedRemove {
     scriptlet_format: ScriptletPackageFormat,
     removed_count: usize,
     dirs_removed: usize,
+    #[allow(dead_code)]
+    planned_pre_remove: Option<LegacyReplayPlan>,
+    planned_post_remove: Option<LegacyReplayPlan>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct RemoveScriptletOptions {
+    no_scripts: bool,
+    sandbox_mode: SandboxMode,
+    legacy_replay: LegacyReplayOptions,
+}
+
+impl RemoveScriptletOptions {
+    pub(crate) fn new(
+        no_scripts: bool,
+        sandbox_mode: SandboxMode,
+        legacy_replay: LegacyReplayOptions,
+    ) -> Self {
+        Self {
+            no_scripts,
+            sandbox_mode,
+            legacy_replay,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,7 +108,7 @@ pub async fn cmd_remove(
     no_scripts: bool,
     sandbox_mode: SandboxMode,
     purge_files: bool,
-    _legacy_replay: LegacyReplayOptions,
+    legacy_replay: LegacyReplayOptions,
 ) -> Result<()> {
     info!("Removing package: {}", package_name);
     println!("Removing package: {}", package_name);
@@ -154,6 +186,7 @@ pub async fn cmd_remove(
         db_path.into(),
     ))?;
     engine.begin()?;
+    let scriptlet_options = RemoveScriptletOptions::new(no_scripts, sandbox_mode, legacy_replay);
 
     if trove.install_source.is_adopted() && purge_files {
         println!(
@@ -175,8 +208,7 @@ pub async fn cmd_remove(
 
             let tx_uuid = uuid::Uuid::new_v4().to_string();
             let tx_description = format!("Remove {}-{}", trove.name, trove.version);
-            let prepared =
-                prepare_remove(&conn, &trove, root, no_scripts, sandbox_mode, &progress)?;
+            let prepared = prepare_remove(&conn, &trove, root, scriptlet_options, &progress)?;
             let remove_paths = prepared
                 .snapshot
                 .files
@@ -261,8 +293,7 @@ pub async fn cmd_remove(
         remove_changeset_id,
         &trove,
         root,
-        no_scripts,
-        sandbox_mode,
+        scriptlet_options,
         &progress,
     ) {
         Ok(result) => result,
@@ -541,11 +572,10 @@ pub(crate) fn remove_inner(
     changeset_id: i64,
     trove: &Trove,
     root: &str,
-    no_scripts: bool,
-    sandbox_mode: SandboxMode,
+    scriptlet_options: RemoveScriptletOptions,
     progress: &RemoveProgress,
 ) -> Result<RemoveInnerResult> {
-    let prepared = prepare_remove(tx, trove, root, no_scripts, sandbox_mode, progress)?;
+    let prepared = prepare_remove(tx, trove, root, scriptlet_options, progress)?;
     commit_remove_db(tx, changeset_id, prepared)
 }
 
@@ -553,13 +583,13 @@ fn prepare_remove(
     conn: &rusqlite::Connection,
     trove: &Trove,
     root: &str,
-    no_scripts: bool,
-    sandbox_mode: SandboxMode,
+    scriptlet_options: RemoveScriptletOptions,
     progress: &RemoveProgress,
 ) -> Result<PreparedRemove> {
     let trove_id = trove.id.ok_or_else(|| anyhow::anyhow!("Trove has no ID"))?;
 
     let files = FileEntry::find_by_trove(conn, trove_id)?;
+    let legacy_replay = load_installed_legacy_remove_plan(conn, trove_id, scriptlet_options)?;
     let stored_scriptlets = ScriptletEntry::find_by_trove(conn, trove_id)?;
     let scriptlet_format = stored_scriptlets
         .first()
@@ -569,7 +599,7 @@ fn prepare_remove(
     // NOTE: Known limitation -- if the pre-remove scriptlet partially executes
     // and then fails, there is no automatic recovery. This is consistent with
     // RPM, dpkg, and pacman which also have no pre-remove rollback mechanism.
-    if !no_scripts && !stored_scriptlets.is_empty() {
+    if !scriptlet_options.no_scripts && !stored_scriptlets.is_empty() {
         progress.set_phase(RemovePhase::PreScript);
         let executor = ScriptletExecutor::new(
             Path::new(root),
@@ -577,7 +607,7 @@ fn prepare_remove(
             &trove.version,
             scriptlet_format,
         )
-        .with_sandbox_mode(sandbox_mode);
+        .with_sandbox_mode(scriptlet_options.sandbox_mode);
 
         for phase in ["pre-remove", "post-remove"] {
             if let Some(scriptlet) = stored_scriptlets
@@ -633,7 +663,84 @@ fn prepare_remove(
         scriptlet_format,
         removed_count: regular_files.len(),
         dirs_removed: directories.len(),
+        planned_pre_remove: legacy_replay.planned_pre_remove,
+        planned_post_remove: legacy_replay.planned_post_remove,
     })
+}
+
+#[derive(Debug, Default)]
+struct PreparedLegacyRemoveReplay {
+    planned_pre_remove: Option<LegacyReplayPlan>,
+    planned_post_remove: Option<LegacyReplayPlan>,
+}
+
+fn load_installed_legacy_remove_plan(
+    conn: &rusqlite::Connection,
+    trove_id: i64,
+    scriptlet_options: RemoveScriptletOptions,
+) -> Result<PreparedLegacyRemoveReplay> {
+    let Some(installed) = InstalledLegacyScriptletBundle::find_by_trove(conn, trove_id)? else {
+        return Ok(PreparedLegacyRemoveReplay::default());
+    };
+    let bundle = installed
+        .bundle()
+        .context("installed legacy scriptlet bundle is malformed")?;
+    plan_installed_legacy_remove_replay(&bundle, scriptlet_options)
+}
+
+fn plan_installed_legacy_remove_replay(
+    bundle: &LegacyScriptletBundle,
+    scriptlet_options: RemoveScriptletOptions,
+) -> Result<PreparedLegacyRemoveReplay> {
+    let target = source_target_from_bundle(bundle);
+    let input = LegacyReplayPolicyInput {
+        replay_enabled: scriptlet_options.legacy_replay.allow_legacy_replay,
+        foreign_replay_override: scriptlet_options.legacy_replay.allow_foreign_legacy_replay,
+        no_scripts: scriptlet_options.no_scripts,
+        requested_sandbox_mode: scriptlet_options.sandbox_mode,
+        host_policy: HostForeignReplayPolicy::Strict,
+        target: target.as_target(),
+    };
+    let pre = plan_legacy_replay(Some(bundle), LegacyReplayLifecycle::RemovePre, &input)?;
+    let post = plan_legacy_replay(Some(bundle), LegacyReplayLifecycle::RemovePost, &input)?;
+
+    Ok(PreparedLegacyRemoveReplay {
+        planned_pre_remove: remove_plan_from_preflight(pre)?,
+        planned_post_remove: remove_plan_from_preflight(post)?,
+    })
+}
+
+fn remove_plan_from_preflight(
+    preflight: LegacyReplayPreflight,
+) -> Result<Option<LegacyReplayPlan>> {
+    match preflight {
+        LegacyReplayPreflight::NativeFree => Ok(None),
+        LegacyReplayPreflight::FullyReplaced(plan) => Ok(Some(plan)),
+        LegacyReplayPreflight::RequiresReplay(plan) => {
+            let entry = plan
+                .lifecycle_entries
+                .first()
+                .map(|entry| format!(" entry={}", entry.entry_id))
+                .unwrap_or_default();
+            anyhow::bail!(
+                "legacy remove replay execution is not wired yet{entry}; raw replay remains fail-closed until the post-remove runner is integrated"
+            )
+        }
+        LegacyReplayPreflight::Refused(refusal) => Err(legacy_replay_refusal_error(refusal)),
+    }
+}
+
+fn legacy_replay_refusal_error(refusal: LegacyReplayRefusal) -> anyhow::Error {
+    let entry = refusal
+        .entry_id
+        .as_deref()
+        .map(|entry_id| format!(" entry={entry_id}"))
+        .unwrap_or_default();
+    anyhow::anyhow!(
+        "legacy scriptlet replay refused ({:?}{entry}): {}",
+        refusal.kind,
+        refusal.message
+    )
 }
 
 fn commit_remove_db(
@@ -690,6 +797,7 @@ fn commit_remove_db(
         scriptlet_format: prepared.scriptlet_format,
         removed_count: prepared.removed_count,
         dirs_removed: prepared.dirs_removed,
+        planned_post_remove: prepared.planned_post_remove,
     })
 }
 
@@ -1054,6 +1162,50 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn commit_remove_db_carries_planned_post_remove_after_trove_delete() {
+        let tmp = TempDir::new().unwrap();
+        let db_path = tmp.path().join("conary.db");
+        conary_core::db::init(&db_path).unwrap();
+        let conn = conary_core::db::open(&db_path).unwrap();
+        let mut trove = conary_core::db::models::Trove::new_with_source(
+            "fixture".to_string(),
+            "1.0.0".to_string(),
+            conary_core::db::models::TroveType::Package,
+            conary_core::db::models::InstallSource::Repository,
+        );
+        trove.id = Some(trove.insert(&conn).unwrap());
+        let planned_post_remove = conary_core::ccs::legacy_replay::LegacyReplayPlan {
+            target_id: "rpm/fedora/44/x86_64".to_string(),
+            source_target_id: "rpm/fedora/44/x86_64".to_string(),
+            bundle_evidence_digest: Some(conary_core::hash::sha256_prefixed(b"bundle-evidence")),
+            lifecycle_entries: vec![conary_core::ccs::legacy_replay::PlannedLegacyEntry {
+                entry_id: "rpm:%postun".to_string(),
+                native_slot: "%postun".to_string(),
+                phase: conary_core::ccs::legacy_scriptlets::LifecyclePath::PostRemove,
+                timeout_ms: 30_000,
+            }],
+            sandbox_floor: SandboxMode::None,
+            ccs_hooks_allowed: true,
+            raw_replay_required: true,
+        };
+        let prepared = PreparedRemove {
+            snapshot: remove_snapshot(Vec::new()),
+            trove,
+            stored_scriptlets: Vec::new(),
+            scriptlet_format: ScriptletPackageFormat::Rpm,
+            removed_count: 0,
+            dirs_removed: 0,
+            planned_pre_remove: None,
+            planned_post_remove: Some(planned_post_remove.clone()),
+        };
+        let tx = conn.unchecked_transaction().unwrap();
+
+        let result = commit_remove_db(&tx, 1, prepared).unwrap();
+
+        assert_eq!(result.planned_post_remove, Some(planned_post_remove));
     }
 
     #[tokio::test]
