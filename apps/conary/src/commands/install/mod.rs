@@ -42,7 +42,7 @@ use resolve::{
 use scriptlets::{
     build_execution_mode, get_old_package_scriptlets, preflight_install_scriptlets,
     preflight_old_remove_scriptlets, run_old_post_remove, run_old_pre_remove, run_post_install,
-    run_pre_install, to_scriptlet_format,
+    run_pre_install, scriptlet_warning_from_failure, to_scriptlet_format,
 };
 
 use super::create_state_snapshot;
@@ -181,6 +181,171 @@ fn legacy_replay_refusal_error(
         refusal.kind,
         refusal.message
     )
+}
+
+fn run_legacy_replay_plan_entries_with<F>(
+    plan: Option<&conary_core::ccs::legacy_replay::LegacyReplayPlan>,
+    bundle: Option<&conary_core::ccs::legacy_scriptlets::LegacyScriptletBundle>,
+    runtime: &conary_core::scriptlet::LegacyInvocationRuntime<'_>,
+    mut execute: F,
+) -> Result<Vec<conary_core::scriptlet::ScriptletOutcome>>
+where
+    F: FnMut(
+        &conary_core::scriptlet::LegacyScriptletExecution<'_>,
+        &conary_core::scriptlet::LegacyInvocationRuntime<'_>,
+    ) -> conary_core::scriptlet::ScriptletOutcome,
+{
+    let Some(plan) = plan else {
+        return Ok(Vec::new());
+    };
+    if plan.lifecycle_entries.is_empty() {
+        return Ok(Vec::new());
+    }
+    let bundle = bundle.context("legacy replay plan exists without a legacy scriptlet bundle")?;
+
+    let mut outcomes = Vec::with_capacity(plan.lifecycle_entries.len());
+    for planned in &plan.lifecycle_entries {
+        let entry = bundle
+            .entries
+            .iter()
+            .find(|entry| entry.id == planned.entry_id)
+            .with_context(|| {
+                format!(
+                    "legacy replay plan references missing bundle entry {}",
+                    planned.entry_id
+                )
+            })?;
+        let execution = conary_core::scriptlet::LegacyScriptletExecution {
+            entry_id: &entry.id,
+            phase: legacy_lifecycle_phase_name(&entry.phase),
+            interpreter: &entry.interpreter,
+            interpreter_args: &entry.interpreter_args,
+            body: entry.body.clone(),
+            body_sha256: entry.body_sha256.clone(),
+            body_encoding: entry.body_encoding.as_deref(),
+            native_args: &entry.native_invocation.args,
+            native_environment: &entry.native_invocation.environment,
+            stdin_contract: entry.native_invocation.stdin.as_deref(),
+            chroot_contract: entry.native_invocation.chroot.as_deref(),
+            timeout_ms: entry.timeout_ms,
+        };
+        outcomes.push(execute(&execution, runtime));
+    }
+
+    Ok(outcomes)
+}
+
+fn execute_legacy_replay_plan_entries(
+    root: &Path,
+    package_name: &str,
+    package_version: &str,
+    bundle: Option<&conary_core::ccs::legacy_scriptlets::LegacyScriptletBundle>,
+    plan: Option<&conary_core::ccs::legacy_replay::LegacyReplayPlan>,
+    mode: &conary_core::scriptlet::ExecutionMode,
+    sandbox_mode: SandboxMode,
+) -> Result<Vec<conary_core::scriptlet::ScriptletOutcome>> {
+    let Some(bundle) = bundle else {
+        return run_legacy_replay_plan_entries_with(
+            plan,
+            None,
+            &conary_core::scriptlet::LegacyInvocationRuntime {
+                mode,
+                old_version: None,
+                new_version: Some(package_version),
+                package_instance_count: Some(1),
+            },
+            |_execution, _runtime| unreachable!("empty bundle cannot execute legacy replay"),
+        );
+    };
+
+    let format = legacy_source_scriptlet_format(&bundle.source_format)?;
+    let executor =
+        conary_core::scriptlet::ScriptletExecutor::new(root, package_name, package_version, format)
+            .with_sandbox_mode(sandbox_mode);
+    let runtime = conary_core::scriptlet::LegacyInvocationRuntime {
+        mode,
+        old_version: None,
+        new_version: Some(package_version),
+        package_instance_count: Some(1),
+    };
+
+    run_legacy_replay_plan_entries_with(plan, Some(bundle), &runtime, |execution, runtime| {
+        executor.execute_legacy_entry_with_outcome(execution, runtime)
+    })
+}
+
+fn require_legacy_replay_success(
+    outcomes: Vec<conary_core::scriptlet::ScriptletOutcome>,
+) -> Result<()> {
+    for outcome in outcomes {
+        outcome.into_result()?;
+    }
+    Ok(())
+}
+
+fn legacy_post_replay_warnings(
+    package_name: &str,
+    outcomes: Vec<conary_core::scriptlet::ScriptletOutcome>,
+) -> Result<Vec<crate::commands::ScriptletWarning>> {
+    let mut warnings = Vec::new();
+
+    for outcome in outcomes {
+        match outcome {
+            conary_core::scriptlet::ScriptletOutcome::Success { .. }
+            | conary_core::scriptlet::ScriptletOutcome::Skipped { .. } => {}
+            conary_core::scriptlet::ScriptletOutcome::Failure(failure)
+                if failure.failure_kind
+                    == conary_core::scriptlet::ScriptletFailureKind::ScriptExited =>
+            {
+                warnings.push(scriptlet_warning_from_failure(
+                    package_name,
+                    failure,
+                    "legacy post-install scriptlet failed after package files were installed",
+                ));
+            }
+            conary_core::scriptlet::ScriptletOutcome::Failure(failure) => {
+                return Err(anyhow::anyhow!(
+                    "legacy post-install scriptlet failed after commit with a non-degradable failure: {}",
+                    failure.message
+                ));
+            }
+        }
+    }
+
+    Ok(warnings)
+}
+
+fn legacy_source_scriptlet_format(
+    source_format: &conary_core::ccs::legacy_scriptlets::SourceFormat,
+) -> Result<ScriptletPackageFormat> {
+    match source_format {
+        conary_core::ccs::legacy_scriptlets::SourceFormat::Rpm => Ok(ScriptletPackageFormat::Rpm),
+        conary_core::ccs::legacy_scriptlets::SourceFormat::Deb => Ok(ScriptletPackageFormat::Deb),
+        conary_core::ccs::legacy_scriptlets::SourceFormat::Arch => Ok(ScriptletPackageFormat::Arch),
+        conary_core::ccs::legacy_scriptlets::SourceFormat::Unknown(value) => {
+            anyhow::bail!("legacy replay source format is unknown: {value}")
+        }
+    }
+}
+
+fn legacy_lifecycle_phase_name(
+    phase: &conary_core::ccs::legacy_scriptlets::LifecyclePath,
+) -> &'static str {
+    use conary_core::ccs::legacy_scriptlets::LifecyclePath;
+
+    match phase {
+        LifecyclePath::PreInstall => "pre-install",
+        LifecyclePath::PostInstall => "post-install",
+        LifecyclePath::PreUpgrade => "pre-upgrade",
+        LifecyclePath::PostUpgrade => "post-upgrade",
+        LifecyclePath::PreRemove => "pre-remove",
+        LifecyclePath::PostRemove => "post-remove",
+        LifecyclePath::PreTransaction => "pre-transaction",
+        LifecyclePath::PostTransaction => "post-transaction",
+        LifecyclePath::Trigger => "trigger",
+        LifecyclePath::FileTrigger => "file-trigger",
+        LifecyclePath::Unknown(_) => "unknown",
+    }
 }
 
 #[allow(dead_code)]
@@ -2403,8 +2568,8 @@ pub(crate) fn install_ccs_package_transactionally(
         .as_ref()
         .map(|hook| hook.script.clone());
 
-    let _legacy_replay_state =
-        plan_ccs_fresh_install_legacy_replay(pkg.manifest().legacy_scriptlets.as_ref(), &opts)?;
+    let legacy_bundle = pkg.manifest().legacy_scriptlets.as_ref();
+    let legacy_replay_state = plan_ccs_fresh_install_legacy_replay(legacy_bundle, &opts)?;
 
     if opts.dry_run {
         show_dry_run_summary(pkg, &opts.component_selection);
@@ -2443,6 +2608,16 @@ pub(crate) fn install_ccs_package_transactionally(
     let execution_path =
         prepare_install_environment_before_scriptlets(conn, opts.db_path, opts.root)?;
     preflight_extracted_live_root_file_ownership(conn, pkg, &extraction, execution_path)?;
+    let legacy_execution_mode = build_execution_mode(old_trove.map(|trove| trove.version.as_str()));
+    require_legacy_replay_success(execute_legacy_replay_plan_entries(
+        Path::new(opts.root),
+        pkg.name(),
+        pkg.version(),
+        legacy_bundle,
+        legacy_replay_state.new_bundle_pre_plan.as_ref(),
+        &legacy_execution_mode,
+        opts.sandbox_mode,
+    )?)?;
 
     let mut hook_executor = conary_core::ccs::HookExecutor::new(Path::new(opts.root));
     let mut pre_hooks_ran = false;
@@ -2545,6 +2720,30 @@ pub(crate) fn install_ccs_package_transactionally(
             eprintln!("WARNING: {warning}");
             post_commit_warnings.push(warning);
         }
+    }
+    let legacy_post_warnings = legacy_post_replay_warnings(
+        pkg.name(),
+        execute_legacy_replay_plan_entries(
+            Path::new(opts.root),
+            pkg.name(),
+            pkg.version(),
+            legacy_bundle,
+            legacy_replay_state.new_bundle_post_plan.as_ref(),
+            &legacy_execution_mode,
+            opts.sandbox_mode,
+        )?,
+    )?;
+    if !legacy_post_warnings.is_empty() {
+        crate::commands::append_scriptlet_warning_metadata(
+            conn,
+            tx_result.changeset_id,
+            legacy_post_warnings.clone(),
+        )?;
+        post_commit_warnings.extend(
+            legacy_post_warnings
+                .into_iter()
+                .map(|warning| warning.message),
+        );
     }
 
     Ok(CcsTransactionInstallResult {
@@ -2804,8 +3003,20 @@ fn print_package_suggestions(conn: &rusqlite::Connection, package_name: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use conary_core::ccs::legacy_replay::HostForeignReplayPolicy;
+    use conary_core::ccs::legacy_replay::{
+        HostForeignReplayPolicy, LegacyReplayPlan, PlannedLegacyEntry,
+    };
+    use conary_core::ccs::legacy_scriptlets::{
+        DecisionCounts, ForeignReplayPolicy, LEGACY_SCRIPTLET_SCHEMA_V1, LegacyScriptletBundle,
+        LegacyScriptletEntry, LifecyclePath, NativeInvocation, PublicationPolicy,
+        PublicationStatus, ScriptletDecision, ScriptletFidelity, SourceFormat, TargetCompatibility,
+        TransactionOrder, VersionScheme,
+    };
     use conary_core::db::models::DistroPin;
+    use conary_core::scriptlet::{
+        EffectiveSandbox, ExecutionMode, LegacyInvocationRuntime, SandboxMode, ScriptletOutcome,
+    };
+    use std::collections::BTreeMap;
 
     #[test]
     fn legacy_replay_options_default_disabled_for_install_surfaces() {
@@ -2894,6 +3105,93 @@ mod tests {
         assert!(state.old_bundle_post_remove_plan.is_none());
         assert!(state.accepted_bundle_to_persist.is_none());
         assert!(state.audit.is_none());
+    }
+
+    #[test]
+    fn legacy_replay_plan_runner_invokes_selected_legacy_entry_once() {
+        let bundle = test_legacy_bundle(vec![test_legacy_entry(
+            "rpm:%post",
+            LifecyclePath::PostInstall,
+            ScriptletDecision::Legacy,
+            "echo legacy-post\n",
+        )]);
+        let plan = test_legacy_plan(vec![("rpm:%post", "%post", LifecyclePath::PostInstall)]);
+        let mode = ExecutionMode::Install;
+        let runtime = LegacyInvocationRuntime {
+            mode: &mode,
+            old_version: None,
+            new_version: None,
+            package_instance_count: Some(1),
+        };
+        let mut calls = Vec::new();
+
+        let outcomes = run_legacy_replay_plan_entries_with(
+            Some(&plan),
+            Some(&bundle),
+            &runtime,
+            |execution, runtime| {
+                calls.push((
+                    execution.entry_id.to_string(),
+                    execution.phase.to_string(),
+                    execution.body.clone(),
+                    matches!(runtime.mode, ExecutionMode::Install),
+                ));
+                ScriptletOutcome::Success {
+                    phase: execution.phase.to_string(),
+                    requested_sandbox_mode: SandboxMode::None,
+                    effective_sandbox: EffectiveSandbox::TargetRoot,
+                }
+            },
+        )
+        .expect("run legacy replay plan");
+
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(
+            calls,
+            vec![(
+                "rpm:%post".to_string(),
+                "post-install".to_string(),
+                "echo legacy-post\n".to_string(),
+                true,
+            )]
+        );
+    }
+
+    #[test]
+    fn legacy_replay_plan_runner_skips_fully_replaced_plan_entries() {
+        let bundle = test_legacy_bundle(vec![test_legacy_entry(
+            "rpm:%post",
+            LifecyclePath::PostInstall,
+            ScriptletDecision::Replaced,
+            "echo replaced\n",
+        )]);
+        let plan = test_legacy_plan(Vec::new());
+        let mode = ExecutionMode::Install;
+        let runtime = LegacyInvocationRuntime {
+            mode: &mode,
+            old_version: None,
+            new_version: None,
+            package_instance_count: Some(1),
+        };
+        let mut calls = 0;
+
+        let outcomes = run_legacy_replay_plan_entries_with(
+            Some(&plan),
+            Some(&bundle),
+            &runtime,
+            |_execution, _runtime| {
+                calls += 1;
+                ScriptletOutcome::Success {
+                    phase: "post-install".to_string(),
+                    requested_sandbox_mode: SandboxMode::None,
+                    effective_sandbox: EffectiveSandbox::TargetRoot,
+                }
+            },
+        )
+        .expect("run legacy replay plan");
+
+        assert!(outcomes.is_empty());
+        assert_eq!(calls, 0);
     }
 
     #[test]
@@ -3021,6 +3319,121 @@ mod tests {
         assert_eq!(changeset.status, ChangesetStatus::Applied);
         let journal_dir = temp.path().join("live-root-journals");
         assert!(!journal_dir.exists() || std::fs::read_dir(&journal_dir).unwrap().next().is_none());
+    }
+
+    fn test_legacy_plan(entries: Vec<(&str, &str, LifecyclePath)>) -> LegacyReplayPlan {
+        LegacyReplayPlan {
+            target_id: "rpm/fedora/44/x86_64".to_string(),
+            source_target_id: "rpm/fedora/44/x86_64".to_string(),
+            bundle_evidence_digest: Some(conary_core::hash::sha256_prefixed(b"bundle-evidence")),
+            lifecycle_entries: entries
+                .into_iter()
+                .map(|(entry_id, native_slot, phase)| PlannedLegacyEntry {
+                    entry_id: entry_id.to_string(),
+                    native_slot: native_slot.to_string(),
+                    phase,
+                    timeout_ms: 30_000,
+                })
+                .collect(),
+            sandbox_floor: SandboxMode::None,
+            ccs_hooks_allowed: true,
+            raw_replay_required: true,
+        }
+    }
+
+    fn test_legacy_bundle(entries: Vec<LegacyScriptletEntry>) -> LegacyScriptletBundle {
+        let mut decision_counts = DecisionCounts::default();
+        for entry in &entries {
+            match &entry.decision {
+                ScriptletDecision::Replaced => decision_counts.replaced += 1,
+                ScriptletDecision::Legacy => decision_counts.legacy += 1,
+                ScriptletDecision::Blocked => decision_counts.blocked += 1,
+                ScriptletDecision::Review => decision_counts.review += 1,
+                ScriptletDecision::Unknown(value) => {
+                    *decision_counts.extra.entry(value.clone()).or_insert(0) += 1;
+                }
+            }
+        }
+
+        LegacyScriptletBundle {
+            schema: LEGACY_SCRIPTLET_SCHEMA_V1.to_string(),
+            schema_revision: 1,
+            source_format: SourceFormat::Rpm,
+            source_family: "fedora-rhel".to_string(),
+            source_distro: Some("fedora".to_string()),
+            source_release: Some("44".to_string()),
+            source_arch: Some("x86_64".to_string()),
+            source_package: "legacy-runner-fixture".to_string(),
+            source_version: "1.0.0-1.fc44".to_string(),
+            source_checksum: None,
+            version_scheme: VersionScheme::Rpm,
+            conversion_tool: "test".to_string(),
+            conversion_tool_version: "0.8.0".to_string(),
+            conversion_policy: "goal6-test".to_string(),
+            adapter_registry_digest: None,
+            target_policy_digest: None,
+            evidence_digest: Some(conary_core::hash::sha256_prefixed(b"bundle-evidence")),
+            target_compatibility: TargetCompatibility::SourceNative,
+            allowed_targets: vec!["rpm/fedora/44/x86_64".to_string()],
+            foreign_replay_policy: ForeignReplayPolicy::Deny,
+            publication_policy: PublicationPolicy::PublicIfNoBlocked,
+            publication_status: PublicationStatus::Public,
+            scriptlet_fidelity: ScriptletFidelity::LegacyReplay,
+            decision_counts,
+            unsupported_class_counts: BTreeMap::new(),
+            entries,
+            extra: BTreeMap::new(),
+        }
+    }
+
+    fn test_legacy_entry(
+        id: &str,
+        phase: LifecyclePath,
+        decision: ScriptletDecision,
+        body: &str,
+    ) -> LegacyScriptletEntry {
+        LegacyScriptletEntry {
+            id: id.to_string(),
+            native_slot: id.split(':').nth(1).unwrap_or("%post").to_string(),
+            phase,
+            lifecycle_paths: vec!["install:post".to_string()],
+            interpreter: "/bin/sh".to_string(),
+            interpreter_args: vec!["-e".to_string()],
+            body_sha256: conary_core::hash::sha256_prefixed(body.as_bytes()),
+            body: body.to_string(),
+            body_encoding: None,
+            native_invocation: NativeInvocation {
+                args: vec!["1".to_string()],
+                environment: vec![],
+                stdin: None,
+                chroot: None,
+                extra: BTreeMap::new(),
+            },
+            transaction_order: TransactionOrder {
+                position: "after-payload".to_string(),
+                before: vec![],
+                after: vec![],
+                extra: BTreeMap::new(),
+            },
+            timeout_ms: 30_000,
+            sandbox: None,
+            capabilities: vec![],
+            decision,
+            reason_code: "legacy-replay-required".to_string(),
+            human_reason: Some("test fixture".to_string()),
+            evidence_digest: Some(conary_core::hash::sha256_prefixed(
+                format!("{id}:{body}").as_bytes(),
+            )),
+            source_evidence_refs: vec![format!("capture:{id}")],
+            effects: vec![],
+            unknown_commands: vec![],
+            blocked_classes: vec![],
+            rpm_trigger: None,
+            deb_maintainer: None,
+            arch_install: None,
+            residual_replay: None,
+            extra: BTreeMap::new(),
+        }
     }
 
     #[test]

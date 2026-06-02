@@ -128,6 +128,16 @@ fn ccs_install_no_scripts_refuses_selected_legacy_replay_before_db_mutation() {
 }
 
 #[test]
+fn ccs_install_allowed_legacy_pre_entry_rejects_unsupported_native_contract_before_db_mutation() {
+    let fixture = InstallFixture::new(LegacyBundleFixture::UnsupportedNativeInvocation);
+    let output = fixture.run_install(&["--allow-legacy-replay"]);
+
+    assert_failure(&output);
+    assert_contains(&output, "NativeArgsContractUnsupported");
+    fixture.assert_no_install_mutation();
+}
+
+#[test]
 fn ccs_install_dry_run_runs_legacy_bundle_admission_before_returning() {
     let fixture = InstallFixture::new(LegacyBundleFixture::ReviewEntry);
     let output = fixture.run_dry_run(&[]);
