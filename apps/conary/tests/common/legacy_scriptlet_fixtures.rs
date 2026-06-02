@@ -20,6 +20,7 @@ pub enum LegacyBundleFixture {
     ReplacedOnly,
     ReviewEntry,
     BlockedEntry,
+    UnknownDecision,
     SameSourceLegacyPostInstall,
     FutureLegacyPostRemove,
     RawTriggerLegacy,
@@ -34,6 +35,7 @@ impl LegacyBundleFixture {
             Self::ReplacedOnly => "legacy-fixture-replaced",
             Self::ReviewEntry => "legacy-fixture-review",
             Self::BlockedEntry => "legacy-fixture-blocked",
+            Self::UnknownDecision => "legacy-fixture-unknown",
             Self::SameSourceLegacyPostInstall => "legacy-fixture-post",
             Self::FutureLegacyPostRemove => "legacy-fixture-remove",
             Self::RawTriggerLegacy => "legacy-fixture-trigger",
@@ -76,6 +78,16 @@ pub fn synthetic_legacy_bundle(case: LegacyBundleFixture) -> Option<LegacyScript
                 LifecyclePath::PreInstall,
                 ScriptletDecision::Blocked,
                 "useradd unsafe-fixture\n",
+            )],
+        )),
+        LegacyBundleFixture::UnknownDecision => Some(bundle_fixture(
+            case,
+            ScriptletFidelity::ReviewRequired,
+            vec![entry_fixture(
+                "rpm:%post",
+                LifecyclePath::PostInstall,
+                ScriptletDecision::Unknown("manual-curation".to_string()),
+                "echo unknown-decision\n",
             )],
         )),
         LegacyBundleFixture::SameSourceLegacyPostInstall => Some(bundle_fixture(

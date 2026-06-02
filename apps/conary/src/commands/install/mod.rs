@@ -107,6 +107,82 @@ pub(crate) struct LegacyReplayAuditContext {
     pub evidence_digest: Option<String>,
 }
 
+fn plan_ccs_fresh_install_legacy_replay(
+    bundle: Option<&conary_core::ccs::legacy_scriptlets::LegacyScriptletBundle>,
+    opts: &CcsTransactionInstallOptions<'_>,
+) -> Result<LegacyReplayInstallState> {
+    use conary_core::ccs::legacy_replay::{
+        HostForeignReplayPolicy, LegacyReplayLifecycle, LegacyReplayPolicyInput, plan_legacy_replay,
+    };
+    use conary_core::repository::distro::source_target_from_bundle;
+
+    let Some(bundle) = bundle else {
+        return Ok(LegacyReplayInstallState::default());
+    };
+
+    let target = source_target_from_bundle(bundle);
+    let input = LegacyReplayPolicyInput {
+        replay_enabled: opts.legacy_replay.allow_legacy_replay,
+        foreign_replay_override: opts.legacy_replay.allow_foreign_legacy_replay,
+        no_scripts: opts.no_scripts,
+        requested_sandbox_mode: opts.sandbox_mode,
+        host_policy: HostForeignReplayPolicy::Strict,
+        target: target.as_target(),
+    };
+
+    let pre = plan_legacy_replay(Some(bundle), LegacyReplayLifecycle::FreshInstallPre, &input)?;
+    let post = plan_legacy_replay(
+        Some(bundle),
+        LegacyReplayLifecycle::FreshInstallPost,
+        &input,
+    )?;
+
+    let target_id = target.to_id();
+    Ok(LegacyReplayInstallState {
+        new_bundle_pre_plan: plan_from_preflight(pre)?,
+        new_bundle_post_plan: plan_from_preflight(post)?,
+        audit: Some(LegacyReplayAuditContext {
+            target_id: target_id.clone(),
+            source_target_id: target_id,
+            target_compatibility: bundle.target_compatibility.as_str().to_string(),
+            foreign_replay_policy: bundle.foreign_replay_policy.as_str().to_string(),
+            host_policy: HostForeignReplayPolicy::Strict,
+            feature_gate_enabled: opts.legacy_replay.allow_legacy_replay,
+            foreign_override: opts.legacy_replay.allow_foreign_legacy_replay,
+            evidence_digest: bundle.evidence_digest.clone(),
+        }),
+        ..LegacyReplayInstallState::default()
+    })
+}
+
+fn plan_from_preflight(
+    preflight: conary_core::ccs::legacy_replay::LegacyReplayPreflight,
+) -> Result<Option<conary_core::ccs::legacy_replay::LegacyReplayPlan>> {
+    use conary_core::ccs::legacy_replay::LegacyReplayPreflight;
+
+    match preflight {
+        LegacyReplayPreflight::NativeFree => Ok(None),
+        LegacyReplayPreflight::FullyReplaced(plan)
+        | LegacyReplayPreflight::RequiresReplay(plan) => Ok(Some(plan)),
+        LegacyReplayPreflight::Refused(refusal) => Err(legacy_replay_refusal_error(refusal)),
+    }
+}
+
+fn legacy_replay_refusal_error(
+    refusal: conary_core::ccs::legacy_replay::LegacyReplayRefusal,
+) -> anyhow::Error {
+    let entry = refusal
+        .entry_id
+        .as_deref()
+        .map(|entry_id| format!(" entry={entry_id}"))
+        .unwrap_or_default();
+    anyhow::anyhow!(
+        "legacy scriptlet replay refused ({:?}{entry}): {}",
+        refusal.kind,
+        refusal.message
+    )
+}
+
 #[allow(dead_code)]
 pub(crate) fn host_foreign_replay_policy_from_pin(
     pin: Option<&conary_core::db::models::DistroPin>,
@@ -2326,6 +2402,9 @@ pub(crate) fn install_ccs_package_transactionally(
         .pre_remove
         .as_ref()
         .map(|hook| hook.script.clone());
+
+    let _legacy_replay_state =
+        plan_ccs_fresh_install_legacy_replay(pkg.manifest().legacy_scriptlets.as_ref(), &opts)?;
 
     if opts.dry_run {
         show_dry_run_summary(pkg, &opts.component_selection);
