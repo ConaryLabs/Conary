@@ -211,6 +211,42 @@ fn ccs_install_with_legacy_bundle_does_not_persist_flattened_pre_remove_hook() {
     );
 }
 
+#[test]
+fn ccs_install_with_future_legacy_bundle_records_changeset_audit_metadata() {
+    let fixture = InstallFixture::new(LegacyBundleFixture::FutureLegacyPostRemove);
+    let output = fixture.run_install(&[]);
+
+    assert_success(&output);
+
+    let conn = db::open(&fixture.db_path).expect("open db");
+    let metadata = single_changeset_metadata(&conn);
+    let audit = metadata
+        .get("legacy_scriptlet_replay")
+        .expect("legacy replay audit metadata");
+
+    assert_eq!(metadata["schema"], "conary.changeset.metadata.v1");
+    assert_eq!(audit["bundle_present"], true);
+    assert_eq!(audit["target_id"], "rpm/fedora/44/x86_64");
+    assert_eq!(audit["source_target_id"], "rpm/fedora/44/x86_64");
+    assert_eq!(audit["target_compatibility"], "source-native");
+    assert_eq!(audit["foreign_replay_policy"], "deny");
+    assert_eq!(audit["host_policy"], "strict");
+    assert_eq!(audit["feature_gate"], "disabled");
+    assert_eq!(audit["foreign_override"], false);
+    assert_eq!(
+        audit["evidence_digest"],
+        conary_core::hash::sha256_prefixed(b"legacy-fixture-remove-evidence")
+    );
+
+    let planned_entries = audit["planned_entries"]
+        .as_array()
+        .expect("planned entries array");
+    assert!(
+        planned_entries.is_empty(),
+        "future lifecycle entries should be preserved in the installed bundle but not planned for fresh install"
+    );
+}
+
 struct InstallFixture {
     _temp: tempfile::TempDir,
     _package_temp: tempfile::TempDir,
@@ -394,6 +430,14 @@ fn table_count(conn: &rusqlite::Connection, table: &str) -> i64 {
 fn single_trove_id(conn: &rusqlite::Connection) -> i64 {
     conn.query_row("SELECT id FROM troves", [], |row| row.get(0))
         .expect("single installed trove")
+}
+
+fn single_changeset_metadata(conn: &rusqlite::Connection) -> serde_json::Value {
+    let raw: Option<String> = conn
+        .query_row("SELECT metadata FROM changesets", [], |row| row.get(0))
+        .expect("single changeset metadata");
+    let raw = raw.expect("changeset metadata should be present");
+    serde_json::from_str(&raw).expect("changeset metadata is JSON")
 }
 
 fn is_safe_table_name(table: &str) -> bool {
