@@ -8,8 +8,8 @@ use super::install::{
     validate_prepared_install_dependencies,
 };
 use super::progress::RemoveProgress;
-use super::remove::remove_inner;
-use super::{RevertMetadata, SandboxMode, open_db};
+use super::remove::{RemoveScriptletOptions, remove_inner};
+use super::{LegacyReplayOptions, RevertMetadata, SandboxMode, open_db};
 use anyhow::Result;
 use conary_core::db::models::{Changeset, StateDiff, StateEngine, StateMember, SystemState, Trove};
 use conary_core::transaction::{TransactionConfig, TransactionEngine};
@@ -337,8 +337,11 @@ async fn execute_restore_plan_with_root(
                 changeset_id,
                 &trove,
                 root,
-                false,
-                SandboxMode::Always,
+                RemoveScriptletOptions::new(
+                    false,
+                    SandboxMode::Always,
+                    LegacyReplayOptions::default(),
+                ),
                 &progress,
             )?;
             removed_troves.push(remove_result.snapshot);

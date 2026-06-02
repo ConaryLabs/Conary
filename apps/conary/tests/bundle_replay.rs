@@ -247,6 +247,38 @@ fn ccs_install_with_future_legacy_bundle_records_changeset_audit_metadata() {
     );
 }
 
+#[test]
+fn remove_refuses_installed_legacy_bundle_without_replay_flag_before_mutation() {
+    let fixture = InstallFixture::new(LegacyBundleFixture::FutureLegacyPostRemove);
+    let output = fixture.run_install(&[]);
+    assert_success(&output);
+
+    let output = fixture.run_remove("legacy-fixture-remove", &[]);
+
+    assert_failure(&output);
+    assert_contains(&output, "LegacyReplayFeatureDisabled");
+    let conn = db::open(&fixture.db_path).expect("open db");
+    assert_eq!(table_count(&conn, "changesets"), 1);
+    assert_eq!(table_count(&conn, "troves"), 1);
+    assert_eq!(table_count(&conn, "installed_legacy_scriptlet_bundles"), 1);
+}
+
+#[test]
+fn remove_with_replay_flag_still_fails_closed_until_remove_runner_is_wired() {
+    let fixture = InstallFixture::new(LegacyBundleFixture::FutureLegacyPostRemove);
+    let output = fixture.run_install(&[]);
+    assert_success(&output);
+
+    let output = fixture.run_remove("legacy-fixture-remove", &["--allow-legacy-replay"]);
+
+    assert_failure(&output);
+    assert_contains(&output, "legacy remove replay execution is not wired yet");
+    let conn = db::open(&fixture.db_path).expect("open db");
+    assert_eq!(table_count(&conn, "changesets"), 1);
+    assert_eq!(table_count(&conn, "troves"), 1);
+    assert_eq!(table_count(&conn, "installed_legacy_scriptlet_bundles"), 1);
+}
+
 struct InstallFixture {
     _temp: tempfile::TempDir,
     _package_temp: tempfile::TempDir,
@@ -327,6 +359,22 @@ impl InstallFixture {
             self.package_path.to_str().expect("utf-8 package path"),
             "--dry-run",
             "--allow-unsigned",
+            "--sandbox",
+            "never",
+            "--db-path",
+            self.db_path.to_str().expect("utf-8 db path"),
+            "--root",
+            self.root.to_str().expect("utf-8 root path"),
+        ];
+        args.extend_from_slice(extra_args);
+        run_conary(&args)
+    }
+
+    fn run_remove(&self, package_name: &str, extra_args: &[&str]) -> Output {
+        let mut args = vec![
+            "--allow-live-system-mutation",
+            "remove",
+            package_name,
             "--sandbox",
             "never",
             "--db-path",
