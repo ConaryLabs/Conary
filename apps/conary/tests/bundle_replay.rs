@@ -26,6 +26,8 @@ fn synthetic_legacy_bundle_fixtures_cover_task5_matrix() {
         LegacyBundleFixture::SameSourceLegacyPostInstall,
         LegacyBundleFixture::FutureLegacyPostRemove,
         LegacyBundleFixture::FutureLegacyPreAndPostRemove,
+        LegacyBundleFixture::UpgradeOldPreAndPostRemove,
+        LegacyBundleFixture::UpgradeNewPreAndPost,
         LegacyBundleFixture::RawTriggerLegacy,
         LegacyBundleFixture::UnsupportedNativeInvocation,
     ];
@@ -87,6 +89,22 @@ fn synthetic_legacy_bundle_fixtures_cover_task5_matrix() {
                     );
                     assert_eq!(bundle.entries[0].phase, LifecyclePath::PreRemove);
                     assert_eq!(bundle.entries[1].phase, LifecyclePath::PostRemove);
+                }
+                LegacyBundleFixture::UpgradeOldPreAndPostRemove => {
+                    assert_eq!(
+                        decisions,
+                        vec![ScriptletDecision::Legacy, ScriptletDecision::Legacy]
+                    );
+                    assert_eq!(bundle.entries[0].phase, LifecyclePath::PreRemove);
+                    assert_eq!(bundle.entries[1].phase, LifecyclePath::PostRemove);
+                }
+                LegacyBundleFixture::UpgradeNewPreAndPost => {
+                    assert_eq!(
+                        decisions,
+                        vec![ScriptletDecision::Legacy, ScriptletDecision::Legacy]
+                    );
+                    assert_eq!(bundle.entries[0].phase, LifecyclePath::PreUpgrade);
+                    assert_eq!(bundle.entries[1].phase, LifecyclePath::PostUpgrade);
                 }
                 LegacyBundleFixture::RawTriggerLegacy => {
                     assert_eq!(decisions, vec![ScriptletDecision::Legacy]);
@@ -377,6 +395,98 @@ fn remove_malformed_installed_bundle_fails_before_mutation() {
     assert_eq!(table_count(&conn, "installed_legacy_scriptlet_bundles"), 1);
 }
 
+#[test]
+fn upgrade_refuses_old_installed_legacy_bundle_without_flag_before_mutation() {
+    let fixture = UpgradeFixture::new(
+        LegacyBundleFixture::UpgradeOldPreAndPostRemove,
+        LegacyBundleFixture::NativeFree,
+    );
+    let output = fixture.run_old_install(&[]);
+    assert_success(&output);
+
+    let output = fixture.run_upgrade(&[]);
+
+    assert_failure(&output);
+    assert_contains(&output, "LegacyReplayFeatureDisabled");
+    let conn = db::open(&fixture.db_path).expect("open db");
+    assert_eq!(table_count(&conn, "changesets"), 1);
+    assert_eq!(table_count(&conn, "troves"), 1);
+    assert_eq!(table_count(&conn, "installed_legacy_scriptlet_bundles"), 1);
+    assert_eq!(installed_versions(&conn), vec!["1.0.0".to_string()]);
+}
+
+#[test]
+fn upgrade_replays_old_and_new_legacy_plans_and_replaces_installed_bundle() {
+    let fixture = UpgradeFixture::new(
+        LegacyBundleFixture::UpgradeOldPreAndPostRemove,
+        LegacyBundleFixture::UpgradeNewPreAndPost,
+    );
+    let output = fixture.run_old_install(&[]);
+    assert_success(&output);
+
+    let output = fixture.run_upgrade(&["--allow-legacy-replay"]);
+
+    assert_success(&output);
+    let conn = db::open(&fixture.db_path).expect("open db");
+    assert_eq!(table_count(&conn, "changesets"), 2);
+    assert_eq!(table_count(&conn, "troves"), 1);
+    assert_eq!(table_count(&conn, "installed_legacy_scriptlet_bundles"), 1);
+    assert_eq!(installed_versions(&conn), vec!["2.0.0".to_string()]);
+
+    let trove_id = single_trove_id(&conn);
+    let installed = InstalledLegacyScriptletBundle::find_by_trove(&conn, trove_id)
+        .expect("load installed legacy bundle")
+        .expect("new installed bundle row exists");
+    let decoded = installed.bundle().expect("decode installed bundle");
+    assert_eq!(decoded.entries[0].phase, LifecyclePath::PreUpgrade);
+    assert_eq!(decoded.entries[1].phase, LifecyclePath::PostUpgrade);
+
+    let metadata = changeset_metadata(&conn, 2);
+    let planned_entries = metadata["legacy_scriptlet_replay"]["planned_entries"]
+        .as_array()
+        .expect("planned entries array");
+    let phases: Vec<_> = planned_entries
+        .iter()
+        .map(|entry| {
+            (
+                entry["entry_id"].as_str().expect("entry id"),
+                entry["phase"].as_str().expect("phase"),
+                entry["outcome"]["status"].as_str().expect("outcome status"),
+            )
+        })
+        .collect();
+    assert_eq!(
+        phases,
+        vec![
+            ("rpm:%preun", "pre-remove", "skipped"),
+            ("rpm:%pre", "pre-upgrade", "skipped"),
+            ("rpm:%postun", "post-remove", "skipped"),
+            ("rpm:%post", "post-upgrade", "skipped"),
+        ]
+    );
+}
+
+#[test]
+fn upgrade_transaction_failure_preserves_old_installed_bundle() {
+    let fixture = UpgradeFixture::new(
+        LegacyBundleFixture::UpgradeOldPreAndPostRemove,
+        LegacyBundleFixture::UpgradeNewPreAndPost,
+    );
+    let output = fixture.run_old_install(&[]);
+    assert_success(&output);
+    fixture.force_upgrade_transaction_failure();
+
+    let output = fixture.run_upgrade(&["--allow-legacy-replay"]);
+
+    assert_failure(&output);
+    assert_contains(&output, "forced upgrade transaction failure");
+    let conn = db::open(&fixture.db_path).expect("open db");
+    assert_eq!(table_count(&conn, "changesets"), 1);
+    assert_eq!(table_count(&conn, "troves"), 1);
+    assert_eq!(table_count(&conn, "installed_legacy_scriptlet_bundles"), 1);
+    assert_eq!(installed_versions(&conn), vec!["1.0.0".to_string()]);
+}
+
 struct InstallFixture {
     _temp: tempfile::TempDir,
     _package_temp: tempfile::TempDir,
@@ -515,6 +625,82 @@ impl InstallFixture {
     }
 }
 
+struct UpgradeFixture {
+    _temp: tempfile::TempDir,
+    _old_package_temp: tempfile::TempDir,
+    _new_package_temp: tempfile::TempDir,
+    old_package_path: std::path::PathBuf,
+    new_package_path: std::path::PathBuf,
+    db_path: std::path::PathBuf,
+    root: std::path::PathBuf,
+}
+
+impl UpgradeFixture {
+    fn new(old_case: LegacyBundleFixture, new_case: LegacyBundleFixture) -> Self {
+        let package_name = old_case.package_name();
+        let (_old_package_temp, old_package_path) =
+            build_ccs_package_fixture(package_name, "1.0.0", synthetic_legacy_bundle(old_case))
+                .expect("build old CCS fixture");
+        let (_new_package_temp, new_package_path) =
+            build_ccs_package_fixture(package_name, "2.0.0", synthetic_legacy_bundle(new_case))
+                .expect("build new CCS fixture");
+        let temp = tempfile::tempdir().expect("create test tempdir");
+        let db_path = temp.path().join("conary.db");
+        let root = temp.path().join("root");
+        std::fs::create_dir_all(&root).expect("create install root");
+        db::init(&db_path).expect("initialize db");
+
+        Self {
+            _temp: temp,
+            _old_package_temp,
+            _new_package_temp,
+            old_package_path,
+            new_package_path,
+            db_path,
+            root,
+        }
+    }
+
+    fn run_old_install(&self, extra_args: &[&str]) -> Output {
+        self.run_install_path(&self.old_package_path, extra_args)
+    }
+
+    fn run_upgrade(&self, extra_args: &[&str]) -> Output {
+        self.run_install_path(&self.new_package_path, extra_args)
+    }
+
+    fn run_install_path(&self, package_path: &std::path::Path, extra_args: &[&str]) -> Output {
+        let mut args = vec![
+            "--allow-live-system-mutation",
+            "ccs",
+            "install",
+            package_path.to_str().expect("utf-8 package path"),
+            "--allow-unsigned",
+            "--sandbox",
+            "never",
+            "--db-path",
+            self.db_path.to_str().expect("utf-8 db path"),
+            "--root",
+            self.root.to_str().expect("utf-8 root path"),
+        ];
+        args.extend_from_slice(extra_args);
+        run_conary(&args)
+    }
+
+    fn force_upgrade_transaction_failure(&self) {
+        let conn = db::open(&self.db_path).expect("open db");
+        conn.execute_batch(
+            "CREATE TRIGGER fail_upgrade_file_history
+             BEFORE INSERT ON file_history
+             WHEN NEW.action = 'modify'
+             BEGIN
+                 SELECT RAISE(FAIL, 'forced upgrade transaction failure');
+             END;",
+        )
+        .expect("install upgrade failure trigger");
+    }
+}
+
 fn build_ccs_package_fixture_with_pre_remove_hook(
     name: &str,
     version: &str,
@@ -589,6 +775,16 @@ fn table_count(conn: &rusqlite::Connection, table: &str) -> i64 {
 fn single_trove_id(conn: &rusqlite::Connection) -> i64 {
     conn.query_row("SELECT id FROM troves", [], |row| row.get(0))
         .expect("single installed trove")
+}
+
+fn installed_versions(conn: &rusqlite::Connection) -> Vec<String> {
+    let mut stmt = conn
+        .prepare("SELECT version FROM troves ORDER BY version")
+        .expect("prepare installed versions query");
+    stmt.query_map([], |row| row.get::<_, String>(0))
+        .expect("query installed versions")
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .expect("collect installed versions")
 }
 
 fn single_changeset_metadata(conn: &rusqlite::Connection) -> serde_json::Value {
