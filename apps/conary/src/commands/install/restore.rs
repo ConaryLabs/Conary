@@ -9,9 +9,9 @@ use super::resolve::{
 };
 use super::{
     ExtractionResult, InstallOptions, InstallPhase, InstallProgress, InstallSemantics,
-    PackageExecutionPath, PreScriptletState, ScriptletContext, TransactionContext,
-    build_resolution_policy, extract_and_classify_files, resolve_canonical_name,
-    run_pre_install_phase,
+    LegacyReplayInstallState, PackageExecutionPath, PreScriptletState, ScriptletContext,
+    TransactionContext, build_resolution_policy, extract_and_classify_files,
+    resolve_canonical_name, run_pre_install_phase,
 };
 use anyhow::{Context, Result};
 use conary_core::ccs::CcsPackage;
@@ -31,6 +31,8 @@ pub(crate) struct PreparedInstall {
     semantics: InstallSemantics,
     _temp_dir: Option<TempDir>,
     legacy_replay: super::LegacyReplayOptions,
+    #[allow(dead_code)]
+    legacy_replay_state: LegacyReplayInstallState,
 }
 
 pub(crate) struct PreparedInstallExecution {
@@ -265,6 +267,7 @@ pub(crate) async fn prepare_install_for_restore(
         semantics,
         _temp_dir: resolved._temp_dir,
         legacy_replay,
+        legacy_replay_state: LegacyReplayInstallState::default(),
     })
 }
 
@@ -329,6 +332,7 @@ pub(crate) fn install_prepared_inner(
         defer_generation: false,
         repository_provenance: None,
         legacy_replay: execution.legacy_replay,
+        accepted_legacy_bundle: None,
     };
     install_inner(
         tx,
@@ -452,7 +456,22 @@ mod tests {
             semantics: InstallSemantics::legacy(PackageFormatType::Rpm),
             _temp_dir: None,
             legacy_replay: crate::commands::LegacyReplayOptions::default(),
+            legacy_replay_state: super::super::LegacyReplayInstallState::default(),
         }
+    }
+
+    #[test]
+    fn prepared_restore_carries_legacy_replay_state() {
+        let prepared = prepared_restore_fixture(Vec::new());
+
+        assert!(prepared.legacy_replay_state.new_bundle_pre_plan.is_none());
+        assert!(prepared.legacy_replay_state.new_bundle_post_plan.is_none());
+        assert!(
+            prepared
+                .legacy_replay_state
+                .accepted_bundle_to_persist
+                .is_none()
+        );
     }
 
     #[test]

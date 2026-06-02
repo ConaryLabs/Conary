@@ -2,6 +2,9 @@
 
 //! Shared test utilities and helpers for integration tests.
 
+#[allow(dead_code)]
+pub mod legacy_scriptlet_fixtures;
+
 use conary_core::db;
 use conary_core::db::models::{
     Changeset, ChangesetStatus, Component, DependencyEntry, FileEntry, ProvideEntry, Trove,
@@ -30,6 +33,7 @@ pub fn create_test_db() -> (TempDir, String, rusqlite::Connection) {
 /// Create a test database with nginx and openssl packages.
 ///
 /// Returns (TempDir, db_path) - keep the TempDir alive to prevent cleanup.
+#[allow(dead_code)]
 pub fn setup_command_test_db() -> (TempDir, String) {
     let temp_dir = tempfile::tempdir().unwrap();
     let db_path = temp_dir
@@ -156,6 +160,7 @@ pub fn setup_command_test_db() -> (TempDir, String) {
     (temp_dir, db_path)
 }
 
+#[allow(dead_code)]
 fn stage_test_boot_assets(root: &std::path::Path) {
     let kernel_version = conary_core::generation::builder::detect_kernel_version_from_troves(&[])
         .unwrap_or_else(|| "test-kernel".to_string());
