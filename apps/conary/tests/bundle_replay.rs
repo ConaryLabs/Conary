@@ -6,9 +6,11 @@ use common::legacy_scriptlet_fixtures::{
     LegacyBundleFixture, build_ccs_package_fixture, synthetic_legacy_bundle,
 };
 use conary_core::ccs::CcsPackage;
+use conary_core::ccs::builder::{CcsBuilder, write_ccs_package};
 use conary_core::ccs::legacy_scriptlets::{LifecyclePath, ScriptletDecision, ScriptletFidelity};
+use conary_core::ccs::manifest::{CcsManifest, ScriptHook};
 use conary_core::db;
-use conary_core::db::models::InstalledLegacyScriptletBundle;
+use conary_core::db::models::{InstalledLegacyScriptletBundle, ScriptletEntry};
 use conary_core::packages::PackageFormat;
 use std::process::{Command, Output};
 
@@ -188,6 +190,27 @@ fn ccs_install_dry_run_with_accepted_future_bundle_persists_no_installed_bundle(
     fixture.assert_no_install_mutation();
 }
 
+#[test]
+fn ccs_install_with_legacy_bundle_does_not_persist_flattened_pre_remove_hook() {
+    let fixture = InstallFixture::new_replaced_pre_remove_with_hook();
+    let output = fixture.run_install(&[]);
+
+    assert_success(&output);
+
+    let conn = db::open(&fixture.db_path).expect("open db");
+    let trove_id = single_trove_id(&conn);
+    let installed = InstalledLegacyScriptletBundle::find_by_trove(&conn, trove_id)
+        .expect("load installed legacy bundle");
+    assert!(installed.is_some(), "installed bundle row should exist");
+
+    let scriptlets =
+        ScriptletEntry::find_by_trove(&conn, trove_id).expect("load flattened scriptlet entries");
+    assert!(
+        scriptlets.is_empty(),
+        "bundle-covered CCS hooks must not be flattened into scriptlets: {scriptlets:?}"
+    );
+}
+
 struct InstallFixture {
     _temp: tempfile::TempDir,
     _package_temp: tempfile::TempDir,
@@ -198,15 +221,41 @@ struct InstallFixture {
 
 impl InstallFixture {
     fn new(case: LegacyBundleFixture) -> Self {
+        let (_package_temp, package_path) =
+            build_ccs_package_fixture(case.package_name(), "1.0.0", synthetic_legacy_bundle(case))
+                .expect("build CCS fixture");
+        Self::from_package(_package_temp, package_path)
+    }
+
+    fn new_replaced_pre_remove_with_hook() -> Self {
+        let mut bundle =
+            synthetic_legacy_bundle(LegacyBundleFixture::ReplacedOnly).expect("replaced bundle");
+        bundle.source_package = "legacy-fixture-replaced-remove".to_string();
+        if let Some(entry) = bundle.entries.first_mut() {
+            entry.id = "rpm:%preun".to_string();
+            entry.native_slot = "%preun".to_string();
+            entry.phase = LifecyclePath::PreRemove;
+            entry.lifecycle_paths = vec!["remove:pre".to_string()];
+            entry.transaction_order.position = "before-payload".to_string();
+        }
+        bundle.validate().expect("mutated fixture bundle validates");
+
+        let (_package_temp, package_path) = build_ccs_package_fixture_with_pre_remove_hook(
+            "legacy-fixture-replaced-remove",
+            "1.0.0",
+            Some(bundle),
+            "echo replaced pre-remove hook\n",
+        )
+        .expect("build CCS fixture with pre-remove hook");
+        Self::from_package(_package_temp, package_path)
+    }
+
+    fn from_package(_package_temp: tempfile::TempDir, package_path: std::path::PathBuf) -> Self {
         let temp = tempfile::tempdir().expect("create test tempdir");
         let db_path = temp.path().join("conary.db");
         let root = temp.path().join("root");
         std::fs::create_dir_all(&root).expect("create install root");
         db::init(&db_path).expect("initialize db");
-
-        let (_package_temp, package_path) =
-            build_ccs_package_fixture(case.package_name(), "1.0.0", synthetic_legacy_bundle(case))
-                .expect("build CCS fixture");
 
         Self {
             _temp: temp,
@@ -269,6 +318,29 @@ impl InstallFixture {
             );
         }
     }
+}
+
+fn build_ccs_package_fixture_with_pre_remove_hook(
+    name: &str,
+    version: &str,
+    bundle: Option<conary_core::ccs::legacy_scriptlets::LegacyScriptletBundle>,
+    pre_remove_script: &str,
+) -> anyhow::Result<(tempfile::TempDir, std::path::PathBuf)> {
+    let temp = tempfile::tempdir()?;
+    let source_dir = temp.path().join("src");
+    std::fs::create_dir_all(source_dir.join("usr/bin"))?;
+    std::fs::write(source_dir.join("usr/bin/fixture"), b"fixture\n")?;
+
+    let mut manifest = CcsManifest::new_minimal(name, version);
+    manifest.legacy_scriptlets = bundle;
+    manifest.hooks.pre_remove = Some(ScriptHook {
+        script: pre_remove_script.to_string(),
+    });
+
+    let result = CcsBuilder::new(manifest, &source_dir).build()?;
+    let package_path = temp.path().join(format!("{name}.ccs"));
+    write_ccs_package(&result, &package_path)?;
+    Ok((temp, package_path))
 }
 
 fn run_conary(args: &[&str]) -> Output {
