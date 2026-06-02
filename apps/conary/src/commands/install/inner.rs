@@ -10,8 +10,8 @@
 use anyhow::{Context, Result, anyhow};
 use conary_core::components::ComponentType;
 use conary_core::db::models::{
-    Component, ConfigFile, ConfigSource, DependencyEntry, FileEntry, InstallSource, ProvideEntry,
-    ScriptletEntry, Trove,
+    Component, ConfigFile, ConfigSource, DependencyEntry, FileEntry, InstallSource,
+    InstalledLegacyScriptletBundle, ProvideEntry, ScriptletEntry, Trove,
 };
 use conary_core::dependencies::DependencyClass;
 use conary_core::transaction::TransactionEngine;
@@ -155,6 +155,18 @@ pub(super) fn install_inner_with_stored_files(
         }
 
         let trove_id = trove.insert(tx)?;
+
+        if let Some(bundle) = ctx.accepted_legacy_bundle {
+            let mut installed_bundle = InstalledLegacyScriptletBundle::new(
+                trove_id,
+                Some(changeset_id),
+                bundle.target_id.clone(),
+                bundle.replay_policy.clone(),
+                bundle.replay_enabled,
+                &bundle.bundle,
+            )?;
+            installed_bundle.insert_or_replace(tx)?;
+        }
 
         let mut path_to_component: HashMap<&str, i64> = HashMap::new();
         if let (Some(component_names), Some(component_names_by_path)) = (
