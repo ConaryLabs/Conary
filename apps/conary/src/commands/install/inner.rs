@@ -246,30 +246,35 @@ pub(super) fn install_inner_with_stored_files(
             dep_entry.insert(tx)?;
         }
 
-        for scriptlet in scriptlets {
-            let mut entry = ScriptletEntry::with_flags(
-                trove_id,
-                scriptlet.phase.to_string(),
-                scriptlet.interpreter.clone(),
-                scriptlet.content.clone(),
-                scriptlet.flags.clone(),
-                match ctx.semantics.source {
-                    super::PreparedSourceKind::Legacy { format } => format.as_str(),
-                    super::PreparedSourceKind::Ccs => "ccs",
-                },
-            );
-            entry.insert(tx)?;
-        }
+        // Bundle-carrying CCS installs use installed_legacy_scriptlet_bundles
+        // as the remove/upgrade authority instead of the flattened scriptlets table.
+        let persist_flattened_scriptlets = ctx.accepted_legacy_bundle.is_none();
+        if persist_flattened_scriptlets {
+            for scriptlet in scriptlets {
+                let mut entry = ScriptletEntry::with_flags(
+                    trove_id,
+                    scriptlet.phase.to_string(),
+                    scriptlet.interpreter.clone(),
+                    scriptlet.content.clone(),
+                    scriptlet.flags.clone(),
+                    match ctx.semantics.source {
+                        super::PreparedSourceKind::Legacy { format } => format.as_str(),
+                        super::PreparedSourceKind::Ccs => "ccs",
+                    },
+                );
+                entry.insert(tx)?;
+            }
 
-        if let Some(script) = extraction.ccs_pre_remove_script.as_deref() {
-            let mut entry = ScriptletEntry::new(
-                trove_id,
-                "pre-remove".to_string(),
-                "/bin/sh".to_string(),
-                script.to_string(),
-                "ccs",
-            );
-            entry.insert(tx)?;
+            if let Some(script) = extraction.ccs_pre_remove_script.as_deref() {
+                let mut entry = ScriptletEntry::new(
+                    trove_id,
+                    "pre-remove".to_string(),
+                    "/bin/sh".to_string(),
+                    script.to_string(),
+                    "ccs",
+                );
+                entry.insert(tx)?;
+            }
         }
 
         for lang_dep in language_provides {
