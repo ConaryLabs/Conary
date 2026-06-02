@@ -107,6 +107,8 @@ pub(crate) struct LegacyReplayAuditContext {
     pub evidence_digest: Option<String>,
 }
 
+const LEGACY_REPLAY_POLICY: &str = "goal6-safe-replay";
+
 fn plan_ccs_fresh_install_legacy_replay(
     bundle: Option<&conary_core::ccs::legacy_scriptlets::LegacyScriptletBundle>,
     opts: &CcsTransactionInstallOptions<'_>,
@@ -141,6 +143,12 @@ fn plan_ccs_fresh_install_legacy_replay(
     Ok(LegacyReplayInstallState {
         new_bundle_pre_plan: plan_from_preflight(pre)?,
         new_bundle_post_plan: plan_from_preflight(post)?,
+        accepted_bundle_to_persist: Some(AcceptedLegacyBundleInstall {
+            bundle: bundle.clone(),
+            target_id: target_id.clone(),
+            replay_policy: LEGACY_REPLAY_POLICY.to_string(),
+            replay_enabled: opts.legacy_replay.allow_legacy_replay,
+        }),
         audit: Some(LegacyReplayAuditContext {
             target_id: target_id.clone(),
             source_target_id: target_id,
@@ -2662,7 +2670,7 @@ pub(crate) fn install_ccs_package_transactionally(
         defer_generation: opts.defer_generation,
         repository_provenance: opts.repository_provenance,
         legacy_replay: opts.legacy_replay,
-        accepted_legacy_bundle: None,
+        accepted_legacy_bundle: legacy_replay_state.accepted_bundle_to_persist.as_ref(),
     };
     let tx_result = match execute_install_transaction(conn, pkg, &extraction, &tx_ctx, &progress) {
         Ok(result) => result,

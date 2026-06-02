@@ -8,6 +8,7 @@ use common::legacy_scriptlet_fixtures::{
 use conary_core::ccs::CcsPackage;
 use conary_core::ccs::legacy_scriptlets::{LifecyclePath, ScriptletDecision, ScriptletFidelity};
 use conary_core::db;
+use conary_core::db::models::InstalledLegacyScriptletBundle;
 use conary_core::packages::PackageFormat;
 use std::process::{Command, Output};
 
@@ -147,6 +148,46 @@ fn ccs_install_dry_run_runs_legacy_bundle_admission_before_returning() {
     fixture.assert_no_install_mutation();
 }
 
+#[test]
+fn ccs_install_persists_future_legacy_bundle_for_later_lifecycle() {
+    let fixture = InstallFixture::new(LegacyBundleFixture::FutureLegacyPostRemove);
+    let output = fixture.run_install(&[]);
+
+    assert_success(&output);
+    assert!(!output_text(&output).contains("replay-post-remove"));
+
+    let conn = db::open(&fixture.db_path).expect("open db");
+    let trove_id = single_trove_id(&conn);
+    let installed = InstalledLegacyScriptletBundle::find_by_trove(&conn, trove_id)
+        .expect("load installed legacy bundle")
+        .expect("installed bundle row exists");
+
+    assert_eq!(installed.source_package, "legacy-fixture-remove");
+    assert_eq!(installed.source_version, "1.0.0-1.fc44");
+    assert_eq!(installed.target_id, "rpm/fedora/44/x86_64");
+    assert_eq!(installed.target_compatibility, "source-native");
+    assert_eq!(installed.foreign_replay_policy, "deny");
+    assert_eq!(installed.scriptlet_fidelity, "legacy-replay");
+    assert_eq!(installed.publication_status, "public");
+    assert_eq!(installed.replay_policy, "goal6-safe-replay");
+    assert!(!installed.replay_enabled);
+    assert_eq!(installed.installed_changeset_id, Some(1));
+
+    let decoded = installed.bundle().expect("decode installed bundle");
+    assert_eq!(decoded.entries.len(), 1);
+    assert_eq!(decoded.entries[0].phase, LifecyclePath::PostRemove);
+    assert_eq!(decoded.entries[0].decision, ScriptletDecision::Legacy);
+}
+
+#[test]
+fn ccs_install_dry_run_with_accepted_future_bundle_persists_no_installed_bundle() {
+    let fixture = InstallFixture::new(LegacyBundleFixture::FutureLegacyPostRemove);
+    let output = fixture.run_dry_run(&[]);
+
+    assert_success(&output);
+    fixture.assert_no_install_mutation();
+}
+
 struct InstallFixture {
     _temp: tempfile::TempDir,
     _package_temp: tempfile::TempDir,
@@ -246,6 +287,14 @@ fn assert_failure(output: &Output) {
     );
 }
 
+fn assert_success(output: &Output) {
+    assert!(
+        output.status.success(),
+        "expected success, got failure\n{}",
+        output_text(output)
+    );
+}
+
 fn assert_contains(output: &Output, expected: &str) {
     let text = output_text(output);
     assert!(
@@ -268,6 +317,11 @@ fn table_count(conn: &rusqlite::Connection, table: &str) -> i64 {
         row.get(0)
     })
     .expect("count table rows")
+}
+
+fn single_trove_id(conn: &rusqlite::Connection) -> i64 {
+    conn.query_row("SELECT id FROM troves", [], |row| row.get(0))
+        .expect("single installed trove")
 }
 
 fn is_safe_table_name(table: &str) -> bool {
