@@ -13,8 +13,8 @@ use super::dep_mode::DepMode;
 use super::dep_resolution;
 use super::resolve::check_provides_dependencies;
 use super::{
-    CcsTransactionInstallOptions, ComponentSelection, RepositoryInstallProvenance,
-    repository_install_provenance_from_package,
+    CcsTransactionInstallOptions, ComponentSelection, LegacyReplayOptions,
+    RepositoryInstallProvenance, repository_install_provenance_from_package,
 };
 use anyhow::{Context, Result};
 use conary_core::capability::inference::InferenceOptions;
@@ -306,6 +306,7 @@ pub struct ConvertedCcsInstallOptions<'a> {
     pub yes: bool,
     pub dependency_passes_remaining: usize,
     pub repository_provenance: Option<RepositoryInstallProvenance>,
+    pub legacy_replay: LegacyReplayOptions,
 }
 
 /// Attempt to convert a legacy package to CCS format
@@ -499,6 +500,7 @@ async fn install_converted_ccs_with_pending(
         yes,
         dependency_passes_remaining,
         repository_provenance,
+        legacy_replay,
     } = opts;
 
     let ccs_pkg = CcsPackage::parse(ccs_path).context("Failed to parse converted CCS package")?;
@@ -670,6 +672,7 @@ async fn install_converted_ccs_with_pending(
                                         repository_provenance: provenance_by_dep
                                             .get(dep_name)
                                             .cloned(),
+                                        legacy_replay,
                                     },
                                     child_pending_providers,
                                     true,
@@ -719,8 +722,13 @@ async fn install_converted_ccs_with_pending(
                         }
 
                         if !prepared_packages.is_empty() {
-                            let installer =
-                                BatchInstaller::new(db_path, root, sandbox_mode, no_scripts);
+                            let installer = BatchInstaller::new(
+                                db_path,
+                                root,
+                                sandbox_mode,
+                                no_scripts,
+                                legacy_replay,
+                            );
                             installer.install_batch(prepared_packages)?;
                         }
                     }
@@ -771,6 +779,7 @@ async fn install_converted_ccs_with_pending(
             component_selection: ComponentSelection::All,
             selected_manifest_components: None,
             repository_provenance,
+            legacy_replay,
         },
     )?;
     Ok(())
@@ -1041,6 +1050,7 @@ mod tests {
             yes: true,
             dependency_passes_remaining: 0,
             repository_provenance: None,
+            legacy_replay: LegacyReplayOptions::default(),
         })
         .await
         .unwrap();
@@ -1080,6 +1090,7 @@ mod tests {
             yes: true,
             dependency_passes_remaining: 0,
             repository_provenance: None,
+            legacy_replay: LegacyReplayOptions::default(),
         })
         .await
         .unwrap();
@@ -1183,6 +1194,7 @@ mod tests {
             yes: true,
             dependency_passes_remaining: 0,
             repository_provenance: None,
+            legacy_replay: LegacyReplayOptions::default(),
         })
         .await
         .unwrap_err();
@@ -1290,6 +1302,7 @@ mod tests {
             yes: true,
             dependency_passes_remaining: 0,
             repository_provenance: None,
+            legacy_replay: LegacyReplayOptions::default(),
         })
         .await
         .unwrap_err();
@@ -1349,6 +1362,7 @@ mod tests {
             yes: true,
             dependency_passes_remaining: 0,
             repository_provenance: None,
+            legacy_replay: LegacyReplayOptions::default(),
         })
         .await
         .unwrap_err();

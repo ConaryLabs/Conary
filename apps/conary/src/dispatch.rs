@@ -104,6 +104,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                         yes,
                         from_distro: from,
                         repository_provenance: None,
+                        legacy_replay: commands::LegacyReplayOptions::default(),
                     },
                 )
                 .await
@@ -134,6 +135,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 no_scripts,
                 sandbox.into(),
                 purge_files,
+                commands::LegacyReplayOptions::default(),
             )
             .await
         }
@@ -250,6 +252,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 dry_run,
                 no_scripts,
                 sandbox.into(),
+                commands::LegacyReplayOptions::default(),
             )
             .await
         }

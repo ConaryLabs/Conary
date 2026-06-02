@@ -68,6 +68,12 @@ use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use tracing::{debug, info, warn};
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct LegacyReplayOptions {
+    pub allow_legacy_replay: bool,
+    pub allow_foreign_legacy_replay: bool,
+}
+
 /// Options for package installation
 #[derive(Debug, Clone, Default)]
 pub struct InstallOptions<'a> {
@@ -113,6 +119,8 @@ pub struct InstallOptions<'a> {
     /// Repository provenance supplied by an internal caller that already
     /// selected and downloaded the package before calling `cmd_install`.
     pub(crate) repository_provenance: Option<RepositoryInstallProvenance>,
+    /// Raw legacy scriptlet replay admission flags. Defaults fail closed.
+    pub legacy_replay: LegacyReplayOptions,
 }
 
 pub(crate) struct CcsTransactionInstallOptions<'a> {
@@ -128,6 +136,7 @@ pub(crate) struct CcsTransactionInstallOptions<'a> {
     pub component_selection: ComponentSelection,
     pub selected_manifest_components: Option<Vec<String>>,
     pub repository_provenance: Option<RepositoryInstallProvenance>,
+    pub legacy_replay: LegacyReplayOptions,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -510,6 +519,7 @@ pub async fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> 
         yes,
         from_distro,
         repository_provenance: requested_repository_provenance,
+        legacy_replay,
     } = opts;
 
     // Hint if source policy is unconfigured (first-run guidance)
@@ -579,6 +589,7 @@ pub async fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> 
         dep_mode: Some(effective_dep_mode),
         yes,
         repository_provenance: requested_repository_provenance,
+        legacy_replay,
     };
 
     let Some((pkg, format, repository_provenance)) = resolve_and_parse_package(
@@ -620,6 +631,7 @@ pub async fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> 
         root,
         sandbox_mode,
         no_scripts,
+        legacy_replay,
         policy: &policy,
         execution_path,
     };
@@ -670,6 +682,7 @@ pub async fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> 
         execution_path,
         defer_generation: false,
         repository_provenance,
+        legacy_replay,
     };
     let tx_result =
         execute_install_transaction(&mut conn, pkg.as_ref(), &extraction, &tx_ctx, &progress)?;
@@ -704,6 +717,7 @@ struct CcsInstallParams<'a> {
     dep_mode: Option<DepMode>,
     yes: bool,
     repository_provenance: Option<RepositoryInstallProvenance>,
+    legacy_replay: LegacyReplayOptions,
 }
 
 /// Context for the dependency analysis phase.
@@ -720,6 +734,7 @@ struct DepAnalysisContext<'a> {
     root: &'a str,
     sandbox_mode: SandboxMode,
     no_scripts: bool,
+    legacy_replay: LegacyReplayOptions,
     policy: &'a conary_core::repository::resolution_policy::ResolutionPolicy,
     execution_path: PackageExecutionPath,
 }
@@ -765,6 +780,7 @@ struct TransactionContext<'a> {
     execution_path: PackageExecutionPath,
     defer_generation: bool,
     repository_provenance: Option<RepositoryInstallProvenance>,
+    legacy_replay: LegacyReplayOptions,
 }
 
 /// Result from a successful transaction execution.
@@ -1072,6 +1088,7 @@ async fn resolve_and_parse_package(
             dependency_passes_remaining: DEFAULT_CCS_DEPENDENCY_PASSES,
             repository_provenance: install_provenance_from_resolved(&resolved)
                 .or_else(|| ccs_opts.repository_provenance.clone()),
+            legacy_replay: ccs_opts.legacy_replay,
         })
         .await?;
         return Ok(None);
@@ -1099,6 +1116,7 @@ async fn resolve_and_parse_package(
             dependency_passes_remaining: DEFAULT_CCS_DEPENDENCY_PASSES,
             repository_provenance: install_provenance_from_resolved(&resolved)
                 .or_else(|| ccs_opts.repository_provenance.clone()),
+            legacy_replay: ccs_opts.legacy_replay,
         })
         .await?;
         return Ok(None);
@@ -1140,6 +1158,7 @@ async fn resolve_and_parse_package(
                     dependency_passes_remaining: DEFAULT_CCS_DEPENDENCY_PASSES,
                     repository_provenance: install_provenance_from_resolved(&resolved)
                         .or_else(|| ccs_opts.repository_provenance.clone()),
+                    legacy_replay: ccs_opts.legacy_replay,
                 })
                 .await?;
                 return Ok(None);
@@ -1458,6 +1477,7 @@ async fn handle_dep_installs(
                         ctx.root,
                         ctx.sandbox_mode,
                         ctx.no_scripts,
+                        ctx.legacy_replay,
                     )
                     .with_preflighted_execution_path(ctx.execution_path);
                     installer.install_batch(prepared_packages)?;
@@ -2017,6 +2037,7 @@ fn execute_install_transaction(
     ctx: &TransactionContext<'_>,
     progress: &InstallProgress,
 ) -> Result<InstallTransactionResult> {
+    let _legacy_replay = ctx.legacy_replay;
     if ctx.execution_path == PackageExecutionPath::MutableLiveRoot {
         inner::preflight_live_root_file_ownership(
             conn,
@@ -2337,6 +2358,7 @@ pub(crate) fn install_ccs_package_transactionally(
         execution_path,
         defer_generation: opts.defer_generation,
         repository_provenance: opts.repository_provenance,
+        legacy_replay: opts.legacy_replay,
     };
     let tx_result = match execute_install_transaction(conn, pkg, &extraction, &tx_ctx, &progress) {
         Ok(result) => result,
@@ -2655,6 +2677,50 @@ mod tests {
     use super::*;
 
     #[test]
+    fn legacy_replay_options_default_disabled_for_install_surfaces() {
+        let default_replay = LegacyReplayOptions::default();
+        assert!(!default_replay.allow_legacy_replay);
+        assert!(!default_replay.allow_foreign_legacy_replay);
+
+        let install_opts = InstallOptions::default();
+        assert_eq!(install_opts.legacy_replay, default_replay);
+
+        let transaction_opts = CcsTransactionInstallOptions {
+            db_path: "/tmp/conary.db",
+            root: "/",
+            dry_run: true,
+            defer_generation: false,
+            no_scripts: false,
+            sandbox_mode: SandboxMode::None,
+            allow_downgrade: false,
+            reinstall: false,
+            selection_reason: None,
+            component_selection: ComponentSelection::Defaults,
+            selected_manifest_components: None,
+            repository_provenance: None,
+            legacy_replay: default_replay,
+        };
+        assert_eq!(transaction_opts.legacy_replay, default_replay);
+
+        let converted_opts = conversion::ConvertedCcsInstallOptions {
+            ccs_path: "/tmp/pkg.ccs",
+            db_path: "/tmp/conary.db",
+            root: "/",
+            dry_run: true,
+            sandbox_mode: SandboxMode::None,
+            no_deps: true,
+            no_scripts: false,
+            allow_downgrade: false,
+            dep_mode: None,
+            yes: true,
+            dependency_passes_remaining: 0,
+            repository_provenance: None,
+            legacy_replay: default_replay,
+        };
+        assert_eq!(converted_opts.legacy_replay, default_replay);
+    }
+
+    #[test]
     fn no_generation_install_transaction_materializes_live_root_file() {
         use conary_core::db::models::{Changeset, ChangesetStatus, FileEntry, Trove, TroveType};
         use conary_core::packages::traits::{
@@ -2749,6 +2815,7 @@ mod tests {
             execution_path: PackageExecutionPath::MutableLiveRoot,
             defer_generation: false,
             repository_provenance: None,
+            legacy_replay: LegacyReplayOptions::default(),
         };
 
         let result = execute_install_transaction(
@@ -2897,6 +2964,7 @@ mod tests {
             execution_path: PackageExecutionPath::MutableLiveRoot,
             defer_generation: false,
             repository_provenance: None,
+            legacy_replay: LegacyReplayOptions::default(),
         };
 
         let error = match execute_install_transaction(

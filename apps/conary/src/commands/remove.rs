@@ -3,7 +3,10 @@
 
 use super::open_db;
 use super::progress::{RemovePhase, RemoveProgress};
-use super::{FileSnapshot, InstalledPackageSelector, TroveSnapshot, resolve_installed_package};
+use super::{
+    FileSnapshot, InstalledPackageSelector, LegacyReplayOptions, TroveSnapshot,
+    resolve_installed_package,
+};
 use anyhow::{Context, Result};
 use conary_core::db::models::{FileEntry, ScriptletEntry, Trove};
 use conary_core::scriptlet::{
@@ -73,6 +76,7 @@ pub async fn cmd_remove(
     no_scripts: bool,
     sandbox_mode: SandboxMode,
     purge_files: bool,
+    _legacy_replay: LegacyReplayOptions,
 ) -> Result<()> {
     info!("Removing package: {}", package_name);
     println!("Removing package: {}", package_name);
@@ -699,6 +703,7 @@ pub async fn cmd_autoremove(
     dry_run: bool,
     no_scripts: bool,
     sandbox_mode: SandboxMode,
+    legacy_replay: LegacyReplayOptions,
 ) -> Result<()> {
     info!("Finding orphaned packages...");
 
@@ -771,6 +776,7 @@ pub async fn cmd_autoremove(
                 no_scripts,
                 sandbox_mode,
                 false,
+                legacy_replay,
             )
             .await
             {
@@ -1036,6 +1042,7 @@ mod tests {
             true,
             SandboxMode::None,
             false,
+            LegacyReplayOptions::default(),
         )
         .await
         .unwrap();
@@ -1088,6 +1095,7 @@ mod tests {
             true,
             SandboxMode::None,
             false,
+            LegacyReplayOptions::default(),
         )
         .await
         .unwrap_err()
@@ -1139,6 +1147,7 @@ mod tests {
             true,
             SandboxMode::None,
             false,
+            LegacyReplayOptions::default(),
         )
         .await
         .unwrap_err()
@@ -1196,6 +1205,7 @@ mod tests {
             true,
             SandboxMode::None,
             false,
+            LegacyReplayOptions::default(),
         )
         .await
         .unwrap_err()

@@ -854,6 +854,7 @@ pub async fn cmd_ccs_install(
                 component_selection,
                 selected_manifest_components: Some(selected_components.names.clone()),
                 repository_provenance: None,
+                legacy_replay: super::super::install::LegacyReplayOptions::default(),
             },
         )?;
         return Ok(());
@@ -881,6 +882,7 @@ pub async fn cmd_ccs_install(
             component_selection,
             selected_manifest_components: Some(selected_components.names.clone()),
             repository_provenance: None,
+            legacy_replay: super::super::install::LegacyReplayOptions::default(),
         },
     )?;
     let _changeset_id = tx_result.changeset_id;

@@ -407,8 +407,8 @@ mod tests {
     use super::*;
     use crate::commands::PackageFormatType;
     use crate::commands::install::{
-        ExtractionResult, InstallSemantics, PackageExecutionPath, RepositoryInstallProvenance,
-        TransactionContext,
+        ExtractionResult, InstallSemantics, LegacyReplayOptions, PackageExecutionPath,
+        RepositoryInstallProvenance, TransactionContext,
     };
     use conary_core::db::models::{
         Changeset, ConfigFile, ConfigSource, FileEntry, Repository, Trove, TroveType,
@@ -554,6 +554,7 @@ mod tests {
             execution_path: PackageExecutionPath::MutableLiveRoot,
             defer_generation: false,
             repository_provenance: None,
+            legacy_replay: LegacyReplayOptions::default(),
         };
         let tx_config = TransactionConfig::from_paths(root.clone(), db_path.clone());
         let mut engine = TransactionEngine::new(tx_config).unwrap();
@@ -669,6 +670,7 @@ mod tests {
             execution_path: PackageExecutionPath::MutableLiveRoot,
             defer_generation: false,
             repository_provenance: None,
+            legacy_replay: LegacyReplayOptions::default(),
         };
         let tx_config = TransactionConfig::from_paths(root.clone(), db_path.clone());
         let mut engine = TransactionEngine::new(tx_config).unwrap();
@@ -750,6 +752,7 @@ mod tests {
                 source_distro: Some("fedora".to_string()),
                 version_scheme: Some("rpm".to_string()),
             }),
+            legacy_replay: LegacyReplayOptions::default(),
         };
         let tx_config = TransactionConfig::from_paths(root.clone(), db_path.clone());
         let mut engine = TransactionEngine::new(tx_config).unwrap();

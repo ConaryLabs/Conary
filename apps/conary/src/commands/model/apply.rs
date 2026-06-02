@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use crate::commands::replatform_rendering::render_replatform_blocked_reason;
-use crate::commands::{InstallOptions, SandboxMode, cmd_install, cmd_remove};
+use crate::commands::{InstallOptions, LegacyReplayOptions, SandboxMode, cmd_install, cmd_remove};
 use anyhow::{Context, Result, anyhow};
 use conary_core::db::models::{
     DerivedOverride, DerivedPackage, DerivedPatch, DistroPin, Repository, Trove, VersionPolicy,
@@ -192,6 +192,7 @@ pub(super) async fn apply_replatform_changes(
                 yes: true,
                 from_distro: None,
                 repository_provenance: None,
+                legacy_replay: LegacyReplayOptions::default(),
             },
         )
         .await
@@ -409,6 +410,7 @@ pub(super) async fn apply_package_changes(
                     false,
                     SandboxMode::Always,
                     false,
+                    LegacyReplayOptions::default(),
                 )
                 .await
                 {
@@ -466,6 +468,7 @@ pub(super) async fn apply_package_changes(
                         yes: true,
                         from_distro: None,
                         repository_provenance: None,
+                        legacy_replay: LegacyReplayOptions::default(),
                     },
                 )
                 .await
@@ -514,6 +517,7 @@ pub(super) async fn apply_package_changes(
                         yes: true,
                         from_distro: None,
                         repository_provenance: None,
+                        legacy_replay: LegacyReplayOptions::default(),
                     },
                 )
                 .await
