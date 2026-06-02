@@ -24,6 +24,8 @@ pub enum LegacyBundleFixture {
     SameSourceLegacyPostInstall,
     FutureLegacyPostRemove,
     FutureLegacyPreAndPostRemove,
+    UpgradeOldPreAndPostRemove,
+    UpgradeNewPreAndPost,
     RawTriggerLegacy,
     UnsupportedNativeInvocation,
 }
@@ -40,6 +42,9 @@ impl LegacyBundleFixture {
             Self::SameSourceLegacyPostInstall => "legacy-fixture-post",
             Self::FutureLegacyPostRemove => "legacy-fixture-remove",
             Self::FutureLegacyPreAndPostRemove => "legacy-fixture-remove-both",
+            Self::UpgradeOldPreAndPostRemove | Self::UpgradeNewPreAndPost => {
+                "legacy-fixture-upgrade"
+            }
             Self::RawTriggerLegacy => "legacy-fixture-trigger",
             Self::UnsupportedNativeInvocation => "legacy-fixture-unsupported-native",
         }
@@ -127,6 +132,42 @@ pub fn synthetic_legacy_bundle(case: LegacyBundleFixture) -> Option<LegacyScript
                     LifecyclePath::PostRemove,
                     ScriptletDecision::Legacy,
                     "echo replay-post-remove\n",
+                ),
+            ],
+        )),
+        LegacyBundleFixture::UpgradeOldPreAndPostRemove => Some(bundle_fixture(
+            case,
+            ScriptletFidelity::LegacyReplay,
+            vec![
+                entry_fixture(
+                    "rpm:%preun",
+                    LifecyclePath::PreRemove,
+                    ScriptletDecision::Legacy,
+                    "echo replay-upgrade-old-pre-remove\n",
+                ),
+                entry_fixture(
+                    "rpm:%postun",
+                    LifecyclePath::PostRemove,
+                    ScriptletDecision::Legacy,
+                    "echo replay-upgrade-old-post-remove\n",
+                ),
+            ],
+        )),
+        LegacyBundleFixture::UpgradeNewPreAndPost => Some(bundle_fixture(
+            case,
+            ScriptletFidelity::LegacyReplay,
+            vec![
+                entry_fixture(
+                    "rpm:%pre",
+                    LifecyclePath::PreUpgrade,
+                    ScriptletDecision::Legacy,
+                    "echo replay-upgrade-new-pre\n",
+                ),
+                entry_fixture(
+                    "rpm:%post",
+                    LifecyclePath::PostUpgrade,
+                    ScriptletDecision::Legacy,
+                    "echo replay-upgrade-new-post\n",
                 ),
             ],
         )),

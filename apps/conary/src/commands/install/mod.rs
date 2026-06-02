@@ -53,7 +53,8 @@ use conary_core::components::{
     ComponentClassifier, ComponentType, parse_component_spec, should_run_scriptlets,
 };
 use conary_core::db::models::{
-    Changeset, ChangesetStatus, DerivedPackage, Repository, RepositoryPackage,
+    Changeset, ChangesetStatus, DerivedPackage, InstalledLegacyScriptletBundle, Repository,
+    RepositoryPackage,
 };
 use conary_core::db::paths::keyring_dir;
 use conary_core::dependencies::{DependencyClass, LanguageDepDetector};
@@ -81,6 +82,7 @@ pub(crate) struct LegacyReplayInstallState {
     pub new_bundle_post_plan: Option<conary_core::ccs::legacy_replay::LegacyReplayPlan>,
     pub old_bundle_pre_remove_plan: Option<conary_core::ccs::legacy_replay::LegacyReplayPlan>,
     pub old_bundle_post_remove_plan: Option<conary_core::ccs::legacy_replay::LegacyReplayPlan>,
+    pub old_bundle_to_replay: Option<conary_core::ccs::legacy_scriptlets::LegacyScriptletBundle>,
     pub accepted_bundle_to_persist: Option<AcceptedLegacyBundleInstall>,
     pub audit: Option<LegacyReplayAuditContext>,
 }
@@ -112,6 +114,7 @@ const LEGACY_REPLAY_POLICY: &str = "goal6-safe-replay";
 fn plan_ccs_fresh_install_legacy_replay(
     bundle: Option<&conary_core::ccs::legacy_scriptlets::LegacyScriptletBundle>,
     opts: &CcsTransactionInstallOptions<'_>,
+    is_upgrade: bool,
 ) -> Result<LegacyReplayInstallState> {
     use conary_core::ccs::legacy_replay::{
         HostForeignReplayPolicy, LegacyReplayLifecycle, LegacyReplayPolicyInput, plan_legacy_replay,
@@ -132,12 +135,20 @@ fn plan_ccs_fresh_install_legacy_replay(
         target: target.as_target(),
     };
 
-    let pre = plan_legacy_replay(Some(bundle), LegacyReplayLifecycle::FreshInstallPre, &input)?;
-    let post = plan_legacy_replay(
-        Some(bundle),
-        LegacyReplayLifecycle::FreshInstallPost,
-        &input,
-    )?;
+    let (pre_lifecycle, post_lifecycle) = if is_upgrade {
+        (
+            LegacyReplayLifecycle::UpgradeNewPre,
+            LegacyReplayLifecycle::UpgradeNewPost,
+        )
+    } else {
+        (
+            LegacyReplayLifecycle::FreshInstallPre,
+            LegacyReplayLifecycle::FreshInstallPost,
+        )
+    };
+
+    let pre = plan_legacy_replay(Some(bundle), pre_lifecycle, &input)?;
+    let post = plan_legacy_replay(Some(bundle), post_lifecycle, &input)?;
 
     let target_id = target.to_id();
     Ok(LegacyReplayInstallState {
@@ -161,6 +172,80 @@ fn plan_ccs_fresh_install_legacy_replay(
         }),
         ..LegacyReplayInstallState::default()
     })
+}
+
+fn plan_ccs_old_installed_upgrade_legacy_replay(
+    conn: &rusqlite::Connection,
+    old_trove: Option<&conary_core::db::models::Trove>,
+    opts: &CcsTransactionInstallOptions<'_>,
+) -> Result<LegacyReplayInstallState> {
+    use conary_core::ccs::legacy_replay::{
+        HostForeignReplayPolicy, LegacyReplayLifecycle, LegacyReplayPolicyInput, plan_legacy_replay,
+    };
+    use conary_core::repository::distro::source_target_from_bundle;
+
+    let Some(old_trove) = old_trove else {
+        return Ok(LegacyReplayInstallState::default());
+    };
+    let Some(old_trove_id) = old_trove.id else {
+        return Ok(LegacyReplayInstallState::default());
+    };
+    let Some(installed) = InstalledLegacyScriptletBundle::find_by_trove(conn, old_trove_id)? else {
+        return Ok(LegacyReplayInstallState::default());
+    };
+    let bundle = installed
+        .bundle()
+        .context("installed legacy scriptlet bundle is malformed")?;
+
+    let target = source_target_from_bundle(&bundle);
+    let input = LegacyReplayPolicyInput {
+        replay_enabled: opts.legacy_replay.allow_legacy_replay,
+        foreign_replay_override: opts.legacy_replay.allow_foreign_legacy_replay,
+        no_scripts: opts.no_scripts,
+        requested_sandbox_mode: opts.sandbox_mode,
+        host_policy: HostForeignReplayPolicy::Strict,
+        target: target.as_target(),
+    };
+    let pre = plan_legacy_replay(
+        Some(&bundle),
+        LegacyReplayLifecycle::UpgradeOldPreRemove,
+        &input,
+    )?;
+    let post = plan_legacy_replay(
+        Some(&bundle),
+        LegacyReplayLifecycle::UpgradeOldPostRemove,
+        &input,
+    )?;
+    let target_id = target.to_id();
+
+    Ok(LegacyReplayInstallState {
+        old_bundle_pre_remove_plan: plan_from_preflight(pre)?,
+        old_bundle_post_remove_plan: plan_from_preflight(post)?,
+        old_bundle_to_replay: Some(bundle.clone()),
+        audit: Some(LegacyReplayAuditContext {
+            target_id: target_id.clone(),
+            source_target_id: target_id,
+            target_compatibility: bundle.target_compatibility.as_str().to_string(),
+            foreign_replay_policy: bundle.foreign_replay_policy.as_str().to_string(),
+            host_policy: HostForeignReplayPolicy::Strict,
+            feature_gate_enabled: opts.legacy_replay.allow_legacy_replay,
+            foreign_override: opts.legacy_replay.allow_foreign_legacy_replay,
+            evidence_digest: bundle.evidence_digest.clone(),
+        }),
+        ..LegacyReplayInstallState::default()
+    })
+}
+
+fn merge_old_upgrade_legacy_replay_state(
+    state: &mut LegacyReplayInstallState,
+    old_state: LegacyReplayInstallState,
+) {
+    state.old_bundle_pre_remove_plan = old_state.old_bundle_pre_remove_plan;
+    state.old_bundle_post_remove_plan = old_state.old_bundle_post_remove_plan;
+    state.old_bundle_to_replay = old_state.old_bundle_to_replay;
+    if state.audit.is_none() {
+        state.audit = old_state.audit;
+    }
 }
 
 fn plan_from_preflight(
@@ -243,23 +328,29 @@ where
     Ok(outcomes)
 }
 
+struct LegacyReplayExecutionScope<'a> {
+    root: &'a Path,
+    package_name: &'a str,
+    package_version: &'a str,
+    mode: &'a conary_core::scriptlet::ExecutionMode,
+    sandbox_mode: SandboxMode,
+    old_version: Option<&'a str>,
+    new_version: Option<&'a str>,
+}
+
 fn execute_legacy_replay_plan_entries(
-    root: &Path,
-    package_name: &str,
-    package_version: &str,
+    scope: LegacyReplayExecutionScope<'_>,
     bundle: Option<&conary_core::ccs::legacy_scriptlets::LegacyScriptletBundle>,
     plan: Option<&conary_core::ccs::legacy_replay::LegacyReplayPlan>,
-    mode: &conary_core::scriptlet::ExecutionMode,
-    sandbox_mode: SandboxMode,
 ) -> Result<Vec<conary_core::scriptlet::ScriptletOutcome>> {
     let Some(bundle) = bundle else {
         return run_legacy_replay_plan_entries_with(
             plan,
             None,
             &conary_core::scriptlet::LegacyInvocationRuntime {
-                mode,
-                old_version: None,
-                new_version: Some(package_version),
+                mode: scope.mode,
+                old_version: scope.old_version,
+                new_version: scope.new_version.or(Some(scope.package_version)),
                 package_instance_count: Some(1),
             },
             |_execution, _runtime| unreachable!("empty bundle cannot execute legacy replay"),
@@ -267,13 +358,17 @@ fn execute_legacy_replay_plan_entries(
     };
 
     let format = legacy_source_scriptlet_format(&bundle.source_format)?;
-    let executor =
-        conary_core::scriptlet::ScriptletExecutor::new(root, package_name, package_version, format)
-            .with_sandbox_mode(sandbox_mode);
+    let executor = conary_core::scriptlet::ScriptletExecutor::new(
+        scope.root,
+        scope.package_name,
+        scope.package_version,
+        format,
+    )
+    .with_sandbox_mode(scope.sandbox_mode);
     let runtime = conary_core::scriptlet::LegacyInvocationRuntime {
-        mode,
-        old_version: None,
-        new_version: Some(package_version),
+        mode: scope.mode,
+        old_version: scope.old_version,
+        new_version: scope.new_version.or(Some(scope.package_version)),
         package_instance_count: Some(1),
     };
 
@@ -325,20 +420,32 @@ fn legacy_post_replay_warnings(
 
 fn build_legacy_replay_audit_for_install(
     state: &LegacyReplayInstallState,
-    pre_outcomes: &[conary_core::scriptlet::ScriptletOutcome],
-    post_outcomes: &[conary_core::scriptlet::ScriptletOutcome],
+    old_pre_outcomes: &[conary_core::scriptlet::ScriptletOutcome],
+    new_pre_outcomes: &[conary_core::scriptlet::ScriptletOutcome],
+    old_post_outcomes: &[conary_core::scriptlet::ScriptletOutcome],
+    new_post_outcomes: &[conary_core::scriptlet::ScriptletOutcome],
 ) -> Option<crate::commands::LegacyReplayAudit> {
     let context = state.audit.as_ref()?;
     let mut planned_entries = Vec::new();
     append_legacy_replay_plan_audit_entries(
         &mut planned_entries,
+        state.old_bundle_pre_remove_plan.as_ref(),
+        old_pre_outcomes,
+    );
+    append_legacy_replay_plan_audit_entries(
+        &mut planned_entries,
         state.new_bundle_pre_plan.as_ref(),
-        pre_outcomes,
+        new_pre_outcomes,
+    );
+    append_legacy_replay_plan_audit_entries(
+        &mut planned_entries,
+        state.old_bundle_post_remove_plan.as_ref(),
+        old_post_outcomes,
     );
     append_legacy_replay_plan_audit_entries(
         &mut planned_entries,
         state.new_bundle_post_plan.as_ref(),
-        post_outcomes,
+        new_post_outcomes,
     );
 
     Some(crate::commands::LegacyReplayAudit {
@@ -2685,7 +2792,11 @@ pub(crate) fn install_ccs_package_transactionally(
         .map(|hook| hook.script.clone());
 
     let legacy_bundle = pkg.manifest().legacy_scriptlets.as_ref();
-    let legacy_replay_state = plan_ccs_fresh_install_legacy_replay(legacy_bundle, &opts)?;
+    let mut legacy_replay_state =
+        plan_ccs_fresh_install_legacy_replay(legacy_bundle, &opts, old_trove.is_some())?;
+    let old_legacy_replay_state =
+        plan_ccs_old_installed_upgrade_legacy_replay(conn, old_trove, &opts)?;
+    merge_old_upgrade_legacy_replay_state(&mut legacy_replay_state, old_legacy_replay_state);
 
     if opts.dry_run {
         show_dry_run_summary(pkg, &opts.component_selection);
@@ -2725,14 +2836,37 @@ pub(crate) fn install_ccs_package_transactionally(
         prepare_install_environment_before_scriptlets(conn, opts.db_path, opts.root)?;
     preflight_extracted_live_root_file_ownership(conn, pkg, &extraction, execution_path)?;
     let legacy_execution_mode = build_execution_mode(old_trove.map(|trove| trove.version.as_str()));
+    let old_legacy_pre_outcomes = if let Some(old_trove) = old_trove {
+        execute_legacy_replay_plan_entries(
+            LegacyReplayExecutionScope {
+                root: Path::new(opts.root),
+                package_name: &old_trove.name,
+                package_version: &old_trove.version,
+                mode: &legacy_execution_mode,
+                sandbox_mode: opts.sandbox_mode,
+                old_version: Some(&old_trove.version),
+                new_version: Some(pkg.version()),
+            },
+            legacy_replay_state.old_bundle_to_replay.as_ref(),
+            legacy_replay_state.old_bundle_pre_remove_plan.as_ref(),
+        )?
+    } else {
+        Vec::new()
+    };
+    require_legacy_replay_success(&old_legacy_pre_outcomes)?;
+
     let legacy_pre_outcomes = execute_legacy_replay_plan_entries(
-        Path::new(opts.root),
-        pkg.name(),
-        pkg.version(),
+        LegacyReplayExecutionScope {
+            root: Path::new(opts.root),
+            package_name: pkg.name(),
+            package_version: pkg.version(),
+            mode: &legacy_execution_mode,
+            sandbox_mode: opts.sandbox_mode,
+            old_version: old_trove.map(|trove| trove.version.as_str()),
+            new_version: Some(pkg.version()),
+        },
         legacy_bundle,
         legacy_replay_state.new_bundle_pre_plan.as_ref(),
-        &legacy_execution_mode,
-        opts.sandbox_mode,
     )?;
     require_legacy_replay_success(&legacy_pre_outcomes)?;
 
@@ -2805,6 +2939,38 @@ pub(crate) fn install_ccs_package_transactionally(
     )?;
 
     let mut post_commit_warnings = Vec::new();
+    let old_legacy_post_outcomes = if let Some(old_trove) = old_trove {
+        execute_legacy_replay_plan_entries(
+            LegacyReplayExecutionScope {
+                root: Path::new(opts.root),
+                package_name: &old_trove.name,
+                package_version: &old_trove.version,
+                mode: &legacy_execution_mode,
+                sandbox_mode: opts.sandbox_mode,
+                old_version: Some(&old_trove.version),
+                new_version: Some(pkg.version()),
+            },
+            legacy_replay_state.old_bundle_to_replay.as_ref(),
+            legacy_replay_state.old_bundle_post_remove_plan.as_ref(),
+        )?
+    } else {
+        Vec::new()
+    };
+    let old_legacy_post_warnings =
+        legacy_post_replay_warnings(pkg.name(), &old_legacy_post_outcomes)?;
+    if !old_legacy_post_warnings.is_empty() {
+        crate::commands::append_scriptlet_warning_metadata(
+            conn,
+            tx_result.changeset_id,
+            old_legacy_post_warnings.clone(),
+        )?;
+        post_commit_warnings.extend(
+            old_legacy_post_warnings
+                .into_iter()
+                .map(|warning| warning.message),
+        );
+    }
+
     if should_run_ccs_hooks && ccs_has_post_hooks(hooks) {
         info!("Executing CCS post-install hooks");
         let results = hook_executor.execute_post_hooks_with_results(hooks);
@@ -2839,13 +3005,17 @@ pub(crate) fn install_ccs_package_transactionally(
         }
     }
     let legacy_post_outcomes = execute_legacy_replay_plan_entries(
-        Path::new(opts.root),
-        pkg.name(),
-        pkg.version(),
+        LegacyReplayExecutionScope {
+            root: Path::new(opts.root),
+            package_name: pkg.name(),
+            package_version: pkg.version(),
+            mode: &legacy_execution_mode,
+            sandbox_mode: opts.sandbox_mode,
+            old_version: old_trove.map(|trove| trove.version.as_str()),
+            new_version: Some(pkg.version()),
+        },
         legacy_bundle,
         legacy_replay_state.new_bundle_post_plan.as_ref(),
-        &legacy_execution_mode,
-        opts.sandbox_mode,
     )?;
     let legacy_post_warnings = legacy_post_replay_warnings(pkg.name(), &legacy_post_outcomes)?;
     if !legacy_post_warnings.is_empty() {
@@ -2862,7 +3032,9 @@ pub(crate) fn install_ccs_package_transactionally(
     }
     if let Some(audit) = build_legacy_replay_audit_for_install(
         &legacy_replay_state,
+        &old_legacy_pre_outcomes,
         &legacy_pre_outcomes,
+        &old_legacy_post_outcomes,
         &legacy_post_outcomes,
     ) {
         crate::commands::append_legacy_replay_audit_metadata(conn, tx_result.changeset_id, audit)?;
@@ -3342,7 +3514,7 @@ mod tests {
             effective_sandbox: EffectiveSandbox::Direct,
         }];
 
-        let audit = build_legacy_replay_audit_for_install(&state, &[], &post_outcomes)
+        let audit = build_legacy_replay_audit_for_install(&state, &[], &[], &[], &post_outcomes)
             .expect("legacy replay audit");
 
         assert!(audit.bundle_present);
