@@ -24,8 +24,8 @@ use super::scriptlets::{
     run_pre_install, to_scriptlet_format,
 };
 use super::{
-    InstallSemantics, LegacyReplayOptions, PackageExecutionPath, PackageFormatType,
-    RepositoryInstallProvenance, detect_package_format,
+    InstallSemantics, LegacyReplayInstallState, LegacyReplayOptions, PackageExecutionPath,
+    PackageFormatType, RepositoryInstallProvenance, detect_package_format,
 };
 use anyhow::{Context, Result};
 use conary_core::components::{ComponentClassifier, ComponentType, should_run_scriptlets};
@@ -103,6 +103,8 @@ pub struct PreparedPackage {
     pub cached_old_scriptlets: Vec<ScriptletEntry>,
     /// Repository metadata for packages resolved from synced repository rows.
     pub repository_provenance: Option<RepositoryInstallProvenance>,
+    /// Bundle replay plans accepted during preflight, carried through commit.
+    pub legacy_replay_state: LegacyReplayInstallState,
 }
 
 impl PreparedPackage {
@@ -1003,6 +1005,7 @@ pub fn prepare_package_for_batch(
         language_provides,
         cached_old_scriptlets,
         repository_provenance: None,
+        legacy_replay_state: LegacyReplayInstallState::default(),
     })
 }
 
@@ -1096,6 +1099,7 @@ pub fn prepare_from_parsed(
         language_provides,
         cached_old_scriptlets,
         repository_provenance: None,
+        legacy_replay_state: LegacyReplayInstallState::default(),
     })
 }
 
@@ -1133,6 +1137,7 @@ mod tests {
             language_provides: Vec::new(),
             cached_old_scriptlets: Vec::new(),
             repository_provenance: None,
+            legacy_replay_state: LegacyReplayInstallState::default(),
         };
 
         let pkg2 = PreparedPackage {
@@ -1161,6 +1166,7 @@ mod tests {
             language_provides: Vec::new(),
             cached_old_scriptlets: Vec::new(),
             repository_provenance: None,
+            legacy_replay_state: LegacyReplayInstallState::default(),
         };
 
         let installer = BatchInstaller::new(
@@ -1210,7 +1216,12 @@ mod tests {
             language_provides: Vec::new(),
             cached_old_scriptlets: Vec::new(),
             repository_provenance: None,
+            legacy_replay_state: super::super::LegacyReplayInstallState::default(),
         };
+
+        assert!(pkg.legacy_replay_state.new_bundle_pre_plan.is_none());
+        assert!(pkg.legacy_replay_state.new_bundle_post_plan.is_none());
+        assert!(pkg.legacy_replay_state.accepted_bundle_to_persist.is_none());
 
         let trove = pkg.to_trove(42);
 
@@ -1249,6 +1260,7 @@ mod tests {
                 source_distro: Some("arch".to_string()),
                 version_scheme: Some("arch".to_string()),
             }),
+            legacy_replay_state: LegacyReplayInstallState::default(),
         };
 
         let trove = pkg.to_trove(42);
@@ -1394,6 +1406,7 @@ mod tests {
             language_provides: Vec::new(),
             cached_old_scriptlets: Vec::new(),
             repository_provenance: None,
+            legacy_replay_state: LegacyReplayInstallState::default(),
         }
     }
 

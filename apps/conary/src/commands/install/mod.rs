@@ -75,6 +75,39 @@ pub struct LegacyReplayOptions {
 }
 
 #[allow(dead_code)]
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct LegacyReplayInstallState {
+    pub new_bundle_pre_plan: Option<conary_core::ccs::legacy_replay::LegacyReplayPlan>,
+    pub new_bundle_post_plan: Option<conary_core::ccs::legacy_replay::LegacyReplayPlan>,
+    pub old_bundle_pre_remove_plan: Option<conary_core::ccs::legacy_replay::LegacyReplayPlan>,
+    pub old_bundle_post_remove_plan: Option<conary_core::ccs::legacy_replay::LegacyReplayPlan>,
+    pub accepted_bundle_to_persist: Option<AcceptedLegacyBundleInstall>,
+    pub audit: Option<LegacyReplayAuditContext>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct AcceptedLegacyBundleInstall {
+    pub bundle: conary_core::ccs::legacy_scriptlets::LegacyScriptletBundle,
+    pub target_id: String,
+    pub replay_policy: String,
+    pub replay_enabled: bool,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LegacyReplayAuditContext {
+    pub target_id: String,
+    pub source_target_id: String,
+    pub target_compatibility: String,
+    pub foreign_replay_policy: String,
+    pub host_policy: conary_core::ccs::legacy_replay::HostForeignReplayPolicy,
+    pub feature_gate_enabled: bool,
+    pub foreign_override: bool,
+    pub evidence_digest: Option<String>,
+}
+
+#[allow(dead_code)]
 pub(crate) fn host_foreign_replay_policy_from_pin(
     pin: Option<&conary_core::db::models::DistroPin>,
 ) -> conary_core::ccs::legacy_replay::HostForeignReplayPolicy {
@@ -696,6 +729,7 @@ pub async fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> 
         defer_generation: false,
         repository_provenance,
         legacy_replay,
+        accepted_legacy_bundle: None,
     };
     let tx_result =
         execute_install_transaction(&mut conn, pkg.as_ref(), &extraction, &tx_ctx, &progress)?;
@@ -794,6 +828,8 @@ struct TransactionContext<'a> {
     defer_generation: bool,
     repository_provenance: Option<RepositoryInstallProvenance>,
     legacy_replay: LegacyReplayOptions,
+    #[allow(dead_code)]
+    accepted_legacy_bundle: Option<&'a AcceptedLegacyBundleInstall>,
 }
 
 /// Result from a successful transaction execution.
@@ -2372,6 +2408,7 @@ pub(crate) fn install_ccs_package_transactionally(
         defer_generation: opts.defer_generation,
         repository_provenance: opts.repository_provenance,
         legacy_replay: opts.legacy_replay,
+        accepted_legacy_bundle: None,
     };
     let tx_result = match execute_install_transaction(conn, pkg, &extraction, &tx_ctx, &progress) {
         Ok(result) => result,
@@ -2769,6 +2806,18 @@ mod tests {
     }
 
     #[test]
+    fn legacy_replay_install_state_defaults_to_empty_carriers() {
+        let state = LegacyReplayInstallState::default();
+
+        assert!(state.new_bundle_pre_plan.is_none());
+        assert!(state.new_bundle_post_plan.is_none());
+        assert!(state.old_bundle_pre_remove_plan.is_none());
+        assert!(state.old_bundle_post_remove_plan.is_none());
+        assert!(state.accepted_bundle_to_persist.is_none());
+        assert!(state.audit.is_none());
+    }
+
+    #[test]
     fn no_generation_install_transaction_materializes_live_root_file() {
         use conary_core::db::models::{Changeset, ChangesetStatus, FileEntry, Trove, TroveType};
         use conary_core::packages::traits::{
@@ -2864,7 +2913,10 @@ mod tests {
             defer_generation: false,
             repository_provenance: None,
             legacy_replay: LegacyReplayOptions::default(),
+            accepted_legacy_bundle: None,
         };
+
+        assert!(ctx.accepted_legacy_bundle.is_none());
 
         let result = execute_install_transaction(
             &mut conn,
@@ -3013,6 +3065,7 @@ mod tests {
             defer_generation: false,
             repository_provenance: None,
             legacy_replay: LegacyReplayOptions::default(),
+            accepted_legacy_bundle: None,
         };
 
         let error = match execute_install_transaction(

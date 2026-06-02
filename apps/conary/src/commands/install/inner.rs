@@ -555,6 +555,7 @@ mod tests {
             defer_generation: false,
             repository_provenance: None,
             legacy_replay: LegacyReplayOptions::default(),
+            accepted_legacy_bundle: None,
         };
         let tx_config = TransactionConfig::from_paths(root.clone(), db_path.clone());
         let mut engine = TransactionEngine::new(tx_config).unwrap();
@@ -671,6 +672,7 @@ mod tests {
             defer_generation: false,
             repository_provenance: None,
             legacy_replay: LegacyReplayOptions::default(),
+            accepted_legacy_bundle: None,
         };
         let tx_config = TransactionConfig::from_paths(root.clone(), db_path.clone());
         let mut engine = TransactionEngine::new(tx_config).unwrap();
@@ -753,6 +755,7 @@ mod tests {
                 version_scheme: Some("rpm".to_string()),
             }),
             legacy_replay: LegacyReplayOptions::default(),
+            accepted_legacy_bundle: None,
         };
         let tx_config = TransactionConfig::from_paths(root.clone(), db_path.clone());
         let mut engine = TransactionEngine::new(tx_config).unwrap();
