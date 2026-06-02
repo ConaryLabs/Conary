@@ -121,6 +121,44 @@ impl ScriptletWarning {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct LegacyReplayAudit {
+    pub bundle_present: bool,
+    pub target_id: String,
+    pub source_target_id: String,
+    pub target_compatibility: String,
+    pub foreign_replay_policy: String,
+    pub host_policy: String,
+    pub feature_gate: String,
+    pub foreign_override: bool,
+    pub evidence_digest: Option<String>,
+    #[serde(default)]
+    pub planned_entries: Vec<LegacyReplayPlannedEntryAudit>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct LegacyReplayPlannedEntryAudit {
+    pub entry_id: String,
+    pub native_slot: String,
+    pub phase: String,
+    pub timeout_ms: u64,
+    pub raw_replay_required: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<LegacyReplayOutcomeAudit>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct LegacyReplayOutcomeAudit {
+    pub status: String,
+    pub phase: String,
+    pub requested_sandbox_mode: String,
+    pub effective_sandbox: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct ChangesetMetadataEnvelope {
     pub schema: String,
     #[serde(default)]
@@ -131,6 +169,8 @@ pub(crate) struct ChangesetMetadataEnvelope {
     pub adoption_warnings: Vec<AdoptionWarning>,
     #[serde(default)]
     pub scriptlet_warnings: Vec<ScriptletWarning>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legacy_scriptlet_replay: Option<LegacyReplayAudit>,
 }
 
 pub(crate) fn metadata_with_removed_troves(snapshots: Vec<TroveSnapshot>) -> Result<String> {
@@ -158,12 +198,29 @@ pub(crate) fn metadata_with_full_envelope(
     adoption_warnings: Vec<AdoptionWarning>,
     scriptlet_warnings: Vec<ScriptletWarning>,
 ) -> Result<String> {
+    metadata_with_envelope_sections(
+        snapshots,
+        deferred_follow_up,
+        adoption_warnings,
+        scriptlet_warnings,
+        None,
+    )
+}
+
+fn metadata_with_envelope_sections(
+    snapshots: Vec<TroveSnapshot>,
+    deferred_follow_up: Vec<DeferredFollowUp>,
+    adoption_warnings: Vec<AdoptionWarning>,
+    scriptlet_warnings: Vec<ScriptletWarning>,
+    legacy_scriptlet_replay: Option<LegacyReplayAudit>,
+) -> Result<String> {
     serde_json::to_string(&ChangesetMetadataEnvelope {
         schema: CHANGESET_METADATA_SCHEMA.to_string(),
         removed_troves: snapshots,
         deferred_follow_up,
         adoption_warnings,
         scriptlet_warnings,
+        legacy_scriptlet_replay,
     })
     .map_err(Into::into)
 }
@@ -216,6 +273,13 @@ pub(crate) fn scriptlet_warnings(snapshot_json: Option<&str>) -> Vec<ScriptletWa
         .unwrap_or_default()
 }
 
+pub(crate) fn legacy_replay_audit(snapshot_json: Option<&str>) -> Option<LegacyReplayAudit> {
+    snapshot_json
+        .and_then(|raw| serde_json::from_str::<ChangesetMetadataEnvelope>(raw).ok())
+        .filter(|envelope| envelope.schema == CHANGESET_METADATA_SCHEMA)
+        .and_then(|envelope| envelope.legacy_scriptlet_replay)
+}
+
 pub(crate) fn append_deferred_follow_up_metadata(
     conn: &rusqlite::Connection,
     changeset_id: i64,
@@ -226,18 +290,19 @@ pub(crate) fn append_deferred_follow_up_metadata(
         [changeset_id],
         |row| row.get(0),
     )?;
-    let mut removed_troves = existing
+    let removed_troves = existing
         .as_deref()
         .map(parse_rollback_snapshots)
         .transpose()?
         .unwrap_or_default();
     let mut deferred = deferred_follow_up(existing.as_deref());
     deferred.push(follow_up);
-    let metadata = metadata_with_full_envelope(
-        std::mem::take(&mut removed_troves),
+    let metadata = metadata_with_envelope_sections(
+        removed_troves,
         deferred,
         adoption_warnings(existing.as_deref()),
         scriptlet_warnings(existing.as_deref()),
+        legacy_replay_audit(existing.as_deref()),
     )?;
     conn.execute(
         "UPDATE changesets SET metadata = ?1 WHERE id = ?2",
@@ -268,11 +333,12 @@ pub(crate) fn append_adoption_warning_metadata(
     let deferred = deferred_follow_up(existing.as_deref());
     let mut existing_warnings = adoption_warnings(existing.as_deref());
     existing_warnings.extend(warnings);
-    let metadata = metadata_with_full_envelope(
+    let metadata = metadata_with_envelope_sections(
         removed_troves,
         deferred,
         existing_warnings,
         scriptlet_warnings(existing.as_deref()),
+        legacy_replay_audit(existing.as_deref()),
     )?;
     conn.execute(
         "UPDATE changesets SET metadata = ?1 WHERE id = ?2",
@@ -304,8 +370,42 @@ pub(crate) fn append_scriptlet_warning_metadata(
     let adoption = adoption_warnings(existing.as_deref());
     let mut existing_warnings = scriptlet_warnings(existing.as_deref());
     existing_warnings.extend(warnings);
-    let metadata =
-        metadata_with_full_envelope(removed_troves, deferred, adoption, existing_warnings)?;
+    let metadata = metadata_with_envelope_sections(
+        removed_troves,
+        deferred,
+        adoption,
+        existing_warnings,
+        legacy_replay_audit(existing.as_deref()),
+    )?;
+    conn.execute(
+        "UPDATE changesets SET metadata = ?1 WHERE id = ?2",
+        rusqlite::params![metadata, changeset_id],
+    )?;
+    Ok(())
+}
+
+pub(crate) fn append_legacy_replay_audit_metadata(
+    conn: &rusqlite::Connection,
+    changeset_id: i64,
+    audit: LegacyReplayAudit,
+) -> Result<()> {
+    let existing: Option<String> = conn.query_row(
+        "SELECT metadata FROM changesets WHERE id = ?1",
+        [changeset_id],
+        |row| row.get(0),
+    )?;
+    let removed_troves = existing
+        .as_deref()
+        .map(parse_rollback_snapshots)
+        .transpose()?
+        .unwrap_or_default();
+    let metadata = metadata_with_envelope_sections(
+        removed_troves,
+        deferred_follow_up(existing.as_deref()),
+        adoption_warnings(existing.as_deref()),
+        scriptlet_warnings(existing.as_deref()),
+        Some(audit),
+    )?;
     conn.execute(
         "UPDATE changesets SET metadata = ?1 WHERE id = ?2",
         rusqlite::params![metadata, changeset_id],
@@ -498,5 +598,66 @@ mod tests {
         assert_eq!(deferred_follow_up(Some(&raw)), vec![deferred]);
         assert_eq!(scriptlet_warnings(Some(&raw)), vec![warning]);
         assert_eq!(adoption_warnings(Some(&raw)).len(), 1);
+    }
+
+    #[test]
+    fn scriptlet_warning_metadata_preserves_legacy_replay_audit() {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("conary.db");
+        conary_core::db::init(&db_path).unwrap();
+        let conn = conary_core::db::open(&db_path).unwrap();
+        let mut changeset = conary_core::db::models::Changeset::new("Install fixture".to_string());
+        let changeset_id = changeset.insert(&conn).unwrap();
+        let audit = LegacyReplayAudit {
+            bundle_present: true,
+            target_id: "rpm/fedora/44/x86_64".to_string(),
+            source_target_id: "rpm/fedora/44/x86_64".to_string(),
+            target_compatibility: "source-native".to_string(),
+            foreign_replay_policy: "deny".to_string(),
+            host_policy: "strict".to_string(),
+            feature_gate: "enabled".to_string(),
+            foreign_override: false,
+            evidence_digest: Some("sha256:fixture".to_string()),
+            planned_entries: vec![LegacyReplayPlannedEntryAudit {
+                entry_id: "rpm:%post".to_string(),
+                native_slot: "%post".to_string(),
+                phase: "post-install".to_string(),
+                timeout_ms: 30_000,
+                raw_replay_required: true,
+                outcome: Some(LegacyReplayOutcomeAudit {
+                    status: "success".to_string(),
+                    phase: "post-install".to_string(),
+                    requested_sandbox_mode: "never".to_string(),
+                    effective_sandbox: "direct".to_string(),
+                    failure_kind: None,
+                    message: None,
+                }),
+            }],
+        };
+        append_legacy_replay_audit_metadata(&conn, changeset_id, audit.clone()).unwrap();
+
+        append_scriptlet_warning_metadata(
+            &conn,
+            changeset_id,
+            vec![ScriptletWarning::new(
+                "post-install",
+                "fixture",
+                "ScriptExited",
+                "never",
+                "direct",
+                "scriptlet warning",
+            )],
+        )
+        .unwrap();
+
+        let raw: String = conn
+            .query_row(
+                "SELECT metadata FROM changesets WHERE id = ?1",
+                [changeset_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(legacy_replay_audit(Some(&raw)), Some(audit));
+        assert_eq!(scriptlet_warnings(Some(&raw)).len(), 1);
     }
 }

@@ -283,17 +283,17 @@ fn execute_legacy_replay_plan_entries(
 }
 
 fn require_legacy_replay_success(
-    outcomes: Vec<conary_core::scriptlet::ScriptletOutcome>,
+    outcomes: &[conary_core::scriptlet::ScriptletOutcome],
 ) -> Result<()> {
     for outcome in outcomes {
-        outcome.into_result()?;
+        outcome.clone().into_result()?;
     }
     Ok(())
 }
 
 fn legacy_post_replay_warnings(
     package_name: &str,
-    outcomes: Vec<conary_core::scriptlet::ScriptletOutcome>,
+    outcomes: &[conary_core::scriptlet::ScriptletOutcome],
 ) -> Result<Vec<crate::commands::ScriptletWarning>> {
     let mut warnings = Vec::new();
 
@@ -307,7 +307,7 @@ fn legacy_post_replay_warnings(
             {
                 warnings.push(scriptlet_warning_from_failure(
                     package_name,
-                    failure,
+                    failure.clone(),
                     "legacy post-install scriptlet failed after package files were installed",
                 ));
             }
@@ -321,6 +321,114 @@ fn legacy_post_replay_warnings(
     }
 
     Ok(warnings)
+}
+
+fn build_legacy_replay_audit_for_install(
+    state: &LegacyReplayInstallState,
+    pre_outcomes: &[conary_core::scriptlet::ScriptletOutcome],
+    post_outcomes: &[conary_core::scriptlet::ScriptletOutcome],
+) -> Option<crate::commands::LegacyReplayAudit> {
+    let context = state.audit.as_ref()?;
+    let mut planned_entries = Vec::new();
+    append_legacy_replay_plan_audit_entries(
+        &mut planned_entries,
+        state.new_bundle_pre_plan.as_ref(),
+        pre_outcomes,
+    );
+    append_legacy_replay_plan_audit_entries(
+        &mut planned_entries,
+        state.new_bundle_post_plan.as_ref(),
+        post_outcomes,
+    );
+
+    Some(crate::commands::LegacyReplayAudit {
+        bundle_present: true,
+        target_id: context.target_id.clone(),
+        source_target_id: context.source_target_id.clone(),
+        target_compatibility: context.target_compatibility.clone(),
+        foreign_replay_policy: context.foreign_replay_policy.clone(),
+        host_policy: host_foreign_replay_policy_name(context.host_policy).to_string(),
+        feature_gate: if context.feature_gate_enabled {
+            "enabled".to_string()
+        } else {
+            "disabled".to_string()
+        },
+        foreign_override: context.foreign_override,
+        evidence_digest: context.evidence_digest.clone(),
+        planned_entries,
+    })
+}
+
+fn append_legacy_replay_plan_audit_entries(
+    entries: &mut Vec<crate::commands::LegacyReplayPlannedEntryAudit>,
+    plan: Option<&conary_core::ccs::legacy_replay::LegacyReplayPlan>,
+    outcomes: &[conary_core::scriptlet::ScriptletOutcome],
+) {
+    let Some(plan) = plan else {
+        return;
+    };
+
+    for (index, entry) in plan.lifecycle_entries.iter().enumerate() {
+        entries.push(crate::commands::LegacyReplayPlannedEntryAudit {
+            entry_id: entry.entry_id.clone(),
+            native_slot: entry.native_slot.clone(),
+            phase: legacy_lifecycle_phase_name(&entry.phase).to_string(),
+            timeout_ms: entry.timeout_ms,
+            raw_replay_required: plan.raw_replay_required,
+            outcome: outcomes.get(index).map(legacy_replay_outcome_audit),
+        });
+    }
+}
+
+fn legacy_replay_outcome_audit(
+    outcome: &conary_core::scriptlet::ScriptletOutcome,
+) -> crate::commands::LegacyReplayOutcomeAudit {
+    match outcome {
+        conary_core::scriptlet::ScriptletOutcome::Skipped {
+            phase,
+            requested_sandbox_mode,
+            effective_sandbox,
+        } => crate::commands::LegacyReplayOutcomeAudit {
+            status: "skipped".to_string(),
+            phase: phase.clone(),
+            requested_sandbox_mode: requested_sandbox_mode.as_str().to_string(),
+            effective_sandbox: effective_sandbox.as_str().to_string(),
+            failure_kind: None,
+            message: None,
+        },
+        conary_core::scriptlet::ScriptletOutcome::Success {
+            phase,
+            requested_sandbox_mode,
+            effective_sandbox,
+        } => crate::commands::LegacyReplayOutcomeAudit {
+            status: "success".to_string(),
+            phase: phase.clone(),
+            requested_sandbox_mode: requested_sandbox_mode.as_str().to_string(),
+            effective_sandbox: effective_sandbox.as_str().to_string(),
+            failure_kind: None,
+            message: None,
+        },
+        conary_core::scriptlet::ScriptletOutcome::Failure(failure) => {
+            crate::commands::LegacyReplayOutcomeAudit {
+                status: "failure".to_string(),
+                phase: failure.phase.clone(),
+                requested_sandbox_mode: failure.requested_sandbox_mode.as_str().to_string(),
+                effective_sandbox: failure.effective_sandbox.as_str().to_string(),
+                failure_kind: Some(failure.failure_kind.as_str().to_string()),
+                message: Some(failure.message.clone()),
+            }
+        }
+    }
+}
+
+fn host_foreign_replay_policy_name(
+    policy: conary_core::ccs::legacy_replay::HostForeignReplayPolicy,
+) -> &'static str {
+    match policy {
+        conary_core::ccs::legacy_replay::HostForeignReplayPolicy::Strict => "strict",
+        conary_core::ccs::legacy_replay::HostForeignReplayPolicy::Guarded => "guarded",
+        conary_core::ccs::legacy_replay::HostForeignReplayPolicy::Permissive => "permissive",
+    }
 }
 
 fn legacy_source_scriptlet_format(
@@ -2617,7 +2725,7 @@ pub(crate) fn install_ccs_package_transactionally(
         prepare_install_environment_before_scriptlets(conn, opts.db_path, opts.root)?;
     preflight_extracted_live_root_file_ownership(conn, pkg, &extraction, execution_path)?;
     let legacy_execution_mode = build_execution_mode(old_trove.map(|trove| trove.version.as_str()));
-    require_legacy_replay_success(execute_legacy_replay_plan_entries(
+    let legacy_pre_outcomes = execute_legacy_replay_plan_entries(
         Path::new(opts.root),
         pkg.name(),
         pkg.version(),
@@ -2625,7 +2733,8 @@ pub(crate) fn install_ccs_package_transactionally(
         legacy_replay_state.new_bundle_pre_plan.as_ref(),
         &legacy_execution_mode,
         opts.sandbox_mode,
-    )?)?;
+    )?;
+    require_legacy_replay_success(&legacy_pre_outcomes)?;
 
     let mut hook_executor = conary_core::ccs::HookExecutor::new(Path::new(opts.root));
     let mut pre_hooks_ran = false;
@@ -2729,18 +2838,16 @@ pub(crate) fn install_ccs_package_transactionally(
             post_commit_warnings.push(warning);
         }
     }
-    let legacy_post_warnings = legacy_post_replay_warnings(
+    let legacy_post_outcomes = execute_legacy_replay_plan_entries(
+        Path::new(opts.root),
         pkg.name(),
-        execute_legacy_replay_plan_entries(
-            Path::new(opts.root),
-            pkg.name(),
-            pkg.version(),
-            legacy_bundle,
-            legacy_replay_state.new_bundle_post_plan.as_ref(),
-            &legacy_execution_mode,
-            opts.sandbox_mode,
-        )?,
+        pkg.version(),
+        legacy_bundle,
+        legacy_replay_state.new_bundle_post_plan.as_ref(),
+        &legacy_execution_mode,
+        opts.sandbox_mode,
     )?;
+    let legacy_post_warnings = legacy_post_replay_warnings(pkg.name(), &legacy_post_outcomes)?;
     if !legacy_post_warnings.is_empty() {
         crate::commands::append_scriptlet_warning_metadata(
             conn,
@@ -2752,6 +2859,13 @@ pub(crate) fn install_ccs_package_transactionally(
                 .into_iter()
                 .map(|warning| warning.message),
         );
+    }
+    if let Some(audit) = build_legacy_replay_audit_for_install(
+        &legacy_replay_state,
+        &legacy_pre_outcomes,
+        &legacy_post_outcomes,
+    ) {
+        crate::commands::append_legacy_replay_audit_metadata(conn, tx_result.changeset_id, audit)?;
     }
 
     Ok(CcsTransactionInstallResult {
@@ -3200,6 +3314,52 @@ mod tests {
 
         assert!(outcomes.is_empty());
         assert_eq!(calls, 0);
+    }
+
+    #[test]
+    fn legacy_replay_audit_records_planned_entry_outcome() {
+        let state = LegacyReplayInstallState {
+            new_bundle_post_plan: Some(test_legacy_plan(vec![(
+                "rpm:%post",
+                "%post",
+                LifecyclePath::PostInstall,
+            )])),
+            audit: Some(LegacyReplayAuditContext {
+                target_id: "rpm/fedora/44/x86_64".to_string(),
+                source_target_id: "rpm/fedora/44/x86_64".to_string(),
+                target_compatibility: "source-native".to_string(),
+                foreign_replay_policy: "deny".to_string(),
+                host_policy: HostForeignReplayPolicy::Strict,
+                feature_gate_enabled: true,
+                foreign_override: false,
+                evidence_digest: Some(conary_core::hash::sha256_prefixed(b"bundle-evidence")),
+            }),
+            ..LegacyReplayInstallState::default()
+        };
+        let post_outcomes = vec![ScriptletOutcome::Success {
+            phase: "post-install".to_string(),
+            requested_sandbox_mode: SandboxMode::None,
+            effective_sandbox: EffectiveSandbox::Direct,
+        }];
+
+        let audit = build_legacy_replay_audit_for_install(&state, &[], &post_outcomes)
+            .expect("legacy replay audit");
+
+        assert!(audit.bundle_present);
+        assert_eq!(audit.target_id, "rpm/fedora/44/x86_64");
+        assert_eq!(audit.feature_gate, "enabled");
+        assert_eq!(audit.planned_entries.len(), 1);
+        let entry = &audit.planned_entries[0];
+        assert_eq!(entry.entry_id, "rpm:%post");
+        assert_eq!(entry.native_slot, "%post");
+        assert_eq!(entry.phase, "post-install");
+        assert_eq!(entry.timeout_ms, 30_000);
+        assert!(entry.raw_replay_required);
+        let outcome = entry.outcome.as_ref().expect("entry outcome");
+        assert_eq!(outcome.status, "success");
+        assert_eq!(outcome.phase, "post-install");
+        assert_eq!(outcome.requested_sandbox_mode, "never");
+        assert_eq!(outcome.effective_sandbox, "direct");
     }
 
     #[test]
