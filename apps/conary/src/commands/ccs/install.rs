@@ -681,6 +681,42 @@ pub async fn cmd_ccs_install(
     allow_capabilities: bool,
     capability_policy: Option<String>,
 ) -> Result<()> {
+    cmd_ccs_install_with_replay_options(
+        package,
+        db_path,
+        root,
+        dry_run,
+        allow_unsigned,
+        policy,
+        components,
+        sandbox,
+        no_deps,
+        false,
+        reinstall,
+        allow_capabilities,
+        capability_policy,
+        super::super::install::LegacyReplayOptions::default(),
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn cmd_ccs_install_with_replay_options(
+    package: &str,
+    db_path: &str,
+    root: &str,
+    dry_run: bool,
+    allow_unsigned: bool,
+    policy: Option<String>,
+    components: Option<Vec<String>>,
+    sandbox: crate::commands::SandboxMode,
+    no_deps: bool,
+    no_scripts: bool,
+    reinstall: bool,
+    allow_capabilities: bool,
+    capability_policy: Option<String>,
+    legacy_replay: super::super::install::LegacyReplayOptions,
+) -> Result<()> {
     let package_path = Path::new(package);
 
     if !package_path.exists() {
@@ -840,7 +876,7 @@ pub async fn cmd_ccs_install(
                 root,
                 dry_run,
                 defer_generation: false,
-                no_scripts: false,
+                no_scripts,
                 sandbox_mode: match sandbox {
                     crate::commands::SandboxMode::None => conary_core::scriptlet::SandboxMode::None,
                     crate::commands::SandboxMode::Auto => conary_core::scriptlet::SandboxMode::Auto,
@@ -854,7 +890,7 @@ pub async fn cmd_ccs_install(
                 component_selection,
                 selected_manifest_components: Some(selected_components.names.clone()),
                 repository_provenance: None,
-                legacy_replay: super::super::install::LegacyReplayOptions::default(),
+                legacy_replay,
             },
         )?;
         return Ok(());
@@ -870,7 +906,7 @@ pub async fn cmd_ccs_install(
             root,
             dry_run,
             defer_generation: false,
-            no_scripts: false,
+            no_scripts,
             sandbox_mode: match sandbox {
                 crate::commands::SandboxMode::None => conary_core::scriptlet::SandboxMode::None,
                 crate::commands::SandboxMode::Auto => conary_core::scriptlet::SandboxMode::Auto,
@@ -882,7 +918,7 @@ pub async fn cmd_ccs_install(
             component_selection,
             selected_manifest_components: Some(selected_components.names.clone()),
             repository_provenance: None,
-            legacy_replay: super::super::install::LegacyReplayOptions::default(),
+            legacy_replay,
         },
     )?;
     let _changeset_id = tx_result.changeset_id;

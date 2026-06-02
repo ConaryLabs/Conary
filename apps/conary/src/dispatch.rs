@@ -30,6 +30,16 @@ fn require_live_mutation(
     )
 }
 
+fn legacy_replay_options(
+    allow_legacy_replay: bool,
+    allow_foreign_legacy_replay: bool,
+) -> commands::LegacyReplayOptions {
+    commands::LegacyReplayOptions {
+        allow_legacy_replay,
+        allow_foreign_legacy_replay,
+    }
+}
+
 pub async fn dispatch(cli: Cli) -> Result<()> {
     let allow_live_system_mutation = cli.allow_live_system_mutation;
     command_risk::enforce_cli_policy(allow_live_system_mutation, &cli)?;
@@ -46,6 +56,8 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             dry_run,
             no_deps,
             no_scripts,
+            allow_legacy_replay,
+            allow_foreign_legacy_replay,
             sandbox,
             allow_downgrade,
             convert_to_ccs,
@@ -57,6 +69,8 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             yes,
         }) => {
             let sandbox_mode = sandbox.into();
+            let legacy_replay =
+                legacy_replay_options(allow_legacy_replay, allow_foreign_legacy_replay);
 
             // Smart dispatch: @name installs a collection
             if package.starts_with('@') {
@@ -74,6 +88,8 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                     dry_run,
                     skip_optional,
                     sandbox_mode,
+                    no_scripts,
+                    legacy_replay,
                 )
                 .await
             } else {
@@ -104,7 +120,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                         yes,
                         from_distro: from,
                         repository_provenance: None,
-                        legacy_replay: commands::LegacyReplayOptions::default(),
+                        legacy_replay,
                     },
                 )
                 .await
@@ -117,9 +133,13 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             version,
             architecture,
             no_scripts,
+            allow_legacy_replay,
+            allow_foreign_legacy_replay,
             sandbox,
             purge_files,
         }) => {
+            let legacy_replay =
+                legacy_replay_options(allow_legacy_replay, allow_foreign_legacy_replay);
             require_live_mutation(
                 allow_live_system_mutation,
                 Cow::Borrowed("conary remove"),
@@ -135,7 +155,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 no_scripts,
                 sandbox.into(),
                 purge_files,
-                commands::LegacyReplayOptions::default(),
+                legacy_replay,
             )
             .await
         }
@@ -147,11 +167,16 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             architecture,
             security,
             dry_run,
+            no_scripts,
+            allow_legacy_replay,
+            allow_foreign_legacy_replay,
             sandbox,
             dep_mode,
             yes,
         }) => {
             let sandbox_mode = sandbox.into();
+            let legacy_replay =
+                legacy_replay_options(allow_legacy_replay, allow_foreign_legacy_replay);
             // Smart dispatch: @name updates a collection/group
             if let Some(ref pkg) = package
                 && pkg.starts_with('@')
@@ -174,9 +199,11 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                     &common.root,
                     security,
                     dry_run,
+                    no_scripts,
                     sandbox_mode,
                     dep_mode,
                     yes,
+                    legacy_replay,
                 )
                 .await;
             }
@@ -192,11 +219,13 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 &common.root,
                 security,
                 dry_run,
+                no_scripts,
                 sandbox_mode,
                 dep_mode,
                 yes,
                 version,
                 architecture,
+                legacy_replay,
             )
             .await
         }
@@ -238,8 +267,12 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             common,
             dry_run,
             no_scripts,
+            allow_legacy_replay,
+            allow_foreign_legacy_replay,
             sandbox,
         }) => {
+            let legacy_replay =
+                legacy_replay_options(allow_legacy_replay, allow_foreign_legacy_replay);
             require_live_mutation(
                 allow_live_system_mutation,
                 Cow::Borrowed("conary autoremove"),
@@ -252,7 +285,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 dry_run,
                 no_scripts,
                 sandbox.into(),
-                commands::LegacyReplayOptions::default(),
+                legacy_replay,
             )
             .await
         }
@@ -1324,17 +1357,22 @@ async fn dispatch_ccs_command(
             components,
             sandbox,
             no_deps,
+            no_scripts,
+            allow_legacy_replay,
+            allow_foreign_legacy_replay,
             reinstall,
             allow_capabilities,
             capability_policy,
         } => {
+            let legacy_replay =
+                legacy_replay_options(allow_legacy_replay, allow_foreign_legacy_replay);
             require_live_mutation(
                 allow_live_system_mutation,
                 Cow::Borrowed("conary ccs install"),
                 LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
                 dry_run,
             )?;
-            commands::ccs::cmd_ccs_install(
+            commands::ccs::cmd_ccs_install_with_replay_options(
                 &package,
                 &common.db.db_path,
                 &common.root,
@@ -1344,9 +1382,11 @@ async fn dispatch_ccs_command(
                 components,
                 sandbox.into(),
                 no_deps,
+                no_scripts,
                 reinstall,
                 allow_capabilities,
                 capability_policy,
+                legacy_replay,
             )
             .await
         }

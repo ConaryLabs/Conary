@@ -237,6 +237,7 @@ pub async fn cmd_collection_delete(name: &str, db_path: &str) -> Result<()> {
 }
 
 /// Install all packages in a collection
+#[allow(clippy::too_many_arguments)]
 pub async fn cmd_collection_install(
     name: &str,
     db_path: &str,
@@ -244,6 +245,8 @@ pub async fn cmd_collection_install(
     dry_run: bool,
     skip_optional: bool,
     sandbox_mode: SandboxMode,
+    no_scripts: bool,
+    legacy_replay: super::LegacyReplayOptions,
 ) -> Result<()> {
     info!("Installing collection: {}", name);
     let conn = open_db(db_path)?;
@@ -312,8 +315,10 @@ pub async fn cmd_collection_install(
                 db_path,
                 root,
                 version: member.member_version.clone(),
+                no_scripts,
                 selection_reason: Some(&reason),
                 sandbox_mode,
+                legacy_replay,
                 ..Default::default()
             },
         )

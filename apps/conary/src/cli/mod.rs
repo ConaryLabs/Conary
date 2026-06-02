@@ -178,9 +178,17 @@ pub enum Commands {
         #[arg(long)]
         no_deps: bool,
 
-        /// Skip running package scriptlets (install/remove hooks)
+        /// Suppress hooks where safe; does not bypass required legacy replay
         #[arg(long)]
         no_scripts: bool,
+
+        /// Allow same-source raw legacy scriptlet replay when the bundle, target, sandbox, and local policy all pass
+        #[arg(long)]
+        allow_legacy_replay: bool,
+
+        /// Additionally allow explicitly compatible foreign raw replay only under permissive host policy
+        #[arg(long)]
+        allow_foreign_legacy_replay: bool,
 
         /// Scriptlet isolation: auto, always, never (default: always).
         /// Protected modes isolate PID/network/mounts and give live-root
@@ -247,9 +255,17 @@ pub enum Commands {
         #[arg(long = "arch")]
         architecture: Option<String>,
 
-        /// Skip running package scriptlets (install/remove hooks)
+        /// Suppress hooks where safe; does not bypass required legacy replay
         #[arg(long)]
         no_scripts: bool,
+
+        /// Allow same-source raw legacy scriptlet replay when the bundle, target, sandbox, and local policy all pass
+        #[arg(long)]
+        allow_legacy_replay: bool,
+
+        /// Additionally allow explicitly compatible foreign raw replay only under permissive host policy
+        #[arg(long)]
+        allow_foreign_legacy_replay: bool,
 
         /// Scriptlet isolation: auto, always, never (default: always).
         /// Protected modes isolate PID/network/mounts and give live-root
@@ -285,6 +301,18 @@ pub enum Commands {
         /// Show what would be updated without making changes
         #[arg(long)]
         dry_run: bool,
+
+        /// Suppress hooks where safe; does not bypass required legacy replay
+        #[arg(long)]
+        no_scripts: bool,
+
+        /// Allow same-source raw legacy scriptlet replay when the bundle, target, sandbox, and local policy all pass
+        #[arg(long)]
+        allow_legacy_replay: bool,
+
+        /// Additionally allow explicitly compatible foreign raw replay only under permissive host policy
+        #[arg(long)]
+        allow_foreign_legacy_replay: bool,
 
         /// Scriptlet isolation: auto, always, never (default: always).
         /// Protected modes isolate PID/network/mounts and give live-root
@@ -363,9 +391,17 @@ pub enum Commands {
         #[arg(long)]
         dry_run: bool,
 
-        /// Skip running package scriptlets (install/remove hooks)
+        /// Suppress hooks where safe; does not bypass required legacy replay
         #[arg(long)]
         no_scripts: bool,
+
+        /// Allow same-source raw legacy scriptlet replay when the bundle, target, sandbox, and local policy all pass
+        #[arg(long)]
+        allow_legacy_replay: bool,
+
+        /// Additionally allow explicitly compatible foreign raw replay only under permissive host policy
+        #[arg(long)]
+        allow_foreign_legacy_replay: bool,
 
         /// Scriptlet isolation: auto, always, never (default: always).
         /// Protected modes isolate PID/network/mounts and give live-root
@@ -690,7 +726,7 @@ pub enum Commands {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cli, CliSandboxMode, Commands, GenerationCommands, SystemCommands};
+    use super::{CcsCommands, Cli, CliSandboxMode, Commands, GenerationCommands, SystemCommands};
     use clap::{CommandFactory, Parser};
 
     #[test]
@@ -711,6 +747,42 @@ mod tests {
     }
 
     #[test]
+    fn install_accepts_legacy_replay_flags_defaulting_false() {
+        let cli = Cli::try_parse_from(["conary", "install", "bash"]).unwrap();
+        match cli.command {
+            Some(Commands::Install {
+                allow_legacy_replay,
+                allow_foreign_legacy_replay,
+                ..
+            }) => {
+                assert!(!allow_legacy_replay);
+                assert!(!allow_foreign_legacy_replay);
+            }
+            _ => panic!("expected install command"),
+        }
+
+        let cli = Cli::try_parse_from([
+            "conary",
+            "install",
+            "bash",
+            "--allow-legacy-replay",
+            "--allow-foreign-legacy-replay",
+        ])
+        .unwrap();
+        match cli.command {
+            Some(Commands::Install {
+                allow_legacy_replay,
+                allow_foreign_legacy_replay,
+                ..
+            }) => {
+                assert!(allow_legacy_replay);
+                assert!(allow_foreign_legacy_replay);
+            }
+            _ => panic!("expected install command"),
+        }
+    }
+
+    #[test]
     fn update_defaults_to_always_sandbox() {
         let cli = Cli::try_parse_from(["conary", "update"]).unwrap();
         match cli.command {
@@ -718,6 +790,160 @@ mod tests {
                 assert_eq!(sandbox, CliSandboxMode::Always);
             }
             _ => panic!("expected update command"),
+        }
+    }
+
+    #[test]
+    fn update_accepts_legacy_replay_flags_and_no_scripts_defaulting_false() {
+        let cli = Cli::try_parse_from(["conary", "update"]).unwrap();
+        match cli.command {
+            Some(Commands::Update {
+                no_scripts,
+                allow_legacy_replay,
+                allow_foreign_legacy_replay,
+                ..
+            }) => {
+                assert!(!no_scripts);
+                assert!(!allow_legacy_replay);
+                assert!(!allow_foreign_legacy_replay);
+            }
+            _ => panic!("expected update command"),
+        }
+
+        let cli = Cli::try_parse_from([
+            "conary",
+            "update",
+            "bash",
+            "--no-scripts",
+            "--allow-legacy-replay",
+            "--allow-foreign-legacy-replay",
+        ])
+        .unwrap();
+        match cli.command {
+            Some(Commands::Update {
+                no_scripts,
+                allow_legacy_replay,
+                allow_foreign_legacy_replay,
+                ..
+            }) => {
+                assert!(no_scripts);
+                assert!(allow_legacy_replay);
+                assert!(allow_foreign_legacy_replay);
+            }
+            _ => panic!("expected update command"),
+        }
+    }
+
+    #[test]
+    fn remove_accepts_legacy_replay_flags_defaulting_false() {
+        let cli = Cli::try_parse_from(["conary", "remove", "bash"]).unwrap();
+        match cli.command {
+            Some(Commands::Remove {
+                allow_legacy_replay,
+                allow_foreign_legacy_replay,
+                ..
+            }) => {
+                assert!(!allow_legacy_replay);
+                assert!(!allow_foreign_legacy_replay);
+            }
+            _ => panic!("expected remove command"),
+        }
+
+        let cli = Cli::try_parse_from([
+            "conary",
+            "remove",
+            "bash",
+            "--allow-legacy-replay",
+            "--allow-foreign-legacy-replay",
+        ])
+        .unwrap();
+        match cli.command {
+            Some(Commands::Remove {
+                allow_legacy_replay,
+                allow_foreign_legacy_replay,
+                ..
+            }) => {
+                assert!(allow_legacy_replay);
+                assert!(allow_foreign_legacy_replay);
+            }
+            _ => panic!("expected remove command"),
+        }
+    }
+
+    #[test]
+    fn autoremove_accepts_legacy_replay_flags_defaulting_false() {
+        let cli = Cli::try_parse_from(["conary", "autoremove"]).unwrap();
+        match cli.command {
+            Some(Commands::Autoremove {
+                allow_legacy_replay,
+                allow_foreign_legacy_replay,
+                ..
+            }) => {
+                assert!(!allow_legacy_replay);
+                assert!(!allow_foreign_legacy_replay);
+            }
+            _ => panic!("expected autoremove command"),
+        }
+
+        let cli = Cli::try_parse_from([
+            "conary",
+            "autoremove",
+            "--allow-legacy-replay",
+            "--allow-foreign-legacy-replay",
+        ])
+        .unwrap();
+        match cli.command {
+            Some(Commands::Autoremove {
+                allow_legacy_replay,
+                allow_foreign_legacy_replay,
+                ..
+            }) => {
+                assert!(allow_legacy_replay);
+                assert!(allow_foreign_legacy_replay);
+            }
+            _ => panic!("expected autoremove command"),
+        }
+    }
+
+    #[test]
+    fn ccs_install_accepts_legacy_replay_flags_and_no_scripts_defaulting_false() {
+        let cli = Cli::try_parse_from(["conary", "ccs", "install", "fixture.ccs"]).unwrap();
+        match cli.command {
+            Some(Commands::Ccs(CcsCommands::Install {
+                no_scripts,
+                allow_legacy_replay,
+                allow_foreign_legacy_replay,
+                ..
+            })) => {
+                assert!(!no_scripts);
+                assert!(!allow_legacy_replay);
+                assert!(!allow_foreign_legacy_replay);
+            }
+            _ => panic!("expected ccs install command"),
+        }
+
+        let cli = Cli::try_parse_from([
+            "conary",
+            "ccs",
+            "install",
+            "fixture.ccs",
+            "--no-scripts",
+            "--allow-legacy-replay",
+            "--allow-foreign-legacy-replay",
+        ])
+        .unwrap();
+        match cli.command {
+            Some(Commands::Ccs(CcsCommands::Install {
+                no_scripts,
+                allow_legacy_replay,
+                allow_foreign_legacy_replay,
+                ..
+            })) => {
+                assert!(no_scripts);
+                assert!(allow_legacy_replay);
+                assert!(allow_foreign_legacy_replay);
+            }
+            _ => panic!("expected ccs install command"),
         }
     }
 

@@ -754,11 +754,13 @@ pub async fn cmd_update(
     root: &str,
     security_only: bool,
     dry_run: bool,
+    no_scripts: bool,
     sandbox_mode: SandboxMode,
     dep_mode: Option<DepMode>,
     yes: bool,
     package_version: Option<String>,
     architecture: Option<String>,
+    legacy_replay: super::LegacyReplayOptions,
 ) -> Result<()> {
     if security_only {
         info!("Checking for security updates only");
@@ -1120,9 +1122,11 @@ pub async fn cmd_update(
                                             super::InstallOptions {
                                                 db_path,
                                                 root,
+                                                no_scripts,
                                                 sandbox_mode,
                                                 dep_mode: Some(dep_mode),
                                                 yes,
+                                                legacy_replay,
                                                 repository_provenance: Some(
                                                     repository_install_provenance_from_package(
                                                         &repo_pkg, &repo,
@@ -1290,9 +1294,11 @@ pub async fn cmd_update(
                     super::InstallOptions {
                         db_path,
                         root,
+                        no_scripts,
                         sandbox_mode,
                         dep_mode: Some(dep_mode),
                         yes,
+                        legacy_replay,
                         repository_provenance: Some(repository_install_provenance_from_package(
                             &repo_pkg, &repo,
                         )?),
@@ -1515,9 +1521,11 @@ pub async fn cmd_update_group(
     root: &str,
     security_only: bool,
     dry_run: bool,
+    no_scripts: bool,
     sandbox_mode: SandboxMode,
     dep_mode: Option<DepMode>,
     yes: bool,
+    legacy_replay: super::LegacyReplayOptions,
 ) -> Result<()> {
     info!("Updating collection: {}", name);
     let requested_dep_mode = dep_mode;
@@ -1690,11 +1698,13 @@ pub async fn cmd_update_group(
             root,
             security_only,
             dry_run,
+            no_scripts,
             sandbox_mode,
             requested_dep_mode,
             yes,
             Some(target.version.clone()),
             target.architecture.clone(),
+            legacy_replay,
         )
         .await
         {
@@ -1968,9 +1978,11 @@ mod tests {
             "/",
             false,
             true,
+            false,
             SandboxMode::None,
             None,
             true,
+            crate::commands::LegacyReplayOptions::default(),
         )
         .await;
 

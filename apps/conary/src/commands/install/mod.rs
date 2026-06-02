@@ -74,6 +74,19 @@ pub struct LegacyReplayOptions {
     pub allow_foreign_legacy_replay: bool,
 }
 
+#[allow(dead_code)]
+pub(crate) fn host_foreign_replay_policy_from_pin(
+    pin: Option<&conary_core::db::models::DistroPin>,
+) -> conary_core::ccs::legacy_replay::HostForeignReplayPolicy {
+    use conary_core::ccs::legacy_replay::HostForeignReplayPolicy;
+
+    match pin.map(|pin| pin.mixing_policy.as_str()) {
+        Some("guarded") => HostForeignReplayPolicy::Guarded,
+        Some("permissive") => HostForeignReplayPolicy::Permissive,
+        _ => HostForeignReplayPolicy::Strict,
+    }
+}
+
 /// Options for package installation
 #[derive(Debug, Clone, Default)]
 pub struct InstallOptions<'a> {
@@ -2675,6 +2688,8 @@ fn print_package_suggestions(conn: &rusqlite::Connection, package_name: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use conary_core::ccs::legacy_replay::HostForeignReplayPolicy;
+    use conary_core::db::models::DistroPin;
 
     #[test]
     fn legacy_replay_options_default_disabled_for_install_surfaces() {
@@ -2718,6 +2733,39 @@ mod tests {
             legacy_replay: default_replay,
         };
         assert_eq!(converted_opts.legacy_replay, default_replay);
+    }
+
+    fn distro_pin_with_policy(policy: &str) -> DistroPin {
+        DistroPin {
+            id: None,
+            distro: "fedora-44".to_string(),
+            mixing_policy: policy.to_string(),
+            created_at: "2026-06-02".to_string(),
+        }
+    }
+
+    #[test]
+    fn host_foreign_replay_policy_from_pin_fails_closed_for_unknowns() {
+        assert_eq!(
+            host_foreign_replay_policy_from_pin(None),
+            HostForeignReplayPolicy::Strict
+        );
+        assert_eq!(
+            host_foreign_replay_policy_from_pin(Some(&distro_pin_with_policy("strict"))),
+            HostForeignReplayPolicy::Strict
+        );
+        assert_eq!(
+            host_foreign_replay_policy_from_pin(Some(&distro_pin_with_policy("guarded"))),
+            HostForeignReplayPolicy::Guarded
+        );
+        assert_eq!(
+            host_foreign_replay_policy_from_pin(Some(&distro_pin_with_policy("permissive"))),
+            HostForeignReplayPolicy::Permissive
+        );
+        assert_eq!(
+            host_foreign_replay_policy_from_pin(Some(&distro_pin_with_policy("mystery"))),
+            HostForeignReplayPolicy::Strict
+        );
     }
 
     #[test]
