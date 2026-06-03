@@ -4,7 +4,9 @@
 use crate::daemon::routes::TransactionOperation;
 use crate::daemon::{DaemonEvent, DaemonState, JobKind};
 use anyhow::{Context, Result, bail};
-use conary::commands::{InstallOptions, SandboxMode, cmd_install, cmd_remove, cmd_update};
+use conary::commands::{
+    InstallOptions, LegacyReplayOptions, SandboxMode, cmd_install, cmd_remove, cmd_update,
+};
 use conary::live_host_safety::{
     LiveMutationClass, LiveMutationRequest, require_live_system_mutation_ack,
 };
@@ -249,6 +251,7 @@ async fn run_cli_command(command: PackageCommand, db_path: String, root: String)
                     no_scripts,
                     SandboxMode::Always,
                     purge_files,
+                    LegacyReplayOptions::default(),
                 )
                 .await?;
             }
@@ -268,11 +271,13 @@ async fn run_cli_command(command: PackageCommand, db_path: String, root: String)
                     &root,
                     security_only,
                     dry_run,
+                    false,
                     SandboxMode::Always,
                     None,
                     yes,
                     None,
                     None,
+                    LegacyReplayOptions::default(),
                 )
                 .await?;
             } else {
@@ -283,11 +288,13 @@ async fn run_cli_command(command: PackageCommand, db_path: String, root: String)
                         &root,
                         security_only,
                         dry_run,
+                        false,
                         SandboxMode::Always,
                         None,
                         yes,
                         None,
                         None,
+                        LegacyReplayOptions::default(),
                     )
                     .await?;
                 }
