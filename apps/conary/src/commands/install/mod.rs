@@ -111,7 +111,7 @@ pub(crate) struct LegacyReplayAuditContext {
 
 const LEGACY_REPLAY_POLICY: &str = "goal6-safe-replay";
 
-fn plan_ccs_fresh_install_legacy_replay(
+pub(super) fn plan_ccs_fresh_install_legacy_replay(
     bundle: Option<&conary_core::ccs::legacy_scriptlets::LegacyScriptletBundle>,
     opts: &CcsTransactionInstallOptions<'_>,
     is_upgrade: bool,
@@ -174,7 +174,7 @@ fn plan_ccs_fresh_install_legacy_replay(
     })
 }
 
-fn plan_ccs_old_installed_upgrade_legacy_replay(
+pub(super) fn plan_ccs_old_installed_upgrade_legacy_replay(
     conn: &rusqlite::Connection,
     old_trove: Option<&conary_core::db::models::Trove>,
     opts: &CcsTransactionInstallOptions<'_>,
@@ -236,7 +236,7 @@ fn plan_ccs_old_installed_upgrade_legacy_replay(
     })
 }
 
-fn merge_old_upgrade_legacy_replay_state(
+pub(super) fn merge_old_upgrade_legacy_replay_state(
     state: &mut LegacyReplayInstallState,
     old_state: LegacyReplayInstallState,
 ) {

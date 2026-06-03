@@ -8,13 +8,15 @@ use super::resolve::{
     PolicyOptions, ResolutionOutcome, ResolvedSourceType, resolve_package_path_with_policy,
 };
 use super::{
-    ExtractionResult, InstallOptions, InstallPhase, InstallProgress, InstallSemantics,
-    LegacyReplayInstallState, PackageExecutionPath, PreScriptletState, ScriptletContext,
-    TransactionContext, build_resolution_policy, extract_and_classify_files,
-    resolve_canonical_name, run_pre_install_phase,
+    CcsTransactionInstallOptions, ComponentSelection, ExtractionResult, InstallOptions,
+    InstallPhase, InstallProgress, InstallSemantics, LegacyReplayInstallState,
+    PackageExecutionPath, PreScriptletState, ScriptletContext, TransactionContext,
+    build_resolution_policy, extract_and_classify_files, resolve_canonical_name,
+    run_pre_install_phase,
 };
 use anyhow::{Context, Result};
 use conary_core::ccs::CcsPackage;
+use conary_core::ccs::legacy_replay::{LegacyReplayPlan, LegacyReplayRefusalKind};
 use conary_core::db::models::{ProvideEntry, StateMember, Trove, TroveType};
 use conary_core::packages::PackageFormat;
 use conary_core::scriptlet::SandboxMode;
@@ -171,13 +173,15 @@ pub(crate) async fn prepare_install_for_restore(
 ) -> Result<PreparedInstall> {
     let InstallOptions {
         db_path,
-        root: _,
+        root,
         version,
         repo,
         architecture,
         selection_reason,
         allow_downgrade,
         from_distro,
+        no_scripts,
+        sandbox_mode,
         legacy_replay,
         ..
     } = opts;
@@ -230,12 +234,14 @@ pub(crate) async fn prepare_install_for_restore(
         .to_str()
         .ok_or_else(|| anyhow::anyhow!("Invalid package path (non-UTF8)"))?;
 
-    let (pkg, semantics) =
+    let (pkg, semantics, legacy_bundle) =
         if resolved.source_type == ResolvedSourceType::Remi || path_str.ends_with(".ccs") {
+            let ccs_pkg = CcsPackage::parse(path_str).context("Failed to parse CCS package")?;
+            let legacy_bundle = ccs_pkg.manifest().legacy_scriptlets.clone();
             (
-                Box::new(CcsPackage::parse(path_str).context("Failed to parse CCS package")?)
-                    as Box<dyn PackageFormat>,
+                Box::new(ccs_pkg) as Box<dyn PackageFormat>,
                 InstallSemantics::ccs(),
+                legacy_bundle,
             )
         } else {
             let format = super::detect_package_format(path_str)
@@ -243,6 +249,7 @@ pub(crate) async fn prepare_install_for_restore(
             (
                 parse_package(&resolved.path, format)?,
                 InstallSemantics::legacy(format),
+                None,
             )
         };
 
@@ -258,6 +265,37 @@ pub(crate) async fn prepare_install_for_restore(
             UpgradeCheck::FreshInstall => None,
             UpgradeCheck::Upgrade(trove) | UpgradeCheck::Downgrade(trove) => Some(*trove),
         };
+    let legacy_replay_state = if legacy_bundle.is_some() || old_trove_to_upgrade.is_some() {
+        let ccs_opts = CcsTransactionInstallOptions {
+            db_path,
+            root,
+            dry_run: false,
+            defer_generation: false,
+            no_scripts,
+            sandbox_mode,
+            allow_downgrade,
+            reinstall: false,
+            selection_reason,
+            component_selection: ComponentSelection::Defaults,
+            selected_manifest_components: None,
+            repository_provenance: None,
+            legacy_replay,
+        };
+        let mut state = super::plan_ccs_fresh_install_legacy_replay(
+            legacy_bundle.as_ref(),
+            &ccs_opts,
+            old_trove_to_upgrade.is_some(),
+        )?;
+        let old_state = super::plan_ccs_old_installed_upgrade_legacy_replay(
+            conn,
+            old_trove_to_upgrade.as_ref(),
+            &ccs_opts,
+        )?;
+        super::merge_old_upgrade_legacy_replay_state(&mut state, old_state);
+        state
+    } else {
+        LegacyReplayInstallState::default()
+    };
 
     Ok(PreparedInstall {
         pkg,
@@ -267,7 +305,7 @@ pub(crate) async fn prepare_install_for_restore(
         semantics,
         _temp_dir: resolved._temp_dir,
         legacy_replay,
-        legacy_replay_state: LegacyReplayInstallState::default(),
+        legacy_replay_state,
     })
 }
 
@@ -286,6 +324,7 @@ pub(crate) fn run_pre_install_for_prepared(
             "state restore installs require an active Conary generation; no-generation live-root package install/remove are supported through `conary install` and `conary remove`"
         );
     }
+    preflight_prepared_legacy_replay(&prepared, no_scripts)?;
     let scriptlet_ctx = ScriptletContext {
         root,
         no_scripts,
@@ -378,10 +417,109 @@ fn should_skip_restore_dependency(name: &str) -> bool {
         || name.starts_with("((")
 }
 
+fn preflight_prepared_legacy_replay(prepared: &PreparedInstall, no_scripts: bool) -> Result<()> {
+    for (phase, plan) in prepared_legacy_replay_plans(prepared) {
+        let Some(plan) = plan else {
+            continue;
+        };
+        if !plan.raw_replay_required || plan.lifecycle_entries.is_empty() {
+            continue;
+        }
+
+        let entry_id = plan
+            .lifecycle_entries
+            .first()
+            .map(|entry| entry.entry_id.as_str())
+            .unwrap_or("unknown");
+        if no_scripts {
+            return Err(restore_legacy_replay_refusal_error(
+                prepared,
+                phase,
+                LegacyReplayRefusalKind::NoScriptsWouldSkipRequiredReplay,
+                entry_id,
+                "--no-scripts would skip required raw legacy replay",
+            ));
+        }
+        if !prepared.legacy_replay.allow_legacy_replay {
+            return Err(restore_legacy_replay_refusal_error(
+                prepared,
+                phase,
+                LegacyReplayRefusalKind::LegacyReplayFeatureDisabled,
+                entry_id,
+                "raw legacy replay requires an explicit operator opt-in",
+            ));
+        }
+        if plan.target_id != plan.source_target_id
+            && !prepared.legacy_replay.allow_foreign_legacy_replay
+        {
+            return Err(restore_legacy_replay_refusal_error(
+                prepared,
+                phase,
+                LegacyReplayRefusalKind::ForeignReplayOverrideRequired,
+                entry_id,
+                "foreign legacy replay requires --allow-foreign-legacy-replay",
+            ));
+        }
+        return Err(restore_legacy_replay_refusal_error(
+            prepared,
+            phase,
+            LegacyReplayRefusalKind::ReplayExecutionUnavailable,
+            entry_id,
+            "restore raw legacy replay execution is not wired yet",
+        ));
+    }
+
+    Ok(())
+}
+
+fn prepared_legacy_replay_plans(
+    prepared: &PreparedInstall,
+) -> [(&'static str, Option<&LegacyReplayPlan>); 4] {
+    [
+        (
+            "new-pre",
+            prepared.legacy_replay_state.new_bundle_pre_plan.as_ref(),
+        ),
+        (
+            "new-post",
+            prepared.legacy_replay_state.new_bundle_post_plan.as_ref(),
+        ),
+        (
+            "old-pre-remove",
+            prepared
+                .legacy_replay_state
+                .old_bundle_pre_remove_plan
+                .as_ref(),
+        ),
+        (
+            "old-post-remove",
+            prepared
+                .legacy_replay_state
+                .old_bundle_post_remove_plan
+                .as_ref(),
+        ),
+    ]
+}
+
+fn restore_legacy_replay_refusal_error(
+    prepared: &PreparedInstall,
+    phase: &str,
+    kind: LegacyReplayRefusalKind,
+    entry_id: &str,
+    message: &str,
+) -> anyhow::Error {
+    anyhow::anyhow!(
+        "legacy scriptlet replay refused ({kind:?} package={} phase={phase} entry={entry_id}): {message}",
+        prepared.pkg.name()
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::commands::install::{InstallSemantics, PackageFormatType};
+    use conary_core::ccs::legacy_replay::{LegacyReplayPlan, PlannedLegacyEntry};
+    use conary_core::ccs::legacy_scriptlets::LifecyclePath;
     use conary_core::components::ComponentType;
     use conary_core::db::models::{Trove, TroveType};
     use conary_core::packages::traits::{
@@ -460,6 +598,23 @@ mod tests {
         }
     }
 
+    fn test_legacy_plan(entry_id: &str, phase: LifecyclePath) -> LegacyReplayPlan {
+        LegacyReplayPlan {
+            target_id: "rpm/fedora/44/x86_64".to_string(),
+            source_target_id: "rpm/fedora/44/x86_64".to_string(),
+            bundle_evidence_digest: Some(conary_core::hash::sha256_prefixed(b"restore-evidence")),
+            lifecycle_entries: vec![PlannedLegacyEntry {
+                entry_id: entry_id.to_string(),
+                native_slot: "%pre".to_string(),
+                phase,
+                timeout_ms: 30_000,
+            }],
+            sandbox_floor: SandboxMode::None,
+            ccs_hooks_allowed: true,
+            raw_replay_required: true,
+        }
+    }
+
     #[test]
     fn prepared_restore_carries_legacy_replay_state() {
         let prepared = prepared_restore_fixture(Vec::new());
@@ -471,6 +626,50 @@ mod tests {
                 .legacy_replay_state
                 .accepted_bundle_to_persist
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn restore_pre_install_refuses_prepared_legacy_plan_before_scriptlets() {
+        let _mount_skip = crate::commands::composefs_ops::test_mount_skip_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("root");
+        let db_path = temp.path().join("conary.db");
+        std::fs::create_dir_all(&root).unwrap();
+        conary_core::db::init(&db_path).unwrap();
+        let conn = conary_core::db::open(&db_path).unwrap();
+        let marker = root.join("restore-legacy-pre-scriptlet-ran");
+        let mut prepared = prepared_restore_fixture(vec![Scriptlet {
+            phase: conary_core::packages::traits::ScriptletPhase::PreInstall,
+            interpreter: "/bin/sh".to_string(),
+            content: format!("touch {}", marker.display()),
+            flags: None,
+        }]);
+        prepared.legacy_replay_state.new_bundle_pre_plan =
+            Some(test_legacy_plan("rpm:%pre", LifecyclePath::PreInstall));
+        let db_path_string = db_path.to_string_lossy().into_owned();
+        let root_string = root.to_string_lossy().into_owned();
+
+        let result = run_pre_install_for_prepared(
+            &conn,
+            &db_path_string,
+            &root_string,
+            false,
+            SandboxMode::None,
+            prepared,
+        );
+        let error = match result {
+            Ok(_) => panic!("restore pre-install should refuse required legacy replay"),
+            Err(error) => error,
+        };
+
+        assert!(
+            error.to_string().contains("LegacyReplayFeatureDisabled"),
+            "{error:#}"
+        );
+        assert!(
+            !marker.exists(),
+            "restore pre-install scriptlet must not run when prepared legacy replay is refused"
         );
     }
 
