@@ -1,5 +1,7 @@
 // apps/conary/tests/query_scripts.rs
 
+mod common;
+
 use clap::Parser;
 use conary::cli::{Cli, Commands, QueryCommands};
 use conary_core::ccs::builder::{CcsBuilder, write_ccs_package};
@@ -11,6 +13,10 @@ use conary_core::ccs::legacy_scriptlets::{
     SourceFormat, TargetCompatibility, TransactionOrder, VersionScheme,
 };
 use conary_core::ccs::manifest::CcsManifest;
+use conary_core::db;
+use conary_core::db::models::{
+    Changeset, ChangesetStatus, InstalledLegacyScriptletBundle, ScriptletEntry, Trove, TroveType,
+};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::process::{Command, Output};
@@ -230,6 +236,7 @@ fn query_scripts_accepts_verbose_flag() {
             verbose,
             entry,
             json,
+            ..
         } => {
             assert_eq!(package_path, "nginx.ccs");
             assert!(verbose);
@@ -257,6 +264,7 @@ fn query_scripts_accepts_entry_filter() {
             verbose,
             entry,
             json,
+            ..
         } => {
             assert_eq!(package_path, "nginx.ccs");
             assert!(!verbose);
@@ -277,6 +285,7 @@ fn query_scripts_accepts_json_flag() {
             verbose,
             entry,
             json,
+            ..
         } => {
             assert_eq!(package_path, "nginx.ccs");
             assert!(!verbose);
@@ -285,6 +294,107 @@ fn query_scripts_accepts_json_flag() {
         }
         _ => panic!("expected query scripts command"),
     }
+}
+
+#[test]
+fn query_scripts_accepts_installed_package_selectors() {
+    let command = parse_query_scripts(&[
+        "conary",
+        "query",
+        "scripts",
+        "nginx",
+        "--db-path",
+        "/tmp/conary-test.db",
+        "--version",
+        "1.28.0",
+        "--arch",
+        "x86_64",
+    ]);
+
+    match command {
+        QueryCommands::Scripts { package_path, .. } => {
+            assert_eq!(package_path, "nginx");
+        }
+        _ => panic!("expected query scripts command"),
+    }
+}
+
+fn install_scriptlet_query_fixture() -> (TempDir, String) {
+    let (temp, db_path, mut conn) = common::create_test_db();
+
+    db::transaction(&mut conn, |tx| {
+        let mut changeset = Changeset::new("Install nginx scriptlet query fixture".to_string());
+        let changeset_id = changeset.insert(tx)?;
+
+        let mut trove = Trove::new(
+            "nginx".to_string(),
+            "1.28.0".to_string(),
+            TroveType::Package,
+        );
+        trove.architecture = Some("x86_64".to_string());
+        trove.installed_by_changeset_id = Some(changeset_id);
+        let trove_id = trove.insert(tx)?;
+
+        let mut flattened = ScriptletEntry::new(
+            trove_id,
+            "pre-install".to_string(),
+            "/bin/sh".to_string(),
+            "echo flattened scriptlet body must stay hidden\n".to_string(),
+            "rpm",
+        );
+        flattened.insert(tx)?;
+
+        let bundle = bundle_fixture();
+        let mut installed_bundle = InstalledLegacyScriptletBundle::new(
+            trove_id,
+            Some(changeset_id),
+            "rpm/fedora/44/x86_64".to_string(),
+            "goal6-safe-replay".to_string(),
+            false,
+            &bundle,
+        )
+        .expect("build installed bundle row");
+        installed_bundle
+            .insert_or_replace(tx)
+            .expect("insert installed bundle row");
+
+        changeset.update_status(tx, ChangesetStatus::Applied)?;
+        Ok(())
+    })
+    .unwrap();
+
+    (temp, db_path)
+}
+
+#[test]
+fn query_scripts_installed_package_distinguishes_flattened_and_bundle_entries() {
+    let (_temp, db_path) = install_scriptlet_query_fixture();
+    let output = run_conary(&[
+        "query",
+        "scripts",
+        "nginx",
+        "--db-path",
+        &db_path,
+        "--version",
+        "1.28.0",
+        "--arch",
+        "x86_64",
+    ]);
+
+    assert_success(&output);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Installed package: nginx 1.28.0 [x86_64]"));
+    assert!(stdout.contains("Flattened native scriptlets (scriptlets table): 1"));
+    assert!(
+        stdout.contains("Installed legacy bundle entries (installed_legacy_scriptlet_bundles): 2")
+    );
+    assert!(stdout.contains("pre-install"));
+    assert!(stdout.contains("package_format=rpm"));
+    assert!(stdout.contains("rpm:%post"));
+    assert!(stdout.contains("decision=legacy"));
+    assert!(stdout.contains("lifecycle=post-install"));
+    assert!(!stdout.contains("echo flattened scriptlet body must stay hidden"));
+    assert!(!stdout.contains("systemctl daemon-reload"));
 }
 
 #[test]

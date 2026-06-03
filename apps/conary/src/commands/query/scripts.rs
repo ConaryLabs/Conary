@@ -6,17 +6,25 @@ use conary_core::ccs::CcsPackage;
 use conary_core::ccs::legacy_scriptlets::{
     DecisionCounts, LegacyScriptletBundle, LegacyScriptletEntry, ScriptletEffect,
 };
+use conary_core::db::models::{InstalledLegacyScriptletBundle, ScriptletEntry, Trove};
 use conary_core::packages::PackageFormat;
 use conary_core::packages::arch::ArchPackage;
 use conary_core::packages::deb::DebPackage;
 use conary_core::packages::rpm::RpmPackage;
 use conary_core::packages::traits::ScriptletPhase;
 use serde::Serialize;
+use std::path::Path;
 
+use crate::commands::{InstalledPackageSelector, resolve_installed_package};
 use crate::commands::{PackageFormatType, detect_package_format};
+
+use super::super::open_db;
 
 #[derive(Debug, Clone, Default)]
 pub struct ScriptQueryOptions {
+    pub db_path: Option<String>,
+    pub version: Option<String>,
+    pub architecture: Option<String>,
     pub verbose: bool,
     pub entry: Option<String>,
     pub json: bool,
@@ -28,6 +36,13 @@ struct PackageQueryIdentity {
     version: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct InstalledPackageQueryIdentity {
+    name: String,
+    version: String,
+    architecture: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 struct ScriptQueryReport {
     package: PackageQueryIdentity,
@@ -35,6 +50,26 @@ struct ScriptQueryReport {
     bundle: Option<BundleQuerySummary>,
     entries: Vec<EntryQuerySummary>,
     warnings: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct InstalledScriptQueryReport {
+    package: InstalledPackageQueryIdentity,
+    flattened_scriptlets: Vec<FlattenedScriptletQuerySummary>,
+    bundle_present: bool,
+    bundle: Option<BundleQuerySummary>,
+    entries: Vec<EntryQuerySummary>,
+    warnings: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct FlattenedScriptletQuerySummary {
+    source: String,
+    phase: String,
+    interpreter: String,
+    flags: Option<String>,
+    package_format: String,
+    content_sha256: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -119,6 +154,12 @@ pub async fn cmd_scripts_with_options(
         return print_ccs_scriptlet_bundle(&package, &options);
     }
 
+    if !looks_like_package_file(package_path)
+        && let Some(db_path) = options.db_path.as_deref()
+    {
+        return print_installed_scriptlets(package_path, db_path, &options);
+    }
+
     let native_result = detect_package_format(package_path);
     match native_result {
         Ok(format) => print_native_scriptlets(package_path, format, &options),
@@ -127,6 +168,15 @@ pub async fn cmd_scripts_with_options(
             Err(_) => Err(native_error),
         },
     }
+}
+
+fn looks_like_package_file(package_path: &str) -> bool {
+    let lower = package_path.to_ascii_lowercase();
+    Path::new(package_path).exists()
+        || lower.ends_with(".ccs")
+        || lower.ends_with(".rpm")
+        || lower.ends_with(".deb")
+        || lower.contains(".pkg.tar")
 }
 
 fn print_ccs_scriptlet_bundle(package: &CcsPackage, options: &ScriptQueryOptions) -> Result<()> {
@@ -202,6 +252,170 @@ fn print_native_scriptlets(
     }
 
     Ok(())
+}
+
+fn print_installed_scriptlets(
+    package_name: &str,
+    db_path: &str,
+    options: &ScriptQueryOptions,
+) -> Result<()> {
+    let conn = open_db(db_path)?;
+    let selector = InstalledPackageSelector::new(
+        package_name.to_string(),
+        options.version.clone(),
+        options.architecture.clone(),
+    );
+    let resolved = resolve_installed_package(&conn, &selector)?;
+    let flattened = ScriptletEntry::find_by_trove(&conn, resolved.trove_id)?;
+    let installed_bundle = InstalledLegacyScriptletBundle::find_by_trove(&conn, resolved.trove_id)?
+        .map(|installed| {
+            installed
+                .bundle()
+                .context("installed legacy scriptlet bundle cannot be decoded")
+        })
+        .transpose()?;
+
+    let output = if options.json {
+        render_installed_scripts_json(
+            &resolved.trove,
+            &flattened,
+            installed_bundle.as_ref(),
+            options,
+        )?
+    } else {
+        render_installed_scripts_text(
+            &resolved.trove,
+            &flattened,
+            installed_bundle.as_ref(),
+            options,
+        )?
+    };
+    println!("{output}");
+    Ok(())
+}
+
+fn render_installed_scripts_text(
+    trove: &Trove,
+    flattened: &[ScriptletEntry],
+    bundle: Option<&LegacyScriptletBundle>,
+    options: &ScriptQueryOptions,
+) -> Result<String> {
+    let mut output = String::new();
+    output.push_str(&format!(
+        "Installed package: {} {} [{}]\n",
+        trove.name,
+        trove.version,
+        trove.architecture.as_deref().unwrap_or("none")
+    ));
+    output.push_str(&format!(
+        "Flattened native scriptlets (scriptlets table): {}\n",
+        flattened.len()
+    ));
+    for scriptlet in flattened {
+        output.push_str(&format!(
+            "  {:<16} source=scriptlets package_format={} interpreter={}\n",
+            scriptlet.phase, scriptlet.package_format, scriptlet.interpreter
+        ));
+        if options.verbose {
+            if let Some(flags) = &scriptlet.flags {
+                output.push_str(&format!("    flags={flags}\n"));
+            }
+            output.push_str(&format!(
+                "    content_sha256={}\n",
+                conary_core::hash::sha256_prefixed(scriptlet.content.as_bytes())
+            ));
+        }
+    }
+
+    let Some(bundle) = bundle else {
+        if let Some(entry_id) = &options.entry {
+            bail!("legacy scriptlet bundle entry '{entry_id}' not found: package has no bundle");
+        }
+        output
+            .push_str("Installed legacy bundle entries (installed_legacy_scriptlet_bundles): 0\n");
+        return Ok(output);
+    };
+
+    let entries = filtered_entries(bundle, options.entry.as_deref())?;
+    output.push_str(&format!(
+        "Installed legacy bundle entries (installed_legacy_scriptlet_bundles): {}\n",
+        bundle.entries.len()
+    ));
+    output.push_str(&format!("Legacy scriptlet bundle: {}\n", bundle.schema));
+    output.push_str(&format!(
+        "Fidelity: {}\n",
+        bundle.scriptlet_fidelity.as_str()
+    ));
+
+    for entry in entries {
+        output.push_str(&format!(
+            "  {:<18} source=installed_legacy_scriptlet_bundles decision={} lifecycle={} reason={}\n",
+            entry.id,
+            entry.decision.as_str(),
+            entry.phase.as_str(),
+            entry.reason_code
+        ));
+        if options.verbose {
+            output.push_str(&format!("    Interpreter: {}\n", entry.interpreter));
+            if !entry.interpreter_args.is_empty() {
+                output.push_str(&format!(
+                    "    Interpreter args: {}\n",
+                    entry.interpreter_args.join(" ")
+                ));
+            }
+            output.push_str(&format!("    Timeout: {}ms\n", entry.timeout_ms));
+            output.push_str(&format!("    body_sha256={}\n", entry.body_sha256));
+            if !entry.lifecycle_paths.is_empty() {
+                output.push_str(&format!(
+                    "    Lifecycle paths: {}\n",
+                    entry.lifecycle_paths.join(", ")
+                ));
+            }
+            if let Some(evidence_digest) = &entry.evidence_digest {
+                output.push_str(&format!("    evidence_digest={evidence_digest}\n"));
+            }
+        }
+    }
+
+    Ok(output)
+}
+
+fn render_installed_scripts_json(
+    trove: &Trove,
+    flattened: &[ScriptletEntry],
+    bundle: Option<&LegacyScriptletBundle>,
+    options: &ScriptQueryOptions,
+) -> Result<String> {
+    let (bundle_summary, entries, warnings) = if let Some(bundle) = bundle {
+        (
+            Some(bundle_summary(bundle)),
+            filtered_entries(bundle, options.entry.as_deref())?
+                .into_iter()
+                .map(entry_summary)
+                .collect(),
+            collect_warnings(bundle),
+        )
+    } else {
+        if let Some(entry_id) = &options.entry {
+            bail!("legacy scriptlet bundle entry '{entry_id}' not found: package has no bundle");
+        }
+        (None, Vec::new(), Vec::new())
+    };
+
+    let report = InstalledScriptQueryReport {
+        package: InstalledPackageQueryIdentity {
+            name: trove.name.clone(),
+            version: trove.version.clone(),
+            architecture: trove.architecture.clone(),
+        },
+        flattened_scriptlets: flattened.iter().map(flattened_summary).collect(),
+        bundle_present: bundle.is_some(),
+        bundle: bundle_summary,
+        entries,
+        warnings,
+    };
+
+    serde_json::to_string_pretty(&report).context("failed to serialize installed script query JSON")
 }
 
 fn render_ccs_bundle_text(
@@ -414,6 +628,17 @@ fn entry_summary(entry: &LegacyScriptletEntry) -> EntryQuerySummary {
             arch_install: entry.arch_install.is_some(),
             residual_replay: entry.residual_replay.is_some(),
         },
+    }
+}
+
+fn flattened_summary(scriptlet: &ScriptletEntry) -> FlattenedScriptletQuerySummary {
+    FlattenedScriptletQuerySummary {
+        source: "scriptlets".to_string(),
+        phase: scriptlet.phase.clone(),
+        interpreter: scriptlet.interpreter.clone(),
+        flags: scriptlet.flags.clone(),
+        package_format: scriptlet.package_format.clone(),
+        content_sha256: conary_core::hash::sha256_prefixed(scriptlet.content.as_bytes()),
     }
 }
 

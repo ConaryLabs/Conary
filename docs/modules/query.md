@@ -27,7 +27,7 @@ conary query <subcommand> [args]
   +-- reason                 -> reason.rs       (Trove.install_reason filter)
   +-- repquery               -> repo.rs         (RepositoryPackage table)
   +-- component / components -> components.rs   (Component + FileEntry tables)
-  +-- scripts                -> package.rs      (parse scriptlets from .rpm/.deb/.pkg)
+  +-- scripts                -> scripts.rs      (package files plus installed scriptlet/bundle state)
   +-- conflicts              -> dependency.rs   (file ownership overlap detection)
   +-- delta-stats            -> dependency.rs   (delta update statistics)
   +-- label                  -> cli/label.rs + dispatch.rs   (label path, delegation, and provenance management)
@@ -48,6 +48,8 @@ conary sbom [--profile ... | --derivation ...]
 | `FileEntry` | db/models/ | Installed file (path, hash, perms, component) |
 | `Component` | db/models/ | Logical subpackage (:runtime, :lib, :devel, :doc) |
 | `RepositoryPackage` | db/models/ | Available package from synced repo metadata |
+| `ScriptletEntry` | db/models/ | Flattened native install/remove hook rows |
+| `InstalledLegacyScriptletBundle` | db/models/ | Persisted CCS legacy bundle authority for replay-aware lifecycle queries |
 
 ## Database Tables
 
@@ -61,6 +63,8 @@ Primary tables hit by queries:
 | `files` | path, trove_id, component_id | component, conflicts |
 | `components` | parent_trove_id, name | component, components |
 | `repository_packages` | name, repository_id | repquery |
+| `scriptlets` | trove_id, phase | scripts |
+| `installed_legacy_scriptlet_bundles` | trove_id, evidence_digest | scripts |
 
 ## Query Patterns
 
@@ -69,6 +73,11 @@ Primary tables hit by queries:
 - **Pattern matching**: LIKE queries with wildcards on names and paths
 - **Recursive traversal**: deptree uses HashSet-based cycle detection with configurable depth
 - **Reverse lookup**: `WHERE depends_on_name = ?` for rdepends/whatbreaks
+- **Scriptlet inspection**: `conary query scripts <path>` inspects native or CCS
+  package files, while `conary query scripts <package> --db-path <db>` resolves an
+  installed package and separates flattened `scriptlets` rows from persisted
+  `installed_legacy_scriptlet_bundles` entries with replay decision and
+  lifecycle phase metadata.
 
 ## Related SBOM Command
 

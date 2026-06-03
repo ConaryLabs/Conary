@@ -111,10 +111,21 @@ pub enum QueryCommands {
         db: DbArgs,
     },
 
-    /// Display scriptlets (install/remove hooks) from a package file
+    /// Display scriptlets (install/remove hooks) from a package file or installed package
     Scripts {
-        /// Path to the package file to inspect
+        /// Path to the package file to inspect, or installed package name
         package_path: String,
+
+        #[command(flatten)]
+        db: DbArgs,
+
+        /// Installed package version to select when multiple variants are installed
+        #[arg(short, long)]
+        version: Option<String>,
+
+        /// Installed package architecture to select when multiple variants are installed
+        #[arg(long = "arch")]
+        architecture: Option<String>,
 
         /// Show full bundle entry details
         #[arg(long)]
