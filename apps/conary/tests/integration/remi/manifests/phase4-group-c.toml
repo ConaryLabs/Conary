@@ -432,7 +432,7 @@ timeout = 30
 group = "C"
 depends_on = ["T197"]
 
-# query scripts takes a file path, no --db-path.
+# query scripts can inspect a package file, or an installed package with --db-path.
 # The CCS built in T197 may have no scripts section, so accept either
 # success (empty scripts) or a graceful error.
 [[test.step]]

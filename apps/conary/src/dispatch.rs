@@ -1170,6 +1170,9 @@ async fn dispatch_query_command(query_cmd: cli::QueryCommands) -> Result<()> {
 
         cli::QueryCommands::Scripts {
             package_path,
+            db,
+            version,
+            architecture,
             verbose,
             entry,
             json,
@@ -1177,6 +1180,9 @@ async fn dispatch_query_command(query_cmd: cli::QueryCommands) -> Result<()> {
             commands::cmd_scripts_with_options(
                 &package_path,
                 commands::ScriptQueryOptions {
+                    db_path: Some(db.db_path),
+                    version,
+                    architecture,
                     verbose,
                     entry,
                     json,
