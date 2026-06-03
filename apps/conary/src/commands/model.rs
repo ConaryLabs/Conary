@@ -1002,10 +1002,17 @@ pub async fn cmd_model_update(model_path: &str, db_path: &str) -> Result<()> {
 mod tests {
     use super::super::test_helpers::{create_test_db, seed_mixed_replatform_fixture};
     use super::*;
+    use conary_core::ccs::legacy_scriptlets::{
+        DecisionCounts, ForeignReplayPolicy, LEGACY_SCRIPTLET_SCHEMA_V1, LegacyScriptletBundle,
+        LegacyScriptletEntry, LifecyclePath, NativeInvocation, PublicationPolicy,
+        PublicationStatus, ScriptletDecision, ScriptletFidelity, SourceFormat, TargetCompatibility,
+        TransactionOrder, VersionScheme,
+    };
     use conary_core::db::models::{DistroPin, settings};
     use conary_core::model::ReplatformBlockedReason;
     use conary_core::model::parser::SystemModel;
     use conary_core::repository::{SETTINGS_KEY_ALLOWED_DISTROS, SETTINGS_KEY_SELECTION_MODE};
+    use std::collections::BTreeMap;
     use std::collections::HashMap;
     use std::io::{Read, Write};
     use std::net::TcpListener;
@@ -1013,6 +1020,15 @@ mod tests {
     use tempfile::tempdir;
 
     fn build_test_ccs_package(dir: &Path, name: &str, version: &str) -> PathBuf {
+        build_test_ccs_package_with_bundle(dir, name, version, None)
+    }
+
+    fn build_test_ccs_package_with_bundle(
+        dir: &Path,
+        name: &str,
+        version: &str,
+        legacy_scriptlets: Option<LegacyScriptletBundle>,
+    ) -> PathBuf {
         use conary_core::ccs::builder::write_ccs_package;
         use conary_core::ccs::manifest::Platform;
         use conary_core::ccs::{BuildResult, CcsManifest, ComponentData, FileEntry, FileType};
@@ -1053,6 +1069,7 @@ mod tests {
             libc: "gnu".to_string(),
             abi: None,
         });
+        manifest.legacy_scriptlets = legacy_scriptlets;
         let result = BuildResult {
             manifest,
             components: HashMap::from([(
@@ -1072,6 +1089,87 @@ mod tests {
         };
         write_ccs_package(&result, &package_path).unwrap();
         package_path
+    }
+
+    fn legacy_replatform_upgrade_bundle(package: &str, version: &str) -> LegacyScriptletBundle {
+        let entry = legacy_replatform_upgrade_entry();
+        LegacyScriptletBundle {
+            schema: LEGACY_SCRIPTLET_SCHEMA_V1.to_string(),
+            schema_revision: 1,
+            source_format: SourceFormat::Rpm,
+            source_family: "fedora-rhel".to_string(),
+            source_distro: Some("fedora".to_string()),
+            source_release: Some("44".to_string()),
+            source_arch: Some("x86_64".to_string()),
+            source_package: package.to_string(),
+            source_version: version.to_string(),
+            source_checksum: None,
+            version_scheme: VersionScheme::Rpm,
+            conversion_tool: "remi".to_string(),
+            conversion_tool_version: "0.8.0".to_string(),
+            conversion_policy: "goal6-model-test".to_string(),
+            adapter_registry_digest: None,
+            target_policy_digest: None,
+            evidence_digest: Some(conary_core::hash::sha256_prefixed(
+                format!("{package}-{version}-legacy-replatform").as_bytes(),
+            )),
+            target_compatibility: TargetCompatibility::SourceNative,
+            allowed_targets: vec!["rpm/fedora/44/x86_64".to_string()],
+            foreign_replay_policy: ForeignReplayPolicy::Deny,
+            publication_policy: PublicationPolicy::LocalOnly,
+            publication_status: PublicationStatus::Public,
+            scriptlet_fidelity: ScriptletFidelity::LegacyReplay,
+            decision_counts: DecisionCounts {
+                replaced: 0,
+                legacy: 1,
+                blocked: 0,
+                review: 0,
+                extra: BTreeMap::new(),
+            },
+            unsupported_class_counts: BTreeMap::new(),
+            entries: vec![entry],
+            extra: BTreeMap::new(),
+        }
+    }
+
+    fn legacy_replatform_upgrade_entry() -> LegacyScriptletEntry {
+        let body = "echo replay-replatform-upgrade\n";
+        LegacyScriptletEntry {
+            id: "rpm:%pre".to_string(),
+            native_slot: "%pre".to_string(),
+            phase: LifecyclePath::PreUpgrade,
+            lifecycle_paths: vec!["upgrade:new-pre".to_string()],
+            interpreter: "/bin/sh".to_string(),
+            interpreter_args: Vec::new(),
+            body_sha256: conary_core::hash::sha256_prefixed(body.as_bytes()),
+            body: body.to_string(),
+            body_encoding: None,
+            native_invocation: NativeInvocation::default(),
+            transaction_order: TransactionOrder {
+                position: "before-payload".to_string(),
+                before: Vec::new(),
+                after: Vec::new(),
+                extra: BTreeMap::new(),
+            },
+            timeout_ms: 30_000,
+            sandbox: None,
+            capabilities: Vec::new(),
+            decision: ScriptletDecision::Legacy,
+            reason_code: "legacy-replay-required".to_string(),
+            human_reason: Some("test fixture".to_string()),
+            evidence_digest: Some(conary_core::hash::sha256_prefixed(
+                b"rpm:%pre:echo replay-replatform-upgrade",
+            )),
+            source_evidence_refs: vec!["capture:rpm:%pre".to_string()],
+            effects: Vec::new(),
+            unknown_commands: Vec::new(),
+            blocked_classes: Vec::new(),
+            rpm_trigger: None,
+            deb_maintainer: None,
+            arch_install: None,
+            residual_replay: None,
+            extra: BTreeMap::new(),
+        }
     }
 
     fn serve_test_file(file_path: PathBuf) -> (String, std::thread::JoinHandle<()>) {
@@ -1891,6 +1989,134 @@ strength = "strict"
             DistroPin::get_current(&conn).unwrap().unwrap().distro,
             "arch"
         );
+    }
+
+    #[tokio::test]
+    async fn test_model_apply_replatform_legacy_replay_failure_names_safe_choices() {
+        use conary_core::db::models::{
+            InstallSource, LabelEntry, PackageResolution, PrimaryStrategy, Repository,
+            RepositoryPackage, ResolutionStrategy, Trove, TroveType,
+        };
+
+        let (_temp_file, db_path) = create_test_db();
+        let temp_dir = tempdir().unwrap();
+        let install_root = temp_dir.path().join("root");
+        std::fs::create_dir_all(&install_root).unwrap();
+
+        let package_path = build_test_ccs_package_with_bundle(
+            temp_dir.path(),
+            "vim",
+            "9.1.0",
+            Some(legacy_replatform_upgrade_bundle("vim", "9.1.0")),
+        );
+        let package_checksum = conary_core::hash::sha256(&std::fs::read(&package_path).unwrap());
+        let (package_url, _server_handle) = serve_test_file(package_path.clone());
+
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+
+        let mut fedora_repo = Repository::new(
+            "fedora".to_string(),
+            "https://example.test/fedora".to_string(),
+        );
+        fedora_repo.default_strategy_distro = Some("fedora-44".to_string());
+        let fedora_repo_id = fedora_repo.insert(&conn).unwrap();
+
+        let mut arch_repo = Repository::new(
+            "arch-core".to_string(),
+            "https://example.test/arch".to_string(),
+        );
+        arch_repo.default_strategy_distro = Some("arch".to_string());
+        let arch_repo_id = arch_repo.insert(&conn).unwrap();
+
+        let mut fedora_label = LabelEntry::new(
+            "fedora".to_string(),
+            "f43".to_string(),
+            "stable".to_string(),
+        );
+        fedora_label.repository_id = Some(fedora_repo_id);
+        let fedora_label_id = fedora_label.insert(&conn).unwrap();
+
+        let mut installed = Trove::new_with_source(
+            "vim".to_string(),
+            "9.0.1".to_string(),
+            TroveType::Package,
+            InstallSource::Repository,
+        );
+        installed.label_id = Some(fedora_label_id);
+        installed.architecture = Some("x86_64".to_string());
+        installed.source_distro = Some("fedora-44".to_string());
+        installed.version_scheme = Some("rpm".to_string());
+        installed.installed_from_repository_id = Some(fedora_repo_id);
+        installed.insert(&conn).unwrap();
+
+        let mut arch_pkg = RepositoryPackage::new(
+            arch_repo_id,
+            "vim".to_string(),
+            "9.1.0".to_string(),
+            package_checksum.clone(),
+            std::fs::metadata(&package_path)
+                .unwrap()
+                .len()
+                .try_into()
+                .unwrap(),
+            package_url.clone(),
+        );
+        arch_pkg.architecture = Some("x86_64".to_string());
+        arch_pkg.insert(&conn).unwrap();
+
+        let mut exact_resolution = PackageResolution::new(
+            arch_repo_id,
+            "vim".to_string(),
+            vec![ResolutionStrategy::Binary {
+                url: package_url,
+                checksum: package_checksum,
+                delta_base: None,
+            }],
+        );
+        exact_resolution.version = Some("9.1.0".to_string());
+        exact_resolution.primary_strategy = PrimaryStrategy::Binary;
+        exact_resolution.insert(&conn).unwrap();
+
+        let model: SystemModel = toml::from_str(
+            r#"
+[model]
+version = 1
+
+[system.pin]
+distro = "arch"
+strength = "strict"
+"#,
+        )
+        .unwrap();
+
+        let state = capture_current_state(&conn).unwrap();
+        let diff = compute_model_diff(&model, &state, &conn, true, false)
+            .await
+            .unwrap();
+        drop(conn);
+
+        let action_refs = diff.actions.iter().collect::<Vec<_>>();
+        let _mount_skip = crate::commands::composefs_ops::test_mount_skip_guard();
+        let (executed, errors) =
+            apply_replatform_changes(&db_path, install_root.to_str().unwrap(), &action_refs)
+                .await
+                .unwrap();
+
+        assert_eq!(executed, 0);
+        assert_eq!(errors.len(), 1);
+        let error = &errors[0];
+        assert!(error.contains("Replatform 'vim'"), "{error}");
+        assert!(error.contains("LegacyReplayFeatureDisabled"), "{error}");
+        assert!(
+            error.contains("select a different target distro"),
+            "{error}"
+        );
+        assert!(error.contains("wait for adapter coverage"), "{error}");
+
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let installed_troves = Trove::find_by_name(&conn, "vim").unwrap();
+        assert_eq!(installed_troves.len(), 1);
+        assert_eq!(installed_troves[0].version, "9.0.1");
     }
 
     #[tokio::test]
