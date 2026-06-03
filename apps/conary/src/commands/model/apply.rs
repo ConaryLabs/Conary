@@ -227,11 +227,21 @@ pub(super) async fn apply_replatform_changes(
                     }
                 }
             }
-            Err(err) => errors.push(format!("Replatform '{}': {}", transaction.package, err)),
+            Err(err) => errors.push(format_replatform_install_error(&transaction.package, err)),
         }
     }
 
     Ok((executed, errors))
+}
+
+fn format_replatform_install_error(package: &str, err: anyhow::Error) -> String {
+    let error = err.to_string();
+    let guidance = if error.contains("LegacyReplayFeatureDisabled") {
+        " Safe choices: select a different target distro or wait for adapter coverage."
+    } else {
+        ""
+    };
+    format!("Replatform '{package}': {error}{guidance}")
 }
 
 fn finalize_replatform_provenance(
