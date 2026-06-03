@@ -8,9 +8,16 @@ use super::open_db;
 #[cfg(test)]
 use anyhow::Context;
 use anyhow::{Result, anyhow};
+use conary_core::ccs::legacy_replay::{
+    HostForeignReplayPolicy, LegacyReplayLifecycle, LegacyReplayPolicyInput, LegacyReplayPreflight,
+    LegacyReplayRefusal, plan_legacy_replay,
+};
+use conary_core::db::models::InstalledLegacyScriptletBundle;
 use conary_core::db::paths::objects_dir;
 use conary_core::filesystem::CasStore;
+use conary_core::repository::distro::source_target_from_bundle;
 use conary_core::runtime_root::ConaryRuntimeRoot;
+use conary_core::scriptlet::SandboxMode;
 use std::cell::RefCell;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -361,6 +368,14 @@ pub async fn cmd_rollback(changeset_id: i64, db_path: &str, root: &str) -> Resul
             "Rollback of changeset {} ({})",
             changeset_id, changeset.description
         ));
+
+        for trove in &troves {
+            if let Some(trove_id) = trove.id {
+                preflight_rollback_installed_bundle(tx, trove_id)
+                    .map_err(|error| conary_core::Error::InitError(error.to_string()))?;
+            }
+        }
+
         let rollback_id = rollback_changeset.insert(tx)?;
 
         for trove in &troves {
@@ -419,6 +434,45 @@ fn require_active_generation_for_rollback(changeset_id: i64, db_path: &str) -> R
         );
     }
     Ok(())
+}
+
+fn preflight_rollback_installed_bundle(conn: &rusqlite::Connection, trove_id: i64) -> Result<()> {
+    let Some(installed) = InstalledLegacyScriptletBundle::find_by_trove(conn, trove_id)? else {
+        return Ok(());
+    };
+    let bundle = installed
+        .bundle()
+        .map_err(|error| anyhow!("installed legacy scriptlet bundle is malformed: {error}"))?;
+    let target = source_target_from_bundle(&bundle);
+    let input = LegacyReplayPolicyInput {
+        replay_enabled: false,
+        foreign_replay_override: false,
+        no_scripts: false,
+        requested_sandbox_mode: SandboxMode::Always,
+        host_policy: HostForeignReplayPolicy::Strict,
+        target: target.as_target(),
+    };
+
+    match plan_legacy_replay(Some(&bundle), LegacyReplayLifecycle::RollbackRemove, &input)? {
+        LegacyReplayPreflight::NativeFree | LegacyReplayPreflight::FullyReplaced(_) => Ok(()),
+        LegacyReplayPreflight::RequiresReplay(_) => Err(anyhow!(
+            "legacy scriptlet replay refused (RollbackReplayUnavailable): rollback cannot execute raw legacy replay in Goal 6"
+        )),
+        LegacyReplayPreflight::Refused(refusal) => Err(legacy_replay_refusal_error(refusal)),
+    }
+}
+
+fn legacy_replay_refusal_error(refusal: LegacyReplayRefusal) -> anyhow::Error {
+    let entry = refusal
+        .entry_id
+        .as_deref()
+        .map(|entry_id| format!(" entry={entry_id}"))
+        .unwrap_or_default();
+    anyhow!(
+        "legacy scriptlet replay refused ({:?}{entry}): {}",
+        refusal.kind,
+        refusal.message
+    )
 }
 
 #[cfg(test)]
@@ -623,6 +677,11 @@ fn rollback_changeset_with_snapshots(
                 stmt.query_map([changeset_id], |row| row.get::<_, i64>(0))?
                     .collect::<rusqlite::Result<Vec<_>>>()?
             };
+
+            for trove_id in &new_trove_ids {
+                preflight_rollback_installed_bundle(tx, *trove_id)
+                    .map_err(|error| conary_core::Error::InitError(error.to_string()))?;
+            }
 
             for trove_id in &new_trove_ids {
                 let trove = conary_core::db::models::Trove::find_by_id(tx, *trove_id)?.ok_or_else(
@@ -1195,12 +1254,20 @@ use super::format_bytes;
 mod tests {
     use super::{cmd_init, cmd_rollback, restore_snapshots_to_live_root, rollback_claim_statuses};
     use crate::commands::{FileSnapshot, RevertMetadata, TroveSnapshot, parse_rollback_snapshots};
+    use conary_core::ccs::legacy_scriptlets::{
+        DecisionCounts, ForeignReplayPolicy, LEGACY_SCRIPTLET_SCHEMA_V1, LegacyScriptletBundle,
+        LegacyScriptletEntry, LifecyclePath, NativeInvocation, PublicationPolicy,
+        PublicationStatus, ScriptletDecision, ScriptletFidelity, SourceFormat, TargetCompatibility,
+        TransactionOrder, VersionScheme,
+    };
     use conary_core::db::models::{
-        Changeset, ChangesetStatus, FileEntry, InstallSource, Trove, TroveType,
+        Changeset, ChangesetStatus, FileEntry, InstallSource, InstalledLegacyScriptletBundle,
+        Trove, TroveType,
     };
     use conary_core::db::paths::objects_dir;
     use conary_core::filesystem::CasStore;
     use rusqlite::params;
+    use std::collections::BTreeMap;
     use std::path::Path;
 
     #[tokio::test]
@@ -1348,7 +1415,7 @@ mod tests {
         name: &str,
         version: &str,
         files: &[(&str, &str, i64)],
-    ) {
+    ) -> i64 {
         let mut trove = Trove::new_with_source(
             name.to_string(),
             version.to_string(),
@@ -1368,6 +1435,232 @@ mod tests {
             );
             file.insert(conn).unwrap();
         }
+
+        trove_id
+    }
+
+    fn create_active_generation_link(runtime_root: &Path) {
+        std::fs::create_dir_all(runtime_root.join("generations/1")).unwrap();
+        std::os::unix::fs::symlink("generations/1", runtime_root.join("current")).unwrap();
+    }
+
+    fn rollback_legacy_entry() -> LegacyScriptletEntry {
+        let body = "systemctl daemon-reload\n";
+        LegacyScriptletEntry {
+            id: "rpm:%post".to_string(),
+            native_slot: "%post".to_string(),
+            phase: LifecyclePath::PostInstall,
+            lifecycle_paths: vec!["install:last".to_string()],
+            interpreter: "/bin/sh".to_string(),
+            interpreter_args: Vec::new(),
+            body_sha256: conary_core::hash::sha256_prefixed(body.as_bytes()),
+            body: body.to_string(),
+            body_encoding: None,
+            native_invocation: NativeInvocation::default(),
+            transaction_order: TransactionOrder {
+                position: "after-payload".to_string(),
+                before: Vec::new(),
+                after: vec!["payload".to_string()],
+                extra: BTreeMap::new(),
+            },
+            timeout_ms: 30_000,
+            sandbox: None,
+            capabilities: Vec::new(),
+            decision: ScriptletDecision::Legacy,
+            reason_code: "legacy-replay-required".to_string(),
+            human_reason: Some("fixture legacy entry".to_string()),
+            evidence_digest: None,
+            source_evidence_refs: Vec::new(),
+            effects: Vec::new(),
+            unknown_commands: Vec::new(),
+            blocked_classes: Vec::new(),
+            rpm_trigger: None,
+            deb_maintainer: None,
+            arch_install: None,
+            residual_replay: None,
+            extra: BTreeMap::new(),
+        }
+    }
+
+    fn rollback_legacy_bundle() -> LegacyScriptletBundle {
+        LegacyScriptletBundle {
+            schema: LEGACY_SCRIPTLET_SCHEMA_V1.to_string(),
+            schema_revision: 1,
+            source_format: SourceFormat::Rpm,
+            source_family: "fedora".to_string(),
+            source_distro: Some("fedora".to_string()),
+            source_release: Some("44".to_string()),
+            source_arch: Some("x86_64".to_string()),
+            source_package: "rollback-legacy-fixture".to_string(),
+            source_version: "1.0-1".to_string(),
+            source_checksum: None,
+            version_scheme: VersionScheme::Rpm,
+            conversion_tool: "remi".to_string(),
+            conversion_tool_version: "0.8.0".to_string(),
+            conversion_policy: "goal6-test".to_string(),
+            adapter_registry_digest: None,
+            target_policy_digest: None,
+            evidence_digest: Some(conary_core::hash::sha256_prefixed(b"rollback-evidence")),
+            target_compatibility: TargetCompatibility::SourceNative,
+            allowed_targets: vec!["rpm/fedora/44/x86_64".to_string()],
+            foreign_replay_policy: ForeignReplayPolicy::Deny,
+            publication_policy: PublicationPolicy::LocalOnly,
+            publication_status: PublicationStatus::LocalOnly,
+            scriptlet_fidelity: ScriptletFidelity::LegacyReplay,
+            decision_counts: DecisionCounts {
+                replaced: 0,
+                legacy: 1,
+                blocked: 0,
+                review: 0,
+                extra: BTreeMap::new(),
+            },
+            unsupported_class_counts: BTreeMap::new(),
+            entries: vec![rollback_legacy_entry()],
+            extra: BTreeMap::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn rollback_refuses_installed_legacy_bundle_before_deleting_trove() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("conary.db");
+        let db_path_str = db_path.to_string_lossy().to_string();
+        conary_core::db::init(&db_path_str).unwrap();
+        create_active_generation_link(temp_dir.path());
+        let conn = conary_core::db::open(&db_path_str).unwrap();
+
+        let mut changeset = Changeset::new("Install rollback legacy fixture".to_string());
+        let changeset_id = changeset.insert(&conn).unwrap();
+        changeset
+            .update_status(&conn, ChangesetStatus::Applied)
+            .unwrap();
+        let trove_id =
+            insert_test_trove(&conn, changeset_id, "rollback-legacy-fixture", "1.0-1", &[]);
+        let bundle = rollback_legacy_bundle();
+        let mut installed = InstalledLegacyScriptletBundle::new(
+            trove_id,
+            Some(changeset_id),
+            "rpm/fedora/44/x86_64".to_string(),
+            "allow-legacy-replay".to_string(),
+            true,
+            &bundle,
+        )
+        .unwrap();
+        installed.insert_or_replace(&conn).unwrap();
+        drop(conn);
+
+        let err = cmd_rollback(
+            changeset_id,
+            &db_path_str,
+            temp_dir.path().join("root").to_string_lossy().as_ref(),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+
+        assert!(
+            err.contains("RollbackReplayUnavailable"),
+            "unexpected rollback error: {err}"
+        );
+
+        let conn = conary_core::db::open(&db_path_str).unwrap();
+        assert!(
+            Trove::find_by_id(&conn, trove_id).unwrap().is_some(),
+            "rollback refusal must happen before deleting the installed trove"
+        );
+        assert!(
+            InstalledLegacyScriptletBundle::find_by_trove(&conn, trove_id)
+                .unwrap()
+                .is_some(),
+            "rollback refusal must preserve the installed legacy bundle row"
+        );
+        let reversed_by: Option<i64> = conn
+            .query_row(
+                "SELECT reversed_by_changeset_id FROM changesets WHERE id = ?1",
+                [changeset_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(reversed_by, None);
+    }
+
+    #[tokio::test]
+    async fn rollback_snapshot_path_refuses_installed_legacy_bundle_before_deleting_trove() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("conary.db");
+        let db_path_str = db_path.to_string_lossy().to_string();
+        conary_core::db::init(&db_path_str).unwrap();
+        create_active_generation_link(temp_dir.path());
+        let conn = conary_core::db::open(&db_path_str).unwrap();
+
+        let old_snapshot = TroveSnapshot {
+            name: "rollback-legacy-fixture".to_string(),
+            version: "0.9-1".to_string(),
+            architecture: Some("x86_64".to_string()),
+            description: None,
+            install_source: InstallSource::File.as_str().to_string(),
+            installed_from_repository_id: None,
+            files: Vec::new(),
+        };
+
+        let mut changeset = Changeset::new("Upgrade rollback legacy fixture".to_string());
+        let changeset_id = changeset.insert(&conn).unwrap();
+        conn.execute(
+            "UPDATE changesets SET metadata = ?1 WHERE id = ?2",
+            params![serde_json::to_string(&old_snapshot).unwrap(), changeset_id],
+        )
+        .unwrap();
+        changeset
+            .update_status(&conn, ChangesetStatus::Applied)
+            .unwrap();
+        let trove_id =
+            insert_test_trove(&conn, changeset_id, "rollback-legacy-fixture", "1.0-1", &[]);
+        let bundle = rollback_legacy_bundle();
+        let mut installed = InstalledLegacyScriptletBundle::new(
+            trove_id,
+            Some(changeset_id),
+            "rpm/fedora/44/x86_64".to_string(),
+            "allow-legacy-replay".to_string(),
+            true,
+            &bundle,
+        )
+        .unwrap();
+        installed.insert_or_replace(&conn).unwrap();
+        drop(conn);
+
+        let err = cmd_rollback(
+            changeset_id,
+            &db_path_str,
+            temp_dir.path().join("root").to_string_lossy().as_ref(),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+
+        assert!(
+            err.contains("RollbackReplayUnavailable"),
+            "unexpected rollback error: {err}"
+        );
+
+        let conn = conary_core::db::open(&db_path_str).unwrap();
+        assert!(
+            Trove::find_by_id(&conn, trove_id).unwrap().is_some(),
+            "snapshot rollback refusal must happen before deleting the installed trove"
+        );
+        assert!(
+            InstalledLegacyScriptletBundle::find_by_trove(&conn, trove_id)
+                .unwrap()
+                .is_some(),
+            "snapshot rollback refusal must preserve the installed legacy bundle row"
+        );
+        let reversed_by: Option<i64> = conn
+            .query_row(
+                "SELECT reversed_by_changeset_id FROM changesets WHERE id = ?1",
+                [changeset_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(reversed_by, None);
     }
 
     #[tokio::test]

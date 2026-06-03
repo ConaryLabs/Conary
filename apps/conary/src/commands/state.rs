@@ -503,10 +503,17 @@ pub async fn cmd_state_create(
 #[cfg(test)]
 mod tests {
     use super::execute_restore_plan_with_root;
-    use conary_core::db::models::{
-        Changeset, ChangesetStatus, PackageResolution, PrimaryStrategy, Repository,
-        RepositoryPackage, ResolutionStrategy, Trove, TroveType,
+    use conary_core::ccs::legacy_scriptlets::{
+        DecisionCounts, ForeignReplayPolicy, LEGACY_SCRIPTLET_SCHEMA_V1, LegacyScriptletBundle,
+        LegacyScriptletEntry, LifecyclePath, NativeInvocation, PublicationPolicy,
+        PublicationStatus, ScriptletDecision, ScriptletFidelity, SourceFormat, TargetCompatibility,
+        TransactionOrder, VersionScheme,
     };
+    use conary_core::db::models::{
+        Changeset, ChangesetStatus, InstalledLegacyScriptletBundle, PackageResolution,
+        PrimaryStrategy, Repository, RepositoryPackage, ResolutionStrategy, Trove, TroveType,
+    };
+    use std::collections::BTreeMap;
     use std::collections::HashMap;
     use std::io::{Read, Write};
     use std::net::TcpListener;
@@ -551,6 +558,123 @@ mod tests {
         package_path
     }
 
+    fn legacy_post_remove_entry() -> LegacyScriptletEntry {
+        let body = "systemctl daemon-reload\n";
+        LegacyScriptletEntry {
+            id: "rpm:%postun".to_string(),
+            native_slot: "%postun".to_string(),
+            phase: LifecyclePath::PostRemove,
+            lifecycle_paths: vec!["remove:last".to_string()],
+            interpreter: "/bin/sh".to_string(),
+            interpreter_args: Vec::new(),
+            body_sha256: conary_core::hash::sha256_prefixed(body.as_bytes()),
+            body: body.to_string(),
+            body_encoding: None,
+            native_invocation: NativeInvocation::default(),
+            transaction_order: TransactionOrder {
+                position: "after-payload".to_string(),
+                before: Vec::new(),
+                after: vec!["payload".to_string()],
+                extra: BTreeMap::new(),
+            },
+            timeout_ms: 30_000,
+            sandbox: None,
+            capabilities: Vec::new(),
+            decision: ScriptletDecision::Legacy,
+            reason_code: "legacy-replay-required".to_string(),
+            human_reason: Some("fixture legacy post-remove".to_string()),
+            evidence_digest: None,
+            source_evidence_refs: Vec::new(),
+            effects: Vec::new(),
+            unknown_commands: Vec::new(),
+            blocked_classes: Vec::new(),
+            rpm_trigger: None,
+            deb_maintainer: None,
+            arch_install: None,
+            residual_replay: None,
+            extra: BTreeMap::new(),
+        }
+    }
+
+    fn legacy_post_remove_bundle(package: &str, version: &str) -> LegacyScriptletBundle {
+        LegacyScriptletBundle {
+            schema: LEGACY_SCRIPTLET_SCHEMA_V1.to_string(),
+            schema_revision: 1,
+            source_format: SourceFormat::Rpm,
+            source_family: "fedora".to_string(),
+            source_distro: Some("fedora".to_string()),
+            source_release: Some("44".to_string()),
+            source_arch: Some("x86_64".to_string()),
+            source_package: package.to_string(),
+            source_version: version.to_string(),
+            source_checksum: None,
+            version_scheme: VersionScheme::Rpm,
+            conversion_tool: "remi".to_string(),
+            conversion_tool_version: "0.8.0".to_string(),
+            conversion_policy: "goal6-test".to_string(),
+            adapter_registry_digest: None,
+            target_policy_digest: None,
+            evidence_digest: Some(conary_core::hash::sha256_prefixed(
+                format!("{package}-{version}-evidence").as_bytes(),
+            )),
+            target_compatibility: TargetCompatibility::SourceNative,
+            allowed_targets: vec!["rpm/fedora/44/x86_64".to_string()],
+            foreign_replay_policy: ForeignReplayPolicy::Deny,
+            publication_policy: PublicationPolicy::LocalOnly,
+            publication_status: PublicationStatus::LocalOnly,
+            scriptlet_fidelity: ScriptletFidelity::LegacyReplay,
+            decision_counts: DecisionCounts {
+                replaced: 0,
+                legacy: 1,
+                blocked: 0,
+                review: 0,
+                extra: BTreeMap::new(),
+            },
+            unsupported_class_counts: BTreeMap::new(),
+            entries: vec![legacy_post_remove_entry()],
+            extra: BTreeMap::new(),
+        }
+    }
+
+    fn insert_legacy_restore_fixture(
+        conn: &mut rusqlite::Connection,
+        package: &str,
+        version: &str,
+    ) -> i64 {
+        conary_core::db::transaction(conn, |tx| {
+            let mut cs = Changeset::new(format!("Install {package}-{version}"));
+            let cs_id = cs.insert(tx)?;
+            let mut trove =
+                Trove::new(package.to_string(), version.to_string(), TroveType::Package);
+            trove.architecture = Some("x86_64".to_string());
+            trove.installed_by_changeset_id = Some(cs_id);
+            let trove_id = trove.insert(tx)?;
+            let bundle = legacy_post_remove_bundle(package, version);
+            let mut installed = InstalledLegacyScriptletBundle::new(
+                trove_id,
+                Some(cs_id),
+                "rpm/fedora/44/x86_64".to_string(),
+                "allow-legacy-replay".to_string(),
+                true,
+                &bundle,
+            )
+            .map_err(|error| conary_core::Error::InitError(error.to_string()))?;
+            installed
+                .insert_or_replace(tx)
+                .map_err(|error| conary_core::Error::InitError(error.to_string()))?;
+            cs.update_status(tx, ChangesetStatus::Applied)?;
+            Ok::<_, conary_core::Error>(trove_id)
+        })
+        .unwrap()
+    }
+
+    fn table_count(conn: &rusqlite::Connection, table: &str) -> i64 {
+        conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+            row.get(0)
+        })
+        .unwrap()
+    }
+
     fn serve_test_file(file_path: PathBuf) -> (String, std::thread::JoinHandle<()>) {
         let filename = file_path.file_name().unwrap().to_string_lossy().to_string();
         let bytes = std::fs::read(&file_path).unwrap();
@@ -568,6 +692,100 @@ mod tests {
             stream.write_all(&bytes).unwrap();
         });
         (format!("http://{addr}/{filename}"), handle)
+    }
+
+    #[tokio::test]
+    async fn state_restore_dry_run_preserves_installed_legacy_bundle_rows() {
+        let (_tmp, db_path) = crate::commands::test_helpers::setup_command_test_db();
+        let root = tempfile::tempdir().unwrap();
+
+        let mut conn = crate::commands::open_db(&db_path).unwrap();
+        let engine = conary_core::db::models::StateEngine::new(&conn);
+        let baseline = engine.create_snapshot("baseline", None, None).unwrap();
+        let trove_id = insert_legacy_restore_fixture(&mut conn, "vim", "9.1.0");
+        conary_core::db::models::StateEngine::new(&conn)
+            .create_snapshot("drifted", None, None)
+            .unwrap();
+
+        let before_changesets = table_count(&conn, "changesets");
+        let before_troves = table_count(&conn, "troves");
+        let before_bundles = table_count(&conn, "installed_legacy_scriptlet_bundles");
+        drop(conn);
+
+        execute_restore_plan_with_root(
+            &db_path,
+            root.path().to_str().unwrap(),
+            baseline.state_number,
+            true,
+        )
+        .await
+        .unwrap();
+
+        let conn = crate::commands::open_db(&db_path).unwrap();
+        assert_eq!(table_count(&conn, "changesets"), before_changesets);
+        assert_eq!(table_count(&conn, "troves"), before_troves);
+        assert_eq!(
+            table_count(&conn, "installed_legacy_scriptlet_bundles"),
+            before_bundles
+        );
+        assert!(
+            InstalledLegacyScriptletBundle::find_by_trove(&conn, trove_id)
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn state_restore_refuses_installed_legacy_remove_replay_before_mutation() {
+        let (_tmp, db_path) = crate::commands::test_helpers::setup_command_test_db();
+        let root = tempfile::tempdir().unwrap();
+        let _guard = crate::commands::composefs_ops::test_mount_skip_guard();
+
+        let mut conn = crate::commands::open_db(&db_path).unwrap();
+        let engine = conary_core::db::models::StateEngine::new(&conn);
+        let baseline = engine.create_snapshot("baseline", None, None).unwrap();
+        let trove_id = insert_legacy_restore_fixture(&mut conn, "vim", "9.1.0");
+        conary_core::db::models::StateEngine::new(&conn)
+            .create_snapshot("drifted", None, None)
+            .unwrap();
+
+        let before_changesets = table_count(&conn, "changesets");
+        let before_troves = table_count(&conn, "troves");
+        let before_bundles = table_count(&conn, "installed_legacy_scriptlet_bundles");
+        drop(conn);
+
+        let err = execute_restore_plan_with_root(
+            &db_path,
+            root.path().to_str().unwrap(),
+            baseline.state_number,
+            false,
+        )
+        .await
+        .expect_err("restore should fail closed before removing legacy bundle trove")
+        .to_string();
+
+        assert!(
+            err.contains("LegacyReplayFeatureDisabled"),
+            "unexpected restore error: {err}"
+        );
+
+        let conn = crate::commands::open_db(&db_path).unwrap();
+        assert_eq!(table_count(&conn, "changesets"), before_changesets);
+        assert_eq!(table_count(&conn, "troves"), before_troves);
+        assert_eq!(
+            table_count(&conn, "installed_legacy_scriptlet_bundles"),
+            before_bundles
+        );
+        assert!(
+            Trove::find_by_id(&conn, trove_id).unwrap().is_some(),
+            "restore refusal must happen before deleting the installed trove"
+        );
+        assert!(
+            InstalledLegacyScriptletBundle::find_by_trove(&conn, trove_id)
+                .unwrap()
+                .is_some(),
+            "restore refusal must preserve the installed legacy bundle row"
+        );
     }
 
     #[tokio::test]
