@@ -92,6 +92,16 @@ design to archive paths. The active `plans/` and `specs/` roots are clear
 again; the release-hardening queue now survives as active product behavior,
 tests, and user/operator docs rather than as open planning records.
 
+The legacy scriptlet semantics sequence has now landed through Goal 6. This
+archive pass moves the completed Goal 0 Remi benchmark/corpus plan, the Goal 1
+through Goal 6 detailed implementation plans, and the matching Goal 1 through
+Goal 6 design specs to archive paths. The top-level legacy scriptlet goal
+queue and umbrella semantics design intentionally remain active because they
+still carry the future compatibility-matrix and golden-fixture goals.
+`docs/modules/remi.md` now carries the current Remi-facing behavior for passive
+scriptlet metadata, publication gating, and local benchmark/corpus evidence
+commands.
+
 Audited every tracked documentation-like file returned by
 `bash scripts/docs-audit-inventory.sh`: tracked files spanning root docs,
 assistant entrypoints, GitHub templates, canonical docs under `docs/`,
@@ -255,14 +265,16 @@ The repo moved materially after the last audit:
 - Existing archive docs and recipe READMEs were retained as historical
   reference material.
 - Completed top-level superpowers plans, including Goal 6, Goal 7, completion
-  validation, Goal 1, and the MCP/LLM-native operations prep slices, were moved
+  validation, Goal 1, the MCP/LLM-native operations prep slices, and the
+  completed legacy scriptlet Goal 0 through Goal 6 detailed records, were moved
   to `docs/superpowers/plans/archive/`.
 - Completed design specs, including the MCP/LLM-native operations design
-  records and the Plan A/B/C invariant-hardening records, were moved to
+  records, the Plan A/B/C invariant-hardening records, and the completed legacy
+  scriptlet Goal 1 through Goal 6 design specs, were moved to
   `docs/superpowers/specs/archive/`; completed implementation plans were moved
-  to `docs/superpowers/plans/archive/`. After Plan C, the active top-level
-  `plans/` and `specs/` directories are intentionally clear for the next
-  current design slice.
+  to `docs/superpowers/plans/archive/`. The current top-level `plans/` and
+  `specs/` directories intentionally retain the legacy scriptlet goal queue and
+  umbrella semantics design for the remaining future goals.
 - The completed May 14 limited-preview honesty review TSV was moved beside its
   archived plan in `docs/superpowers/plans/archive/`; it is outside the doc
   inventory script because that script tracks documentation-like files.

@@ -386,7 +386,7 @@ Recommended logical shape:
 This is an abbreviated, non-normative sketch of the bundle shape. The exact v1
 field names, enum values, reserved metadata fields, and validation rules are
 defined in
-`docs/superpowers/specs/2026-05-27-legacy-scriptlet-bundle-schema-v1-passive-query-design.md`.
+`docs/superpowers/specs/archive/2026-05-27-legacy-scriptlet-bundle-schema-v1-passive-query-design.md`.
 
 ```toml
 [legacy_scriptlets]

@@ -32,6 +32,7 @@ docs/modules/conaryd.md	canonical	contributor
 docs/modules/federation.md	canonical	contributor
 docs/modules/query.md	canonical	contributor
 docs/modules/recipe.md	canonical	contributor
+docs/modules/remi.md	canonical	contributor
 docs/modules/source-selection.md	canonical	contributor
 docs/operations/LOCAL_ACCESS.example.md	template	contributor
 docs/operations/agent-mcp-adapter-decision.md	canonical	contributor
@@ -49,6 +50,7 @@ docs/superpowers/daily-driver-readiness-completion-audit-2026-05-22.md	planning	
 docs/superpowers/documentation-accuracy-audit-summary.md	planning	maintainer
 docs/superpowers/limited-preview-release-checkpoint-2026-05-16.md	planning	maintainer
 docs/superpowers/limited-preview-subreddit-tester-post-2026-05-19.md	planning	maintainer
+docs/superpowers/plans/2026-05-27-legacy-scriptlet-semantics-bundle-goal-queue.md	planning	maintainer
 docs/superpowers/plans/archive/2026-04-10-all-tracks-release-hardening-plan.md	historical	historical
 docs/superpowers/plans/archive/2026-04-16-conaryd-forge-staging-deployment-plan.md	historical	historical
 docs/superpowers/plans/archive/2026-04-22-generation-artifact-export-unification-plan.md	historical	historical
@@ -81,7 +83,16 @@ docs/superpowers/plans/archive/2026-05-26-generation-state-resilience.md	histori
 docs/superpowers/plans/archive/2026-05-26-preview-truth-and-onboarding.md	historical	historical
 docs/superpowers/plans/archive/2026-05-26-release-evidence-and-supportability.md	historical	historical
 docs/superpowers/plans/archive/2026-05-26-scriptlet-trust-assurance.md	historical	historical
+docs/superpowers/plans/archive/2026-05-27-legacy-scriptlet-bundle-schema-v1-passive-query-plan.md	historical	historical
+docs/superpowers/plans/archive/2026-05-27-legacy-scriptlet-native-abi-extraction-plan.md	historical	historical
+docs/superpowers/plans/archive/2026-05-27-remi-conversion-benchmark-corpus-plan.md	historical	historical
+docs/superpowers/plans/archive/2026-05-28-legacy-scriptlet-adapter-registry-blocked-classes-plan.md	historical	historical
+docs/superpowers/plans/archive/2026-05-28-legacy-scriptlet-bootstrap-adapters-plan.md	historical	historical
+docs/superpowers/plans/archive/2026-05-28-legacy-scriptlet-passive-remi-bundle-embedding-plan.md	historical	historical
+docs/superpowers/plans/archive/2026-05-28-legacy-scriptlet-publication-gate-plan.md	historical	historical
+docs/superpowers/plans/archive/2026-05-31-legacy-scriptlet-safe-replay-engine-plan.md	historical	historical
 docs/superpowers/release-security-waivers-2026-05-06.md	planning	maintainer
+docs/superpowers/specs/2026-05-27-legacy-scriptlet-semantics-bundle-design.md	planning	maintainer
 docs/superpowers/specs/archive/2026-04-10-all-tracks-release-hardening-design.md	historical	historical
 docs/superpowers/specs/archive/2026-04-10-conaryd-forge-staging-deployment-design.md	historical	historical
 docs/superpowers/specs/archive/2026-04-16-bootstrap-self-hosting-vm-design.md	historical	historical
@@ -102,6 +113,13 @@ docs/superpowers/specs/archive/2026-05-25-preview-invariant-hardening-design.md	
 docs/superpowers/specs/archive/2026-05-26-docs-ci-truth-checks-design.md	historical	historical
 docs/superpowers/specs/archive/2026-05-26-generation-publication-durability-design.md	historical	historical
 docs/superpowers/specs/archive/2026-05-26-limited-preview-release-hardening-design.md	historical	historical
+docs/superpowers/specs/archive/2026-05-27-legacy-scriptlet-bundle-schema-v1-passive-query-design.md	historical	historical
+docs/superpowers/specs/archive/2026-05-27-legacy-scriptlet-native-abi-extraction-design.md	historical	historical
+docs/superpowers/specs/archive/2026-05-28-legacy-scriptlet-adapter-registry-blocked-classes-design.md	historical	historical
+docs/superpowers/specs/archive/2026-05-28-legacy-scriptlet-bootstrap-adapters-design.md	historical	historical
+docs/superpowers/specs/archive/2026-05-28-legacy-scriptlet-passive-remi-bundle-embedding-design.md	historical	historical
+docs/superpowers/specs/archive/2026-05-28-legacy-scriptlet-publication-gate-design.md	historical	historical
+docs/superpowers/specs/archive/2026-05-31-legacy-scriptlet-safe-replay-engine-design.md	historical	historical
 recipes/archive/core/README.md	historical	historical
 recipes/archive/core/archive/README.md	historical	historical
 recipes/archive/core/base/README.md	historical	historical

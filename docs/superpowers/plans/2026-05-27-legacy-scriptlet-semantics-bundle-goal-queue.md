@@ -49,7 +49,7 @@ Recommended objective:
 
 Detailed plan:
 
-- `docs/superpowers/plans/2026-05-27-remi-conversion-benchmark-corpus-plan.md`
+- `docs/superpowers/plans/archive/2026-05-27-remi-conversion-benchmark-corpus-plan.md`
 
 Files likely touched:
 
@@ -89,8 +89,8 @@ Recommended objective:
 
 Design and detailed plan:
 
-- `docs/superpowers/specs/2026-05-27-legacy-scriptlet-bundle-schema-v1-passive-query-design.md`
-- `docs/superpowers/plans/2026-05-27-legacy-scriptlet-bundle-schema-v1-passive-query-plan.md`
+- `docs/superpowers/specs/archive/2026-05-27-legacy-scriptlet-bundle-schema-v1-passive-query-design.md`
+- `docs/superpowers/plans/archive/2026-05-27-legacy-scriptlet-bundle-schema-v1-passive-query-plan.md`
 
 Files likely touched:
 
@@ -125,9 +125,10 @@ git diff --check
 
 ## Goal 2: Native ABI Extraction For RPM, DEB, And Arch
 
-Design:
+Design and detailed plan:
 
-- `docs/superpowers/specs/2026-05-27-legacy-scriptlet-native-abi-extraction-design.md`
+- `docs/superpowers/specs/archive/2026-05-27-legacy-scriptlet-native-abi-extraction-design.md`
+- `docs/superpowers/plans/archive/2026-05-27-legacy-scriptlet-native-abi-extraction-plan.md`
 
 Recommended objective:
 
@@ -171,8 +172,8 @@ git diff --check
 
 Design and detailed plan:
 
-- `docs/superpowers/specs/2026-05-28-legacy-scriptlet-adapter-registry-blocked-classes-design.md`
-- `docs/superpowers/plans/2026-05-28-legacy-scriptlet-adapter-registry-blocked-classes-plan.md`
+- `docs/superpowers/specs/archive/2026-05-28-legacy-scriptlet-adapter-registry-blocked-classes-design.md`
+- `docs/superpowers/plans/archive/2026-05-28-legacy-scriptlet-adapter-registry-blocked-classes-plan.md`
 
 Recommended objective:
 
@@ -211,8 +212,8 @@ git diff --check
 
 Design and detailed plan:
 
-- `docs/superpowers/specs/2026-05-28-legacy-scriptlet-bootstrap-adapters-design.md`
-- `docs/superpowers/plans/2026-05-28-legacy-scriptlet-bootstrap-adapters-plan.md`
+- `docs/superpowers/specs/archive/2026-05-28-legacy-scriptlet-bootstrap-adapters-design.md`
+- `docs/superpowers/plans/archive/2026-05-28-legacy-scriptlet-bootstrap-adapters-plan.md`
 
 Recommended objective:
 
@@ -254,6 +255,11 @@ Recommended objective:
 /goal Implement Goal 4: have Remi embed passive legacy scriptlet bundles in converted CCS packages and expose scriptlet fidelity metadata without changing install enforcement. Stop when converted packages carry bundles and Remi DB/API metadata reports fidelity, target compatibility, decisions, unknown commands, and blocked classes.
 ```
 
+Design and detailed plan:
+
+- `docs/superpowers/specs/archive/2026-05-28-legacy-scriptlet-passive-remi-bundle-embedding-design.md`
+- `docs/superpowers/plans/archive/2026-05-28-legacy-scriptlet-passive-remi-bundle-embedding-plan.md`
+
 Files likely touched:
 
 - `crates/conary-core/src/ccs/convert/converter.rs`
@@ -285,14 +291,13 @@ git diff --check
 
 ## Goal 5: Review, Blocked, And Publication Gate
 
-Status: implemented on the Goal 5 publication-gate branch. Final merge range
-will be recorded during the merge/push/cleanup turn after Task 7 verification
-passes.
+Status: implemented on main; the detailed design and plan are archived as
+historical implementation records.
 
 Design and detailed plan:
 
-- `docs/superpowers/specs/2026-05-28-legacy-scriptlet-publication-gate-design.md`
-- `docs/superpowers/plans/2026-05-28-legacy-scriptlet-publication-gate-plan.md`
+- `docs/superpowers/specs/archive/2026-05-28-legacy-scriptlet-publication-gate-design.md`
+- `docs/superpowers/plans/archive/2026-05-28-legacy-scriptlet-publication-gate-plan.md`
 
 Recommended objective:
 
@@ -333,11 +338,19 @@ git diff --check
 
 ## Goal 6: Safe Replay Engine With Target Compatibility Gate
 
+Status: implemented on main; the detailed design and plan are archived as
+historical implementation records.
+
 Recommended objective:
 
 ```text
 /goal Implement Goal 6: make install/update/remove consume legacy scriptlet bundles behind an explicit feature gate. Persist installed bundle state for remove/upgrade, enforce target compatibility metadata, and deny foreign legacy replay by default during preflight before live mutation. Stop when bundle-aware same-distro dry-run/install/remove tests pass and cross-distro replay is rejected.
 ```
+
+Design and detailed plan:
+
+- `docs/superpowers/specs/archive/2026-05-31-legacy-scriptlet-safe-replay-engine-design.md`
+- `docs/superpowers/plans/archive/2026-05-31-legacy-scriptlet-safe-replay-engine-plan.md`
 
 Files likely touched:
 
