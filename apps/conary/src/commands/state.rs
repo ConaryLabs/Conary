@@ -520,6 +520,15 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     fn build_test_ccs_package(dir: &Path, name: &str, version: &str) -> PathBuf {
+        build_test_ccs_package_with_bundle(dir, name, version, None)
+    }
+
+    fn build_test_ccs_package_with_bundle(
+        dir: &Path,
+        name: &str,
+        version: &str,
+        legacy_scriptlets: Option<LegacyScriptletBundle>,
+    ) -> PathBuf {
         use conary_core::ccs::builder::write_ccs_package;
         use conary_core::ccs::{BuildResult, CcsManifest, ComponentData, FileEntry, FileType};
         use conary_core::hash;
@@ -537,8 +546,10 @@ mod tests {
             chunks: None,
         }];
         let package_path = dir.join(format!("{name}-{version}.ccs"));
+        let mut manifest = CcsManifest::new_minimal(name, version);
+        manifest.legacy_scriptlets = legacy_scriptlets;
         let result = BuildResult {
-            manifest: CcsManifest::new_minimal(name, version),
+            manifest,
             components: HashMap::from([(
                 "runtime".to_string(),
                 ComponentData {
@@ -556,6 +567,44 @@ mod tests {
         };
         write_ccs_package(&result, &package_path).unwrap();
         package_path
+    }
+
+    fn legacy_pre_install_entry() -> LegacyScriptletEntry {
+        let body = "getent group conary-test >/dev/null || true\n";
+        LegacyScriptletEntry {
+            id: "rpm:%pre".to_string(),
+            native_slot: "%pre".to_string(),
+            phase: LifecyclePath::PreInstall,
+            lifecycle_paths: vec!["install:pre".to_string()],
+            interpreter: "/bin/sh".to_string(),
+            interpreter_args: Vec::new(),
+            body_sha256: conary_core::hash::sha256_prefixed(body.as_bytes()),
+            body: body.to_string(),
+            body_encoding: None,
+            native_invocation: NativeInvocation::default(),
+            transaction_order: TransactionOrder {
+                position: "before-payload".to_string(),
+                before: vec!["payload".to_string()],
+                after: Vec::new(),
+                extra: BTreeMap::new(),
+            },
+            timeout_ms: 30_000,
+            sandbox: None,
+            capabilities: Vec::new(),
+            decision: ScriptletDecision::Legacy,
+            reason_code: "legacy-replay-required".to_string(),
+            human_reason: Some("fixture legacy pre-install".to_string()),
+            evidence_digest: None,
+            source_evidence_refs: Vec::new(),
+            effects: Vec::new(),
+            unknown_commands: Vec::new(),
+            blocked_classes: Vec::new(),
+            rpm_trigger: None,
+            deb_maintainer: None,
+            arch_install: None,
+            residual_replay: None,
+            extra: BTreeMap::new(),
+        }
     }
 
     fn legacy_post_remove_entry() -> LegacyScriptletEntry {
@@ -596,7 +645,19 @@ mod tests {
         }
     }
 
+    fn legacy_pre_install_bundle(package: &str, version: &str) -> LegacyScriptletBundle {
+        legacy_bundle(package, version, legacy_pre_install_entry())
+    }
+
     fn legacy_post_remove_bundle(package: &str, version: &str) -> LegacyScriptletBundle {
+        legacy_bundle(package, version, legacy_post_remove_entry())
+    }
+
+    fn legacy_bundle(
+        package: &str,
+        version: &str,
+        entry: LegacyScriptletEntry,
+    ) -> LegacyScriptletBundle {
         LegacyScriptletBundle {
             schema: LEGACY_SCRIPTLET_SCHEMA_V1.to_string(),
             schema_revision: 1,
@@ -631,7 +692,7 @@ mod tests {
                 extra: BTreeMap::new(),
             },
             unsupported_class_counts: BTreeMap::new(),
-            entries: vec![legacy_post_remove_entry()],
+            entries: vec![entry],
             extra: BTreeMap::new(),
         }
     }
@@ -785,6 +846,105 @@ mod tests {
                 .unwrap()
                 .is_some(),
             "restore refusal must preserve the installed legacy bundle row"
+        );
+    }
+
+    #[tokio::test]
+    async fn state_restore_refuses_legacy_install_bundle_before_mutation() {
+        let (_tmp, db_path) = crate::commands::test_helpers::setup_command_test_db();
+        let root = tempfile::tempdir().unwrap();
+        let package_dir = tempfile::tempdir().unwrap();
+        let _guard = crate::commands::composefs_ops::test_mount_skip_guard();
+
+        let package_path = build_test_ccs_package_with_bundle(
+            package_dir.path(),
+            "vim",
+            "9.1.0",
+            Some(legacy_pre_install_bundle("vim", "9.1.0")),
+        );
+        let package_checksum = conary_core::hash::sha256(&std::fs::read(&package_path).unwrap());
+        let (package_url, _server_handle) = serve_test_file(package_path.clone());
+
+        let mut conn = crate::commands::open_db(&db_path).unwrap();
+        let mut repo = Repository::new("arch-test".to_string(), package_url.clone());
+        let repo_id = repo.insert(&conn).unwrap();
+
+        let mut repo_pkg = RepositoryPackage::new(
+            repo_id,
+            "vim".to_string(),
+            "9.1.0".to_string(),
+            package_checksum.clone(),
+            std::fs::metadata(&package_path)
+                .unwrap()
+                .len()
+                .try_into()
+                .unwrap(),
+            package_url.clone(),
+        );
+        repo_pkg.architecture = Some("x86_64".to_string());
+        repo_pkg.insert(&conn).unwrap();
+
+        let mut resolution = PackageResolution::new(
+            repo_id,
+            "vim".to_string(),
+            vec![ResolutionStrategy::Binary {
+                url: package_url,
+                checksum: package_checksum,
+                delta_base: None,
+            }],
+        );
+        resolution.version = Some("9.1.0".to_string());
+        resolution.primary_strategy = PrimaryStrategy::Binary;
+        resolution.insert(&conn).unwrap();
+
+        conary_core::db::transaction(&mut conn, |tx| {
+            let mut cs = Changeset::new("Install vim-9.1.0".to_string());
+            let cs_id = cs.insert(tx)?;
+            let mut vim = Trove::new("vim".to_string(), "9.1.0".to_string(), TroveType::Package);
+            vim.architecture = Some("x86_64".to_string());
+            vim.installed_by_changeset_id = Some(cs_id);
+            vim.insert(tx)?;
+            cs.update_status(tx, ChangesetStatus::Applied)?;
+            Ok::<_, conary_core::Error>(())
+        })
+        .unwrap();
+        let baseline = conary_core::db::models::StateEngine::new(&conn)
+            .create_snapshot("baseline", None, None)
+            .unwrap();
+
+        conn.execute("DELETE FROM troves WHERE name = 'vim'", [])
+            .unwrap();
+        conary_core::db::models::StateEngine::new(&conn)
+            .create_snapshot("drifted", None, None)
+            .unwrap();
+
+        let before_changesets = table_count(&conn, "changesets");
+        let before_troves = table_count(&conn, "troves");
+        drop(conn);
+
+        let err = execute_restore_plan_with_root(
+            &db_path,
+            root.path().to_str().unwrap(),
+            baseline.state_number,
+            false,
+        )
+        .await
+        .expect_err("restore should fail closed before installing legacy replay bundle")
+        .to_string();
+
+        assert!(
+            err.contains("LegacyReplayFeatureDisabled"),
+            "unexpected restore error: {err}"
+        );
+
+        let conn = crate::commands::open_db(&db_path).unwrap();
+        assert_eq!(table_count(&conn, "changesets"), before_changesets);
+        assert_eq!(table_count(&conn, "troves"), before_troves);
+        assert!(
+            conary_core::db::models::Trove::find_one_by_name(&conn, "vim")
+                .unwrap()
+                .is_none(),
+            "restore refusal must happen before reinstalling the target trove"
         );
     }
 
