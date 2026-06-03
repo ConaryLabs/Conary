@@ -292,7 +292,10 @@ fn foreign_replay_refusal(
         return None;
     }
 
-    if bundle.foreign_replay_policy == ForeignReplayPolicy::Deny {
+    if matches!(
+        &bundle.foreign_replay_policy,
+        ForeignReplayPolicy::Deny | ForeignReplayPolicy::Unknown(_)
+    ) {
         return Some(refused(
             LegacyReplayRefusalKind::ForeignReplayDeniedByBundle,
             None,
@@ -306,18 +309,26 @@ fn foreign_replay_refusal(
             "host policy denies foreign legacy replay",
         ));
     }
-    if bundle.foreign_replay_policy == ForeignReplayPolicy::Guarded
-        && input.host_policy == HostForeignReplayPolicy::Guarded
-        && !input.foreign_replay_override
-    {
+    if !input.foreign_replay_override {
         return Some(refused(
             LegacyReplayRefusalKind::ForeignReplayOverrideRequired,
             None,
-            "guarded foreign replay requires an explicit override",
+            "foreign legacy replay requires an explicit operator override",
         ));
     }
 
-    None
+    match (&bundle.foreign_replay_policy, input.host_policy) {
+        (
+            ForeignReplayPolicy::Guarded,
+            HostForeignReplayPolicy::Guarded | HostForeignReplayPolicy::Permissive,
+        )
+        | (ForeignReplayPolicy::Permissive, HostForeignReplayPolicy::Permissive) => None,
+        _ => Some(refused(
+            LegacyReplayRefusalKind::ForeignReplayDeniedByHostPolicy,
+            None,
+            "host policy is not compatible with the bundle foreign replay policy",
+        )),
+    }
 }
 
 fn select_lifecycle_entries(
@@ -808,6 +819,56 @@ mod tests {
     }
 
     #[test]
+    fn unknown_target_release_refuses_source_native_raw_replay() {
+        let bundle = bundle_with_entries(vec![entry(
+            "post",
+            LifecyclePath::PostInstall,
+            ScriptletDecision::Legacy,
+        )]);
+        let mut input = policy_input();
+        input.replay_enabled = true;
+        input.target = ReplayTarget {
+            format: "rpm",
+            distro: "fedora",
+            release: "unknown",
+            arch: "x86_64",
+        };
+
+        assert_refused(
+            plan_legacy_replay(
+                Some(&bundle),
+                LegacyReplayLifecycle::FreshInstallPost,
+                &input,
+            )
+            .expect("plan"),
+            LegacyReplayRefusalKind::TargetMismatch,
+        );
+    }
+
+    #[test]
+    fn same_source_raw_replay_does_not_need_foreign_override() {
+        let bundle = bundle_with_entries(vec![entry(
+            "post",
+            LifecyclePath::PostInstall,
+            ScriptletDecision::Legacy,
+        )]);
+        let mut input = policy_input();
+        input.replay_enabled = true;
+        input.host_policy = HostForeignReplayPolicy::Strict;
+        input.foreign_replay_override = false;
+
+        assert_plan_entry_ids(
+            plan_legacy_replay(
+                Some(&bundle),
+                LegacyReplayLifecycle::FreshInstallPost,
+                &input,
+            )
+            .expect("plan"),
+            &["post"],
+        );
+    }
+
+    #[test]
     fn old_upgrade_remove_lifecycle_selects_installed_bundle_remove_entries() {
         let bundle = bundle_with_entries(vec![
             entry(
@@ -919,6 +980,8 @@ mod tests {
             release: "10",
             arch: "x86_64",
         };
+        input.foreign_replay_override = true;
+        input.host_policy = HostForeignReplayPolicy::Permissive;
 
         assert_refused(
             plan_legacy_replay(
@@ -931,6 +994,7 @@ mod tests {
         );
 
         bundle.foreign_replay_policy = ForeignReplayPolicy::Guarded;
+        input.host_policy = HostForeignReplayPolicy::Strict;
         assert_refused(
             plan_legacy_replay(
                 Some(&bundle),
@@ -942,6 +1006,7 @@ mod tests {
         );
 
         input.host_policy = HostForeignReplayPolicy::Guarded;
+        input.foreign_replay_override = false;
         assert_refused(
             plan_legacy_replay(
                 Some(&bundle),
@@ -965,6 +1030,17 @@ mod tests {
 
         input.host_policy = HostForeignReplayPolicy::Permissive;
         input.foreign_replay_override = false;
+        assert_refused(
+            plan_legacy_replay(
+                Some(&bundle),
+                LegacyReplayLifecycle::FreshInstallPost,
+                &input,
+            )
+            .expect("plan"),
+            LegacyReplayRefusalKind::ForeignReplayOverrideRequired,
+        );
+
+        input.foreign_replay_override = true;
         assert_plan_entry_ids(
             plan_legacy_replay(
                 Some(&bundle),
@@ -973,6 +1049,109 @@ mod tests {
             )
             .expect("plan"),
             &["post"],
+        );
+    }
+
+    #[test]
+    fn foreign_replay_override_without_replay_enabled_is_insufficient() {
+        let mut bundle = bundle_with_entries(vec![entry(
+            "post",
+            LifecyclePath::PostInstall,
+            ScriptletDecision::Legacy,
+        )]);
+        bundle.target_compatibility = TargetCompatibility::FamilyCompatible;
+        bundle.foreign_replay_policy = ForeignReplayPolicy::Permissive;
+        let mut input = policy_input();
+        input.foreign_replay_override = true;
+        input.host_policy = HostForeignReplayPolicy::Permissive;
+        input.target = ReplayTarget {
+            format: "rpm",
+            distro: "centos",
+            release: "10",
+            arch: "x86_64",
+        };
+
+        assert_refused(
+            plan_legacy_replay(
+                Some(&bundle),
+                LegacyReplayLifecycle::FreshInstallPost,
+                &input,
+            )
+            .expect("plan"),
+            LegacyReplayRefusalKind::LegacyReplayFeatureDisabled,
+        );
+    }
+
+    #[test]
+    fn guarded_host_requires_guarded_compatible_bundle_policy() {
+        let mut bundle = bundle_with_entries(vec![entry(
+            "post",
+            LifecyclePath::PostInstall,
+            ScriptletDecision::Legacy,
+        )]);
+        bundle.target_compatibility = TargetCompatibility::FamilyCompatible;
+        bundle.foreign_replay_policy = ForeignReplayPolicy::Permissive;
+        let mut input = policy_input();
+        input.replay_enabled = true;
+        input.foreign_replay_override = true;
+        input.host_policy = HostForeignReplayPolicy::Guarded;
+        input.target = ReplayTarget {
+            format: "rpm",
+            distro: "centos",
+            release: "10",
+            arch: "x86_64",
+        };
+
+        assert_refused(
+            plan_legacy_replay(
+                Some(&bundle),
+                LegacyReplayLifecycle::FreshInstallPost,
+                &input,
+            )
+            .expect("plan"),
+            LegacyReplayRefusalKind::ForeignReplayDeniedByHostPolicy,
+        );
+
+        bundle.foreign_replay_policy = ForeignReplayPolicy::Guarded;
+        assert_plan_entry_ids(
+            plan_legacy_replay(
+                Some(&bundle),
+                LegacyReplayLifecycle::FreshInstallPost,
+                &input,
+            )
+            .expect("plan"),
+            &["post"],
+        );
+    }
+
+    #[test]
+    fn unknown_foreign_replay_policy_fails_closed() {
+        let mut bundle = bundle_with_entries(vec![entry(
+            "post",
+            LifecyclePath::PostInstall,
+            ScriptletDecision::Legacy,
+        )]);
+        bundle.target_compatibility = TargetCompatibility::FamilyCompatible;
+        bundle.foreign_replay_policy = ForeignReplayPolicy::Unknown("future".to_string());
+        let mut input = policy_input();
+        input.replay_enabled = true;
+        input.foreign_replay_override = true;
+        input.host_policy = HostForeignReplayPolicy::Permissive;
+        input.target = ReplayTarget {
+            format: "rpm",
+            distro: "centos",
+            release: "10",
+            arch: "x86_64",
+        };
+
+        assert_refused(
+            plan_legacy_replay(
+                Some(&bundle),
+                LegacyReplayLifecycle::FreshInstallPost,
+                &input,
+            )
+            .expect("plan"),
+            LegacyReplayRefusalKind::ForeignReplayDeniedByBundle,
         );
     }
 
