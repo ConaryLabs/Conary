@@ -28,6 +28,7 @@ use super::{
     PackageFormatType, RepositoryInstallProvenance, detect_package_format,
 };
 use anyhow::{Context, Result};
+use conary_core::ccs::legacy_replay::{LegacyReplayPlan, LegacyReplayRefusalKind};
 use conary_core::components::{ComponentClassifier, ComponentType, should_run_scriptlets};
 use conary_core::db::models::{
     Changeset, ChangesetStatus, Component, ConfigFile, ConfigSource, DependencyEntry, ProvideEntry,
@@ -204,7 +205,7 @@ impl<'a> BatchInstaller<'a> {
         if packages.is_empty() {
             return Ok(());
         }
-        let _legacy_replay = self.legacy_replay;
+        self.preflight_prepared_legacy_replay(&packages)?;
 
         let package_count = packages.len();
         let main_pkg_name = packages
@@ -487,6 +488,62 @@ impl<'a> BatchInstaller<'a> {
             );
         }
 
+        Ok(())
+    }
+
+    fn preflight_prepared_legacy_replay(&self, packages: &[PreparedPackage]) -> Result<()> {
+        for pkg in packages {
+            for (phase, plan) in prepared_legacy_replay_plans(pkg) {
+                let Some(plan) = plan else {
+                    continue;
+                };
+                if !plan.raw_replay_required || plan.lifecycle_entries.is_empty() {
+                    continue;
+                }
+
+                let entry_id = plan
+                    .lifecycle_entries
+                    .first()
+                    .map(|entry| entry.entry_id.as_str())
+                    .unwrap_or("unknown");
+                if self.no_scripts {
+                    return Err(batch_legacy_replay_refusal_error(
+                        pkg,
+                        phase,
+                        LegacyReplayRefusalKind::NoScriptsWouldSkipRequiredReplay,
+                        entry_id,
+                        "--no-scripts would skip required raw legacy replay",
+                    ));
+                }
+                if !self.legacy_replay.allow_legacy_replay {
+                    return Err(batch_legacy_replay_refusal_error(
+                        pkg,
+                        phase,
+                        LegacyReplayRefusalKind::LegacyReplayFeatureDisabled,
+                        entry_id,
+                        "raw legacy replay requires an explicit operator opt-in",
+                    ));
+                }
+                if plan.target_id != plan.source_target_id
+                    && !self.legacy_replay.allow_foreign_legacy_replay
+                {
+                    return Err(batch_legacy_replay_refusal_error(
+                        pkg,
+                        phase,
+                        LegacyReplayRefusalKind::ForeignReplayOverrideRequired,
+                        entry_id,
+                        "foreign legacy replay requires --allow-foreign-legacy-replay",
+                    ));
+                }
+                return Err(batch_legacy_replay_refusal_error(
+                    pkg,
+                    phase,
+                    LegacyReplayRefusalKind::ReplayExecutionUnavailable,
+                    entry_id,
+                    "batch raw legacy replay execution is not wired yet",
+                ));
+            }
+        }
         Ok(())
     }
 
@@ -916,6 +973,42 @@ impl fmt::Display for BatchConflict {
     }
 }
 
+fn prepared_legacy_replay_plans(
+    pkg: &PreparedPackage,
+) -> [(&'static str, Option<&LegacyReplayPlan>); 4] {
+    [
+        (
+            "new-pre",
+            pkg.legacy_replay_state.new_bundle_pre_plan.as_ref(),
+        ),
+        (
+            "new-post",
+            pkg.legacy_replay_state.new_bundle_post_plan.as_ref(),
+        ),
+        (
+            "old-pre-remove",
+            pkg.legacy_replay_state.old_bundle_pre_remove_plan.as_ref(),
+        ),
+        (
+            "old-post-remove",
+            pkg.legacy_replay_state.old_bundle_post_remove_plan.as_ref(),
+        ),
+    ]
+}
+
+fn batch_legacy_replay_refusal_error(
+    pkg: &PreparedPackage,
+    phase: &str,
+    kind: LegacyReplayRefusalKind,
+    entry_id: &str,
+    message: &str,
+) -> anyhow::Error {
+    anyhow::anyhow!(
+        "legacy scriptlet replay refused ({kind:?} package={} phase={phase} entry={entry_id}): {message}",
+        pkg.name
+    )
+}
+
 fn get_old_files_for_upgrade(
     conn: &Connection,
     old_trove: Option<&Trove>,
@@ -1106,6 +1199,8 @@ pub fn prepare_from_parsed(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use conary_core::ccs::legacy_replay::{LegacyReplayPlan, PlannedLegacyEntry};
+    use conary_core::ccs::legacy_scriptlets::LifecyclePath;
     use conary_core::db::models::{Changeset, ChangesetStatus, FileEntry, Trove, TroveType};
 
     #[test]
@@ -1416,6 +1511,127 @@ mod tests {
         package.extracted_files[0].mode = 0o120777;
         package.extracted_files[0].symlink_target = Some(target.to_string());
         package
+    }
+
+    fn test_legacy_plan(entry_id: &str, phase: LifecyclePath) -> LegacyReplayPlan {
+        LegacyReplayPlan {
+            target_id: "rpm/fedora/44/x86_64".to_string(),
+            source_target_id: "rpm/fedora/44/x86_64".to_string(),
+            bundle_evidence_digest: Some(conary_core::hash::sha256_prefixed(b"batch-evidence")),
+            lifecycle_entries: vec![PlannedLegacyEntry {
+                entry_id: entry_id.to_string(),
+                native_slot: "%pre".to_string(),
+                phase,
+                timeout_ms: 30_000,
+            }],
+            sandbox_floor: SandboxMode::None,
+            ccs_hooks_allowed: true,
+            raw_replay_required: true,
+        }
+    }
+
+    #[test]
+    fn batch_install_refuses_prepared_legacy_plan_before_scripts_and_mutation() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("root");
+        let db_path = temp.path().join("conary.db");
+        let marker = root.join("batch-legacy-pre-scriptlet-ran");
+        std::fs::create_dir_all(&root).unwrap();
+        conary_core::db::init(&db_path).unwrap();
+
+        let mut package = prepared_test_package(
+            "batch-legacy-fixture",
+            "/usr/bin/batch-legacy-fixture",
+            b"batch-legacy",
+            vec![Scriptlet {
+                phase: conary_core::packages::traits::ScriptletPhase::PreInstall,
+                interpreter: "/bin/sh".to_string(),
+                content: format!("touch {}", marker.display()),
+                flags: None,
+            }],
+        );
+        package.legacy_replay_state.new_bundle_pre_plan =
+            Some(test_legacy_plan("rpm:%pre", LifecyclePath::PreInstall));
+
+        let db_path_string = db_path.to_string_lossy().into_owned();
+        let root_string = root.to_string_lossy().into_owned();
+        let installer = BatchInstaller::new(
+            &db_path_string,
+            &root_string,
+            SandboxMode::None,
+            false,
+            LegacyReplayOptions::default(),
+        )
+        .with_preflighted_execution_path(PackageExecutionPath::MutableLiveRoot);
+
+        let error = installer.install_batch(vec![package]).unwrap_err();
+
+        assert!(
+            error.to_string().contains("LegacyReplayFeatureDisabled"),
+            "{error:#}"
+        );
+        assert!(!marker.exists(), "batch pre-scriptlet must not run");
+        assert!(
+            !root.join("usr/bin/batch-legacy-fixture").exists(),
+            "batch files must not be installed"
+        );
+        let conn = conary_core::db::open(&db_path).unwrap();
+        assert!(
+            Trove::find_by_name(&conn, "batch-legacy-fixture")
+                .unwrap()
+                .is_empty()
+        );
+        assert!(Changeset::list_all(&conn).unwrap().is_empty());
+    }
+
+    #[test]
+    fn batch_install_refuses_prepared_legacy_plan_even_with_replay_flag_until_execution_is_wired() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("root");
+        let db_path = temp.path().join("conary.db");
+        std::fs::create_dir_all(&root).unwrap();
+        conary_core::db::init(&db_path).unwrap();
+
+        let mut package = prepared_test_package(
+            "batch-legacy-enabled-fixture",
+            "/usr/bin/batch-legacy-enabled-fixture",
+            b"batch-legacy-enabled",
+            Vec::new(),
+        );
+        package.legacy_replay_state.new_bundle_pre_plan =
+            Some(test_legacy_plan("rpm:%pre", LifecyclePath::PreInstall));
+
+        let db_path_string = db_path.to_string_lossy().into_owned();
+        let root_string = root.to_string_lossy().into_owned();
+        let installer = BatchInstaller::new(
+            &db_path_string,
+            &root_string,
+            SandboxMode::None,
+            false,
+            LegacyReplayOptions {
+                allow_legacy_replay: true,
+                allow_foreign_legacy_replay: false,
+            },
+        )
+        .with_preflighted_execution_path(PackageExecutionPath::MutableLiveRoot);
+
+        let error = installer.install_batch(vec![package]).unwrap_err();
+
+        assert!(
+            error.to_string().contains("ReplayExecutionUnavailable"),
+            "{error:#}"
+        );
+        assert!(
+            !root.join("usr/bin/batch-legacy-enabled-fixture").exists(),
+            "batch files must not be installed"
+        );
+        let conn = conary_core::db::open(&db_path).unwrap();
+        assert!(
+            Trove::find_by_name(&conn, "batch-legacy-enabled-fixture")
+                .unwrap()
+                .is_empty()
+        );
+        assert!(Changeset::list_all(&conn).unwrap().is_empty());
     }
 
     #[test]
