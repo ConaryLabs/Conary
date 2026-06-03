@@ -658,6 +658,53 @@ mod tests {
     }
 
     #[test]
+    fn no_bundle_keeps_no_scripts_native_free() {
+        let mut input = policy_input();
+        input.no_scripts = true;
+
+        let preflight = plan_legacy_replay(None, LegacyReplayLifecycle::FreshInstallPost, &input)
+            .expect("plan");
+
+        assert_eq!(preflight, LegacyReplayPreflight::NativeFree);
+    }
+
+    #[test]
+    fn native_free_bundle_is_allowed_with_no_scripts() {
+        let bundle = bundle_with_entries(Vec::new());
+        let mut input = policy_input();
+        input.no_scripts = true;
+
+        let preflight = plan_legacy_replay(
+            Some(&bundle),
+            LegacyReplayLifecycle::FreshInstallPost,
+            &input,
+        )
+        .expect("plan");
+
+        assert_eq!(preflight, LegacyReplayPreflight::NativeFree);
+    }
+
+    #[test]
+    fn no_scripts_future_lifecycle_legacy_entry_is_not_selected_for_current_install() {
+        let bundle = bundle_with_entries(vec![entry(
+            "future-remove",
+            LifecyclePath::PostRemove,
+            ScriptletDecision::Legacy,
+        )]);
+        let mut input = policy_input();
+        input.no_scripts = true;
+
+        let preflight = plan_legacy_replay(
+            Some(&bundle),
+            LegacyReplayLifecycle::FreshInstallPost,
+            &input,
+        )
+        .expect("plan");
+
+        assert_eq!(preflight, LegacyReplayPreflight::NativeFree);
+    }
+
+    #[test]
     fn selected_legacy_entry_requires_feature_gate() {
         let bundle = bundle_with_entries(vec![entry(
             "post",
@@ -718,6 +765,60 @@ mod tests {
         };
         assert!(!plan.raw_replay_required);
         assert!(plan.lifecycle_entries.is_empty());
+    }
+
+    #[test]
+    fn no_scripts_replaced_only_bundle_suppresses_ccs_hooks_in_plan() {
+        let bundle = bundle_with_entries(vec![entry(
+            "post",
+            LifecyclePath::PostInstall,
+            ScriptletDecision::Replaced,
+        )]);
+        let mut input = policy_input();
+        input.no_scripts = true;
+
+        let preflight = plan_legacy_replay(
+            Some(&bundle),
+            LegacyReplayLifecycle::FreshInstallPost,
+            &input,
+        )
+        .expect("plan");
+
+        let LegacyReplayPreflight::FullyReplaced(plan) = preflight else {
+            panic!("expected fully replaced plan");
+        };
+        assert!(!plan.ccs_hooks_allowed);
+        assert!(!plan.raw_replay_required);
+        assert!(plan.lifecycle_entries.is_empty());
+    }
+
+    #[test]
+    fn review_and_blocked_entries_refuse_even_with_no_scripts() {
+        for (decision, expected) in [
+            (
+                ScriptletDecision::Review,
+                LegacyReplayRefusalKind::ReviewEntry,
+            ),
+            (
+                ScriptletDecision::Blocked,
+                LegacyReplayRefusalKind::BlockedEntry,
+            ),
+        ] {
+            let bundle =
+                bundle_with_entries(vec![entry("future", LifecyclePath::PostRemove, decision)]);
+            let mut input = policy_input();
+            input.no_scripts = true;
+
+            assert_refused(
+                plan_legacy_replay(
+                    Some(&bundle),
+                    LegacyReplayLifecycle::FreshInstallPost,
+                    &input,
+                )
+                .expect("plan"),
+                expected,
+            );
+        }
     }
 
     #[test]

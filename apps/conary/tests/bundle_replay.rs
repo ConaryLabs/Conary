@@ -158,6 +158,76 @@ fn ccs_install_no_scripts_refuses_selected_legacy_replay_before_db_mutation() {
 }
 
 #[test]
+fn ccs_install_no_bundle_with_no_scripts_keeps_existing_behavior() {
+    let fixture = InstallFixture::new(LegacyBundleFixture::NoBundle);
+    let output = fixture.run_install(&["--no-scripts"]);
+
+    assert_success(&output);
+    let conn = db::open(&fixture.db_path).expect("open db");
+    assert_eq!(table_count(&conn, "troves"), 1);
+    assert_eq!(table_count(&conn, "installed_legacy_scriptlet_bundles"), 0);
+    let metadata = single_changeset_metadata(&conn);
+    assert!(
+        metadata.get("legacy_scriptlet_replay").is_none(),
+        "no-bundle install should not add legacy replay audit metadata"
+    );
+}
+
+#[test]
+fn ccs_install_native_free_bundle_with_no_scripts_is_allowed_and_persisted() {
+    let fixture = InstallFixture::new(LegacyBundleFixture::NativeFree);
+    let output = fixture.run_install(&["--no-scripts"]);
+
+    assert_success(&output);
+    let conn = db::open(&fixture.db_path).expect("open db");
+    let trove_id = single_trove_id(&conn);
+    let installed = InstalledLegacyScriptletBundle::find_by_trove(&conn, trove_id)
+        .expect("load installed legacy bundle")
+        .expect("native-free bundle should still be persisted");
+    let decoded = installed.bundle().expect("decode installed bundle");
+    assert!(decoded.entries.is_empty());
+    assert_eq!(decoded.scriptlet_fidelity, ScriptletFidelity::NativeFree);
+}
+
+#[test]
+fn ccs_install_replaced_only_bundle_with_no_scripts_suppresses_ccs_hooks() {
+    let fixture = InstallFixture::new_replaced_post_install_with_hook("exit 42\n");
+    let output = fixture.run_install(&["--no-scripts"]);
+
+    assert_success(&output);
+    assert!(
+        !output_text(&output).contains("Post-install hooks failed"),
+        "--no-scripts should suppress the failing CCS post-install hook"
+    );
+    let conn = db::open(&fixture.db_path).expect("open db");
+    let trove_id = single_trove_id(&conn);
+    let installed = InstalledLegacyScriptletBundle::find_by_trove(&conn, trove_id)
+        .expect("load installed legacy bundle")
+        .expect("replaced-only bundle should be persisted");
+    let decoded = installed.bundle().expect("decode installed bundle");
+    assert_eq!(decoded.entries[0].decision, ScriptletDecision::Replaced);
+}
+
+#[test]
+fn ccs_install_no_scripts_persists_future_legacy_bundle_for_later_lifecycle() {
+    let fixture = InstallFixture::new(LegacyBundleFixture::FutureLegacyPostRemove);
+    let output = fixture.run_install(&["--no-scripts"]);
+
+    assert_success(&output);
+    assert!(!output_text(&output).contains("NoScriptsWouldSkipRequiredReplay"));
+
+    let conn = db::open(&fixture.db_path).expect("open db");
+    let trove_id = single_trove_id(&conn);
+    let installed = InstalledLegacyScriptletBundle::find_by_trove(&conn, trove_id)
+        .expect("load installed legacy bundle")
+        .expect("future-lifecycle bundle should be persisted");
+    let decoded = installed.bundle().expect("decode installed bundle");
+    assert_eq!(decoded.entries.len(), 1);
+    assert_eq!(decoded.entries[0].phase, LifecyclePath::PostRemove);
+    assert_eq!(decoded.entries[0].decision, ScriptletDecision::Legacy);
+}
+
+#[test]
 fn ccs_install_allowed_legacy_pre_entry_rejects_unsupported_native_contract_before_db_mutation() {
     let fixture = InstallFixture::new(LegacyBundleFixture::UnsupportedNativeInvocation);
     let output = fixture.run_install(&["--allow-legacy-replay"]);
@@ -526,6 +596,28 @@ impl InstallFixture {
         Self::from_package(_package_temp, package_path)
     }
 
+    fn new_replaced_post_install_with_hook(post_install_script: &str) -> Self {
+        let mut bundle =
+            synthetic_legacy_bundle(LegacyBundleFixture::ReplacedOnly).expect("replaced bundle");
+        if let Some(entry) = bundle.entries.first_mut() {
+            entry.id = "rpm:%post".to_string();
+            entry.native_slot = "%post".to_string();
+            entry.phase = LifecyclePath::PostInstall;
+            entry.lifecycle_paths = vec!["install:post".to_string()];
+            entry.transaction_order.position = "after-payload".to_string();
+        }
+        bundle.validate().expect("mutated fixture bundle validates");
+
+        let (_package_temp, package_path) = build_ccs_package_fixture_with_post_install_hook(
+            LegacyBundleFixture::ReplacedOnly.package_name(),
+            "1.0.0",
+            Some(bundle),
+            post_install_script,
+        )
+        .expect("build CCS fixture with post-install hook");
+        Self::from_package(_package_temp, package_path)
+    }
+
     fn from_package(_package_temp: tempfile::TempDir, package_path: std::path::PathBuf) -> Self {
         let temp = tempfile::tempdir().expect("create test tempdir");
         let db_path = temp.path().join("conary.db");
@@ -716,6 +808,29 @@ fn build_ccs_package_fixture_with_pre_remove_hook(
     manifest.legacy_scriptlets = bundle;
     manifest.hooks.pre_remove = Some(ScriptHook {
         script: pre_remove_script.to_string(),
+    });
+
+    let result = CcsBuilder::new(manifest, &source_dir).build()?;
+    let package_path = temp.path().join(format!("{name}.ccs"));
+    write_ccs_package(&result, &package_path)?;
+    Ok((temp, package_path))
+}
+
+fn build_ccs_package_fixture_with_post_install_hook(
+    name: &str,
+    version: &str,
+    bundle: Option<conary_core::ccs::legacy_scriptlets::LegacyScriptletBundle>,
+    post_install_script: &str,
+) -> anyhow::Result<(tempfile::TempDir, std::path::PathBuf)> {
+    let temp = tempfile::tempdir()?;
+    let source_dir = temp.path().join("src");
+    std::fs::create_dir_all(source_dir.join("usr/bin"))?;
+    std::fs::write(source_dir.join("usr/bin/fixture"), b"fixture\n")?;
+
+    let mut manifest = CcsManifest::new_minimal(name, version);
+    manifest.legacy_scriptlets = bundle;
+    manifest.hooks.post_install = Some(ScriptHook {
+        script: post_install_script.to_string(),
     });
 
     let result = CcsBuilder::new(manifest, &source_dir).build()?;
