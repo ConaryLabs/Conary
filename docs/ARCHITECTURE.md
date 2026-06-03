@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-05-14
-revision: 15
-summary: Refresh composefs atomic selection, recovery wording, and current service boundaries
+last_updated: 2026-06-02
+revision: 16
+summary: Note legacy scriptlet bundle replay preflight in package lifecycle
 ---
 
 # Conary Architecture
@@ -280,6 +280,9 @@ This is the primary operation. The flow from
    +-- Parse package metadata into unified PackageMetadata
    +-- Detect package format (magic bytes or extension)
    +-- Optional: convert legacy format to CCS on-the-fly
+   +-- Preflight CCS legacy scriptlet bundles before dry-run or mutation
+   |   +-- Review/blocked entries refuse
+   |   +-- Raw replay requires explicit operator flags and compatible target policy
 
 3. TRANSACTION (composefs-native)
    +-- Create TransactionEngine, acquire lock

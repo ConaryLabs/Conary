@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-05-27
-revision: 9
-summary: Add passive legacy scriptlet bundle query notes
+last_updated: 2026-06-02
+revision: 10
+summary: Document local legacy scriptlet replay gates for converted CCS packages
 ---
 
 # CCS Module (conary-core/src/ccs/)
@@ -45,7 +45,7 @@ CcsBuilder::new(manifest, source_dir)
 | `SigningKeyPair` | signing.rs | Ed25519 key generation, signing, file I/O |
 | `PackageSignature` | signing.rs | Embedded signature with algorithm, key_id, timestamp |
 | `HookExecutor` | hooks/ | Runs declarative hooks with rollback tracking |
-| `LegacyScriptletBundle` | legacy_scriptlets.rs | Passive metadata for converted RPM/DEB/Arch scriptlet decisions |
+| `LegacyScriptletBundle` | legacy_scriptlets.rs | Converted RPM/DEB/Arch scriptlet decisions and local replay policy |
 | `BuildPolicy` (trait) | policy.rs | Pluggable build policy (DenyPaths, StripBinaries, FixShebangs, etc.) |
 | `EnhancementEngine` (trait) | enhancement/ | Post-conversion enhancement (capabilities, provenance, subpackages) |
 
@@ -62,8 +62,8 @@ hooks from scriptlets where possible and preserves remaining scripts for
 sandboxed execution when they cannot be safely captured. Tracks conversion
 fidelity (High/Medium/Low) via `FidelityReport`.
 
-**legacy_scriptlets.rs** -- Versioned passive metadata for converted package
-scriptlet semantics. The v1 bundle lives in the TOML manifest as
+**legacy_scriptlets.rs** -- Versioned metadata for converted package scriptlet
+semantics and local replay planning. The v1 bundle lives in the TOML manifest as
 `[legacy_scriptlets]` and records source package identity, target
 compatibility, per-entry decisions, effects, reserved trigger/purge metadata,
 timeouts, and evidence digests. It is TOML-only in this revision; the CBOR
@@ -85,14 +85,27 @@ CCS sits at the center of Conary's format pipeline. All package formats
 CAS-compatible content (SHA-256 keyed blobs), and the chunking system
 enables delta-efficient distribution via the Remi server.
 
-## Passive Legacy Scriptlet Bundles
+## Legacy Scriptlet Bundles And Replay
 
-Converted CCS packages may carry a `[legacy_scriptlets]` section. In the
-current implementation this bundle is queryable metadata only: it does not
-enable legacy replay, does not change install/update/remove behavior, and does
-not make a converted package eligible for public publication. Raw foreign
-scriptlet replay remains denied until later target-compatibility, sandbox, and
-replay safety gates land.
+Converted CCS packages may carry a `[legacy_scriptlets]` section. Local Conary
+clients consume this bundle during install, update, remove, restore, batch, and
+autoremove planning. Entries with `review`, `blocked`, or unknown decisions
+refuse before mutation. Entries with `legacy` decisions are replayed only after
+the bundle passes target, sandbox, lifecycle, timeout, and ordering preflight
+and the operator explicitly provides `--allow-legacy-replay`.
+
+Foreign raw replay has a second gate. If the bundle source target differs from
+the host target and the host is not listed in `allowed_targets`, the operation
+also requires `--allow-foreign-legacy-replay` plus compatible bundle and host
+mixing policy. `--no-scripts` is not a bypass for required raw replay: it
+suppresses ordinary CCS hooks for replaced-only bundles, but refuses when the
+selected lifecycle needs a raw legacy entry.
+
+Accepted bundles are persisted with the installed trove so remove and upgrade
+can replay or refuse safely even if the original `.ccs` archive is no longer in
+the cache. Remi publication remains a separate gate; review, blocked, and raw
+legacy replay requirements do not become public-serving approval merely because
+the local client can consume the bundle.
 
 Operators can inspect a local CCS package with:
 

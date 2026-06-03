@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-05-15
-revision: 2
-summary: Canonical guide to Conary source-selection inputs, runtime mirrors, and install or replatform behavior
+last_updated: 2026-06-02
+revision: 3
+summary: Add foreign legacy replay policy relationship to source selection
 ---
 
 # Source Selection Module (conary-core/src/repository/ + conary-core/src/model/)
@@ -133,6 +133,26 @@ Ranking input is `SelectionMode`:
 Explicit version constraints remain strict and scheme-aware. Cross-distro
 identity mapping helps find equivalent packages; it does not replace native
 version constraint semantics.
+
+## Foreign Legacy Replay Policy
+
+Source-selection mixing also defines the host-side floor for raw legacy
+scriptlet replay from converted CCS bundles. The installed `DistroPin`
+`mixing_policy` maps into the legacy replay host policy:
+
+- `strict` or an unset/unknown pin denies foreign raw legacy replay, even when
+  `--allow-foreign-legacy-replay` is present.
+- `guarded` allows foreign replay only when the bundle policy is also guarded
+  and the operator supplied both `--allow-legacy-replay` and
+  `--allow-foreign-legacy-replay`.
+- `permissive` allows guarded or permissive bundle policies with both explicit
+  replay flags.
+
+A bundle is not treated as foreign when its source target matches the host
+target or when the host target appears in the bundle's `allowed_targets` list.
+Bundle-level `deny`, unknown foreign policy, review compatibility, blocked
+compatibility, triggers, unsupported ordering, and `review` or `blocked`
+entries still refuse before mutation regardless of host mixing policy.
 
 ## Ranking Modes
 

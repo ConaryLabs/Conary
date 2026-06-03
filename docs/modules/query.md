@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-04-22
-revision: 1
-summary: Query-oriented CLI surfaces, local database read paths, and the related SBOM command placement
+last_updated: 2026-06-02
+revision: 2
+summary: Clarify installed legacy scriptlet bundle query output
 ---
 
 # Query Module (apps/conary/src/commands/query/)
@@ -77,7 +77,9 @@ Primary tables hit by queries:
   package files, while `conary query scripts <package> --db-path <db>` resolves an
   installed package and separates flattened `scriptlets` rows from persisted
   `installed_legacy_scriptlet_bundles` entries with replay decision and
-  lifecycle phase metadata.
+  lifecycle phase metadata. Text and JSON output identify installed bundle
+  entries by native slot, lifecycle path, replay decision, reason code, and
+  evidence digest without printing preserved raw script bodies by default.
 
 ## Related SBOM Command
 
