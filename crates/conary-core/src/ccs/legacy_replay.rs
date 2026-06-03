@@ -87,6 +87,7 @@ pub enum LegacyReplayRefusalKind {
     NativeArgsContractUnsupported,
     UnsatisfiedTransactionOrder,
     RollbackReplayUnavailable,
+    ReplayExecutionUnavailable,
     TimeoutOutOfRange,
     MalformedBundle,
 }
