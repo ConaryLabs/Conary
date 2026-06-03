@@ -342,6 +342,62 @@ fn ccs_install_with_future_legacy_bundle_records_changeset_audit_metadata() {
         planned_entries.is_empty(),
         "future lifecycle entries should be preserved in the installed bundle but not planned for fresh install"
     );
+    assert_metadata_excludes_local_paths(&metadata, &fixture);
+}
+
+#[test]
+fn ccs_install_allowed_legacy_replay_records_complete_audit_metadata_without_paths() {
+    let fixture = InstallFixture::new(LegacyBundleFixture::SameSourceLegacyPostInstall);
+    let output = fixture.run_install(&["--allow-legacy-replay", "--allow-foreign-legacy-replay"]);
+
+    assert_success(&output);
+
+    let conn = db::open(&fixture.db_path).expect("open db");
+    let metadata = single_changeset_metadata(&conn);
+    let audit = metadata
+        .get("legacy_scriptlet_replay")
+        .expect("legacy replay audit metadata");
+
+    assert_eq!(metadata["schema"], "conary.changeset.metadata.v1");
+    assert_eq!(audit["bundle_present"], true);
+    assert_eq!(audit["target_id"], "rpm/fedora/44/x86_64");
+    assert_eq!(audit["source_target_id"], "rpm/fedora/44/x86_64");
+    assert_eq!(audit["target_compatibility"], "source-native");
+    assert_eq!(audit["foreign_replay_policy"], "deny");
+    assert_eq!(audit["host_policy"], "strict");
+    assert_eq!(audit["feature_gate"], "enabled");
+    assert_eq!(audit["foreign_override"], true);
+    assert_eq!(
+        audit["evidence_digest"],
+        conary_core::hash::sha256_prefixed(b"legacy-fixture-post-evidence")
+    );
+
+    let planned_entries = audit["planned_entries"]
+        .as_array()
+        .expect("planned entries array");
+    assert_eq!(planned_entries.len(), 1);
+    let entry = &planned_entries[0];
+    assert_eq!(entry["entry_id"], "rpm:%post");
+    assert_eq!(entry["native_slot"], "%post");
+    assert_eq!(entry["phase"], "post-install");
+    assert_eq!(entry["timeout_ms"], 30_000);
+    assert_eq!(entry["raw_replay_required"], true);
+    assert_eq!(entry["outcome"]["phase"], "post-install");
+    assert!(
+        entry["outcome"]["status"].as_str().is_some(),
+        "legacy replay outcome should include execution status"
+    );
+    assert!(
+        entry["outcome"]["requested_sandbox_mode"]
+            .as_str()
+            .is_some(),
+        "legacy replay outcome should include requested sandbox mode"
+    );
+    assert!(
+        entry["outcome"]["effective_sandbox"].as_str().is_some(),
+        "legacy replay outcome should include effective sandbox"
+    );
+    assert_metadata_excludes_local_paths(&metadata, &fixture);
 }
 
 #[test]
@@ -397,15 +453,42 @@ fn remove_with_replay_flag_executes_post_remove_plan_from_memory() {
     let audit = metadata
         .get("legacy_scriptlet_replay")
         .expect("remove changeset has legacy replay audit");
+    assert_eq!(audit["bundle_present"], true);
+    assert_eq!(audit["target_id"], "rpm/fedora/44/x86_64");
+    assert_eq!(audit["source_target_id"], "rpm/fedora/44/x86_64");
+    assert_eq!(audit["target_compatibility"], "source-native");
+    assert_eq!(audit["foreign_replay_policy"], "deny");
+    assert_eq!(audit["host_policy"], "strict");
+    assert_eq!(audit["feature_gate"], "enabled");
+    assert_eq!(audit["foreign_override"], false);
+    assert_eq!(
+        audit["evidence_digest"],
+        conary_core::hash::sha256_prefixed(b"legacy-fixture-remove-evidence")
+    );
     let planned_entries = audit["planned_entries"]
         .as_array()
         .expect("planned entries array");
     assert_eq!(planned_entries.len(), 1);
     assert_eq!(planned_entries[0]["entry_id"], "rpm:%postun");
+    assert_eq!(planned_entries[0]["native_slot"], "%postun");
     assert_eq!(planned_entries[0]["phase"], "post-remove");
+    assert_eq!(planned_entries[0]["timeout_ms"], 30_000);
     assert_eq!(planned_entries[0]["raw_replay_required"], true);
     assert_eq!(planned_entries[0]["outcome"]["phase"], "post-remove");
     assert_eq!(planned_entries[0]["outcome"]["status"], "skipped");
+    assert!(
+        planned_entries[0]["outcome"]["requested_sandbox_mode"]
+            .as_str()
+            .is_some(),
+        "remove replay outcome should include requested sandbox mode"
+    );
+    assert!(
+        planned_entries[0]["outcome"]["effective_sandbox"]
+            .as_str()
+            .is_some(),
+        "remove replay outcome should include effective sandbox"
+    );
+    assert_metadata_excludes_local_paths(&metadata, &fixture);
 }
 
 #[test]
@@ -916,6 +999,17 @@ fn changeset_metadata(conn: &rusqlite::Connection, changeset_id: i64) -> serde_j
         .expect("changeset metadata");
     let raw = raw.expect("changeset metadata should be present");
     serde_json::from_str(&raw).expect("changeset metadata is JSON")
+}
+
+fn assert_metadata_excludes_local_paths(metadata: &serde_json::Value, fixture: &InstallFixture) {
+    let serialized = serde_json::to_string(metadata).expect("serialize metadata");
+    for path in [&fixture.db_path, &fixture.root, &fixture.package_path] {
+        let path = path.to_string_lossy();
+        assert!(
+            !serialized.contains(path.as_ref()),
+            "legacy replay audit metadata must not expose local filesystem path {path:?}: {serialized}"
+        );
+    }
 }
 
 fn is_safe_table_name(table: &str) -> bool {
