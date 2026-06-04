@@ -1527,6 +1527,20 @@ mod tests {
             sandbox_floor: SandboxMode::None,
             ccs_hooks_allowed: true,
             raw_replay_required: true,
+            compatibility_decision: accepted_compatibility_decision(),
+        }
+    }
+
+    fn accepted_compatibility_decision()
+    -> conary_core::ccs::legacy_replay::LegacyReplayCompatibilityDecision {
+        conary_core::ccs::legacy_replay::LegacyReplayCompatibilityDecision {
+            decision: "accepted".to_string(),
+            reason_code: "compatibility-source-native".to_string(),
+            matrix_entry_id: None,
+            matrix_digest: None,
+            preflight_checks: Vec::new(),
+            override_required: false,
+            override_used: false,
         }
     }
 

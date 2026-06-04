@@ -1864,7 +1864,7 @@ allowed_distros = ["arch"]
     #[tokio::test]
     async fn test_model_apply_executes_replatform_replacement_when_route_is_executable() {
         use conary_core::db::models::{
-            InstallSource, LabelEntry, PackageResolution, PrimaryStrategy, Repository,
+            DistroPin, InstallSource, LabelEntry, PackageResolution, PrimaryStrategy, Repository,
             RepositoryPackage, ResolutionStrategy, Trove, TroveType,
         };
 
@@ -1878,6 +1878,7 @@ allowed_distros = ["arch"]
         let (package_url, _server_handle) = serve_test_file(package_path.clone());
 
         let conn = rusqlite::Connection::open(&db_path).unwrap();
+        DistroPin::set(&conn, "fedora-44", "strict").unwrap();
 
         let mut fedora_repo = Repository::new(
             "fedora".to_string(),
@@ -2013,6 +2014,7 @@ strength = "strict"
         let (package_url, _server_handle) = serve_test_file(package_path.clone());
 
         let conn = rusqlite::Connection::open(&db_path).unwrap();
+        DistroPin::set(&conn, "fedora-44", "strict").unwrap();
 
         let mut fedora_repo = Repository::new(
             "fedora".to_string(),
@@ -2093,9 +2095,10 @@ strength = "strict"
         let diff = compute_model_diff(&model, &state, &conn, true, false)
             .await
             .unwrap();
+        let action_refs = diff.actions.iter().collect::<Vec<_>>();
+        apply_source_policy_changes(&conn, &action_refs).unwrap();
         drop(conn);
 
-        let action_refs = diff.actions.iter().collect::<Vec<_>>();
         let _mount_skip = crate::commands::composefs_ops::test_mount_skip_guard();
         let (executed, errors) =
             apply_replatform_changes(&db_path, install_root.to_str().unwrap(), &action_refs)

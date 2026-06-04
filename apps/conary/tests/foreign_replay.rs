@@ -8,6 +8,10 @@ use conary_core::ccs::legacy_replay::{
     LegacyReplayRefusalKind, plan_legacy_replay,
 };
 use conary_core::ccs::legacy_scriptlets::{ForeignReplayPolicy, TargetCompatibility};
+use conary_core::ccs::target_compatibility::{
+    CompatibilityPreflightEnvironment, MatrixPreflightRequirements, TargetCompatibilityMatrix,
+    TargetCompatibilityMatrixEntry, TargetSelector, TargetSelectorArch, TargetSelectorRelease,
+};
 use conary_core::repository::distro::ReplayTarget;
 use conary_core::scriptlet::SandboxMode;
 
@@ -102,7 +106,30 @@ fn policy_input() -> LegacyReplayPolicyInput<'static> {
             release: "44",
             arch: "x86_64",
         },
+        compatibility_matrix: synthetic_foreign_matrix(),
+        compatibility_environment: CompatibilityPreflightEnvironment::default(),
     }
+}
+
+fn synthetic_foreign_matrix() -> TargetCompatibilityMatrix {
+    TargetCompatibilityMatrix::for_testing(vec![TargetCompatibilityMatrixEntry {
+        id: "test-fedora45-to-fedora44".to_string(),
+        source: TargetSelector {
+            format: "rpm".to_string(),
+            distro: "fedora".to_string(),
+            release: TargetSelectorRelease::Exact("45".to_string()),
+            arch: TargetSelectorArch::Exact("x86_64".to_string()),
+        },
+        target: TargetSelector {
+            format: "rpm".to_string(),
+            distro: "fedora".to_string(),
+            release: TargetSelectorRelease::Exact("44".to_string()),
+            arch: TargetSelectorArch::Exact("x86_64".to_string()),
+        },
+        requirements: MatrixPreflightRequirements::default(),
+        digest: Some("sha256:test-fedora45-to-fedora44".to_string()),
+        rationale: "synthetic foreign replay test entry".to_string(),
+    }])
 }
 
 fn assert_refused(preflight: LegacyReplayPreflight, expected: LegacyReplayRefusalKind) {

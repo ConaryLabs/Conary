@@ -9,13 +9,11 @@ use super::open_db;
 use anyhow::Context;
 use anyhow::{Result, anyhow};
 use conary_core::ccs::legacy_replay::{
-    HostForeignReplayPolicy, LegacyReplayLifecycle, LegacyReplayPolicyInput, LegacyReplayPreflight,
-    LegacyReplayRefusal, plan_legacy_replay,
+    LegacyReplayLifecycle, LegacyReplayPreflight, LegacyReplayRefusal, plan_legacy_replay,
 };
 use conary_core::db::models::InstalledLegacyScriptletBundle;
 use conary_core::db::paths::objects_dir;
 use conary_core::filesystem::CasStore;
-use conary_core::repository::distro::source_target_from_bundle;
 use conary_core::runtime_root::ConaryRuntimeRoot;
 use conary_core::scriptlet::SandboxMode;
 use std::cell::RefCell;
@@ -443,15 +441,17 @@ fn preflight_rollback_installed_bundle(conn: &rusqlite::Connection, trove_id: i6
     let bundle = installed
         .bundle()
         .map_err(|error| anyhow!("installed legacy scriptlet bundle is malformed: {error}"))?;
-    let target = source_target_from_bundle(&bundle);
-    let input = LegacyReplayPolicyInput {
-        replay_enabled: false,
-        foreign_replay_override: false,
-        no_scripts: false,
-        requested_sandbox_mode: SandboxMode::Always,
-        host_policy: HostForeignReplayPolicy::Strict,
-        target: target.as_target(),
-    };
+    let host_context =
+        crate::commands::legacy_replay_policy::resolve_legacy_replay_host_context(conn)?;
+    let input = crate::commands::legacy_replay_policy::legacy_replay_policy_input(
+        &host_context,
+        crate::commands::legacy_replay_policy::LegacyReplayPolicyOptions {
+            replay_enabled: false,
+            foreign_replay_override: false,
+            no_scripts: false,
+            requested_sandbox_mode: SandboxMode::Always,
+        },
+    )?;
 
     match plan_legacy_replay(Some(&bundle), LegacyReplayLifecycle::RollbackRemove, &input)? {
         LegacyReplayPreflight::NativeFree | LegacyReplayPreflight::FullyReplaced(_) => Ok(()),

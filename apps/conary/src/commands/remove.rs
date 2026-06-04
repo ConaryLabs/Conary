@@ -9,8 +9,8 @@ use super::{
 };
 use anyhow::{Context, Result};
 use conary_core::ccs::legacy_replay::{
-    HostForeignReplayPolicy, LegacyReplayLifecycle, LegacyReplayPlan, LegacyReplayPolicyInput,
-    LegacyReplayPreflight, LegacyReplayRefusal, plan_legacy_replay,
+    HostForeignReplayPolicy, LegacyReplayLifecycle, LegacyReplayPlan, LegacyReplayPreflight,
+    LegacyReplayRefusal, plan_legacy_replay,
 };
 use conary_core::ccs::legacy_scriptlets::{LegacyScriptletBundle, LifecyclePath, SourceFormat};
 use conary_core::db::models::{FileEntry, InstalledLegacyScriptletBundle, ScriptletEntry, Trove};
@@ -984,25 +984,29 @@ fn load_installed_legacy_remove_plan(
     let bundle = installed
         .bundle()
         .context("installed legacy scriptlet bundle is malformed")?;
-    plan_installed_legacy_remove_replay(&bundle, scriptlet_options)
+    plan_installed_legacy_remove_replay(conn, &bundle, scriptlet_options)
 }
 
 fn plan_installed_legacy_remove_replay(
+    conn: &rusqlite::Connection,
     bundle: &LegacyScriptletBundle,
     scriptlet_options: RemoveScriptletOptions,
 ) -> Result<PreparedLegacyRemoveReplay> {
-    let target = source_target_from_bundle(bundle);
-    let input = LegacyReplayPolicyInput {
-        replay_enabled: scriptlet_options.legacy_replay.allow_legacy_replay,
-        foreign_replay_override: scriptlet_options.legacy_replay.allow_foreign_legacy_replay,
-        no_scripts: scriptlet_options.no_scripts,
-        requested_sandbox_mode: scriptlet_options.sandbox_mode,
-        host_policy: HostForeignReplayPolicy::Strict,
-        target: target.as_target(),
-    };
+    let host_context =
+        crate::commands::legacy_replay_policy::resolve_legacy_replay_host_context(conn)?;
+    let input = crate::commands::legacy_replay_policy::legacy_replay_policy_input(
+        &host_context,
+        crate::commands::legacy_replay_policy::LegacyReplayPolicyOptions {
+            replay_enabled: scriptlet_options.legacy_replay.allow_legacy_replay,
+            foreign_replay_override: scriptlet_options.legacy_replay.allow_foreign_legacy_replay,
+            no_scripts: scriptlet_options.no_scripts,
+            requested_sandbox_mode: scriptlet_options.sandbox_mode,
+        },
+    )?;
     let pre = plan_legacy_replay(Some(bundle), LegacyReplayLifecycle::RemovePre, &input)?;
     let post = plan_legacy_replay(Some(bundle), LegacyReplayLifecycle::RemovePost, &input)?;
-    let target_id = target.to_id();
+    let target_id = host_context.target.to_id();
+    let source_target_id = source_target_from_bundle(bundle).to_id();
 
     Ok(PreparedLegacyRemoveReplay {
         bundle: Some(bundle.clone()),
@@ -1010,10 +1014,10 @@ fn plan_installed_legacy_remove_replay(
         planned_post_remove: remove_plan_from_preflight(post)?,
         audit_context: Some(LegacyRemoveReplayAuditContext {
             target_id: target_id.clone(),
-            source_target_id: target_id,
+            source_target_id,
             target_compatibility: bundle.target_compatibility.as_str().to_string(),
             foreign_replay_policy: bundle.foreign_replay_policy.as_str().to_string(),
-            host_policy: HostForeignReplayPolicy::Strict,
+            host_policy: host_context.host_policy,
             feature_gate_enabled: scriptlet_options.legacy_replay.allow_legacy_replay,
             foreign_override: scriptlet_options.legacy_replay.allow_foreign_legacy_replay,
             evidence_digest: bundle.evidence_digest.clone(),
@@ -1426,6 +1430,7 @@ mod tests {
         conary_core::db::init(&db_path).unwrap();
 
         let conn = conary_core::db::open(&db_path).unwrap();
+        conary_core::db::models::DistroPin::set(&conn, "fedora-44", "strict").unwrap();
         seed_dependency_trove(&conn, "aa-plain-orphan");
         let legacy_trove_id = seed_dependency_trove(&conn, "zz-legacy-orphan");
         seed_installed_legacy_bundle(&conn, legacy_trove_id, "zz-legacy-orphan");
@@ -1469,6 +1474,7 @@ mod tests {
         conary_core::db::init(&db_path).unwrap();
 
         let conn = conary_core::db::open(&db_path).unwrap();
+        conary_core::db::models::DistroPin::set(&conn, "fedora-44", "strict").unwrap();
         seed_dependency_trove(&conn, "aa-plain-orphan");
         let legacy_trove_id = seed_dependency_trove(&conn, "zz-legacy-orphan");
         seed_installed_legacy_bundle(&conn, legacy_trove_id, "zz-legacy-orphan");
@@ -1754,6 +1760,7 @@ mod tests {
             sandbox_floor: SandboxMode::None,
             ccs_hooks_allowed: true,
             raw_replay_required: true,
+            compatibility_decision: accepted_compatibility_decision(),
         };
         let prepared = PreparedRemove {
             snapshot: remove_snapshot(Vec::new()),
@@ -1773,6 +1780,19 @@ mod tests {
         let result = commit_remove_db(&tx, 1, prepared).unwrap();
 
         assert_eq!(result.planned_post_remove, Some(planned_post_remove));
+    }
+
+    fn accepted_compatibility_decision()
+    -> conary_core::ccs::legacy_replay::LegacyReplayCompatibilityDecision {
+        conary_core::ccs::legacy_replay::LegacyReplayCompatibilityDecision {
+            decision: "accepted".to_string(),
+            reason_code: "compatibility-source-native".to_string(),
+            matrix_entry_id: None,
+            matrix_digest: None,
+            preflight_checks: Vec::new(),
+            override_required: false,
+            override_used: false,
+        }
     }
 
     #[tokio::test]
