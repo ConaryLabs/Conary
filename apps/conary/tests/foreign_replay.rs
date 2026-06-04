@@ -80,6 +80,28 @@ fn permissive_host_allows_permissive_bundle_with_explicit_overrides() {
     ));
 }
 
+#[test]
+fn family_compatible_without_matrix_refuses_before_foreign_policy() {
+    let bundle = foreign_legacy_bundle(ForeignReplayPolicy::Guarded);
+    let mut input = policy_input();
+    input.compatibility_matrix = TargetCompatibilityMatrix::production_default();
+    input.replay_enabled = true;
+    input.foreign_replay_override = true;
+    input.host_policy = HostForeignReplayPolicy::Guarded;
+
+    let preflight = plan_legacy_replay(
+        Some(&bundle),
+        LegacyReplayLifecycle::FreshInstallPost,
+        &input,
+    )
+    .expect("plan replay");
+
+    assert_refused(
+        preflight,
+        LegacyReplayRefusalKind::CompatibilityMatrixEntryMissing,
+    );
+}
+
 fn foreign_legacy_bundle(
     policy: ForeignReplayPolicy,
 ) -> conary_core::ccs::legacy_scriptlets::LegacyScriptletBundle {

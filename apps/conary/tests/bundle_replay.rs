@@ -9,6 +9,10 @@ use conary_core::ccs::CcsPackage;
 use conary_core::ccs::builder::{CcsBuilder, write_ccs_package};
 use conary_core::ccs::legacy_scriptlets::{LifecyclePath, ScriptletDecision, ScriptletFidelity};
 use conary_core::ccs::manifest::{CcsManifest, ScriptHook};
+use conary_core::ccs::target_compatibility::{
+    MatrixPreflightRequirements, TargetCompatibilityMatrix, TargetCompatibilityMatrixEntry,
+    TargetSelector, TargetSelectorArch, TargetSelectorRelease,
+};
 use conary_core::db;
 use conary_core::db::models::{DistroPin, InstalledLegacyScriptletBundle, ScriptletEntry};
 use conary_core::packages::PackageFormat;
@@ -400,6 +404,73 @@ fn ccs_install_allowed_legacy_replay_records_complete_audit_metadata_without_pat
     assert_metadata_excludes_local_paths(&metadata, &fixture);
 }
 
+fn matrix_json_for_fedora44_source_native() -> String {
+    let matrix = TargetCompatibilityMatrix::for_testing(vec![TargetCompatibilityMatrixEntry {
+        id: "test-fedora44-to-fedora44".to_string(),
+        source: TargetSelector {
+            format: "rpm".to_string(),
+            distro: "fedora".to_string(),
+            release: TargetSelectorRelease::Exact("44".to_string()),
+            arch: TargetSelectorArch::Exact("x86_64".to_string()),
+        },
+        target: TargetSelector {
+            format: "rpm".to_string(),
+            distro: "fedora".to_string(),
+            release: TargetSelectorRelease::Exact("44".to_string()),
+            arch: TargetSelectorArch::Exact("x86_64".to_string()),
+        },
+        requirements: MatrixPreflightRequirements::default(),
+        digest: Some("sha256:test-fedora44-to-fedora44".to_string()),
+        rationale: "synthetic process integration fixture".to_string(),
+    }]);
+    serde_json::to_string(&matrix).expect("serialize matrix")
+}
+
+#[test]
+fn ccs_install_family_compatible_without_matrix_refuses_before_db_mutation() {
+    let bundle = common::legacy_scriptlet_fixtures::family_compatible_legacy_bundle();
+    let (_package_temp, package_path) =
+        build_ccs_package_fixture("legacy-fixture-family-compatible", "1.0.0", Some(bundle))
+            .expect("build CCS fixture");
+    let fixture = InstallFixture::from_package(_package_temp, package_path);
+
+    let output = fixture.run_install(&["--allow-legacy-replay", "--allow-foreign-legacy-replay"]);
+
+    assert_failure(&output);
+    assert_contains(&output, "CompatibilityMatrixEntryMissing");
+    fixture.assert_no_install_mutation();
+}
+
+#[test]
+fn ccs_install_family_compatible_with_test_matrix_records_compatibility_audit() {
+    let bundle = common::legacy_scriptlet_fixtures::family_compatible_legacy_bundle();
+    let (_package_temp, package_path) =
+        build_ccs_package_fixture("legacy-fixture-family-compatible", "1.0.0", Some(bundle))
+            .expect("build CCS fixture");
+    let fixture = InstallFixture::from_package(_package_temp, package_path);
+
+    let output = fixture.run_install_with_matrix(
+        &["--allow-legacy-replay", "--allow-foreign-legacy-replay"],
+        matrix_json_for_fedora44_source_native(),
+    );
+
+    assert_success(&output);
+    let conn = db::open(&fixture.db_path).expect("open db");
+    let metadata = single_changeset_metadata(&conn);
+    let compatibility = &metadata["legacy_scriptlet_replay"]["compatibility"];
+    assert_eq!(compatibility["decision"], "accepted");
+    assert_eq!(
+        compatibility["reason_code"],
+        "compatibility-matrix-entry-accepted"
+    );
+    assert_eq!(
+        compatibility["matrix_entry_id"],
+        "test-fedora44-to-fedora44"
+    );
+    assert_eq!(compatibility["override_used"], true);
+    assert_metadata_excludes_local_paths(&metadata, &fixture);
+}
+
 #[test]
 fn remove_refuses_installed_legacy_bundle_without_replay_flag_before_mutation() {
     let fixture = InstallFixture::new(LegacyBundleFixture::FutureLegacyPostRemove);
@@ -738,6 +809,27 @@ impl InstallFixture {
         run_conary(&args)
     }
 
+    fn run_install_with_matrix(&self, extra_args: &[&str], matrix_json: String) -> Output {
+        let mut args = vec![
+            "--allow-live-system-mutation",
+            "ccs",
+            "install",
+            self.package_path.to_str().expect("utf-8 package path"),
+            "--allow-unsigned",
+            "--sandbox",
+            "never",
+            "--db-path",
+            self.db_path.to_str().expect("utf-8 db path"),
+            "--root",
+            self.root.to_str().expect("utf-8 root path"),
+        ];
+        args.extend_from_slice(extra_args);
+        run_conary_with_env(
+            &args,
+            &[("CONARY_TEST_COMPATIBILITY_MATRIX_JSON", matrix_json)],
+        )
+    }
+
     fn run_dry_run(&self, extra_args: &[&str]) -> Output {
         let mut args = vec![
             "ccs",
@@ -929,11 +1021,16 @@ fn build_ccs_package_fixture_with_post_install_hook(
 }
 
 fn run_conary(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_conary"))
-        .env("CONARY_TEST_SKIP_GENERATION_MOUNT", "1")
-        .args(args)
-        .output()
-        .expect("run conary")
+    run_conary_with_env(args, &[])
+}
+
+fn run_conary_with_env(args: &[&str], envs: &[(&str, String)]) -> Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_conary"));
+    command.env("CONARY_TEST_SKIP_GENERATION_MOUNT", "1");
+    for (key, value) in envs {
+        command.env(key, value);
+    }
+    command.args(args).output().expect("run conary")
 }
 
 fn assert_failure(output: &Output) {
