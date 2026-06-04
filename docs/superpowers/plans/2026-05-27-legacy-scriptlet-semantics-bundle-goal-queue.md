@@ -398,6 +398,14 @@ git diff --check
 
 ## Goal 7: Compatibility Matrix Expansion And Override Audit
 
+Design:
+
+- `docs/superpowers/specs/2026-06-02-legacy-scriptlet-compatibility-matrix-override-audit-design.md`
+
+Implementation plan:
+
+- `docs/superpowers/plans/2026-06-02-legacy-scriptlet-compatibility-matrix-override-audit-plan.md`
+
 Recommended objective:
 
 ```text
@@ -423,8 +431,10 @@ Verification:
 
 ```bash
 cargo test -p conary-core target_compatibility
-cargo test -p conary foreign_replay
-cargo test -p conary live_host_safety
+cargo test -p conary-core legacy_replay
+cargo test -p conary --test bundle_replay
+cargo test -p conary --test foreign_replay
+cargo test -p conary --bin conary live_host_safety
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --check
 git diff --check
