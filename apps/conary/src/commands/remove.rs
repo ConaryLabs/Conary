@@ -68,6 +68,7 @@ struct LegacyRemoveReplayAuditContext {
     feature_gate_enabled: bool,
     foreign_override: bool,
     evidence_digest: Option<String>,
+    compatibility: crate::commands::LegacyReplayCompatibilityAudit,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -658,6 +659,7 @@ fn build_legacy_replay_audit_for_remove(
         },
         foreign_override: context.foreign_override,
         evidence_digest: context.evidence_digest.clone(),
+        compatibility: context.compatibility.clone(),
         planned_entries,
     })
 }
@@ -1007,11 +1009,15 @@ fn plan_installed_legacy_remove_replay(
     let post = plan_legacy_replay(Some(bundle), LegacyReplayLifecycle::RemovePost, &input)?;
     let target_id = host_context.target.to_id();
     let source_target_id = source_target_from_bundle(bundle).to_id();
+    let planned_pre_remove = remove_plan_from_preflight(pre)?;
+    let planned_post_remove = remove_plan_from_preflight(post)?;
+    let compatibility =
+        compatibility_audit_from_plan(planned_pre_remove.as_ref().or(planned_post_remove.as_ref()));
 
     Ok(PreparedLegacyRemoveReplay {
         bundle: Some(bundle.clone()),
-        planned_pre_remove: remove_plan_from_preflight(pre)?,
-        planned_post_remove: remove_plan_from_preflight(post)?,
+        planned_pre_remove,
+        planned_post_remove,
         audit_context: Some(LegacyRemoveReplayAuditContext {
             target_id: target_id.clone(),
             source_target_id,
@@ -1021,8 +1027,36 @@ fn plan_installed_legacy_remove_replay(
             feature_gate_enabled: scriptlet_options.legacy_replay.allow_legacy_replay,
             foreign_override: scriptlet_options.legacy_replay.allow_foreign_legacy_replay,
             evidence_digest: bundle.evidence_digest.clone(),
+            compatibility,
         }),
     })
+}
+
+fn compatibility_audit_from_plan(
+    plan: Option<&conary_core::ccs::legacy_replay::LegacyReplayPlan>,
+) -> crate::commands::LegacyReplayCompatibilityAudit {
+    let Some(plan) = plan else {
+        return crate::commands::LegacyReplayCompatibilityAudit::default();
+    };
+    let decision = &plan.compatibility_decision;
+    crate::commands::LegacyReplayCompatibilityAudit {
+        decision: decision.decision.clone(),
+        reason_code: decision.reason_code.clone(),
+        matrix_entry_id: decision.matrix_entry_id.clone(),
+        matrix_digest: decision.matrix_digest.clone(),
+        override_required: decision.override_required,
+        override_used: decision.override_used,
+        preflight_checks: decision
+            .preflight_checks
+            .iter()
+            .map(|check| crate::commands::LegacyReplayPreflightCheckAudit {
+                id: check.id.clone(),
+                kind: check.kind.clone(),
+                status: check.status.clone(),
+                reason_code: check.reason_code.clone(),
+            })
+            .collect(),
+    }
 }
 
 fn remove_plan_from_preflight(
