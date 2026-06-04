@@ -1621,16 +1621,17 @@ Remove the old `target_compatibility_refusal(...)` helper once all call sites ar
 
 - [ ] **Step 5: Update existing foreign policy tests to inject synthetic matrix entries**
 
-In existing tests that set `bundle.target_compatibility = TargetCompatibility::FamilyCompatible` and expect `ForeignReplayDeniedByBundle`, `ForeignReplayDeniedByHostPolicy`, `ForeignReplayOverrideRequired`, or success, use `policy_with_fedora_matrix()` for the Fedora 45 to Fedora 44 target pair. For tests that change the target to CentOS 10, use the `fedora44_to_centos10_entry(...)` helper below.
+In existing tests that set `bundle.target_compatibility = TargetCompatibility::FamilyCompatible` and expect `ForeignReplayDeniedByBundle`, `ForeignReplayDeniedByHostPolicy`, `ForeignReplayOverrideRequired`, or success, use `policy_with_fedora_matrix()` for the Fedora 45 to Fedora 44 target pair. For tests that change the target to Ubuntu 26.04, use the `fedora44_to_ubuntu2604_entry(...)` helper below so synthetic fixtures stay within the supported distro catalog.
 
-For tests with a CentOS target, add:
+For tests with an Ubuntu target, add:
 
 ```rust
-fn fedora44_to_centos10_entry(id: &str) -> TargetCompatibilityMatrixEntry {
+fn fedora44_to_ubuntu2604_entry(id: &str) -> TargetCompatibilityMatrixEntry {
     let mut entry = fedora45_to_fedora44_entry(id);
     entry.source.release = TargetSelectorRelease::Exact("44".to_string());
-    entry.target.distro = "centos".to_string();
-    entry.target.release = TargetSelectorRelease::Exact("10".to_string());
+    entry.target.format = "deb".to_string();
+    entry.target.distro = "ubuntu".to_string();
+    entry.target.release = TargetSelectorRelease::Exact("26.04".to_string());
     entry
 }
 ```
@@ -1639,8 +1640,8 @@ Then set:
 
 ```rust
 input.compatibility_matrix =
-    TargetCompatibilityMatrix::for_testing(vec![fedora44_to_centos10_entry(
-        "test-fedora44-to-centos10",
+    TargetCompatibilityMatrix::for_testing(vec![fedora44_to_ubuntu2604_entry(
+        "test-fedora44-to-ubuntu2604",
     )]);
 ```
 

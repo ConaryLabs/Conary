@@ -26,6 +26,7 @@ pub mod generation;
 pub mod groups;
 mod install;
 mod label;
+mod legacy_replay_policy;
 #[allow(dead_code)]
 mod live_root;
 mod model;

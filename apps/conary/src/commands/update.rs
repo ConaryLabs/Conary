@@ -782,6 +782,7 @@ fn preflight_prepared_full_update_legacy_replay(
     };
 
     let mut state = super::install::plan_ccs_fresh_install_legacy_replay(
+        conn,
         pkg.manifest().legacy_scriptlets.as_ref(),
         &ccs_opts,
         true,
@@ -2317,6 +2318,7 @@ mod tests {
         let (package_url, _server_handle) = serve_test_file(package_path);
 
         let mut conn = crate::commands::open_db(&db_path).unwrap();
+        DistroPin::set(&conn, "fedora-44", "strict").unwrap();
         let mut repo = Repository::new("fedora-test".to_string(), package_url.clone());
         repo.gpg_check = false;
         repo.gpg_strict = false;
@@ -2425,6 +2427,7 @@ mod tests {
         let (package_url, _server_handle) = serve_test_file(package_path);
 
         let mut conn = crate::commands::open_db(&db_path).unwrap();
+        DistroPin::set(&conn, "fedora-44", "strict").unwrap();
         let mut repo = Repository::new("fedora-test".to_string(), package_url.clone());
         repo.gpg_check = false;
         repo.gpg_strict = false;

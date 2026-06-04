@@ -10,7 +10,7 @@ use conary_core::ccs::builder::{CcsBuilder, write_ccs_package};
 use conary_core::ccs::legacy_scriptlets::{LifecyclePath, ScriptletDecision, ScriptletFidelity};
 use conary_core::ccs::manifest::{CcsManifest, ScriptHook};
 use conary_core::db;
-use conary_core::db::models::{InstalledLegacyScriptletBundle, ScriptletEntry};
+use conary_core::db::models::{DistroPin, InstalledLegacyScriptletBundle, ScriptletEntry};
 use conary_core::packages::PackageFormat;
 use std::process::{Command, Output};
 
@@ -707,6 +707,9 @@ impl InstallFixture {
         let root = temp.path().join("root");
         std::fs::create_dir_all(&root).expect("create install root");
         db::init(&db_path).expect("initialize db");
+        let conn = db::open(&db_path).expect("open db");
+        DistroPin::set(&conn, "fedora-44", "strict").expect("pin fixture distro");
+        drop(conn);
 
         Self {
             _temp: temp,
@@ -824,6 +827,9 @@ impl UpgradeFixture {
         let root = temp.path().join("root");
         std::fs::create_dir_all(&root).expect("create install root");
         db::init(&db_path).expect("initialize db");
+        let conn = db::open(&db_path).expect("open db");
+        DistroPin::set(&conn, "fedora-44", "strict").expect("pin fixture distro");
+        drop(conn);
 
         Self {
             _temp: temp,

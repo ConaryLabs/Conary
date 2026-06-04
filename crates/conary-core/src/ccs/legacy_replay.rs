@@ -5,6 +5,10 @@ use crate::ccs::legacy_scriptlets::{
     ForeignReplayPolicy, LegacyScriptletBundle, LegacyScriptletEntry, LifecyclePath,
     ScriptletDecision, TargetCompatibility,
 };
+use crate::ccs::target_compatibility::{
+    CompatibilityDecisionStatus, CompatibilityPreflightCheck, CompatibilityPreflightEnvironment,
+    TargetCompatibilityDecision, TargetCompatibilityMatrix,
+};
 use crate::repository::distro::{ReplayTarget, replay_target_id, source_target_from_bundle};
 use crate::scriptlet::SandboxMode;
 
@@ -19,6 +23,8 @@ pub struct LegacyReplayPolicyInput<'a> {
     pub requested_sandbox_mode: SandboxMode,
     pub host_policy: HostForeignReplayPolicy,
     pub target: ReplayTarget<'a>,
+    pub compatibility_matrix: TargetCompatibilityMatrix,
+    pub compatibility_environment: CompatibilityPreflightEnvironment,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,6 +65,18 @@ pub struct LegacyReplayPlan {
     pub sandbox_floor: SandboxMode,
     pub ccs_hooks_allowed: bool,
     pub raw_replay_required: bool,
+    pub compatibility_decision: LegacyReplayCompatibilityDecision,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LegacyReplayCompatibilityDecision {
+    pub decision: String,
+    pub reason_code: String,
+    pub matrix_entry_id: Option<String>,
+    pub matrix_digest: Option<String>,
+    pub preflight_checks: Vec<CompatibilityPreflightCheck>,
+    pub override_required: bool,
+    pub override_used: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -90,6 +108,55 @@ pub enum LegacyReplayRefusalKind {
     ReplayExecutionUnavailable,
     TimeoutOutOfRange,
     MalformedBundle,
+    CompatibilityMatrixEntryMissing,
+    CompatibilityMatrixEntryAmbiguous,
+    CompatibilityHelperMissing,
+    CompatibilityHelperVersionMissing,
+    CompatibilityHelperVersionUnsupported,
+    CompatibilityPathMissing,
+    CompatibilityServiceManagerMismatch,
+    CompatibilitySecurityPolicyUnsupported,
+    CompatibilitySandboxFloorUnsupported,
+}
+
+impl LegacyReplayRefusalKind {
+    #[must_use]
+    pub fn reason_code(self) -> &'static str {
+        match self {
+            Self::ReviewEntry => "legacy-review-entry",
+            Self::BlockedEntry => "legacy-blocked-entry",
+            Self::UnknownDecision => "legacy-unknown-decision",
+            Self::LegacyReplayFeatureDisabled => "legacy-replay-feature-disabled",
+            Self::NoScriptsWouldSkipRequiredReplay => "no-scripts-would-skip-required-replay",
+            Self::TargetCompatibilityReviewRequired => "target-compatibility-review-required",
+            Self::TargetCompatibilityBlocked => "target-compatibility-blocked",
+            Self::TargetMismatch => "target-mismatch",
+            Self::ForeignReplayDeniedByBundle => "foreign-replay-denied-by-bundle",
+            Self::ForeignReplayDeniedByHostPolicy => "foreign-replay-denied-by-host-policy",
+            Self::ForeignReplayOverrideRequired => "foreign-replay-override-required",
+            Self::SandboxRequirementUnsupported => "sandbox-requirement-unsupported",
+            Self::TriggerReplayUnsupported => "trigger-replay-unsupported",
+            Self::NativeArgsContractUnsupported => "native-args-contract-unsupported",
+            Self::UnsatisfiedTransactionOrder => "unsatisfied-transaction-order",
+            Self::RollbackReplayUnavailable => "rollback-replay-unavailable",
+            Self::ReplayExecutionUnavailable => "replay-execution-unavailable",
+            Self::TimeoutOutOfRange => "timeout-out-of-range",
+            Self::MalformedBundle => "malformed-bundle",
+            Self::CompatibilityMatrixEntryMissing => "compatibility-matrix-entry-missing",
+            Self::CompatibilityMatrixEntryAmbiguous => "compatibility-matrix-entry-ambiguous",
+            Self::CompatibilityHelperMissing => "compatibility-helper-missing",
+            Self::CompatibilityHelperVersionMissing => "compatibility-helper-version-missing",
+            Self::CompatibilityHelperVersionUnsupported => {
+                "compatibility-helper-version-unsupported"
+            }
+            Self::CompatibilityPathMissing => "compatibility-path-missing",
+            Self::CompatibilityServiceManagerMismatch => "compatibility-service-manager-mismatch",
+            Self::CompatibilitySecurityPolicyUnsupported => {
+                "compatibility-security-policy-unsupported"
+            }
+            Self::CompatibilitySandboxFloorUnsupported => "compatibility-sandbox-floor-unsupported",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -157,6 +224,7 @@ pub fn plan_legacy_replay(
             source_target_id,
             Vec::new(),
             false,
+            compatibility_decision_for_no_raw_replay(),
         )));
     }
 
@@ -193,9 +261,11 @@ pub fn plan_legacy_replay(
         ));
     }
 
-    if let Some(refusal) = target_compatibility_refusal(bundle, &target_id, &source_target_id) {
-        return Ok(refusal);
-    }
+    let compatibility_decision =
+        match compatibility_decision_from_target(bundle, input, &target_id, &source_target_id) {
+            Ok(decision) => decision,
+            Err(refusal) => return Ok(refusal),
+        };
 
     if let Some(refusal) = foreign_replay_refusal(bundle, input, &target_id, &source_target_id) {
         return Ok(refusal);
@@ -208,6 +278,7 @@ pub fn plan_legacy_replay(
         source_target_id,
         selected_legacy,
         true,
+        compatibility_decision,
     )))
 }
 
@@ -241,22 +312,25 @@ fn admission_refusal(bundle: &LegacyScriptletBundle) -> Option<LegacyReplayPrefl
     None
 }
 
-fn target_compatibility_refusal(
+fn compatibility_decision_for_no_raw_replay() -> LegacyReplayCompatibilityDecision {
+    LegacyReplayCompatibilityDecision {
+        decision: "native-free".to_string(),
+        reason_code: "compatibility-native-free".to_string(),
+        matrix_entry_id: None,
+        matrix_digest: None,
+        preflight_checks: Vec::new(),
+        override_required: false,
+        override_used: false,
+    }
+}
+
+fn compatibility_decision_from_target(
     bundle: &LegacyScriptletBundle,
+    input: &LegacyReplayPolicyInput<'_>,
     target_id: &str,
     source_target_id: &str,
-) -> Option<LegacyReplayPreflight> {
+) -> Result<LegacyReplayCompatibilityDecision, LegacyReplayPreflight> {
     match &bundle.target_compatibility {
-        TargetCompatibility::ReviewRequired | TargetCompatibility::Unknown(_) => Some(refused(
-            LegacyReplayRefusalKind::TargetCompatibilityReviewRequired,
-            None,
-            "target compatibility requires review before raw replay",
-        )),
-        TargetCompatibility::Blocked => Some(refused(
-            LegacyReplayRefusalKind::TargetCompatibilityBlocked,
-            None,
-            "target compatibility blocks raw replay",
-        )),
         TargetCompatibility::SourceNative => {
             if target_id == source_target_id
                 || bundle
@@ -264,17 +338,121 @@ fn target_compatibility_refusal(
                     .iter()
                     .any(|allowed| allowed == target_id)
             {
-                None
+                Ok(LegacyReplayCompatibilityDecision {
+                    decision: "accepted".to_string(),
+                    reason_code: "compatibility-source-native".to_string(),
+                    matrix_entry_id: None,
+                    matrix_digest: None,
+                    preflight_checks: Vec::new(),
+                    override_required: target_id != source_target_id,
+                    override_used: input.foreign_replay_override,
+                })
             } else {
-                Some(refused(
+                Err(refused(
                     LegacyReplayRefusalKind::TargetMismatch,
                     None,
-                    "source-native legacy replay target does not match this host",
+                    format!("target {target_id} does not match source {source_target_id}"),
                 ))
             }
         }
-        TargetCompatibility::FamilyCompatible | TargetCompatibility::ConaryPortable => None,
+        TargetCompatibility::ConaryPortable => Ok(LegacyReplayCompatibilityDecision {
+            decision: "accepted".to_string(),
+            reason_code: "compatibility-conary-portable".to_string(),
+            matrix_entry_id: None,
+            matrix_digest: None,
+            preflight_checks: Vec::new(),
+            override_required: target_id != source_target_id,
+            override_used: input.foreign_replay_override,
+        }),
+        TargetCompatibility::FamilyCompatible => {
+            let source_target = source_target_from_bundle(bundle);
+            let matched = input
+                .compatibility_matrix
+                .match_entry(&source_target.as_target(), &input.target)
+                .map_err(|error| {
+                    refused(
+                        LegacyReplayRefusalKind::CompatibilityMatrixEntryAmbiguous,
+                        None,
+                        error.to_string(),
+                    )
+                })?;
+            let Some(matched) = matched else {
+                return Err(refused(
+                    LegacyReplayRefusalKind::CompatibilityMatrixEntryMissing,
+                    None,
+                    format!(
+                        "no compatibility matrix entry authorizes {source_target_id} on {target_id}"
+                    ),
+                ));
+            };
+            let decision = input
+                .compatibility_matrix
+                .preflight_entry(&matched, &input.compatibility_environment);
+            if decision.decision == CompatibilityDecisionStatus::Accepted {
+                Ok(LegacyReplayCompatibilityDecision {
+                    decision: "accepted".to_string(),
+                    reason_code: decision.reason_code,
+                    matrix_entry_id: decision.matrix_entry_id,
+                    matrix_digest: decision.matrix_digest,
+                    preflight_checks: decision.preflight_checks,
+                    override_required: target_id != source_target_id,
+                    override_used: input.foreign_replay_override,
+                })
+            } else {
+                Err(refusal_from_compatibility_decision(decision))
+            }
+        }
+        TargetCompatibility::ReviewRequired => Err(refused(
+            LegacyReplayRefusalKind::TargetCompatibilityReviewRequired,
+            None,
+            "target compatibility requires review",
+        )),
+        TargetCompatibility::Blocked => Err(refused(
+            LegacyReplayRefusalKind::TargetCompatibilityBlocked,
+            None,
+            "target compatibility is blocked",
+        )),
+        TargetCompatibility::Unknown(value) => Err(refused(
+            LegacyReplayRefusalKind::TargetCompatibilityReviewRequired,
+            None,
+            format!("unknown target compatibility {value}"),
+        )),
     }
+}
+
+fn refusal_from_compatibility_decision(
+    decision: TargetCompatibilityDecision,
+) -> LegacyReplayPreflight {
+    let kind = match decision.reason_code.as_str() {
+        "compatibility-helper-missing" => LegacyReplayRefusalKind::CompatibilityHelperMissing,
+        "compatibility-helper-version-missing" => {
+            LegacyReplayRefusalKind::CompatibilityHelperVersionMissing
+        }
+        "compatibility-helper-version-unsupported" => {
+            LegacyReplayRefusalKind::CompatibilityHelperVersionUnsupported
+        }
+        "compatibility-path-missing" => LegacyReplayRefusalKind::CompatibilityPathMissing,
+        "compatibility-service-manager-mismatch" => {
+            LegacyReplayRefusalKind::CompatibilityServiceManagerMismatch
+        }
+        "compatibility-security-policy-unsupported" => {
+            LegacyReplayRefusalKind::CompatibilitySecurityPolicyUnsupported
+        }
+        "compatibility-sandbox-floor-unsupported" => {
+            LegacyReplayRefusalKind::CompatibilitySandboxFloorUnsupported
+        }
+        _ => LegacyReplayRefusalKind::CompatibilityMatrixEntryMissing,
+    };
+
+    refused(
+        kind,
+        None,
+        format!(
+            "{} for matrix entry {}",
+            decision.reason_code,
+            decision.matrix_entry_id.as_deref().unwrap_or("unknown")
+        ),
+    )
 }
 
 fn foreign_replay_refusal(
@@ -441,6 +619,7 @@ fn build_plan(
     source_target_id: String,
     entries: Vec<&LegacyScriptletEntry>,
     raw_replay_required: bool,
+    compatibility_decision: LegacyReplayCompatibilityDecision,
 ) -> LegacyReplayPlan {
     LegacyReplayPlan {
         target_id,
@@ -458,6 +637,7 @@ fn build_plan(
         sandbox_floor: input.requested_sandbox_mode,
         ccs_hooks_allowed: !input.no_scripts,
         raw_replay_required,
+        compatibility_decision,
     }
 }
 
@@ -482,6 +662,10 @@ mod tests {
         PublicationStatus, ScriptletDecision, ScriptletFidelity, SourceFormat, TargetCompatibility,
         TransactionOrder, VersionScheme,
     };
+    use crate::ccs::target_compatibility::{
+        CompatibilityPreflightEnvironment, MatrixPreflightRequirements, TargetCompatibilityMatrix,
+        TargetCompatibilityMatrixEntry, TargetSelector, TargetSelectorArch, TargetSelectorRelease,
+    };
     use crate::hash;
     use crate::repository::distro::{ReplayTarget, source_target_from_bundle};
     use crate::scriptlet::SandboxMode;
@@ -504,7 +688,48 @@ mod tests {
             requested_sandbox_mode: SandboxMode::Always,
             host_policy: HostForeignReplayPolicy::Strict,
             target: target(),
+            compatibility_matrix: TargetCompatibilityMatrix::production_default(),
+            compatibility_environment: CompatibilityPreflightEnvironment::default(),
         }
+    }
+
+    fn fedora45_to_fedora44_entry(id: &str) -> TargetCompatibilityMatrixEntry {
+        TargetCompatibilityMatrixEntry {
+            id: id.to_string(),
+            source: TargetSelector {
+                format: "rpm".to_string(),
+                distro: "fedora".to_string(),
+                release: TargetSelectorRelease::Exact("45".to_string()),
+                arch: TargetSelectorArch::Exact("x86_64".to_string()),
+            },
+            target: TargetSelector {
+                format: "rpm".to_string(),
+                distro: "fedora".to_string(),
+                release: TargetSelectorRelease::Exact("44".to_string()),
+                arch: TargetSelectorArch::Exact("x86_64".to_string()),
+            },
+            requirements: MatrixPreflightRequirements::default(),
+            digest: Some("sha256:test-fedora45-to-44".to_string()),
+            rationale: "synthetic planner fixture".to_string(),
+        }
+    }
+
+    fn policy_with_fedora_matrix() -> LegacyReplayPolicyInput<'static> {
+        let mut input = policy_input();
+        input.compatibility_matrix =
+            TargetCompatibilityMatrix::for_testing(vec![fedora45_to_fedora44_entry(
+                "test-fedora45-to-fedora44",
+            )]);
+        input
+    }
+
+    fn fedora44_to_ubuntu2604_entry(id: &str) -> TargetCompatibilityMatrixEntry {
+        let mut entry = fedora45_to_fedora44_entry(id);
+        entry.source.release = TargetSelectorRelease::Exact("44".to_string());
+        entry.target.format = "deb".to_string();
+        entry.target.distro = "ubuntu".to_string();
+        entry.target.release = TargetSelectorRelease::Exact("26.04".to_string());
+        entry
     }
 
     fn entry(id: &str, phase: LifecyclePath, decision: ScriptletDecision) -> LegacyScriptletEntry {
@@ -1065,6 +1290,144 @@ mod tests {
     }
 
     #[test]
+    fn family_compatible_without_matrix_entry_refuses() {
+        let mut bundle = bundle_with_entries(vec![entry(
+            "post",
+            LifecyclePath::PostInstall,
+            ScriptletDecision::Legacy,
+        )]);
+        bundle.source_release = Some("45".to_string());
+        bundle.target_compatibility = TargetCompatibility::FamilyCompatible;
+        bundle.foreign_replay_policy = ForeignReplayPolicy::Guarded;
+
+        let mut input = policy_input();
+        input.replay_enabled = true;
+        input.foreign_replay_override = true;
+        input.host_policy = HostForeignReplayPolicy::Guarded;
+        input.target = ReplayTarget {
+            format: "rpm",
+            distro: "fedora",
+            release: "44",
+            arch: "x86_64",
+        };
+
+        assert_refused(
+            plan_legacy_replay(
+                Some(&bundle),
+                LegacyReplayLifecycle::FreshInstallPost,
+                &input,
+            )
+            .expect("plan"),
+            LegacyReplayRefusalKind::CompatibilityMatrixEntryMissing,
+        );
+    }
+
+    #[test]
+    fn family_compatible_with_matrix_entry_records_decision() {
+        let mut bundle = bundle_with_entries(vec![entry(
+            "post",
+            LifecyclePath::PostInstall,
+            ScriptletDecision::Legacy,
+        )]);
+        bundle.source_release = Some("45".to_string());
+        bundle.target_compatibility = TargetCompatibility::FamilyCompatible;
+        bundle.foreign_replay_policy = ForeignReplayPolicy::Guarded;
+
+        let mut input = policy_with_fedora_matrix();
+        input.replay_enabled = true;
+        input.foreign_replay_override = true;
+        input.host_policy = HostForeignReplayPolicy::Guarded;
+
+        let LegacyReplayPreflight::RequiresReplay(plan) = plan_legacy_replay(
+            Some(&bundle),
+            LegacyReplayLifecycle::FreshInstallPost,
+            &input,
+        )
+        .expect("plan") else {
+            panic!("expected accepted replay plan");
+        };
+
+        assert_eq!(plan.compatibility_decision.decision, "accepted");
+        assert_eq!(
+            plan.compatibility_decision.reason_code,
+            "compatibility-matrix-entry-accepted"
+        );
+        assert_eq!(
+            plan.compatibility_decision.matrix_entry_id.as_deref(),
+            Some("test-fedora45-to-fedora44")
+        );
+        assert!(plan.compatibility_decision.override_required);
+        assert!(plan.compatibility_decision.override_used);
+    }
+
+    #[test]
+    fn allowed_targets_do_not_substitute_for_family_compatible_matrix_entry() {
+        let mut bundle = bundle_with_entries(vec![entry(
+            "post",
+            LifecyclePath::PostInstall,
+            ScriptletDecision::Legacy,
+        )]);
+        bundle.source_release = Some("45".to_string());
+        bundle.target_compatibility = TargetCompatibility::FamilyCompatible;
+        bundle.foreign_replay_policy = ForeignReplayPolicy::Guarded;
+        bundle
+            .allowed_targets
+            .push("rpm/fedora/44/x86_64".to_string());
+
+        let mut input = policy_input();
+        input.replay_enabled = true;
+        input.foreign_replay_override = true;
+        input.host_policy = HostForeignReplayPolicy::Guarded;
+        input.target = ReplayTarget {
+            format: "rpm",
+            distro: "fedora",
+            release: "44",
+            arch: "x86_64",
+        };
+
+        assert_refused(
+            plan_legacy_replay(
+                Some(&bundle),
+                LegacyReplayLifecycle::FreshInstallPost,
+                &input,
+            )
+            .expect("plan"),
+            LegacyReplayRefusalKind::CompatibilityMatrixEntryMissing,
+        );
+    }
+
+    #[test]
+    fn no_scripts_refusal_still_precedes_matrix_lookup() {
+        let mut bundle = bundle_with_entries(vec![entry(
+            "post",
+            LifecyclePath::PostInstall,
+            ScriptletDecision::Legacy,
+        )]);
+        bundle.source_release = Some("45".to_string());
+        bundle.target_compatibility = TargetCompatibility::FamilyCompatible;
+
+        let mut input = policy_input();
+        input.replay_enabled = true;
+        input.no_scripts = true;
+        input.target = ReplayTarget {
+            format: "rpm",
+            distro: "fedora",
+            release: "44",
+            arch: "x86_64",
+        };
+
+        assert_refused(
+            plan_legacy_replay(
+                Some(&bundle),
+                LegacyReplayLifecycle::FreshInstallPost,
+                &input,
+            )
+            .expect("plan"),
+            LegacyReplayRefusalKind::NoScriptsWouldSkipRequiredReplay,
+        );
+    }
+
+    #[test]
     fn foreign_replay_policy_and_host_policy_fail_closed() {
         let mut bundle = bundle_with_entries(vec![entry(
             "post",
@@ -1076,11 +1439,15 @@ mod tests {
         let mut input = policy_input();
         input.replay_enabled = true;
         input.target = ReplayTarget {
-            format: "rpm",
-            distro: "centos",
-            release: "10",
+            format: "deb",
+            distro: "ubuntu",
+            release: "26.04",
             arch: "x86_64",
         };
+        input.compatibility_matrix =
+            TargetCompatibilityMatrix::for_testing(vec![fedora44_to_ubuntu2604_entry(
+                "test-fedora44-to-ubuntu2604",
+            )]);
         input.foreign_replay_override = true;
         input.host_policy = HostForeignReplayPolicy::Permissive;
 
@@ -1166,11 +1533,15 @@ mod tests {
         input.foreign_replay_override = true;
         input.host_policy = HostForeignReplayPolicy::Permissive;
         input.target = ReplayTarget {
-            format: "rpm",
-            distro: "centos",
-            release: "10",
+            format: "deb",
+            distro: "ubuntu",
+            release: "26.04",
             arch: "x86_64",
         };
+        input.compatibility_matrix =
+            TargetCompatibilityMatrix::for_testing(vec![fedora44_to_ubuntu2604_entry(
+                "test-fedora44-to-ubuntu2604",
+            )]);
 
         assert_refused(
             plan_legacy_replay(
@@ -1197,11 +1568,15 @@ mod tests {
         input.foreign_replay_override = true;
         input.host_policy = HostForeignReplayPolicy::Guarded;
         input.target = ReplayTarget {
-            format: "rpm",
-            distro: "centos",
-            release: "10",
+            format: "deb",
+            distro: "ubuntu",
+            release: "26.04",
             arch: "x86_64",
         };
+        input.compatibility_matrix =
+            TargetCompatibilityMatrix::for_testing(vec![fedora44_to_ubuntu2604_entry(
+                "test-fedora44-to-ubuntu2604",
+            )]);
 
         assert_refused(
             plan_legacy_replay(
@@ -1239,11 +1614,15 @@ mod tests {
         input.foreign_replay_override = true;
         input.host_policy = HostForeignReplayPolicy::Permissive;
         input.target = ReplayTarget {
-            format: "rpm",
-            distro: "centos",
-            release: "10",
+            format: "deb",
+            distro: "ubuntu",
+            release: "26.04",
             arch: "x86_64",
         };
+        input.compatibility_matrix =
+            TargetCompatibilityMatrix::for_testing(vec![fedora44_to_ubuntu2604_entry(
+                "test-fedora44-to-ubuntu2604",
+            )]);
 
         assert_refused(
             plan_legacy_replay(
