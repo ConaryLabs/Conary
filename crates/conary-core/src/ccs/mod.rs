@@ -26,6 +26,7 @@ pub mod manifest;
 pub mod package;
 pub mod policy;
 pub mod signing;
+pub mod target_compatibility;
 pub mod verify;
 
 pub use binary_manifest::{BinaryManifest, ComponentRef, Hash, MerkleTree};
@@ -50,4 +51,11 @@ pub use manifest::CcsManifest;
 pub use package::CcsPackage;
 pub use policy::{BuildPolicy, BuildPolicyConfig, PolicyAction, PolicyChain};
 pub use signing::SigningKeyPair;
+pub use target_compatibility::{
+    CompatibilityDecisionStatus, CompatibilityPreflightCheck, CompatibilityPreflightEnvironment,
+    MatrixPreflightRequirements, ObservedHelper, ObservedPath, RequiredHelper, RequiredPath,
+    SecurityPolicyRequirement, ServiceManagerRequirement, TargetCompatibilityDecision,
+    TargetCompatibilityMatch, TargetCompatibilityMatrix, TargetCompatibilityMatrixEntry,
+    TargetSelector, TargetSelectorArch, TargetSelectorRelease,
+};
 pub use verify::{TrustPolicy, VerificationResult};

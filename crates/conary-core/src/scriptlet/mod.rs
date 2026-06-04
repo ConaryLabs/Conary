@@ -40,6 +40,7 @@ use runtime::{
     chroot_namespace_flags, current_seccomp_mode, log_script_output, wait_and_capture,
     write_executable_script,
 };
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
@@ -51,9 +52,11 @@ use tracing::{debug, info, warn};
 mod runtime;
 
 /// Sandbox mode for scriptlet execution
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum SandboxMode {
     /// No sandboxing - direct execution
+    #[serde(rename = "never", alias = "none")]
     None,
     /// Automatic - sandbox based on script risk analysis
     Auto,
@@ -1937,6 +1940,30 @@ mod tests {
         // Invalid
         assert_eq!(SandboxMode::parse("invalid"), None);
         assert_eq!(SandboxMode::parse(""), None);
+    }
+
+    #[test]
+    fn sandbox_mode_serde_round_trips_goal7_matrix_spellings() {
+        assert_eq!(
+            serde_json::from_str::<SandboxMode>("\"never\"").expect("never deserializes"),
+            SandboxMode::None
+        );
+        assert_eq!(
+            serde_json::from_str::<SandboxMode>("\"none\"").expect("none alias deserializes"),
+            SandboxMode::None
+        );
+        assert_eq!(
+            serde_json::from_str::<SandboxMode>("\"auto\"").expect("auto deserializes"),
+            SandboxMode::Auto
+        );
+        assert_eq!(
+            serde_json::from_str::<SandboxMode>("\"always\"").expect("always deserializes"),
+            SandboxMode::Always
+        );
+        assert_eq!(
+            serde_json::to_string(&SandboxMode::None).expect("serialize none"),
+            "\"never\""
+        );
     }
 
     #[test]
