@@ -121,6 +121,42 @@ impl ScriptletWarning {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct LegacyReplayCompatibilityAudit {
+    pub decision: String,
+    pub reason_code: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matrix_entry_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matrix_digest: Option<String>,
+    pub override_required: bool,
+    pub override_used: bool,
+    #[serde(default)]
+    pub preflight_checks: Vec<LegacyReplayPreflightCheckAudit>,
+}
+
+impl Default for LegacyReplayCompatibilityAudit {
+    fn default() -> Self {
+        Self {
+            decision: "unknown".to_string(),
+            reason_code: "compatibility-audit-unavailable".to_string(),
+            matrix_entry_id: None,
+            matrix_digest: None,
+            override_required: false,
+            override_used: false,
+            preflight_checks: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct LegacyReplayPreflightCheckAudit {
+    pub id: String,
+    pub kind: String,
+    pub status: String,
+    pub reason_code: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct LegacyReplayAudit {
     pub bundle_present: bool,
     pub target_id: String,
@@ -131,6 +167,8 @@ pub(crate) struct LegacyReplayAudit {
     pub feature_gate: String,
     pub foreign_override: bool,
     pub evidence_digest: Option<String>,
+    #[serde(default)]
+    pub compatibility: LegacyReplayCompatibilityAudit,
     #[serde(default)]
     pub planned_entries: Vec<LegacyReplayPlannedEntryAudit>,
 }
@@ -618,6 +656,7 @@ mod tests {
             feature_gate: "enabled".to_string(),
             foreign_override: false,
             evidence_digest: Some("sha256:fixture".to_string()),
+            compatibility: LegacyReplayCompatibilityAudit::default(),
             planned_entries: vec![LegacyReplayPlannedEntryAudit {
                 entry_id: "rpm:%post".to_string(),
                 native_slot: "%post".to_string(),
@@ -659,5 +698,103 @@ mod tests {
             .unwrap();
         assert_eq!(legacy_replay_audit(Some(&raw)), Some(audit));
         assert_eq!(scriptlet_warnings(Some(&raw)).len(), 1);
+    }
+
+    #[test]
+    fn legacy_replay_audit_deserializes_goal6_json_without_compatibility() {
+        let json = r#"{
+          "bundle_present": true,
+          "target_id": "rpm/fedora/44/x86_64",
+          "source_target_id": "rpm/fedora/44/x86_64",
+          "target_compatibility": "source-native",
+          "foreign_replay_policy": "deny",
+          "host_policy": "strict",
+          "feature_gate": "enabled",
+          "foreign_override": false,
+          "evidence_digest": "sha256:test",
+          "planned_entries": []
+        }"#;
+
+        let audit: LegacyReplayAudit = serde_json::from_str(json).expect("old audit JSON reads");
+
+        assert_eq!(audit.compatibility.decision, "unknown");
+        assert_eq!(
+            audit.compatibility.reason_code,
+            "compatibility-audit-unavailable"
+        );
+    }
+
+    #[test]
+    fn legacy_replay_audit_serializes_compatibility_block() {
+        let audit = LegacyReplayAudit {
+            bundle_present: true,
+            target_id: "rpm/fedora/44/x86_64".to_string(),
+            source_target_id: "rpm/fedora/45/x86_64".to_string(),
+            target_compatibility: "family-compatible".to_string(),
+            foreign_replay_policy: "guarded".to_string(),
+            host_policy: "guarded".to_string(),
+            feature_gate: "enabled".to_string(),
+            foreign_override: true,
+            evidence_digest: Some("sha256:test".to_string()),
+            compatibility: LegacyReplayCompatibilityAudit {
+                decision: "accepted".to_string(),
+                reason_code: "compatibility-matrix-entry-accepted".to_string(),
+                matrix_entry_id: Some("test-fedora45-to-fedora44".to_string()),
+                matrix_digest: Some("sha256:matrix".to_string()),
+                override_required: true,
+                override_used: true,
+                preflight_checks: vec![LegacyReplayPreflightCheckAudit {
+                    id: "helper-systemctl".to_string(),
+                    kind: "helper".to_string(),
+                    status: "passed".to_string(),
+                    reason_code: "compatibility-helper-present".to_string(),
+                }],
+            },
+            planned_entries: Vec::new(),
+        };
+
+        let value = serde_json::to_value(&audit).expect("serialize audit");
+
+        assert_eq!(value["compatibility"]["decision"], "accepted");
+        assert_eq!(
+            value["compatibility"]["matrix_entry_id"],
+            "test-fedora45-to-fedora44"
+        );
+    }
+
+    #[test]
+    fn legacy_replay_audit_preflight_checks_exclude_local_paths() {
+        let audit = LegacyReplayAudit {
+            bundle_present: true,
+            target_id: "rpm/fedora/44/x86_64".to_string(),
+            source_target_id: "rpm/fedora/45/x86_64".to_string(),
+            target_compatibility: "family-compatible".to_string(),
+            foreign_replay_policy: "guarded".to_string(),
+            host_policy: "guarded".to_string(),
+            feature_gate: "enabled".to_string(),
+            foreign_override: true,
+            evidence_digest: Some("sha256:test".to_string()),
+            compatibility: LegacyReplayCompatibilityAudit {
+                decision: "accepted".to_string(),
+                reason_code: "compatibility-matrix-entry-accepted".to_string(),
+                matrix_entry_id: Some("test-fedora45-to-fedora44".to_string()),
+                matrix_digest: Some("sha256:matrix".to_string()),
+                override_required: true,
+                override_used: true,
+                preflight_checks: vec![LegacyReplayPreflightCheckAudit {
+                    id: "path-systemctl".to_string(),
+                    kind: "path".to_string(),
+                    status: "passed".to_string(),
+                    reason_code: "compatibility-path-present".to_string(),
+                }],
+            },
+            planned_entries: Vec::new(),
+        };
+
+        let serialized = serde_json::to_string(&audit).expect("serialize audit");
+
+        assert!(!serialized.contains("/tmp/conary"));
+        assert!(!serialized.contains("/var/cache/conary"));
+        assert!(!serialized.contains("review_artifact_path"));
     }
 }

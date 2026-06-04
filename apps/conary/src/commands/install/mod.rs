@@ -107,6 +107,7 @@ pub(crate) struct LegacyReplayAuditContext {
     pub feature_gate_enabled: bool,
     pub foreign_override: bool,
     pub evidence_digest: Option<String>,
+    pub compatibility: crate::commands::LegacyReplayCompatibilityAudit,
 }
 
 const LEGACY_REPLAY_POLICY: &str = "goal6-safe-replay";
@@ -153,9 +154,17 @@ pub(super) fn plan_ccs_fresh_install_legacy_replay(
 
     let target_id = host_context.target.to_id();
     let source_target_id = source_target_from_bundle(bundle).to_id();
+    let new_bundle_pre_plan = plan_from_preflight(pre)?;
+    let new_bundle_post_plan = plan_from_preflight(post)?;
+    let compatibility = compatibility_audit_from_plan(
+        new_bundle_pre_plan
+            .as_ref()
+            .or(new_bundle_post_plan.as_ref()),
+    );
+
     Ok(LegacyReplayInstallState {
-        new_bundle_pre_plan: plan_from_preflight(pre)?,
-        new_bundle_post_plan: plan_from_preflight(post)?,
+        new_bundle_pre_plan,
+        new_bundle_post_plan,
         accepted_bundle_to_persist: Some(AcceptedLegacyBundleInstall {
             bundle: bundle.clone(),
             target_id: target_id.clone(),
@@ -171,6 +180,7 @@ pub(super) fn plan_ccs_fresh_install_legacy_replay(
             feature_gate_enabled: opts.legacy_replay.allow_legacy_replay,
             foreign_override: opts.legacy_replay.allow_foreign_legacy_replay,
             evidence_digest: bundle.evidence_digest.clone(),
+            compatibility,
         }),
         ..LegacyReplayInstallState::default()
     })
@@ -220,10 +230,17 @@ pub(super) fn plan_ccs_old_installed_upgrade_legacy_replay(
     )?;
     let target_id = host_context.target.to_id();
     let source_target_id = source_target_from_bundle(&bundle).to_id();
+    let old_bundle_pre_remove_plan = plan_from_preflight(pre)?;
+    let old_bundle_post_remove_plan = plan_from_preflight(post)?;
+    let compatibility = compatibility_audit_from_plan(
+        old_bundle_pre_remove_plan
+            .as_ref()
+            .or(old_bundle_post_remove_plan.as_ref()),
+    );
 
     Ok(LegacyReplayInstallState {
-        old_bundle_pre_remove_plan: plan_from_preflight(pre)?,
-        old_bundle_post_remove_plan: plan_from_preflight(post)?,
+        old_bundle_pre_remove_plan,
+        old_bundle_post_remove_plan,
         old_bundle_to_replay: Some(bundle.clone()),
         audit: Some(LegacyReplayAuditContext {
             target_id: target_id.clone(),
@@ -234,6 +251,7 @@ pub(super) fn plan_ccs_old_installed_upgrade_legacy_replay(
             feature_gate_enabled: opts.legacy_replay.allow_legacy_replay,
             foreign_override: opts.legacy_replay.allow_foreign_legacy_replay,
             evidence_digest: bundle.evidence_digest.clone(),
+            compatibility,
         }),
         ..LegacyReplayInstallState::default()
     })
@@ -261,6 +279,33 @@ fn plan_from_preflight(
         LegacyReplayPreflight::FullyReplaced(plan)
         | LegacyReplayPreflight::RequiresReplay(plan) => Ok(Some(plan)),
         LegacyReplayPreflight::Refused(refusal) => Err(legacy_replay_refusal_error(refusal)),
+    }
+}
+
+fn compatibility_audit_from_plan(
+    plan: Option<&conary_core::ccs::legacy_replay::LegacyReplayPlan>,
+) -> crate::commands::LegacyReplayCompatibilityAudit {
+    let Some(plan) = plan else {
+        return crate::commands::LegacyReplayCompatibilityAudit::default();
+    };
+    let decision = &plan.compatibility_decision;
+    crate::commands::LegacyReplayCompatibilityAudit {
+        decision: decision.decision.clone(),
+        reason_code: decision.reason_code.clone(),
+        matrix_entry_id: decision.matrix_entry_id.clone(),
+        matrix_digest: decision.matrix_digest.clone(),
+        override_required: decision.override_required,
+        override_used: decision.override_used,
+        preflight_checks: decision
+            .preflight_checks
+            .iter()
+            .map(|check| crate::commands::LegacyReplayPreflightCheckAudit {
+                id: check.id.clone(),
+                kind: check.kind.clone(),
+                status: check.status.clone(),
+                reason_code: check.reason_code.clone(),
+            })
+            .collect(),
     }
 }
 
@@ -465,6 +510,7 @@ fn build_legacy_replay_audit_for_install(
         },
         foreign_override: context.foreign_override,
         evidence_digest: context.evidence_digest.clone(),
+        compatibility: context.compatibility.clone(),
         planned_entries,
     })
 }
@@ -3461,6 +3507,7 @@ mod tests {
                 feature_gate_enabled: true,
                 foreign_override: false,
                 evidence_digest: Some(conary_core::hash::sha256_prefixed(b"bundle-evidence")),
+                compatibility: crate::commands::LegacyReplayCompatibilityAudit::default(),
             }),
             ..LegacyReplayInstallState::default()
         };

@@ -82,7 +82,8 @@ pub use capability::{
 #[allow(unused_imports)]
 pub(crate) use changeset_metadata::{
     AdoptionWarning, ChangesetMetadataEnvelope, DeferredFollowUp, DeferredFollowUpKind,
-    LegacyReplayAudit, LegacyReplayOutcomeAudit, LegacyReplayPlannedEntryAudit, ScriptletWarning,
+    LegacyReplayAudit, LegacyReplayCompatibilityAudit, LegacyReplayOutcomeAudit,
+    LegacyReplayPlannedEntryAudit, LegacyReplayPreflightCheckAudit, ScriptletWarning,
     adoption_warnings, append_adoption_warning_metadata, append_deferred_follow_up_metadata,
     append_legacy_replay_audit_metadata, append_scriptlet_warning_metadata,
     classify_deferred_follow_up_kind, deferred_follow_up, legacy_replay_audit,
