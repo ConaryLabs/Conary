@@ -216,6 +216,18 @@ pub fn synthetic_legacy_bundle(case: LegacyBundleFixture) -> Option<LegacyScript
     }
 }
 
+pub fn family_compatible_legacy_bundle() -> LegacyScriptletBundle {
+    let mut bundle = synthetic_legacy_bundle(LegacyBundleFixture::SameSourceLegacyPostInstall)
+        .expect("legacy bundle fixture");
+    bundle.target_compatibility = TargetCompatibility::FamilyCompatible;
+    bundle.foreign_replay_policy = ForeignReplayPolicy::Guarded;
+    bundle.allowed_targets.clear();
+    bundle
+        .validate()
+        .expect("family-compatible fixture validates");
+    bundle
+}
+
 pub fn build_ccs_package_fixture(
     name: &str,
     version: &str,
