@@ -291,7 +291,7 @@ impl ResolutionPolicy {
     ) -> bool {
         // Evaluate in priority order (highest first).
         let mut sorted: Vec<&SourceSelectionProfile> = self.profiles.iter().collect();
-        sorted.sort_by(|a, b| b.priority.cmp(&a.priority));
+        sorted.sort_by_key(|profile| std::cmp::Reverse(profile.priority));
 
         for profile in sorted {
             if !profile.allowed_flavors.contains(&flavor) && !profile.allowed_flavors.is_empty() {

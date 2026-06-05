@@ -232,7 +232,7 @@ pub fn merge_popularity(
         .map(|(name, score)| PackagePopularity { name, score })
         .collect();
 
-    result.sort_by(|a, b| b.score.cmp(&a.score));
+    result.sort_by_key(|package| std::cmp::Reverse(package.score));
     result
 }
 

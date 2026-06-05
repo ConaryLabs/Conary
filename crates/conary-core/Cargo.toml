@@ -30,7 +30,7 @@ tracing.workspace = true
 
 # Package format parsing. Keep rpm's PGP signature feature disabled; Conary
 # handles repository/package trust separately and only needs RPM metadata/payload parsing here.
-rpm = { version = "0.23", default-features = false, features = ["payload"] }
+rpm = { version = "0.25", default-features = false, features = ["payload"] }
 
 # Temp files for RPM extraction
 tempfile.workspace = true
@@ -75,7 +75,7 @@ tar.workspace = true                     # Tarball extraction for Arch repos
 flate2.workspace = true                  # Gzip compression (for Arch, Debian, Fedora)
 liblzma = "0.4"                  # XZ/LZMA compression (for Arch)
 rfc822-like = "0.2"             # RFC 822 parser for Debian/Ubuntu Packages files
-quick-xml = "0.39"              # XML parser for Fedora/RPM repodata
+quick-xml = "0.40"              # XML parser for Fedora/RPM repodata
 ar = "0.9"                      # AR archive parsing for DEB packages
 glob.workspace = true
 log.workspace = true                      # Logging facade for transaction module
@@ -139,7 +139,7 @@ async-trait.workspace = true
 futures.workspace = true
 
 # composefs-rs: EROFS image builder for composefs (optional, feature-gated)
-composefs = { version = "0.3", default-features = false, optional = true }
+composefs = { version = "0.4", default-features = false, optional = true }
 
 [[bench]]
 name = "erofs_build"

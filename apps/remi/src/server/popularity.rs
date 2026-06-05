@@ -62,7 +62,7 @@ async fn fetch_fedora_popularity_from(
 fn parse_fedora_popularity(body: &str) -> Result<Vec<PackagePopularity>> {
     let mut data: Vec<PackagePopularity> =
         serde_json::from_str(body).context("Failed to parse Fedora popularity JSON")?;
-    data.sort_by(|a, b| b.download_count.cmp(&a.download_count));
+    data.sort_by_key(|package| std::cmp::Reverse(package.download_count));
     Ok(data)
 }
 
@@ -128,7 +128,7 @@ fn parse_arch_popularity(body: &str) -> Result<Vec<PackagePopularity>> {
         });
     }
 
-    results.sort_by(|a, b| b.download_count.cmp(&a.download_count));
+    results.sort_by_key(|package| std::cmp::Reverse(package.download_count));
     Ok(results)
 }
 
@@ -198,7 +198,7 @@ fn parse_ubuntu_popularity(body: &str) -> Result<Vec<PackagePopularity>> {
         });
     }
 
-    results.sort_by(|a, b| b.download_count.cmp(&a.download_count));
+    results.sort_by_key(|package| std::cmp::Reverse(package.download_count));
     Ok(results)
 }
 

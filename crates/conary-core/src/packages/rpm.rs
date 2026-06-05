@@ -520,13 +520,13 @@ impl RpmPackage {
         if let Ok(file_entries) = pkg.metadata.get_file_entries() {
             for entry in file_entries {
                 // FileDigest can be formatted as hex string
-                let sha256 = entry.digest.as_ref().map(|d| format!("{}", d));
+                let sha256 = entry.digest().map(|d| format!("{}", d));
 
-                let symlink_target = entry.linkto.clone();
+                let symlink_target = entry.linkto().map(str::to_string);
                 files.push(PackageFile {
-                    path: entry.path.to_string_lossy().to_string(),
-                    size: i64::try_from(entry.size).unwrap_or(i64::MAX),
-                    mode: entry.mode.raw_mode() as i32,
+                    path: entry.path().to_string_lossy().to_string(),
+                    size: i64::try_from(entry.size()).unwrap_or(i64::MAX),
+                    mode: entry.mode().raw_mode() as i32,
                     sha256,
                     symlink_target,
                 });
@@ -543,11 +543,11 @@ impl RpmPackage {
 
         if let Ok(file_entries) = pkg.metadata.get_file_entries() {
             for entry in file_entries {
-                if entry.flags.contains(FileFlags::CONFIG) {
+                if entry.flags().contains(FileFlags::CONFIG) {
                     config_files.push(ConfigFileInfo {
-                        path: entry.path.to_string_lossy().to_string(),
-                        noreplace: entry.flags.contains(FileFlags::NOREPLACE),
-                        ghost: entry.flags.contains(FileFlags::GHOST),
+                        path: entry.path().to_string_lossy().to_string(),
+                        noreplace: entry.flags().contains(FileFlags::NOREPLACE),
+                        ghost: entry.flags().contains(FileFlags::GHOST),
                     });
                 }
             }

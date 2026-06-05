@@ -13,7 +13,7 @@ resolver = "3"
 
 [workspace.dependencies]
 # Database
-rusqlite = { version = "0.39", features = ["bundled"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
 
 # Error handling
 thiserror = "2.0"
@@ -63,7 +63,7 @@ libc = "0.2"
 nix = { version = "0.31", features = ["user", "mount", "sched", "process", "signal", "resource", "fs"] }
 
 # Sigstore
-sigstore = { version = "0.13", default-features = false, features = ["bundle", "rekor", "rustls-tls"] }
+sigstore = { version = "0.14", default-features = false, features = ["bundle", "rekor", "rustls-tls"] }
 const-oid = { version = "0.10", features = ["db"] }
 rustls-pki-types = "1.0"
 webpki = { package = "rustls-webpki", version = "0.103", features = ["std"], default-features = false }
@@ -91,7 +91,7 @@ axum = "0.8"
 tower = "0.5"
 tower-http = "0.6"
 tokio-stream = "0.1"
-mdns-sd = "0.19.1"
+mdns-sd = "0.20.0"
 dashmap = "6.0"
 
 # MCP

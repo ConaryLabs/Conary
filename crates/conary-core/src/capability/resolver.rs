@@ -227,7 +227,7 @@ impl<'a> CapabilityResolver<'a> {
         }
 
         // Sort by match score descending
-        providers.sort_by(|a, b| b.match_score.cmp(&a.match_score));
+        providers.sort_by_key(|provider| std::cmp::Reverse(provider.match_score));
 
         Ok(providers)
     }
@@ -264,7 +264,7 @@ impl<'a> CapabilityResolver<'a> {
             });
         }
 
-        providers.sort_by(|a, b| b.match_score.cmp(&a.match_score));
+        providers.sort_by_key(|provider| std::cmp::Reverse(provider.match_score));
         Ok(providers)
     }
 
@@ -312,7 +312,7 @@ impl<'a> CapabilityResolver<'a> {
             }
         }
 
-        providers.sort_by(|a, b| b.match_score.cmp(&a.match_score));
+        providers.sort_by_key(|provider| std::cmp::Reverse(provider.match_score));
         Ok(providers)
     }
 
@@ -388,7 +388,7 @@ impl<'a> CapabilityResolver<'a> {
             }
         }
 
-        providers.sort_by(|a, b| b.match_score.cmp(&a.match_score));
+        providers.sort_by_key(|provider| std::cmp::Reverse(provider.match_score));
         Ok(providers)
     }
 

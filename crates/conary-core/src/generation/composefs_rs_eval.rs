@@ -8,14 +8,12 @@
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
     use std::collections::BTreeMap;
     use std::ffi::OsStr;
-    use std::rc::Rc;
 
     use composefs::erofs::writer::mkfs_erofs;
     use composefs::fsverity::{FsVerityHashValue, Sha256HashValue};
-    use composefs::tree::{Directory, FileSystem, Inode, Leaf, LeafContent, RegularFile, Stat};
+    use composefs::tree::{Directory, FileSystem, Inode, LeafContent, RegularFile, Stat};
 
     /// Helper: create a default Stat with root ownership and 0o755 mode.
     fn default_stat() -> Stat {
@@ -24,35 +22,33 @@ mod tests {
             st_uid: 0,
             st_gid: 0,
             st_mtim_sec: 0,
-            xattrs: RefCell::new(BTreeMap::new()),
+            xattrs: BTreeMap::new(),
         }
     }
 
     /// Helper: insert a leaf inode into a directory.
     fn add_leaf(
+        fs: &mut FileSystem<Sha256HashValue>,
         dir: &mut Directory<Sha256HashValue>,
         name: &str,
         content: LeafContent<Sha256HashValue>,
     ) {
-        dir.insert(
-            OsStr::new(name),
-            Inode::Leaf(Rc::new(Leaf {
-                content,
-                stat: Stat {
-                    st_mode: 0o644,
-                    st_uid: 0,
-                    st_gid: 0,
-                    st_mtim_sec: 0,
-                    xattrs: RefCell::new(BTreeMap::new()),
-                },
-            })),
+        let leaf_id = fs.push_leaf(
+            Stat {
+                st_mode: 0o644,
+                st_uid: 0,
+                st_gid: 0,
+                st_mtim_sec: 0,
+                xattrs: BTreeMap::new(),
+            },
+            content,
         );
+        dir.insert(OsStr::new(name), Inode::leaf(leaf_id));
     }
 
     /// Build a minimal filesystem tree with CAS-reference-only files.
     fn build_cas_only_tree() -> FileSystem<Sha256HashValue> {
-        let mut fs = FileSystem::<Sha256HashValue>::default();
-        fs.set_root_stat(default_stat());
+        let mut fs = FileSystem::<Sha256HashValue>::new(default_stat());
 
         let hash_a = Sha256HashValue::from_hex(
             "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd",
@@ -68,7 +64,7 @@ mod tests {
             st_uid: 0,
             st_gid: 0,
             st_mtim_sec: 1000,
-            xattrs: RefCell::new(BTreeMap::new()),
+            xattrs: BTreeMap::new(),
         };
         let mut usr_dir = Directory::new(usr_stat);
 
@@ -77,16 +73,18 @@ mod tests {
             st_uid: 0,
             st_gid: 0,
             st_mtim_sec: 1000,
-            xattrs: RefCell::new(BTreeMap::new()),
+            xattrs: BTreeMap::new(),
         };
         let mut bin_dir = Directory::new(bin_stat);
 
         add_leaf(
+            &mut fs,
             &mut bin_dir,
             "conary",
             LeafContent::Regular(RegularFile::External(hash_a, 1_200_000)),
         );
         add_leaf(
+            &mut fs,
             &mut bin_dir,
             "ls",
             LeafContent::Regular(RegularFile::External(hash_b, 150_000)),

@@ -614,7 +614,7 @@ pub fn list_runs(state: &AppState, limit: usize) -> Vec<RunSummary> {
         })
         .collect();
 
-    summaries.sort_by(|a, b| b.run_id.cmp(&a.run_id));
+    summaries.sort_by_key(|summary| std::cmp::Reverse(summary.run_id));
     summaries.truncate(limit);
     summaries
 }
