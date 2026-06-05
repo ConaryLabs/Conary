@@ -92,15 +92,15 @@ design to archive paths. The active `plans/` and `specs/` roots are clear
 again; the release-hardening queue now survives as active product behavior,
 tests, and user/operator docs rather than as open planning records.
 
-The legacy scriptlet semantics sequence has now landed through Goal 6. This
-archive pass moves the completed Goal 0 Remi benchmark/corpus plan, the Goal 1
-through Goal 6 detailed implementation plans, and the matching Goal 1 through
-Goal 6 design specs to archive paths. The top-level legacy scriptlet goal
-queue and umbrella semantics design intentionally remain active because they
-still carry the future compatibility-matrix and golden-fixture goals.
-`docs/modules/remi.md` now carries the current Remi-facing behavior for passive
-scriptlet metadata, publication gating, and local benchmark/corpus evidence
-commands.
+The legacy scriptlet semantics sequence has now landed through Goal 8. The
+first archive pass moved the completed Goal 0 Remi benchmark/corpus plan, the
+Goal 1 through Goal 6 detailed implementation plans, and the matching Goal 1
+through Goal 6 design specs to archive paths. This follow-up archive pass moves
+the completed umbrella goal queue and semantics design, the Goal 7 compatibility
+matrix/override audit design and plan, and the Goal 8 golden-fixture/regex-truth
+plan to archive paths. The active `plans/` and `specs/` roots are clear again;
+current behavior now survives in implementation, tests, and canonical module
+docs rather than as open planning records.
 
 Audited every tracked documentation-like file returned by
 `bash scripts/docs-audit-inventory.sh`: tracked files spanning root docs,
