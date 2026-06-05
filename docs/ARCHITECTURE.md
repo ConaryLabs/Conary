@@ -91,7 +91,7 @@ crates/conary-core/      Core library crate
     +-- lib.rs           Internal workspace crate surface, not a stable external API
     +-- operations.rs    Shared operation vocabulary across CLI and daemon boundaries
     +-- db/              Database layer
-    |   +-- schema.rs    Schema v69, migration dispatcher
+    |   +-- schema.rs    Schema v71, migration dispatcher
     |   +-- migrations/  Migration functions grouped into v1_v20.rs, v21_v40.rs, v41_current.rs
     |   +-- models/      ORM-style model structs
     +-- transaction/     Composefs-native transaction engine
@@ -438,7 +438,7 @@ itself.
 Supports x86_64, aarch64, and riscv64 targets. Dry-run mode
 (`--dry-run`) validates the full pipeline without building.
 
-## Database Schema (v69)
+## Database Schema (v71)
 
 All runtime state lives in SQLite, and migrations are dispatched from
 `crates/conary-core/src/db/schema.rs`.
