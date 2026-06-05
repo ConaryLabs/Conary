@@ -3,10 +3,11 @@
 use anyhow::Result;
 use conary_core::ccs::builder::{CcsBuilder, write_ccs_package};
 use conary_core::ccs::legacy_scriptlets::{
-    DecisionCounts, ForeignReplayPolicy, LEGACY_SCRIPTLET_SCHEMA_V1, LegacyScriptletBundle,
-    LegacyScriptletEntry, LifecyclePath, NativeInvocation, PublicationPolicy, PublicationStatus,
-    RpmTriggerMetadata, RpmTriggerTargetConstraint, ScriptletDecision, ScriptletFidelity,
-    SourceFormat, TargetCompatibility, TransactionOrder, VersionScheme,
+    ArchInstallMetadata, DebMaintainerMetadata, DecisionCounts, ForeignReplayPolicy,
+    LEGACY_SCRIPTLET_SCHEMA_V1, LegacyScriptletBundle, LegacyScriptletEntry, LifecyclePath,
+    NativeInvocation, PublicationPolicy, PublicationStatus, RpmTriggerMetadata,
+    RpmTriggerTargetConstraint, ScriptletDecision, ScriptletFidelity, SourceFormat,
+    TargetCompatibility, TransactionOrder, VersionScheme,
 };
 use conary_core::ccs::manifest::CcsManifest;
 use std::collections::BTreeMap;
@@ -27,6 +28,9 @@ pub enum LegacyBundleFixture {
     UpgradeOldPreAndPostRemove,
     UpgradeNewPreAndPost,
     RawTriggerLegacy,
+    RawFileTriggerLegacy,
+    DebTriggerLegacy,
+    ArchInstallWrapperLegacy,
     UnsupportedNativeInvocation,
 }
 
@@ -46,6 +50,9 @@ impl LegacyBundleFixture {
                 "legacy-fixture-upgrade"
             }
             Self::RawTriggerLegacy => "legacy-fixture-trigger",
+            Self::RawFileTriggerLegacy => "legacy-fixture-file-trigger",
+            Self::DebTriggerLegacy => "legacy-fixture-deb-trigger",
+            Self::ArchInstallWrapperLegacy => "legacy-fixture-arch-install",
             Self::UnsupportedNativeInvocation => "legacy-fixture-unsupported-native",
         }
     }
@@ -199,6 +206,83 @@ pub fn synthetic_legacy_bundle(case: LegacyBundleFixture) -> Option<LegacyScript
                 vec![entry],
             ))
         }
+        LegacyBundleFixture::RawFileTriggerLegacy => {
+            let mut entry = entry_fixture(
+                "rpm:%filetriggerin",
+                LifecyclePath::FileTrigger,
+                ScriptletDecision::Legacy,
+                "echo replay-file-trigger\n",
+            );
+            entry.rpm_trigger = Some(RpmTriggerMetadata {
+                kind: "file-trigger".to_string(),
+                condition: Some("in".to_string()),
+                target_constraints: vec![],
+                priority: Some(100),
+                file_globs: vec!["/usr/share/icons/*".to_string()],
+                stdin_contract: Some("paths".to_string()),
+                transaction_order: Some("post-transaction".to_string()),
+                extra: BTreeMap::new(),
+            });
+            Some(bundle_fixture(
+                case,
+                ScriptletFidelity::LegacyReplay,
+                vec![entry],
+            ))
+        }
+        LegacyBundleFixture::DebTriggerLegacy => {
+            let mut entry = entry_fixture(
+                "deb:triggers",
+                LifecyclePath::Trigger,
+                ScriptletDecision::Legacy,
+                "interest-noawait icon-cache\n",
+            );
+            entry.native_slot = "triggers".to_string();
+            entry.native_invocation.environment =
+                vec!["DEBIAN_FRONTEND=noninteractive".to_string()];
+            entry.native_invocation.stdin = Some("debconf".to_string());
+            entry.deb_maintainer = Some(DebMaintainerMetadata {
+                invocation_mode: Some("triggered".to_string()),
+                old_version: None,
+                new_version: None,
+                triggers_content: Some("interest-noawait icon-cache".to_string()),
+                trigger_names: vec!["icon-cache".to_string()],
+                purge: false,
+                abort: false,
+                noninteractive: true,
+                extra: BTreeMap::new(),
+            });
+            Some(bundle_fixture(
+                case,
+                ScriptletFidelity::LegacyReplay,
+                vec![entry],
+            ))
+        }
+        LegacyBundleFixture::ArchInstallWrapperLegacy => {
+            let mut entry = entry_fixture(
+                "arch:post_install",
+                LifecyclePath::PostInstall,
+                ScriptletDecision::Legacy,
+                "post_install() { echo ok; }\n",
+            );
+            entry.native_slot = "post_install".to_string();
+            entry.arch_install = Some(ArchInstallMetadata {
+                install_digest: Some(conary_core::hash::sha256_prefixed(
+                    b"post_install() { echo ok; }\n",
+                )),
+                called_function: Some("post_install".to_string()),
+                old_version: None,
+                new_version: Some("1.0.0-1".to_string()),
+                wrapper_source_digest: Some(conary_core::hash::sha256_prefixed(
+                    b"source .INSTALL && post_install",
+                )),
+                extra: BTreeMap::new(),
+            });
+            Some(bundle_fixture(
+                case,
+                ScriptletFidelity::LegacyReplay,
+                vec![entry],
+            ))
+        }
         LegacyBundleFixture::UnsupportedNativeInvocation => {
             let mut entry = entry_fixture(
                 "rpm:%pre",
@@ -262,21 +346,58 @@ fn bundle_fixture(
         LegacyBundleFixture::BlockedEntry => TargetCompatibility::Blocked,
         _ => TargetCompatibility::SourceNative,
     };
+    let (
+        source_format,
+        source_family,
+        source_distro,
+        source_release,
+        source_version,
+        version_scheme,
+        allowed_targets,
+    ) = match case {
+        LegacyBundleFixture::DebTriggerLegacy => (
+            SourceFormat::Deb,
+            "ubuntu".to_string(),
+            Some("ubuntu".to_string()),
+            Some("26.04".to_string()),
+            "1.0.0-1".to_string(),
+            VersionScheme::Deb,
+            vec!["deb/ubuntu/26.04/x86_64".to_string()],
+        ),
+        LegacyBundleFixture::ArchInstallWrapperLegacy => (
+            SourceFormat::Arch,
+            "arch".to_string(),
+            Some("arch".to_string()),
+            None,
+            "1.0.0-1".to_string(),
+            VersionScheme::Arch,
+            vec!["arch/arch/rolling/x86_64".to_string()],
+        ),
+        _ => (
+            SourceFormat::Rpm,
+            "fedora-rhel".to_string(),
+            Some("fedora".to_string()),
+            Some("44".to_string()),
+            "1.0.0-1.fc44".to_string(),
+            VersionScheme::Rpm,
+            vec!["rpm/fedora/44/x86_64".to_string()],
+        ),
+    };
 
     LegacyScriptletBundle {
         schema: LEGACY_SCRIPTLET_SCHEMA_V1.to_string(),
         schema_revision: 1,
-        source_format: SourceFormat::Rpm,
-        source_family: "fedora-rhel".to_string(),
-        source_distro: Some("fedora".to_string()),
-        source_release: Some("44".to_string()),
+        source_format,
+        source_family,
+        source_distro,
+        source_release,
         source_arch: Some("x86_64".to_string()),
         source_package: case.package_name().to_string(),
-        source_version: "1.0.0-1.fc44".to_string(),
+        source_version,
         source_checksum: Some(conary_core::hash::sha256_prefixed(
             format!("{}-source", case.package_name()).as_bytes(),
         )),
-        version_scheme: VersionScheme::Rpm,
+        version_scheme,
         conversion_tool: "remi-test".to_string(),
         conversion_tool_version: "0.8.0".to_string(),
         conversion_policy: "goal6-test-fixture".to_string(),
@@ -288,7 +409,7 @@ fn bundle_fixture(
             format!("{}-evidence", case.package_name()).as_bytes(),
         )),
         target_compatibility,
-        allowed_targets: vec!["rpm/fedora/44/x86_64".to_string()],
+        allowed_targets,
         foreign_replay_policy: ForeignReplayPolicy::Deny,
         publication_policy: PublicationPolicy::PublicIfNoBlocked,
         publication_status,
