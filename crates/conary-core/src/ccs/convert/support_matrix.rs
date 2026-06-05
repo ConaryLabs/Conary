@@ -270,6 +270,130 @@ mod tests {
     }
 
     #[test]
+    fn public_ready_adapter_rows_have_golden_fixture_evidence() {
+        let fixtures: std::collections::BTreeMap<_, _> = golden_fixtures::all_cases()
+            .iter()
+            .map(|case| (case.id, *case))
+            .collect();
+
+        for entry in SupportMatrix::default()
+            .entries()
+            .iter()
+            .filter(|entry| entry.outcome == SupportOutcome::Known)
+        {
+            let adapter_id = entry
+                .adapter_id
+                .unwrap_or_else(|| panic!("known support row {} has no adapter id", entry.id));
+            assert!(
+                !entry.fixture_names.is_empty(),
+                "adapter {adapter_id} has no golden fixture evidence"
+            );
+
+            for fixture_name in entry.fixture_names {
+                let fixture = fixtures.get(fixture_name).unwrap_or_else(|| {
+                    panic!("adapter {adapter_id} fixture {fixture_name} is not declared")
+                });
+                let expected = if adapter_id == "native-free/v1" {
+                    golden_fixtures::GoldenFixtureOutcome::NativeFree
+                } else {
+                    golden_fixtures::GoldenFixtureOutcome::FullyReplaced
+                };
+                assert_eq!(
+                    fixture.expected_outcome, expected,
+                    "adapter {adapter_id} fixture {fixture_name} has wrong public-ready outcome"
+                );
+                assert!(
+                    fixture.source_distro_id.is_some() && fixture.target_distro_id.is_some(),
+                    "public-ready fixture {fixture_name} must use exact source and target distro ids"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn public_ready_golden_fixtures_are_backed_by_adapter_or_native_free_evidence() {
+        let matrix = SupportMatrix::default();
+        let known_fixture_authority: std::collections::BTreeMap<_, _> = matrix
+            .entries()
+            .iter()
+            .filter(|entry| entry.outcome == SupportOutcome::Known)
+            .flat_map(|entry| {
+                entry.fixture_names.iter().map(move |fixture| {
+                    (
+                        *fixture,
+                        entry
+                            .adapter_id
+                            .expect("known support row should carry adapter id"),
+                    )
+                })
+            })
+            .collect();
+
+        for fixture in golden_fixtures::all_cases().iter().filter(|case| {
+            matches!(
+                case.expected_outcome,
+                golden_fixtures::GoldenFixtureOutcome::NativeFree
+                    | golden_fixtures::GoldenFixtureOutcome::FullyReplaced
+            )
+        }) {
+            let adapter_id = known_fixture_authority.get(fixture.id).unwrap_or_else(|| {
+                panic!(
+                    "public-ready fixture {} has no adapter or native-free support-matrix evidence",
+                    fixture.id
+                )
+            });
+            if fixture.expected_outcome == golden_fixtures::GoldenFixtureOutcome::NativeFree {
+                assert_eq!(
+                    *adapter_id, "native-free/v1",
+                    "native-free fixture {} must be backed by explicit native-free evidence",
+                    fixture.id
+                );
+            } else {
+                assert_ne!(
+                    *adapter_id, "native-free/v1",
+                    "fully-replaced fixture {} must be backed by adapter evidence",
+                    fixture.id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn review_and_blocked_support_rows_have_stable_reason_fixture_alignment() {
+        for entry in SupportMatrix::default()
+            .entries()
+            .iter()
+            .filter(|entry| entry.outcome != SupportOutcome::Known)
+        {
+            let (reason_prefix, fixture_prefix) = match entry.outcome {
+                SupportOutcome::Review => ("review-class-", "review-class-"),
+                SupportOutcome::Blocked => ("blocked-class-", "blocked-class-"),
+                SupportOutcome::Known => unreachable!("known rows filtered out"),
+            };
+            assert!(
+                entry.reason_code.starts_with(reason_prefix),
+                "support row {} has unstable reason id {}",
+                entry.id,
+                entry.reason_code
+            );
+            assert!(
+                !entry.fixture_names.is_empty(),
+                "support row {} has no golden fixture evidence",
+                entry.id
+            );
+            for fixture_name in entry.fixture_names {
+                assert!(
+                    fixture_name.starts_with(fixture_prefix),
+                    "support row {} fixture {} does not match {} outcome",
+                    entry.id,
+                    fixture_name,
+                    fixture_prefix
+                );
+            }
+        }
+    }
+
+    #[test]
     fn goal8_required_corpus_rows_are_declared() {
         let fixtures: std::collections::BTreeMap<_, _> = golden_fixtures::required_goal8_cases()
             .iter()
