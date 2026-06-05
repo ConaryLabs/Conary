@@ -144,7 +144,7 @@ unadopt --all` removes Conary tracking without deleting native package files.
 ### Developer Build
 
 ```bash
-# Build from source (requires Rust 1.94+, Linux only)
+# Build from source (requires Rust 1.96+, Linux only)
 git clone https://github.com/ConaryLabs/Conary.git
 cd Conary
 cargo build -p conary
@@ -629,7 +629,7 @@ cargo run -p conary-test -- logs T42  # Retrieve test logs
 
 ## Building
 
-Requires Rust 1.94+ (edition 2024). The project root is a virtual Cargo
+Requires Rust 1.96+ (edition 2024). The project root is a virtual Cargo
 workspace with eight members: `apps/conary` (CLI), `apps/remi` (Remi),
 `apps/conaryd` (daemon), `apps/conary-test` (test infrastructure),
 `crates/conary-bootstrap` (shared binary bootstrap helpers),

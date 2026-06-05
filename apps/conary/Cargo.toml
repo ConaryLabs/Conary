@@ -2,7 +2,7 @@
 name = "conary"
 version = "0.8.0"
 edition = "2024"
-rust-version = "1.94"
+rust-version = "1.96"
 authors = ["Conary Contributors"]
 description = "Modern package manager with atomic operations, rollback, and delta updates"
 repository = "https://github.com/ConaryLabs/Conary"

@@ -2,7 +2,7 @@
 name = "conaryd"
 version = "0.6.0"
 edition = "2024"
-rust-version = "1.94"
+rust-version = "1.96"
 authors = ["Conary Contributors"]
 description = "Conary system daemon"
 license = "MIT OR Apache-2.0"
