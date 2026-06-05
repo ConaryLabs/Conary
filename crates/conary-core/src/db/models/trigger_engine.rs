@@ -161,7 +161,7 @@ impl<'a> TriggerEngine<'a> {
         if sorted.len() != changeset_triggers.len() {
             warn!("Circular dependency detected in triggers, using priority order fallback");
             let mut remaining: Vec<Trigger> = triggers.into_values().collect();
-            remaining.sort_by(|a, b| a.priority.cmp(&b.priority));
+            remaining.sort_by_key(|trigger| trigger.priority);
             sorted.extend(remaining);
         }
 

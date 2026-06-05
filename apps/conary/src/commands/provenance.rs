@@ -36,6 +36,8 @@ enum SigstoreCommandError {
     MissingSignature,
     #[error("Rekor entry missing public key data")]
     MissingPublicKey,
+    #[error("Rekor entry missing UUID")]
+    MissingRekorUuid,
     #[error("signing key is required unless --keyless is provided")]
     MissingSigningKey,
     #[error("Rekor entry contains unsupported public key")]
@@ -642,9 +644,13 @@ pub async fn cmd_provenance_register(
                 };
 
                 let entry = rekor_create_entry(build_rekor_entry(dna_hash, &signed)?).await?;
+                let entry_uuid = entry
+                    .uuid
+                    .as_deref()
+                    .ok_or(SigstoreCommandError::MissingRekorUuid)?;
                 println!(
                     "[OK] Rekor entry created: uuid={}, log_index={}",
-                    entry.uuid, entry.log_index
+                    entry_uuid, entry.log_index
                 );
 
                 conn.execute(
@@ -818,6 +824,9 @@ fn sign_dna_with_key(dna_hash: &str, key_path: &str) -> Result<SignedDna, Sigsto
             sigstore::crypto::signing_key::ecdsa::ECDSAKeys::P384(_) => {
                 SigningScheme::ECDSA_P384_SHA384_ASN1
             }
+            sigstore::crypto::signing_key::ecdsa::ECDSAKeys::P521(_) => {
+                SigningScheme::ECDSA_P521_SHA512_ASN1
+            }
         },
         SigStoreKeyPair::ED25519(_) => SigningScheme::ED25519,
         SigStoreKeyPair::RSA(_) => SigningScheme::RSA_PSS_SHA256(0),
@@ -930,7 +939,10 @@ fn verify_rekor_entry(
         hash_match,
         signature_valid,
         cert_chain_valid,
-        entry_uuid: entry.uuid.clone(),
+        entry_uuid: entry
+            .uuid
+            .clone()
+            .ok_or(SigstoreCommandError::MissingRekorUuid)?,
         entry_index: entry.log_index,
         signer_kind,
     })

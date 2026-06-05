@@ -61,7 +61,7 @@ impl RendezvousRouter {
 
         // Extract peers sorted by weight (highest first)
         let mut result: Vec<_> = heap.into_iter().map(|(Reverse(w), idx)| (w, idx)).collect();
-        result.sort_by(|a, b| b.0.cmp(&a.0)); // Sort descending by weight
+        result.sort_by_key(|entry| Reverse(entry.0)); // Sort descending by weight
 
         result.into_iter().map(|(_, idx)| &peers[idx]).collect()
     }
@@ -180,7 +180,7 @@ impl RendezvousRouter {
             .map(|p| (self.compute_weight(chunk_hash, &p.id), p))
             .collect();
 
-        weighted.sort_by(|a, b| b.0.cmp(&a.0));
+        weighted.sort_by_key(|entry| Reverse(entry.0));
         weighted.into_iter().take(self.k).map(|(_, p)| p).collect()
     }
 }

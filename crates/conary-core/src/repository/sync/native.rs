@@ -37,7 +37,7 @@ pub(super) fn persist_native_sync_rows(
     let mut all_groups: Vec<DbRequirementGroup> = Vec::new();
     let mut all_group_clauses: Vec<Vec<RepositoryRequirement>> = Vec::new();
 
-    for (pkg, row) in repo_packages.iter().zip(synced_packages.into_iter()) {
+    for (pkg, row) in repo_packages.iter().zip(synced_packages) {
         let Some(repository_package_id) = pkg.id else {
             return Err(Error::InitError(
                 "Inserted repository package missing generated ID".to_string(),
@@ -70,7 +70,7 @@ pub(super) fn persist_native_sync_rows(
 
     DbRequirementGroup::batch_insert_with_ids(&tx, &mut all_groups)?;
     let mut grouped_clauses = Vec::new();
-    for (group, clauses) in all_groups.iter().zip(all_group_clauses.into_iter()) {
+    for (group, clauses) in all_groups.iter().zip(all_group_clauses) {
         let group_id = group.id.ok_or_else(|| {
             Error::InitError("Inserted requirement group missing generated ID".to_string())
         })?;

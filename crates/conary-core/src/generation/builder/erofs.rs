@@ -173,14 +173,12 @@ pub fn build_erofs_image(
     symlinks: &[SymlinkEntryRef],
     generation_dir: &Path,
 ) -> crate::Result<BuildResult> {
-    use std::cell::RefCell;
     use std::collections::BTreeMap;
     use std::ffi::OsStr;
-    use std::rc::Rc;
 
     use composefs::erofs::writer::mkfs_erofs;
     use composefs::fsverity::{FsVerityHashValue, Sha256HashValue};
-    use composefs::tree::{Directory, FileSystem, Inode, Leaf, LeafContent, RegularFile, Stat};
+    use composefs::tree::{Directory, FileSystem, Inode, LeafContent, RegularFile, Stat};
 
     fn dir_stat(mode: u32) -> Stat {
         Stat {
@@ -188,7 +186,7 @@ pub fn build_erofs_image(
             st_uid: 0,
             st_gid: 0,
             st_mtim_sec: 0,
-            xattrs: RefCell::new(BTreeMap::new()),
+            xattrs: BTreeMap::new(),
         }
     }
 
@@ -198,7 +196,7 @@ pub fn build_erofs_image(
             st_uid: uid,
             st_gid: gid,
             st_mtim_sec: 0,
-            xattrs: RefCell::new(BTreeMap::new()),
+            xattrs: BTreeMap::new(),
         }
     }
 
@@ -264,8 +262,7 @@ pub fn build_erofs_image(
         }
     }
 
-    let mut fs = FileSystem::<Sha256HashValue>::default();
-    fs.set_root_stat(dir_stat(0o755));
+    let mut fs = FileSystem::<Sha256HashValue>::new(dir_stat(0o755));
 
     let mut cas_objects: u64 = 0;
 
@@ -287,17 +284,15 @@ pub fn build_erofs_image(
         };
 
         let (dir_path, file_name) = ensure_parent_dirs(&mut fs.root, &entry.path)?;
-        let parent_dir = get_parent_dir(&mut fs.root, &dir_path, &entry.path)?;
         let uid = resolve_uid(entry.owner.as_deref());
         let gid = resolve_gid(entry.group_name.as_deref());
-
-        parent_dir.insert(
-            OsStr::new(&file_name),
-            Inode::Leaf(Rc::new(Leaf {
-                content: LeafContent::Regular(RegularFile::External(hash, entry.size)),
-                stat: file_stat(entry.permissions, uid, gid),
-            })),
+        let leaf_id = fs.push_leaf(
+            file_stat(entry.permissions, uid, gid),
+            LeafContent::Regular(RegularFile::External(hash, entry.size)),
         );
+        let parent_dir = get_parent_dir(&mut fs.root, &dir_path, &entry.path)?;
+
+        parent_dir.insert(OsStr::new(&file_name), Inode::leaf(leaf_id));
 
         cas_objects += 1;
     }
@@ -308,25 +303,21 @@ pub fn build_erofs_image(
         }
 
         let (dir_path, link_name) = ensure_parent_dirs(&mut fs.root, &symlink.path)?;
+        let leaf_id = fs.push_leaf(
+            dir_stat(0o777),
+            LeafContent::Symlink(OsStr::new(&symlink.target).into()),
+        );
         let parent_dir = get_parent_dir(&mut fs.root, &dir_path, &symlink.path)?;
 
-        parent_dir.insert(
-            OsStr::new(&link_name),
-            Inode::Leaf(Rc::new(Leaf {
-                content: LeafContent::Symlink(OsStr::new(&symlink.target).into()),
-                stat: dir_stat(0o777),
-            })),
-        );
+        parent_dir.insert(OsStr::new(&link_name), Inode::leaf(leaf_id));
     }
 
     for (link, target) in ROOT_SYMLINKS {
-        fs.root.insert(
-            OsStr::new(link),
-            Inode::Leaf(Rc::new(Leaf {
-                content: LeafContent::Symlink(OsStr::new(target).into()),
-                stat: dir_stat(0o777),
-            })),
+        let leaf_id = fs.push_leaf(
+            dir_stat(0o777),
+            LeafContent::Symlink(OsStr::new(target).into()),
         );
+        fs.root.insert(OsStr::new(link), Inode::leaf(leaf_id));
     }
 
     let image_bytes = mkfs_erofs(&fs);
