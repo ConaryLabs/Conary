@@ -308,6 +308,13 @@ fn admission_refusal(bundle: &LegacyScriptletBundle) -> Option<LegacyReplayPrefl
                 "raw trigger and file-trigger replay is unsupported in Goal 6",
             ));
         }
+        if entry.arch_install.is_some() && entry.decision == ScriptletDecision::Legacy {
+            return Some(refused(
+                LegacyReplayRefusalKind::ReplayExecutionUnavailable,
+                Some(&entry.id),
+                "raw Arch .INSTALL wrapper replay is unsupported",
+            ));
+        }
     }
     None
 }

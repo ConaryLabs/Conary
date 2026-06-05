@@ -33,6 +33,9 @@ fn synthetic_legacy_bundle_fixtures_cover_task5_matrix() {
         LegacyBundleFixture::UpgradeOldPreAndPostRemove,
         LegacyBundleFixture::UpgradeNewPreAndPost,
         LegacyBundleFixture::RawTriggerLegacy,
+        LegacyBundleFixture::RawFileTriggerLegacy,
+        LegacyBundleFixture::DebTriggerLegacy,
+        LegacyBundleFixture::ArchInstallWrapperLegacy,
         LegacyBundleFixture::UnsupportedNativeInvocation,
     ];
 
@@ -115,6 +118,23 @@ fn synthetic_legacy_bundle_fixtures_cover_task5_matrix() {
                     assert_eq!(bundle.entries[0].phase, LifecyclePath::Trigger);
                     assert!(bundle.entries[0].rpm_trigger.is_some());
                 }
+                LegacyBundleFixture::RawFileTriggerLegacy => {
+                    assert_eq!(decisions, vec![ScriptletDecision::Legacy]);
+                    assert_eq!(bundle.entries[0].phase, LifecyclePath::FileTrigger);
+                    assert!(bundle.entries[0].rpm_trigger.is_some());
+                }
+                LegacyBundleFixture::DebTriggerLegacy => {
+                    assert_eq!(decisions, vec![ScriptletDecision::Legacy]);
+                    assert_eq!(bundle.entries[0].phase, LifecyclePath::Trigger);
+                    assert!(bundle.entries[0].deb_maintainer.is_some());
+                    assert_eq!(bundle.allowed_targets, vec!["deb/ubuntu/26.04/x86_64"]);
+                }
+                LegacyBundleFixture::ArchInstallWrapperLegacy => {
+                    assert_eq!(decisions, vec![ScriptletDecision::Legacy]);
+                    assert_eq!(bundle.entries[0].phase, LifecyclePath::PostInstall);
+                    assert!(bundle.entries[0].arch_install.is_some());
+                    assert_eq!(bundle.allowed_targets, vec!["arch/arch/rolling/x86_64"]);
+                }
                 LegacyBundleFixture::UnsupportedNativeInvocation => {
                     assert_eq!(decisions, vec![ScriptletDecision::Legacy]);
                     assert!(bundle.entries[0].native_invocation.stdin.is_some());
@@ -122,6 +142,36 @@ fn synthetic_legacy_bundle_fixtures_cover_task5_matrix() {
                 LegacyBundleFixture::NoBundle => unreachable!("handled by None branch"),
             }
         }
+    }
+}
+
+#[test]
+fn ccs_install_quarantines_trigger_and_wrapper_replay_before_db_mutation() {
+    let cases = [
+        (
+            LegacyBundleFixture::RawFileTriggerLegacy,
+            "fedora-44",
+            "TriggerReplayUnsupported",
+        ),
+        (
+            LegacyBundleFixture::DebTriggerLegacy,
+            "ubuntu-26.04",
+            "TriggerReplayUnsupported",
+        ),
+        (
+            LegacyBundleFixture::ArchInstallWrapperLegacy,
+            "arch",
+            "ReplayExecutionUnavailable",
+        ),
+    ];
+
+    for (case, distro_pin, expected_text) in cases {
+        let fixture = InstallFixture::new_with_distro_pin(case, distro_pin);
+        let output = fixture.run_install(&["--allow-legacy-replay"]);
+
+        assert_failure(&output);
+        assert_contains(&output, expected_text);
+        fixture.assert_no_install_mutation();
     }
 }
 
@@ -721,10 +771,14 @@ struct InstallFixture {
 
 impl InstallFixture {
     fn new(case: LegacyBundleFixture) -> Self {
+        Self::new_with_distro_pin(case, "fedora-44")
+    }
+
+    fn new_with_distro_pin(case: LegacyBundleFixture, distro_pin: &str) -> Self {
         let (_package_temp, package_path) =
             build_ccs_package_fixture(case.package_name(), "1.0.0", synthetic_legacy_bundle(case))
                 .expect("build CCS fixture");
-        Self::from_package(_package_temp, package_path)
+        Self::from_package_with_distro_pin(_package_temp, package_path, distro_pin)
     }
 
     fn new_replaced_pre_remove_with_hook() -> Self {
@@ -773,13 +827,21 @@ impl InstallFixture {
     }
 
     fn from_package(_package_temp: tempfile::TempDir, package_path: std::path::PathBuf) -> Self {
+        Self::from_package_with_distro_pin(_package_temp, package_path, "fedora-44")
+    }
+
+    fn from_package_with_distro_pin(
+        _package_temp: tempfile::TempDir,
+        package_path: std::path::PathBuf,
+        distro_pin: &str,
+    ) -> Self {
         let temp = tempfile::tempdir().expect("create test tempdir");
         let db_path = temp.path().join("conary.db");
         let root = temp.path().join("root");
         std::fs::create_dir_all(&root).expect("create install root");
         db::init(&db_path).expect("initialize db");
         let conn = db::open(&db_path).expect("open db");
-        DistroPin::set(&conn, "fedora-44", "strict").expect("pin fixture distro");
+        DistroPin::set(&conn, distro_pin, "strict").expect("pin fixture distro");
         drop(conn);
 
         Self {
