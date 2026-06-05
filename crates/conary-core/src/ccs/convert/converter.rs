@@ -231,6 +231,7 @@ impl LegacyConverter {
         // Step 1: Analyze scriptlets (remaining ones) to extract declarative hooks
         let (detected_hooks_list, fidelity) = self.analyzer.analyze(&final_metadata.scriptlets);
         let mut detected_hooks = ScriptletAnalyzer::build_hooks(&detected_hooks_list);
+        let manifest_hooks = captured_hooks.clone();
 
         // Merge captured hooks
         detected_hooks.users.extend(captured_hooks.users);
@@ -308,7 +309,7 @@ impl LegacyConverter {
         };
 
         // Step 4: Build CCS manifest from metadata
-        let mut manifest = self.build_manifest(&final_metadata, &final_files, &detected_hooks)?;
+        let mut manifest = self.build_manifest(&final_metadata, &final_files, &manifest_hooks)?;
         manifest.capabilities = inferred_capabilities
             .as_ref()
             .map(InferredCapabilities::to_declaration);
@@ -1066,6 +1067,52 @@ mod tests {
                 crate::ccs::convert::effects::ScriptletClassification::Known { .. }
             )
         }));
+    }
+
+    #[test]
+    fn regex_detected_hooks_remain_advisory_without_adapter_evidence() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut metadata = make_test_metadata();
+        metadata.scriptlets = vec![Scriptlet {
+            phase: ScriptletPhase::PreInstall,
+            interpreter: "/bin/sh".to_string(),
+            content: "getent passwd demo || useradd -r demo\n".to_string(),
+            flags: None,
+        }];
+        let files = make_test_files();
+        let converter = passive_test_converter(temp_dir.path());
+
+        let result = converter
+            .convert(&metadata, &files, "rpm", "sha256:test")
+            .expect("conversion succeeds");
+
+        assert!(
+            result
+                .detected_hooks
+                .users
+                .iter()
+                .any(|hook| hook.name == "demo")
+        );
+        assert_ne!(
+            result.scriptlet_metadata.scriptlet_fidelity,
+            "fully-replaced"
+        );
+        assert_ne!(result.scriptlet_metadata.publication_status, "public");
+
+        let manifest_hooks = &result.build_result.manifest.hooks;
+        assert!(manifest_hooks.users.is_empty());
+        assert!(manifest_hooks.groups.is_empty());
+        assert!(manifest_hooks.services.is_empty());
+        assert!(manifest_hooks.systemd.is_empty());
+        assert!(
+            !result.scriptlet_classification.entries.iter().any(|entry| {
+                matches!(
+                    &entry.classification,
+                    ScriptletClassification::Known { effects, .. }
+                        if effects.iter().any(|effect| effect.adapter_id.is_some())
+                )
+            })
+        );
     }
 
     #[test]
