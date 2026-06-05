@@ -326,7 +326,9 @@ fn sanitize_component(value: &str) -> String {
 mod tests {
     use super::*;
     use conary_core::ccs::convert::{ScriptletBundleSummary, ScriptletDecisionCountsSummary};
-    use conary_core::db::models::ScriptletSummaryForPublication;
+    use conary_core::db::models::{
+        ChunkPublicationState, ConvertedPackage, ScriptletSummaryForPublication,
+    };
 
     fn summary(status: &str) -> ScriptletBundleSummary {
         ScriptletBundleSummary {
@@ -335,6 +337,45 @@ mod tests {
             target_compatibility: status.to_string(),
             ..ScriptletBundleSummary::default()
         }
+    }
+
+    fn golden_summary(
+        scriptlet_fidelity: &str,
+        target_compatibility: &str,
+        publication_status: &str,
+    ) -> ScriptletBundleSummary {
+        ScriptletBundleSummary {
+            scriptlet_fidelity: scriptlet_fidelity.to_string(),
+            target_compatibility: target_compatibility.to_string(),
+            publication_status: publication_status.to_string(),
+            evidence_digest: Some(conary_core::hash::sha256_prefixed(
+                format!("{scriptlet_fidelity}:{publication_status}").as_bytes(),
+            )),
+            ..ScriptletBundleSummary::default()
+        }
+    }
+
+    fn insert_golden_converted(
+        conn: &rusqlite::Connection,
+        name: &str,
+        chunk: &str,
+        summary: &ScriptletBundleSummary,
+    ) {
+        let mut converted = ConvertedPackage::new_server(
+            "fedora".to_string(),
+            name.to_string(),
+            "1.0".to_string(),
+            "rpm".to_string(),
+            format!("sha256:{name}-source"),
+            "high".to_string(),
+            &[chunk.to_string()],
+            10,
+            format!("sha256:{name}-content"),
+            format!("/cache/{name}.ccs"),
+        );
+        converted.package_architecture = Some("x86_64".to_string());
+        converted.set_scriptlet_metadata(summary).unwrap();
+        converted.insert(conn).unwrap();
     }
 
     #[test]
@@ -366,6 +407,127 @@ mod tests {
                 valid: false,
             }),
             PublicationDecision::ReviewRequired(_)
+        ));
+    }
+
+    #[test]
+    fn publication_golden_outcomes_filter_public_listing_and_chunks() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let db_path = temp.path().join("remi.db");
+        conary_core::db::init(&db_path).unwrap();
+        let conn = conary_core::db::open(&db_path).unwrap();
+
+        let native_free = golden_summary("native-free", "source-native", "public");
+
+        let mut fully_replaced = golden_summary("fully-replaced", "source-native", "public");
+        fully_replaced.decision_counts = ScriptletDecisionCountsSummary {
+            replaced: 1,
+            ..ScriptletDecisionCountsSummary::default()
+        };
+
+        let mut legacy_replay = golden_summary("legacy-replay", "source-native", "private-review");
+        legacy_replay.decision_counts = ScriptletDecisionCountsSummary {
+            legacy: 1,
+            ..ScriptletDecisionCountsSummary::default()
+        };
+        legacy_replay
+            .review_reason_codes
+            .push("legacy-replay-required".to_string());
+
+        let mut review_required =
+            golden_summary("review-required", "review-required", "private-review");
+        review_required.decision_counts = ScriptletDecisionCountsSummary {
+            review: 1,
+            ..ScriptletDecisionCountsSummary::default()
+        };
+        review_required
+            .review_reason_codes
+            .push("review-class-deb-trigger".to_string());
+
+        let mut blocked = golden_summary("blocked", "blocked", "blocked");
+        blocked.decision_counts = ScriptletDecisionCountsSummary {
+            blocked: 1,
+            ..ScriptletDecisionCountsSummary::default()
+        };
+        blocked
+            .blocked_reason_codes
+            .push("blocked-class-package-manager-recursion".to_string());
+
+        let cases = [
+            ("goal8a-native-free", "native-free-chunk", native_free, true),
+            (
+                "goal8a-fully-replaced",
+                "fully-replaced-chunk",
+                fully_replaced,
+                true,
+            ),
+            (
+                "goal8a-legacy-replay",
+                "legacy-replay-chunk",
+                legacy_replay,
+                false,
+            ),
+            (
+                "goal8a-review-required",
+                "review-required-chunk",
+                review_required,
+                false,
+            ),
+            ("goal8a-blocked", "blocked-chunk", blocked, false),
+        ];
+
+        for (name, chunk, summary, _public_ready) in &cases {
+            insert_golden_converted(&conn, name, chunk, summary);
+        }
+
+        let public_ready_names: std::collections::BTreeSet<_> =
+            ConvertedPackage::find_publication_candidates(&conn, "fedora", None)
+                .unwrap()
+                .into_iter()
+                .filter(|converted| converted.is_scriptlet_public_ready())
+                .map(|converted| converted.package_name.unwrap())
+                .collect();
+        assert_eq!(
+            public_ready_names,
+            std::collections::BTreeSet::from([
+                "goal8a-fully-replaced".to_string(),
+                "goal8a-native-free".to_string(),
+            ])
+        );
+
+        for (_name, chunk, _summary, public_ready) in cases {
+            let expected = if public_ready {
+                ChunkPublicationState::PublicReady
+            } else {
+                ChunkPublicationState::NonPublicOnly
+            };
+            assert_eq!(
+                local_chunk_servable_by_public_gate(&db_path, chunk).unwrap(),
+                public_ready,
+                "{chunk}"
+            );
+            assert_eq!(
+                ConvertedPackage::chunk_publication_state(&conn, chunk).unwrap(),
+                expected,
+                "{chunk}"
+            );
+        }
+    }
+
+    #[test]
+    fn publication_gate_does_not_promote_regex_like_signals_to_authority() {
+        let mut summary = golden_summary("fully-replaced", "source-native", "public");
+        summary
+            .review_reason_codes
+            .push("regex-advisory-review".to_string());
+        summary.unknown_commands.push("systemctl".to_string());
+
+        assert!(matches!(
+            classify_summary(ScriptletSummaryForPublication {
+                summary,
+                valid: true,
+            }),
+            PublicationDecision::Ready
         ));
     }
 
