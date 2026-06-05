@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-06-02
-revision: 10
-summary: Document local legacy scriptlet replay gates for converted CCS packages
+last_updated: 2026-06-04
+revision: 11
+summary: Document legacy scriptlet compatibility matrix boundaries
 ---
 
 # CCS Module (conary-core/src/ccs/)
@@ -100,6 +100,14 @@ also requires `--allow-foreign-legacy-replay` plus compatible bundle and host
 mixing policy. `--no-scripts` is not a bypass for required raw replay: it
 suppresses ordinary CCS hooks for replaced-only bundles, but refuses when the
 selected lifecycle needs a raw legacy entry.
+
+Converted CCS packages can carry metadata about legacy native scriptlets, but
+CCS format does not make raw native scriptlets portable across distributions.
+Raw replay of `family-compatible` legacy scriptlets is accepted only when an
+explicit target compatibility matrix entry authorizes the source and host target
+pair and the shallow compatibility preflight succeeds. The default production
+matrix is empty, so Conary fails closed unless a later release ships or
+configures validated compatibility evidence.
 
 Accepted bundles are persisted with the installed trove so remove and upgrade
 can replay or refuse safely even if the original `.ccs` archive is no longer in
