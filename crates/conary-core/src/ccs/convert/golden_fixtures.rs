@@ -37,6 +37,10 @@ pub(in crate::ccs::convert) fn required_goal8_cases() -> &'static [GoldenFixture
     REQUIRED_GOAL8_CASES
 }
 
+pub(in crate::ccs::convert) fn all_cases() -> &'static [GoldenFixtureCase] {
+    ALL_GOLDEN_FIXTURE_CASES
+}
+
 const REQUIRED_GOAL8_CASES: &[GoldenFixtureCase] = &[
     public_fixture(
         "adapter-registry-native-free",
