@@ -30,6 +30,8 @@ pub mod command_evidence;
 mod converter;
 pub mod effects;
 mod fidelity;
+#[cfg(test)]
+mod golden_fixtures;
 pub mod legacy_provenance;
 pub mod mock;
 pub mod payload_hints;
