@@ -264,7 +264,7 @@ pub fn plan_legacy_replay(
     let compatibility_decision =
         match compatibility_decision_from_target(bundle, input, &target_id, &source_target_id) {
             Ok(decision) => decision,
-            Err(refusal) => return Ok(refusal),
+            Err(refusal) => return Ok(LegacyReplayPreflight::Refused(refusal)),
         };
 
     if let Some(refusal) = foreign_replay_refusal(bundle, input, &target_id, &source_target_id) {
@@ -329,7 +329,7 @@ fn compatibility_decision_from_target(
     input: &LegacyReplayPolicyInput<'_>,
     target_id: &str,
     source_target_id: &str,
-) -> Result<LegacyReplayCompatibilityDecision, LegacyReplayPreflight> {
+) -> Result<LegacyReplayCompatibilityDecision, LegacyReplayRefusal> {
     match &bundle.target_compatibility {
         TargetCompatibility::SourceNative => {
             if target_id == source_target_id
@@ -348,7 +348,7 @@ fn compatibility_decision_from_target(
                     override_used: input.foreign_replay_override,
                 })
             } else {
-                Err(refused(
+                Err(refusal(
                     LegacyReplayRefusalKind::TargetMismatch,
                     None,
                     format!("target {target_id} does not match source {source_target_id}"),
@@ -370,14 +370,14 @@ fn compatibility_decision_from_target(
                 .compatibility_matrix
                 .match_entry(&source_target.as_target(), &input.target)
                 .map_err(|error| {
-                    refused(
+                    refusal(
                         LegacyReplayRefusalKind::CompatibilityMatrixEntryAmbiguous,
                         None,
                         error.to_string(),
                     )
                 })?;
             let Some(matched) = matched else {
-                return Err(refused(
+                return Err(refusal(
                     LegacyReplayRefusalKind::CompatibilityMatrixEntryMissing,
                     None,
                     format!(
@@ -402,17 +402,17 @@ fn compatibility_decision_from_target(
                 Err(refusal_from_compatibility_decision(decision))
             }
         }
-        TargetCompatibility::ReviewRequired => Err(refused(
+        TargetCompatibility::ReviewRequired => Err(refusal(
             LegacyReplayRefusalKind::TargetCompatibilityReviewRequired,
             None,
             "target compatibility requires review",
         )),
-        TargetCompatibility::Blocked => Err(refused(
+        TargetCompatibility::Blocked => Err(refusal(
             LegacyReplayRefusalKind::TargetCompatibilityBlocked,
             None,
             "target compatibility is blocked",
         )),
-        TargetCompatibility::Unknown(value) => Err(refused(
+        TargetCompatibility::Unknown(value) => Err(refusal(
             LegacyReplayRefusalKind::TargetCompatibilityReviewRequired,
             None,
             format!("unknown target compatibility {value}"),
@@ -422,7 +422,7 @@ fn compatibility_decision_from_target(
 
 fn refusal_from_compatibility_decision(
     decision: TargetCompatibilityDecision,
-) -> LegacyReplayPreflight {
+) -> LegacyReplayRefusal {
     let kind = match decision.reason_code.as_str() {
         "compatibility-helper-missing" => LegacyReplayRefusalKind::CompatibilityHelperMissing,
         "compatibility-helper-version-missing" => {
@@ -444,7 +444,7 @@ fn refusal_from_compatibility_decision(
         _ => LegacyReplayRefusalKind::CompatibilityMatrixEntryMissing,
     };
 
-    refused(
+    refusal(
         kind,
         None,
         format!(
@@ -646,11 +646,19 @@ fn refused(
     entry_id: Option<&str>,
     message: impl Into<String>,
 ) -> LegacyReplayPreflight {
-    LegacyReplayPreflight::Refused(LegacyReplayRefusal {
+    LegacyReplayPreflight::Refused(refusal(kind, entry_id, message))
+}
+
+fn refusal(
+    kind: LegacyReplayRefusalKind,
+    entry_id: Option<&str>,
+    message: impl Into<String>,
+) -> LegacyReplayRefusal {
+    LegacyReplayRefusal {
         kind,
         entry_id: entry_id.map(str::to_string),
         message: message.into(),
-    })
+    }
 }
 
 #[cfg(test)]
