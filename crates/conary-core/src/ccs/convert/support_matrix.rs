@@ -189,6 +189,7 @@ mod tests {
     use super::*;
     use crate::ccs::convert::adapters::AdapterRegistry;
     use crate::ccs::convert::blocked_classes::BlockedClassRegistry;
+    use crate::ccs::convert::golden_fixtures;
 
     #[test]
     fn support_matrix_covers_every_builtin_adapter() {
@@ -251,6 +252,93 @@ mod tests {
             if let Some(class_id) = entry.class_id {
                 assert!(class_ids.contains(class_id), "orphan class row {class_id}");
             }
+        }
+    }
+
+    #[test]
+    fn support_matrix_fixture_names_have_declared_golden_cases() {
+        let fixtures = golden_fixtures::declared_fixture_ids();
+
+        for entry in SupportMatrix::default().entries() {
+            for fixture_name in entry.fixture_names {
+                assert!(
+                    fixtures.contains(fixture_name),
+                    "support-matrix fixture {fixture_name} has no golden case"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn goal8_required_corpus_rows_are_declared() {
+        let fixtures: std::collections::BTreeMap<_, _> = golden_fixtures::required_goal8_cases()
+            .iter()
+            .map(|case| (case.id, case.expected_outcome))
+            .collect();
+
+        for (fixture_id, expected_outcome) in [
+            (
+                "adapter-registry-native-free",
+                golden_fixtures::GoldenFixtureOutcome::NativeFree,
+            ),
+            (
+                "adapter-sysusers",
+                golden_fixtures::GoldenFixtureOutcome::FullyReplaced,
+            ),
+            (
+                "adapter-registry-systemd-daemon-reload",
+                golden_fixtures::GoldenFixtureOutcome::FullyReplaced,
+            ),
+            (
+                "adapter-registry-systemd-unit-state",
+                golden_fixtures::GoldenFixtureOutcome::FullyReplaced,
+            ),
+            (
+                "adapter-tmpfiles-create",
+                golden_fixtures::GoldenFixtureOutcome::FullyReplaced,
+            ),
+            (
+                "adapter-registry-ldconfig",
+                golden_fixtures::GoldenFixtureOutcome::FullyReplaced,
+            ),
+            (
+                "adapter-cache-refresh",
+                golden_fixtures::GoldenFixtureOutcome::FullyReplaced,
+            ),
+            (
+                "adapter-alternatives-registration",
+                golden_fixtures::GoldenFixtureOutcome::FullyReplaced,
+            ),
+            (
+                "legacy-replay-unknown-shell",
+                golden_fixtures::GoldenFixtureOutcome::LegacyReplay,
+            ),
+            (
+                "blocked-class-package-manager-recursion",
+                golden_fixtures::GoldenFixtureOutcome::Blocked,
+            ),
+            (
+                "legacy-replay-foreign-replay-rejected",
+                golden_fixtures::GoldenFixtureOutcome::Rejected,
+            ),
+            (
+                "review-class-rpm-trigger",
+                golden_fixtures::GoldenFixtureOutcome::ReviewRequired,
+            ),
+            (
+                "review-class-deb-trigger",
+                golden_fixtures::GoldenFixtureOutcome::ReviewRequired,
+            ),
+            (
+                "review-class-arch-install-function",
+                golden_fixtures::GoldenFixtureOutcome::ReviewRequired,
+            ),
+        ] {
+            assert_eq!(
+                fixtures.get(fixture_id).copied(),
+                Some(expected_outcome),
+                "Goal 8 required corpus fixture {fixture_id} is missing or has the wrong outcome"
+            );
         }
     }
 }
