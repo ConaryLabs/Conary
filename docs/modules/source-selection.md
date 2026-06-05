@@ -140,6 +140,11 @@ Source-selection mixing also defines the host-side floor for raw legacy
 scriptlet replay from converted CCS bundles. The installed `DistroPin`
 `mixing_policy` maps into the legacy replay host policy:
 
+This is a refusal boundary for local replay, not a portability promise. The
+current production target-compatibility matrix has no public cross-distro
+allowances, so different source and host targets fail closed unless explicit
+matrix evidence is added in a later release.
+
 - `strict` or an unset/unknown pin denies foreign raw legacy replay, even when
   `--allow-foreign-legacy-replay` is present.
 - `guarded` allows foreign replay only when the bundle policy is also guarded

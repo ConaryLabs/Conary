@@ -51,7 +51,7 @@ conary --allow-live-system-mutation model apply    # Make it so
 conary model check    # Drift detection (CI/CD friendly, uses exit codes)
 ```
 
-**Cross-distro package access on day one.** Remi, the on-demand conversion proxy at [remi.conary.io](https://remi.conary.io), transparently converts upstream RPM/DEB/Arch packages into CCS format. No upstream changes are required to start using Conary against the supported upstream repositories.
+**Cross-distro package access on day one.** Remi, the on-demand conversion proxy at [remi.conary.io](https://remi.conary.io), converts supported Fedora 44, Ubuntu 26.04 LTS, and Arch upstream packages into CCS format. Public serving is limited to converted artifacts whose scriptlets are native-free or fully replaced by adapter-backed evidence. No upstream changes are required to start using Conary against the supported upstream repositories.
 
 ```bash
 conary repo add remi https://remi.conary.io
@@ -120,10 +120,12 @@ generation, so composefs/kernel prerequisites are checked by the generation and
 takeover commands that need them. Budget disk space before full adoption or
 generation work, especially when copying package files into CAS.
 
-The first install or dry-run that needs a package not already converted by Remi
-may spend extra time converting upstream RPM/DEB/Arch metadata into CCS. That
-cold-start latency is expected during the limited preview; reruns should be
-faster once the conversion cache is warm.
+The first install or dry-run that needs a package not already publicly
+converted by Remi may spend extra time converting upstream RPM/DEB/Arch metadata
+into CCS. That cold-start latency is expected during the limited preview; reruns
+should be faster once the conversion cache is warm. Conversions that require
+legacy replay, review, or blocking are retained as private server state rather
+than advertised as ordinary ready-to-install packages.
 
 When you are ready to test the reversible adoption apply path on that host:
 
@@ -257,7 +259,7 @@ conary --allow-live-system-mutation system state revert 5      # Revert to snaps
 
 ### Multi-Format Support
 
-Install packages from any major Linux format. Conary parses metadata, dependencies, and scriptlets from all of them.
+Install supported RPM, DEB, and Arch package files. Conary parses metadata, dependencies, and scriptlets from those formats.
 
 ```bash
 conary --allow-live-system-mutation install ./package.rpm
@@ -559,7 +561,7 @@ For a detailed architecture overview, see [docs/ARCHITECTURE.md](docs/ARCHITECTU
 
 ## Remi Server
 
-Conary includes an on-demand CCS conversion proxy called Remi. It converts legacy packages (RPM, DEB, Arch) to CCS format on the fly, serves chunks via content-addressable storage, and provides a sparse index for efficient client sync without requiring upstream package authors to republish in CCS first.
+Conary includes an on-demand CCS conversion proxy called Remi. It converts supported legacy packages (Fedora 44 RPM, Ubuntu 26.04 DEB, and Arch packages) to CCS format on the fly, serves only public-ready converted artifacts through the public package surfaces, and provides a sparse index for efficient client sync without requiring upstream package authors to republish in CCS first.
 
 A public instance runs at **[remi.conary.io](https://remi.conary.io)**.
 
