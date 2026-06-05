@@ -384,8 +384,7 @@ fn classify_entry(
         classifications
             .iter()
             .find_map(|entry| match &entry.classification {
-                ScriptletClassification::Unknown { reason_code, .. }
-                | ScriptletClassification::Review { reason_code, .. } => Some(reason_code.clone()),
+                ScriptletClassification::Review { reason_code, .. } => Some(reason_code.clone()),
                 _ => None,
             })
     {
@@ -402,6 +401,23 @@ fn classify_entry(
         return EntryOutcome {
             decision: ScriptletDecision::Review,
             reason_code: reason_code.clone(),
+            effects,
+            unknown_commands,
+            blocked_classes,
+        };
+    }
+
+    if let Some(reason_code) =
+        classifications
+            .iter()
+            .find_map(|entry| match &entry.classification {
+                ScriptletClassification::Unknown { reason_code, .. } => Some(reason_code.clone()),
+                _ => None,
+            })
+    {
+        return EntryOutcome {
+            decision: ScriptletDecision::Legacy,
+            reason_code,
             effects,
             unknown_commands,
             blocked_classes,
@@ -827,6 +843,14 @@ fn aggregate_status(
             TargetCompatibility::ReviewRequired,
             PublicationPolicy::PrivateReview,
             PublicationStatus::PrivateReview,
+        );
+    }
+    if counts.legacy > 0 {
+        return (
+            ScriptletFidelity::LegacyReplay,
+            TargetCompatibility::SourceNative,
+            PublicationPolicy::LocalOnly,
+            PublicationStatus::LocalOnly,
         );
     }
     (
@@ -1373,7 +1397,8 @@ mod tests {
         ScriptletClassification, ScriptletClassificationReport, ScriptletEffectEvidence,
     };
     use crate::ccs::legacy_scriptlets::{
-        EffectConfidence, EffectReplacement, EffectSource, ScriptletDecision,
+        EffectConfidence, EffectReplacement, EffectSource, ForeignReplayPolicy, PublicationPolicy,
+        PublicationStatus, ScriptletDecision, ScriptletFidelity, TargetCompatibility,
     };
     use crate::packages::native_abi::*;
     use crate::packages::traits::{Scriptlet, ScriptletPhase};
@@ -1425,7 +1450,7 @@ mod tests {
             source_files: &files,
             final_files: &files,
             source_format: "rpm",
-            source_distro: Some("fedora"),
+            source_distro: Some("fedora-44"),
             source_release: Some("44"),
             source_arch: Some("x86_64"),
             source_checksum: Some(
@@ -1442,6 +1467,10 @@ mod tests {
         assert_eq!(
             build.bundle.target_compatibility.as_str(),
             "conary-portable"
+        );
+        assert_eq!(
+            build.bundle.publication_policy.as_str(),
+            "public-if-no-blocked"
         );
         assert_eq!(build.bundle.publication_status.as_str(), "public");
         assert_eq!(build.bundle.decision_counts.total(), 0);
@@ -1528,7 +1557,7 @@ mod tests {
     }
 
     #[test]
-    fn unknown_classification_becomes_review_entry() {
+    fn unknown_classification_becomes_source_native_legacy_replay_entry() {
         let mut metadata = package_metadata("unknown", "1.0");
         metadata.scriptlets.push(Scriptlet {
             phase: ScriptletPhase::PostInstall,
@@ -1548,10 +1577,78 @@ mod tests {
         let build = bundle_for_metadata(&metadata, &[], &classification).unwrap();
         let entry = &build.bundle.entries[0];
 
-        assert_eq!(entry.decision, ScriptletDecision::Review);
+        assert_eq!(entry.decision, ScriptletDecision::Legacy);
         assert_eq!(entry.reason_code, "unknown-command");
         assert_eq!(entry.unknown_commands, vec!["custom-helper"]);
+        assert_eq!(build.bundle.decision_counts.legacy, 1);
+        assert_eq!(
+            build.bundle.scriptlet_fidelity,
+            ScriptletFidelity::LegacyReplay
+        );
+        assert_eq!(
+            build.bundle.target_compatibility,
+            TargetCompatibility::SourceNative
+        );
+        assert_eq!(
+            build.bundle.foreign_replay_policy,
+            ForeignReplayPolicy::Deny
+        );
+        assert_eq!(
+            build.bundle.publication_policy,
+            PublicationPolicy::LocalOnly
+        );
+        assert_eq!(
+            build.bundle.publication_status,
+            PublicationStatus::LocalOnly
+        );
+        assert_ne!(build.bundle.publication_status, PublicationStatus::Public);
+        assert_eq!(build.summary.scriptlet_fidelity, "legacy-replay");
+        assert_eq!(build.summary.target_compatibility, "source-native");
+        assert_eq!(build.summary.publication_status, "local-only");
+        assert_eq!(build.summary.decision_counts.legacy, 1);
         assert_eq!(build.summary.unknown_commands, vec!["custom-helper"]);
+    }
+
+    #[test]
+    fn review_classification_becomes_private_review_entry() {
+        let mut metadata = package_metadata("review", "1.0");
+        metadata.scriptlets.push(Scriptlet {
+            phase: ScriptletPhase::PostInstall,
+            interpreter: "/bin/sh".to_string(),
+            content: "systemctl restart demo.service\n".to_string(),
+            flags: None,
+        });
+        let mut classification = ScriptletClassificationReport::default();
+        classification.push(
+            "scriptlet:0:post-install",
+            ScriptletClassification::Review {
+                reason_code: "review-class-systemd-runtime-action".to_string(),
+                class_id: Some("systemd-runtime-action".to_string()),
+            },
+        );
+
+        let build = bundle_for_metadata(&metadata, &[], &classification).unwrap();
+        let entry = &build.bundle.entries[0];
+
+        assert_eq!(entry.decision, ScriptletDecision::Review);
+        assert_eq!(entry.reason_code, "review-class-systemd-runtime-action");
+        assert_eq!(build.bundle.decision_counts.review, 1);
+        assert_eq!(
+            build.bundle.scriptlet_fidelity,
+            ScriptletFidelity::ReviewRequired
+        );
+        assert_eq!(
+            build.bundle.target_compatibility,
+            TargetCompatibility::ReviewRequired
+        );
+        assert_eq!(
+            build.bundle.publication_status,
+            PublicationStatus::PrivateReview
+        );
+        assert_eq!(
+            build.summary.review_reason_codes,
+            vec!["review-class-systemd-runtime-action"]
+        );
     }
 
     #[test]
@@ -1622,6 +1719,77 @@ mod tests {
         assert_eq!(deferred.reason_code, "rpm-verify-scriptlet-deferred");
         assert_eq!(unpreservable.decision, ScriptletDecision::Blocked);
         assert_eq!(unpreservable.reason_code, "native-abi-parser-limitation");
+    }
+
+    #[test]
+    fn format_metadata_boundaries_become_review_required_with_registry_reasons() {
+        let mut metadata = package_metadata("metadata-boundaries", "1.0");
+        metadata.native_scriptlet_abi = vec![
+            rpm_trigger_entry(),
+            deb_triggers_entry(),
+            arch_install_entry(),
+        ];
+        let mut classification = ScriptletClassificationReport::default();
+        for (entry_id, class_id, reason_code) in [
+            ("rpm:trigger", "rpm-trigger", "review-class-rpm-trigger"),
+            ("deb:triggers", "deb-trigger", "review-class-deb-trigger"),
+            (
+                "arch:post_install",
+                "arch-install-function",
+                "review-class-arch-install-function",
+            ),
+        ] {
+            classification.push(
+                entry_id,
+                ScriptletClassification::Review {
+                    reason_code: reason_code.to_string(),
+                    class_id: Some(class_id.to_string()),
+                },
+            );
+        }
+
+        let build = bundle_for_metadata(&metadata, &[], &classification).unwrap();
+
+        for (entry_id, reason_code) in [
+            ("rpm:trigger", "review-class-rpm-trigger"),
+            ("deb:triggers", "review-class-deb-trigger"),
+            ("arch:post_install", "review-class-arch-install-function"),
+        ] {
+            let entry = build
+                .bundle
+                .entries
+                .iter()
+                .find(|entry| entry.id == entry_id)
+                .unwrap_or_else(|| panic!("missing entry {entry_id}"));
+            assert_eq!(entry.decision, ScriptletDecision::Review, "{entry_id}");
+            assert_eq!(entry.reason_code, reason_code, "{entry_id}");
+        }
+        assert_eq!(
+            build.bundle.scriptlet_fidelity,
+            ScriptletFidelity::ReviewRequired
+        );
+        assert_eq!(
+            build.bundle.target_compatibility,
+            TargetCompatibility::ReviewRequired
+        );
+        assert_eq!(
+            build.bundle.publication_status,
+            PublicationStatus::PrivateReview
+        );
+        for reason_code in [
+            "review-class-rpm-trigger",
+            "review-class-deb-trigger",
+            "review-class-arch-install-function",
+        ] {
+            assert!(
+                build
+                    .summary
+                    .review_reason_codes
+                    .iter()
+                    .any(|code| code == reason_code),
+                "missing review reason {reason_code}"
+            );
+        }
     }
 
     #[test]
@@ -1838,7 +2006,7 @@ mod tests {
             source_files: files,
             final_files: files,
             source_format: "rpm",
-            source_distro: Some("fedora"),
+            source_distro: Some("fedora-44"),
             source_release: Some("44"),
             source_arch: Some("x86_64"),
             source_checksum: None,

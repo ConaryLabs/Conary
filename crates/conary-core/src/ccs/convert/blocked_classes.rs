@@ -506,6 +506,45 @@ mod tests {
     }
 
     #[test]
+    fn blocked_classes_goal8_boundaries_have_stable_outcomes() {
+        let registry = BlockedClassRegistry::default();
+        let cases = [
+            (
+                "package-manager-recursion",
+                BlockedClassOutcome::Blocked,
+                "blocked-class-package-manager-recursion",
+            ),
+            (
+                "rpm-trigger",
+                BlockedClassOutcome::Review,
+                "review-class-rpm-trigger",
+            ),
+            (
+                "deb-trigger",
+                BlockedClassOutcome::Review,
+                "review-class-deb-trigger",
+            ),
+            (
+                "arch-install-function",
+                BlockedClassOutcome::Review,
+                "review-class-arch-install-function",
+            ),
+        ];
+
+        for (class_id, expected_outcome, expected_reason) in cases {
+            let class = registry
+                .class_by_id(class_id)
+                .unwrap_or_else(|| panic!("missing blocked class {class_id}"));
+
+            assert_eq!(
+                class.default_outcome, expected_outcome,
+                "{class_id} outcome"
+            );
+            assert_eq!(class.reason_code, expected_reason, "{class_id} reason");
+        }
+    }
+
+    #[test]
     fn blocked_classes_mark_dbus_and_debconf_for_review() {
         let registry = BlockedClassRegistry::default();
 

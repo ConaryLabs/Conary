@@ -12,10 +12,18 @@ pub(in crate::ccs::convert) enum GoldenFixtureOutcome {
     Rejected,
 }
 
+impl GoldenFixtureOutcome {
+    fn is_public_ready(self) -> bool {
+        matches!(self, Self::NativeFree | Self::FullyReplaced)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::ccs::convert) struct GoldenFixtureCase {
     pub id: &'static str,
     pub expected_outcome: GoldenFixtureOutcome,
+    pub source_distro_id: Option<&'static str>,
+    pub target_distro_id: Option<&'static str>,
 }
 
 pub(in crate::ccs::convert) fn declared_fixture_ids() -> BTreeSet<&'static str> {
@@ -30,31 +38,53 @@ pub(in crate::ccs::convert) fn required_goal8_cases() -> &'static [GoldenFixture
 }
 
 const REQUIRED_GOAL8_CASES: &[GoldenFixtureCase] = &[
-    fixture(
+    public_fixture(
         "adapter-registry-native-free",
         GoldenFixtureOutcome::NativeFree,
+        "fedora-44",
+        "fedora-44",
     ),
-    fixture("adapter-sysusers", GoldenFixtureOutcome::FullyReplaced),
-    fixture(
+    public_fixture(
+        "adapter-sysusers",
+        GoldenFixtureOutcome::FullyReplaced,
+        "fedora-44",
+        "fedora-44",
+    ),
+    public_fixture(
         "adapter-registry-systemd-daemon-reload",
         GoldenFixtureOutcome::FullyReplaced,
+        "fedora-44",
+        "fedora-44",
     ),
-    fixture(
+    public_fixture(
         "adapter-registry-systemd-unit-state",
         GoldenFixtureOutcome::FullyReplaced,
+        "fedora-44",
+        "fedora-44",
     ),
-    fixture(
+    public_fixture(
         "adapter-tmpfiles-create",
         GoldenFixtureOutcome::FullyReplaced,
+        "fedora-44",
+        "fedora-44",
     ),
-    fixture(
+    public_fixture(
         "adapter-registry-ldconfig",
         GoldenFixtureOutcome::FullyReplaced,
+        "fedora-44",
+        "fedora-44",
     ),
-    fixture("adapter-cache-refresh", GoldenFixtureOutcome::FullyReplaced),
-    fixture(
+    public_fixture(
+        "adapter-cache-refresh",
+        GoldenFixtureOutcome::FullyReplaced,
+        "arch",
+        "arch",
+    ),
+    public_fixture(
         "adapter-alternatives-registration",
         GoldenFixtureOutcome::FullyReplaced,
+        "ubuntu-26.04",
+        "ubuntu-26.04",
     ),
     fixture(
         "legacy-replay-unknown-shell",
@@ -83,32 +113,54 @@ const REQUIRED_GOAL8_CASES: &[GoldenFixtureCase] = &[
 ];
 
 const ALL_GOLDEN_FIXTURE_CASES: &[GoldenFixtureCase] = &[
-    fixture(
+    public_fixture(
         "adapter-registry-native-free",
         GoldenFixtureOutcome::NativeFree,
+        "fedora-44",
+        "fedora-44",
     ),
-    fixture(
+    public_fixture(
         "adapter-registry-ldconfig",
         GoldenFixtureOutcome::FullyReplaced,
+        "fedora-44",
+        "fedora-44",
     ),
-    fixture(
+    public_fixture(
         "adapter-registry-systemd-daemon-reload",
         GoldenFixtureOutcome::FullyReplaced,
+        "fedora-44",
+        "fedora-44",
     ),
-    fixture(
+    public_fixture(
         "adapter-registry-systemd-unit-state",
         GoldenFixtureOutcome::FullyReplaced,
+        "fedora-44",
+        "fedora-44",
     ),
-    fixture(
+    public_fixture(
         "adapter-tmpfiles-create",
         GoldenFixtureOutcome::FullyReplaced,
+        "fedora-44",
+        "fedora-44",
     ),
-    fixture("adapter-sysusers", GoldenFixtureOutcome::FullyReplaced),
-    fixture(
+    public_fixture(
+        "adapter-sysusers",
+        GoldenFixtureOutcome::FullyReplaced,
+        "fedora-44",
+        "fedora-44",
+    ),
+    public_fixture(
         "adapter-alternatives-registration",
         GoldenFixtureOutcome::FullyReplaced,
+        "ubuntu-26.04",
+        "ubuntu-26.04",
     ),
-    fixture("adapter-cache-refresh", GoldenFixtureOutcome::FullyReplaced),
+    public_fixture(
+        "adapter-cache-refresh",
+        GoldenFixtureOutcome::FullyReplaced,
+        "arch",
+        "arch",
+    ),
     fixture("blocked-class-network", GoldenFixtureOutcome::Blocked),
     fixture(
         "blocked-class-package-manager-recursion",
@@ -207,12 +259,29 @@ const fn fixture(id: &'static str, expected_outcome: GoldenFixtureOutcome) -> Go
     GoldenFixtureCase {
         id,
         expected_outcome,
+        source_distro_id: None,
+        target_distro_id: None,
+    }
+}
+
+const fn public_fixture(
+    id: &'static str,
+    expected_outcome: GoldenFixtureOutcome,
+    source_distro_id: &'static str,
+    target_distro_id: &'static str,
+) -> GoldenFixtureCase {
+    GoldenFixtureCase {
+        id,
+        expected_outcome,
+        source_distro_id: Some(source_distro_id),
+        target_distro_id: Some(target_distro_id),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::repository::distro::SUPPORTED_USER_DISTROS;
 
     #[test]
     fn golden_fixtures_have_unique_ids() {
@@ -235,6 +304,37 @@ mod tests {
                 Some(*required),
                 "required Goal 8 fixture {} is not declared with the same outcome",
                 required.id
+            );
+        }
+    }
+
+    #[test]
+    fn public_ready_golden_fixtures_use_supported_exact_distro_ids() {
+        let supported = SUPPORTED_USER_DISTROS
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>();
+
+        for case in ALL_GOLDEN_FIXTURE_CASES
+            .iter()
+            .filter(|case| case.expected_outcome.is_public_ready())
+        {
+            let source = case
+                .source_distro_id
+                .unwrap_or_else(|| panic!("{} missing source distro id", case.id));
+            let target = case
+                .target_distro_id
+                .unwrap_or_else(|| panic!("{} missing target distro id", case.id));
+
+            assert!(
+                supported.contains(source),
+                "{} uses unsupported source distro id {source}",
+                case.id
+            );
+            assert!(
+                supported.contains(target),
+                "{} uses unsupported target distro id {target}",
+                case.id
             );
         }
     }
