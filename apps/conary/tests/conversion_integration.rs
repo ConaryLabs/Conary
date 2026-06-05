@@ -10,12 +10,26 @@
 //! - Fidelity tracking
 
 use conary_core::capability::inference::{Confidence, InferenceOptions};
+use conary_core::ccs::CcsPackage;
 use conary_core::ccs::convert::{ConversionOptions, FidelityLevel, LegacyConverter};
+use conary_core::ccs::legacy_replay::{
+    HostForeignReplayPolicy, LegacyReplayLifecycle, LegacyReplayPolicyInput, LegacyReplayPreflight,
+    LegacyReplayRefusalKind, plan_legacy_replay,
+};
+use conary_core::ccs::legacy_scriptlets::{
+    PublicationStatus, ScriptletDecision, ScriptletFidelity, TargetCompatibility,
+};
+use conary_core::ccs::target_compatibility::{
+    CompatibilityPreflightEnvironment, TargetCompatibilityMatrix,
+};
+use conary_core::packages::PackageFormat;
 use conary_core::packages::common::PackageMetadata;
 use conary_core::packages::traits::{
     ConfigFileInfo, Dependency, DependencyType, ExtractedFile, PackageFile, Scriptlet,
     ScriptletPhase,
 };
+use conary_core::repository::distro::ReplayTarget;
+use conary_core::scriptlet::SandboxMode;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
@@ -56,6 +70,70 @@ fn create_test_files(name: &str) -> Vec<ExtractedFile> {
         sha256: Some("abc123".to_string()),
         symlink_target: None,
     }]
+}
+
+fn passive_converter(output_dir: &std::path::Path) -> LegacyConverter {
+    LegacyConverter::new(ConversionOptions {
+        output_dir: output_dir.to_path_buf(),
+        enable_chunking: false,
+        capture_scriptlets: false,
+        enable_inference: false,
+        min_fidelity: FidelityLevel::Low,
+        ..Default::default()
+    })
+    .with_source_distro("fedora")
+    .with_source_release("44")
+}
+
+fn parse_converted_package(result: &conary_core::ccs::convert::ConversionResult) -> CcsPackage {
+    CcsPackage::parse(
+        result
+            .package_path
+            .as_ref()
+            .expect("conversion should write CCS package")
+            .to_str()
+            .expect("package path is utf-8"),
+    )
+    .expect("converted CCS package should parse")
+}
+
+fn golden_payload_files(name: &str) -> Vec<ExtractedFile> {
+    let mut files = create_test_files(name);
+    files.extend([
+        ExtractedFile {
+            path: "/usr/lib/systemd/system/demo.service".to_string(),
+            content: b"[Service]\nExecStart=/usr/bin/demo\n".to_vec(),
+            size: 32,
+            mode: 0o644,
+            sha256: None,
+            symlink_target: None,
+        },
+        ExtractedFile {
+            path: "/usr/lib/tmpfiles.d/demo.conf".to_string(),
+            content: b"d /run/demo 0755 root root -\n".to_vec(),
+            size: 28,
+            mode: 0o644,
+            sha256: None,
+            symlink_target: None,
+        },
+        ExtractedFile {
+            path: "/usr/lib/sysusers.d/demo.conf".to_string(),
+            content: b"u demo - \"Demo User\" /run/demo -\n".to_vec(),
+            size: 32,
+            mode: 0o644,
+            sha256: None,
+            symlink_target: None,
+        },
+        ExtractedFile {
+            path: "/usr/share/mime/packages/demo.xml".to_string(),
+            content: b"<mime-info/>".to_vec(),
+            size: 12,
+            mode: 0o644,
+            sha256: None,
+            symlink_target: None,
+        },
+    ]);
+    files
 }
 
 /// Create a network server package (nginx-like)
@@ -433,6 +511,209 @@ fn test_complex_scriptlet_analysis() {
         !result.detected_hooks.systemd.is_empty(),
         "Should detect systemd operations"
     );
+}
+
+#[test]
+fn golden_conversion_native_free_is_public_ready_without_entries() {
+    let temp_dir = TempDir::new().unwrap();
+    let converter = passive_converter(temp_dir.path());
+    let metadata = create_test_metadata("adapter-registry-native-free");
+    let files = create_test_files("adapter-registry-native-free");
+
+    let result = converter
+        .convert(
+            &metadata,
+            &files,
+            "rpm",
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        )
+        .expect("native-free conversion succeeds");
+    let parsed = parse_converted_package(&result);
+    let bundle = parsed
+        .manifest()
+        .legacy_scriptlets
+        .as_ref()
+        .expect("converted package should carry scriptlet bundle");
+
+    assert!(bundle.entries.is_empty());
+    assert_eq!(bundle.decision_counts.total(), 0);
+    assert_eq!(bundle.scriptlet_fidelity, ScriptletFidelity::NativeFree);
+    assert_eq!(
+        bundle.target_compatibility,
+        TargetCompatibility::ConaryPortable
+    );
+    assert_eq!(bundle.publication_status, PublicationStatus::Public);
+    assert_eq!(result.scriptlet_metadata.scriptlet_fidelity, "native-free");
+    assert_eq!(result.scriptlet_metadata.publication_status, "public");
+}
+
+#[test]
+fn golden_conversion_adapter_backed_cases_are_fully_replaced() {
+    let temp_dir = TempDir::new().unwrap();
+    let converter = passive_converter(temp_dir.path());
+    let mut metadata = create_test_metadata("adapter-registry-fully-replaced");
+    metadata.scriptlets = vec![Scriptlet {
+        phase: ScriptletPhase::PostInstall,
+        interpreter: "/bin/sh".to_string(),
+        content: "\
+/sbin/ldconfig
+systemctl daemon-reload
+systemctl enable demo.service
+systemd-tmpfiles --create /usr/lib/tmpfiles.d/demo.conf
+systemd-sysusers /usr/lib/sysusers.d/demo.conf
+update-mime-database /usr/share/mime
+update-alternatives --install /usr/bin/editor editor /usr/bin/demo-editor 50
+"
+        .to_string(),
+        flags: None,
+    }];
+    let files = golden_payload_files("adapter-registry-fully-replaced");
+
+    let result = converter
+        .convert(
+            &metadata,
+            &files,
+            "rpm",
+            "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        )
+        .expect("adapter-backed conversion succeeds");
+    let parsed = parse_converted_package(&result);
+    let bundle = parsed
+        .manifest()
+        .legacy_scriptlets
+        .as_ref()
+        .expect("converted package should carry scriptlet bundle");
+
+    assert_eq!(bundle.scriptlet_fidelity, ScriptletFidelity::FullyReplaced);
+    assert_eq!(
+        bundle.target_compatibility,
+        TargetCompatibility::ConaryPortable
+    );
+    assert_eq!(bundle.publication_status, PublicationStatus::Public);
+    assert_eq!(bundle.decision_counts.replaced, 1);
+    assert_eq!(bundle.decision_counts.legacy, 0);
+    assert!(bundle.entries.iter().any(|entry| {
+        entry.effects.iter().any(|effect| {
+            effect.adapter_id.is_some()
+                && effect.replacement
+                    == conary_core::ccs::legacy_scriptlets::EffectReplacement::Complete
+        })
+    }));
+    assert!(
+        !bundle
+            .entries
+            .iter()
+            .any(|entry| entry.decision == ScriptletDecision::Legacy)
+    );
+    assert_eq!(
+        result.scriptlet_metadata.scriptlet_fidelity,
+        "fully-replaced"
+    );
+    assert_eq!(result.scriptlet_metadata.publication_status, "public");
+}
+
+#[test]
+fn golden_conversion_unknown_same_target_requires_non_public_legacy_replay() {
+    let temp_dir = TempDir::new().unwrap();
+    let converter = passive_converter(temp_dir.path());
+    let mut metadata = create_test_metadata("legacy-replay-unknown-shell");
+    metadata.scriptlets = vec![Scriptlet {
+        phase: ScriptletPhase::PostInstall,
+        interpreter: "/bin/sh".to_string(),
+        content: "custom-helper --do-thing\n".to_string(),
+        flags: None,
+    }];
+    let files = create_test_files("legacy-replay-unknown-shell");
+
+    let result = converter
+        .convert(
+            &metadata,
+            &files,
+            "rpm",
+            "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        )
+        .expect("unknown shell conversion succeeds");
+    let parsed = parse_converted_package(&result);
+    let bundle = parsed
+        .manifest()
+        .legacy_scriptlets
+        .as_ref()
+        .expect("converted package should carry scriptlet bundle");
+
+    assert_eq!(bundle.scriptlet_fidelity, ScriptletFidelity::LegacyReplay);
+    assert_eq!(
+        bundle.target_compatibility,
+        TargetCompatibility::SourceNative
+    );
+    assert_ne!(bundle.publication_status, PublicationStatus::Public);
+    assert_eq!(bundle.decision_counts.legacy, 1);
+    assert!(bundle.entries.iter().any(|entry| {
+        entry.decision == ScriptletDecision::Legacy
+            && entry
+                .unknown_commands
+                .iter()
+                .any(|cmd| cmd == "custom-helper")
+    }));
+    assert_eq!(
+        result.scriptlet_metadata.scriptlet_fidelity,
+        "legacy-replay"
+    );
+    assert_eq!(result.scriptlet_metadata.publication_status, "local-only");
+}
+
+#[test]
+fn golden_conversion_foreign_replay_is_refused_before_mutation() {
+    let temp_dir = TempDir::new().unwrap();
+    let converter = passive_converter(temp_dir.path());
+    let mut metadata = create_test_metadata("legacy-replay-foreign-replay-rejected");
+    metadata.scriptlets = vec![Scriptlet {
+        phase: ScriptletPhase::PostInstall,
+        interpreter: "/bin/sh".to_string(),
+        content: "custom-helper --do-thing\n".to_string(),
+        flags: None,
+    }];
+    let files = create_test_files("legacy-replay-foreign-replay-rejected");
+    let result = converter
+        .convert(
+            &metadata,
+            &files,
+            "rpm",
+            "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        )
+        .expect("unknown shell conversion succeeds");
+    let bundle = result
+        .legacy_scriptlets
+        .as_ref()
+        .expect("conversion should embed passive scriptlet bundle");
+
+    let input = LegacyReplayPolicyInput {
+        replay_enabled: true,
+        foreign_replay_override: true,
+        no_scripts: false,
+        requested_sandbox_mode: SandboxMode::Always,
+        host_policy: HostForeignReplayPolicy::Permissive,
+        target: ReplayTarget {
+            format: "deb",
+            distro: "ubuntu",
+            release: "26.04",
+            arch: "x86_64",
+        },
+        compatibility_matrix: TargetCompatibilityMatrix::production_default(),
+        compatibility_environment: CompatibilityPreflightEnvironment::default(),
+    };
+
+    let preflight = plan_legacy_replay(
+        Some(bundle),
+        LegacyReplayLifecycle::FreshInstallPost,
+        &input,
+    )
+    .expect("plan legacy replay");
+
+    let LegacyReplayPreflight::Refused(refusal) = preflight else {
+        panic!("foreign replay request should be refused before mutation");
+    };
+    assert_eq!(refusal.kind, LegacyReplayRefusalKind::TargetMismatch);
+    assert_eq!(refusal.kind.reason_code(), "target-mismatch");
 }
 
 // =============================================================================
