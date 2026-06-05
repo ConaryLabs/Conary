@@ -2260,6 +2260,202 @@ mod tests {
         }
     }
 
+    fn goal8a_scriptlet_summary(
+        scriptlet_fidelity: &str,
+        target_compatibility: &str,
+        publication_status: &str,
+    ) -> ScriptletBundleSummary {
+        ScriptletBundleSummary {
+            scriptlet_fidelity: scriptlet_fidelity.to_string(),
+            target_compatibility: target_compatibility.to_string(),
+            publication_status: publication_status.to_string(),
+            evidence_digest: Some(conary_core::hash::sha256_prefixed(
+                format!("{scriptlet_fidelity}:{publication_status}").as_bytes(),
+            )),
+            ..ScriptletBundleSummary::default()
+        }
+    }
+
+    #[test]
+    fn persisted_goal8a_golden_outcomes_respect_publication_gate() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let db_path = temp.path().join("remi.db");
+        conary_core::db::init(&db_path).unwrap();
+        let chunk_dir = temp.path().join("chunks");
+        let cache_dir = temp.path().join("cache");
+        let service = ConversionService::new(chunk_dir, cache_dir.clone(), db_path.clone(), None);
+
+        let mut native_free = goal8a_scriptlet_summary("native-free", "source-native", "public");
+        native_free.decision_counts = ScriptletDecisionCountsSummary::default();
+
+        let mut fully_replaced =
+            goal8a_scriptlet_summary("fully-replaced", "source-native", "public");
+        fully_replaced.decision_counts = ScriptletDecisionCountsSummary {
+            replaced: 2,
+            ..ScriptletDecisionCountsSummary::default()
+        };
+
+        let mut legacy_replay =
+            goal8a_scriptlet_summary("legacy-replay", "source-native", "private-review");
+        legacy_replay.decision_counts = ScriptletDecisionCountsSummary {
+            legacy: 1,
+            ..ScriptletDecisionCountsSummary::default()
+        };
+        legacy_replay
+            .review_reason_codes
+            .push("legacy-replay-required".to_string());
+
+        let mut review_required =
+            goal8a_scriptlet_summary("review-required", "review-required", "private-review");
+        review_required.decision_counts = ScriptletDecisionCountsSummary {
+            review: 1,
+            ..ScriptletDecisionCountsSummary::default()
+        };
+        review_required
+            .review_reason_codes
+            .push("review-class-deb-trigger".to_string());
+        review_required
+            .unknown_commands
+            .push("custom-helper".to_string());
+
+        let mut blocked = goal8a_scriptlet_summary("blocked", "blocked", "blocked");
+        blocked.decision_counts = ScriptletDecisionCountsSummary {
+            blocked: 1,
+            ..ScriptletDecisionCountsSummary::default()
+        };
+        blocked
+            .blocked_reason_codes
+            .push("blocked-class-package-manager-recursion".to_string());
+        blocked
+            .blocked_classes
+            .push("package-manager-recursion".to_string());
+
+        let cases = [
+            ("goal8a-native-free", native_free, "ready", true),
+            ("goal8a-fully-replaced", fully_replaced, "ready", true),
+            (
+                "goal8a-legacy-replay",
+                legacy_replay,
+                "review-required",
+                false,
+            ),
+            (
+                "goal8a-review-required",
+                review_required,
+                "review-required",
+                false,
+            ),
+            ("goal8a-blocked", blocked, "blocked", false),
+        ];
+
+        for (index, (name, summary, expected_outcome, public_ready)) in cases.iter().enumerate() {
+            let output_ccs = temp.path().join("out").join(format!("{name}.ccs"));
+            std::fs::create_dir_all(output_ccs.parent().unwrap()).unwrap();
+            std::fs::write(&output_ccs, format!("ccs payload {name}")).unwrap();
+
+            let metadata = PackageMetadata::new(
+                PathBuf::from(format!("/tmp/{name}.rpm")),
+                (*name).to_string(),
+                "1.0".to_string(),
+            );
+            let mut result = make_conversion_result(Default::default());
+            result.package_path = Some(output_ccs);
+            result.scriptlet_metadata = summary.clone();
+
+            let mut repo_pkg = RepositoryPackage::new(
+                index as i64 + 1,
+                (*name).to_string(),
+                "1.0".to_string(),
+                format!("sha256:{name}-source"),
+                11,
+                format!("https://example.invalid/{name}.rpm"),
+            );
+            repo_pkg.architecture = Some("x86_64".to_string());
+
+            let outcome = service
+                .persist_conversion_result(PersistConversionInput {
+                    distro: "fedora".to_string(),
+                    metadata,
+                    format: "rpm",
+                    original_checksum: format!("sha256:{name}-original"),
+                    conversion_result: result,
+                    repo_pkg: repo_pkg.clone(),
+                    chunk_hashes: vec![format!("sha256:{name}-chunk")],
+                })
+                .unwrap();
+            let observed_outcome = match &outcome {
+                ServerConversionOutcome::Ready(_) => "ready",
+                ServerConversionOutcome::ReviewRequired(_) => "review-required",
+                ServerConversionOutcome::Blocked(_) => "blocked",
+            };
+            assert_eq!(observed_outcome, *expected_outcome, "{name}");
+
+            let server_result = outcome.result();
+            assert_eq!(
+                server_result.scriptlets.scriptlet_fidelity, summary.scriptlet_fidelity,
+                "{name}"
+            );
+            assert_eq!(
+                server_result.scriptlets.publication_status, summary.publication_status,
+                "{name}"
+            );
+            assert_eq!(server_result.publication.is_none(), *public_ready, "{name}");
+            assert_eq!(
+                server_result.scriptlets.review_artifact_available, !*public_ready,
+                "{name}"
+            );
+            let public_metadata_json = serde_json::to_string(&server_result.scriptlets).unwrap();
+            assert!(!public_metadata_json.contains("review_artifact_path"));
+            assert!(!public_metadata_json.contains(cache_dir.to_str().unwrap()));
+            if let Some(report) = &server_result.publication {
+                let report_json = serde_json::to_string(report).unwrap();
+                assert!(report.evidence_digest.is_some(), "{name}");
+                assert!(!report_json.contains("review_artifact_path"));
+                assert!(!report_json.contains(cache_dir.to_str().unwrap()));
+                assert!(!report_json.contains("legacy_scriptlets"));
+            }
+        }
+
+        let conn = conary_core::db::open(&db_path).unwrap();
+        let candidates =
+            ConvertedPackage::find_publication_candidates(&conn, "fedora", None).unwrap();
+        assert_eq!(candidates.len(), cases.len());
+
+        let public_ready_names: std::collections::BTreeSet<_> = candidates
+            .iter()
+            .filter(|converted| converted.is_scriptlet_public_ready())
+            .map(|converted| converted.package_name.as_deref().unwrap())
+            .collect();
+        assert_eq!(
+            public_ready_names,
+            std::collections::BTreeSet::from(["goal8a-fully-replaced", "goal8a-native-free"])
+        );
+
+        for (name, summary, _expected_outcome, public_ready) in cases {
+            let converted = ConvertedPackage::find_by_package_identity_with_arch(
+                &conn,
+                "fedora",
+                name,
+                Some("1.0"),
+                Some("x86_64"),
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(converted.scriptlet_fidelity, summary.scriptlet_fidelity);
+            assert_eq!(converted.publication_status, summary.publication_status);
+            assert_eq!(
+                converted.is_scriptlet_public_ready(),
+                public_ready,
+                "{name}"
+            );
+            assert_eq!(
+                converted.review_artifact_path.is_some(),
+                !public_ready,
+                "{name}"
+            );
+        }
+    }
+
     #[test]
     fn persisted_conversion_records_scriptlet_metadata() {
         let temp = tempfile::TempDir::new().unwrap();
