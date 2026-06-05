@@ -452,7 +452,11 @@ Files likely touched:
 
 - `crates/conary-core/src/ccs/convert/`
 - `apps/conary/tests/`
-- `apps/remi/tests/`
+- `apps/remi/src/server/`
+
+Design and detailed plan:
+
+- `docs/superpowers/plans/2026-06-05-legacy-scriptlet-goal8-golden-fixtures-regex-truth-plan.md`
 
 Done means:
 
@@ -462,8 +466,12 @@ Done means:
 Verification:
 
 ```bash
-cargo test -p conary-core conversion_integration
-cargo test -p conary bundle_replay
+cargo test -p conary-core support_matrix
+cargo test -p conary-core adapters
+cargo test -p conary-core blocked_classes
+cargo test -p conary --test conversion_integration
+cargo test -p conary --test bundle_replay
+cargo test -p conary --test foreign_replay
 cargo test -p remi conversion
 cargo run -p conary-test -- list
 cargo clippy --workspace --all-targets -- -D warnings
@@ -483,9 +491,14 @@ Files likely touched:
 
 - `crates/conary-core/src/ccs/convert/analyzer.rs`
 - `crates/conary-core/src/ccs/convert/`
+- `docs/modules/ccs.md`
 - `docs/modules/remi.md`
 - `docs/conaryopedia-v2.md`
 - `README.md`
+
+Design and detailed plan:
+
+- `docs/superpowers/plans/2026-06-05-legacy-scriptlet-goal8-golden-fixtures-regex-truth-plan.md`
 
 Done means:
 
@@ -496,7 +509,10 @@ Done means:
 Verification:
 
 ```bash
-cargo test -p conary-core conversion_integration
+cargo test -p conary-core analyzer
+cargo test -p conary-core converter
+cargo test -p conary-core scriptlet_bundle
+cargo test -p conary-core support_matrix
 cargo test -p remi conversion
 bash scripts/check-doc-truth.sh
 cargo clippy --workspace --all-targets -- -D warnings
