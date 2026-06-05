@@ -78,7 +78,7 @@
 			<p class="install-note">
 				Release binaries are not linked for this preview tag yet, so source builds are
 				the current developer path.
-				Requires Rust 1.94+, SQLite development headers, and Linux 6.2+ with
+				Requires Rust 1.96+, SQLite development headers, and Linux 6.2+ with
 				composefs and EROFS support. Conary uses Linux-specific kernel APIs
 				(composefs, fs-verity, namespaces, landlock, seccomp) and does not
 				currently build on macOS or Windows.

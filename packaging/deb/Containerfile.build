@@ -1,7 +1,7 @@
 # packaging/deb/Containerfile.build
 #
 # Ubuntu 26.04 LTS build container for Conary DEBs.
-# Uses rustup for a current toolchain (distro Rust is too old for MSRV 1.93).
+# Uses rustup for a current toolchain (distro Rust is too old for MSRV 1.96).
 
 FROM docker.io/library/ubuntu:26.04
 

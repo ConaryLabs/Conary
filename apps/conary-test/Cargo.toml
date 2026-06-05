@@ -3,7 +3,7 @@ name = "conary-test"
 version = "0.8.0"
 # Canonical release track: conary-test-v* (legacy history: test-v*)
 edition = "2024"
-rust-version = "1.94"
+rust-version = "1.96"
 authors = ["Conary Contributors"]
 license = "MIT OR Apache-2.0"
 description = "Test infrastructure for Conary — declarative TOML test engine with container management, HTTP API, and MCP interface"

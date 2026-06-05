@@ -1,9 +1,9 @@
 # recipes/tier2/rust.toml
 #
-# BLFS — Rustc-1.94.0 (version alignment only)
+# BLFS — Rustc-1.96.0 (version alignment only)
 # https://www.linuxfromscratch.org/blfs/view/systemd/general/rust.html
 #
-# Downloads the official Rust 1.94.0 standalone binary distribution
+# Downloads the official Rust 1.96.0 standalone binary distribution
 # and installs it to the sysroot. NOT built from source. This
 # provides rustc and cargo needed to build Conary itself.
 #
@@ -13,7 +13,7 @@
 
 [package]
 name = "rust"
-version = "1.94.0"
+version = "1.96.0"
 release = "1"
 summary = "Rust programming language toolchain"
 description = """
@@ -26,7 +26,7 @@ homepage = "https://www.rust-lang.org/"
 
 [source]
 archive = "https://static.rust-lang.org/dist/rust-%(version)s-x86_64-unknown-linux-gnu.tar.xz"
-checksum = "sha256:e8fa4185f3ef6ae32725ff638b1ecdbff28f5d651dc0b3111e2539350d03b15a"
+checksum = "sha256:c295047583a56238ea06b43f849f4b877fa12bfd4c7103f8d9a74c94c9c4e108"
 
 [build]
 requires = ["glibc"]

@@ -170,7 +170,7 @@ The first self-hosting milestone uses this audited package set:
 | `curl` | `8.19.0` | Matches current BLFS systemd page |
 | `sudo` | `1.9.17p2` | Matches current BLFS systemd page |
 | `nano` | `9.0` | Updated to the current BLFS page |
-| `rust` | `1.94.0` | Version matches current BLFS page |
+| `rust` | `1.96.0` | Version matches current BLFS page |
 | `conary` | tracked workspace | Built from the staged `conary-workspace.tar.gz` snapshot |
 
 Additional prerequisite note:

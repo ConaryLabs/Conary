@@ -47,7 +47,7 @@ fn expected_tier2_versions() -> BTreeMap<&'static str, &'static str> {
         ("curl", "8.19.0"),
         ("sudo", "1.9.17p2"),
         ("nano", "9.0"),
-        ("rust", "1.94.0"),
+        ("rust", "1.96.0"),
     ])
 }
 
