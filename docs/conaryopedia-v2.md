@@ -1630,7 +1630,7 @@ component = "runtime"
 
 #### Declarative Hooks
 
-CCS replaces imperative scriptlets (bash scripts that run as root) with declarative hooks that describe *what* should happen, not *how*:
+CCS can replace known imperative scriptlet patterns (bash scripts that run as root) with declarative hooks that describe *what* should happen, not *how*:
 
 ```toml
 # System users
@@ -1700,6 +1700,11 @@ Declarative hooks are safer than scriptlets because:
 2. They can be validated before execution
 3. They can be sandboxed with fine-grained control
 4. They can be reverted (users deleted, services disabled, etc.)
+
+During legacy conversion, executable hooks are generated only when
+adapter-backed or curated evidence proves the scriptlet can be replaced. Text
+matches are retained as advisory diagnostics and do not make a package
+public-ready by themselves.
 
 CCS also has a narrow scriptlet capability declaration lane for packages that
 still need host integration while enforcement is being designed:
@@ -2471,7 +2476,7 @@ The `Kitchen::sources_cached()` method checks whether all sources (main archive,
 
 # 6. Remi Server
 
-Remi is Conary's server-side component: an HTTP server that converts legacy Linux packages (RPM, DEB, Arch) into CCS format on demand, stores the results as content-addressed chunks, and serves them to clients through a CDN-friendly API. Where a traditional mirror network replicates entire repositories, Remi converts only what clients actually request, then caches the results indefinitely since chunks are immutable. The name is short for "repository middleware."
+Remi is Conary's server-side component: an HTTP server that converts supported legacy Linux packages (Fedora 44 RPM, Ubuntu 26.04 DEB, and Arch packages) into CCS format on demand, stores the results as content-addressed chunks, and serves public-ready artifacts to clients through a CDN-friendly API. Where a traditional mirror network replicates entire repositories, Remi converts only what clients actually request, then caches the results indefinitely since chunks are immutable. The name is short for "repository middleware."
 
 Remi now lives in its own `apps/remi` crate rather than riding behind a root server feature toggle. A production instance runs at `remi.conary.io` on a Hetzner dedicated server (12 cores, 64 GB RAM, 2x 1 TB NVMe) behind Cloudflare.
 
@@ -2655,7 +2660,9 @@ Client: GET /v1/fedora/packages/nginx
   |
   v
 [Check DB: converted_packages table]
-  |-- Already converted? Return metadata immediately (200 OK)
+  |-- Public-ready conversion already exists? Return metadata immediately (200 OK)
+  |
+  |-- Existing conversion is review/blocked/local-only? Return non-public conversion status
   |
   |-- Active job? Return job ID for polling (202 Accepted)
   |
@@ -2676,8 +2683,8 @@ Client: GET /v1/fedora/packages/nginx
         4. Convert to CCS via LegacyConverter (FastCDC chunking)
         5. Store each chunk in CAS (atomic write: .tmp -> rename)
         6. Write-through to R2 (if enabled)
-        7. Record in converted_packages table
-        8. Update job status to Ready
+        7. Record in converted_packages table with scriptlet fidelity and publication status
+        8. Mark the public path ready only for public-ready outcomes
 ```
 
 The `ConversionService` (`apps/remi/src/server/conversion.rs`) orchestrates this pipeline:
@@ -2691,7 +2698,7 @@ pub struct ConversionService {
 }
 ```
 
-Package type detection uses the supported public distro family: `fedora` -> RPM, `ubuntu` -> DEB, `arch` -> Arch. The parser layer still understands DEB-family package metadata internally, but Debian is not part of the limited public support matrix. Each format's parser (`RpmPackage`, `DebPackage`, `ArchPackage`) implements the `PackageFormat` trait, producing a `PackageMetadata` with files, dependencies, and scripts. The `LegacyConverter` then chunks the content using FastCDC boundaries (16 KB min, 64 KB avg, 256 KB max).
+Package type detection uses the supported public distro family: `fedora` -> RPM, `ubuntu` -> DEB, `arch` -> Arch. The limited public target set is Fedora 44, Ubuntu 26.04, and Arch. The parser layer still understands DEB-family package metadata internally, but Debian is not part of the limited public support matrix. Each format's parser (`RpmPackage`, `DebPackage`, `ArchPackage`) implements the `PackageFormat` trait, producing a `PackageMetadata` with files, dependencies, and scripts. The `LegacyConverter` then chunks the content using FastCDC boundaries (16 KB min, 64 KB avg, 256 KB max).
 
 Filename sanitization prevents path traversal -- `safe_ccs_filename()` passes both the package name and version through `sanitize_filename()` before constructing the output path.
 
@@ -2966,7 +2973,11 @@ Returns a `SparseIndexEntry`:
 }
 ```
 
-The `converted` field tells clients whether the package is ready for immediate download or will require an on-demand conversion (triggering the 202 Accepted flow).
+In sparse and federated indexes, `converted` means the converted artifact is
+public-ready: it does not need reconversion and its scriptlet summary is valid
+for public serving. Completed conversions that require legacy replay, manual
+review, blocking, local-only handling, or malformed scriptlet summaries remain
+server-side records and are not advertised as converted artifacts.
 
 Package listing is paginated:
 
@@ -2976,7 +2987,9 @@ GET /v1/index/fedora?page=1&per_page=100
 
 Returns distinct package names with pagination metadata. This enables clients to sync the full index incrementally.
 
-When **federated index** is enabled, the sparse entry builder merges local data with entries fetched in parallel from upstream Remi instances, preferring versions where `converted = true`.
+When **federated index** is enabled, the sparse entry builder merges local data
+with entries fetched in parallel from upstream Remi instances, preferring
+versions that peers mark as public-ready converted artifacts.
 
 ## 6.11 Full-Text Search
 
@@ -3299,7 +3312,7 @@ When a sparse index request arrives:
 1. Build the local sparse entry from the database
 2. Fetch remote entries from all peers in parallel (`tokio::join!`)
 3. Merge all entries, deduplicating by version
-4. Prefer versions where `converted = true` (one peer may have already converted it)
+4. Prefer versions marked converted by a peer; that mark means the peer has a public-ready artifact
 5. Cache the merged result in memory with TTL
 
 ```rust

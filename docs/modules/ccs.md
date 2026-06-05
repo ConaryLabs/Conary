@@ -57,10 +57,13 @@ All operations respect a target_root parameter for bootstrap/container use.
 
 Hook types: User, Group, Directory, Systemd, Tmpfiles, Sysctl, Alternatives.
 
-**convert/** -- Legacy (RPM/DEB/Arch) to CCS conversion. Extracts declarative
-hooks from scriptlets where possible and preserves remaining scripts for
-sandboxed execution when they cannot be safely captured. Tracks conversion
-fidelity (High/Medium/Low) via `FidelityReport`.
+**convert/** -- Legacy (RPM/DEB/Arch) to CCS conversion. Builds scriptlet
+decisions from the adapter registry, blocked-class registry, support matrix,
+replay policy, and target compatibility checks. Declarative manifest hooks are
+emitted only from adapter-backed or curated evidence; text-pattern detections
+remain advisory metadata for review diagnostics. Remaining scripts are
+preserved for guarded local replay or review when they cannot be safely
+captured. Tracks conversion fidelity (High/Medium/Low) via `FidelityReport`.
 
 **legacy_scriptlets.rs** -- Versioned metadata for converted package scriptlet
 semantics and local replay planning. The v1 bundle lives in the TOML manifest as
@@ -93,6 +96,13 @@ autoremove planning. Entries with `review`, `blocked`, or unknown decisions
 refuse before mutation. Entries with `legacy` decisions are replayed only after
 the bundle passes target, sandbox, lifecycle, timeout, and ordering preflight
 and the operator explicitly provides `--allow-legacy-replay`.
+
+Public-ready conversion is narrower than local replay acceptance. The supported
+public source targets are `fedora-44`, `ubuntu-26.04`, and `arch`. A converted
+artifact is public-ready only when the scriptlet outcome is native-free or
+fully replaced by adapter/support-matrix evidence for the exact source and
+target. Legacy replay, review-required, blocked, malformed, or local-only
+scriptlet outcomes remain private conversion results.
 
 Foreign raw replay has a second gate. If the bundle source target differs from
 the host target and the host is not listed in `allowed_targets`, the operation

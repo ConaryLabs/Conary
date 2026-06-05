@@ -1,9 +1,10 @@
 # Remi
 
-Remi is Conary's on-demand conversion and package-serving service. It converts
-upstream RPM, DEB, and Arch packages into CCS artifacts, stores converted
-content in the local content-addressed store, and can write chunks through to R2
-when configured.
+Remi is Conary's on-demand conversion and package-serving service. For the
+limited public preview, its supported public source targets are Fedora 44,
+Ubuntu 26.04, and Arch. It converts upstream RPM, DEB, and Arch packages into
+CCS artifacts, stores converted content in the local content-addressed store,
+and can write chunks through to R2 when configured.
 
 ## Passive Scriptlet Metadata
 
@@ -22,13 +23,20 @@ values remain private server state and are represented publicly only as
 
 Remi treats legacy scriptlet metadata embedded during conversion as an active
 serving gate. Converted rows whose scriptlet summary is valid and has
-`publication_status = "public"` may be advertised, indexed, and served. Rows
-with `private-review`, `blocked`, `local-only`, malformed summary JSON, or
-non-default scriptlet evidence without an explicit summary are terminal
-review/blocked conversion outcomes and are not public-ready.
+`publication_status = "public"` may be advertised, indexed, and served only
+when the core conversion outcome is public-ready: native-free or fully replaced
+by adapter/support-matrix evidence. Rows with `private-review`, `blocked`,
+`local-only`, malformed summary JSON, or non-default scriptlet evidence without
+an explicit summary are terminal review/blocked conversion outcomes and are not
+public-ready.
 
 This gate is publication-only. It does not replay scriptlets, promote reviewed
 packages, or change client install/update/remove behavior.
+
+Sparse-index and search responses use `converted=true` only for rows that do
+not need reconversion and pass the same public-ready scriptlet gate. A completed
+conversion row that requires legacy replay, review, or blocking remains private
+server state and is not advertised as a normal converted artifact.
 
 ## Conversion Benchmark Evidence
 
