@@ -109,7 +109,7 @@ struct IndexGenArgs {
     #[arg(short, long, default_value = "/var/lib/conary/data/repo")]
     output_dir: String,
 
-    /// Distribution to generate index for (arch, fedora, ubuntu, debian)
+    /// Distribution to generate index for (fedora-44, ubuntu-26.04, arch)
     #[arg(long)]
     distro: Option<String>,
 
@@ -132,7 +132,7 @@ struct PrewarmArgs {
     #[arg(long, default_value = "/var/lib/conary/data/cache")]
     cache_dir: String,
 
-    /// Distribution to pre-warm (arch, fedora, ubuntu, debian)
+    /// Distribution to pre-warm (fedora-44, ubuntu-26.04, arch)
     #[arg(long)]
     distro: String,
 
@@ -167,7 +167,7 @@ struct ConversionBenchmarkArgs {
     #[arg(long, default_value = "/var/lib/conary/data/cache")]
     cache_dir: String,
 
-    /// Distribution to benchmark, such as fedora, ubuntu, debian, or arch
+    /// Distribution to benchmark (fedora-44, ubuntu-26.04, arch)
     #[arg(long)]
     distro: String,
 
