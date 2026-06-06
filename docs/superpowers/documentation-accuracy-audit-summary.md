@@ -304,6 +304,11 @@ Remi and CCS conversion/publication evidence. It keeps the first slice
 documentation-first so fixture ownership and verification recipes are explicit
 before helper moves or hotspot decompositions begin.
 
+The first fixture-map artifact records Remi and CCS conversion/publication
+fixture families as contributor-facing proof surfaces, including owner files,
+consuming tests, fast and medium proof commands, slow proof boundaries, and
+safety notes.
+
 ## Verification Commands
 
 - `bash scripts/docs-audit-inventory.sh`
@@ -378,9 +383,9 @@ public tester copy is tracked by
 
 ## Final Counts
 
-- Total tracked doc-like files audited: 144
+- Total tracked doc-like files audited: 145
 - `verified-no-change`: 14
-- `corrected`: 43
+- `corrected`: 44
 - `archived`: 73
 - `retained-historical`: 14
 - Remaining pending rows: 0
