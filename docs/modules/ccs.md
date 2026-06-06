@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-06-06
-revision: 12
-summary: Route CCS conversion fixture ownership and proof commands
+revision: 13
+summary: Route CCS conversion fixtures and install-side legacy replay ownership
 ---
 
 # CCS Module (conary-core/src/ccs/)
@@ -115,6 +115,11 @@ autoremove planning. Entries with `review`, `blocked`, or unknown decisions
 refuse before mutation. Entries with `legacy` decisions are replayed only after
 the bundle passes target, sandbox, lifecycle, timeout, and ordering preflight
 and the operator explicitly provides `--allow-legacy-replay`.
+
+Core replay planning lives in
+`crates/conary-core/src/ccs/legacy_replay.rs`. The install-side adapter that
+binds that planner to local install/update/remove replay execution and audit
+metadata lives in `apps/conary/src/commands/install/legacy_replay.rs`.
 
 Public-ready conversion is narrower than local replay acceptance. The supported
 public source targets are `fedora-44`, `ubuntu-26.04`, and `arch`. A converted

@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-06-06
-revision: 9
-summary: Stable subsystem pointers and durable assistant-facing guidance for the Conary workspace after fixture proof routing
+revision: 10
+summary: Stable subsystem pointers and durable assistant-facing guidance for the Conary workspace after install replay routing
 ---
 
 # Assistant Subsystem Map
@@ -35,6 +35,14 @@ summary: Stable subsystem pointers and durable assistant-facing guidance for the
 - Transaction lifecycle and conflict preflight:
   `crates/conary-core/src/transaction/mod.rs` and
   `crates/conary-core/src/transaction/planner.rs`
+- Install orchestration, legacy replay install adapter behavior, and live-root
+  preflight:
+  `apps/conary/src/commands/install/mod.rs`,
+  `apps/conary/src/commands/install/legacy_replay.rs`,
+  `apps/conary/src/commands/install/inner.rs`,
+  `apps/conary/src/commands/install/batch.rs`,
+  `apps/conary/src/commands/install/restore.rs`, and
+  `docs/modules/test-fixtures.md`
 - Generation building, artifact export, composefs mounting, `/etc` merge, and GC:
   `crates/conary-core/src/generation/builder.rs`,
   `crates/conary-core/src/generation/builder/runtime_inputs.rs`,
