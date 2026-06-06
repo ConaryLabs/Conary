@@ -6,7 +6,7 @@
 //! and exporting to container formats.
 
 use super::super::open_db;
-use super::install::sanitize_package_relative_path;
+use super::payload_paths::sanitize_package_relative_path;
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::path::Path;
