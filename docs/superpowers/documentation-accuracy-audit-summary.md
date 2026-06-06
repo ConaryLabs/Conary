@@ -324,6 +324,12 @@ adapter into `apps/conary/src/commands/install/legacy_replay.rs` and refreshed
 assistant plus fixture routing so replay refactors no longer start in the full
 install orchestrator.
 
+The Phase 5/6 feature ownership and workflow UX plan now combines subsystem-map
+consolidation with contributor workflow routing. It scopes the first slice to a
+canonical feature ownership map, human/assistant entrypoint links, focused proof
+recipes, and cross-system interaction gates while leaving MIT-only licensing and
+live-system mutation UX as separate follow-up designs.
+
 ## Verification Commands
 
 - `bash scripts/docs-audit-inventory.sh`
@@ -398,9 +404,9 @@ public tester copy is tracked by
 
 ## Final Counts
 
-- Total tracked doc-like files audited: 146
+- Total tracked doc-like files audited: 147
 - `verified-no-change`: 13
-- `corrected`: 46
+- `corrected`: 47
 - `archived`: 73
 - `retained-historical`: 14
 - Remaining pending rows: 0
