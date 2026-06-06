@@ -355,6 +355,13 @@ changed-path owner hints, docs-audit health, focused proof suggestions, and
 current Rust hotspot context. Contributor and assistant guidance now point to
 the report as review support for broad maintenance work, not as a hard gate.
 
+The live-system mutation UX redesign spec now opens the first post-Phase 7
+follow-up design from the maintainability roadmap. It inventories the current
+global acknowledgement flag, command-risk taxonomy, conaryd request surface,
+tests, docs, and integration manifests, then scopes a risk-tiered replacement
+that reduces daily CLI friction without weakening active-host, generation,
+recovery, or daemon safety gates.
+
 ## Verification Commands
 
 - `bash scripts/docs-audit-inventory.sh`
@@ -429,9 +436,9 @@ public tester copy is tracked by
 
 ## Final Counts
 
-- Total tracked doc-like files audited: 149
+- Total tracked doc-like files audited: 150
 - `verified-no-change`: 13
-- `corrected`: 49
+- `corrected`: 50
 - `archived`: 73
 - `retained-historical`: 14
 - Remaining pending rows: 0
