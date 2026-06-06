@@ -34,6 +34,7 @@ docs/modules/query.md	canonical	contributor
 docs/modules/recipe.md	canonical	contributor
 docs/modules/remi.md	canonical	contributor
 docs/modules/source-selection.md	canonical	contributor
+docs/modules/test-fixtures.md	canonical	contributor
 docs/operations/LOCAL_ACCESS.example.md	template	contributor
 docs/operations/agent-mcp-adapter-decision.md	canonical	contributor
 docs/operations/bootstrap-follow-up-investigations.md	canonical	contributor
