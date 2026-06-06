@@ -286,7 +286,7 @@ The repo moved materially after the last audit:
   being an active toolchain for this repo. The historical Claude-era notes were
   retained under `docs/llms/archive/`.
 
-### 2026-06-06 Maintainability Phase 2 Planning
+### 2026-06-06 Maintainability Planning
 
 The maintainability reset reopened the active planning lane after the prior
 clean-slate archive pass. Phase 1 added the repo discipline contract and
@@ -298,6 +298,11 @@ current active roadmap and child-plan files are tracked through the ledger.
 The first Phase 2 pruning inventory records the fixed public help strings,
 intentional internal/parser/archive surfaces, deferred runtime target-ID
 normalization, and refresh commands for extending the queue.
+
+The Phase 3 test and fixture discipline plan now opens the fixture-map lane for
+Remi and CCS conversion/publication evidence. It keeps the first slice
+documentation-first so fixture ownership and verification recipes are explicit
+before helper moves or hotspot decompositions begin.
 
 ## Verification Commands
 
@@ -373,9 +378,9 @@ public tester copy is tracked by
 
 ## Final Counts
 
-- Total tracked doc-like files audited: 143
+- Total tracked doc-like files audited: 144
 - `verified-no-change`: 14
-- `corrected`: 42
+- `corrected`: 43
 - `archived`: 73
 - `retained-historical`: 14
 - Remaining pending rows: 0
