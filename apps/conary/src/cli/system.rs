@@ -71,6 +71,10 @@ pub enum SystemCommands {
         /// Show what would be restored without making changes
         #[arg(long)]
         dry_run: bool,
+
+        /// Confirm applying this command's active-system changes
+        #[arg(short = 'y', long)]
+        yes: bool,
     },
 
     /// Adopt system packages into Conary tracking
@@ -179,6 +183,10 @@ pub enum SystemCommands {
         /// Show what would be unadopted without changing the database
         #[arg(long)]
         dry_run: bool,
+
+        /// Confirm applying this command's active-system changes
+        #[arg(short = 'y', long)]
+        yes: bool,
 
         /// Leave installed native package manager refresh hooks in place
         #[arg(long)]

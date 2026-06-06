@@ -11,23 +11,21 @@ use crate::cli::{self, Cli, Commands};
 use crate::command_risk;
 use crate::commands;
 use crate::live_host_safety::{
-    LiveMutationClass, LiveMutationRequest, require_live_system_mutation_ack,
+    LiveMutationClass, LiveMutationRequest, MutationIntent, require_mutation_intent,
 };
 
 fn require_live_mutation(
-    allow_live_system_mutation: bool,
+    intent: MutationIntent,
     command_label: Cow<'static, str>,
     class: LiveMutationClass,
     dry_run: bool,
 ) -> Result<()> {
-    require_live_system_mutation_ack(
-        allow_live_system_mutation,
-        &LiveMutationRequest {
-            command_label,
-            class,
-            dry_run,
-        },
-    )
+    require_mutation_intent(&LiveMutationRequest {
+        command_label,
+        class,
+        dry_run,
+        intent,
+    })
 }
 
 fn legacy_replay_options(
@@ -75,7 +73,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             // Smart dispatch: @name installs a collection
             if package.starts_with('@') {
                 require_live_mutation(
-                    allow_live_system_mutation,
+                    MutationIntent::from_apply_intent(yes, allow_live_system_mutation),
                     Cow::Borrowed("conary install @collection"),
                     LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
                     dry_run,
@@ -94,7 +92,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 .await
             } else {
                 require_live_mutation(
-                    allow_live_system_mutation,
+                    MutationIntent::from_apply_intent(yes, allow_live_system_mutation),
                     Cow::Borrowed("conary install"),
                     LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
                     dry_run,
@@ -133,6 +131,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             version,
             architecture,
             no_scripts,
+            yes,
             allow_legacy_replay,
             allow_foreign_legacy_replay,
             sandbox,
@@ -141,7 +140,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             let legacy_replay =
                 legacy_replay_options(allow_legacy_replay, allow_foreign_legacy_replay);
             require_live_mutation(
-                allow_live_system_mutation,
+                MutationIntent::from_apply_intent(yes, allow_live_system_mutation),
                 Cow::Borrowed("conary remove"),
                 LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
                 false,
@@ -187,7 +186,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                     );
                 }
                 require_live_mutation(
-                    allow_live_system_mutation,
+                    MutationIntent::from_apply_intent(yes, allow_live_system_mutation),
                     Cow::Borrowed("conary update @collection"),
                     LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
                     dry_run,
@@ -208,7 +207,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 .await;
             }
             require_live_mutation(
-                allow_live_system_mutation,
+                MutationIntent::from_apply_intent(yes, allow_live_system_mutation),
                 Cow::Borrowed("conary update"),
                 LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
                 dry_run,
@@ -267,6 +266,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             common,
             dry_run,
             no_scripts,
+            yes,
             allow_legacy_replay,
             allow_foreign_legacy_replay,
             sandbox,
@@ -274,7 +274,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             let legacy_replay =
                 legacy_replay_options(allow_legacy_replay, allow_foreign_legacy_replay);
             require_live_mutation(
-                allow_live_system_mutation,
+                MutationIntent::from_apply_intent(yes, allow_live_system_mutation),
                 Cow::Borrowed("conary autoremove"),
                 LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
                 dry_run,
@@ -565,9 +565,10 @@ async fn dispatch_system_command(
             common,
             force,
             dry_run,
+            yes,
         } => {
             require_live_mutation(
-                allow_live_system_mutation,
+                MutationIntent::from_apply_intent(yes, allow_live_system_mutation),
                 Cow::Borrowed("conary system restore"),
                 LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
                 dry_run,
@@ -640,10 +641,11 @@ async fn dispatch_system_command(
             db,
             all,
             dry_run,
+            yes,
             keep_hooks,
         } => {
             require_live_mutation(
-                allow_live_system_mutation,
+                MutationIntent::from_apply_intent(yes, allow_live_system_mutation),
                 Cow::Borrowed("conary system unadopt"),
                 LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
                 dry_run,
@@ -669,7 +671,7 @@ async fn dispatch_system_command(
             keep_hooks,
         } => {
             require_live_mutation(
-                allow_live_system_mutation,
+                MutationIntent::from_apply_intent(yes, allow_live_system_mutation),
                 Cow::Borrowed("conary system native-handoff"),
                 LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
                 dry_run,
@@ -715,7 +717,7 @@ async fn dispatch_system_command(
                 db,
             } => {
                 require_live_mutation(
-                    allow_live_system_mutation,
+                    MutationIntent::from_apply_intent(yes, allow_live_system_mutation),
                     Cow::Borrowed("conary system db-backup recover"),
                     LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
                     dry_run,
@@ -749,9 +751,10 @@ async fn dispatch_system_command(
                 state_number,
                 db,
                 dry_run,
+                yes,
             } => {
                 require_live_mutation(
-                    allow_live_system_mutation,
+                    MutationIntent::from_apply_intent(yes, allow_live_system_mutation),
                     Cow::Borrowed("conary system state revert"),
                     LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
                     dry_run,
@@ -772,9 +775,10 @@ async fn dispatch_system_command(
             cli::StateCommands::Rollback {
                 changeset_id,
                 common,
+                yes,
             } => {
                 require_live_mutation(
-                    allow_live_system_mutation,
+                    MutationIntent::from_apply_intent(yes, allow_live_system_mutation),
                     Cow::Borrowed("conary system state rollback"),
                     LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
                     false,
@@ -787,18 +791,18 @@ async fn dispatch_system_command(
             cli::GenerationCommands::List => {
                 commands::generation::commands::cmd_generation_list().await
             }
-            cli::GenerationCommands::Build { summary, db } => {
+            cli::GenerationCommands::Build { summary, yes, db } => {
                 require_live_mutation(
-                    allow_live_system_mutation,
+                    MutationIntent::from_apply_intent(yes, allow_live_system_mutation),
                     Cow::Borrowed("conary system generation build"),
                     LiveMutationClass::AlwaysLive,
                     false,
                 )?;
                 commands::generation::commands::cmd_generation_build(&db.db_path, &summary)
             }
-            cli::GenerationCommands::Publish { changeset, db } => {
+            cli::GenerationCommands::Publish { changeset, yes, db } => {
                 require_live_mutation(
-                    allow_live_system_mutation,
+                    MutationIntent::from_apply_intent(yes, allow_live_system_mutation),
                     Cow::Borrowed("conary system generation publish"),
                     LiveMutationClass::AlwaysLive,
                     false,
@@ -826,7 +830,7 @@ async fn dispatch_system_command(
                 db,
             } => {
                 require_live_mutation(
-                    allow_live_system_mutation,
+                    MutationIntent::from_apply_intent(yes, allow_live_system_mutation),
                     Cow::Borrowed("conary system generation recover-db"),
                     LiveMutationClass::AlwaysLive,
                     dry_run,
@@ -856,27 +860,31 @@ async fn dispatch_system_command(
                 )
                 .await
             }
-            cli::GenerationCommands::Switch { number, reboot } => {
+            cli::GenerationCommands::Switch {
+                number,
+                reboot,
+                yes,
+            } => {
                 require_live_mutation(
-                    allow_live_system_mutation,
+                    MutationIntent::from_apply_intent(yes, allow_live_system_mutation),
                     Cow::Borrowed("conary system generation switch"),
                     LiveMutationClass::AlwaysLive,
                     false,
                 )?;
                 commands::generation::commands::cmd_generation_switch(number, reboot)
             }
-            cli::GenerationCommands::Rollback => {
+            cli::GenerationCommands::Rollback { yes } => {
                 require_live_mutation(
-                    allow_live_system_mutation,
+                    MutationIntent::from_apply_intent(yes, allow_live_system_mutation),
                     Cow::Borrowed("conary system generation rollback"),
                     LiveMutationClass::AlwaysLive,
                     false,
                 )?;
                 commands::generation::commands::cmd_generation_rollback()
             }
-            cli::GenerationCommands::Gc { keep, db } => {
+            cli::GenerationCommands::Gc { keep, yes, db } => {
                 require_live_mutation(
-                    allow_live_system_mutation,
+                    MutationIntent::from_apply_intent(yes, allow_live_system_mutation),
                     Cow::Borrowed("conary system generation gc"),
                     LiveMutationClass::AlwaysLive,
                     false,
@@ -886,9 +894,9 @@ async fn dispatch_system_command(
             cli::GenerationCommands::Info { number } => {
                 commands::generation::commands::cmd_generation_info(number).await
             }
-            cli::GenerationCommands::Recover { db } => {
+            cli::GenerationCommands::Recover { yes, db } => {
                 require_live_mutation(
-                    allow_live_system_mutation,
+                    MutationIntent::from_apply_intent(yes, allow_live_system_mutation),
                     Cow::Borrowed("conary system generation recover"),
                     LiveMutationClass::AlwaysLive,
                     false,
@@ -904,7 +912,7 @@ async fn dispatch_system_command(
             db,
         } => {
             require_live_mutation(
-                allow_live_system_mutation,
+                MutationIntent::from_apply_intent(yes, allow_live_system_mutation),
                 Cow::Borrowed("conary system takeover"),
                 LiveMutationClass::AlwaysLive,
                 dry_run,
@@ -1364,6 +1372,7 @@ async fn dispatch_ccs_command(
             sandbox,
             no_deps,
             no_scripts,
+            yes,
             allow_legacy_replay,
             allow_foreign_legacy_replay,
             reinstall,
@@ -1373,7 +1382,7 @@ async fn dispatch_ccs_command(
             let legacy_replay =
                 legacy_replay_options(allow_legacy_replay, allow_foreign_legacy_replay);
             require_live_mutation(
-                allow_live_system_mutation,
+                MutationIntent::from_apply_intent(yes, allow_live_system_mutation),
                 Cow::Borrowed("conary ccs install"),
                 LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
                 dry_run,
@@ -1518,13 +1527,14 @@ async fn dispatch_model_command(
             model,
             common,
             dry_run,
+            yes,
             skip_optional,
             strict,
             no_autoremove,
             offline,
         } => {
             require_live_mutation(
-                allow_live_system_mutation,
+                MutationIntent::from_apply_intent(yes, allow_live_system_mutation),
                 Cow::Borrowed("conary model apply"),
                 LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
                 dry_run,
@@ -1620,7 +1630,7 @@ async fn dispatch_automation_command(
             no_scripts,
         } => {
             require_live_mutation(
-                allow_live_system_mutation,
+                MutationIntent::from_apply_intent(yes, allow_live_system_mutation),
                 Cow::Borrowed("conary automation apply"),
                 LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
                 dry_run,

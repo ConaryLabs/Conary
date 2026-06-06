@@ -8,7 +8,7 @@ use conary::commands::{
     InstallOptions, LegacyReplayOptions, SandboxMode, cmd_install, cmd_remove, cmd_update,
 };
 use conary::live_host_safety::{
-    LiveMutationClass, LiveMutationRequest, require_live_system_mutation_ack,
+    LiveMutationClass, LiveMutationRequest, MutationIntent, require_mutation_intent,
 };
 use serde::Serialize;
 use std::borrow::Cow;
@@ -37,6 +37,7 @@ enum PackageCommand {
         dry_run: bool,
         no_scripts: bool,
         yes: bool,
+        apply_intent: bool,
         allow_live_system_mutation: bool,
     },
     Remove {
@@ -45,6 +46,7 @@ enum PackageCommand {
         remove_orphans: bool,
         no_scripts: bool,
         purge_files: bool,
+        apply_intent: bool,
         allow_live_system_mutation: bool,
     },
     Update {
@@ -52,6 +54,7 @@ enum PackageCommand {
         security_only: bool,
         dry_run: bool,
         yes: bool,
+        apply_intent: bool,
         allow_live_system_mutation: bool,
     },
 }
@@ -160,6 +163,7 @@ impl From<&TransactionOperation> for PackageCommand {
                 dry_run,
                 no_scripts,
                 yes,
+                apply_intent,
                 allow_live_system_mutation,
             } => Self::Install {
                 packages: packages.clone(),
@@ -168,6 +172,7 @@ impl From<&TransactionOperation> for PackageCommand {
                 dry_run: *dry_run,
                 no_scripts: *no_scripts,
                 yes: *yes,
+                apply_intent: *apply_intent,
                 allow_live_system_mutation: *allow_live_system_mutation,
             },
             TransactionOperation::Remove {
@@ -176,6 +181,7 @@ impl From<&TransactionOperation> for PackageCommand {
                 remove_orphans,
                 no_scripts,
                 purge_files,
+                apply_intent,
                 allow_live_system_mutation,
             } => Self::Remove {
                 packages: packages.clone(),
@@ -183,6 +189,7 @@ impl From<&TransactionOperation> for PackageCommand {
                 remove_orphans: *remove_orphans,
                 no_scripts: *no_scripts,
                 purge_files: *purge_files,
+                apply_intent: *apply_intent,
                 allow_live_system_mutation: *allow_live_system_mutation,
             },
             TransactionOperation::Update {
@@ -190,12 +197,14 @@ impl From<&TransactionOperation> for PackageCommand {
                 security_only,
                 dry_run,
                 yes,
+                apply_intent,
                 allow_live_system_mutation,
             } => Self::Update {
                 packages: packages.clone(),
                 security_only: *security_only,
                 dry_run: *dry_run,
                 yes: *yes,
+                apply_intent: *apply_intent,
                 allow_live_system_mutation: *allow_live_system_mutation,
             },
         }
@@ -211,9 +220,14 @@ async fn run_cli_command(command: PackageCommand, db_path: String, root: String)
             dry_run,
             no_scripts,
             yes,
+            apply_intent,
             allow_live_system_mutation,
         } => {
-            require_live_ack("conaryd install", dry_run, allow_live_system_mutation)?;
+            require_live_ack(
+                "conaryd install",
+                dry_run,
+                MutationIntent::from_apply_intent(apply_intent, allow_live_system_mutation),
+            )?;
             for package in packages {
                 let mut opts = InstallOptions::default();
                 opts.db_path = &db_path;
@@ -233,6 +247,7 @@ async fn run_cli_command(command: PackageCommand, db_path: String, root: String)
             remove_orphans,
             no_scripts,
             purge_files,
+            apply_intent,
             allow_live_system_mutation,
         } => {
             if cascade || remove_orphans {
@@ -240,7 +255,11 @@ async fn run_cli_command(command: PackageCommand, db_path: String, root: String)
                     "Daemon remove jobs do not support cascade or remove_orphans yet; use explicit remove jobs"
                 );
             }
-            require_live_ack("conaryd remove", false, allow_live_system_mutation)?;
+            require_live_ack(
+                "conaryd remove",
+                false,
+                MutationIntent::from_apply_intent(apply_intent, allow_live_system_mutation),
+            )?;
             for package in packages {
                 cmd_remove(
                     &package,
@@ -261,9 +280,14 @@ async fn run_cli_command(command: PackageCommand, db_path: String, root: String)
             security_only,
             dry_run,
             yes,
+            apply_intent,
             allow_live_system_mutation,
         } => {
-            require_live_ack("conaryd update", dry_run, allow_live_system_mutation)?;
+            require_live_ack(
+                "conaryd update",
+                dry_run,
+                MutationIntent::from_apply_intent(apply_intent, allow_live_system_mutation),
+            )?;
             if packages.is_empty() {
                 cmd_update(
                     None,
@@ -308,16 +332,14 @@ async fn run_cli_command(command: PackageCommand, db_path: String, root: String)
 fn require_live_ack(
     command_label: &'static str,
     dry_run: bool,
-    allow_live_system_mutation: bool,
+    intent: MutationIntent,
 ) -> Result<()> {
-    require_live_system_mutation_ack(
-        allow_live_system_mutation,
-        &LiveMutationRequest {
-            command_label: Cow::Borrowed(command_label),
-            class: LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
-            dry_run,
-        },
-    )
+    require_mutation_intent(&LiveMutationRequest {
+        command_label: Cow::Borrowed(command_label),
+        class: LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
+        dry_run,
+        intent,
+    })
 }
 
 fn ensure_not_cancelled(cancel_token: &AtomicBool) -> Result<()> {
@@ -418,11 +440,30 @@ mod tests {
         .unwrap_err();
 
         let message = format!("{err:#}");
+        assert!(message.contains("--dry-run"), "{message}");
+        assert!(message.contains("--yes"), "{message}");
         assert!(
-            message.contains("--allow-live-system-mutation"),
+            !message.contains("--allow-live-system-mutation"),
             "{message}"
         );
         assert!(message.contains("conaryd install"), "{message}");
+    }
+
+    #[test]
+    fn package_executor_accepts_apply_intent_without_old_ack() {
+        assert!(require_live_ack("conaryd install", false, MutationIntent::Apply).is_ok());
+    }
+
+    #[test]
+    fn package_executor_accepts_old_ack_as_compatibility_alias() {
+        assert!(
+            require_live_ack(
+                "conaryd install",
+                false,
+                MutationIntent::DeprecatedLiveSystemMutationFlag,
+            )
+            .is_ok()
+        );
     }
 
     #[tokio::test]

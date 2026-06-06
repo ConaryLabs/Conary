@@ -135,6 +135,10 @@ pub enum CcsCommands {
         #[arg(long)]
         dry_run: bool,
 
+        /// Confirm applying this command's active-system changes
+        #[arg(short = 'y', long)]
+        yes: bool,
+
         /// Allow installation of unsigned packages
         #[arg(long)]
         allow_unsigned: bool,

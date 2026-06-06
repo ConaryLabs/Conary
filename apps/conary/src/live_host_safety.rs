@@ -3,6 +3,30 @@
 use anyhow::bail;
 use std::borrow::Cow;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MutationIntent {
+    Missing,
+    Apply,
+    DeprecatedLiveSystemMutationFlag,
+}
+
+impl MutationIntent {
+    pub fn from_apply_intent(apply_intent: bool, deprecated_live_ack: bool) -> Self {
+        if apply_intent {
+            Self::Apply
+        } else if deprecated_live_ack {
+            Self::DeprecatedLiveSystemMutationFlag
+        } else {
+            Self::Missing
+        }
+    }
+
+    pub fn is_present(self) -> bool {
+        !matches!(self, Self::Missing)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LiveMutationClass {
     AlwaysLive,
     LiveConaryState,
@@ -13,27 +37,46 @@ pub struct LiveMutationRequest {
     pub command_label: Cow<'static, str>,
     pub class: LiveMutationClass,
     pub dry_run: bool,
+    pub intent: MutationIntent,
 }
 
 pub fn require_live_system_mutation_ack(
     allow_live_system_mutation: bool,
     request: &LiveMutationRequest,
 ) -> anyhow::Result<()> {
-    if request.dry_run || allow_live_system_mutation {
+    let intent = if request.intent.is_present() {
+        request.intent
+    } else {
+        MutationIntent::from_apply_intent(false, allow_live_system_mutation)
+    };
+    let request = LiveMutationRequest {
+        command_label: request.command_label.clone(),
+        class: request.class,
+        dry_run: request.dry_run,
+        intent,
+    };
+
+    require_mutation_intent(&request)
+}
+
+pub fn require_mutation_intent(request: &LiveMutationRequest) -> anyhow::Result<()> {
+    if request.dry_run || request.intent.is_present() {
         return Ok(());
     }
 
     let mut message = match request.class {
         LiveMutationClass::LiveConaryState => format!(
-            "command '{}' may mutate live Conary state. Conary is still early software, and this command can update the Conary DB or CAS records that describe the active machine.",
+            "command '{}' may update Conary DB or CAS metadata for this machine.",
             request.command_label
         ),
-        LiveMutationClass::AlwaysLive | LiveMutationClass::CurrentlyLiveEvenWithRootArguments => {
-            format!(
-                "command '{}' may mutate the active host. Conary is still early software, and this command can perform generation rebuild or activation work, remount /usr, rewrite the live /etc overlay, execute scriptlet hooks, or change package ownership during takeover or rollback.",
-                request.command_label
-            )
-        }
+        LiveMutationClass::CurrentlyLiveEvenWithRootArguments => format!(
+            "command '{}' may change packages, files, scriptlets, ownership, or the live Conary database.",
+            request.command_label
+        ),
+        LiveMutationClass::AlwaysLive => format!(
+            "command '{}' may change generation state, boot selection, publication debt, or recovery state.",
+            request.command_label
+        ),
     };
 
     if matches!(
@@ -45,16 +88,23 @@ pub fn require_live_system_mutation_ack(
         );
     }
 
-    message.push_str(
-        " Use --dry-run when available to preview first. Rerun with --allow-live-system-mutation only if you intend to modify the real machine. For durable background package jobs, use conaryd; daemon jobs keep the same explicit live-host acknowledgement boundary.",
-    );
+    message.push_str(" Use --dry-run when available to preview first.");
+    message.push_str(" Rerun with --yes when you intend to apply this command.");
+    if matches!(request.class, LiveMutationClass::AlwaysLive) {
+        message.push_str(
+            " For generation and recovery operations, verify the concrete generation, boot, or recovery target before applying.",
+        );
+    }
 
     bail!("{message}")
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{LiveMutationClass, LiveMutationRequest, require_live_system_mutation_ack};
+    use super::{
+        LiveMutationClass, LiveMutationRequest, MutationIntent, require_live_system_mutation_ack,
+        require_mutation_intent,
+    };
     use std::borrow::Cow;
 
     #[test]
@@ -63,23 +113,52 @@ mod tests {
             command_label: Cow::Borrowed("conary install"),
             class: LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
             dry_run: true,
+            intent: MutationIntent::Missing,
         };
 
         assert!(require_live_system_mutation_ack(false, &request).is_ok());
     }
 
     #[test]
-    fn missing_ack_mentions_early_software_rationale() {
+    fn apply_intent_passes_active_host_mutation() {
         let request = LiveMutationRequest {
             command_label: Cow::Borrowed("conary install"),
             class: LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
             dry_run: false,
+            intent: MutationIntent::Apply,
         };
 
-        let err = require_live_system_mutation_ack(false, &request).unwrap_err();
+        assert!(require_mutation_intent(&request).is_ok());
+    }
+
+    #[test]
+    fn deprecated_global_flag_still_passes_for_persisted_retry_commands() {
+        let request = LiveMutationRequest {
+            command_label: Cow::Borrowed("conary system generation publish"),
+            class: LiveMutationClass::AlwaysLive,
+            dry_run: false,
+            intent: MutationIntent::DeprecatedLiveSystemMutationFlag,
+        };
+
+        assert!(require_mutation_intent(&request).is_ok());
+    }
+
+    #[test]
+    fn missing_apply_intent_mentions_dry_run_and_yes_not_old_global_flag() {
+        let request = LiveMutationRequest {
+            command_label: Cow::Borrowed("conary install"),
+            class: LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
+            dry_run: false,
+            intent: MutationIntent::Missing,
+        };
+
+        let err = require_mutation_intent(&request).unwrap_err();
         let message = format!("{err:#}");
-        assert!(message.contains("--allow-live-system-mutation"));
-        assert!(message.contains("early software"));
+        assert!(message.contains("conary install"));
+        assert!(message.contains("--dry-run"));
+        assert!(message.contains("--yes"));
+        assert!(!message.contains("--allow-live-system-mutation"));
+        assert!(!message.contains("early software"));
     }
 
     #[test]
@@ -88,26 +167,26 @@ mod tests {
             command_label: Cow::Borrowed("conary install"),
             class: LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
             dry_run: false,
+            intent: MutationIntent::Missing,
         };
 
         assert!(require_live_system_mutation_ack(true, &request).is_ok());
     }
 
     #[test]
-    fn refusal_lists_live_host_risks() {
+    fn always_live_refusal_names_generation_risk() {
         let request = LiveMutationRequest {
             command_label: Cow::Borrowed("conary system generation switch"),
             class: LiveMutationClass::AlwaysLive,
             dry_run: false,
+            intent: MutationIntent::Missing,
         };
 
-        let err = require_live_system_mutation_ack(false, &request).unwrap_err();
+        let err = require_mutation_intent(&request).unwrap_err();
         let message = format!("{err:#}");
-        assert!(message.contains("conary system generation switch"));
-        assert!(message.contains("mutate the active host"));
-        assert!(message.contains("/usr"));
-        assert!(message.contains("/etc"));
-        assert!(message.contains("scriptlet"));
+        assert!(message.contains("generation"));
+        assert!(message.contains("boot selection"));
+        assert!(message.contains("--yes"));
     }
 
     #[test]
@@ -116,6 +195,7 @@ mod tests {
             command_label: Cow::Borrowed("conary ccs install"),
             class: LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
             dry_run: false,
+            intent: MutationIntent::Missing,
         };
 
         let err = require_live_system_mutation_ack(false, &request).unwrap_err();
@@ -131,13 +211,14 @@ mod tests {
             command_label: Cow::Borrowed("conary system adopt <pkg>"),
             class: LiveMutationClass::LiveConaryState,
             dry_run: false,
+            intent: MutationIntent::Missing,
         };
 
         let err = require_live_system_mutation_ack(false, &request).unwrap_err();
         let message = format!("{err:#}");
         assert!(message.contains("Conary DB"));
         assert!(message.contains("CAS"));
-        assert!(message.contains("--allow-live-system-mutation"));
+        assert!(message.contains("--yes"));
         assert!(!message.contains("scriptlet hooks"));
         assert!(!message.contains("remount /usr"));
     }

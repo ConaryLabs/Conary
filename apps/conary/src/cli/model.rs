@@ -41,6 +41,10 @@ pub enum ModelCommands {
         #[arg(long)]
         dry_run: bool,
 
+        /// Confirm applying this command's active-system changes
+        #[arg(short = 'y', long)]
+        yes: bool,
+
         /// Skip optional packages
         #[arg(long)]
         skip_optional: bool,
