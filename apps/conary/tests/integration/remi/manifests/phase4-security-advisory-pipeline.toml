@@ -74,7 +74,7 @@ depends_on = ["TSEC01"]
 group = "security-advisory-pipeline"
 
 [[test.step]]
-run = ". /tmp/security-advisory-v1/native-fixture.env && ${CONARY_BIN} install --allow-live-system-mutation \"$NATIVE_PKG_FILE\" --db-path ${DB_PATH} --no-deps --yes --sandbox never"
+run = ". /tmp/security-advisory-v1/native-fixture.env && ${CONARY_BIN} install \"$NATIVE_PKG_FILE\" --db-path ${DB_PATH} --no-deps --yes --sandbox never"
 
 [test.step.assert]
 exit_code = 0
@@ -151,7 +151,7 @@ ${CONARY_BIN} repo sync security-advisory-json --db-path ${DB_PATH} --force
 REPO_ID=$(sqlite3 ${DB_PATH} "SELECT id FROM repositories WHERE name = 'security-advisory-json'")
 sqlite3 ${DB_PATH} "UPDATE troves SET installed_from_repository_id = $REPO_ID, source_distro = '${native_distro}', version_scheme = '${native_scheme}' WHERE name = 'phase4-runtime-fixture'"
 set +e
-OUTPUT=$(${CONARY_BIN} update phase4-runtime-fixture --security --allow-live-system-mutation --db-path ${DB_PATH} --sandbox never --yes 2>&1)
+OUTPUT=$(${CONARY_BIN} update phase4-runtime-fixture --security --db-path ${DB_PATH} --sandbox never --yes 2>&1)
 STATUS=$?
 set -e
 printf '%s\n' "$OUTPUT"
@@ -198,7 +198,7 @@ group = "security-advisory-pipeline"
 run = """
 REPO_ID=$(sqlite3 ${DB_PATH} "SELECT id FROM repositories WHERE name = 'security-advisory-json'")
 sqlite3 ${DB_PATH} "UPDATE troves SET installed_from_repository_id = $REPO_ID, source_distro = '${native_distro}', version_scheme = '${native_scheme}' WHERE name = 'phase4-runtime-fixture'"
-${CONARY_BIN} update phase4-runtime-fixture --security --allow-live-system-mutation --db-path ${DB_PATH} --sandbox never --yes
+${CONARY_BIN} update phase4-runtime-fixture --security --db-path ${DB_PATH} --sandbox never --yes
 """
 
 [test.step.assert]

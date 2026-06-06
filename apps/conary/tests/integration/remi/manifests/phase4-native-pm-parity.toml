@@ -164,7 +164,7 @@ fatal = true
 depends_on = ["TNPM02"]
 
 [[test.step]]
-run = ". /tmp/native-pm-parity/native-fixture.env && ${CONARY_BIN} install --allow-live-system-mutation \"$NATIVE_PKG_FILE\" --db-path ${DB_PATH} --no-deps --yes --sandbox never"
+run = ". /tmp/native-pm-parity/native-fixture.env && ${CONARY_BIN} install \"$NATIVE_PKG_FILE\" --db-path ${DB_PATH} --no-deps --yes --sandbox never"
 
 [test.step.assert]
 exit_code = 0
@@ -316,7 +316,7 @@ exit_code = 0
 stdout_contains = "Pinned package 'phase4-runtime-fixture'"
 
 [[test.step]]
-run = "${CONARY_BIN} remove phase4-runtime-fixture --db-path ${DB_PATH} --no-scripts --sandbox never --allow-live-system-mutation 2>&1"
+run = "${CONARY_BIN} remove phase4-runtime-fixture --db-path ${DB_PATH} --no-scripts --sandbox never --yes 2>&1"
 
 [test.step.assert]
 exit_code_not = 0
@@ -371,7 +371,7 @@ run = "if test -f /tmp/native-pm-http.pid; then kill \"$(cat /tmp/native-pm-http
 exit_code = 0
 
 [[test.step]]
-run = "${CONARY_BIN} update phase4-runtime-fixture --db-path ${DB_PATH} --yes --sandbox never --allow-live-system-mutation"
+run = "${CONARY_BIN} update phase4-runtime-fixture --db-path ${DB_PATH} --yes --sandbox never"
 
 [test.step.assert]
 exit_code = 0
@@ -404,7 +404,7 @@ fatal = true
 depends_on = ["TNPM07"]
 
 [[test.step]]
-conary = "remove phase4-runtime-fixture --no-scripts --sandbox never --allow-live-system-mutation"
+conary = "remove phase4-runtime-fixture --no-scripts --sandbox never --yes"
 
 [test.step.assert]
 exit_code = 0
@@ -440,7 +440,7 @@ fatal = true
 depends_on = ["TNPM08"]
 
 [[test.step]]
-run = ". /tmp/native-pm-parity/native-fixture.env && CONARY_TEST_SKIP_GENERATION_MOUNT=1 CONARY_TEST_FAIL_GENERATION_REBUILD=slice-d-forced ${CONARY_BIN} install --allow-live-system-mutation \"$NATIVE_PKG_FILE\" --db-path ${DB_PATH} --no-deps --yes --sandbox never 2>&1"
+run = ". /tmp/native-pm-parity/native-fixture.env && CONARY_TEST_SKIP_GENERATION_MOUNT=1 CONARY_TEST_FAIL_GENERATION_REBUILD=slice-d-forced ${CONARY_BIN} install \"$NATIVE_PKG_FILE\" --db-path ${DB_PATH} --no-deps --yes --sandbox never 2>&1"
 
 [test.step.assert]
 exit_code = 0
@@ -473,7 +473,7 @@ fatal = true
 depends_on = ["TNPM09"]
 
 [[test.step]]
-conary = "install ${repo_install_pkg} --repo ${REPO_NAME} --no-deps --yes --sandbox never --allow-live-system-mutation"
+conary = "install ${repo_install_pkg} --repo ${REPO_NAME} --no-deps --yes --sandbox never"
 
 [test.step.assert]
 exit_code = 0
@@ -529,7 +529,7 @@ run = "REPO_ID=$(sqlite3 ${DB_PATH} \"SELECT id FROM repositories WHERE name = '
 exit_code = 0
 
 [[test.step]]
-run = "${CONARY_BIN} update --security ${repo_install_pkg} --db-path ${DB_PATH} --yes --sandbox never --allow-live-system-mutation 2>&1"
+run = "${CONARY_BIN} update --security ${repo_install_pkg} --db-path ${DB_PATH} --yes --sandbox never 2>&1"
 
 [test.step.assert]
 exit_code_not = 0
@@ -567,7 +567,7 @@ exit_code = 0
 stdout_contains_all = ["Found", "${repo_install_pkg}", "Dry run"]
 
 [[test.step]]
-conary = "autoremove --no-scripts --sandbox never --allow-live-system-mutation"
+conary = "autoremove --no-scripts --sandbox never --yes"
 
 [test.step.assert]
 exit_code = 0
@@ -623,7 +623,7 @@ exit_code = 0
 stdout_contains = "Created trigger: phase4-corpus-trigger"
 
 [[test.step]]
-run = ". /tmp/native-pm-corpus/native-fixture.env && ${CONARY_BIN} install --allow-live-system-mutation \"$NATIVE_PKG_FILE\" --db-path ${DB_PATH} --no-deps --yes --sandbox never"
+run = ". /tmp/native-pm-corpus/native-fixture.env && ${CONARY_BIN} install \"$NATIVE_PKG_FILE\" --db-path ${DB_PATH} --no-deps --yes --sandbox never"
 
 [test.step.assert]
 exit_code = 0
@@ -779,7 +779,7 @@ run = "rm -rf /tmp/native-pm-corpus-conflict /tmp/native-pm-corpus-conflict-src 
 exit_code = 0
 
 [[test.step]]
-run = ". /tmp/native-pm-corpus-conflict/native-fixture.env && ${CONARY_BIN} install --allow-live-system-mutation \"$NATIVE_PKG_FILE\" --db-path ${DB_PATH} --no-deps --yes --sandbox never 2>&1"
+run = ". /tmp/native-pm-corpus-conflict/native-fixture.env && ${CONARY_BIN} install \"$NATIVE_PKG_FILE\" --db-path ${DB_PATH} --no-deps --yes --sandbox never 2>&1"
 
 [test.step.assert]
 exit_code_not = 0
@@ -809,7 +809,7 @@ fatal = true
 depends_on = ["TNPM17"]
 
 [[test.step]]
-conary = "remove phase4-daily-driver-corpus --sandbox never --allow-live-system-mutation"
+conary = "remove phase4-daily-driver-corpus --sandbox never --yes"
 
 [test.step.assert]
 exit_code = 0

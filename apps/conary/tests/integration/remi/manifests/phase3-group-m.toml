@@ -44,7 +44,7 @@ group = "M"
 fatal = true
 
 [[test.step]]
-conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never --allow-live-system-mutation"
+conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never --yes"
 
 [test.step.assert]
 exit_code = 0
@@ -71,7 +71,7 @@ timeout = 900
 group = "M"
 
 [[test.step]]
-conary = "--allow-live-system-mutation system adopt --system"
+conary = "system adopt --system"
 
 [test.step.assert]
 exit_code = 0
@@ -83,7 +83,7 @@ conary = "repo sync ${distro_repo} --force"
 exit_code = 0
 
 [[test.step]]
-conary = "install ${small_package} --repo ${distro_repo} --dep-mode takeover --yes --sandbox never --allow-live-system-mutation"
+conary = "install ${small_package} --repo ${distro_repo} --dep-mode takeover --yes --sandbox never"
 
 [test.step.assert]
 exit_code = 0
@@ -110,7 +110,7 @@ timeout = 300
 group = "M"
 
 [[test.step]]
-conary = "install ${dep_heavy_package} --repo ${distro_repo} --dep-mode takeover --yes --sandbox never --allow-live-system-mutation"
+conary = "install ${dep_heavy_package} --repo ${distro_repo} --dep-mode takeover --yes --sandbox never"
 
 [test.step.assert]
 exit_code = 0
@@ -142,10 +142,10 @@ group = "M"
 fatal = true
 
 [[test.step]]
-run = "${CONARY_BIN} remove ${FIXTURE_PKG_NAME} --no-scripts --allow-live-system-mutation --db-path ${DB_PATH} 2>/dev/null || true"
+run = "${CONARY_BIN} remove ${FIXTURE_PKG_NAME} --no-scripts --yes --db-path ${DB_PATH} 2>/dev/null || true"
 
 [[test.step]]
-conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never --allow-live-system-mutation"
+conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never --yes"
 
 [test.step.assert]
 exit_code = 0
@@ -154,7 +154,7 @@ exit_code = 0
 file_checksum = { path = "${FIXTURE_FILE}", sha256 = "${FIXTURE_V1_HELLO_SHA256}" }
 
 [[test.step]]
-conary = "ccs install ${FIXTURE_V2_CCS} --allow-unsigned --sandbox never --allow-live-system-mutation"
+conary = "ccs install ${FIXTURE_V2_CCS} --allow-unsigned --sandbox never --yes"
 
 [test.step.assert]
 exit_code = 0
@@ -179,22 +179,22 @@ depends_on = ["T139", "T140"]
 
 # Clean up from prior tests, then reinstall fresh
 [[test.step]]
-run = "${CONARY_BIN} remove ${small_package} --no-scripts --allow-live-system-mutation --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} remove ${dep_heavy_package} --no-scripts --allow-live-system-mutation --db-path ${DB_PATH} 2>/dev/null; true"
+run = "${CONARY_BIN} remove ${small_package} --no-scripts --yes --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} remove ${dep_heavy_package} --no-scripts --yes --db-path ${DB_PATH} 2>/dev/null; true"
 
 [[test.step]]
-conary = "install ${small_package} --repo ${distro_repo} --no-deps --yes --sandbox never --allow-live-system-mutation"
+conary = "install ${small_package} --repo ${distro_repo} --no-deps --yes --sandbox never"
 
 [test.step.assert]
 exit_code = 0
 
 [[test.step]]
-conary = "install ${dep_heavy_package} --repo ${distro_repo} --no-deps --yes --sandbox never --allow-live-system-mutation"
+conary = "install ${dep_heavy_package} --repo ${distro_repo} --no-deps --yes --sandbox never"
 
 [test.step.assert]
 exit_code = 0
 
 [[test.step]]
-conary = "remove ${small_package} --no-scripts --allow-live-system-mutation"
+conary = "remove ${small_package} --no-scripts --yes"
 
 [test.step.assert]
 exit_code = 0
@@ -224,7 +224,7 @@ conary = "repo sync ${REPO_NAME} --force"
 exit_code = 0
 
 [[test.step]]
-conary = "update --yes --sandbox never --allow-live-system-mutation"
+conary = "update --yes --sandbox never"
 
 [test.step.assert]
 stdout_not_contains = "panicked at"
@@ -247,10 +247,10 @@ timeout = 180
 group = "M"
 
 [[test.step]]
-run = "${CONARY_BIN} remove ${FIXTURE_PKG_NAME} --no-scripts --allow-live-system-mutation --db-path ${DB_PATH} 2>/dev/null || true"
+run = "${CONARY_BIN} remove ${FIXTURE_PKG_NAME} --no-scripts --yes --db-path ${DB_PATH} 2>/dev/null || true"
 
 [[test.step]]
-conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never --allow-live-system-mutation"
+conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never --yes"
 
 [test.step.assert]
 exit_code = 0
@@ -262,7 +262,7 @@ conary = "pin ${FIXTURE_PKG_NAME}"
 exit_code = 0
 
 [[test.step]]
-conary = "update --yes --sandbox never --allow-live-system-mutation"
+conary = "update --yes --sandbox never"
 
 [test.step.assert]
 stdout_not_contains = "panicked at"
@@ -293,16 +293,16 @@ group = "M"
 
 # Remove first in case already installed from earlier tests
 [[test.step]]
-run = "${CONARY_BIN} remove ${small_package} --no-scripts --allow-live-system-mutation --db-path ${DB_PATH} 2>/dev/null; true"
+run = "${CONARY_BIN} remove ${small_package} --no-scripts --yes --db-path ${DB_PATH} 2>/dev/null; true"
 
 [[test.step]]
-conary = "install ${small_package} --repo ${distro_repo} --no-deps --yes --sandbox never --allow-live-system-mutation"
+conary = "install ${small_package} --repo ${distro_repo} --no-deps --yes --sandbox never"
 
 [test.step.assert]
 exit_code = 0
 
 [[test.step]]
-conary = "remove ${small_package} --no-scripts --allow-live-system-mutation"
+conary = "remove ${small_package} --no-scripts --yes"
 
 [test.step.assert]
 exit_code = 0
@@ -329,7 +329,7 @@ timeout = 120
 group = "M"
 
 [[test.step]]
-conary = "--allow-live-system-mutation system adopt curl"
+conary = "system adopt curl"
 
 [test.step.assert]
 exit_code = 0
@@ -354,22 +354,22 @@ group = "M"
 fatal = true
 
 [[test.step]]
-run = "${CONARY_BIN} remove ${FIXTURE_PKG_NAME} --no-scripts --allow-live-system-mutation --db-path ${DB_PATH} 2>/dev/null || true"
+run = "${CONARY_BIN} remove ${FIXTURE_PKG_NAME} --no-scripts --yes --db-path ${DB_PATH} 2>/dev/null || true"
 
 [[test.step]]
-conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never --allow-live-system-mutation"
+conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never --yes"
 
 [test.step.assert]
 exit_code = 0
 
 [[test.step]]
-conary = "ccs install ${FIXTURE_V2_CCS} --allow-unsigned --sandbox never --allow-live-system-mutation"
+conary = "ccs install ${FIXTURE_V2_CCS} --allow-unsigned --sandbox never --yes"
 
 [test.step.assert]
 exit_code = 0
 
 [[test.step]]
-run = "CS_ID=$(${CONARY_BIN} system history --db-path ${DB_PATH} | grep -oP '\\[\\K\\d+(?=\\])' | head -1) && ${CONARY_BIN} system state rollback $CS_ID --allow-live-system-mutation --db-path ${DB_PATH}"
+run = "CS_ID=$(${CONARY_BIN} system history --db-path ${DB_PATH} | grep -oP '\\[\\K\\d+(?=\\])' | head -1) && ${CONARY_BIN} system state rollback $CS_ID --yes --db-path ${DB_PATH}"
 
 [test.step.assert]
 exit_code = 0
@@ -392,23 +392,23 @@ timeout = 300
 group = "M"
 
 [[test.step]]
-run = "${CONARY_BIN} remove ${FIXTURE_PKG_NAME} --no-scripts --allow-live-system-mutation --db-path ${DB_PATH} >/dev/null 2>&1 || true"
+run = "${CONARY_BIN} remove ${FIXTURE_PKG_NAME} --no-scripts --yes --db-path ${DB_PATH} >/dev/null 2>&1 || true"
 
 [test.step.assert]
 exit_code = 0
 
 [[test.step]]
-conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never --allow-live-system-mutation"
+conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never --yes"
 
 [test.step.assert]
 exit_code = 0
 
 # Remove small_package if it exists from prior tests, then reinstall
 [[test.step]]
-run = "${CONARY_BIN} remove ${small_package} --no-scripts --allow-live-system-mutation --db-path ${DB_PATH} 2>/dev/null; true"
+run = "${CONARY_BIN} remove ${small_package} --no-scripts --yes --db-path ${DB_PATH} 2>/dev/null; true"
 
 [[test.step]]
-conary = "install ${small_package} --repo ${distro_repo} --no-deps --yes --sandbox never --allow-live-system-mutation"
+conary = "install ${small_package} --repo ${distro_repo} --no-deps --yes --sandbox never"
 
 [test.step.assert]
 exit_code = 0
@@ -434,7 +434,7 @@ fatal = true
 
 # Remove fixture from prior tests, sync, and install fresh
 [[test.step]]
-run = "${CONARY_BIN} remove ${FIXTURE_PKG_NAME} --no-scripts --allow-live-system-mutation --db-path ${DB_PATH} 2>/dev/null; true"
+run = "${CONARY_BIN} remove ${FIXTURE_PKG_NAME} --no-scripts --yes --db-path ${DB_PATH} 2>/dev/null; true"
 
 [[test.step]]
 conary = "repo sync ${REPO_NAME} --force"
@@ -443,7 +443,7 @@ conary = "repo sync ${REPO_NAME} --force"
 exit_code = 0
 
 [[test.step]]
-conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never --allow-live-system-mutation"
+conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never --yes"
 
 [test.step.assert]
 exit_code = 0
@@ -453,7 +453,7 @@ file_exists = "${FIXTURE_FILE}"
 
 # Use --reinstall in case repo already has v2 (avoids "already installed")
 [[test.step]]
-conary = "ccs install ${FIXTURE_V2_CCS} --allow-unsigned --sandbox never --reinstall --allow-live-system-mutation"
+conary = "ccs install ${FIXTURE_V2_CCS} --allow-unsigned --sandbox never --reinstall --yes"
 
 [test.step.assert]
 exit_code = 0
@@ -478,7 +478,7 @@ conary = "unpin ${FIXTURE_PKG_NAME}"
 exit_code = 0
 
 [[test.step]]
-conary = "remove ${FIXTURE_PKG_NAME} --no-scripts --allow-live-system-mutation"
+conary = "remove ${FIXTURE_PKG_NAME} --no-scripts --yes"
 
 [test.step.assert]
 exit_code = 0

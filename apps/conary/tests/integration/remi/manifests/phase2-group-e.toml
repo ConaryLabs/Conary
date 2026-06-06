@@ -47,7 +47,7 @@ exit_code = 0
 
 # Install a distro-backed package via Remi
 [[test.step]]
-conary = "install ${TEST_PACKAGE_3} --dep-mode takeover --yes --sandbox never --allow-live-system-mutation"
+conary = "install ${TEST_PACKAGE_3} --dep-mode takeover --yes --sandbox never"
 
 [test.step.assert]
 exit_code = 0
@@ -58,7 +58,7 @@ file_exists = "${TEST_BINARY_3}"
 
 # Clean up
 [[test.step]]
-conary = "remove ${TEST_PACKAGE_3} --no-scripts --allow-live-system-mutation"
+conary = "remove ${TEST_PACKAGE_3} --no-scripts --yes"
 
 # --------------------------------------------------------------------------
 # T69: OCI manifest

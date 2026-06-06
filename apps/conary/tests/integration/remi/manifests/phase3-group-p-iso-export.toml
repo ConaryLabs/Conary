@@ -31,7 +31,7 @@ copy_to_guest = [
 ]
 commands = [
     "conary system init",
-    "if ! command -v xorriso >/dev/null || ! command -v mmd >/dev/null || ! command -v mcopy >/dev/null; then conary repo remove remi || true; conary repo add remi https://packages.conary.io --default-strategy remi --remi-endpoint https://packages.conary.io --remi-distro fedora --no-gpg-check; conary repo sync remi --force; for pkg in libburn libisofs libisoburn xorriso mtools; do conary install \"$pkg\" --repo remi --yes --sandbox never --allow-live-system-mutation --no-deps; done; ldconfig; fi",
+    "if ! command -v xorriso >/dev/null || ! command -v mmd >/dev/null || ! command -v mcopy >/dev/null; then conary repo remove remi || true; conary repo add remi https://packages.conary.io --default-strategy remi --remi-endpoint https://packages.conary.io --remi-distro fedora --no-gpg-check; conary repo sync remi --force; for pkg in libburn libisofs libisoburn xorriso mtools; do conary install \"$pkg\" --repo remi --yes --sandbox never --no-deps; done; ldconfig; fi",
     "xorriso -version >/dev/null",
     "mmd -V >/dev/null",
     "mcopy -V >/dev/null",
@@ -45,7 +45,7 @@ commands = [
     "mkdir -p /mnt/conary-scratch",
     "mount -o noatime /dev/disk/by-id/virtio-conary-scratch /mnt/conary-scratch",
     "mkdir -p /mnt/conary-scratch/seed /mnt/conary-scratch/bootstrap-run /mnt/conary-scratch/export",
-    "conary bootstrap seed --from-adopted --distro conaryos --distro-version qemu-fixture --output /mnt/conary-scratch/seed --allow-live-system-mutation",
+    "conary bootstrap seed --from-adopted --distro conaryos --distro-version qemu-fixture --output /mnt/conary-scratch/seed --yes",
     "test -f /mnt/conary-scratch/seed/seed.erofs",
     "mkdir -p /var/cache/conary/sources /tmp/conary-fixture-source/generation-fixture-rootfs-1.0.0",
     "printf '%s\\n' 'generation export fixture source' > /tmp/conary-fixture-source/generation-fixture-rootfs-1.0.0/README",
