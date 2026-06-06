@@ -108,6 +108,7 @@ Primary docs and generated surfaces:
 - `docs/operations/live-mutation-backup-inventory.md`
 - `docs/operations/post-generation-export-follow-up-roadmap.md`
 - `docs/operations/release-artifact-matrix.md`
+- `docs/superpowers/limited-preview-subreddit-tester-post-2026-05-19.md`
 - `apps/conary/tests/integration/remi/manifests/*.toml`
 
 ## Non-Goals
@@ -122,6 +123,9 @@ Primary docs and generated surfaces:
 - Do not hide broad manifest rewrites inside an unrelated behavior change.
 - Do not make old persisted `DeferredFollowUp.retry_command` strings fail to
   parse. Old databases can contain retry commands with the current global flag.
+- Do not rewrite archived historical docs solely to remove old examples; active
+  guidance and active tester-facing copy should migrate, while archive records
+  may retain historical command text.
 
 ## Design Principles
 
@@ -381,9 +385,14 @@ Minimum fast gates:
 Medium gates when command examples, integration manifests, or conaryd request
 semantics change:
 
+- `cargo test -p conary --test component`
+- `cargo test -p conary --test live_host_mutation_readiness`
+- `cargo test -p conary --test model_apply`
 - `cargo test -p conary --test native_pm_daily_driver`
 - `cargo test -p conary --test native_pm_live_root`
 - `cargo test -p conary --test bundle_replay`
+- `cargo test -p conary --test query`
+- `cargo test -p conary --test workflow`
 - `cargo test -p conaryd daemon::routes`
 - `cargo test -p conary-test suite_inventory`
 
