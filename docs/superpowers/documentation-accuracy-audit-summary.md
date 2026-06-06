@@ -370,6 +370,14 @@ always-live flows, preserves conaryd request compatibility, expands manifest
 validation coverage, and inventories the active source, script, site, docs,
 manpage, and test surfaces that must migrate together.
 
+The Phase 8 install CCS transaction decomposition plan now continues the
+install-hotspot lane after the legacy replay extraction. It scopes the next
+behavior-preserving slice to `apps/conary/src/commands/install/ccs_transaction.rs`,
+keeping shared live-root transaction machinery and manifest-provides
+persistence in `install/mod.rs` while moving the direct CCS transaction entry
+point, option/result pair, manifest selection helper, hook-status helpers, and
+scriptlet capability gate into a focused install submodule.
+
 ## Verification Commands
 
 - `bash scripts/docs-audit-inventory.sh`
@@ -444,9 +452,9 @@ public tester copy is tracked by
 
 ## Final Counts
 
-- Total tracked doc-like files audited: 151
+- Total tracked doc-like files audited: 152
 - `verified-no-change`: 13
-- `corrected`: 51
+- `corrected`: 52
 - `archived`: 73
 - `retained-historical`: 14
 - Remaining pending rows: 0
