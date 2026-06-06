@@ -2,16 +2,18 @@
 
 `conaryd` is the local daemon for query routes, package job queueing, SSE events,
 and selected system-operation stubs. It listens on the configured local socket
-and applies the same live-host mutation acknowledgement boundary as the CLI for
-package mutation jobs.
+and applies the same apply-intent boundary as the CLI for package mutation
+jobs.
 
 ## Authorization
 
 `GET /health` is outside the v1 auth gate so service managers can perform basic
 liveness checks. `/v1/*` routes are behind the v1 gate. Query routes are
 read-oriented. Package mutation and system operation routes require the daemon
-authorization checks and still require explicit live-host mutation
-acknowledgement in request bodies where the operation can mutate the host.
+authorization checks and still require explicit apply intent in request bodies
+where the operation can mutate the host. New package requests should send
+`apply_intent: true`; `allow_live_system_mutation: true` remains accepted as a
+compatibility alias for existing clients during the migration window.
 
 PolicyKit authorization is currently fail-closed. Root and the daemon identity
 can perform daemon operations. Non-root PolicyKit write authorization is not

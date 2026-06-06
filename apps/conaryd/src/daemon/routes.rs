@@ -581,6 +581,9 @@ pub enum TransactionOperation {
         /// Assume yes to confirmation prompts
         #[serde(default, skip_serializing_if = "is_false")]
         yes: bool,
+        /// Confirm applying this package operation
+        #[serde(default, skip_serializing_if = "is_false")]
+        apply_intent: bool,
         /// Explicitly acknowledge live-host mutation risk
         #[serde(default, skip_serializing_if = "is_false")]
         allow_live_system_mutation: bool,
@@ -601,6 +604,9 @@ pub enum TransactionOperation {
         /// Delete adopted package files from disk
         #[serde(default, skip_serializing_if = "is_false")]
         purge_files: bool,
+        /// Confirm applying this package operation
+        #[serde(default, skip_serializing_if = "is_false")]
+        apply_intent: bool,
         /// Explicitly acknowledge live-host mutation risk
         #[serde(default, skip_serializing_if = "is_false")]
         allow_live_system_mutation: bool,
@@ -618,6 +624,9 @@ pub enum TransactionOperation {
         /// Assume yes to confirmation prompts
         #[serde(default, skip_serializing_if = "is_false")]
         yes: bool,
+        /// Confirm applying this package operation
+        #[serde(default, skip_serializing_if = "is_false")]
+        apply_intent: bool,
         /// Explicitly acknowledge live-host mutation risk
         #[serde(default, skip_serializing_if = "is_false")]
         allow_live_system_mutation: bool,
@@ -668,6 +677,9 @@ pub struct PackageOperationOptions {
     /// Assume yes to prompts where the operation supports it
     #[serde(default)]
     pub yes: bool,
+    /// Confirm applying this package operation
+    #[serde(default)]
+    pub apply_intent: bool,
     /// Delete adopted package files from disk during remove
     #[serde(default)]
     pub purge_files: bool,

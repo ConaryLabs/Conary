@@ -15,6 +15,10 @@ pub enum GenerationCommands {
         #[arg(long, default_value = "Manual generation build")]
         summary: String,
 
+        /// Confirm applying this generation, boot, publication, or recovery change
+        #[arg(short = 'y', long)]
+        yes: bool,
+
         #[command(flatten)]
         db: DbArgs,
     },
@@ -24,6 +28,10 @@ pub enum GenerationCommands {
         /// Assert that this pending changeset is covered by the publication
         #[arg(long)]
         changeset: Option<i64>,
+
+        /// Confirm applying this generation, boot, publication, or recovery change
+        #[arg(short = 'y', long)]
+        yes: bool,
 
         #[command(flatten)]
         db: DbArgs,
@@ -106,16 +114,28 @@ pub enum GenerationCommands {
         /// Reboot after selecting the generation
         #[arg(long)]
         reboot: bool,
+
+        /// Confirm applying this generation, boot, publication, or recovery change
+        #[arg(short = 'y', long)]
+        yes: bool,
     },
 
     /// Select the previous generation for next boot
-    Rollback,
+    Rollback {
+        /// Confirm applying this generation, boot, publication, or recovery change
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
 
     /// Remove old generations and unreferenced CAS objects
     Gc {
         /// Number of generations to keep (default: 3)
         #[arg(long, default_value = "3")]
         keep: usize,
+
+        /// Confirm applying this generation, boot, publication, or recovery change
+        #[arg(short = 'y', long)]
+        yes: bool,
 
         #[command(flatten)]
         db: DbArgs,
@@ -137,6 +157,10 @@ pub enum GenerationCommands {
     ///
     /// Intended for use from the initramfs (Dracut hook) and as a manual repair tool.
     Recover {
+        /// Confirm applying this generation, boot, publication, or recovery change
+        #[arg(short = 'y', long)]
+        yes: bool,
+
         #[command(flatten)]
         db: DbArgs,
     },

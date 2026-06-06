@@ -64,9 +64,78 @@ fn install_refuses_without_live_mutation_flag() {
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("Error:"));
+    assert!(!stderr.contains("--allow-live-system-mutation"));
+    assert!(!stderr.contains("may change packages"));
+}
+
+#[test]
+fn install_refuses_without_apply_intent_and_mentions_yes() {
+    let (_tmp, db_path) = common::setup_command_test_db();
+    let root = tempfile::tempdir().unwrap();
+
+    let output = run_conary(&[
+        "install",
+        "nginx",
+        "--db-path",
+        &db_path,
+        "--root",
+        root.path().to_str().unwrap(),
+        "--sandbox",
+        "never",
+    ]);
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("conary install"));
-    assert!(stderr.contains("--allow-live-system-mutation"));
+    assert!(stderr.contains("--dry-run"));
+    assert!(stderr.contains("--yes"));
+    assert!(!stderr.contains("--allow-live-system-mutation"));
+}
+
+#[test]
+fn install_with_yes_reaches_underlying_package_resolution() {
+    let (_tmp, db_path) = common::setup_command_test_db();
+    let root = tempfile::tempdir().unwrap();
+
+    let output = run_conary(&[
+        "install",
+        "nginx",
+        "--db-path",
+        &db_path,
+        "--root",
+        root.path().to_str().unwrap(),
+        "--sandbox",
+        "never",
+        "--yes",
+    ]);
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("--allow-live-system-mutation"));
+    assert!(!stderr.contains("may mutate"));
+}
+
+#[test]
+fn deprecated_global_flag_still_reaches_underlying_package_resolution() {
+    let (_tmp, db_path) = common::setup_command_test_db();
+    let root = tempfile::tempdir().unwrap();
+
+    let output = run_conary(&[
+        "--allow-live-system-mutation",
+        "install",
+        "nginx",
+        "--db-path",
+        &db_path,
+        "--root",
+        root.path().to_str().unwrap(),
+        "--sandbox",
+        "never",
+    ]);
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("unrecognized option"));
+    assert!(!stderr.contains("may mutate"));
 }
 
 #[test]
@@ -83,12 +152,13 @@ fn collection_install_refusal_uses_collection_label() {
         root.path().to_str().unwrap(),
         "--sandbox",
         "never",
-        "--yes",
     ]);
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("conary install @collection"));
+    assert!(stderr.contains("--yes"));
+    assert!(!stderr.contains("--allow-live-system-mutation"));
 }
 
 #[test]
@@ -100,7 +170,8 @@ fn state_revert_refuses_without_live_mutation_flag() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("conary system state revert"));
-    assert!(stderr.contains("--allow-live-system-mutation"));
+    assert!(stderr.contains("--yes"));
+    assert!(!stderr.contains("--allow-live-system-mutation"));
 }
 
 #[test]
@@ -129,7 +200,8 @@ fn model_apply_refuses_without_live_mutation_flag() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("conary model apply"));
-    assert!(stderr.contains("--allow-live-system-mutation"));
+    assert!(stderr.contains("--yes"));
+    assert!(!stderr.contains("--allow-live-system-mutation"));
 }
 
 #[test]
@@ -144,13 +216,13 @@ fn automation_apply_refuses_without_live_mutation_flag() {
         &db_path,
         "--root",
         root.path().to_str().unwrap(),
-        "--yes",
     ]);
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("conary automation apply"));
-    assert!(stderr.contains("--allow-live-system-mutation"));
+    assert!(stderr.contains("--yes"));
+    assert!(!stderr.contains("--allow-live-system-mutation"));
 }
 
 #[test]
@@ -243,23 +315,29 @@ fn system_adopt_package_refuses_without_live_mutation_flag() {
 
     let output = run_conary(&["system", "adopt", "curl", "--db-path", &db_path]);
 
-    assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("conary system adopt <pkg>"));
-    assert!(stderr.contains("--allow-live-system-mutation"));
-    assert!(stderr.contains("Conary DB"));
+    assert!(!stderr.contains("--allow-live-system-mutation"));
+    assert!(!stderr.contains("may update Conary DB"));
 }
 
 #[test]
-fn system_adopt_system_refuses_without_live_mutation_flag() {
+fn system_adopt_package_no_longer_requires_live_mutation_gate() {
     let (_tmp, db_path) = common::setup_command_test_db();
 
-    let output = run_conary(&["system", "adopt", "--system", "--db-path", &db_path]);
+    let output = run_conary(&["system", "adopt", "curl", "--db-path", &db_path]);
 
-    assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("conary system adopt --system"));
-    assert!(stderr.contains("--allow-live-system-mutation"));
+    assert!(!stderr.contains("--allow-live-system-mutation"));
+    assert!(!stderr.contains("may mutate"));
+}
+
+#[test]
+fn system_adopt_system_help_does_not_reference_live_mutation_flag() {
+    let output = run_conary(&["system", "adopt", "--help"]);
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("--allow-live-system-mutation"));
+    assert!(!stderr.contains("may update Conary DB"));
 }
 
 #[test]
@@ -268,10 +346,9 @@ fn system_adopt_refresh_refuses_without_live_mutation_flag() {
 
     let output = run_conary(&["system", "adopt", "--refresh", "--db-path", &db_path]);
 
-    assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("conary system adopt --refresh"));
-    assert!(stderr.contains("--allow-live-system-mutation"));
+    assert!(!stderr.contains("--allow-live-system-mutation"));
+    assert!(!stderr.contains("may update Conary DB"));
 }
 
 #[test]
@@ -281,10 +358,9 @@ fn system_adopt_convert_refuses_without_live_mutation_flag() {
 
     let output = run_conary(&["system", "adopt", "--convert", "--db-path", &db_path]);
 
-    assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("conary system adopt --convert"));
-    assert!(stderr.contains("--allow-live-system-mutation"));
+    assert!(!stderr.contains("--allow-live-system-mutation"));
+    assert!(!stderr.contains("may update Conary DB"));
 }
 
 #[test]
@@ -296,7 +372,8 @@ fn system_adopt_sync_hook_refuses_without_live_mutation_flag() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("conary system adopt --sync-hook"));
-    assert!(stderr.contains("--allow-live-system-mutation"));
+    assert!(stderr.contains("--yes"));
+    assert!(!stderr.contains("--allow-live-system-mutation"));
 }
 
 #[test]

@@ -134,15 +134,15 @@ pub struct CommonArgs {
 #[command(version)]
 #[command(about = "A next-generation package manager with atomic transactions", long_about = None)]
 #[command(
-    after_help = "Daily workflow examples:\n  conary install nginx --dry-run\n  conary --allow-live-system-mutation install nginx\n  conary update --dry-run\n  conary system adopt --refresh --dry-run\n  conary system completions bash > /tmp/conary-completion.bash\n  conary system generation export --path /conary/generations/1 --format qcow2 --output gen1.qcow2\n  conaryd handles durable package jobs with the same live-host acknowledgement boundary"
+    after_help = "Daily workflow examples:\n  conary install nginx --dry-run\n  conary install nginx --yes\n  conary update --dry-run\n  conary system adopt --refresh\n  conary system completions bash > /tmp/conary-completion.bash\n  conary system generation export --path /conary/generations/1 --format qcow2 --output gen1.qcow2\n  conaryd handles durable package jobs with the same apply-intent boundary"
 )]
 pub struct Cli {
     /// Use seccomp warn mode for scriptlets instead of enforcing blocked syscalls
     #[arg(long, global = true)]
     pub seccomp_warn: bool,
 
-    /// Acknowledge that this command may mutate the active host.
-    #[arg(long, global = true)]
+    /// Deprecated compatibility alias for old persisted retry commands.
+    #[arg(long, global = true, hide = true)]
     pub allow_live_system_mutation: bool,
 
     #[command(subcommand)]
@@ -258,6 +258,10 @@ pub enum Commands {
         /// Suppress hooks where safe; does not bypass required legacy replay
         #[arg(long)]
         no_scripts: bool,
+
+        /// Confirm applying this command's active-system changes
+        #[arg(short = 'y', long)]
+        yes: bool,
 
         /// Allow same-source raw legacy scriptlet replay when the bundle, target, sandbox, and local policy all pass
         #[arg(long)]
@@ -394,6 +398,10 @@ pub enum Commands {
         /// Suppress hooks where safe; does not bypass required legacy replay
         #[arg(long)]
         no_scripts: bool,
+
+        /// Confirm applying this command's active-system changes
+        #[arg(short = 'y', long)]
+        yes: bool,
 
         /// Allow same-source raw legacy scriptlet replay when the bundle, target, sandbox, and local policy all pass
         #[arg(long)]
@@ -1033,6 +1041,59 @@ mod tests {
         .expect("global live-mutation flag should parse before nested commands");
 
         assert!(cli.allow_live_system_mutation);
+    }
+
+    #[test]
+    fn cli_accepts_yes_for_remove_autoremove_and_ccs_install() {
+        let remove = Cli::try_parse_from(["conary", "remove", "nginx", "--yes"]).unwrap();
+        assert!(matches!(
+            remove.command,
+            Some(Commands::Remove { yes: true, .. })
+        ));
+
+        let autoremove = Cli::try_parse_from(["conary", "autoremove", "--yes"]).unwrap();
+        assert!(matches!(
+            autoremove.command,
+            Some(Commands::Autoremove { yes: true, .. })
+        ));
+
+        let ccs = Cli::try_parse_from(["conary", "ccs", "install", "pkg.ccs", "--yes"]).unwrap();
+        assert!(matches!(
+            ccs.command,
+            Some(Commands::Ccs(crate::cli::CcsCommands::Install {
+                yes: true,
+                ..
+            }))
+        ));
+    }
+
+    #[test]
+    fn cli_accepts_yes_for_state_and_generation_apply_commands() {
+        let revert =
+            Cli::try_parse_from(["conary", "system", "state", "revert", "1", "--yes"]).unwrap();
+        assert!(matches!(
+            revert.command,
+            Some(Commands::System(crate::cli::SystemCommands::State(
+                crate::cli::StateCommands::Revert { yes: true, .. }
+            )))
+        ));
+
+        let build = Cli::try_parse_from([
+            "conary",
+            "system",
+            "generation",
+            "build",
+            "--summary",
+            "after install",
+            "--yes",
+        ])
+        .unwrap();
+        assert!(matches!(
+            build.command,
+            Some(Commands::System(crate::cli::SystemCommands::Generation(
+                crate::cli::GenerationCommands::Build { yes: true, .. }
+            )))
+        ));
     }
 
     #[test]

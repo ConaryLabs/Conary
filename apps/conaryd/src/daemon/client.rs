@@ -81,6 +81,7 @@ pub struct InstallOptions {
     pub dry_run: bool,
     pub no_scripts: bool,
     pub yes: bool,
+    pub apply_intent: bool,
     pub allow_live_system_mutation: bool,
 }
 
@@ -91,6 +92,7 @@ pub struct RemoveOptions {
     pub remove_orphans: bool,
     pub no_scripts: bool,
     pub purge_files: bool,
+    pub apply_intent: bool,
     pub allow_live_system_mutation: bool,
 }
 
@@ -100,6 +102,7 @@ pub struct UpdateOptions {
     pub security_only: bool,
     pub dry_run: bool,
     pub yes: bool,
+    pub apply_intent: bool,
     pub allow_live_system_mutation: bool,
 }
 

@@ -48,6 +48,10 @@ pub enum StateCommands {
         /// Show what would be done without making changes
         #[arg(long)]
         dry_run: bool,
+
+        /// Confirm applying this command's active-system changes
+        #[arg(short = 'y', long)]
+        yes: bool,
     },
 
     /// Prune old states, keeping only the most recent N
@@ -83,5 +87,9 @@ pub enum StateCommands {
 
         #[command(flatten)]
         common: CommonArgs,
+
+        /// Confirm applying this command's active-system changes
+        #[arg(short = 'y', long)]
+        yes: bool,
     },
 }

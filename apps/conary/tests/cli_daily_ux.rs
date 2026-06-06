@@ -67,10 +67,8 @@ fn root_help_includes_daily_workflow_examples() {
     assert!(output.status.success(), "{}", output_text(&output));
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Daily workflow examples"), "{stdout}");
-    assert!(
-        stdout.contains("conary system adopt --refresh --dry-run"),
-        "{stdout}"
-    );
+    assert!(stdout.contains("conary install nginx --yes"), "{stdout}");
+    assert!(stdout.contains("conary system adopt --refresh"), "{stdout}");
     assert!(
         stdout.contains("conary system completions bash"),
         "{stdout}"
@@ -143,9 +141,9 @@ fn live_mutation_refusal_routes_to_preview_ack_and_daemon_jobs() {
 
     assert!(!output.status.success(), "{}", output_text(&output));
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("--dry-run"), "{stderr}");
-    assert!(stderr.contains("--allow-live-system-mutation"), "{stderr}");
-    assert!(stderr.contains("conaryd"), "{stderr}");
+    assert!(!stderr.contains("--allow-live-system-mutation"), "{stderr}");
+    assert!(!stderr.contains("live-host acknowledgement"), "{stderr}");
+    assert!(!stderr.contains("may change packages"), "{stderr}");
 }
 
 #[test]
