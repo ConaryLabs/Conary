@@ -3,6 +3,7 @@
 
 mod batch;
 mod blocklist;
+mod ccs_transaction;
 mod conversion;
 mod dep_mode;
 mod dep_resolution;
