@@ -1,4 +1,4 @@
-// src/cli/repo.rs
+// apps/conary/src/cli/repo.rs
 //! Repository management commands
 
 use super::DbArgs;
@@ -68,7 +68,7 @@ pub enum RepoCommands {
 
         /// Distribution name for Remi conversion (required when --default-strategy=remi)
         ///
-        /// Examples: fedora, arch, debian, ubuntu
+        /// Examples: fedora-44, ubuntu-26.04, arch
         #[arg(long, value_name = "DISTRO")]
         remi_distro: Option<String>,
 
