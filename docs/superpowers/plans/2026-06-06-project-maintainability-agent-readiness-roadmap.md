@@ -169,10 +169,22 @@ already expensive:
 | `crates/conary-core/src/generation/artifact.rs` | 1582 | Generation artifact metadata and validation are persisted-output adjacent |
 
 This is an initial snapshot, not a canonical inventory. Child plans should
-refresh these numbers before implementation. A quick refresh can use
-`rg --files apps crates | rg '\.rs$' | while read f; do wc -l "$f"; done | sort -nr | awk 'NR <= 60'`
-or an equivalent `find apps crates -name '*.rs' -print | while read f; do wc -l "$f"; done | sort -nr | awk 'NR <= 60'`
-fallback.
+refresh these numbers before implementation with:
+
+```bash
+scripts/line-count-report.sh 30
+```
+
+If the script is unavailable in an older checkout, or a one-off shell refresh
+is easier, use:
+
+```bash
+find apps crates -type f -name '*.rs' -exec wc -l {} + \
+    | awk '$NF != "total" { print $1 "\t" $2 }' \
+    | sort -rn -k1,1 \
+    | awk 'NR <= 30'
+```
+
 New line-count thresholds should be used as review signals, not blunt rules:
 
 - Over 1000 lines: ask whether the file still has one clear responsibility.
