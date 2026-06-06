@@ -38,6 +38,26 @@ not need reconversion and pass the same public-ready scriptlet gate. A completed
 conversion row that requires legacy replay, review, or blocking remains private
 server state and is not advertised as a normal converted artifact.
 
+### Fixture Ownership
+
+The first Remi fixture ownership map lives in `docs/modules/test-fixtures.md`.
+Start there before changing scriptlet publication gates, converted package
+public-ready filtering, public index metadata, review artifacts, static test
+fixture uploads, or `conary-test` manifest behavior.
+
+Fast proof for publication-gate edits:
+
+```bash
+cargo test -p remi publication
+```
+
+Medium proof when public serving, conversion state, or generated metadata
+changes:
+
+```bash
+cargo test -p remi
+```
+
 ## Conversion Benchmark Evidence
 
 Remi includes a local benchmark command for measuring cold-path conversion cost

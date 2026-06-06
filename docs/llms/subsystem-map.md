@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-05-22
-revision: 8
-summary: Stable subsystem pointers and durable assistant-facing guidance for the Conary workspace after selected-generation handoff, x86_64 ISO export proof, and agent contract split
+last_updated: 2026-06-06
+revision: 9
+summary: Stable subsystem pointers and durable assistant-facing guidance for the Conary workspace after fixture proof routing
 ---
 
 # Assistant Subsystem Map
@@ -49,11 +49,12 @@ summary: Stable subsystem pointers and durable assistant-facing guidance for the
   `apps/conary/src/commands/adopt/unadopt.rs`,
   `apps/conary/src/commands/adopt/native_handoff.rs`, and
   `apps/conary/tests/integration/remi/manifests/phase3-active-generation-handoff.toml`
-- CCS package building, chunking, verification, and conversion:
+- CCS package building, chunking, verification, conversion, and fixture proof:
   `crates/conary-core/src/ccs/builder.rs`,
   `crates/conary-core/src/ccs/binary_manifest.rs`,
-  `crates/conary-core/src/ccs/chunking.rs`, and
-  `crates/conary-core/src/ccs/convert/`
+  `crates/conary-core/src/ccs/chunking.rs`,
+  `crates/conary-core/src/ccs/convert/`, and
+  `docs/modules/test-fixtures.md`
 - TUF trust and signature verification:
   `crates/conary-core/src/trust/verify.rs`,
   `crates/conary-core/src/trust/client.rs`, and
@@ -62,10 +63,13 @@ summary: Stable subsystem pointers and durable assistant-facing guidance for the
   `crates/conary-core/src/operations.rs`,
   `apps/conaryd/src/daemon/mod.rs`, and
   `apps/conaryd/src/daemon/routes/transactions.rs`
-- Remi admin and MCP flows:
+- Remi admin, publication, artifact fixture, and MCP flows:
   `apps/remi/src/server/admin_service.rs`,
-  `apps/remi/src/server/mcp.rs`, and
-  `apps/remi/src/server/handlers/admin/`
+  `apps/remi/src/server/publication.rs`,
+  `apps/remi/src/server/mcp.rs`,
+  `apps/remi/src/server/handlers/artifacts.rs`,
+  `apps/remi/src/server/handlers/admin/`, and
+  `docs/modules/test-fixtures.md`
 - conary-test HTTP and MCP service layer:
   `apps/conary-test/src/server/service.rs`,
   `apps/conary-test/src/server/mcp.rs`, and
@@ -103,6 +107,7 @@ summary: Stable subsystem pointers and durable assistant-facing guidance for the
 
 - [`docs/modules/federation.md`](../modules/federation.md) for federation background
 - [`docs/modules/ccs.md`](../modules/ccs.md) for CCS format and conversion context
+- [`docs/modules/test-fixtures.md`](../modules/test-fixtures.md) for Remi and CCS fixture ownership and proof commands
 - [`docs/modules/bootstrap.md`](../modules/bootstrap.md) for bootstrap and stage flows
 - [`docs/operations/bootstrap-selfhosting-vm.md`](../operations/bootstrap-selfhosting-vm.md) for the truthful self-hosting VM build and validation path
 - [`docs/operations/post-generation-export-follow-up-roadmap.md`](../operations/post-generation-export-follow-up-roadmap.md) for remaining bundle, boot-artifact verification, sandbox, pristine-validation, and image-projection follow-ups
