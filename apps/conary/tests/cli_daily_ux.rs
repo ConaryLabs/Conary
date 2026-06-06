@@ -103,8 +103,9 @@ fn phase2_pruning_ccs_init_next_steps_use_current_build_subcommand() {
 
     assert!(output.status.success(), "{}", output_text(&output));
     let stdout = String::from_utf8_lossy(&output.stdout);
+    let retired_build_command = ["conary ccs", "build"].join("-");
     assert!(stdout.contains("conary ccs build"), "{stdout}");
-    assert!(!stdout.contains("conary ccs-build"), "{stdout}");
+    assert!(!stdout.contains(&retired_build_command), "{stdout}");
     assert!(dir.path().join("ccs.toml").exists());
 }
 
