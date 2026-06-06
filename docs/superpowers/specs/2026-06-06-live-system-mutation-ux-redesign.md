@@ -39,7 +39,7 @@ implementation should make the UX match those categories.
 Primary policy files:
 
 - `apps/conary/src/cli/mod.rs` defines the global
-  `allow_live_system_mutation` flag and root help examples.
+  `allow_live_system_mutation` flag and the root `after_help` examples.
 - `apps/conary/src/command_risk.rs` classifies CLI command risk and calls the
   live-host acknowledgement helper.
 - `apps/conary/src/live_host_safety.rs` renders current refusal messages.
@@ -57,13 +57,18 @@ Primary tests:
   dry-run bypass behavior.
 - `apps/conary/tests/cli_daily_ux.rs` verifies daily workflow wording and
   refusal routing.
+- `apps/conary/tests/native_pm_live_root.rs`,
+  `apps/conary/tests/native_pm_daily_driver.rs`, and
+  `apps/conary/tests/bundle_replay.rs` contain active mutation invocations that
+  must move with the new apply-intent wording.
 - `apps/conary/src/command_risk.rs` unit tests verify risk classification.
 - `apps/conary/src/live_host_safety.rs` unit tests verify refusal wording.
 - `apps/conary/src/cli/mod.rs` unit tests verify global flag parsing.
 - `apps/conaryd/src/daemon/package_ops.rs` tests verify daemon package-job
   refusal without acknowledgement.
 - `apps/conary-test/src/config/mod.rs` asserts integration manifest mutation
-  commands acknowledge live mutation unless they are dry runs.
+  commands acknowledge live mutation unless they are dry runs; update this test
+  in the same patch as the integration manifests.
 
 Primary docs and generated surfaces:
 
@@ -139,12 +144,26 @@ read-only. But they are not the same as package file mutation, generation
 activation, or recovery. Treating them as active-host mutation makes the
 day-to-day adoption and refresh path more awkward than useful.
 
+Implementation note:
+
+Adopt commands currently have no secondary live-mutation refusal check in
+`apps/conary/src/dispatch.rs`; the central `enforce_cli_policy` call is their
+only gate. The implementation plan must explicitly choose one of these paths:
+
+- add `--yes` or another command-scoped confirmation to mutating adopt variants
+  in the same slice;
+- keep a scoped continue/apply flag on adopt until a command-specific
+  confirmation exists;
+- document that `DbMutation` commands genuinely need no gate beyond the command
+  name and existing options such as `--dry-run`, `--status`, `--system`, and
+  `--refresh`.
+
 ### Tier 2: Active Package, File, Scriptlet, Model, And Automation Mutation
 
 Examples include install, remove, update, autoremove, ccs install, model apply,
 automation apply, state revert, state rollback, package restore, sync-hook
-install/remove, and unadopt flows that change active package ownership or
-files.
+install/remove, db-backup recover, and unadopt flows that change active package
+ownership, files, or the live Conary database.
 
 UX rule:
 
@@ -168,11 +187,30 @@ The implementation plan must verify which commands already have `--yes`.
 Commands without `--yes` should either gain it in the same slice or retain a
 scoped explicit flag until a prompt/apply flow exists.
 
+Current `--yes` inventory to resolve in the implementation plan:
+
+| Command | Current confirmation | Action needed |
+|---|---|---|
+| `install` | `--yes` | Wire to the new apply-intent policy. |
+| `update` | `--yes` | Wire to the new apply-intent policy. |
+| `remove` | none | Add `--yes` or keep a scoped explicit apply flag. |
+| `autoremove` | none | Add `--yes` or keep a scoped explicit apply flag. |
+| `system restore` | `--force`, no `--yes` | Decide whether overwrite intent remains `--force` or gains `--yes`. |
+| `system unadopt` | none | Add `--yes` or keep a scoped explicit apply flag. |
+| `system native-handoff` | `--yes` | Wire to the new apply-intent policy. |
+| `system state revert` | none | Add `--yes` or keep a scoped explicit apply flag. |
+| `system state rollback` | none | Add `--yes` or keep a scoped explicit apply flag. |
+| `system db-backup recover` | `--yes` | Wire to the new apply-intent policy; this is `ActiveHostMutation`, not `AlwaysLive`. |
+| `ccs install` | none | Add `--yes` or keep a scoped explicit apply flag. |
+| `model apply` | `--force`, no `--yes` | Decide whether model apply intent remains `--force` or gains `--yes`. |
+| `automation apply` | `--yes` | Wire to the new apply-intent policy. |
+| `self-update` | `--force`, no `--yes` | Decide whether update intent remains `--force` or gains `--yes`. |
+
 ### Tier 3: Always-Live Generation, Boot, Publication, And Recovery Operations
 
 Examples include generation build, switch, rollback, garbage collection,
-publication retry, generation recovery, DB recovery apply, and generation-bound
-DB recovery apply.
+publication retry, generation recovery, and generation-bound DB recovery apply
+through `system generation recover-db`.
 
 UX rule:
 
@@ -182,8 +220,8 @@ UX rule:
   actions unless the command already prints a concrete plan and the tests prove
   refusal-before-mutation;
 - refusal messages should name the exact active asset: boot selection,
-  `/conary/current`, DB recovery target, generation publication retry, or
-  rollback target.
+  `/conary/current`, generation-bound DB recovery target, generation
+  publication retry, or rollback target.
 
 Candidate CLI wording:
 
@@ -210,6 +248,12 @@ UX rule:
 - existing request bodies with `allow_live_system_mutation: true` should keep
   working during the transition;
 - docs and responses should stop requiring the old phrase once the CLI policy
+  changes.
+- `apps/conaryd/src/daemon/client.rs` should forward the preferred new intent
+  once it exists, while still serializing the old compatibility field during the
+  transition.
+- daemon refusal wording should move with the shared helper so background jobs
+  do not keep obsolete "early software" or global-flag language after the CLI
   changes.
 
 Potential staging:
@@ -247,15 +291,21 @@ The child implementation plan should be a full behavior plan, not a docs-only
 cleanup. It should likely split into these tasks:
 
 1. Add failing tests for the new Tier 1/Tier 2/Tier 3 UX expectations.
-2. Introduce a new mutation-intent helper or refactor the existing
+2. Run an `rg` inventory of `allow-live-system-mutation`,
+   `allow_live_system_mutation`, and `LiveMutationRequest`, then turn the
+   results into an explicit implementation checklist.
+3. Decide the Tier 1 `DbMutation` confirmation policy before removing the
+   central gate for those commands.
+4. Introduce a new mutation-intent helper or refactor the existing
    `LiveMutationRequest` API so risk class controls the refusal policy.
-3. Update CLI parsing and help examples.
-4. Update dispatch and command-risk enforcement while preserving deeper
+5. Update CLI parsing and help examples, including the current root
+   `after_help` examples.
+6. Update dispatch and command-risk enforcement while preserving deeper
    refusal-before-mutation checks.
-5. Update conaryd package-job request handling with a compatibility path.
-6. Update integration manifests and manifest validation tests.
-7. Update docs and generated manpage.
-8. Run focused and medium gates.
+7. Update conaryd package-job request handling with a compatibility path.
+8. Update integration manifests and manifest validation tests.
+9. Update docs and generated manpage.
+10. Run focused and medium gates.
 
 The implementation plan should keep changes in one reviewed slice because the
 old phrase is spread through tests, docs, manifests, and daemon behavior. A
@@ -278,6 +328,7 @@ Medium gates when command examples, integration manifests, or conaryd request
 semantics change:
 
 - `cargo test -p conary --test native_pm_daily_driver`
+- `cargo test -p conary --test native_pm_live_root`
 - `cargo test -p conary --test bundle_replay`
 - `cargo test -p conaryd daemon::routes`
 - `cargo test -p conary-test suite_inventory`
