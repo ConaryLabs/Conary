@@ -93,45 +93,61 @@ async fn atomic_replace_record(
 ) -> anyhow::Result<Option<conary_core::db::models::ConvertedPackage>> {
     tokio::task::spawn_blocking(move || {
         let mut conn = crate::server::open_runtime_db(&input.db_path)?;
-        conary_core::db::transaction(&mut conn, |tx| {
-            // Find existing record (if any) before deleting
-            let existing =
-                conary_core::db::models::ConvertedPackage::find_by_package_identity_with_arch(
-                    tx,
-                    &input.distro,
-                    &input.package_name,
-                    Some(&input.package_version),
-                    input.package_architecture.as_deref(),
-                )?;
+        let tx = conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|error| {
+                anyhow::anyhow!("begin converted package metadata transaction: {error}")
+            })?;
 
-            // Delete old record inside the transaction
-            if let Some(ref existing) = existing {
-                conary_core::db::models::ConvertedPackage::delete_by_checksum(
-                    tx,
-                    &existing.original_checksum,
-                )?;
-            }
+        // Find existing record (if any) before deleting.
+        let existing =
+            conary_core::db::models::ConvertedPackage::find_by_package_identity_with_arch(
+                &tx,
+                &input.distro,
+                &input.package_name,
+                Some(&input.package_version),
+                input.package_architecture.as_deref(),
+            )
+            .map_err(|error| {
+                anyhow::anyhow!("find existing converted package metadata: {error}")
+            })?;
 
-            // Insert new record inside the same transaction
-            let mut converted = conary_core::db::models::ConvertedPackage::new_server(
-                input.distro.clone(),
-                input.package_name.clone(),
-                input.package_version.clone(),
-                "ccs".to_string(),
-                format!("upload:{}:{}", input.distro, input.content_hash),
-                "full".to_string(),
-                std::slice::from_ref(&input.content_hash),
-                input.size,
-                input.content_hash.clone(),
-                input.final_ccs_path,
-            );
-            converted.package_architecture = input.package_architecture;
-            converted.set_scriptlet_metadata(&input.scriptlet_summary)?;
-            converted.insert(tx)?;
+        // Delete old record inside the transaction.
+        if let Some(ref existing) = existing {
+            conary_core::db::models::ConvertedPackage::delete_by_checksum(
+                &tx,
+                &existing.original_checksum,
+            )
+            .map_err(|error| {
+                anyhow::anyhow!("delete existing converted package metadata: {error}")
+            })?;
+        }
 
-            Ok(existing)
-        })
-        .map_err(|e| anyhow::anyhow!("database transaction failed: {e}"))
+        // Insert new record inside the same transaction.
+        let mut converted = conary_core::db::models::ConvertedPackage::new_server(
+            input.distro.clone(),
+            input.package_name.clone(),
+            input.package_version.clone(),
+            "ccs".to_string(),
+            format!("upload:{}:{}", input.distro, input.content_hash),
+            "full".to_string(),
+            std::slice::from_ref(&input.content_hash),
+            input.size,
+            input.content_hash.clone(),
+            input.final_ccs_path,
+        );
+        converted.package_architecture = input.package_architecture;
+        converted
+            .set_scriptlet_metadata(&input.scriptlet_summary)
+            .map_err(|error| anyhow::anyhow!("serialize scriptlet metadata: {error}"))?;
+        converted
+            .insert(&tx)
+            .map_err(|error| anyhow::anyhow!("insert converted package metadata: {error}"))?;
+
+        tx.commit()
+            .map_err(|error| anyhow::anyhow!("commit converted package metadata: {error}"))?;
+
+        Ok(existing)
     })
     .await
     .map_err(|e| anyhow::anyhow!("failed to join blocking db task: {e}"))?
@@ -802,11 +818,19 @@ mod tests {
     }
 
     async fn assert_status(response: axum::response::Response, expected: StatusCode) {
+        assert_status_named("response", response, expected).await;
+    }
+
+    async fn assert_status_named(
+        label: &str,
+        response: axum::response::Response,
+        expected: StatusCode,
+    ) {
         let status = response.status();
         if status != expected {
             let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
             panic!(
-                "unexpected status {status}, expected {expected}; body: {}",
+                "{label}: unexpected status {status}, expected {expected}; body: {}",
                 String::from_utf8_lossy(&body)
             );
         }
@@ -827,7 +851,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_status(response, StatusCode::CREATED).await;
+        assert_status_named("fedora upload", response, StatusCode::CREATED).await;
 
         let conn = conary_core::db::open(&db_path).unwrap();
         let found = conary_core::db::models::ConvertedPackage::find_by_package_identity(
@@ -862,7 +886,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_status(response, StatusCode::CREATED).await;
+        assert_status_named("fedora upload", response, StatusCode::CREATED).await;
 
         let app2 = rebuild_app(&db_path);
         let response = app2
@@ -876,7 +900,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_status(response, StatusCode::CREATED).await;
+        assert_status_named("ubuntu upload", response, StatusCode::CREATED).await;
 
         let conn = conary_core::db::open(&db_path).unwrap();
         assert!(
