@@ -123,7 +123,10 @@ checklist, not a replacement for the subsystem map:
   surface and updates tests/docs. Do not preserve poor names or misleading
   flows only because they already exist.
 - Do not weaken trust defaults, adoption safety, selected-generation safety,
-  scriptlet replay gates, or host mutation safeguards.
+  scriptlet replay gates, or host mutation safeguards casually. A child design
+  may simplify a host-mutation acknowledgement only if it inventories the
+  current protection, proposes an equally explicit replacement UX, and names
+  the regression gates that preserve safety.
 - Do not add compatibility shims for stale or fake surfaces solely to reduce
   refactor effort.
 - Do not split files mechanically without naming the new ownership boundary.
@@ -342,6 +345,9 @@ deletion, defer the deletion until Phase 3 establishes the fixture/test gate.
 - Remove stale test helpers that encode no longer desired behavior.
 - Normalize command names and docs examples when the current surface is
   inconsistent.
+- Simplify repository-level policy metadata, such as license declarations, when
+  the repo has one desired public policy and a child plan inventories every
+  tracked and host-service surface that needs to match it.
 - Decide the fate of leftover ignored or host-local tool harness files, such as
   `.claude/settings.local.json`, without reintroducing tracked tool-specific
   entrypoints or parallel assistant guidance.
@@ -560,6 +566,11 @@ the decomposed code.
 - Refresh affected `docs/modules/*.md` files with stable entry points.
 - Add narrow "change guide" sections only where they reduce repeated
   maintainer explanation.
+- Add feature or capability ownership cards for the actual useful pieces of
+  Conary: what the feature does, which files own it, which neighboring systems
+  it depends on, which changes require broader verification, and where a
+  contributor can work on that feature without being surprised by hidden
+  coupling.
 - Add nested `AGENTS.md` only for subtrees with distinct durable rules, such as
   generated fixture trees or integration-test manifests, if justified.
 - Define how docs should refer to focused test commands without becoming stale.
@@ -608,6 +619,9 @@ clear runner diagnostics, and honest labels for slow QEMU/KVM validation.
   `.github/PULL_REQUEST_TEMPLATE.md`, with assistant-specific routing kept in
   `AGENTS.md` and `docs/llms/README.md`.
 - Optional scripts that print suggested verification gates for a changed path.
+- Feature-focused workflow recipes that let a contributor pick a Conary
+  capability, read the right local packet, and see both the narrow proof and
+  the cross-system proof before editing.
 - Review prompts for external assistants that ask for repo-grounded findings,
   not generic advice.
 - Compile-cache guidance for local development, including how to use sccache
@@ -618,6 +632,9 @@ clear runner diagnostics, and honest labels for slow QEMU/KVM validation.
   checks, and slow QEMU/KVM release evidence.
 - `conary-test` diagnostics improvements when a failing run needs clearer
   next-step output.
+- A live-system mutation UX review that decides whether the current explicit
+  acknowledgement flag should remain, be renamed, or be replaced by a lower
+  friction flow with equivalent safety evidence.
 
 **Explicit non-goals:**
 
@@ -711,8 +728,68 @@ First shippable artifacts by phase:
 - Phase 3: fixture discovery map for one high-value subsystem.
 - Phase 4: one reviewed hotspot child plan and one behavior-preserving slice.
 - Phase 5: rolling map updates audited against the changed subsystem paths.
-- Phase 6: one human/assistant workflow recipe slice.
+- Phase 6: one human/assistant workflow recipe slice, ideally tied to a real
+  feature ownership packet.
 - Phase 7: warn-only drift report with actionable paths and next commands.
+
+## Seeded Follow-Up Child Designs
+
+These ideas are intentionally recorded here so they do not live only in chat
+history. They are not implementation permission on their own; each one needs a
+reviewed child design and implementation plan before code or repo-policy changes
+land.
+
+### Feature Ownership And Interaction Gates
+
+**Fits:** Phase 5 plus Phase 6.
+
+Create a feature-focused map for the actual capabilities people may want to
+work on independently: native package installation, adoption and unadoption,
+generation build/switch/recovery, CCS authoring/install, Remi publication and
+serving, conaryd package jobs, bootstrap/self-hosting, integration-test
+execution, and agent/MCP operation surfaces. Each entry should name:
+
+- The short capability description.
+- The owning files and docs.
+- The nearby systems it interacts with.
+- The focused test or command for a small edit.
+- The broader verification gate required when the edit changes behavior across
+  a boundary.
+- The docs that must change when the feature moves.
+
+The child design should make it easy to work on one cool Conary capability in
+isolation while still making cross-system coupling visible. For example, a Remi
+publication change that affects CCS package availability should point at both
+Remi tests and the relevant CCS/client verification gate.
+
+### MIT-Only License Simplification
+
+**Fits:** Phase 2 plus Phase 6.
+
+Review and simplify the repository license story to MIT-only if the desired
+project policy is a single MIT license. The child design should inventory
+`LICENSE`, `README.md`, `CONTRIBUTING.md`, Cargo package metadata, generated
+release metadata, GitHub repository metadata, and any docs or templates that
+state contribution licensing. The implementation should update tracked files
+and leave any host-service setting changes as explicit operator steps when they
+cannot be represented in git.
+
+### Live-System Mutation Acknowledgement UX
+
+**Fits:** Phase 6, with Phase 2 pruning only after the safety replacement is
+specified.
+
+Review whether the current live-system mutation acknowledgement flow is still
+earning its friction. The child design should inventory commands and tests that
+depend on the flag, define which operations are genuinely dangerous, and
+compare options such as a shorter flag, contextual confirmation, dry-run-first
+guidance, or `--yes` plus operation-specific risk prompts. Any replacement must
+preserve the core safety property: a command that mutates the active host should
+not do so accidentally or silently.
+
+Minimum gates for that child design should include focused CLI diagnostics,
+live-host safety tests, generation/adoption handoff tests when touched, and
+conaryd package-job tests when daemon execution inherits the same policy.
 
 ## Verification Strategy
 
