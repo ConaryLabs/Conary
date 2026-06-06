@@ -362,6 +362,14 @@ tests, docs, and integration manifests, then scopes a risk-tiered replacement
 that reduces daily CLI friction without weakening active-host, generation,
 recovery, or daemon safety gates.
 
+The live-system mutation UX implementation plan now turns that reviewed design
+into a task-by-task behavior packet. It keeps the old global flag parseable as
+a hidden compatibility alias, removes the live-system gate from DB/CAS-only
+adoption paths, adds command-scoped apply intent for active-host and
+always-live flows, preserves conaryd request compatibility, expands manifest
+validation coverage, and inventories the active source, script, site, docs,
+manpage, and test surfaces that must migrate together.
+
 ## Verification Commands
 
 - `bash scripts/docs-audit-inventory.sh`
@@ -436,9 +444,9 @@ public tester copy is tracked by
 
 ## Final Counts
 
-- Total tracked doc-like files audited: 150
+- Total tracked doc-like files audited: 151
 - `verified-no-change`: 13
-- `corrected`: 50
+- `corrected`: 51
 - `archived`: 73
 - `retained-historical`: 14
 - Remaining pending rows: 0
