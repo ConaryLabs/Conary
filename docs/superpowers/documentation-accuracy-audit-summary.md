@@ -343,6 +343,12 @@ feature ownership map. `docs/llms/README.md`, `docs/llms/subsystem-map.md`,
 start-here files, focused proof commands, and broader interaction gates without
 turning any one entrypoint into a duplicate manual.
 
+The Phase 7 enforcement and drift-control plan now opens the final
+maintainability-roadmap lane. It scopes the first slice to a warn-only local
+drift report that maps changed paths to feature ownership hints, focused proof
+commands, docs-audit health, and current Rust hotspot context without adding a
+hard CI gate or line-count threshold.
+
 ## Verification Commands
 
 - `bash scripts/docs-audit-inventory.sh`
@@ -417,9 +423,9 @@ public tester copy is tracked by
 
 ## Final Counts
 
-- Total tracked doc-like files audited: 148
+- Total tracked doc-like files audited: 149
 - `verified-no-change`: 13
-- `corrected`: 48
+- `corrected`: 49
 - `archived`: 73
 - `retained-historical`: 14
 - Remaining pending rows: 0
