@@ -10,7 +10,7 @@ A cross-distribution Linux system manager with immutable generations, atomic tra
 
 Inspired by the [original Conary](https://en.wikipedia.org/wiki/Conary_(package_manager)) from rPath, which pioneered concepts like troves, changesets, flavors, and components that were ahead of their time. This project carries those ideas forward with a modern implementation.
 
-**Release status:** Conary is being prepared as an adoption-led limited public preview for Fedora 44, Ubuntu 26.04 LTS, and Arch Linux. The package-manager preview surface is the CLI install/remove/update path, native-package adoption/unadoption, selected-generation native-authority handoff, Remi conversion, and local validation for those flows. Immutable generations and raw/qcow2 generation export remain core capabilities, and the refreshed 2026-05-21 Group O QEMU run passed installed-runtime and bootstrap-run generation export boot proof. The codebase now also has x86_64 UEFI ISO generation-carrier export with output provenance sidecars, and the focused 2026-05-21 Group P QEMU run passed ISO export, host copy-back, provenance, readonly-carrier boot, and writable `/etc` overlay proof. The public ask is still intentionally package-manager focused: in adoption mode, dnf, apt, and pacman remain authoritative for packages they already own; `conary --allow-live-system-mutation system unadopt --all` is the non-destructive escape hatch on hosts without a selected Conary generation, and `conary --allow-live-system-mutation system native-handoff --yes` is the staged handoff path after a Conary generation has been selected. Conary-owned updates work without requiring a selected generation, adopted packages are skipped unless takeover is explicit, and `update --security` refuses before mutation when a requested Conary-owned source cannot prove advisory metadata support. Repositories marked `--security-advisories supported` can now drive security-only updates from trusted JSON advisory metadata with persisted advisory ID, CVE, severity, fixed-version, and source-trust data. Takeover remains explicit, native transaction-history import remains out of scope, and non-x86_64 generation boot assets remain reserved.
+**Release status:** Conary is being prepared as an adoption-led limited public preview for Fedora 44, Ubuntu 26.04 LTS, and Arch Linux. The package-manager preview surface is the CLI install/remove/update path, native-package adoption/unadoption, selected-generation native-authority handoff, Remi conversion, and local validation for those flows. Immutable generations and raw/qcow2 generation export remain core capabilities, and the refreshed 2026-05-21 Group O QEMU run passed installed-runtime and bootstrap-run generation export boot proof. The codebase now also has x86_64 UEFI ISO generation-carrier export with output provenance sidecars, and the focused 2026-05-21 Group P QEMU run passed ISO export, host copy-back, provenance, readonly-carrier boot, and writable `/etc` overlay proof. The public ask is still intentionally package-manager focused: in adoption mode, dnf, apt, and pacman remain authoritative for packages they already own; `conary system unadopt --all --yes` is the non-destructive escape hatch on hosts without a selected Conary generation, and `conary system native-handoff --yes` is the staged handoff path after a Conary generation has been selected. Conary-owned updates work without requiring a selected generation, adopted packages are skipped unless takeover is explicit, and `update --security` refuses before mutation when a requested Conary-owned source cannot prove advisory metadata support. Repositories marked `--security-advisories supported` can now drive security-only updates from trusted JSON advisory metadata with persisted advisory ID, CVE, severity, fixed-version, and source-trust data. Takeover remains explicit, native transaction-history import remains out of scope, and non-x86_64 generation boot assets remain reserved.
 
 Release artifact and provenance expectations for the limited preview are tracked in [docs/operations/release-artifact-matrix.md](docs/operations/release-artifact-matrix.md).
 
@@ -21,33 +21,33 @@ Release artifact and provenance expectations for the limited preview are tracked
 **Immutable system generations.** Build read-only EROFS images of your entire system and mount them via composefs. Select complete system states for the next boot or export them as bootable raw/qcow2 artifacts or x86_64 UEFI ISO generation carriers. Exportable runtime generations are self-contained CAS-backed snapshots -- rollback means switching a generation, not undoing thousands of file operations.
 
 ```bash
-conary --allow-live-system-mutation system generation build --summary "After nginx setup"
+conary system generation build --summary "After nginx setup" --yes
 conary system generation list
-conary --allow-live-system-mutation system generation switch 2
-conary --allow-live-system-mutation system generation rollback
+conary system generation switch 2 --yes
+conary system generation rollback --yes
 ```
 
 **Atomic package state and generation selection.** Install, remove, and update operations commit package DB/file state as changesets, and generation rollback switches complete system states. Legacy RPM/DEB/Arch post-scriptlets can still fail after package files are installed or removed only when protected setup succeeded and the script process itself exited nonzero; Conary records those cases as `scriptlet_warning` metadata and marks them in history rather than treating scriptlet side effects as part of the same rollback boundary.
 
 ```bash
-conary --allow-live-system-mutation install nginx postgresql redis
+conary install nginx postgresql redis --yes
 conary system state list
-conary --allow-live-system-mutation system state revert 5
+conary system state revert 5 --yes
 ```
 
 **Format-agnostic.** RPM, DEB, Arch packages, and Conary's native CCS format are all first-class. One tool handles them all.
 
 ```bash
-conary --allow-live-system-mutation install ./package.rpm
-conary --allow-live-system-mutation install ./package.deb
-conary --allow-live-system-mutation install ./package.pkg.tar.zst
+conary install ./package.rpm --yes
+conary install ./package.deb --yes
+conary install ./package.pkg.tar.zst --yes
 ```
 
 **Declarative state.** Define your system in TOML and let Conary compute the diff. Drift detection, state snapshots, and full rollback come built in.
 
 ```bash
 conary model diff     # What needs to change?
-conary --allow-live-system-mutation model apply    # Make it so
+conary model apply --yes # Make it so
 conary model check    # Drift detection (CI/CD friendly, uses exit codes)
 ```
 
@@ -56,7 +56,7 @@ conary model check    # Drift detection (CI/CD friendly, uses exit codes)
 ```bash
 conary repo add remi https://remi.conary.io
 conary repo sync
-conary --allow-live-system-mutation install nginx
+conary install nginx --yes
 ```
 
 **Current focus: limited public preview readiness.** The core install, rollback, generation, bootstrap, and server paths are in place. The preview path is now adopt-first: users can let Conary observe existing RPM/DEB/Arch packages while the native package manager remains the authority, optionally CAS-back them with full adoption, then unadopt without deleting package files if they decide not to continue. Remote Forge validation is paused pending a new KVM-capable runner; QEMU release evidence should come from `scripts/local-qemu-validation.sh` on a local machine with `/dev/kvm`.
@@ -130,16 +130,18 @@ than advertised as ordinary ready-to-install packages.
 When you are ready to test the reversible adoption apply path on that host:
 
 ```bash
-./target/debug/conary --allow-live-system-mutation system adopt --system
+./target/debug/conary system adopt --system
 ./target/debug/conary system adopt --status
 ./target/debug/conary system unadopt --all --dry-run
-./target/debug/conary --allow-live-system-mutation system unadopt --all
+./target/debug/conary system unadopt --all --yes
 ```
 
-`--allow-live-system-mutation` is intentionally long: it marks the exact point
-where the preview moves from inspection into changing the active host. Before
-selecting a Conary generation, `conary --allow-live-system-mutation system
-unadopt --all` removes Conary tracking without deleting native package files.
+Commands that change packages, files, generation state, or selected native
+authority use command-local apply intent. Preview with `--dry-run` when
+available, then rerun the specific apply command with `--yes` once you are
+ready to change the active host. Before selecting a Conary generation,
+`conary system unadopt --all --yes` removes Conary tracking without deleting
+native package files.
 
 ### Developer Build
 
@@ -157,12 +159,12 @@ cargo build -p conary
 ./target/debug/conary repo sync
 ```
 
-Commands that mutate the active host require the explicit `--allow-live-system-mutation` acknowledgement; dry-run commands remain the safest first pass.
+Commands that mutate packages, files, generation state, or selected native authority require command-local apply intent with `--yes`; dry-run commands remain the safest first pass.
 
 ```bash
 # Install a package
 ./target/debug/conary install nginx --dry-run   # Preview changes
-./target/debug/conary --allow-live-system-mutation install nginx             # Apply atomically
+./target/debug/conary install nginx --yes       # Apply atomically
 
 # Query your system
 ./target/debug/conary list                      # All installed packages
@@ -176,23 +178,23 @@ Commands that mutate the active host require the explicit `--allow-live-system-m
 
 # Adopt packages already on the system; dnf/apt/pacman remain authoritative
 ./target/debug/conary system adopt --system --dry-run
-./target/debug/conary --allow-live-system-mutation system adopt --system # Track native packages
+./target/debug/conary system adopt --system # Track native packages
 
 # Optional escape hatch before a Conary generation is selected
 # ./target/debug/conary system unadopt --all --dry-run
-# ./target/debug/conary --allow-live-system-mutation system unadopt --all
+# ./target/debug/conary system unadopt --all --yes
 
 # Update only Conary-owned packages by default; adopted packages stay native-PM owned
 ./target/debug/conary update --dry-run
-./target/debug/conary --allow-live-system-mutation update nginx --yes
+./target/debug/conary update nginx --yes
 
 # Security-only updates are fail-closed unless the requested source publishes advisories
-./target/debug/conary --allow-live-system-mutation update --security --dry-run
+./target/debug/conary update --security --dry-run
 
 # Build a generation from current system state
-./target/debug/conary --allow-live-system-mutation system generation build --summary "Initial setup"
+./target/debug/conary system generation build --summary "Initial setup" --yes
 ./target/debug/conary system generation list
-./target/debug/conary --allow-live-system-mutation system generation switch 1
+./target/debug/conary system generation switch 1 --yes
 ```
 
 ---
@@ -206,11 +208,11 @@ Build immutable EROFS images of your entire system and mount them via composefs.
 Requires Linux 6.2+ with composefs support.
 
 ```bash
-conary --allow-live-system-mutation system generation build --summary "Post-update"
+conary system generation build --summary "Post-update" --yes
 conary system generation list        # Show all generations
-conary --allow-live-system-mutation system generation switch 3    # Select generation 3 for next boot
-conary --allow-live-system-mutation system generation rollback    # Select previous generation for next boot
-conary --allow-live-system-mutation system generation gc --keep 3 # Keep only the 3 most recent
+conary system generation switch 3 --yes    # Select generation 3 for next boot
+conary system generation rollback --yes    # Select previous generation for next boot
+conary system generation gc --keep 3 --yes # Keep only the 3 most recent
 conary system generation info 2      # Detailed info about generation 2
 conary system generation export --path /conary/generations/3 --format qcow2 --output gen3.qcow2
 conary system generation export --path /conary/generations/3 --format iso --output gen3.iso
@@ -219,12 +221,12 @@ conary system generation export --path /conary/generations/3 --format iso --outp
 When a package mutation commits but generation publication fails, Conary exits
 successfully for the package transaction and records pending publication debt.
 Run `conary system generation pending` to inspect it and
-`conary --allow-live-system-mutation system generation publish` to retry
+`conary system generation publish --yes` to retry
 publication of the current DB state.
 
 ### Adoption And Explicit Takeover
 
-Adopt an existing Linux installation without giving up native package-manager authority. The fastest preview path today is metadata-only system adoption, `conary --allow-live-system-mutation system adopt --system`, which records native packages in Conary while dnf, apt, or pacman remains authoritative for those packages. Use `--full` when you want CAS backing for adopted package files and have budgeted the extra first-run time and disk growth. `conary --allow-live-system-mutation system unadopt --all` removes Conary tracking without deleting native package files on hosts without a selected Conary generation. If a Conary generation is already selected, use the staged native-authority handoff flow: run `conary system native-handoff --dry-run`, then `conary --allow-live-system-mutation system native-handoff --yes`; if the operation is interrupted after its record is written, rerun `conary --allow-live-system-mutation system native-handoff --recover --yes`.
+Adopt an existing Linux installation without giving up native package-manager authority. The fastest preview path today is metadata-only system adoption, `conary system adopt --system`, which records native packages in Conary while dnf, apt, or pacman remains authoritative for those packages. Use `--full` when you want CAS backing for adopted package files and have budgeted the extra first-run time and disk growth. `conary system unadopt --all --yes` removes Conary tracking without deleting native package files on hosts without a selected Conary generation. If a Conary generation is already selected, use the staged native-authority handoff flow: run `conary system native-handoff --dry-run`, then `conary system native-handoff --yes`; if the operation is interrupted after its record is written, rerun `conary system native-handoff --recover --yes`.
 
 Updates follow the same authority boundary. Conary-owned packages can be installed, removed, and updated on a normal mutable host without first selecting a Conary generation. Adopted packages are not silently replaced by Conary during `update`; Conary reports that the native package manager remains authoritative unless you explicitly choose `--dep-mode takeover`. Critical adopted packages remain blocked even under takeover.
 
@@ -234,16 +236,16 @@ Takeover is a separate, explicit step. The `system takeover` release path builds
 
 ```bash
 # Risk-free adoption lane
-conary --allow-live-system-mutation system adopt --system --full  # Bulk adoption with CAS backing
+conary system adopt --system --full  # Bulk adoption with CAS backing
 conary system unadopt --all --dry-run
 conary system native-handoff --dry-run
-conary --allow-live-system-mutation system unadopt --all
-conary --allow-live-system-mutation system native-handoff --yes
+conary system unadopt --all --yes
+conary system native-handoff --yes
 
 # Explicit takeover lane
 conary system takeover --dry-run     # Preview the takeover plan
-conary --allow-live-system-mutation system takeover --up-to generation --yes
-conary --allow-live-system-mutation system generation switch 1    # Select the prepared generation for next boot
+conary system takeover --up-to generation --yes
+conary system generation switch 1 --yes    # Select the prepared generation for next boot
 ```
 
 ### Atomic Transactions
@@ -251,10 +253,10 @@ conary --allow-live-system-mutation system generation switch 1    # Select the p
 Every operation produces a changeset. It applies completely or not at all. The full history is retained for rollback.
 
 ```bash
-conary --allow-live-system-mutation install nginx postgresql redis
+conary install nginx postgresql redis --yes
 conary system state list          # See all system snapshots
 conary system state diff 5 8      # Compare two snapshots
-conary --allow-live-system-mutation system state revert 5      # Revert to snapshot 5
+conary system state revert 5 --yes      # Revert to snapshot 5
 ```
 
 ### Multi-Format Support
@@ -262,9 +264,9 @@ conary --allow-live-system-mutation system state revert 5      # Revert to snaps
 Install supported RPM, DEB, and Arch package files. Conary parses metadata, dependencies, and scriptlets from those formats.
 
 ```bash
-conary --allow-live-system-mutation install ./package.rpm
-conary --allow-live-system-mutation install ./package.deb
-conary --allow-live-system-mutation install ./package.pkg.tar.zst
+conary install ./package.rpm --yes
+conary install ./package.deb --yes
+conary install ./package.pkg.tar.zst --yes
 ```
 
 ### Declarative System Model
@@ -292,7 +294,7 @@ strength = "guarded"
 
 ```bash
 conary model diff     # What needs to change?
-conary --allow-live-system-mutation model apply    # Make it so
+conary model apply --yes # Make it so
 conary model check    # Drift detection (CI/CD friendly, uses exit codes)
 conary distro info
 conary distro selection-mode latest
@@ -304,7 +306,7 @@ Files are stored by SHA-256 hash with automatic deduplication. Content-defined c
 
 ```bash
 conary system verify nginx      # Integrity check against CAS
-conary --allow-live-system-mutation system restore nginx     # Restore files from CAS
+conary system restore nginx --yes # Restore files from CAS
 conary system gc                # Garbage collect unreferenced objects
 ```
 
@@ -329,8 +331,8 @@ conary autoremove --dry-run         # Preview orphan cleanup
 Packages are automatically split into components: `:runtime`, `:lib`, `:devel`, `:doc`, `:config`, `:debuginfo`. Install only what you need.
 
 ```bash
-conary --allow-live-system-mutation install nginx:runtime      # Binaries only
-conary --allow-live-system-mutation install openssl:devel      # Headers and libs for building
+conary install nginx:runtime --yes # Binaries only
+conary install openssl:devel --yes # Headers and libs for building
 ```
 
 ### Bootstrap System
@@ -375,8 +377,8 @@ Conary's native format uses content-addressable chunked storage, CBOR manifests 
 
 ```bash
 conary ccs build .                   # Build from ccs.toml
-conary --allow-live-system-mutation ccs install package.ccs       # Install a CCS package
-conary --allow-live-system-mutation ccs install package.ccs --reinstall    # Reinstall same version
+conary ccs install package.ccs --yes # Install a CCS package
+conary ccs install package.ccs --reinstall --yes # Reinstall same version
 conary ccs sign package.ccs          # Ed25519 signatures
 conary ccs verify package.ccs        # Verify integrity
 conary ccs export package.ccs --output ./package.oci  # Export to container image
@@ -416,7 +418,7 @@ Group packages into named sets for bulk operations.
 
 ```bash
 conary collection create web-stack --members nginx,postgresql,redis
-conary --allow-live-system-mutation install @web-stack
+conary install @web-stack --yes
 conary collection show web-stack
 conary collection add web-stack haproxy
 ```
@@ -442,8 +444,8 @@ conary query label delegate local@devel:main fedora@f44:stable
 Package install scripts run in namespace isolation with resource limits by default. Protected live-root mode preflights namespace/enforcement setup before mutation and records both requested and effective sandbox mode for any warning-only post-scriptlet degradation.
 
 ```bash
-conary --allow-live-system-mutation install pkg --sandbox=always   # Force sandboxing
-conary --allow-live-system-mutation install pkg --sandbox=never    # Trust the scripts
+conary install pkg --sandbox=always --yes # Force sandboxing
+conary install pkg --sandbox=never --yes # Trust the scripts
 ```
 
 </details>
@@ -470,8 +472,8 @@ CCS packages declaring capabilities are evaluated against a three-tier policy:
 | **Denied** | Always rejected | `cap-sys-admin`, `cap-sys-rawio` |
 
 ```bash
-conary --allow-live-system-mutation ccs install package.ccs --allow-capabilities    # Approve prompted caps
-conary --allow-live-system-mutation ccs install package.ccs --capability-policy /path/to/policy.toml
+conary ccs install package.ccs --allow-capabilities --yes # Approve prompted caps
+conary ccs install package.ccs --capability-policy /path/to/policy.toml --yes
 ```
 
 Scriptlet-scoped host integration declarations use `[[scriptlets.capabilities]]`
@@ -553,7 +555,7 @@ Conary is a system manager structured around a few core concepts:
 
 **Database-first design.** All state lives in SQLite. No config files for runtime state. Every operation is queryable, every state transition is recorded. Conary writes SQLite-native checkpoint backups for first-wave adoption/unadoption paths and stores generation-bound DB backups next to published generation artifacts. Use `conary system db-backup recover --latest --dry-run`, `conary system generation verify-db-backup --current`, and `conary system generation recover-db --generation <n> --dry-run` to verify recovery metadata before applying it.
 
-SQLite-native backups recover Conary manager visibility for packages and generations represented by the backed-up DB. They do not recover missing package payloads, private keys, remote repository history, or native package-manager transaction history. Applying a generation-bound DB backup requires an explicit live-host acknowledgement and confirmation: `conary --allow-live-system-mutation system generation recover-db --generation <n> --yes`.
+SQLite-native backups recover Conary manager visibility for packages and generations represented by the backed-up DB. They do not recover missing package payloads, private keys, remote repository history, or native package-manager transaction history. Applying a generation-bound DB backup requires an explicit live-host acknowledgement and confirmation: `conary system generation recover-db --generation <n> --yes`.
 
 For a detailed architecture overview, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 

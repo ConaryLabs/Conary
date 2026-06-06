@@ -1458,7 +1458,7 @@ mod tests {
         assert!(deferred[0].message.contains("composefs build failed"));
         assert_eq!(
             deferred[0].retry_command.as_deref(),
-            Some("conary --allow-live-system-mutation system generation publish")
+            Some("conary system generation publish --yes")
         );
         let debts =
             conary_core::db::models::GenerationPublication::pending_recoverable(&conn).unwrap();

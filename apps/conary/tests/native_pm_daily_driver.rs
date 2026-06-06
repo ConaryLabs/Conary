@@ -94,7 +94,6 @@ fn autoremove_dry_run_lists_conary_owned_orphans_and_skips_adopted() {
     drop(conn);
 
     let output = run_conary(&[
-        "--allow-live-system-mutation",
         "autoremove",
         "--dry-run",
         "--db-path",
@@ -133,7 +132,6 @@ fn autoremove_apply_removes_owned_orphan_without_deleting_adopted_orphan() {
     drop(conn);
 
     let output = run_conary(&[
-        "--allow-live-system-mutation",
         "autoremove",
         "--db-path",
         db_path.to_str().unwrap(),
@@ -142,6 +140,7 @@ fn autoremove_apply_removes_owned_orphan_without_deleting_adopted_orphan() {
         "--no-scripts",
         "--sandbox",
         "never",
+        "--yes",
     ]);
     assert!(output.status.success(), "{}", output_text(&output));
     assert!(
@@ -184,7 +183,6 @@ fn autoremove_reports_each_failed_orphan_once_across_replans() {
     drop(conn);
 
     let output = run_conary(&[
-        "--allow-live-system-mutation",
         "autoremove",
         "--db-path",
         db_path.to_str().unwrap(),
@@ -193,6 +191,7 @@ fn autoremove_reports_each_failed_orphan_once_across_replans() {
         "--no-scripts",
         "--sandbox",
         "never",
+        "--yes",
     ]);
     assert!(!output.status.success(), "{}", output_text(&output));
     assert!(
@@ -267,7 +266,6 @@ fn pin_blocks_remove_and_unpin_allows_remove() {
     assert!(pin.status.success(), "{}", output_text(&pin));
 
     let blocked = run_conary(&[
-        "--allow-live-system-mutation",
         "remove",
         "pin-remove-demo",
         "--db-path",
@@ -277,6 +275,7 @@ fn pin_blocks_remove_and_unpin_allows_remove() {
         "--no-scripts",
         "--sandbox",
         "never",
+        "--yes",
     ]);
     assert!(!blocked.status.success(), "{}", output_text(&blocked));
     assert!(output_text(&blocked).contains("is pinned"));
@@ -290,7 +289,6 @@ fn pin_blocks_remove_and_unpin_allows_remove() {
     assert!(unpin.status.success(), "{}", output_text(&unpin));
 
     let removed = run_conary(&[
-        "--allow-live-system-mutation",
         "remove",
         "pin-remove-demo",
         "--db-path",
@@ -300,6 +298,7 @@ fn pin_blocks_remove_and_unpin_allows_remove() {
         "--no-scripts",
         "--sandbox",
         "never",
+        "--yes",
     ]);
     assert!(removed.status.success(), "{}", output_text(&removed));
 }

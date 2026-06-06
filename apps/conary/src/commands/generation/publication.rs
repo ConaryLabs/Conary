@@ -26,8 +26,7 @@ pub(crate) struct PublicationOutcome {
     pub completed_debts: usize,
 }
 
-pub(crate) const DEFAULT_PUBLICATION_RETRY_COMMAND: &str =
-    "conary --allow-live-system-mutation system generation publish";
+pub(crate) const DEFAULT_PUBLICATION_RETRY_COMMAND: &str = "conary system generation publish --yes";
 
 impl PublicationOutcome {
     pub(crate) fn default_retry_command() -> String {
@@ -168,7 +167,7 @@ mod tests {
     fn retry_command_uses_parameterless_publish() {
         assert_eq!(
             PublicationOutcome::default_retry_command(),
-            "conary --allow-live-system-mutation system generation publish"
+            "conary system generation publish --yes"
         );
     }
 

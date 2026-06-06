@@ -546,7 +546,6 @@ fn test_ccs_install_components_only_installs_requested_component() {
 
     let output = Command::new(env!("CARGO_BIN_EXE_conary"))
         .env("CONARY_TEST_SKIP_GENERATION_MOUNT", "1")
-        .arg("--allow-live-system-mutation")
         .arg("ccs")
         .arg("install")
         .arg(package_path.to_str().unwrap())
@@ -559,6 +558,7 @@ fn test_ccs_install_components_only_installs_requested_component() {
         .arg(&db_path)
         .arg("--root")
         .arg(install_root.to_str().unwrap())
+        .arg("--yes")
         .output()
         .unwrap();
 

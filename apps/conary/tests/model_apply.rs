@@ -32,9 +32,9 @@ fn model_apply_executes_remove_actions() {
     .unwrap();
 
     let output = run_conary(&[
-        "--allow-live-system-mutation",
         "model",
         "apply",
+        "--yes",
         "--model",
         model_path.to_str().unwrap(),
         "--db-path",
@@ -64,9 +64,9 @@ fn model_apply_returns_err_when_every_operation_fails() {
     .unwrap();
 
     let output = run_conary(&[
-        "--allow-live-system-mutation",
         "model",
         "apply",
+        "--yes",
         "--model",
         model_path.to_str().unwrap(),
         "--db-path",

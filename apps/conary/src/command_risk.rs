@@ -84,7 +84,7 @@ fn require_sync_hook_context(policy: &CommandRiskPolicy) -> Result<()> {
     {
         if !nix::unistd::Uid::effective().is_root() {
             anyhow::bail!(
-                "command '{}' is reserved for installed native package-manager sync hooks; run `conary --allow-live-system-mutation system adopt --refresh` for an interactive refresh",
+                "command '{}' is reserved for installed native package-manager sync hooks; run `conary system adopt --refresh` for an interactive refresh",
                 policy.command_label
             );
         }

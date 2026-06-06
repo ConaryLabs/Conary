@@ -12,7 +12,7 @@ For limited-preview artifact, checksum, signature, SBOM, provenance, and source-
 ### 1. Adopt Without Regret
 
 - Keep dnf, apt, and pacman authoritative for packages in adoption mode
-- Keep `conary --allow-live-system-mutation system unadopt --all` as the one-command, non-destructive escape hatch for adopted packages on hosts without a selected Conary generation
+- Keep `conary system unadopt --all --yes` as the one-command, non-destructive escape hatch for adopted packages on hosts without a selected Conary generation
 - Write SQLite rollback and post-success checkpoint backups around
   adoption/unadoption and other first-wave live DB mutations, with
   non-generation recovery commands so the escape hatch remains recoverable even
@@ -70,7 +70,7 @@ For limited-preview artifact, checksum, signature, SBOM, provenance, and source-
 ### Preview Caveats
 
 - The limited preview should be adoption-led and risk-free to try, not takeover-led. Native package managers remain the authority for adopted RPM, DEB, and Arch packages until the user explicitly chooses takeover.
-- `conary --allow-live-system-mutation system unadopt --all` is the one-command escape hatch only when no Conary generation is selected; after a generation is selected, use `conary system native-handoff --dry-run` and then `conary --allow-live-system-mutation system native-handoff --yes`. `--recover --yes` resumes an interrupted handoff record.
+- `conary system unadopt --all --yes` is the one-command escape hatch only when no Conary generation is selected; after a generation is selected, use `conary system native-handoff --dry-run` and then `conary system native-handoff --yes`. `--recover --yes` resumes an interrupted handoff record.
 - conaryd has queue/SSE/read-route plumbing plus install/remove/update and enhance-job execution. Package mutation jobs still require the same explicit live-host mutation acknowledgement as the CLI.
 - Generation export has x86_64 raw/qcow2/ISO support. The 2026-05-21 Group O QEMU run passed installed-runtime and bootstrap-run raw/qcow2 boot proof. The focused 2026-05-21 Group P QEMU run passed ISO export, provenance sidecar, copy-back, readonly-carrier boot, and writable `/etc` overlay proof. Keep generation export as supporting evidence for the preview rather than the headline ask. aarch64/riscv64 boot assets remain reserved follow-up work.
 - The former `tough`/Sigstore trust-root dependency path has been removed from `Cargo.lock`; the remaining `rsa` RustSec advisory is covered by the dated limited-preview waiver until a compatible fixed dependency path exists.

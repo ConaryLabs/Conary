@@ -263,7 +263,7 @@ consumers.
 ## Data Flow: Package Installation
 
 This is the primary operation. The flow from
-`conary install nginx --allow-live-system-mutation`:
+`conary install nginx --yes`:
 
 ```
 1. RESOLVE
@@ -338,7 +338,7 @@ generations using EROFS images and Linux composefs.
 ```
 Current System State
        |
-  conary system generation build --allow-live-system-mutation
+  conary system generation build --yes
        |
   +----+----+
   | Snapshot |-- Capture all installed troves from SQLite

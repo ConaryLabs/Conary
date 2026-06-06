@@ -170,8 +170,8 @@ signatures, evaluates capability policy, stores content in CAS, reuses the
 shared composefs generation transaction, and runs declarative hooks.
 
 ```bash
-conary ccs install package.ccs --allow-live-system-mutation               # Standard install
-conary ccs install package.ccs --allow-live-system-mutation --reinstall   # Reinstall same version (replaces files in CAS)
+conary ccs install package.ccs --yes         # Standard install
+conary ccs install package.ccs --reinstall --yes # Reinstall same version (replaces files in CAS)
 conary ccs install package.ccs --dry-run     # Preview without applying
 ```
 
@@ -185,7 +185,7 @@ in Phase 4:
 ```bash
 conary ccs shell package-name          # Interactive environment with package contents
 conary ccs run package-name -- cmd     # One-shot execution under that environment
-conary ccs install package.ccs --allow-live-system-mutation --components runtime,config
+conary ccs install package.ccs --components runtime,config --yes
 ```
 
 Selective component installs persist only the requested components and skip

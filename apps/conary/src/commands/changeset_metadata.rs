@@ -38,9 +38,7 @@ pub(crate) fn publication_deferred_follow_up(message: String) -> DeferredFollowU
         kind: "generation_publication".to_string(),
         status: "pending".to_string(),
         message,
-        retry_command: Some(
-            "conary --allow-live-system-mutation system generation publish".to_string(),
-        ),
+        retry_command: Some("conary system generation publish --yes".to_string()),
     }
 }
 
@@ -505,7 +503,7 @@ mod tests {
             status: "failed".to_string(),
             message: "root is not self-contained".to_string(),
             retry_command: Some(
-                "conary --allow-live-system-mutation system generation build --summary \"Retry deferred package follow-up\""
+                "conary system generation build --summary \"Retry deferred package follow-up\" --yes"
                     .to_string(),
             ),
         };
@@ -528,7 +526,7 @@ mod tests {
         assert_eq!(follow_up.status, "pending");
         assert_eq!(
             follow_up.retry_command.as_deref(),
-            Some("conary --allow-live-system-mutation system generation publish")
+            Some("conary system generation publish --yes")
         );
     }
 

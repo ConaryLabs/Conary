@@ -112,9 +112,7 @@ pub async fn cmd_adopt_refresh(
 
     if adopted.is_empty() {
         if !quiet {
-            println!(
-                "No adopted packages found. Run 'conary --allow-live-system-mutation system adopt --system' first."
-            );
+            println!("No adopted packages found. Run 'conary system adopt --system' first.");
         }
         return Ok(());
     }

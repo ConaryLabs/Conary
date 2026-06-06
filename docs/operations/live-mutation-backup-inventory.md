@@ -33,11 +33,11 @@ These paths write pre-mutation and post-success SQLite checkpoint backups via
 | `conary system db-backup list` | `ReadOnly` | Lists checkpoint manifests without opening or migrating the live DB. |
 | `conary system db-backup verify --latest` | `ReadOnly` | Verifies the latest checkpoint by checksum, SQLite `integrity_check`, and Conary schema version. |
 | `conary system db-backup recover --latest --dry-run` | `ReadOnly` | Verifies the selected checkpoint without requiring a healthy live DB. |
-| `conary --allow-live-system-mutation system db-backup recover --latest --yes` | `ActiveHostMutation` | Restores a missing/corrupt live DB from the latest verified checkpoint and quarantines existing DB/WAL/SHM sidecars. |
-| `conary system generation publish` | `AlwaysLive` | Writes `/conary/generations/<n>/state/conary.db.backup`, checksum, and manifest after `/conary/current` is selected and before publication debt is marked complete. |
+| `conary system db-backup recover --latest --yes` | `ActiveHostMutation` | Restores a missing/corrupt live DB from the latest verified checkpoint and quarantines existing DB/WAL/SHM sidecars. |
+| `conary system generation publish --yes` | `AlwaysLive` | Writes `/conary/generations/<n>/state/conary.db.backup`, checksum, and manifest after `/conary/current` is selected and before publication debt is marked complete. |
 | `conary system generation verify-db-backup --current` | `ReadOnly` | Verifies the selected generation's artifact, manifest, checksum, SQLite integrity, schema version, and publication state without requiring a healthy live DB. |
 | `conary system generation recover-db --generation <n> --dry-run` | `ReadOnly` | Copies and verifies a generation-bound DB backup without touching the live DB. |
-| `conary --allow-live-system-mutation system generation recover-db --generation <n> --yes` | `AlwaysLive` | Restores a missing/corrupt live DB from a verified generation-bound backup after taking the transaction lock and quarantining existing DB/WAL/SHM sidecars. |
+| `conary system generation recover-db --generation <n> --yes` | `AlwaysLive` | Restores a missing/corrupt live DB from a verified generation-bound backup after taking the transaction lock and quarantining existing DB/WAL/SHM sidecars. |
 
 ## Excluded From First-Wave Public Docs
 
