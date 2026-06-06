@@ -108,7 +108,7 @@ A changeset records:
 #### How Changesets Work
 
 ```
-1. User runs: conary install nginx --allow-live-system-mutation
+1. User runs: conary install nginx --yes
 2. Conary creates a changeset (status: pending)
 3. Package content is verified and stored in CAS
 4. The database transaction records the package/file ownership state
@@ -130,7 +130,7 @@ Because every changeset records what it changed, any changeset can be reversed:
 
 ```bash
 conary system state list         # Show all state snapshots
-conary system state rollback 5 --allow-live-system-mutation  # Reverse all changes since state 5
+conary system state rollback 5 --yes # Reverse all changes since state 5
 ```
 
 Rollback creates a *new* changeset that undoes the effects of previous ones. This means rollbacks themselves can be rolled back -- there is no destructive operation.
@@ -149,12 +149,12 @@ A **component** is a functional subdivision of a package. When Conary installs a
 | `:debuginfo` | Debug symbols (`.debug` files, build-id indexed) | No |
 | `:test` | Test suites and test data | No |
 
-**Default components** (`:runtime`, `:lib`, `:config`) are installed when you run `conary install nginx --allow-live-system-mutation`. Non-default components must be explicitly requested.
+**Default components** (`:runtime`, `:lib`, `:config`) are installed when you run `conary install nginx --yes`. Non-default components must be explicitly requested.
 
 ```bash
-conary install nginx --allow-live-system-mutation              # Installs :runtime, :lib, :config
-conary install nginx:devel --allow-live-system-mutation        # Just the development headers
-conary install nginx:all --allow-live-system-mutation          # Everything
+conary install nginx --yes        # Installs :runtime, :lib, :config
+conary install nginx:devel --yes  # Just the development headers
+conary install nginx:all --yes    # Everything
 ```
 
 Components are addressable troves in their own right. They have their own dependency relationships -- for example, `openssl:devel` depends on `openssl:lib` but not on `openssl:runtime`.
@@ -336,7 +336,7 @@ A **system state** is a snapshot of every package installed on the system at a p
 conary system state list          # Show all snapshots
 conary system state show 12       # Details of state 12
 conary system state diff 5 8      # What changed between states 5 and 8
-conary system state rollback 5 --allow-live-system-mutation   # Return to state 5
+conary system state rollback 5 --yes # Return to state 5
 ```
 
 Each state records:
@@ -402,7 +402,7 @@ A **collection** (called a "group" in original Conary) is a named set of package
 
 ```bash
 conary collection create web-stack --members nginx,postgresql,redis
-conary install @web-stack --allow-live-system-mutation          # Install all members
+conary install @web-stack --yes    # Install all members
 conary collection show web-stack   # List members
 ```
 
@@ -442,18 +442,18 @@ The `install` command accepts three types of targets:
 
 | Target Type | Example | Description |
 |-------------|---------|-------------|
-| Package name | `conary install nginx --allow-live-system-mutation` | Resolved from configured repositories |
-| File path | `conary install ./nginx-1.24.0.rpm --allow-live-system-mutation` | Local RPM, DEB, Arch, or CCS file |
-| Collection | `conary install @web-stack --allow-live-system-mutation` | All members of a collection |
+| Package name | `conary install nginx --yes` | Resolved from configured repositories |
+| File path | `conary install ./nginx-1.24.0.rpm --yes` | Local RPM, DEB, Arch, or CCS file |
+| Collection | `conary install @web-stack --yes` | All members of a collection |
 
 #### Basic Installation
 
 ```bash
-conary install nginx --allow-live-system-mutation                     # From repository
-conary install nginx --version 1.24.0 --allow-live-system-mutation    # Specific version
-conary install nginx --repo fedora-44 --allow-live-system-mutation    # From specific repository
-conary install ./package.rpm --allow-live-system-mutation             # Local file
-conary install @web-stack --allow-live-system-mutation                # Collection
+conary install nginx --yes               # From repository
+conary install nginx --version 1.24.0 --yes # Specific version
+conary install nginx --repo fedora-44 --yes # From specific repository
+conary install ./package.rpm --yes       # Local file
+conary install @web-stack --yes          # Collection
 ```
 
 #### Component Installation
@@ -461,9 +461,9 @@ conary install @web-stack --allow-live-system-mutation                # Collecti
 Components follow the `package:component` syntax from Chapter 1:
 
 ```bash
-conary install nginx --allow-live-system-mutation              # Default components (:runtime, :lib, :config)
-conary install nginx:devel --allow-live-system-mutation        # Just development headers
-conary install nginx:all --allow-live-system-mutation          # Everything including docs and debuginfo
+conary install nginx --yes        # Default components (:runtime, :lib, :config)
+conary install nginx:devel --yes  # Just development headers
+conary install nginx:all --yes    # Everything including docs and debuginfo
 ```
 
 #### Installation Flags
@@ -483,7 +483,7 @@ conary install nginx:all --allow-live-system-mutation          # Everything incl
 When installing a legacy package (RPM/DEB/Arch), you can convert it to CCS format in-flight:
 
 ```bash
-conary install nginx --convert-to-ccs --allow-live-system-mutation
+conary install nginx --convert-to-ccs --yes
 ```
 
 This enables CAS deduplication, component selection, and atomic transactions for the installed package. Scriptlets can be captured and converted to declarative hooks during conversion flows; imperative scriptlets that still run at install time use the scriptlet sandbox controls below.
@@ -510,9 +510,9 @@ warning-only.
 ### 2.3 Removing Packages
 
 ```bash
-conary remove nginx --allow-live-system-mutation                      # Remove nginx
-conary remove nginx --version 1.24.0 --allow-live-system-mutation     # Remove specific version
-conary remove nginx --purge-files --allow-live-system-mutation        # Also delete files for adopted packages
+conary remove nginx --yes                # Remove nginx
+conary remove nginx --version 1.24.0 --yes # Remove specific version
+conary remove nginx --purge-files --yes  # Also delete files for adopted packages
 ```
 
 By default, removing a package that was adopted from the system package manager (`adopted-track` or `adopted-full`) only removes Conary's tracking metadata -- the files remain on disk because the system package manager still owns them. Use `--purge-files` to remove those files through a new composefs generation. Purge removal requires an active composefs generation and will fail before touching files if the system has not been initialized into the generation model.
@@ -529,12 +529,12 @@ Removal respects dependencies: if other packages depend on the one being removed
 ### 2.4 Updating Packages
 
 ```bash
-conary update --allow-live-system-mutation                    # Update all packages
+conary update --yes              # Update all packages
 conary update --dry-run                                      # Preview updates and any source switches
-conary update nginx --allow-live-system-mutation              # Update just nginx
-conary update @web-stack --allow-live-system-mutation         # Update all members of a collection
-conary update --security --allow-live-system-mutation         # Only trusted advisory-marked security updates
-conary update nginx --dep-mode takeover --allow-live-system-mutation --yes
+conary update nginx --yes        # Update just nginx
+conary update @web-stack --yes   # Update all members of a collection
+conary update --security --yes   # Only trusted advisory-marked security updates
+conary update nginx --dep-mode takeover --yes
 ```
 
 The update command checks configured repositories for newer versions of installed packages. When no package is specified, all installed packages are checked.
@@ -630,7 +630,7 @@ Pinned packages are skipped during `conary update` and protected from `conary re
 When a package is removed, any packages that were only installed as its dependencies become orphans. The `autoremove` command cleans these up:
 
 ```bash
-conary autoremove --allow-live-system-mutation  # Remove orphaned packages
+conary autoremove --yes # Remove orphaned packages
 conary autoremove --dry-run                     # Preview what would be removed
 ```
 
@@ -643,8 +643,8 @@ Conary can coexist with your system's native package manager (dnf, apt, pacman).
 #### Adopting Individual Packages
 
 ```bash
-conary --allow-live-system-mutation system adopt nginx curl vim  # Adopt specific packages
-conary --allow-live-system-mutation system adopt nginx --full    # Adopt with files copied to CAS
+conary system adopt nginx curl vim  # Adopt specific packages
+conary system adopt nginx --full    # Adopt with files copied to CAS
 ```
 
 The `--full` flag copies all files into Conary's content-addressable store. This is slower but enables rollback and integrity verification for those packages.
@@ -652,11 +652,11 @@ The `--full` flag copies all files into Conary's content-addressable store. This
 #### Adopting the Entire System
 
 ```bash
-conary --allow-live-system-mutation system adopt --system                      # Adopt all packages
-conary --allow-live-system-mutation system adopt --system --full               # Full adoption (CAS)
-conary --allow-live-system-mutation system adopt --system --pattern "lib*"     # Only matching packages
-conary --allow-live-system-mutation system adopt --system --exclude "kernel*"  # Skip kernel packages
-conary --allow-live-system-mutation system adopt --system --explicit-only      # Skip auto-installed deps
+conary system adopt --system                      # Adopt all packages
+conary system adopt --system --full               # Full adoption (CAS)
+conary system adopt --system --pattern "lib*"     # Only matching packages
+conary system adopt --system --exclude "kernel*"  # Skip kernel packages
+conary system adopt --system --explicit-only      # Skip auto-installed deps
 conary system adopt --system --dry-run                                          # Preview
 ```
 
@@ -671,7 +671,7 @@ conary system adopt --status     # Summary of adopted/native packages
 If packages have been updated via the system package manager, refresh detects the version drift:
 
 ```bash
-conary --allow-live-system-mutation system adopt --refresh    # Update adopted packages that changed
+conary system adopt --refresh    # Update adopted packages that changed
 ```
 
 #### Unadopting Without Deleting Files
@@ -681,11 +681,11 @@ Unadoption is the limited-preview escape hatch. It removes Conary's adopted-pack
 ```bash
 conary system unadopt curl --dry-run
 conary system unadopt --all --dry-run
-conary --allow-live-system-mutation system unadopt curl
-conary --allow-live-system-mutation system unadopt --all
+conary system unadopt curl --yes
+conary system unadopt --all --yes
 ```
 
-Apply-mode unadoption still fails closed when a Conary generation is currently selected, because deleting tracking rows while `/conary/current` points at a generation can make the next generated root omit packages that the native package manager still believes are installed. Use `conary system native-handoff --dry-run` to inspect the selected-generation handoff plan, then `conary --allow-live-system-mutation system native-handoff --yes` to clear `/conary/current` before removing adopted tracking rows. If the operation is interrupted after its record is written, `conary --allow-live-system-mutation system native-handoff --recover --yes` resumes it. The handoff preserves native package files and native package-manager databases; it does not import native transaction history or silently take over packages.
+Apply-mode unadoption still fails closed when a Conary generation is currently selected, because deleting tracking rows while `/conary/current` points at a generation can make the next generated root omit packages that the native package manager still believes are installed. Use `conary system native-handoff --dry-run` to inspect the selected-generation handoff plan, then `conary system native-handoff --yes` to clear `/conary/current` before removing adopted tracking rows. If the operation is interrupted after its record is written, `conary system native-handoff --recover --yes` resumes it. The handoff preserves native package files and native package-manager databases; it does not import native transaction history or silently take over packages.
 
 #### Database Backup Recovery
 
@@ -695,7 +695,7 @@ Adoption-lane apply paths write pre-mutation and post-success SQLite checkpoint 
 conary system db-backup list
 conary system db-backup verify --latest
 conary system db-backup recover --latest --dry-run
-conary --allow-live-system-mutation system db-backup recover --latest --yes
+conary system db-backup recover --latest --yes
 ```
 
 Generation publication also writes a SQLite-native backup next to the generation artifact:
@@ -703,7 +703,7 @@ Generation publication also writes a SQLite-native backup next to the generation
 ```bash
 conary system generation verify-db-backup --current
 conary system generation recover-db --generation <n> --dry-run
-conary --allow-live-system-mutation system generation recover-db --generation <n> --yes
+conary system generation recover-db --generation <n> --yes
 ```
 
 SQLite-native backups recover Conary manager visibility for packages and generations represented by the backed-up DB. They do not recover missing package payloads, private keys, remote repository history, or native package-manager transaction history.
@@ -713,9 +713,9 @@ SQLite-native backups recover Conary manager visibility for packages and generat
 Bulk convert adopted packages to CCS format for deduplication and atomic transactions:
 
 ```bash
-conary --allow-live-system-mutation system adopt --convert                # Convert all adopted packages
-conary --allow-live-system-mutation system adopt --convert --jobs 8       # With 8 parallel threads
-conary --allow-live-system-mutation system adopt --convert --no-chunking  # Skip CDC chunking
+conary system adopt --convert                # Convert all adopted packages
+conary system adopt --convert --jobs 8       # With 8 parallel threads
+conary system adopt --convert --no-chunking  # Skip CDC chunking
 ```
 
 #### Takeover
@@ -723,14 +723,14 @@ conary --allow-live-system-mutation system adopt --convert --no-chunking  # Skip
 For full Conary management, you can **take over** packages from the system package manager using the generation-level pipeline:
 
 ```bash
-conary system takeover --allow-live-system-mutation                    # Default: build generation + boot entry, then stop ready to activate
+conary system takeover --yes              # Build generation + boot entry, then stop ready to activate
 conary system takeover --dry-run          # Preview what would happen
-conary system takeover --yes --allow-live-system-mutation              # Skip confirmation after explicit acknowledgment
-conary system generation switch 1 --allow-live-system-mutation         # Select a prepared takeover generation for next boot
+conary system takeover --yes              # Skip confirmation after explicit acknowledgment
+conary system generation switch 1 --yes   # Select a prepared takeover generation for next boot
 ```
 
-The pipeline is internally progressive, but the supported release path is the `generation` level. The lower `cas` and `owned` stop-points are internal/debug checkpoints for development and diagnosis. The `generation` level (default) builds an EROFS generation and boot entry, then stops ready to activate. Activation is an explicit next-boot follow-up via `conary system generation switch <N> --allow-live-system-mutation`.
-`--yes` skips interactive prompts, but it does not replace `--allow-live-system-mutation`.
+The pipeline is internally progressive, but the supported release path is the `generation` level. The lower `cas` and `owned` stop-points are internal/debug checkpoints for development and diagnosis. The `generation` level (default) builds an EROFS generation and boot entry, then stops ready to activate. Activation is an explicit next-boot follow-up via `conary system generation switch <N> --yes`.
+`--yes` is the command-local apply intent for takeover and generation activation.
 
 Do not treat takeover as part of the risk-free adoption lane. Package-level takeover also appears as `conary update --dep-mode takeover`; that is an explicit ownership change and is not used by default for adopted packages.
 
@@ -739,8 +739,8 @@ Do not treat takeover as part of the risk-free adoption lane. Package-level take
 Install hooks that automatically notify Conary when the system package manager installs or removes packages:
 
 ```bash
-conary --allow-live-system-mutation system adopt --sync-hook                # Install the hooks
-conary --allow-live-system-mutation system adopt --sync-hook --remove-hook  # Remove them
+conary system adopt --sync-hook                # Install the hooks
+conary system adopt --sync-hook --remove-hook  # Remove them
 ```
 
 ### 2.10 System State and Rollback
@@ -775,7 +775,7 @@ Shows packages added, removed, and version-changed between two states.
 #### Rolling Back
 
 ```bash
-conary system state revert 5 --allow-live-system-mutation  # Return to state 5
+conary system state revert 5 --yes # Return to state 5
 conary system state revert 5 --dry-run                     # Preview the rollback
 ```
 
@@ -784,7 +784,7 @@ Reverting creates a new changeset that undoes all changes since state 5. This me
 You can also roll back a specific changeset:
 
 ```bash
-conary system state rollback 42 --allow-live-system-mutation  # Undo changeset #42
+conary system state rollback 42 --yes # Undo changeset #42
 ```
 
 #### Creating Manual Snapshots
@@ -830,10 +830,10 @@ Verification recomputes file hashes and compares them against the CAS. Any modif
 If verification finds problems, restore files from the CAS:
 
 ```bash
-conary system restore nginx --allow-live-system-mutation          # Restore missing/modified files
-conary system restore nginx --force --allow-live-system-mutation  # Overwrite even if files exist
+conary system restore nginx --yes    # Restore missing/modified files
+conary system restore nginx --force --yes # Overwrite even if files exist
 conary system restore nginx --dry-run                             # Preview restoration
-conary system restore all --allow-live-system-mutation            # Check and restore all packages
+conary system restore all --yes      # Check and restore all packages
 ```
 
 ### 2.13 Repository Management
@@ -1240,12 +1240,12 @@ The diff engine computes these action types:
 ### 3.3 Apply: Sync System to Model
 
 ```bash
-conary model apply --allow-live-system-mutation                 # Apply the model
+conary model apply --yes           # Apply the model
 conary model apply --dry-run                                    # Preview without changes
-conary model apply --strict --allow-live-system-mutation        # Remove packages not in model
-conary model apply --skip-optional --allow-live-system-mutation # Skip optional packages
-conary model apply --no-autoremove --allow-live-system-mutation # Don't clean up orphans after
-conary model apply --offline --allow-live-system-mutation       # Use cached remote data only
+conary model apply --strict --yes  # Remove packages not in model
+conary model apply --skip-optional --yes # Skip optional packages
+conary model apply --no-autoremove --yes # Don't clean up orphans after
+conary model apply --offline --yes # Use cached remote data only
 ```
 
 Apply performs the diff and then executes all actions as a single atomic changeset. If anything fails, the entire operation rolls back.
@@ -1522,7 +1522,7 @@ The typical model workflow:
 2. Edit the model:            vim /etc/conary/system.toml
 3. Preview changes:           conary model diff
 4. Lock remote includes:      conary model lock
-5. Apply:                     conary model apply --allow-live-system-mutation
+5. Apply:                     conary model apply --yes
 6. Verify:                    conary model check
 7. Monitor drift:             conary model check (via cron/systemd timer)
 8. Publish for others:        conary model publish --name my-stack --version 1.0
@@ -1854,10 +1854,10 @@ Policies are applied in sequence. Each policy can:
 ### 4.5 Installing CCS Packages
 
 ```bash
-conary ccs install ./myapp-1.2.3.ccs --allow-live-system-mutation
-conary ccs install ./myapp-1.2.3.ccs --allow-live-system-mutation --components runtime,lib
-conary ccs install ./myapp-1.2.3.ccs --allow-live-system-mutation --allow-unsigned
-conary ccs install ./myapp-1.2.3.ccs --allow-live-system-mutation --policy trust.toml
+conary ccs install ./myapp-1.2.3.ccs --yes
+conary ccs install ./myapp-1.2.3.ccs --components runtime,lib --yes
+conary ccs install ./myapp-1.2.3.ccs --allow-unsigned --yes
+conary ccs install ./myapp-1.2.3.ccs --policy trust.toml --yes
 conary ccs install ./myapp-1.2.3.ccs --dry-run
 ```
 
@@ -4007,8 +4007,8 @@ network, filesystem, and syscall fields via `infer_linux_capabilities()`:
 - Syscalls like `ptrace`, `mount`, `mknod` -> corresponding capabilities
 
 **CLI flags:**
-- `conary ccs install pkg.ccs --allow-live-system-mutation --allow-capabilities` -- approve prompted capabilities
-- `conary ccs install pkg.ccs --allow-live-system-mutation --capability-policy /path/to/policy.toml` -- custom policy
+- `conary ccs install pkg.ccs --allow-capabilities --yes` -- approve prompted capabilities
+- `conary ccs install pkg.ccs --capability-policy /path/to/policy.toml --yes` -- custom policy
 
 **Custom policy file** (`/etc/conary/capability-policy.toml`):
 
@@ -5250,7 +5250,7 @@ hash = "sha256:789abc..."
 
 ```bash
 conary model diff        # Show what would change
-conary model apply --allow-live-system-mutation  # Converge to desired state
+conary model apply --yes # Converge to desired state
 conary model lock        # Generate/update lockfile
 conary model check       # Detect drift (lockfile vs actual)
 conary model export      # Export current state as system.toml
@@ -5573,12 +5573,13 @@ In `Advisory` mode, the AI analyzes the situation and explains its reasoning, bu
 ```bash
 conary automation status           # Show pending suggestions
 conary automation check            # Run all detection checks
-conary automation apply --dry-run --yes   # Preview pending safe actions
+conary automation apply --dry-run         # Preview pending safe actions
+conary automation apply --yes             # Apply pending safe actions
 conary automation configure --show        # Show effective defaults / current file path
 ```
 
 `automation history` reads records written by
-`conary automation apply --allow-live-system-mutation` and prints
+`conary automation apply --yes` and prints
 `No automation history.` when none are present. `automation daemon` runs the
 scheduler in the foreground for preview use; use systemd or another supervisor
 for background operation. `automation configure` persists settings to the active
@@ -5662,7 +5663,7 @@ These systems compose into workflows that span the entire lifecycle:
 **Air-gapped deployment**:
 1. On an internet-connected machine, `conary model lock` resolves and downloads everything (8.4)
 2. Copy the lockfile and chunk cache to removable media
-3. On the air-gapped machine, `conary model apply --offline --allow-live-system-mutation` installs from the local cache
+3. On the air-gapped machine, `conary model apply --offline --yes` installs from the local cache
 4. No network access needed -- all chunks are content-addressed and pre-verified
 
 ---

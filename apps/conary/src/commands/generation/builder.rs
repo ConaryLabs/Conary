@@ -267,7 +267,7 @@ pub fn build_generation(conn: &rusqlite::Connection, db_path: &str, summary: &st
         warn!(
             "{track_only_count} package(s) are at AdoptedTrack (no CAS content) \
              and may have incomplete file coverage in the generation image. \
-             Use 'conary --allow-live-system-mutation system adopt --system --full' \
+             Use 'conary system adopt --system --full' \
              to promote them along the ownership ladder."
         );
     }

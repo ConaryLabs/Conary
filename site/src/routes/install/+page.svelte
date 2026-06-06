@@ -53,16 +53,16 @@
 					<div class="terminal-line t-blank"></div>
 					<div class="terminal-line">
 						<span class="t-prompt">$</span>
-						<span class="t-cmd">conary --allow-live-system-mutation system adopt --system</span>
+						<span class="t-cmd">conary system adopt --system</span>
 					</div>
-					<div class="terminal-line t-output">The long flag marks the point where Conary changes the active host.</div>
+						<div class="terminal-line t-output">Use --dry-run first, then --yes when applying active-host changes.</div>
 					<div class="terminal-line">
 						<span class="t-prompt">$</span>
 						<span class="t-cmd">conary system unadopt --all --dry-run</span>
 					</div>
 					<div class="terminal-line">
 						<span class="t-prompt">$</span>
-						<span class="t-cmd">conary --allow-live-system-mutation system unadopt --all</span>
+							<span class="t-cmd">conary system unadopt --all --yes</span>
 					</div>
 				</div>
 			</div>

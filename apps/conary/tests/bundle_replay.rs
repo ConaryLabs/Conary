@@ -855,7 +855,6 @@ impl InstallFixture {
 
     fn run_install(&self, extra_args: &[&str]) -> Output {
         let mut args = vec![
-            "--allow-live-system-mutation",
             "ccs",
             "install",
             self.package_path.to_str().expect("utf-8 package path"),
@@ -866,6 +865,7 @@ impl InstallFixture {
             self.db_path.to_str().expect("utf-8 db path"),
             "--root",
             self.root.to_str().expect("utf-8 root path"),
+            "--yes",
         ];
         args.extend_from_slice(extra_args);
         run_conary(&args)
@@ -873,7 +873,6 @@ impl InstallFixture {
 
     fn run_install_with_matrix(&self, extra_args: &[&str], matrix_json: String) -> Output {
         let mut args = vec![
-            "--allow-live-system-mutation",
             "ccs",
             "install",
             self.package_path.to_str().expect("utf-8 package path"),
@@ -884,6 +883,7 @@ impl InstallFixture {
             self.db_path.to_str().expect("utf-8 db path"),
             "--root",
             self.root.to_str().expect("utf-8 root path"),
+            "--yes",
         ];
         args.extend_from_slice(extra_args);
         run_conary_with_env(
@@ -912,7 +912,6 @@ impl InstallFixture {
 
     fn run_remove(&self, package_name: &str, extra_args: &[&str]) -> Output {
         let mut args = vec![
-            "--allow-live-system-mutation",
             "remove",
             package_name,
             "--sandbox",
@@ -921,6 +920,7 @@ impl InstallFixture {
             self.db_path.to_str().expect("utf-8 db path"),
             "--root",
             self.root.to_str().expect("utf-8 root path"),
+            "--yes",
         ];
         args.extend_from_slice(extra_args);
         run_conary(&args)
@@ -1006,7 +1006,6 @@ impl UpgradeFixture {
 
     fn run_install_path(&self, package_path: &std::path::Path, extra_args: &[&str]) -> Output {
         let mut args = vec![
-            "--allow-live-system-mutation",
             "ccs",
             "install",
             package_path.to_str().expect("utf-8 package path"),
@@ -1017,6 +1016,7 @@ impl UpgradeFixture {
             self.db_path.to_str().expect("utf-8 db path"),
             "--root",
             self.root.to_str().expect("utf-8 root path"),
+            "--yes",
         ];
         args.extend_from_slice(extra_args);
         run_conary(&args)

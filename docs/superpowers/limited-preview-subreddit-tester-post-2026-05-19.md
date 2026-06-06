@@ -32,13 +32,13 @@ Tested preview targets:
 What I would love people to try in a VM, snapshot, or spare system:
 
 ```bash
-conary --allow-live-system-mutation system adopt --system --full
+conary system adopt --system --full
 conary list
 conary search <package>
 conary update --dry-run
-conary --allow-live-system-mutation install <small-package> --yes
-conary --allow-live-system-mutation remove <small-package> --yes
-conary --allow-live-system-mutation system unadopt --all
+conary install <small-package> --yes
+conary remove <small-package> --yes
+conary system unadopt --all --yes
 ```
 
 Please do not test this first on an irreplaceable daily driver. This is preview

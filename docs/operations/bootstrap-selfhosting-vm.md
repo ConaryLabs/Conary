@@ -149,8 +149,8 @@ Inside the guest the checked-in validation script performs:
 2. optional `conary trust init <repo-name> --root /var/lib/conary/bootstrap-inputs/root.json`
 3. `conary repo sync`
 4. `conary query label list`
-5. `conary install tree --allow-live-system-mutation`
-6. `conary remove tree --allow-live-system-mutation`
+5. `conary install tree --yes`
+6. `conary remove tree --yes`
 7. `conary cook /var/lib/conary/bootstrap-inputs/conary-workspace/recipes/bootstrap-smoke/simple-hello.toml`
 8. `cargo build --locked` from the unpacked Conary workspace
 9. rebuilt-binary smoke commands with `target/debug/conary`

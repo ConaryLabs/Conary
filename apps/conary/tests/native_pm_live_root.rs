@@ -75,7 +75,6 @@ fn build_ccs_fixture(work_dir: &Path, version: &str) -> PathBuf {
 
 fn install_ccs_into_root(root: &Path, db_path: &Path, package_path: &Path) {
     let output = run_conary_owned(&[
-        "--allow-live-system-mutation".to_string(),
         "ccs".to_string(),
         "install".to_string(),
         package_path.to_string_lossy().into_owned(),
@@ -87,6 +86,7 @@ fn install_ccs_into_root(root: &Path, db_path: &Path, package_path: &Path) {
         "--sandbox".to_string(),
         "never".to_string(),
         "--no-deps".to_string(),
+        "--yes".to_string(),
     ]);
     assert_success(&output);
 }
@@ -316,7 +316,6 @@ fn no_generation_remove_deletes_file_and_history_records_apply() {
     drop(conn);
 
     let output = run_conary(&[
-        "--allow-live-system-mutation",
         "remove",
         "fixture",
         "--db-path",
@@ -326,6 +325,7 @@ fn no_generation_remove_deletes_file_and_history_records_apply() {
         "--no-scripts",
         "--sandbox",
         "never",
+        "--yes",
     ]);
 
     assert!(
@@ -381,7 +381,6 @@ fn remove_arch_selector_targets_one_variant() {
     drop(conn);
 
     let ambiguous = run_conary(&[
-        "--allow-live-system-mutation",
         "remove",
         "remove-demo",
         "--db-path",
@@ -391,11 +390,11 @@ fn remove_arch_selector_targets_one_variant() {
         "--no-scripts",
         "--sandbox",
         "never",
+        "--yes",
     ]);
     assert!(!ambiguous.status.success(), "{}", output_text(&ambiguous));
 
     let selected = run_conary(&[
-        "--allow-live-system-mutation",
         "remove",
         "remove-demo",
         "--version",
@@ -409,6 +408,7 @@ fn remove_arch_selector_targets_one_variant() {
         "--no-scripts",
         "--sandbox",
         "never",
+        "--yes",
     ]);
     assert_success(&selected);
     assert!(root.path().join("usr/bin/remove-demo-x86_64").exists());
@@ -452,7 +452,6 @@ fn remove_ignores_non_package_trove_with_same_name() {
     drop(conn);
 
     let output = run_conary(&[
-        "--allow-live-system-mutation",
         "remove",
         "remove-shared-selector",
         "--db-path",
@@ -462,6 +461,7 @@ fn remove_ignores_non_package_trove_with_same_name() {
         "--no-scripts",
         "--sandbox",
         "never",
+        "--yes",
     ]);
 
     assert_success(&output);
@@ -504,7 +504,6 @@ fn no_generation_update_installs_repository_ccs_into_live_root() {
     );
 
     let output = run_conary_owned(&[
-        "--allow-live-system-mutation".to_string(),
         "update".to_string(),
         FIXTURE_NAME.to_string(),
         "--db-path".to_string(),
@@ -561,7 +560,6 @@ fn security_update_with_unknown_advisory_support_refuses_before_mutation() {
     );
 
     let output = run_conary_owned(&[
-        "--allow-live-system-mutation".to_string(),
         "update".to_string(),
         FIXTURE_NAME.to_string(),
         "--security".to_string(),
@@ -639,7 +637,6 @@ fn security_update_syncs_trusted_json_advisory_and_applies_fix() {
     drop(conn);
 
     let output = run_conary_owned(&[
-        "--allow-live-system-mutation".to_string(),
         "update".to_string(),
         FIXTURE_NAME.to_string(),
         "--security".to_string(),

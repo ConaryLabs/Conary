@@ -82,7 +82,7 @@ fn deferred_retry_hint(follow_up: &crate::commands::DeferredFollowUp) -> String 
     match kind {
         crate::commands::DeferredFollowUpKind::GenerationPublication
         | crate::commands::DeferredFollowUpKind::LegacyGenerationRebuild => {
-            " Retry: conary --allow-live-system-mutation system generation publish.".to_string()
+            " Retry: conary system generation publish --yes.".to_string()
         }
         crate::commands::DeferredFollowUpKind::Other => follow_up
             .retry_command
@@ -165,10 +165,7 @@ mod tests {
             kind: "generation_rebuild".to_string(),
             status: "failed".to_string(),
             message: "root is not self-contained".to_string(),
-            retry_command: Some(
-                "conary --allow-live-system-mutation system generation build --summary retry"
-                    .to_string(),
-            ),
+            retry_command: Some("conary system generation build --summary retry --yes".to_string()),
         };
         let mut changeset = Changeset::new("Install fixture-1.0.0".to_string());
         changeset.id = Some(8);
@@ -185,7 +182,7 @@ mod tests {
         let details = format_deferred_follow_up_lines(&changeset);
         assert_eq!(details.len(), 1);
         assert!(details[0].contains("deferred generation_rebuild failed"));
-        assert!(details[0].contains("Retry: conary --allow-live-system-mutation"));
+        assert!(details[0].contains("Retry: conary system generation publish --yes"));
         assert!(details[0].contains("system generation publish"));
         assert!(!details[0].contains("system generation build"));
     }
@@ -223,10 +220,7 @@ mod tests {
             kind: "generation_rebuild".to_string(),
             status: "failed".to_string(),
             message: "root is not self-contained".to_string(),
-            retry_command: Some(
-                "conary --allow-live-system-mutation system generation build --summary retry"
-                    .to_string(),
-            ),
+            retry_command: Some("conary system generation build --summary retry --yes".to_string()),
         };
         let mut changeset = Changeset::new("Install fixture".to_string());
         changeset.id = Some(8);

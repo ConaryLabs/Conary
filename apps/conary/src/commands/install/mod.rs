@@ -490,7 +490,7 @@ fn report_provides_check(
             );
         }
         println!(
-            "\nHint: Run 'conary --allow-live-system-mutation system adopt --system' to track all installed native packages"
+            "\nHint: Run 'conary system adopt --system' to track all installed native packages"
         );
         return Err(anyhow::anyhow!(
             "Cannot install {}: {} unresolvable dependencies",
@@ -960,7 +960,7 @@ fn parse_component_and_validate(
                 ""
             };
             return Err(anyhow::anyhow!(
-                "Package '{}' is adopted from {}.{} Run 'conary --allow-live-system-mutation system adopt --refresh' after native package-manager changes. Use 'conary install {} --dep-mode takeover' \
+                "Package '{}' is adopted from {}.{} Run 'conary system adopt --refresh' after native package-manager changes. Use 'conary install {} --dep-mode takeover' \
                  for explicit package takeover, or 'conary system takeover' for generation-level takeover.",
                 package_name,
                 pkg_mgr.display_name(),

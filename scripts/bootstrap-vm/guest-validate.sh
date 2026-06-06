@@ -140,8 +140,8 @@ main() {
     conary repo sync "$REPO_NAME" --force
     conary query label list
 
-    conary install tree --repo "$REPO_NAME" --yes --sandbox never --allow-live-system-mutation
-    conary remove tree --sandbox never --allow-live-system-mutation
+    conary install tree --repo "$REPO_NAME" --yes --sandbox never
+    conary remove tree --sandbox never --yes
 
     rm -rf "$SMOKE_OUTPUT" "$SMOKE_CACHE"
     conary cook \
@@ -155,8 +155,8 @@ main() {
         cargo build --locked
         target/debug/conary --version
         target/debug/conary query label list
-        target/debug/conary install tree --repo "$REPO_NAME" --yes --sandbox never --allow-live-system-mutation
-        target/debug/conary remove tree --sandbox never --allow-live-system-mutation
+        target/debug/conary install tree --repo "$REPO_NAME" --yes --sandbox never
+        target/debug/conary remove tree --sandbox never --yes
     )
 
     check_for_baked_private_key

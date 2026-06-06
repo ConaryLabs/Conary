@@ -390,7 +390,6 @@ fn test_parent_upgrade_marks_built_derived_package_stale_via_install_cli() {
 
     let install_output = Command::new(env!("CARGO_BIN_EXE_conary"))
         .env("CONARY_TEST_SKIP_GENERATION_MOUNT", "1")
-        .arg("--allow-live-system-mutation")
         .arg("install")
         .arg(package_path.to_str().unwrap())
         .arg("--db-path")
@@ -442,7 +441,6 @@ fn test_capability_run_uses_installed_package_declaration() {
 
     let install_output = Command::new(env!("CARGO_BIN_EXE_conary"))
         .env("CONARY_TEST_SKIP_GENERATION_MOUNT", "1")
-        .arg("--allow-live-system-mutation")
         .arg("ccs")
         .arg("install")
         .arg(fixture_path)
@@ -455,6 +453,7 @@ fn test_capability_run_uses_installed_package_declaration() {
         .arg(&db_path)
         .arg("--root")
         .arg(install_root.to_str().unwrap())
+        .arg("--yes")
         .output()
         .unwrap();
 

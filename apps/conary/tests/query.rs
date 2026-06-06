@@ -614,7 +614,6 @@ fn whatbreaks_reports_same_dependency_blocker_as_remove() {
     assert!(stdout.contains("consumer-demo"), "{stdout}");
 
     let remove = run_conary(&[
-        "--allow-live-system-mutation",
         "remove",
         "provider-demo",
         "--db-path",
@@ -624,6 +623,7 @@ fn whatbreaks_reports_same_dependency_blocker_as_remove() {
         "--no-scripts",
         "--sandbox",
         "never",
+        "--yes",
     ]);
     assert!(!remove.status.success(), "{}", output_text(&remove));
     assert!(output_text(&remove).contains("consumer-demo"));
@@ -645,14 +645,7 @@ fn update_package_selector_refuses_ambiguous_variants_at_cli() {
         trove.insert(&conn).unwrap();
     }
 
-    let ambiguous = run_conary(&[
-        "--allow-live-system-mutation",
-        "update",
-        "update-demo",
-        "--dry-run",
-        "--db-path",
-        &db_path,
-    ]);
+    let ambiguous = run_conary(&["update", "update-demo", "--dry-run", "--db-path", &db_path]);
     assert!(!ambiguous.status.success(), "{}", output_text(&ambiguous));
     let text = output_text(&ambiguous);
     assert!(
@@ -662,7 +655,6 @@ fn update_package_selector_refuses_ambiguous_variants_at_cli() {
     assert!(text.contains("--arch"), "{text}");
 
     let selected = run_conary(&[
-        "--allow-live-system-mutation",
         "update",
         "update-demo",
         "--dry-run",
@@ -681,7 +673,6 @@ fn update_collection_refuses_installed_variant_selectors() {
     let (_tmp, db_path, _conn) = common::create_test_db();
 
     let output = run_conary(&[
-        "--allow-live-system-mutation",
         "update",
         "@base",
         "--dry-run",

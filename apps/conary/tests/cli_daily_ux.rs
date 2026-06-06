@@ -154,7 +154,6 @@ fn adopted_install_refusal_routes_to_refresh_and_takeover() {
     let root = tempfile::tempdir().unwrap();
 
     let output = run_conary(&[
-        "--allow-live-system-mutation",
         "install",
         "curl",
         "--db-path",
@@ -168,10 +167,7 @@ fn adopted_install_refusal_routes_to_refresh_and_takeover() {
 
     assert!(!output.status.success(), "{}", output_text(&output));
     let text = output_text(&output);
-    assert!(
-        text.contains("conary --allow-live-system-mutation system adopt --refresh"),
-        "{text}"
-    );
+    assert!(text.contains("conary system adopt --refresh"), "{text}");
     assert!(
         text.contains("conary install curl --dep-mode takeover"),
         "{text}"
@@ -187,7 +183,6 @@ fn adopted_remove_refusal_routes_to_unadopt_or_purge() {
     let root = tempfile::tempdir().unwrap();
 
     let output = run_conary(&[
-        "--allow-live-system-mutation",
         "remove",
         "curl",
         "--db-path",
@@ -196,6 +191,7 @@ fn adopted_remove_refusal_routes_to_unadopt_or_purge() {
         root.path().to_str().unwrap(),
         "--sandbox",
         "never",
+        "--yes",
     ]);
 
     assert!(!output.status.success(), "{}", output_text(&output));
@@ -219,7 +215,6 @@ fn adopted_update_routes_to_native_pm_and_refresh() {
     let root = tempfile::tempdir().unwrap();
 
     let output = run_conary(&[
-        "--allow-live-system-mutation",
         "update",
         "curl",
         "--dry-run",
@@ -236,8 +231,5 @@ fn adopted_update_routes_to_native_pm_and_refresh() {
         "{stdout}"
     );
     assert!(stdout.contains("dnf update curl"), "{stdout}");
-    assert!(
-        stdout.contains("conary --allow-live-system-mutation system adopt --refresh"),
-        "{stdout}"
-    );
+    assert!(stdout.contains("conary system adopt --refresh"), "{stdout}");
 }
