@@ -286,6 +286,15 @@ The repo moved materially after the last audit:
   being an active toolchain for this repo. The historical Claude-era notes were
   retained under `docs/llms/archive/`.
 
+### 2026-06-06 Maintainability Phase 2 Planning
+
+The maintainability reset reopened the active planning lane after the prior
+clean-slate archive pass. Phase 1 added the repo discipline contract and
+line-count report. Phase 2 now opens a focused dead-surface pruning plan for
+portable docs-audit inventory filtering, tested public CLI help cleanup, and a
+pruning inventory. Active plan roots are therefore not expected to be empty;
+current active roadmap and child-plan files are tracked through the ledger.
+
 ## Verification Commands
 
 - `bash scripts/docs-audit-inventory.sh`
@@ -360,9 +369,9 @@ public tester copy is tracked by
 
 ## Final Counts
 
-- Total tracked doc-like files audited: 106
-- `verified-no-change`: 17
-- `corrected`: 33
-- `archived`: 42
+- Total tracked doc-like files audited: 142
+- `verified-no-change`: 14
+- `corrected`: 41
+- `archived`: 73
 - `retained-historical`: 14
 - Remaining pending rows: 0

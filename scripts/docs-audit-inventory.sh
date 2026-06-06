@@ -88,6 +88,6 @@ while IFS= read -r path; do
     printf '%s\t%s\t%s\n' "$path" "$family" "$audience"
 done < <(
     git ls-files \
-        | rg '(^|/)(README\.md|AGENTS\.md|CONTRIBUTING\.md|ROADMAP\.md|CHANGELOG\.md|SECURITY\.md|.*\.md|.*\.mdx|.*\.rst|.*\.adoc|.*\.toml\.example)$' \
+        | grep -E '(^|/)(README\.md|AGENTS\.md|CONTRIBUTING\.md|ROADMAP\.md|CHANGELOG\.md|SECURITY\.md|.*\.md|.*\.mdx|.*\.rst|.*\.adoc|.*\.toml\.example)$' \
         | sort
 )
