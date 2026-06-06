@@ -313,6 +313,12 @@ Assistant routing and the CCS/Remi module guides now point contributors to the
 fixture map before changing conversion golden cases, support-matrix evidence,
 publication gates, static fixture uploads, or `conary-test` manifest behavior.
 
+The Phase 4 install hotspot decomposition plan now opens the first code-moving
+maintenance slice. It chooses `apps/conary/src/commands/install/mod.rs` over the
+CCS install hotspot so CCS native contract work can proceed separately, and it
+narrows the first refactor to the install-side legacy replay adapter plus docs
+routing.
+
 ## Verification Commands
 
 - `bash scripts/docs-audit-inventory.sh`
@@ -387,9 +393,9 @@ public tester copy is tracked by
 
 ## Final Counts
 
-- Total tracked doc-like files audited: 145
+- Total tracked doc-like files audited: 146
 - `verified-no-change`: 13
-- `corrected`: 45
+- `corrected`: 46
 - `archived`: 73
 - `retained-historical`: 14
 - Remaining pending rows: 0
