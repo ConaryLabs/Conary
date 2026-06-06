@@ -79,6 +79,36 @@ fn root_help_includes_daily_workflow_examples() {
 }
 
 #[test]
+fn phase2_pruning_repo_add_help_lists_only_supported_remi_distro_examples() {
+    let output = run_conary(&["repo", "add", "--help"]);
+
+    assert!(output.status.success(), "{}", output_text(&output));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("fedora-44, ubuntu-26.04, arch"), "{stdout}");
+    assert!(!stdout.to_lowercase().contains("debian"), "{stdout}");
+}
+
+#[test]
+fn phase2_pruning_ccs_init_next_steps_use_current_build_subcommand() {
+    let dir = tempfile::tempdir().unwrap();
+    let output = run_conary(&[
+        "ccs",
+        "init",
+        dir.path().to_str().unwrap(),
+        "--name",
+        "phase2-pruning",
+        "--version",
+        "1.0.0",
+    ]);
+
+    assert!(output.status.success(), "{}", output_text(&output));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("conary ccs build"), "{stdout}");
+    assert!(!stdout.contains("conary ccs-build"), "{stdout}");
+    assert!(dir.path().join("ccs.toml").exists());
+}
+
+#[test]
 fn shell_completion_rendering_covers_bash_and_zsh() {
     let bash = run_conary(&["system", "completions", "bash"]);
     assert!(bash.status.success(), "{}", output_text(&bash));

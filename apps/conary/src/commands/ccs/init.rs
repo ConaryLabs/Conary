@@ -1,4 +1,4 @@
-// src/commands/ccs/init.rs
+// apps/conary/src/commands/ccs/init.rs
 
 //! CCS package initialization
 //!
@@ -51,7 +51,7 @@ pub async fn cmd_ccs_init(
     println!();
     println!("Next steps:");
     println!("  1. Edit ccs.toml to add dependencies and hooks");
-    println!("  2. Run 'conary ccs-build' to create the package");
+    println!("  2. Run 'conary ccs build' to create the package");
 
     Ok(())
 }
