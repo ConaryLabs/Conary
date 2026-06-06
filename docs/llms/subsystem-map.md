@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-06-06
-revision: 10
-summary: Stable subsystem pointers and durable assistant-facing guidance for the Conary workspace after install replay routing
+revision: 11
+summary: Stable subsystem pointers with feature ownership and interaction-gate routing
 ---
 
 # Assistant Subsystem Map
@@ -115,6 +115,7 @@ summary: Stable subsystem pointers and durable assistant-facing guidance for the
 
 - [`docs/modules/federation.md`](../modules/federation.md) for federation background
 - [`docs/modules/ccs.md`](../modules/ccs.md) for CCS format and conversion context
+- [`docs/modules/feature-ownership.md`](../modules/feature-ownership.md) for feature ownership cards, neighboring systems, and interaction verification gates
 - [`docs/modules/test-fixtures.md`](../modules/test-fixtures.md) for Remi and CCS fixture ownership and proof commands
 - [`docs/modules/bootstrap.md`](../modules/bootstrap.md) for bootstrap and stage flows
 - [`docs/operations/bootstrap-selfhosting-vm.md`](../operations/bootstrap-selfhosting-vm.md) for the truthful self-hosting VM build and validation path

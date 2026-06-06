@@ -330,6 +330,19 @@ canonical feature ownership map, human/assistant entrypoint links, focused proof
 recipes, and cross-system interaction gates while leaving MIT-only licensing and
 live-system mutation UX as separate follow-up designs.
 
+The first Phase 5/6 implementation slice adds
+`docs/modules/feature-ownership.md` as the canonical feature-card map for major
+Conary capabilities. The map records start-here files, neighboring systems,
+focused proof commands, broader interaction gates, docs to update, and safety
+notes so feature-focused work can stay local without hiding cross-system
+coupling.
+
+Assistant and contributor entrypoints now route feature-scoped work through the
+feature ownership map. `docs/llms/README.md`, `docs/llms/subsystem-map.md`,
+`CONTRIBUTING.md`, and the pull request template point contributors toward
+start-here files, focused proof commands, and broader interaction gates without
+turning any one entrypoint into a duplicate manual.
+
 ## Verification Commands
 
 - `bash scripts/docs-audit-inventory.sh`
@@ -404,9 +417,9 @@ public tester copy is tracked by
 
 ## Final Counts
 
-- Total tracked doc-like files audited: 147
+- Total tracked doc-like files audited: 148
 - `verified-no-change`: 13
-- `corrected`: 47
+- `corrected`: 48
 - `archived`: 73
 - `retained-historical`: 14
 - Remaining pending rows: 0
