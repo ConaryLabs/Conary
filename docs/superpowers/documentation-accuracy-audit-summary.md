@@ -309,6 +309,10 @@ fixture families as contributor-facing proof surfaces, including owner files,
 consuming tests, fast and medium proof commands, slow proof boundaries, and
 safety notes.
 
+Assistant routing and the CCS/Remi module guides now point contributors to the
+fixture map before changing conversion golden cases, support-matrix evidence,
+publication gates, static fixture uploads, or `conary-test` manifest behavior.
+
 ## Verification Commands
 
 - `bash scripts/docs-audit-inventory.sh`
@@ -384,8 +388,8 @@ public tester copy is tracked by
 ## Final Counts
 
 - Total tracked doc-like files audited: 145
-- `verified-no-change`: 14
-- `corrected`: 44
+- `verified-no-change`: 13
+- `corrected`: 45
 - `archived`: 73
 - `retained-historical`: 14
 - Remaining pending rows: 0

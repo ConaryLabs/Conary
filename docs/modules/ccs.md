@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-06-04
-revision: 11
-summary: Document legacy scriptlet compatibility matrix boundaries
+last_updated: 2026-06-06
+revision: 12
+summary: Route CCS conversion fixture ownership and proof commands
 ---
 
 # CCS Module (conary-core/src/ccs/)
@@ -87,6 +87,25 @@ CCS sits at the center of Conary's format pipeline. All package formats
 (RPM, DEB, Arch) convert to CCS before installation. The builder produces
 CAS-compatible content (SHA-256 keyed blobs), and the chunking system
 enables delta-efficient distribution via the Remi server.
+
+## Fixture Ownership
+
+The first fixture ownership map for CCS conversion lives in
+`docs/modules/test-fixtures.md`. Start there before changing golden conversion
+cases, support-matrix fixture names, adapter-backed public-ready evidence, or
+legacy scriptlet bundle fixtures. The fast proof for map-only or table-only
+changes is:
+
+```bash
+cargo test -p conary-core golden_fixtures
+cargo test -p conary-core support_matrix
+```
+
+If conversion output changes, also run:
+
+```bash
+cargo test -p conary --test conversion_integration golden_conversion
+```
 
 ## Legacy Scriptlet Bundles And Replay
 
