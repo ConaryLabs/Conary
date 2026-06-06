@@ -51,12 +51,34 @@ Primary policy files:
   `apps/conaryd/src/daemon/client.rs` carry the daemon-side request field and
   execution gate.
 
+Primary user-facing source strings and persisted hints:
+
+- `apps/conary/src/commands/adopt/refresh.rs`,
+  `apps/conary/src/commands/generation/builder.rs`,
+  `apps/conary/src/commands/generation/publication.rs`,
+  `apps/conary/src/commands/install/mod.rs`,
+  `apps/conary/src/commands/install/batch.rs`,
+  `apps/conary/src/commands/query/history.rs`, and
+  `apps/conary/src/commands/update.rs` contain user-facing hints that mention
+  the old global flag.
+- `apps/conary/src/commands/changeset_metadata.rs` serializes
+  `ChangesetMetadataEnvelope` records with `DeferredFollowUp.retry_command`.
+  Existing databases may already contain retry commands with the old global
+  flag, so the CLI parser must keep accepting that flag as a deprecated
+  compatibility alias or fallback during the redesign. Do not hard-reject
+  persisted retry commands in the first implementation.
+
 Primary tests:
 
 - `apps/conary/tests/live_host_mutation_safety.rs` verifies CLI refusal and
   dry-run bypass behavior.
 - `apps/conary/tests/cli_daily_ux.rs` verifies daily workflow wording and
   refusal routing.
+- `apps/conary/tests/component.rs`,
+  `apps/conary/tests/live_host_mutation_readiness.rs`,
+  `apps/conary/tests/model_apply.rs`, `apps/conary/tests/query.rs`, and
+  `apps/conary/tests/workflow.rs` contain hardcoded active-mutation
+  invocations that must be migrated or kept compatible.
 - `apps/conary/tests/native_pm_live_root.rs`,
   `apps/conary/tests/native_pm_daily_driver.rs`, and
   `apps/conary/tests/bundle_replay.rs` contain active mutation invocations that
@@ -73,13 +95,18 @@ Primary tests:
 Primary docs and generated surfaces:
 
 - `README.md`
+- `ROADMAP.md`
+- `docs/ARCHITECTURE.md`
+- `docs/conaryopedia-v2.md`
 - `apps/conary/man/conary.1`
+- `man/conary.1`
 - `docs/operations/daily-driver-ux-matrix.md`
 - `docs/modules/feature-ownership.md`
 - `docs/modules/conaryd.md`
 - `docs/modules/ccs.md`
 - `docs/operations/bootstrap-selfhosting-vm.md`
 - `docs/operations/live-mutation-backup-inventory.md`
+- `docs/operations/post-generation-export-follow-up-roadmap.md`
 - `docs/operations/release-artifact-matrix.md`
 - `apps/conary/tests/integration/remi/manifests/*.toml`
 
@@ -93,6 +120,8 @@ Primary docs and generated surfaces:
 - Do not make conaryd API clients migrate immediately unless the child plan
   proves a compatibility path.
 - Do not hide broad manifest rewrites inside an unrelated behavior change.
+- Do not make old persisted `DeferredFollowUp.retry_command` strings fail to
+  parse. Old databases can contain retry commands with the current global flag.
 
 ## Design Principles
 
@@ -209,8 +238,8 @@ Current `--yes` inventory to resolve in the implementation plan:
 ### Tier 3: Always-Live Generation, Boot, Publication, And Recovery Operations
 
 Examples include generation build, switch, rollback, garbage collection,
-publication retry, generation recovery, and generation-bound DB recovery apply
-through `system generation recover-db`.
+generation publish follow-up, generation recovery, and generation-bound DB
+recovery apply through `system generation recover-db`.
 
 UX rule:
 
@@ -221,7 +250,13 @@ UX rule:
   refusal-before-mutation;
 - refusal messages should name the exact active asset: boot selection,
   `/conary/current`, generation-bound DB recovery target, generation
-  publication retry, or rollback target.
+  publication follow-up, or rollback target.
+- interactive generation switch, rollback, garbage collection, publish, and
+  recovery flows should print the concrete generations, boot assets, DB backup,
+  or publication debt they will affect before accepting confirmation;
+- non-interactive generation switch, rollback, and garbage collection should
+  reject a generic `--yes` unless the command has a specific target or a scoped
+  confirmation flag that names the operation's real risk.
 
 Candidate CLI wording:
 
@@ -288,7 +323,23 @@ communicating anything useful.
 ## Implementation Packet Shape
 
 The child implementation plan should be a full behavior plan, not a docs-only
-cleanup. It should likely split into these tasks:
+cleanup. It should tackle the whole old-flag surface in one reviewed packet, but
+the packet should stage compatibility and migration instead of doing one
+all-at-once rename.
+
+Suggested staging:
+
+1. Add the tiered UX and command-scoped confirmations while keeping
+   `--allow-live-system-mutation` accepted as a deprecated compatibility alias;
+   update the conary-test manifest validator to accept either the old alias or
+   the new apply-intent form.
+2. Migrate active tests, integration manifests, user-facing source hints, docs,
+   and generated manpages to the new wording.
+3. Only after active surfaces are migrated, decide whether to hide, warn on, or
+   eventually remove the old global flag. Hard removal requires a separate
+   compatibility plan for old databases with persisted retry commands.
+
+The implementation packet should likely split into these tasks:
 
 1. Add failing tests for the new Tier 1/Tier 2/Tier 3 UX expectations.
 2. Run an `rg` inventory of `allow-live-system-mutation`,
@@ -303,13 +354,16 @@ cleanup. It should likely split into these tasks:
 6. Update dispatch and command-risk enforcement while preserving deeper
    refusal-before-mutation checks.
 7. Update conaryd package-job request handling with a compatibility path.
-8. Update integration manifests and manifest validation tests.
-9. Update docs and generated manpage.
+8. Update integration manifests and manifest validation tests while temporarily
+   accepting both old and new intent forms.
+9. Update docs, user-facing source hints, persisted follow-up generators, and
+   generated manpages.
 10. Run focused and medium gates.
 
-The implementation plan should keep changes in one reviewed slice because the
-old phrase is spread through tests, docs, manifests, and daemon behavior. A
-partial rename would leave users and agents with contradictory guidance.
+The implementation plan should still avoid a partial user-visible rename. The
+old phrase is spread through tests, docs, manifests, persisted follow-up hints,
+and daemon behavior; any staged compatibility path must be explicit about which
+surfaces still accept old input and which surfaces now prefer the new wording.
 
 ## Verification Gates
 
@@ -336,7 +390,7 @@ semantics change:
 Docs and hygiene gates:
 
 - `bash scripts/check-doc-audit-ledger.sh docs/superpowers/documentation-accuracy-audit-ledger.tsv --require-complete`
-- `bash scripts/docs-audit-inventory.sh | diff -u docs/superpowers/documentation-accuracy-audit-inventory.tsv -`
+- `LC_ALL=C bash scripts/docs-audit-inventory.sh | diff -u docs/superpowers/documentation-accuracy-audit-inventory.tsv -`
 - `git diff --check`
 - an added-line stale-term sweep over touched docs and active plans/specs.
 
@@ -350,6 +404,8 @@ Docs and hygiene gates:
   explicit operator intent that names the real risk.
 - conaryd package jobs preserve compatibility while aligning new docs/tests
   with the redesigned intent model.
+- Old persisted follow-up retry commands containing the current global flag
+  still parse during the compatibility window.
 - Docs, manpage, CLI help, tests, and integration manifests no longer disagree
   about the preferred apply path.
 - Refusal tests still prove that unsafe commands fail before mutation when
