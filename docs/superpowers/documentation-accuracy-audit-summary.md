@@ -319,6 +319,11 @@ CCS install hotspot so CCS native contract work can proceed separately, and it
 narrows the first refactor to the install-side legacy replay adapter plus docs
 routing.
 
+The first Phase 4 implementation slice extracted the install legacy replay
+adapter into `apps/conary/src/commands/install/legacy_replay.rs` and refreshed
+assistant plus fixture routing so replay refactors no longer start in the full
+install orchestrator.
+
 ## Verification Commands
 
 - `bash scripts/docs-audit-inventory.sh`

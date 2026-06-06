@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-06-06
-revision: 1
-summary: Map Remi and CCS conversion/publication fixture ownership and proof gates
+revision: 2
+summary: Map Remi, CCS, and install replay fixture ownership and proof gates
 ---
 
 # Test Fixtures And Proof Maps
@@ -34,7 +34,7 @@ Each fixture family should record:
 | Family ID | Owner | Fast proof |
 |-----------|-------|------------|
 | `ccs-convert-golden-cases` | CCS convert | `cargo test -p conary-core golden_fixtures`; `cargo test -p conary-core support_matrix` |
-| `legacy-scriptlet-bundle-fixtures` | Conary CLI tests | `cargo test -p conary --test bundle_replay synthetic_legacy_bundle_fixtures_cover_task5_matrix` |
+| `legacy-scriptlet-bundle-fixtures` | Install replay adapter and Conary CLI tests | `cargo test -p conary --test bundle_replay synthetic_legacy_bundle_fixtures_cover_task5_matrix` |
 | `remi-scriptlet-publication-gate` | Remi server publication | `cargo test -p remi publication` |
 | `remi-test-artifact-fixtures` | Remi artifact handlers | `cargo test -p remi test_upload_fixture`; `cargo test -p remi test_public_fixture_get_and_head` |
 | `conary-test-remi-manifests` | Integration harness | `cargo run -p conary-test -- list`; `cargo test -p conary-test suite_inventory` |
@@ -61,7 +61,8 @@ Each fixture family should record:
 
 ### legacy-scriptlet-bundle-fixtures
 
-- **Owner:** Conary CLI tests:
+- **Owner:** Install replay adapter:
+  `apps/conary/src/commands/install/legacy_replay.rs`; fixture builders:
   `apps/conary/tests/common/legacy_scriptlet_fixtures.rs`.
 - **Purpose:** Synthetic legacy scriptlet bundles for install, remove, upgrade,
   foreign replay, and query safety behavior.
