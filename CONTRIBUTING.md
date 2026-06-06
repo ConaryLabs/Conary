@@ -158,6 +158,19 @@ cargo test -p conaryd
 - Minimize `.unwrap()` in production code paths -- prefer `?` or explicit error handling
 - Keep ownership explicit: service and daemon code live in `apps/remi` and `apps/conaryd`, not behind a root feature flag
 
+### Maintainability Slices
+
+Refactor and cleanup PRs are welcome when they make ownership clearer. Keep
+them focused: name the current responsibility, the module or helper that should
+own it, and the focused verification command that proves behavior is preserved
+or intentionally changed.
+
+Large files are review signals. Use `scripts/line-count-report.sh` to refresh
+the current hotspot list when planning broad maintenance work. Do not split a
+file only to reduce line count; split when a responsibility has a clearer home.
+Persisted state, package formats, trust metadata, and integration-test
+manifests need explicit compatibility or migration decisions before they change.
+
 ### Commit Messages
 
 This project uses [Conventional Commits](https://www.conventionalcommits.org/). Every commit message must start with a type prefix:

@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-05-22
-revision: 8
-summary: GPT-5.5/Codex-first map with local bootstrap smoke routing
+last_updated: 2026-06-06
+revision: 9
+summary: GPT-5.5/Codex-first map with maintainability packet routing and local bootstrap smoke routing
 ---
 
 # Conary For Coding Assistants
@@ -137,6 +137,13 @@ other non-UTC context.
   publishing and does not add live MCP resources or live MCP prompts.
 - When version-specific library behavior matters, check current external
   documentation instead of guessing APIs.
+- For maintainability, pruning, or refactor work, require the task packet to
+  name the owning subsystem, the current large-file or stale-surface pressure,
+  the intended new boundary, persisted-state impact, focused verification, and
+  docs or subsystem-map updates.
+- Use `scripts/line-count-report.sh` when a planning or review pass needs a
+  fresh Rust hotspot snapshot. Treat the report as a prioritization aid, not a
+  CI failure condition.
 
 ## Freshness Rules
 

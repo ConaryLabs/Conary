@@ -19,6 +19,21 @@ Use standard Rust formatting (`cargo fmt`) and keep Clippy clean. Indentation is
 
 Recent history uses conventional-style prefixes such as `fix:`, `security:`, and `docs:`. Keep commit subjects short and imperative, e.g. `security(federation): pin https peer identity`. PRs should explain the problem, summarize the fix, list verification commands run, and link the relevant issue/plan entry. Include logs or API examples when behavior changes are not obvious from the diff.
 
+## Maintainability & Refactor Discipline
+Treat large files as review signals, not automatic failures. When a change adds
+substantial behavior to a Rust file over 1000 lines, or adds or changes
+behavior in a Rust file over 1500 lines, name the ownership boundary you are
+preserving or improving before editing. Files over 2500 lines should get a
+reviewed decomposition path before major feature work unless the task is an
+urgent fix.
+
+Refactor and pruning slices must say which behavior moves, which module owns it
+afterward, which persisted state or public surface is affected, and which
+focused test proves behavior stayed the same or changed intentionally. Do not
+split files mechanically, keep command and route handlers thin, and update
+`docs/llms/subsystem-map.md` or the relevant `docs/modules/*.md` file when the
+"look here first" path changes.
+
 ## Testing and Documentation Guidance
 Prefer small unit tests near the code they cover and integration tests in `apps/conary/tests/` for end-to-end CLI flows. Name tests descriptively, for example `test_prepare_discovered_peer_rejects_https_without_pinned_fingerprint`. When touching service code, rerun the owning packages directly with `cargo test -p remi` and `cargo test -p conaryd`. Security and transaction changes should include regression coverage.
 
