@@ -295,6 +295,10 @@ portable docs-audit inventory filtering, tested public CLI help cleanup, and a
 pruning inventory. Active plan roots are therefore not expected to be empty;
 current active roadmap and child-plan files are tracked through the ledger.
 
+The first Phase 2 pruning inventory records the fixed public help strings,
+intentional internal/parser/archive surfaces, deferred runtime target-ID
+normalization, and refresh commands for extending the queue.
+
 ## Verification Commands
 
 - `bash scripts/docs-audit-inventory.sh`
@@ -369,9 +373,9 @@ public tester copy is tracked by
 
 ## Final Counts
 
-- Total tracked doc-like files audited: 142
+- Total tracked doc-like files audited: 143
 - `verified-no-change`: 14
-- `corrected`: 41
+- `corrected`: 42
 - `archived`: 73
 - `retained-historical`: 14
 - Remaining pending rows: 0
