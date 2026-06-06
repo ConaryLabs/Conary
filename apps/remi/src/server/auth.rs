@@ -280,13 +280,16 @@ pub async fn auth_middleware(
     };
 
     if should_touch {
-        tokio::task::spawn_blocking(move || {
-            if let Ok(conn) = conary_core::db::open_fast(&bg_db_path)
-                && let Err(e) = conary_core::db::models::admin_token::touch(&conn, bg_id)
-            {
-                tracing::warn!("Failed to update token last_used_at: {}", e);
-            }
-        });
+        match tokio::task::spawn_blocking(move || {
+            let conn = conary_core::db::open_fast(&bg_db_path)?;
+            conary_core::db::models::admin_token::touch(&conn, bg_id)
+        })
+        .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => tracing::warn!("Failed to update token last_used_at: {}", e),
+            Err(e) => tracing::warn!("Failed to join token last_used_at update task: {}", e),
+        }
     }
 
     response

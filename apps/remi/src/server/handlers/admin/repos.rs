@@ -391,7 +391,7 @@ mod tests {
         // Create a repo
         let create_body = serde_json::json!({
             "name": "fedora",
-            "url": "https://example.com/fedora",
+            "url": "https://93.184.216.34/fedora",
             "enabled": true,
             "priority": 10
         });
@@ -607,7 +607,7 @@ mod tests {
 
         let create_body = serde_json::json!({
             "name": "fedora",
-            "url": "https://example.com/fedora"
+            "url": "https://93.184.216.34/fedora"
         });
         let create_resp = app
             .oneshot(
@@ -626,7 +626,7 @@ mod tests {
         let app2 = rebuild_app(&db_path);
         let update_body = serde_json::json!({
             "name": "fedora",
-            "url": "https://example.com/fedora",
+            "url": "https://93.184.216.34/fedora",
             "content_url": "http://10.0.0.42/content"
         });
         let resp = app2

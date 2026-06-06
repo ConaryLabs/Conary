@@ -323,10 +323,11 @@ mod tests {
     async fn test_federation_peer_lifecycle() {
         let (app, db_path) = test_app().await;
         let token = "test-admin-token-12345";
+        let endpoint = "https://93.184.216.34:7891";
 
         // Add a peer
         let add_body = serde_json::json!({
-            "endpoint": "https://example.com:7891",
+            "endpoint": endpoint,
             "tier": "leaf",
             "node_name": "peer1",
             "tls_fingerprint": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -349,7 +350,7 @@ mod tests {
             .await
             .unwrap();
         let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
-        assert_eq!(body["endpoint"], "https://example.com:7891");
+        assert_eq!(body["endpoint"], endpoint);
         assert_eq!(body["tier"], "leaf");
         assert_eq!(body["is_enabled"], true);
         let peer_id = body["id"]
@@ -414,7 +415,7 @@ mod tests {
         let token = "test-admin-token-12345";
 
         let add_body = serde_json::json!({
-            "endpoint": "https://example.com:7891",
+            "endpoint": "https://93.184.216.34:7891",
             "tier": "leaf",
             "node_name": "peer2"
         });
