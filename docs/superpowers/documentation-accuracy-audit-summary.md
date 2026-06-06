@@ -378,6 +378,15 @@ persistence in `install/mod.rs` while moving the direct CCS transaction entry
 point, option/result pair, manifest selection helper, hook-status helpers, and
 scriptlet capability gate into a focused install submodule.
 
+The Phase 9 CCS payload paths decomposition plan continues the CCS
+maintainability work by targeting the current largest source file,
+`apps/conary/src/commands/ccs/install.rs`. It extracts CCS payload path
+normalization and symlink safety helpers into
+`apps/conary/src/commands/ccs/payload_paths.rs`, while keeping dependency
+validation, component selection, capability policy, trust verification, and
+command orchestration in `ccs/install.rs`, and preserving existing
+cross-module re-exports.
+
 ## Verification Commands
 
 - `bash scripts/docs-audit-inventory.sh`
@@ -452,9 +461,9 @@ public tester copy is tracked by
 
 ## Final Counts
 
-- Total tracked doc-like files audited: 152
+- Total tracked doc-like files audited: 153
 - `verified-no-change`: 13
-- `corrected`: 52
+- `corrected`: 53
 - `archived`: 73
 - `retained-historical`: 14
 - Remaining pending rows: 0
