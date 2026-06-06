@@ -349,6 +349,12 @@ drift report that maps changed paths to feature ownership hints, focused proof
 commands, docs-audit health, and current Rust hotspot context without adding a
 hard CI gate or line-count threshold.
 
+The first Phase 7 implementation slice adds
+`scripts/maintainability-drift-report.sh` as a warn-only local report for
+changed-path owner hints, docs-audit health, focused proof suggestions, and
+current Rust hotspot context. Contributor and assistant guidance now point to
+the report as review support for broad maintenance work, not as a hard gate.
+
 ## Verification Commands
 
 - `bash scripts/docs-audit-inventory.sh`

@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-06-06
-revision: 10
-summary: GPT-5.5/Codex-first map with feature ownership routing and local bootstrap smoke routing
+revision: 11
+summary: GPT-5.5/Codex-first map with feature ownership, bootstrap smoke, and drift-control routing
 ---
 
 # Conary For Coding Assistants
@@ -148,6 +148,9 @@ other non-UTC context.
 - Use `scripts/line-count-report.sh` when a planning or review pass needs a
   fresh Rust hotspot snapshot. Treat the report as a prioritization aid, not a
   CI failure condition.
+- Use `scripts/maintainability-drift-report.sh` before broad feature,
+  refactor, or docs-routing changes to get warn-only changed-path owner hints,
+  docs-audit status, and current hotspot context.
 
 ## Freshness Rules
 

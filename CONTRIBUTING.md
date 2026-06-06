@@ -173,6 +173,12 @@ file only to reduce line count; split when a responsibility has a clearer home.
 Persisted state, package formats, trust metadata, and integration-test
 manifests need explicit compatibility or migration decisions before they change.
 
+Before a broad refactor or cleanup PR, run
+`scripts/maintainability-drift-report.sh` for a warn-only view of changed-path
+owner hints, focused proof commands, docs-audit health, and current Rust
+hotspots. Treat its output as review guidance, not as a substitute for the
+feature card or the tests you actually ran.
+
 ### Feature Ownership And Verification
 
 Use `docs/modules/feature-ownership.md` when a change is easier to describe as
