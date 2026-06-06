@@ -26,7 +26,7 @@ group = "A"
 fatal = true
 
 [[test.step]]
-conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never --allow-live-system-mutation"
+conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never --yes"
 
 [test.step.assert]
 exit_code = 0
@@ -92,7 +92,7 @@ group = "A"
 depends_on = ["T38"]
 
 [[test.step]]
-conary = "remove ${FIXTURE_PKG_NAME} --sandbox never --allow-live-system-mutation"
+conary = "remove ${FIXTURE_PKG_NAME} --sandbox never --yes"
 
 [test.step.assert]
 exit_code = 0
@@ -117,7 +117,7 @@ depends_on = ["T42"]
 fatal = true
 
 [[test.step]]
-conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never --allow-live-system-mutation"
+conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never --yes"
 
 [test.step.assert]
 exit_code = 0
@@ -136,7 +136,7 @@ depends_on = ["T43"]
 fatal = true
 
 [[test.step]]
-conary = "ccs install ${FIXTURE_V2_CCS} --allow-unsigned --sandbox never --allow-live-system-mutation"
+conary = "ccs install ${FIXTURE_V2_CCS} --allow-unsigned --sandbox never --yes"
 
 [test.step.assert]
 exit_code = 0
@@ -189,7 +189,7 @@ depends_on = ["T44"]
 # Get history and extract the most recent changeset ID, then rollback.
 # The shell pipeline extracts the first [N] pattern from history output.
 [[test.step]]
-run = "CS_ID=$(${CONARY_BIN} system history --db-path ${DB_PATH} | grep -oP '\\[\\K\\d+(?=\\])' | head -1) && ${CONARY_BIN} system state rollback $CS_ID --allow-live-system-mutation --db-path ${DB_PATH}"
+run = "CS_ID=$(${CONARY_BIN} system history --db-path ${DB_PATH} | grep -oP '\\[\\K\\d+(?=\\])' | head -1) && ${CONARY_BIN} system state rollback $CS_ID --yes --db-path ${DB_PATH}"
 
 [test.step.assert]
 exit_code = 0
@@ -267,7 +267,7 @@ depends_on = ["T43"]
 
 # Remove the package (may already be removed, check=False equivalent)
 [[test.step]]
-conary = "remove ${FIXTURE_PKG_NAME} --no-scripts --allow-live-system-mutation"
+conary = "remove ${FIXTURE_PKG_NAME} --no-scripts --yes"
 
 # List orphans -- just verify no crash
 [[test.step]]

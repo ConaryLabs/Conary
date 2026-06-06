@@ -25,7 +25,7 @@ group = "N"
 requires = ["composefs_runtime"]
 
 [[test.step]]
-run = "${CONARY_BIN} system generation build --allow-live-system-mutation && ${CONARY_BIN} system generation build --allow-live-system-mutation"
+run = "${CONARY_BIN} system generation build --yes && ${CONARY_BIN} system generation build --yes"
 
 [test.step.assert]
 exit_code = 0

@@ -41,7 +41,7 @@ rm -rf /conary/current /conary/current.native-handoff-backup /conary/native-auth
 ${CONARY_BIN} system init --db-path ${DB_PATH}
 ${native_query}
 test -x ${native_file}
-${CONARY_BIN} --allow-live-system-mutation system adopt ${native_package} --db-path ${DB_PATH}
+${CONARY_BIN} system adopt ${native_package} --db-path ${DB_PATH}
 mkdir -p /conary/generations/71
 ln -s generations/71 /conary/current
 ${CONARY_BIN} system native-handoff --dry-run --db-path ${DB_PATH} > /tmp/native-handoff-dry-run.log 2>&1
@@ -71,7 +71,7 @@ depends_on = ["THND01"]
 run = """
 set -eu
 set +e
-${CONARY_BIN} --allow-live-system-mutation system native-handoff --db-path ${DB_PATH} > /tmp/native-handoff-refusal.log 2>&1
+${CONARY_BIN} system native-handoff --db-path ${DB_PATH} > /tmp/native-handoff-refusal.log 2>&1
 code=$?
 set -e
 cat /tmp/native-handoff-refusal.log
@@ -99,7 +99,7 @@ depends_on = ["THND02"]
 [[test.step]]
 run = """
 set -eu
-${CONARY_BIN} --allow-live-system-mutation system native-handoff --yes --db-path ${DB_PATH} > /tmp/native-handoff-success.log 2>&1
+${CONARY_BIN} system native-handoff --yes --db-path ${DB_PATH} > /tmp/native-handoff-success.log 2>&1
 cat /tmp/native-handoff-success.log
 grep -q "Completed native authority handoff" /tmp/native-handoff-success.log
 test ! -e /conary/current
@@ -132,11 +132,11 @@ rm -rf /conary/current /conary/current.native-handoff-backup /conary/native-auth
 ${CONARY_BIN} system init --db-path ${DB_PATH}
 ${native_query}
 test -x ${native_file}
-${CONARY_BIN} --allow-live-system-mutation system adopt ${native_package} --db-path ${DB_PATH}
+${CONARY_BIN} system adopt ${native_package} --db-path ${DB_PATH}
 mkdir -p /conary/generations/72
 ln -s generations/72 /conary/current
 set +e
-CONARY_TEST_NATIVE_HANDOFF_FAIL_AFTER=current-cleared ${CONARY_BIN} --allow-live-system-mutation system native-handoff --yes --db-path ${DB_PATH} > /tmp/native-handoff-interrupted.log 2>&1
+CONARY_TEST_NATIVE_HANDOFF_FAIL_AFTER=current-cleared ${CONARY_BIN} system native-handoff --yes --db-path ${DB_PATH} > /tmp/native-handoff-interrupted.log 2>&1
 code=$?
 set -e
 cat /tmp/native-handoff-interrupted.log
@@ -145,7 +145,7 @@ grep -q "current-cleared" /tmp/native-handoff-interrupted.log
 test ! -e /conary/current
 test -L /conary/current.native-handoff-backup
 test "$(sqlite3 ${DB_PATH} "SELECT COUNT(*) FROM troves WHERE name = '${native_package}' AND install_source IN ('adopted-track', 'adopted-full')")" = "1"
-${CONARY_BIN} --allow-live-system-mutation system native-handoff --recover --yes --db-path ${DB_PATH} > /tmp/native-handoff-recovered.log 2>&1
+${CONARY_BIN} system native-handoff --recover --yes --db-path ${DB_PATH} > /tmp/native-handoff-recovered.log 2>&1
 cat /tmp/native-handoff-recovered.log
 grep -q "Recovered native authority handoff" /tmp/native-handoff-recovered.log
 test "$(sqlite3 ${DB_PATH} "SELECT COUNT(*) FROM troves WHERE name = '${native_package}'")" = "0"

@@ -52,7 +52,7 @@ exit_code = 0
 
 # Setup: install fixture CCS (always available, no distro repo needed)
 [[test.step]]
-conary = "ccs install ${FIXTURE_V1_CCS} --allow-live-system-mutation --allow-unsigned --sandbox never --reinstall"
+conary = "ccs install ${FIXTURE_V1_CCS} --yes --allow-unsigned --sandbox never --reinstall"
 
 [test.step.assert]
 exit_code = 0
@@ -179,7 +179,7 @@ timeout = 120
 group = "D"
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/cap-net-raw/output/cap-net-raw.ccs --allow-live-system-mutation --allow-unsigned --allow-capabilities --sandbox never --reinstall"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/cap-net-raw/output/cap-net-raw.ccs --yes --allow-unsigned --allow-capabilities --sandbox never --reinstall"
 
 [test.step.assert]
 exit_code = 0
@@ -571,7 +571,7 @@ run = "printf '#!/bin/sh\\necho broken-phase4-runtime\\n' > /usr/bin/phase4-runt
 exit_code = 0
 
 [[test.step]]
-conary = "system restore ${FIXTURE_PKG_NAME} --allow-live-system-mutation"
+conary = "system restore ${FIXTURE_PKG_NAME} --yes"
 
 [test.step.assert]
 exit_code = 0

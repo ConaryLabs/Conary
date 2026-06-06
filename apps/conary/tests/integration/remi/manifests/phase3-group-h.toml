@@ -32,7 +32,7 @@ retries = 3
 
 [[test.step]]
 [test.step.kill_after_log]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/large/10k-files.ccs --allow-unsigned --sandbox never --allow-live-system-mutation"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/large/10k-files.ccs --allow-unsigned --sandbox never --yes"
 pattern = "Deploying files"
 timeout_seconds = 30
 
@@ -67,7 +67,7 @@ memory_limit_mb = 512
 network_isolated = false
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/large/large-package.ccs --allow-unsigned --sandbox never --allow-live-system-mutation"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/large/large-package.ccs --allow-unsigned --sandbox never --yes"
 
 [test.step.assert]
 exit_code_not = 0
@@ -121,14 +121,14 @@ requires = ["composefs_runtime"]
 
 # Step 1: Install a package (populates CAS + DB)
 [[test.step]]
-run = "${CONARY_BIN} ccs install --allow-live-system-mutation /opt/remi-tests/fixtures/adversarial/large/10k-files.ccs --allow-unsigned --sandbox never --db-path ${DB_PATH}"
+run = "${CONARY_BIN} ccs install --yes /opt/remi-tests/fixtures/adversarial/large/10k-files.ccs --allow-unsigned --sandbox never --db-path ${DB_PATH}"
 
 [test.step.assert]
 exit_code = 0
 
 # Step 2: Build a generation (succeeds — reads hashes from DB, not CAS content)
 [[test.step]]
-run = "${CONARY_BIN} system generation build --allow-live-system-mutation 2>&1"
+run = "${CONARY_BIN} system generation build --yes 2>&1"
 
 [test.step.assert]
 exit_code = 0
@@ -143,7 +143,7 @@ exit_code = 0
 
 # Step 4: Generation switch should fail (composefs mount needs CAS as content backend)
 [[test.step]]
-run = "GEN=$(${CONARY_BIN} system generation list 2>/dev/null | grep -oP '^\\s*\\K\\d+' | head -1); ${CONARY_BIN} system generation switch --allow-live-system-mutation ${GEN:-0} 2>&1; echo EXIT:$?"
+run = "GEN=$(${CONARY_BIN} system generation list 2>/dev/null | grep -oP '^\\s*\\K\\d+' | head -1); ${CONARY_BIN} system generation switch --yes ${GEN:-0} 2>&1; echo EXIT:$?"
 
 [test.step.assert]
 stdout_contains = "EXIT:1"
@@ -170,7 +170,7 @@ retries = 3
 
 [[test.step]]
 [test.step.kill_after_log]
-conary = "env CONARY_TEST_HOLD_AFTER_DB_UPDATE_MS=1500 ccs install /opt/remi-tests/fixtures/conary-test-fixture/v2/output/conary-test-fixture-2.0.0.ccs --allow-unsigned --sandbox never"
+conary = "env CONARY_TEST_HOLD_AFTER_DB_UPDATE_MS=1500 ccs install /opt/remi-tests/fixtures/conary-test-fixture/v2/output/conary-test-fixture-2.0.0.ccs --allow-unsigned --sandbox never --yes"
 pattern = "Updating database..."
 timeout_seconds = 30
 
@@ -229,7 +229,7 @@ timeout = 60
 group = "H"
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/failing-scriptlet/output/failing-scriptlet-1.0.0.ccs --allow-unsigned --sandbox never --allow-live-system-mutation"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/failing-scriptlet/output/failing-scriptlet-1.0.0.ccs --allow-unsigned --sandbox never --yes"
 
 [test.step.assert]
 exit_code = 0
@@ -259,7 +259,7 @@ flaky = true
 retries = 3
 
 [[test.step]]
-run = "${CONARY_BIN} ccs install --allow-live-system-mutation /opt/remi-tests/fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0.ccs --allow-unsigned --sandbox never --db-path ${DB_PATH} >/tmp/t94-a.log 2>&1 & PID1=$!; ${CONARY_BIN} ccs install --allow-live-system-mutation /opt/remi-tests/fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0.ccs --allow-unsigned --sandbox never --db-path ${DB_PATH} >/tmp/t94-b.log 2>&1 & PID2=$!; wait $PID1 $PID2 || true; cat /tmp/t94-a.log /tmp/t94-b.log"
+run = "${CONARY_BIN} ccs install --yes /opt/remi-tests/fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0.ccs --allow-unsigned --sandbox never --db-path ${DB_PATH} >/tmp/t94-a.log 2>&1 & PID1=$!; ${CONARY_BIN} ccs install --yes /opt/remi-tests/fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0.ccs --allow-unsigned --sandbox never --db-path ${DB_PATH} >/tmp/t94-b.log 2>&1 & PID2=$!; wait $PID1 $PID2 || true; cat /tmp/t94-a.log /tmp/t94-b.log"
 
 [test.step.assert]
 stdout_contains_any = ["already installed", "database is locked", "installed"]
@@ -279,7 +279,7 @@ retries = 3
 
 [[test.step]]
 [test.step.kill_after_log]
-conary = "env CONARY_TEST_HOLD_DURING_ROLLBACK_MS=1500 system state rollback 1 --allow-live-system-mutation"
+conary = "env CONARY_TEST_HOLD_DURING_ROLLBACK_MS=1500 system state rollback 1 --yes"
 pattern = "Rolling back changeset"
 timeout_seconds = 30
 
@@ -314,14 +314,14 @@ memory_limit_mb = 512
 network_isolated = false
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0.ccs --allow-unsigned --sandbox never --allow-live-system-mutation"
+conary = "ccs install /opt/remi-tests/fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0.ccs --allow-unsigned --sandbox never --yes"
 
 [test.step.assert]
 exit_code = 0
 
 [[test.step]]
 [test.step.kill_after_log]
-conary = "env CONARY_TEST_HOLD_DURING_REMOVE_MS=1500 remove conary-test-fixture --no-scripts --allow-live-system-mutation"
+conary = "env CONARY_TEST_HOLD_DURING_REMOVE_MS=1500 remove conary-test-fixture --no-scripts --yes"
 pattern = "Removing package"
 timeout_seconds = 30
 

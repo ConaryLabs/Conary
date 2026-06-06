@@ -45,34 +45,66 @@ mod tests {
             || (segment.starts_with("env ") && segment.contains(" remove "))
     }
 
+    fn segment_matches_command(segment: &str, command: &str) -> bool {
+        segment.starts_with(command)
+            || segment.contains(&format!(" {command} "))
+            || segment.contains(&format!("${{CONARY_BIN}} {command}"))
+    }
+
+    fn is_package_apply_segment(segment: &str) -> bool {
+        segment.starts_with("install ")
+            || segment.starts_with("update ")
+            || segment.starts_with("ccs install ")
+            || segment.contains("${CONARY_BIN} install ")
+            || segment.contains("${CONARY_BIN} update ")
+            || segment.contains("${CONARY_BIN} ccs install ")
+            || (segment.starts_with("env ")
+                && (segment.contains(" install ") || segment.contains(" ccs install ")))
+    }
+
     fn is_system_mutation_segment(segment: &str) -> bool {
+        if segment_matches_command(segment, "system adopt") {
+            return segment.split_whitespace().any(|arg| arg == "--sync-hook");
+        }
+
         [
+            "system restore",
+            "system native-handoff",
+            "system state revert",
             "system state rollback",
+            "system db-backup recover",
             "system generation build",
+            "system generation publish",
             "system generation switch",
             "system generation gc",
             "system generation rollback",
             "system generation recover",
+            "system generation recover-db",
+            "system takeover",
             "system unadopt",
+            "model apply",
+            "automation apply",
         ]
         .iter()
-        .any(|command| {
-            segment.starts_with(command)
-                || segment.contains(&format!(" {command} "))
-                || segment.contains(&format!("${{CONARY_BIN}} {command}"))
-        })
+        .any(|command| segment_matches_command(segment, command))
     }
 
     fn live_mutation_segments(command: &str) -> impl Iterator<Item = &str> {
         command.split(';').filter_map(|segment| {
             let segment = segment.trim();
-            (is_package_remove_segment(segment) || is_system_mutation_segment(segment))
-                .then_some(segment)
+            (is_package_apply_segment(segment)
+                || is_package_remove_segment(segment)
+                || is_system_mutation_segment(segment))
+            .then_some(segment)
         })
     }
 
     fn is_dry_run_segment(segment: &str) -> bool {
         segment.split_whitespace().any(|arg| arg == "--dry-run")
+    }
+
+    fn has_apply_intent(segment: &str) -> bool {
+        segment.contains("--yes") || segment.contains("--allow-live-system-mutation")
     }
 
     #[test]
@@ -477,8 +509,8 @@ ccs_file = "conary-test-fixture-1.0.0.ccs"
                                 continue;
                             }
                             assert!(
-                                segment.contains("--allow-live-system-mutation"),
-                                "{}:{} step {} mutation command must acknowledge live mutation: {}",
+                                has_apply_intent(segment),
+                                "{}:{} step {} mutation command must include apply intent: {}",
                                 path.display(),
                                 test.id,
                                 index + 1,

@@ -39,7 +39,7 @@ conary = "repo sync ${REPO_NAME} --force"
 exit_code = 0
 
 [[test.step]]
-conary = "install ${TEST_PACKAGE_1} --no-scripts --no-deps --sandbox never --allow-live-system-mutation"
+conary = "install ${TEST_PACKAGE_1} --no-scripts --no-deps --sandbox never --yes"
 
 [test.step.assert]
 exit_code = 0
@@ -56,7 +56,7 @@ timeout = 60
 depends_on = ["T10a"]
 
 [[test.step]]
-conary = "remove ${TEST_PACKAGE_1} --no-scripts --allow-live-system-mutation"
+conary = "remove ${TEST_PACKAGE_1} --no-scripts --yes"
 
 [test.step.assert]
 exit_code = 0
@@ -111,7 +111,7 @@ timeout = 300
 depends_on = ["T11"]
 
 [[test.step]]
-conary = "install ${TEST_PACKAGE_1} --no-scripts --no-deps --sandbox never --allow-live-system-mutation"
+conary = "install ${TEST_PACKAGE_1} --no-scripts --no-deps --sandbox never --yes"
 
 [test.step.assert]
 exit_code = 0
@@ -182,7 +182,7 @@ timeout = 300
 depends_on = ["T04"]
 
 [[test.step]]
-conary = "install ${TEST_PACKAGE_2} --no-scripts --no-deps --sandbox never --allow-live-system-mutation"
+conary = "install ${TEST_PACKAGE_2} --no-scripts --no-deps --sandbox never --yes"
 
 [test.step.assert]
 exit_code = 0
@@ -216,7 +216,7 @@ timeout = 60
 depends_on = ["T04"]
 
 [[test.step]]
-conary = "--allow-live-system-mutation system adopt curl"
+conary = "system adopt curl"
 
 [test.step.assert]
 exit_code = 0
@@ -269,7 +269,7 @@ timeout = 60
 depends_on = ["T21a"]
 
 [[test.step]]
-conary = "--allow-live-system-mutation system unadopt curl"
+conary = "system unadopt curl --yes"
 
 [test.step.assert]
 exit_code = 0
@@ -300,7 +300,7 @@ timeout = 90
 depends_on = ["T21b"]
 
 [[test.step]]
-conary = "--allow-live-system-mutation system adopt curl"
+conary = "system adopt curl"
 
 [test.step.assert]
 exit_code = 0
@@ -313,7 +313,7 @@ exit_code = 0
 stdout_contains_all = ["Would unadopt", "curl"]
 
 [[test.step]]
-conary = "--allow-live-system-mutation system unadopt --all"
+conary = "system unadopt --all --yes"
 
 [test.step.assert]
 exit_code = 0
@@ -410,7 +410,7 @@ timeout = 300
 depends_on = ["T04"]
 
 [[test.step]]
-conary = "install ${TEST_PACKAGE_3} --no-scripts --no-deps --sandbox never --allow-live-system-mutation"
+conary = "install ${TEST_PACKAGE_3} --no-scripts --no-deps --sandbox never --yes"
 
 [test.step.assert]
 exit_code = 0
@@ -459,17 +459,17 @@ timeout = 300
 depends_on = ["T04"]
 
 [[test.step]]
-run = "${CONARY_BIN} remove ${TEST_PACKAGE_1} --no-scripts --allow-live-system-mutation --db-path ${DB_PATH} >/dev/null 2>&1 || true"
+run = "${CONARY_BIN} remove ${TEST_PACKAGE_1} --no-scripts --yes --db-path ${DB_PATH} >/dev/null 2>&1 || true"
 
 [[test.step]]
-conary = "install ${TEST_PACKAGE_1} --no-scripts --dep-mode satisfy --yes --sandbox never --allow-live-system-mutation"
+conary = "install ${TEST_PACKAGE_1} --no-scripts --dep-mode satisfy --yes --sandbox never"
 
 [test.step.assert]
 exit_code = 0
 
 # Cleanup: remove the package for later tests
 [[test.step]]
-run = "${CONARY_BIN} remove ${TEST_PACKAGE_1} --no-scripts --allow-live-system-mutation --db-path ${DB_PATH} >/dev/null 2>&1 || true"
+run = "${CONARY_BIN} remove ${TEST_PACKAGE_1} --no-scripts --yes --db-path ${DB_PATH} >/dev/null 2>&1 || true"
 
 # --------------------------------------------------------------------------
 # T29: Dep Mode Adopt
@@ -483,10 +483,10 @@ timeout = 300
 depends_on = ["T04"]
 
 [[test.step]]
-run = "${CONARY_BIN} remove ${TEST_PACKAGE_2} --no-scripts --allow-live-system-mutation --db-path ${DB_PATH} >/dev/null 2>&1 || true"
+run = "${CONARY_BIN} remove ${TEST_PACKAGE_2} --no-scripts --yes --db-path ${DB_PATH} >/dev/null 2>&1 || true"
 
 [[test.step]]
-conary = "install ${TEST_PACKAGE_2} --no-scripts --dep-mode adopt --yes --sandbox never --allow-live-system-mutation"
+conary = "install ${TEST_PACKAGE_2} --no-scripts --dep-mode adopt --yes --sandbox never"
 
 [test.step.assert]
 exit_code = 0
@@ -506,10 +506,10 @@ timeout = 300
 depends_on = ["T04"]
 
 [[test.step]]
-run = "${CONARY_BIN} remove ${TEST_PACKAGE_3} --no-scripts --allow-live-system-mutation --db-path ${DB_PATH} >/dev/null 2>&1 || true"
+run = "${CONARY_BIN} remove ${TEST_PACKAGE_3} --no-scripts --yes --db-path ${DB_PATH} >/dev/null 2>&1 || true"
 
 [[test.step]]
-conary = "install ${TEST_PACKAGE_3} --no-scripts --dep-mode takeover --yes --sandbox never --allow-live-system-mutation"
+conary = "install ${TEST_PACKAGE_3} --no-scripts --dep-mode takeover --yes --sandbox never"
 
 [test.step.assert]
 exit_code = 0
@@ -530,7 +530,7 @@ depends_on = ["T04"]
 
 # Attempt to install glibc (should fail or be blocked)
 [[test.step]]
-conary = "install glibc --no-scripts --dep-mode takeover --yes --sandbox never --allow-live-system-mutation"
+conary = "install glibc --no-scripts --dep-mode takeover --yes --sandbox never"
 
 # Verify glibc does NOT appear in installed list
 [[test.step]]
@@ -553,11 +553,11 @@ depends_on = ["T04"]
 
 # Ensure curl is adopted
 [[test.step]]
-conary = "--allow-live-system-mutation system adopt curl"
+conary = "system adopt curl"
 
 # Run update with dep-mode satisfy
 [[test.step]]
-conary = "update --dep-mode satisfy --allow-live-system-mutation"
+conary = "update --dep-mode satisfy --yes"
 
 [test.step.assert]
 exit_code = 0
@@ -610,7 +610,7 @@ timeout = 10
 depends_on = ["T04"]
 
 [[test.step]]
-run = "${CONARY_BIN} system generation gc --allow-live-system-mutation"
+run = "${CONARY_BIN} system generation gc --yes"
 
 [test.step.assert]
 stdout_contains_any = ["Nothing to clean", "No generations", "Nothing to collect"]
