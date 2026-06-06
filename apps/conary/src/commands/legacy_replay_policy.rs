@@ -103,9 +103,38 @@ mod tests {
     use conary_core::db::models::DistroPin;
     use conary_core::repository::distro::ReplayTargetOwned;
     use conary_core::scriptlet::SandboxMode;
-    use std::sync::Mutex;
+    use std::sync::mpsc::RecvTimeoutError;
+    use std::time::Duration;
 
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    fn env_lock() -> crate::commands::composefs_ops::TestMountEnvGuard {
+        crate::commands::composefs_ops::test_mount_env_guard()
+    }
+
+    #[test]
+    fn env_lock_serializes_with_generation_mount_skip_guard() {
+        let mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+        let (tx, rx) = std::sync::mpsc::channel();
+
+        let handle = std::thread::spawn(move || {
+            let _guard = env_lock();
+            tx.send(()).expect("send env lock acquired");
+        });
+
+        match rx.recv_timeout(Duration::from_millis(100)) {
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(error) => panic!("env lock worker exited unexpectedly: {error}"),
+            Ok(()) => panic!("legacy replay env lock acquired while mount skip guard was held"),
+        }
+        assert_eq!(
+            std::env::var("CONARY_TEST_SKIP_GENERATION_MOUNT").as_deref(),
+            Ok("1")
+        );
+
+        drop(mount_guard);
+        handle.join().expect("env lock worker");
+        rx.recv()
+            .expect("env lock should acquire after mount skip guard drops");
+    }
 
     #[test]
     fn host_context_uses_current_distro_pin() {
@@ -141,7 +170,7 @@ mod tests {
 
     #[test]
     fn policy_input_uses_host_target_not_source_target() {
-        let _guard = ENV_LOCK.lock().expect("env lock");
+        let _guard = env_lock();
         unsafe {
             std::env::remove_var("CONARY_TEST_SKIP_GENERATION_MOUNT");
             std::env::remove_var("CONARY_TEST_COMPATIBILITY_MATRIX_JSON");
@@ -171,7 +200,7 @@ mod tests {
 
     #[test]
     fn test_matrix_env_is_ignored_without_test_marker() {
-        let _guard = ENV_LOCK.lock().expect("env lock");
+        let _guard = env_lock();
         let matrix_json = serde_json::to_string(&synthetic_matrix()).expect("matrix json");
         unsafe {
             std::env::remove_var("CONARY_TEST_SKIP_GENERATION_MOUNT");
@@ -188,7 +217,7 @@ mod tests {
 
     #[test]
     fn invalid_test_matrix_json_fails_closed() {
-        let _guard = ENV_LOCK.lock().expect("env lock");
+        let _guard = env_lock();
         unsafe {
             std::env::set_var("CONARY_TEST_SKIP_GENERATION_MOUNT", "1");
             std::env::set_var("CONARY_TEST_COMPATIBILITY_MATRIX_JSON", "{not-json");
@@ -209,7 +238,7 @@ mod tests {
 
     #[test]
     fn invalid_test_matrix_entries_fail_closed() {
-        let _guard = ENV_LOCK.lock().expect("env lock");
+        let _guard = env_lock();
         let duplicate_json = r#"{
             "entries": [
                 {

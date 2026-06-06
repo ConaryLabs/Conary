@@ -377,6 +377,25 @@ pub(crate) struct TestMountSkipGuard {
 static TEST_MOUNT_SKIP_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(test)]
+fn lock_test_mount_skip() -> std::sync::MutexGuard<'static, ()> {
+    TEST_MOUNT_SKIP_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+#[cfg(test)]
+pub(crate) struct TestMountEnvGuard {
+    _guard: std::sync::MutexGuard<'static, ()>,
+}
+
+#[cfg(test)]
+pub(crate) fn test_mount_env_guard() -> TestMountEnvGuard {
+    TestMountEnvGuard {
+        _guard: lock_test_mount_skip(),
+    }
+}
+
+#[cfg(test)]
 pub(crate) struct TestMountSkipClearGuard {
     _guard: std::sync::MutexGuard<'static, ()>,
     previous: Option<std::ffi::OsString>,
@@ -384,7 +403,7 @@ pub(crate) struct TestMountSkipClearGuard {
 
 #[cfg(test)]
 pub(crate) fn test_mount_skip_guard() -> TestMountSkipGuard {
-    let guard = TEST_MOUNT_SKIP_LOCK.lock().unwrap();
+    let guard = lock_test_mount_skip();
     unsafe {
         std::env::set_var("CONARY_TEST_SKIP_GENERATION_MOUNT", "1");
     }
@@ -393,7 +412,7 @@ pub(crate) fn test_mount_skip_guard() -> TestMountSkipGuard {
 
 #[cfg(test)]
 pub(crate) fn test_mount_skip_clear_guard() -> TestMountSkipClearGuard {
-    let guard = TEST_MOUNT_SKIP_LOCK.lock().unwrap();
+    let guard = lock_test_mount_skip();
     let previous = std::env::var_os("CONARY_TEST_SKIP_GENERATION_MOUNT");
     unsafe {
         std::env::remove_var("CONARY_TEST_SKIP_GENERATION_MOUNT");
