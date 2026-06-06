@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-06-06
-revision: 9
-summary: GPT-5.5/Codex-first map with maintainability packet routing and local bootstrap smoke routing
+revision: 10
+summary: GPT-5.5/Codex-first map with feature ownership routing and local bootstrap smoke routing
 ---
 
 # Conary For Coding Assistants
@@ -99,6 +99,7 @@ other non-UTC context.
 - [`docs/INTEGRATION-TESTING.md`](../INTEGRATION-TESTING.md): `conary-test` suites, phases, and runtime expectations
 - [`docs/modules/bootstrap.md`](../modules/bootstrap.md): bootstrap pipeline background
 - [`docs/modules/ccs.md`](../modules/ccs.md): CCS format and tooling notes
+- [`docs/modules/feature-ownership.md`](../modules/feature-ownership.md): feature ownership cards and interaction verification gates
 - [`docs/modules/federation.md`](../modules/federation.md): Remi federation model and trust constraints
 - [`docs/modules/query.md`](../modules/query.md): CLI query surface and related data paths
 - [`docs/modules/recipe.md`](../modules/recipe.md): recipe/build-system background
@@ -141,6 +142,9 @@ other non-UTC context.
   name the owning subsystem, the current large-file or stale-surface pressure,
   the intended new boundary, persisted-state impact, focused verification, and
   docs or subsystem-map updates.
+- For feature-scoped work, use `docs/modules/feature-ownership.md` to find the
+  start-here files, neighboring systems, focused proof, and broader interaction
+  gate before editing.
 - Use `scripts/line-count-report.sh` when a planning or review pass needs a
   fresh Rust hotspot snapshot. Treat the report as a prioritization aid, not a
   CI failure condition.

@@ -65,8 +65,10 @@ If you work with an LLM coding tool, start with:
 
 1. `AGENTS.md`
 2. `docs/llms/README.md`
-3. `docs/INTEGRATION-TESTING.md` when validation spans `conary-test`
-4. `docs/operations/infrastructure.md` for MCP, deploy, and host workflow notes
+3. `docs/modules/feature-ownership.md` when choosing a feature area or
+   deciding which cross-system gates apply
+4. `docs/INTEGRATION-TESTING.md` when validation spans `conary-test`
+5. `docs/operations/infrastructure.md` for MCP, deploy, and host workflow notes
 
 Tool-specific files such as `GEMINI.md` and `.github/copilot-instructions.md`
 are compatibility shims. Prefer the linked
@@ -170,6 +172,18 @@ the current hotspot list when planning broad maintenance work. Do not split a
 file only to reduce line count; split when a responsibility has a clearer home.
 Persisted state, package formats, trust metadata, and integration-test
 manifests need explicit compatibility or migration decisions before they change.
+
+### Feature Ownership And Verification
+
+Use `docs/modules/feature-ownership.md` when a change is easier to describe as
+a feature than as a crate or file. Each card names the files to read first, the
+neighboring systems that can be affected, a focused proof command for small
+edits, and a broader interaction gate for behavior that crosses subsystem
+boundaries.
+
+Small docs-only or module-local changes do not need full workspace validation by
+default. Run the focused proof for the touched feature, then add the broader
+gate when the card's neighboring systems are affected.
 
 ### Commit Messages
 
