@@ -54,7 +54,11 @@ use conversion::{
     install_converted_ccs, try_convert_to_ccs,
 };
 use dependencies::extract_runtime_deps;
-// execute::get_files_to_remove is used by batch.rs via super::execute
+use execute::{
+    PackageExecutionPath, live_root_files_from_stored_files,
+    preflight_extracted_live_root_file_ownership, prepare_install_environment_before_scriptlets,
+    run_triggers,
+};
 use prepare::{check_upgrade_status, parse_package};
 use resolve::{
     PolicyOptions, ResolutionOutcome, ResolvedSourceType, check_provides_dependencies,
@@ -86,169 +90,6 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use tracing::{debug, info, warn};
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum PackageExecutionPath {
-    GenerationAware,
-    MutableLiveRoot,
-}
-
-fn package_execution_path(db_path: &str) -> Result<PackageExecutionPath> {
-    let runtime_root =
-        conary_core::runtime_root::ConaryRuntimeRoot::from_db_path(PathBuf::from(db_path));
-    let current_link = runtime_root.root().join("current");
-    let has_current_link = match std::fs::symlink_metadata(&current_link) {
-        Ok(metadata) if metadata.file_type().is_symlink() && !current_link.exists() => {
-            let target = std::fs::read_link(&current_link)
-                .with_context(|| format!("Failed to read {}", current_link.display()))?;
-            anyhow::bail!(
-                "current generation symlink {} -> {} is dangling",
-                current_link.display(),
-                target.display()
-            );
-        }
-        Ok(_) => true,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
-        Err(error) => {
-            return Err(error)
-                .with_context(|| format!("Failed to inspect {}", current_link.display()));
-        }
-    };
-    if !has_current_link && std::env::var_os("CONARY_TEST_SKIP_GENERATION_MOUNT").is_some() {
-        return Ok(PackageExecutionPath::GenerationAware);
-    }
-    let current = conary_core::generation::mount::current_generation(runtime_root.root())?;
-    Ok(match current {
-        Some(_) => PackageExecutionPath::GenerationAware,
-        None => PackageExecutionPath::MutableLiveRoot,
-    })
-}
-
-fn prepare_install_environment_before_scriptlets(
-    conn: &rusqlite::Connection,
-    db_path: &str,
-    root: &str,
-) -> Result<PackageExecutionPath> {
-    let execution_path = package_execution_path(db_path)?;
-    recover_mutable_journals_before_scriptlets(conn, db_path, root, execution_path)?;
-    Ok(execution_path)
-}
-
-fn recover_mutable_journals_before_scriptlets(
-    conn: &rusqlite::Connection,
-    db_path: &str,
-    root: &str,
-    execution_path: PackageExecutionPath,
-) -> Result<()> {
-    if execution_path == PackageExecutionPath::MutableLiveRoot {
-        let runtime_root =
-            conary_core::runtime_root::ConaryRuntimeRoot::from_db_path(PathBuf::from(db_path));
-        super::live_root::recover_pending_journals_with_changesets(
-            runtime_root.root(),
-            Path::new(root),
-            conn,
-        )?;
-    }
-    Ok(())
-}
-
-fn preflight_extracted_live_root_file_ownership(
-    conn: &rusqlite::Connection,
-    pkg: &dyn conary_core::packages::PackageFormat,
-    extraction: &ExtractionResult,
-    execution_path: PackageExecutionPath,
-) -> Result<()> {
-    if execution_path == PackageExecutionPath::MutableLiveRoot {
-        inner::preflight_live_root_file_ownership(
-            conn,
-            extraction
-                .extracted_files
-                .iter()
-                .map(|file| file.path.as_str()),
-            pkg.name(),
-        )?;
-    }
-    Ok(())
-}
-
-fn live_root_files_from_stored_files(
-    cas: &conary_core::filesystem::CasStore,
-    stored_files: &[inner::StoredInstallFile],
-) -> Result<Vec<crate::commands::LiveRootFile>> {
-    stored_files
-        .iter()
-        .map(|file| {
-            let content = if let Some(target) = file.symlink_target.as_deref() {
-                let stored_target = cas
-                    .retrieve_symlink(&file.hash)
-                    .with_context(|| format!("Failed to read symlink {} from CAS", file.path))?;
-                if stored_target != target {
-                    anyhow::bail!(
-                        "CAS symlink target mismatch for {}: expected {}, got {}",
-                        file.path,
-                        target,
-                        stored_target
-                    );
-                }
-                Vec::new()
-            } else {
-                let content = cas
-                    .retrieve(&file.hash)
-                    .with_context(|| format!("Failed to read {} from CAS", file.path))?;
-                if content.len() as i64 != file.size {
-                    anyhow::bail!(
-                        "CAS object size mismatch for {}: expected {}, got {}",
-                        file.path,
-                        file.size,
-                        content.len()
-                    );
-                }
-                content
-            };
-            Ok(crate::commands::LiveRootFile {
-                path: file.path.clone(),
-                content,
-                mode: file.mode,
-                symlink_target: file.symlink_target.clone(),
-            })
-        })
-        .collect()
-}
-pub(super) fn run_triggers(
-    conn: &rusqlite::Connection,
-    root: &Path,
-    changeset_id: i64,
-    file_paths: &[String],
-) {
-    let trigger_executor = conary_core::trigger::TriggerExecutor::new(conn, root);
-
-    let triggered = trigger_executor
-        .record_triggers(changeset_id, file_paths)
-        .unwrap_or_else(|e| {
-            warn!("Failed to record triggers: {}", e);
-            Vec::new()
-        });
-
-    if !triggered.is_empty() {
-        info!("Recorded {} trigger(s) for execution", triggered.len());
-        match trigger_executor.execute_pending(changeset_id) {
-            Ok(results) => {
-                if results.total() > 0 {
-                    info!(
-                        "Triggers: {} succeeded, {} failed, {} skipped",
-                        results.succeeded, results.failed, results.skipped
-                    );
-                    for error in &results.errors {
-                        warn!("Trigger error: {}", error);
-                    }
-                }
-            }
-            Err(e) => {
-                warn!("Trigger execution failed: {}", e);
-            }
-        }
-    }
-}
-
 pub(crate) fn resolve_default_dep_mode_from_model() -> DepMode {
     let convergence = if conary_core::model::model_exists(None) {
         conary_core::model::load_model(None)
@@ -2358,50 +2199,6 @@ mod tests {
             "owned elsewhere"
         );
     }
-
-    #[test]
-    fn recover_mutable_journals_runs_before_scriptlets() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().join("root");
-        let db_path = temp.path().join("conary.db");
-        let live_file = root.join("usr/bin/fixture");
-        std::fs::create_dir_all(live_file.parent().unwrap()).unwrap();
-        std::fs::write(&live_file, "before").unwrap();
-        conary_core::db::init(&db_path).unwrap();
-        let conn = conary_core::db::open(&db_path).unwrap();
-
-        let tx_uuid = uuid::Uuid::new_v4().to_string();
-        let mut live_tx = crate::commands::LiveRootTransaction::begin(
-            temp.path(),
-            &root,
-            tx_uuid,
-            "install fixture",
-        )
-        .unwrap();
-        live_tx
-            .apply_install_files(&[crate::commands::LiveRootFile {
-                path: "/usr/bin/fixture".to_string(),
-                content: b"after".to_vec(),
-                mode: 0o100644,
-                symlink_target: None,
-            }])
-            .unwrap();
-        std::mem::forget(live_tx);
-        assert_eq!(std::fs::read_to_string(&live_file).unwrap(), "after");
-
-        let db_path_string = db_path.to_string_lossy().into_owned();
-        let root_string = root.to_string_lossy().into_owned();
-        recover_mutable_journals_before_scriptlets(
-            &conn,
-            &db_path_string,
-            &root_string,
-            PackageExecutionPath::MutableLiveRoot,
-        )
-        .unwrap();
-
-        assert_eq!(std::fs::read_to_string(&live_file).unwrap(), "before");
-    }
-
     #[test]
     fn package_execution_path_is_prepared_before_dependency_handling() {
         let source = include_str!("mod.rs");
@@ -2454,59 +2251,6 @@ mod tests {
             "direct installs must preflight live-root ownership after extraction and before scriptlets"
         );
     }
-
-    #[test]
-    fn live_root_files_are_loaded_from_stored_cas_objects() {
-        let temp = tempfile::tempdir().unwrap();
-        let cas = conary_core::filesystem::CasStore::new(temp.path().join("objects")).unwrap();
-        let hash = cas.store(b"from cas").unwrap();
-        let files = live_root_files_from_stored_files(
-            &cas,
-            &[inner::StoredInstallFile {
-                path: "/usr/bin/fixture".to_string(),
-                hash,
-                size: 8,
-                mode: 0o100755,
-                symlink_target: None,
-            }],
-        )
-        .unwrap();
-
-        assert_eq!(files.len(), 1);
-        assert_eq!(files[0].content, b"from cas");
-    }
-
-    #[test]
-    fn package_execution_path_fails_closed_on_invalid_generation_state() {
-        let temp = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(temp.path().join("generations/not-a-generation")).unwrap();
-        std::os::unix::fs::symlink("generations/not-a-generation", temp.path().join("current"))
-            .unwrap();
-        let db_path = temp.path().join("conary.db");
-        let db_path_string = db_path.to_string_lossy().into_owned();
-
-        let error = package_execution_path(&db_path_string).unwrap_err();
-
-        assert!(
-            error
-                .to_string()
-                .contains("Failed to parse generation number"),
-            "{error}"
-        );
-    }
-
-    #[test]
-    fn package_execution_path_fails_closed_on_dangling_current_symlink() {
-        let temp = tempfile::tempdir().unwrap();
-        std::os::unix::fs::symlink("generations/7", temp.path().join("current")).unwrap();
-        let db_path = temp.path().join("conary.db");
-        let db_path_string = db_path.to_string_lossy().into_owned();
-
-        let error = package_execution_path(&db_path_string).unwrap_err();
-
-        assert!(error.to_string().contains("dangling"), "{error}");
-    }
-
     #[test]
     fn classify_dep_type_packages() {
         assert_eq!(classify_dep_type("bash"), "package");
