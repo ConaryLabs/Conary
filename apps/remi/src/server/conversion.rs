@@ -4,6 +4,10 @@
 //! Downloads legacy packages from upstream repositories and converts them
 //! to CCS format, storing chunks in the CAS.
 
+#[cfg(test)]
+mod test_support;
+mod types;
+
 use crate::server::R2Store;
 use crate::server::conversion_timing::{
     ConversionPhase, ConversionPhaseTiming, ConversionSkippedPhase, ConversionTimingReport,
@@ -15,7 +19,6 @@ use crate::server::publication::{
 use anyhow::{Context, Result, anyhow};
 use conary_core::ccs::convert::{
     ConversionOptions, ConversionResult, LegacyConverter, ScriptletBundleSummary,
-    ScriptletDecisionCountsSummary,
 };
 use conary_core::db::models::{ConvertedPackage, RepositoryPackage, RepositoryProvide};
 use conary_core::filesystem::path::sanitize_filename;
@@ -25,7 +28,6 @@ use conary_core::packages::deb::DebPackage;
 use conary_core::packages::rpm::RpmPackage;
 use conary_core::packages::traits::{Dependency, DependencyType, PackageFormat};
 use conary_core::repository::download_package;
-use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -33,79 +35,7 @@ use std::time::{Duration, Instant};
 use tempfile::TempDir;
 use tracing::{debug, info};
 
-/// Result of a server-side conversion
-#[derive(Debug)]
-pub struct ServerConversionResult {
-    /// Package name
-    pub name: String,
-    /// Package version
-    pub version: String,
-    /// Distribution
-    pub distro: String,
-    /// List of chunk hashes
-    pub chunk_hashes: Vec<String>,
-    /// Total size when reassembled
-    pub total_size: u64,
-    /// SHA-256 of the complete content
-    pub content_hash: String,
-    /// Path to the generated CCS package (temporary)
-    pub ccs_path: PathBuf,
-    /// Whether this result came from a cold conversion or a hot existing CCS artifact.
-    pub cache_state: String,
-    /// Passive legacy scriptlet summary for public metadata surfaces.
-    pub scriptlets: ScriptletPackageMetadata,
-    /// Publication refusal report for review-required or blocked results.
-    pub publication: Option<crate::server::publication::PublicationGateReport>,
-    /// Phase timing report for this conversion, when collected.
-    pub timing: Option<ConversionTimingReport>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ScriptletPackageMetadata {
-    pub scriptlet_fidelity: String,
-    pub target_compatibility: String,
-    pub publication_status: String,
-    pub evidence_digest: Option<String>,
-    pub curation_evidence_digest: Option<String>,
-    pub decision_counts: ScriptletDecisionCountsSummary,
-    pub blocked_reason_codes: Vec<String>,
-    pub review_reason_codes: Vec<String>,
-    pub unknown_commands: Vec<String>,
-    pub blocked_classes: Vec<String>,
-    pub review_artifact_available: bool,
-}
-
-impl From<&ScriptletBundleSummary> for ScriptletPackageMetadata {
-    fn from(summary: &ScriptletBundleSummary) -> Self {
-        Self {
-            scriptlet_fidelity: summary.scriptlet_fidelity.clone(),
-            target_compatibility: summary.target_compatibility.clone(),
-            publication_status: summary.publication_status.clone(),
-            evidence_digest: summary.evidence_digest.clone(),
-            curation_evidence_digest: summary.curation_evidence_digest.clone(),
-            decision_counts: summary.decision_counts,
-            blocked_reason_codes: summary.blocked_reason_codes.clone(),
-            review_reason_codes: summary.review_reason_codes.clone(),
-            unknown_commands: summary.unknown_commands.clone(),
-            blocked_classes: summary.blocked_classes.clone(),
-            review_artifact_available: summary.review_artifact_path.is_some(),
-        }
-    }
-}
-
-#[derive(Debug, Serialize)]
-pub struct ConversionBenchmarkEvidence {
-    pub distro: String,
-    pub package: String,
-    pub version: Option<String>,
-    pub scan_only: bool,
-    pub cache_state: String,
-    pub r2_configured: bool,
-    pub timing: Option<ConversionTimingReport>,
-    pub scriptlet_summary: Option<crate::server::scriptlet_corpus::ScriptletCorpusSummary>,
-    pub converted: bool,
-    pub error: Option<String>,
-}
+pub use types::{ConversionBenchmarkEvidence, ScriptletPackageMetadata, ServerConversionResult};
 
 /// Conversion service for Remi
 #[derive(Clone)]
@@ -1657,90 +1587,12 @@ fn constraint_from_raw_provide(raw: &str, capability: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use super::test_support::*;
     use super::*;
-    use conary_core::db::models::{
-        ConvertedPackage, Repository, RepositoryPackage, RepositoryProvide,
-    };
-    use conary_core::db::schema;
+    use conary_core::ccs::convert::ScriptletDecisionCountsSummary;
+    use conary_core::db::models::{ConvertedPackage, RepositoryPackage, RepositoryProvide};
     use conary_core::packages::common::PackageMetadata;
-    use std::fs;
     use std::path::Path;
-    use tempfile::NamedTempFile;
-
-    fn create_test_db() -> (NamedTempFile, rusqlite::Connection) {
-        let temp_file = NamedTempFile::new().unwrap();
-        let conn = rusqlite::Connection::open(temp_file.path()).unwrap();
-        conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
-        schema::migrate(&conn).unwrap();
-        (temp_file, conn)
-    }
-
-    fn insert_repo(conn: &rusqlite::Connection, name: &str, distro: &str) -> i64 {
-        let mut repo = Repository::new(name.to_string(), "https://example.com".to_string());
-        repo.default_strategy_distro = Some(distro.to_string());
-        repo.insert(conn).unwrap()
-    }
-
-    fn insert_package(
-        conn: &rusqlite::Connection,
-        repo_id: i64,
-        name: &str,
-        version: &str,
-        size: i64,
-    ) {
-        let mut pkg = RepositoryPackage::new(
-            repo_id,
-            name.to_string(),
-            version.to_string(),
-            format!("sha256:{name}-{version}"),
-            size,
-            format!("https://example.com/{name}-{version}.rpm"),
-        );
-        pkg.architecture = Some("x86_64".to_string());
-        pkg.dependencies = Some(r#"["glibc","openssl"]"#.to_string());
-        pkg.insert(conn).unwrap();
-    }
-
-    fn production_source_without_comments(relative_path: &str) -> String {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(relative_path);
-        let source = fs::read_to_string(&path)
-            .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
-        let mut stripped = String::new();
-        let mut in_block_comment = false;
-
-        for line in source.lines() {
-            if line.trim_start().starts_with("#[cfg(test)]") {
-                break;
-            }
-
-            let mut chars = line.chars().peekable();
-            while let Some(ch) = chars.next() {
-                if in_block_comment {
-                    if ch == '*' && chars.peek() == Some(&'/') {
-                        let _ = chars.next();
-                        in_block_comment = false;
-                    }
-                    continue;
-                }
-
-                if ch == '/' && chars.peek() == Some(&'/') {
-                    break;
-                }
-
-                if ch == '/' && chars.peek() == Some(&'*') {
-                    let _ = chars.next();
-                    in_block_comment = true;
-                    continue;
-                }
-
-                stripped.push(ch);
-            }
-
-            stripped.push('\n');
-        }
-
-        stripped
-    }
 
     #[test]
     fn remi_server_conversion_paths_do_not_block_on_async_work() {
@@ -2195,85 +2047,6 @@ mod tests {
             provide.name == "kernel-uname-r"
                 && provide.version.as_deref() == Some("= 6.17.1-300.fc44.x86_64")
         }));
-    }
-
-    // --- store_chunks tests ---
-
-    /// Helper to create a minimal ConversionResult with the given blobs
-    fn make_conversion_result(
-        blobs: std::collections::HashMap<String, Vec<u8>>,
-    ) -> conary_core::ccs::convert::ConversionResult {
-        use conary_core::ccs::builder::{BuildResult, FileEntry};
-        use conary_core::ccs::convert::FidelityReport;
-        use conary_core::ccs::manifest::{CcsManifest, Hooks, Package};
-
-        let manifest = CcsManifest {
-            package: Package {
-                name: "test".to_string(),
-                version: "1.0".to_string(),
-                description: "test package".to_string(),
-                license: None,
-                homepage: None,
-                repository: None,
-                platform: None,
-                authors: None,
-            },
-            provides: Default::default(),
-            requires: Default::default(),
-            suggests: Default::default(),
-            components: Default::default(),
-            hooks: Hooks::default(),
-            scriptlets: Default::default(),
-            legacy_scriptlets: None,
-            config: Default::default(),
-            build: None,
-            legacy: None,
-            policy: Default::default(),
-            provenance: None,
-            capabilities: None,
-            redirects: Default::default(),
-        };
-
-        let build_result = BuildResult {
-            manifest,
-            components: std::collections::HashMap::new(),
-            files: Vec::<FileEntry>::new(),
-            blobs,
-            total_size: 0,
-            chunked: false,
-            chunk_stats: None,
-        };
-
-        conary_core::ccs::convert::ConversionResult {
-            build_result,
-            package_path: None,
-            fidelity: FidelityReport::default(),
-            original_format: "rpm".to_string(),
-            original_checksum: "sha256:test".to_string(),
-            detected_hooks: Hooks::default(),
-            inferred_capabilities: None,
-            inference_error: None,
-            legacy_provenance: None,
-            scriptlet_classification: Default::default(),
-            legacy_scriptlets: None,
-            scriptlet_metadata: conary_core::ccs::convert::ScriptletBundleSummary::default(),
-        }
-    }
-
-    fn goal8a_scriptlet_summary(
-        scriptlet_fidelity: &str,
-        target_compatibility: &str,
-        publication_status: &str,
-    ) -> ScriptletBundleSummary {
-        ScriptletBundleSummary {
-            scriptlet_fidelity: scriptlet_fidelity.to_string(),
-            target_compatibility: target_compatibility.to_string(),
-            publication_status: publication_status.to_string(),
-            evidence_digest: Some(conary_core::hash::sha256_prefixed(
-                format!("{scriptlet_fidelity}:{publication_status}").as_bytes(),
-            )),
-            ..ScriptletBundleSummary::default()
-        }
     }
 
     #[test]
@@ -2778,81 +2551,6 @@ mod tests {
         assert_eq!(service.db_path, PathBuf::from("/db.sqlite"));
         assert!(service.r2_store.is_none());
     }
-
-    // --- ServerConversionResult tests ---
-
-    #[test]
-    fn server_conversion_result_can_carry_timing_report() {
-        use crate::server::conversion_timing::{ConversionPhase, ConversionTimingReport};
-        use std::time::Duration;
-
-        let mut timing = ConversionTimingReport::new("fedora", "nginx", None);
-        timing.record(ConversionPhase::PackageLookup, Duration::from_millis(7));
-        timing.finish(true);
-
-        let result = ServerConversionResult {
-            name: "nginx".to_string(),
-            version: "1.28.0".to_string(),
-            distro: "fedora".to_string(),
-            chunk_hashes: vec![],
-            total_size: 0,
-            content_hash: "sha256:test".to_string(),
-            ccs_path: PathBuf::from("/tmp/nginx.ccs"),
-            cache_state: "cold".to_string(),
-            scriptlets: ScriptletPackageMetadata::from(&ScriptletBundleSummary::default()),
-            publication: None,
-            timing: Some(timing),
-        };
-
-        assert_eq!(result.timing.unwrap().phases[0].duration_ms, 7);
-    }
-
-    #[test]
-    fn server_conversion_outcome_reports_terminal_state() {
-        use crate::server::jobs::JobStatus;
-        use crate::server::publication::ServerConversionOutcome;
-
-        let result = ServerConversionResult {
-            name: "pkg".to_string(),
-            version: "1.0".to_string(),
-            distro: "fedora".to_string(),
-            chunk_hashes: Vec::new(),
-            total_size: 0,
-            content_hash: "sha256:test".to_string(),
-            ccs_path: std::path::PathBuf::from("/tmp/pkg.ccs"),
-            cache_state: "cold".to_string(),
-            scriptlets: ScriptletPackageMetadata::from(&ScriptletBundleSummary::default()),
-            publication: None,
-            timing: None,
-        };
-
-        assert!(matches!(
-            ServerConversionOutcome::Ready(result).job_status(),
-            JobStatus::Ready
-        ));
-    }
-
-    #[test]
-    fn test_server_conversion_result_debug() {
-        let result = ServerConversionResult {
-            name: "nginx".to_string(),
-            version: "1.24.0".to_string(),
-            distro: "fedora".to_string(),
-            chunk_hashes: vec!["abc123".to_string()],
-            total_size: 1024,
-            content_hash: "sha256:deadbeef".to_string(),
-            ccs_path: PathBuf::from("/data/nginx.ccs"),
-            cache_state: "cold".to_string(),
-            scriptlets: ScriptletPackageMetadata::from(&ScriptletBundleSummary::default()),
-            publication: None,
-            timing: None,
-        };
-        // Verify Debug is implemented (would fail to compile otherwise)
-        let debug_str = format!("{:?}", result);
-        assert!(debug_str.contains("nginx"));
-    }
-
-    // --- distro mapping tests ---
 
     #[test]
     fn test_find_package_maps_distro_to_repo_pattern() {
