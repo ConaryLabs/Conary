@@ -47,9 +47,13 @@ mutation flows for local package operations.
 `apps/conary/src/commands/install/batch.rs`;
 `apps/conary/src/commands/install/restore.rs`;
 `apps/conary/src/commands/update/mod.rs`;
+`apps/conary/src/commands/update/package.rs`;
+`apps/conary/src/commands/update/source_policy.rs`;
 `apps/conary/src/commands/update/selection.rs`;
 `apps/conary/src/commands/update/adopted_authority.rs`;
 `apps/conary/src/commands/update/collection.rs`;
+`apps/conary/src/commands/update/pinning.rs`;
+`apps/conary/src/commands/update/delta_stats.rs`;
 `apps/conary/src/commands/remove.rs`;
 `docs/modules/test-fixtures.md`; `docs/operations/daily-driver-ux-matrix.md`.
 
@@ -85,6 +89,8 @@ escape hatches.
 `docs/modules/source-selection.md`; `docs/ARCHITECTURE.md`.
 
 **Neighbor systems:** `apps/conary/src/commands/update/mod.rs`;
+`apps/conary/src/commands/update/package.rs`;
+`apps/conary/src/commands/update/source_policy.rs`;
 `apps/conary/src/commands/update/selection.rs`;
 `apps/conary/src/commands/update/adopted_authority.rs`;
 `apps/conary/src/commands/update/collection.rs`;
