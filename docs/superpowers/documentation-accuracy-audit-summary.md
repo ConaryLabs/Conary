@@ -429,6 +429,14 @@ repository lookup/download refresh, CAS/R2 storage, conversion persistence,
 recipe URL/SSRF handling, benchmark evidence, and cold/hot conversion workflow
 orchestration.
 
+The Phase 15 CCS install completion decomposition plan targets the current
+largest Rust hotspot, `apps/conary/src/commands/ccs/install.rs`. It keeps
+`install.rs` as the stable command hub, moves dependency validation,
+capability-policy enforcement, component selection, command orchestration, and
+the command-flow test families into child modules under
+`apps/conary/src/commands/ccs/install/`, and preserves the Phase 9
+`payload_paths.rs` owner plus existing public command re-exports.
+
 ## Verification Commands
 
 - `bash scripts/docs-audit-inventory.sh`
@@ -503,9 +511,9 @@ public tester copy is tracked by
 
 ## Final Counts
 
-- Total tracked doc-like files audited: 158
+- Total tracked doc-like files audited: 159
 - `verified-no-change`: 13
-- `corrected`: 58
+- `corrected`: 59
 - `archived`: 73
 - `retained-historical`: 14
 - Remaining pending rows: 0
