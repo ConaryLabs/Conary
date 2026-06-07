@@ -412,6 +412,15 @@ update execution, candidate selection, adopted-package authority policy,
 collection management commands, delta/full update preparation, and legacy
 replay preflight in their existing owners.
 
+The Phase 13 update module completion decomposition plan finishes the update
+hotspot lane by targeting the remaining responsibilities in
+`apps/conary/src/commands/update/mod.rs`. It plans to turn `update/mod.rs` into
+a routing hub while extracting single-package update execution into
+`apps/conary/src/commands/update/package.rs`, source-policy/replatform update
+previewing into `apps/conary/src/commands/update/source_policy.rs`, pinning
+commands into `apps/conary/src/commands/update/pinning.rs`, and delta statistics
+into `apps/conary/src/commands/update/delta_stats.rs`.
+
 ## Verification Commands
 
 - `bash scripts/docs-audit-inventory.sh`
@@ -486,9 +495,9 @@ public tester copy is tracked by
 
 ## Final Counts
 
-- Total tracked doc-like files audited: 156
+- Total tracked doc-like files audited: 157
 - `verified-no-change`: 13
-- `corrected`: 56
+- `corrected`: 57
 - `archived`: 73
 - `retained-historical`: 14
 - Remaining pending rows: 0
