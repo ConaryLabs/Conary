@@ -403,6 +403,15 @@ selection, adopted skip records, and native-authority summary text into
 selection, collection orchestration, delta/full update execution, and legacy
 replay preflight in their existing owners.
 
+The Phase 12 update collection decomposition plan continues reducing
+`apps/conary/src/commands/update/mod.rs` after the selection and adopted
+authority splits. It extracts collection update target modeling and
+`update @collection` orchestration into
+`apps/conary/src/commands/update/collection.rs`, while keeping single-package
+update execution, candidate selection, adopted-package authority policy,
+collection management commands, delta/full update preparation, and legacy
+replay preflight in their existing owners.
+
 ## Verification Commands
 
 - `bash scripts/docs-audit-inventory.sh`
@@ -477,9 +486,9 @@ public tester copy is tracked by
 
 ## Final Counts
 
-- Total tracked doc-like files audited: 155
+- Total tracked doc-like files audited: 156
 - `verified-no-change`: 13
-- `corrected`: 55
+- `corrected`: 56
 - `archived`: 73
 - `retained-historical`: 14
 - Remaining pending rows: 0
