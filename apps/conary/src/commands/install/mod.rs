@@ -11,10 +11,13 @@ mod dependencies;
 mod execute;
 mod inner;
 mod legacy_replay;
+mod options;
 mod prepare;
 mod resolve;
 mod restore;
 mod scriptlets;
+mod semantics;
+mod source_policy;
 mod system_pm;
 
 pub use batch::{BatchInstaller, prepare_package_for_batch};
@@ -35,6 +38,8 @@ pub(super) use legacy_replay::{
     merge_old_upgrade_legacy_replay_state, plan_ccs_fresh_install_legacy_replay,
     plan_ccs_old_installed_upgrade_legacy_replay,
 };
+pub use options::InstallOptions;
+pub(crate) use options::{RepositoryInstallProvenance, repository_install_provenance_from_package};
 pub use prepare::{ComponentSelection, UpgradeCheck};
 pub(crate) use restore::{
     add_prepared_install_to_target_state, build_target_state_view,
@@ -58,8 +63,10 @@ use resolve::{
 use scriptlets::{
     build_execution_mode, get_old_package_scriptlets, preflight_install_scriptlets,
     preflight_old_remove_scriptlets, run_old_post_remove, run_old_pre_remove, run_post_install,
-    run_pre_install, to_scriptlet_format,
+    run_pre_install,
 };
+use semantics::{InstallSemantics, PreparedSourceKind, scheme_to_string};
+use source_policy::{build_resolution_policy, resolve_canonical_name};
 
 use super::create_state_snapshot;
 use super::progress::{InstallPhase, InstallProgress};
@@ -68,137 +75,17 @@ use anyhow::{Context, Result};
 use conary_core::components::{
     ComponentClassifier, ComponentType, parse_component_spec, should_run_scriptlets,
 };
-use conary_core::db::models::{
-    Changeset, ChangesetStatus, DerivedPackage, Repository, RepositoryPackage,
-};
+use conary_core::db::models::{Changeset, ChangesetStatus, DerivedPackage};
 use conary_core::db::paths::keyring_dir;
 use conary_core::dependencies::{DependencyClass, LanguageDepDetector};
 use conary_core::repository;
-use conary_core::repository::versioning::{VersionScheme, resolve_package_version_scheme};
 use conary_core::resolver::MissingDependency;
-use conary_core::scriptlet::{PackageFormat as ScriptletPackageFormat, SandboxMode};
+use conary_core::scriptlet::SandboxMode;
 use conary_core::transaction::{TransactionConfig, TransactionEngine};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use tracing::{debug, info, warn};
-
-/// Options for package installation
-#[derive(Debug, Clone, Default)]
-pub struct InstallOptions<'a> {
-    /// Path to the package database
-    pub db_path: &'a str,
-    /// Filesystem root for installation
-    pub root: &'a str,
-    /// Specific version to install
-    pub version: Option<String>,
-    /// Specific repository to use
-    pub repo: Option<String>,
-    /// Preferred architecture to resolve/install
-    pub architecture: Option<String>,
-    /// Preview without installing
-    pub dry_run: bool,
-    /// Skip dependency resolution
-    pub no_deps: bool,
-    /// Skip scriptlet execution
-    pub no_scripts: bool,
-    /// Human-readable reason for installation
-    pub selection_reason: Option<&'a str>,
-    /// Sandbox mode for scriptlet execution
-    pub sandbox_mode: SandboxMode,
-    /// Allow installing older versions
-    pub allow_downgrade: bool,
-    /// Convert legacy packages to CCS format
-    pub convert_to_ccs: bool,
-    /// Skip the automatic state snapshot that is normally captured after
-    /// a successful install.  Named `no_capture` for CLI consistency with
-    /// `--no-capture`; equivalent to "skip scriptlet output capture" in
-    /// some package managers but here it controls state snapshots.
-    pub no_capture: bool,
-    /// Force install/reinstall checks, but not adopted-package ownership
-    pub force: bool,
-    /// Dependency handling mode: satisfy, adopt, takeover.
-    /// `None` means the user did not explicitly set `--dep-mode`, so the
-    /// policy-aware resolver uses the system model convergence intent.
-    pub dep_mode: Option<DepMode>,
-    /// Skip confirmation prompts
-    pub yes: bool,
-    /// Install from a specific distro (cross-distro canonical resolution)
-    pub from_distro: Option<String>,
-    /// Repository provenance supplied by an internal caller that already
-    /// selected and downloaded the package before calling `cmd_install`.
-    pub(crate) repository_provenance: Option<RepositoryInstallProvenance>,
-    /// Raw legacy scriptlet replay admission flags. Defaults fail closed.
-    pub legacy_replay: LegacyReplayOptions,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct RepositoryInstallProvenance {
-    pub repository_id: i64,
-    pub source_distro: Option<String>,
-    pub version_scheme: Option<String>,
-}
-
-pub(crate) fn repository_install_provenance_from_package(
-    package: &RepositoryPackage,
-    repository: &Repository,
-) -> Result<RepositoryInstallProvenance> {
-    let repository_id = repository
-        .id
-        .ok_or_else(|| anyhow::anyhow!("Selected repository has no database ID"))?;
-    let source_distro = package
-        .distro
-        .clone()
-        .or_else(|| repository.default_strategy_distro.clone());
-    let version_scheme =
-        resolve_package_version_scheme(package, repository).map(|scheme| match scheme {
-            VersionScheme::Rpm => "rpm".to_string(),
-            VersionScheme::Debian => "debian".to_string(),
-            VersionScheme::Arch => "arch".to_string(),
-        });
-
-    Ok(RepositoryInstallProvenance {
-        repository_id,
-        source_distro,
-        version_scheme,
-    })
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PreparedSourceKind {
-    Legacy { format: PackageFormatType },
-    Ccs,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct InstallSemantics {
-    source: PreparedSourceKind,
-    version_scheme: VersionScheme,
-    scriptlet_format: ScriptletPackageFormat,
-}
-
-impl InstallSemantics {
-    fn legacy(format: PackageFormatType) -> Self {
-        Self {
-            source: PreparedSourceKind::Legacy { format },
-            version_scheme: prepare::version_scheme_for_format(format),
-            scriptlet_format: to_scriptlet_format(format),
-        }
-    }
-
-    fn ccs() -> Self {
-        Self {
-            source: PreparedSourceKind::Ccs,
-            // CCS is the native artifact shape, but the current install/rollback
-            // metadata still expects a version-scheme and scriptlet-family.
-            // Until CCS carries an explicit scheme, keep the existing RPM
-            // fallback for mixed-version comparisons and upgrade scriptlets.
-            version_scheme: VersionScheme::Rpm,
-            scriptlet_format: ScriptletPackageFormat::Rpm,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum PackageExecutionPath {
     GenerationAware,
@@ -326,16 +213,6 @@ fn live_root_files_from_stored_files(
         })
         .collect()
 }
-
-/// Map a distro identifier string to its `RepositoryDependencyFlavor`.
-///
-/// Returns `None` for unrecognised distro names.
-fn distro_name_to_flavor(
-    distro: &str,
-) -> Option<conary_core::repository::dependency_model::RepositoryDependencyFlavor> {
-    conary_core::repository::distro::flavor_from_distro_name(distro)
-}
-
 pub(super) fn run_triggers(
     conn: &rusqlite::Connection,
     root: &Path,
@@ -782,100 +659,6 @@ struct InstallTransactionResult {
 // ---------------------------------------------------------------------------
 // Extracted helper functions
 // ---------------------------------------------------------------------------
-
-/// Overlay install-specific request scope from CLI flags onto the effective policy.
-///
-/// The `--from-distro` flag constrains the root request to a specific distro
-/// flavor; `--repo` constrains to a specific repository.  Both apply to the
-/// root request only (transitive deps are governed by the mixing policy).
-fn build_resolution_policy(
-    mut policy: conary_core::repository::resolution_policy::ResolutionPolicy,
-    from_distro: Option<&str>,
-    repo: Option<&str>,
-) -> conary_core::repository::resolution_policy::ResolutionPolicy {
-    use conary_core::repository::resolution_policy::RequestScope;
-
-    let scope = if let Some(target_distro) = from_distro {
-        // Map distro name to the correct flavor for request-scope filtering
-        let flavor = distro_name_to_flavor(target_distro);
-        if let Some(f) = flavor {
-            RequestScope::DistroFlavor(f)
-        } else {
-            // Unknown flavor -- use repo scope as a fallback
-            RequestScope::Repository(target_distro.to_string())
-        }
-    } else if let Some(r) = repo {
-        RequestScope::Repository(r.to_string())
-    } else {
-        RequestScope::Any
-    };
-
-    policy.request_scope = scope;
-    policy
-}
-
-/// Resolve the canonical name for a package.
-///
-/// If `--from <distro>` was specified, resolve the canonical name to that
-/// distro's package name.  Otherwise, use canonical expansion to find the best
-/// implementation for the current system (canonical expansion applies only to
-/// root requests, never deps).
-fn resolve_canonical_name(
-    conn: &rusqlite::Connection,
-    package: &str,
-    from_distro: Option<&str>,
-    policy: &conary_core::repository::resolution_policy::ResolutionPolicy,
-) -> Result<Option<String>> {
-    if let Some(target_distro) = from_distro {
-        if let Some(canonical) =
-            conary_core::db::models::CanonicalPackage::resolve_name(conn, package)?
-        {
-            let impls = conary_core::db::models::PackageImplementation::find_by_canonical(
-                conn,
-                canonical
-                    .id
-                    .ok_or_else(|| anyhow::anyhow!("Canonical package has no ID"))?,
-            )?;
-            if let Some(imp) = impls.iter().find(|i| i.distro == target_distro) {
-                info!(
-                    "Resolved canonical '{}' -> '{}' for {}",
-                    package, imp.distro_name, target_distro
-                );
-                return Ok(Some(imp.distro_name.clone()));
-            }
-            warn!(
-                "No implementation of '{}' found for distro '{}'",
-                package, target_distro
-            );
-        }
-        Ok(None)
-    } else {
-        // No explicit --from-distro: use canonical resolver to expand and rank
-        // implementations by pin/affinity/override.  This only applies to root
-        // requests -- deps are never canonically expanded.
-        use conary_core::resolver::canonical::CanonicalResolver;
-        let canonical_resolver = CanonicalResolver::new(conn);
-        let candidates = canonical_resolver.expand(package)?;
-        if candidates.len() > 1 {
-            let ranked = canonical_resolver.rank_candidates_with_policy(&candidates, policy)?;
-            info!(
-                "Canonical expansion for '{}': {} implementations, best = '{}' ({})",
-                package,
-                ranked.len(),
-                ranked[0].distro_name,
-                ranked[0].distro,
-            );
-            // Use the top-ranked implementation
-            Ok(Some(ranked[0].distro_name.clone()))
-        } else if candidates.len() == 1 {
-            Ok(Some(candidates[0].distro_name.clone()))
-        } else {
-            // No canonical mapping -- use the name as-is
-            Ok(None)
-        }
-    }
-}
-
 /// Parse a component spec from the package argument and run pre-install
 /// validation checks (blocklist, adoption).
 ///
@@ -2197,15 +1980,6 @@ fn finalize_install(
     }
     Ok(())
 }
-
-fn scheme_to_string(scheme: VersionScheme) -> String {
-    match scheme {
-        VersionScheme::Rpm => "rpm".to_string(),
-        VersionScheme::Debian => "debian".to_string(),
-        VersionScheme::Arch => "arch".to_string(),
-    }
-}
-
 /// Search canonical packages and repository packages for names similar to the
 /// given query. Returns up to 5 `(name, distros)` pairs suitable for "did you
 /// mean?" suggestions.
@@ -2774,29 +2548,6 @@ mod tests {
             "OR group"
         );
     }
-
-    #[test]
-    fn distro_name_to_flavor_known() {
-        use conary_core::repository::dependency_model::RepositoryDependencyFlavor;
-        assert_eq!(
-            distro_name_to_flavor("fedora-44"),
-            Some(RepositoryDependencyFlavor::Rpm)
-        );
-        assert_eq!(
-            distro_name_to_flavor("ubuntu-26.04"),
-            Some(RepositoryDependencyFlavor::Deb)
-        );
-        assert_eq!(
-            distro_name_to_flavor("arch"),
-            Some(RepositoryDependencyFlavor::Arch)
-        );
-    }
-
-    #[test]
-    fn distro_name_to_flavor_unknown() {
-        assert_eq!(distro_name_to_flavor("nixos"), None);
-    }
-
     #[test]
     fn missing_model_uses_preview_convergence_dep_mode() {
         assert_eq!(resolve_default_dep_mode_from_model(), DepMode::Adopt);
