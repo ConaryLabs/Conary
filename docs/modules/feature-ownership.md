@@ -42,6 +42,16 @@ Each ownership card uses these fields:
 mutation flows for local package operations.
 
 **Start here:** `apps/conary/src/commands/install/mod.rs`;
+`apps/conary/src/commands/install/command.rs`;
+`apps/conary/src/commands/install/acquire.rs`;
+`apps/conary/src/commands/install/validation.rs`;
+`apps/conary/src/commands/install/dependencies.rs`;
+`apps/conary/src/commands/install/execute.rs`;
+`apps/conary/src/commands/install/lifecycle.rs`;
+`apps/conary/src/commands/install/transaction.rs`;
+`apps/conary/src/commands/install/options.rs`;
+`apps/conary/src/commands/install/semantics.rs`;
+`apps/conary/src/commands/install/source_policy.rs`;
 `apps/conary/src/commands/install/legacy_replay.rs`;
 `apps/conary/src/commands/install/inner.rs`;
 `apps/conary/src/commands/install/batch.rs`;
