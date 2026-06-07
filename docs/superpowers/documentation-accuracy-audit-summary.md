@@ -437,6 +437,13 @@ the command-flow test families into child modules under
 `apps/conary/src/commands/ccs/install/`, and preserves the Phase 9
 `payload_paths.rs` owner plus existing public command re-exports.
 
+The Phase 16 install module completion decomposition plan targets the current
+largest Rust hotspot, `apps/conary/src/commands/install/mod.rs`. It keeps
+`install/mod.rs` as the stable module hub while planning focused owners for
+command orchestration, acquisition and conversion handoff, validation,
+dependency flow, execution-path safety, lifecycle/finalization, transaction
+execution, install options, source semantics, and source-policy resolution.
+
 ## Verification Commands
 
 - `bash scripts/docs-audit-inventory.sh`
@@ -511,9 +518,9 @@ public tester copy is tracked by
 
 ## Final Counts
 
-- Total tracked doc-like files audited: 159
+- Total tracked doc-like files audited: 160
 - `verified-no-change`: 13
-- `corrected`: 59
+- `corrected`: 60
 - `archived`: 73
 - `retained-historical`: 14
 - Remaining pending rows: 0
