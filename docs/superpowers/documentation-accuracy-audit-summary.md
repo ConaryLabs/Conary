@@ -420,6 +420,15 @@ previewing into `apps/conary/src/commands/update/source_policy.rs`, pinning
 commands into `apps/conary/src/commands/update/pinning.rs`, and delta statistics
 into `apps/conary/src/commands/update/delta_stats.rs`.
 
+The Phase 14 Remi conversion service decomposition plan starts the next
+whole-file maintainability pass by targeting
+`apps/remi/src/server/conversion.rs`. It keeps `conversion.rs` as the public
+module hub while planning child modules for conversion result types, shared
+test support, package metadata parsing, critical-package safety guards,
+repository lookup/download refresh, CAS/R2 storage, conversion persistence,
+recipe URL/SSRF handling, benchmark evidence, and cold/hot conversion workflow
+orchestration.
+
 ## Verification Commands
 
 - `bash scripts/docs-audit-inventory.sh`
@@ -494,9 +503,9 @@ public tester copy is tracked by
 
 ## Final Counts
 
-- Total tracked doc-like files audited: 157
+- Total tracked doc-like files audited: 158
 - `verified-no-change`: 13
-- `corrected`: 57
+- `corrected`: 58
 - `archived`: 73
 - `retained-historical`: 14
 - Remaining pending rows: 0
