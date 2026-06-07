@@ -456,19 +456,21 @@ install::is_package_blocked(&trove.name)
 Expected: the new module owns adopted authority policy and exposes only the
 surface `update/mod.rs` already uses.
 
-- [ ] **Step 4: Clean up `update/mod.rs` imports**
+- [ ] **Step 4: Keep required `update/mod.rs` imports**
 
-Remove the unused `PackageFormat` import from `update/mod.rs`, and keep
-`SystemPackageManager` in the parent because `cmd_update` and
-`cmd_update_group` still call `SystemPackageManager::detect()`:
+Keep both `PackageFormat` and `SystemPackageManager` in `update/mod.rs`.
+`PackageFormat` is required for the trait-provided `CcsPackage::parse(...)`
+call in `preflight_prepared_full_update_legacy_replay`, and
+`SystemPackageManager` is still required because `cmd_update` and
+`cmd_update_group` call `SystemPackageManager::detect()`:
 
-```diff
--use conary_core::packages::{PackageFormat, SystemPackageManager};
-+use conary_core::packages::SystemPackageManager;
+```rust
+use conary_core::packages::{PackageFormat, SystemPackageManager};
 ```
 
-Expected: `update/mod.rs` keeps native package-manager detection for parent
-orchestration, while dropping the unused package-format trait import.
+Expected: `update/mod.rs` keeps the package-format trait import for CCS update
+preflight parsing and native package-manager detection for parent
+orchestration.
 
 - [ ] **Step 5: Move direct adopted authority tests**
 
