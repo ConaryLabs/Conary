@@ -395,6 +395,14 @@ eligibility into `apps/conary/src/commands/update/selection.rs`, while keeping
 update execution, delta handling, collection orchestration, replatform
 previewing, and adopted-package authority policy in `update/mod.rs`.
 
+The Phase 11 update adopted authority decomposition plan continues reducing
+`apps/conary/src/commands/update/mod.rs` after the selection split. It extracts
+adopted-package update takeover decisions, native package-manager fallback
+selection, adopted skip records, and native-authority summary text into
+`apps/conary/src/commands/update/adopted_authority.rs`, while keeping update
+selection, collection orchestration, delta/full update execution, and legacy
+replay preflight in their existing owners.
+
 ## Verification Commands
 
 - `bash scripts/docs-audit-inventory.sh`
@@ -469,9 +477,9 @@ public tester copy is tracked by
 
 ## Final Counts
 
-- Total tracked doc-like files audited: 154
+- Total tracked doc-like files audited: 155
 - `verified-no-change`: 13
-- `corrected`: 54
+- `corrected`: 55
 - `archived`: 73
 - `retained-historical`: 14
 - Remaining pending rows: 0
