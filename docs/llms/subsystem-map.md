@@ -28,7 +28,8 @@ summary: Stable subsystem pointers with feature ownership and interaction-gate r
   `apps/conary/src/commands/distro.rs`,
   `apps/conary/src/commands/update/mod.rs`,
   `apps/conary/src/commands/update/selection.rs`,
-  `apps/conary/src/commands/update/adopted_authority.rs`, and
+  `apps/conary/src/commands/update/adopted_authority.rs`,
+  `apps/conary/src/commands/update/collection.rs`, and
   `apps/conary/src/commands/model.rs`
 - Dependency resolution and package candidate ranking:
   `crates/conary-core/src/resolver/sat.rs`,
