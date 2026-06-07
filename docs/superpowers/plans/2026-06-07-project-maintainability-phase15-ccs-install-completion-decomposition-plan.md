@@ -816,7 +816,7 @@ Apply these body updates:
 ```rust
 LegacyReplayOptions::default()
 CcsTransactionInstallOptions { ... }
-install_ccs_package_transactionally(...).await?
+install_ccs_package_transactionally(...)?
 ```
 
 instead of old `super::super::install::...` paths.

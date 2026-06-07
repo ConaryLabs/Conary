@@ -64,11 +64,15 @@ summary: Stable subsystem pointers with feature ownership and interaction-gate r
   `apps/conary/src/commands/adopt/unadopt.rs`,
   `apps/conary/src/commands/adopt/native_handoff.rs`, and
   `apps/conary/tests/integration/remi/manifests/phase3-active-generation-handoff.toml`
-- CCS package building, chunking, verification, conversion, and fixture proof:
+- CCS package building, chunking, verification, conversion, install, and
+  fixture proof:
   `crates/conary-core/src/ccs/builder.rs`,
   `crates/conary-core/src/ccs/binary_manifest.rs`,
   `crates/conary-core/src/ccs/chunking.rs`,
-  `crates/conary-core/src/ccs/convert/`, and
+  `crates/conary-core/src/ccs/convert/`,
+  `apps/conary/src/commands/ccs/install/command.rs`,
+  `apps/conary/src/commands/ccs/install/dependency.rs`,
+  `apps/conary/src/commands/ccs/payload_paths.rs`, and
   `docs/modules/test-fixtures.md`
 - TUF trust and signature verification:
   `crates/conary-core/src/trust/verify.rs`,
