@@ -387,6 +387,14 @@ validation, component selection, capability policy, trust verification, and
 command orchestration in `ccs/install.rs`, and preserving existing
 cross-module re-exports.
 
+The Phase 10 update selection decomposition plan now targets the current
+largest source file, `apps/conary/src/commands/update.rs`. It converts the
+update command into a directory module and extracts repository candidate
+selection, latest-mode source-switch previewing, and security-update metadata
+eligibility into `apps/conary/src/commands/update/selection.rs`, while keeping
+update execution, delta handling, collection orchestration, replatform
+previewing, and adopted-package authority policy in `update/mod.rs`.
+
 ## Verification Commands
 
 - `bash scripts/docs-audit-inventory.sh`
@@ -461,9 +469,9 @@ public tester copy is tracked by
 
 ## Final Counts
 
-- Total tracked doc-like files audited: 153
+- Total tracked doc-like files audited: 154
 - `verified-no-change`: 13
-- `corrected`: 53
+- `corrected`: 54
 - `archived`: 73
 - `retained-historical`: 14
 - Remaining pending rows: 0
