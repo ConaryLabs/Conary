@@ -1,4 +1,4 @@
-// src/commands/update.rs
+// src/commands/update/mod.rs
 //! Update, pinning, and delta statistics commands
 
 use super::install::{
