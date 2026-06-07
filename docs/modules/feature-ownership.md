@@ -148,7 +148,14 @@ install CCS packages, and preserve/replay legacy scriptlet metadata safely.
 **Start here:** `crates/conary-core/src/ccs/`;
 `crates/conary-core/src/ccs/convert/`;
 `crates/conary-core/src/ccs/legacy_replay.rs`;
-`apps/conary/src/commands/ccs/`; `docs/modules/ccs.md`;
+`apps/conary/src/commands/ccs/`;
+`apps/conary/src/commands/ccs/install.rs`;
+`apps/conary/src/commands/ccs/install/command.rs`;
+`apps/conary/src/commands/ccs/install/dependency.rs`;
+`apps/conary/src/commands/ccs/install/component_selection.rs`;
+`apps/conary/src/commands/ccs/install/capability_policy.rs`;
+`apps/conary/src/commands/ccs/payload_paths.rs`;
+`docs/modules/ccs.md`;
 `docs/modules/test-fixtures.md`;
 `docs/superpowers/plans/2026-06-05-ccs-native-ecosystem-roadmap.md`.
 

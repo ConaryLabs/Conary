@@ -179,6 +179,15 @@ The `--reinstall` flag forces reinstallation even when the same version is
 already present. This is useful for repairing corrupted files or re-running
 hooks without bumping the version.
 
+Implementation routing: `apps/conary/src/commands/ccs/install.rs` is the
+stable command hub. Command execution lives in
+`apps/conary/src/commands/ccs/install/command.rs`; dependency/version policy
+lives in `apps/conary/src/commands/ccs/install/dependency.rs`; component
+selection lives in `apps/conary/src/commands/ccs/install/component_selection.rs`;
+capability-policy enforcement lives in
+`apps/conary/src/commands/ccs/install/capability_policy.rs`; and payload path
+normalization remains in `apps/conary/src/commands/ccs/payload_paths.rs`.
+
 CCS also exposes two package-scoped runtime helpers that are positively covered
 in Phase 4:
 
