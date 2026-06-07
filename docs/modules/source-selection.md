@@ -273,4 +273,6 @@ affinity data.
   candidate behavior
 - `apps/conary/src/commands/update/adopted_authority.rs` for adopted-update
   native-authority policy
+- `apps/conary/src/commands/update/collection.rs` for `update @collection`
+  orchestration, member filtering, and per-member update dispatch
 - `crates/conary-core/src/model/replatform.rs` for executable replatform planning
