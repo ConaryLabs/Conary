@@ -271,4 +271,6 @@ affinity data.
 - `apps/conary/src/commands/update/mod.rs` for update command orchestration
 - `apps/conary/src/commands/update/selection.rs` for source-switching update
   candidate behavior
+- `apps/conary/src/commands/update/adopted_authority.rs` for adopted-update
+  native-authority policy
 - `crates/conary-core/src/model/replatform.rs` for executable replatform planning
