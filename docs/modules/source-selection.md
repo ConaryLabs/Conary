@@ -268,6 +268,8 @@ affinity data.
 - [`docs/llms/subsystem-map.md`](../llms/subsystem-map.md) for assistant-facing entry points
 - `crates/conary-core/src/repository/effective_policy.rs` for runtime policy loading
 - `crates/conary-core/src/model/parser.rs` for `[system]` parsing and precedence
+- `apps/conary/src/commands/install/source_policy.rs` for install request-scope
+  policy construction and canonical package name resolution
 - `apps/conary/src/commands/update/mod.rs` for update module routing
 - `apps/conary/src/commands/update/package.rs` for single-package update
   execution, delta/full update handling, and legacy replay preflight
