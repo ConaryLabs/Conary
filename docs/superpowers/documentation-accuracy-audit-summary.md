@@ -387,9 +387,9 @@ validation, component selection, capability policy, trust verification, and
 command orchestration in `ccs/install.rs`, and preserving existing
 cross-module re-exports.
 
-The Phase 10 update selection decomposition plan now targets the current
-largest source file, `apps/conary/src/commands/update.rs`. It converts the
-update command into a directory module and extracts repository candidate
+The Phase 10 update selection decomposition targeted the former flat update
+hotspot, `apps/conary/src/commands/update.rs`. It converted the update command
+into a directory module and extracted repository candidate
 selection, latest-mode source-switch previewing, and security-update metadata
 eligibility into `apps/conary/src/commands/update/selection.rs`, while keeping
 update execution, delta handling, collection orchestration, replatform
