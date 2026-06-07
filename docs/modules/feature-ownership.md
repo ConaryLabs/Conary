@@ -176,7 +176,17 @@ and fail-closed.
 and static test fixtures through Remi.
 
 **Start here:** `apps/remi/src/server/publication.rs`;
-`apps/remi/src/server/conversion.rs`; `apps/remi/src/server/index_gen.rs`;
+`apps/remi/src/server/conversion.rs`;
+`apps/remi/src/server/conversion/types.rs`;
+`apps/remi/src/server/conversion/workflow.rs`;
+`apps/remi/src/server/conversion/persistence.rs`;
+`apps/remi/src/server/conversion/lookup.rs`;
+`apps/remi/src/server/conversion/metadata.rs`;
+`apps/remi/src/server/conversion/safety.rs`;
+`apps/remi/src/server/conversion/storage.rs`;
+`apps/remi/src/server/conversion/recipe.rs`;
+`apps/remi/src/server/conversion/benchmark.rs`;
+`apps/remi/src/server/index_gen.rs`;
 `apps/remi/src/server/prewarm.rs`; `apps/remi/src/server/handlers/`;
 `docs/modules/remi.md`; `docs/modules/test-fixtures.md`.
 

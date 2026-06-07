@@ -78,8 +78,13 @@ summary: Stable subsystem pointers with feature ownership and interaction-gate r
   `crates/conary-core/src/operations.rs`,
   `apps/conaryd/src/daemon/mod.rs`, and
   `apps/conaryd/src/daemon/routes/transactions.rs`
-- Remi admin, publication, artifact fixture, and MCP flows:
+- Remi admin, conversion, publication, artifact fixture, and MCP flows:
   `apps/remi/src/server/admin_service.rs`,
+  `apps/remi/src/server/conversion.rs`,
+  `apps/remi/src/server/conversion/workflow.rs`,
+  `apps/remi/src/server/conversion/persistence.rs`,
+  `apps/remi/src/server/conversion/lookup.rs`,
+  `apps/remi/src/server/conversion/metadata.rs`,
   `apps/remi/src/server/publication.rs`,
   `apps/remi/src/server/mcp.rs`,
   `apps/remi/src/server/handlers/artifacts.rs`,

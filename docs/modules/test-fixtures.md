@@ -91,7 +91,11 @@ Each fixture family should record:
 - **Purpose:** Public-ready filtering for converted packages and chunks based
   on scriptlet metadata.
 - **Fixture sources:** `apps/remi/src/server/publication.rs`;
-  `apps/remi/src/server/conversion.rs`; `apps/remi/src/server/index_gen.rs`;
+  `apps/remi/src/server/conversion.rs`;
+  `apps/remi/src/server/conversion/test_support.rs`;
+  `apps/remi/src/server/conversion/persistence.rs`;
+  `apps/remi/src/server/conversion/workflow.rs`;
+  `apps/remi/src/server/index_gen.rs`;
   `apps/remi/src/server/prewarm.rs`; handler tests under
   `apps/remi/src/server/handlers/`.
 - **Consumes:** Remi publication, conversion, generated-index,

@@ -58,6 +58,41 @@ changes:
 cargo test -p remi
 ```
 
+## Conversion Service Ownership
+
+The conversion service now keeps `apps/remi/src/server/conversion.rs` as the
+stable public hub for `ConversionService` and conversion result DTO re-exports.
+Implementation ownership lives in child modules:
+
+- `conversion/workflow.rs`: cold/hot package conversion orchestration and
+  timing.
+- `conversion/types.rs`: public conversion result DTOs, scriptlet package
+  metadata projection, and conversion benchmark evidence records.
+- `conversion/benchmark.rs`: benchmark sampling, scan-only scriptlet evidence,
+  and benchmark conversion wrappers.
+- `conversion/lookup.rs`: repository package selection, supported distro
+  mapping, upstream download, and one-shot metadata refresh after upstream
+  404s.
+- `conversion/metadata.rs`: safe CCS filenames, package parsing, metadata
+  construction, repository identity application, and repository-provide merging.
+- `conversion/safety.rs`: critical package and runtime capability refusal
+  guards.
+- `conversion/storage.rs`: local CAS writes, optional R2 write-through, and
+  checksum helpers.
+- `conversion/persistence.rs`: converted-package rows, cache-hit
+  reconstruction, review artifact persistence, and publication outcome
+  wrapping.
+- `conversion/recipe.rs`: recipe URL fetch, DNS/IP validation, SSRF refusal,
+  and server-side recipe builds.
+- `conversion/test_support.rs`: conversion-owned test DB, repository package,
+  conversion result, and scriptlet summary builders shared by child-module
+  tests.
+
+For conversion behavior changes, start with the owner module and run the
+focused module tests plus `cargo test -p remi --lib conversion`. For public
+listing, review artifact, or scriptlet-publication behavior changes, also run
+`cargo test -p remi publication`.
+
 ## Conversion Benchmark Evidence
 
 Remi includes a local benchmark command for measuring cold-path conversion cost
