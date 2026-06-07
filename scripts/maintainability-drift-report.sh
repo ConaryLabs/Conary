@@ -87,7 +87,7 @@ feature_hint_for_path() {
         crates/conary-agent-contract/*|crates/conary-mcp/*|apps/remi/src/server/mcp.rs|apps/conary-test/src/server/mcp.rs)
             printf 'Agent/MCP operation surfaces | focused: cargo test -p conary-agent-contract; cargo test -p conary-mcp | gate: owning service tests when adapter calls service behavior'
             ;;
-        apps/conary/src/commands/install/*|apps/conary/src/commands/update.rs|apps/conary/src/commands/remove.rs)
+        apps/conary/src/commands/install/*|apps/conary/src/commands/update/*|apps/conary/src/commands/remove.rs)
             printf 'Native package install/update/remove | focused: cargo test -p conary --test live_host_mutation_safety; cargo test -p conary --test bundle_replay | gate: cargo test -p conaryd daemon::routes when daemon jobs change'
             ;;
         apps/conary/src/commands/adopt/*)
@@ -114,7 +114,7 @@ feature_hint_for_path() {
         apps/conary-test/*|apps/conary/tests/integration/remi/manifests/*)
             printf 'conary-test integration execution | focused: cargo run -p conary-test -- list; cargo test -p conary-test suite_inventory | gate: touched suite command from docs/modules/feature-ownership.md'
             ;;
-        AGENTS.md|CONTRIBUTING.md|.github/PULL_REQUEST_TEMPLATE.md|docs/llms/*|docs/modules/feature-ownership.md)
+        AGENTS.md|CONTRIBUTING.md|.github/PULL_REQUEST_TEMPLATE.md|docs/llms/*|docs/modules/feature-ownership.md|docs/superpowers/documentation-accuracy-audit-*|scripts/maintainability-drift-report.sh)
             printf 'Assistant/contributor guidance | focused: bash scripts/check-doc-audit-ledger.sh docs/superpowers/documentation-accuracy-audit-ledger.tsv --require-complete | gate: docs-audit inventory diff and stale-term added-line sweep'
             ;;
         docs/modules/*|docs/operations/*|docs/INTEGRATION-TESTING.md|docs/ARCHITECTURE.md)

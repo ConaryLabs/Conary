@@ -268,5 +268,7 @@ affinity data.
 - [`docs/llms/subsystem-map.md`](../llms/subsystem-map.md) for assistant-facing entry points
 - `crates/conary-core/src/repository/effective_policy.rs` for runtime policy loading
 - `crates/conary-core/src/model/parser.rs` for `[system]` parsing and precedence
-- `apps/conary/src/commands/update.rs` for source-switching update behavior
+- `apps/conary/src/commands/update/mod.rs` for update command orchestration
+- `apps/conary/src/commands/update/selection.rs` for source-switching update
+  candidate behavior
 - `crates/conary-core/src/model/replatform.rs` for executable replatform planning

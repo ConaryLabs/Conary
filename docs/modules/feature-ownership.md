@@ -46,7 +46,9 @@ mutation flows for local package operations.
 `apps/conary/src/commands/install/inner.rs`;
 `apps/conary/src/commands/install/batch.rs`;
 `apps/conary/src/commands/install/restore.rs`;
-`apps/conary/src/commands/update.rs`; `apps/conary/src/commands/remove.rs`;
+`apps/conary/src/commands/update/mod.rs`;
+`apps/conary/src/commands/update/selection.rs`;
+`apps/conary/src/commands/remove.rs`;
 `docs/modules/test-fixtures.md`; `docs/operations/daily-driver-ux-matrix.md`.
 
 **Neighbor systems:** `crates/conary-core/src/transaction/`;
@@ -80,7 +82,8 @@ escape hatches.
 `apps/conary/src/commands/adopt/native_handoff.rs`;
 `docs/modules/source-selection.md`; `docs/ARCHITECTURE.md`.
 
-**Neighbor systems:** `apps/conary/src/commands/update.rs`;
+**Neighbor systems:** `apps/conary/src/commands/update/mod.rs`;
+`apps/conary/src/commands/update/selection.rs`;
 `apps/conary/src/commands/install/`; `crates/conary-core/src/repository/`;
 `crates/conary-core/src/generation/`; integration manifests under
 `apps/conary/tests/integration/remi/manifests/`.
