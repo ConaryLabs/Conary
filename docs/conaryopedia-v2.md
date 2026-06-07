@@ -2485,7 +2485,8 @@ apps/remi/src/server/
   mod.rs              ServerConfig, ServerState, run_server_from_config()
   config.rs           RemiConfig TOML parser (11 sections)
   routes.rs           Axum router: public + admin, middleware stack
-  conversion.rs       ConversionService: download -> parse -> CCS -> store
+  conversion.rs       ConversionService public hub
+  conversion/         workflow, lookup, metadata, safety, storage, persistence, recipe, benchmark
   cache.rs            ChunkCache: two-level CAS, DB-backed LRU eviction
   bloom.rs            ChunkBloomFilter: fast negative lookups (~1.2 MB)
   handlers/
@@ -2687,7 +2688,10 @@ Client: GET /v1/fedora/packages/nginx
         8. Mark the public path ready only for public-ready outcomes
 ```
 
-The `ConversionService` (`apps/remi/src/server/conversion.rs`) orchestrates this pipeline:
+The `ConversionService` public hub lives at `apps/remi/src/server/conversion.rs`.
+The pipeline orchestration lives in `apps/remi/src/server/conversion/workflow.rs`
+with supporting lookup, metadata, safety, storage, persistence, recipe, and
+benchmark child modules under `apps/remi/src/server/conversion/`:
 
 ```rust
 pub struct ConversionService {
@@ -2700,7 +2704,10 @@ pub struct ConversionService {
 
 Package type detection uses the supported public distro family: `fedora` -> RPM, `ubuntu` -> DEB, `arch` -> Arch. The limited public target set is Fedora 44, Ubuntu 26.04, and Arch. The parser layer still understands DEB-family package metadata internally, but Debian is not part of the limited public support matrix. Each format's parser (`RpmPackage`, `DebPackage`, `ArchPackage`) implements the `PackageFormat` trait, producing a `PackageMetadata` with files, dependencies, and scripts. The `LegacyConverter` then chunks the content using FastCDC boundaries (16 KB min, 64 KB avg, 256 KB max).
 
-Filename sanitization prevents path traversal -- `safe_ccs_filename()` passes both the package name and version through `sanitize_filename()` before constructing the output path.
+Filename sanitization lives in
+`apps/remi/src/server/conversion/metadata.rs`; `safe_ccs_filename()` passes
+both the package name and version through `sanitize_filename()` before
+constructing the output path.
 
 The 202 Accepted pattern lets clients poll for completion:
 
