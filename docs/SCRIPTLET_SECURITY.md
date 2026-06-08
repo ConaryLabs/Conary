@@ -8,6 +8,12 @@ summary: Record protected live-root seccomp/root-transition assurance and struct
 
 This document describes Conary's security model for executing package scriptlets (install/remove hooks).
 
+Code owners for this model live under `crates/conary-core/src/scriptlet/`:
+`sandbox.rs` owns sandbox mode and protected live-root policy, `process.rs`
+owns direct/target-root/chroot execution, `legacy.rs` owns legacy replay
+invocation contracts, `arguments.rs` owns distro argument mapping, and
+`runtime.rs` owns subprocess/seccomp helper plumbing.
+
 ## Threat Model
 
 Package scriptlets execute arbitrary code with the privileges of the package manager (typically root). Threats include:
@@ -271,7 +277,16 @@ alternate roots; that is not the protected live-root sandbox boundary.
 
 | File | Purpose |
 |------|---------|
-| `crates/conary-core/src/scriptlet/mod.rs` | Scriptlet executor, cross-distro handling |
+| `crates/conary-core/src/scriptlet/mod.rs` | Public scriptlet API hub and re-exports |
+| `crates/conary-core/src/scriptlet/types.rs` | Package format and execution mode value types |
+| `crates/conary-core/src/scriptlet/outcome.rs` | Typed scriptlet outcomes and failure classification |
+| `crates/conary-core/src/scriptlet/phases.rs` | Scriptlet phase string conversions |
+| `crates/conary-core/src/scriptlet/executor.rs` | Public `ScriptletExecutor` orchestration |
+| `crates/conary-core/src/scriptlet/arguments.rs` | RPM, Debian, and Arch argument mapping |
+| `crates/conary-core/src/scriptlet/sandbox.rs` | Sandbox mode and protected live-root policy |
+| `crates/conary-core/src/scriptlet/process.rs` | Direct, target-root, chroot, and sandboxed process execution |
+| `crates/conary-core/src/scriptlet/legacy.rs` | Legacy replay invocation contracts |
+| `crates/conary-core/src/scriptlet/runtime.rs` | Subprocess, seccomp, and chroot helper plumbing |
 | `crates/conary-core/src/container/mod.rs` | Container isolation, risk analysis |
 | `crates/conary-core/src/trigger/mod.rs` | Post-install triggers (preferred over scriptlets) |
 | `crates/conary-core/src/db/models/scriptlet_entry.rs` | Scriptlet database storage |

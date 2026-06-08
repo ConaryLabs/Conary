@@ -58,7 +58,14 @@ summary: Stable subsystem pointers with feature ownership and interaction-gate r
   `apps/conary/src/commands/install/legacy_replay.rs`,
   `apps/conary/src/commands/install/inner.rs`,
   `apps/conary/src/commands/install/batch.rs`,
-  `apps/conary/src/commands/install/restore.rs`, and
+  `apps/conary/src/commands/install/restore.rs`,
+  `crates/conary-core/src/scriptlet/mod.rs`,
+  `crates/conary-core/src/scriptlet/executor.rs`,
+  `crates/conary-core/src/scriptlet/arguments.rs`,
+  `crates/conary-core/src/scriptlet/sandbox.rs`,
+  `crates/conary-core/src/scriptlet/process.rs`,
+  `crates/conary-core/src/scriptlet/legacy.rs`,
+  `crates/conary-core/src/scriptlet/runtime.rs`, and
   `docs/modules/test-fixtures.md`
 - Generation building, artifact export, composefs mounting, `/etc` merge, and GC:
   `crates/conary-core/src/generation/builder.rs`,
