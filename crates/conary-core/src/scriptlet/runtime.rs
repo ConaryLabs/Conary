@@ -12,6 +12,10 @@ use tracing::{info, warn};
 
 static SECCOMP_WARN_OVERRIDE: AtomicBool = AtomicBool::new(false);
 
+#[cfg(test)]
+pub(super) static ENV_LOCK: std::sync::LazyLock<std::sync::Mutex<()>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(()));
+
 /// Write script content to a file and set it executable (mode 0o700).
 ///
 /// Delegates to [`crate::container::write_executable_script`].

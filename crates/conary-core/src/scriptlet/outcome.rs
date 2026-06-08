@@ -1,6 +1,6 @@
 // conary-core/src/scriptlet/outcome.rs
 
-use super::{EffectiveSandbox, SandboxMode};
+use super::{EffectiveSandbox, SandboxMode, ScriptletExecutor};
 use crate::error::{Error, Result};
 
 /// Typed failure classification for scriptlet execution.
@@ -65,5 +65,59 @@ impl ScriptletOutcome {
             Self::Skipped { .. } | Self::Success { .. } => Ok(()),
             Self::Failure(failure) => Err(Error::ScriptletError(failure.message)),
         }
+    }
+}
+
+impl ScriptletExecutor {
+    pub(super) fn failure_outcome(
+        &self,
+        phase: &str,
+        failure_kind: ScriptletFailureKind,
+        requested_sandbox_mode: SandboxMode,
+        effective_sandbox: EffectiveSandbox,
+        message: String,
+    ) -> ScriptletOutcome {
+        ScriptletOutcome::Failure(ScriptletFailureOutcome {
+            phase: phase.to_string(),
+            failure_kind,
+            requested_sandbox_mode,
+            effective_sandbox,
+            message,
+        })
+    }
+
+    pub(super) fn failure_from_error(
+        &self,
+        phase: &str,
+        requested_sandbox_mode: SandboxMode,
+        effective_sandbox: EffectiveSandbox,
+        error: Error,
+    ) -> ScriptletOutcome {
+        let message = match error {
+            Error::ScriptletError(message) => message,
+            other => other.to_string(),
+        };
+        self.failure_outcome(
+            phase,
+            classify_scriptlet_failure(&message),
+            requested_sandbox_mode,
+            effective_sandbox,
+            message,
+        )
+    }
+}
+
+fn classify_scriptlet_failure(message: &str) -> ScriptletFailureKind {
+    if message.contains("failed with exit code") {
+        ScriptletFailureKind::ScriptExited
+    } else if message.contains("timed out") || message.contains("Timeout:") {
+        ScriptletFailureKind::ScriptTimedOut
+    } else if message.contains("Capability enforcement failed")
+        || message.contains("seccomp filter application failed")
+        || message.contains("requires seccomp enforcement support")
+    {
+        ScriptletFailureKind::EnforcementSetupFailed
+    } else {
+        ScriptletFailureKind::SandboxSetupUnavailable
     }
 }
