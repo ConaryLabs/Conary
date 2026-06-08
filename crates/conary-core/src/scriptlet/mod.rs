@@ -33,14 +33,13 @@ use crate::container::{
 };
 use crate::db::models::ScriptletEntry;
 use crate::error::{Error, Result};
-use crate::packages::traits::{Scriptlet, ScriptletPhase};
+use crate::packages::traits::Scriptlet;
 use anyhow::{Result as AnyhowResult, bail};
 use runtime::{
     apply_sanitized_command_env, build_scriptlet_seccomp, chroot_mount_private_flags,
     chroot_namespace_flags, current_seccomp_mode, log_script_output, wait_and_capture,
     write_executable_script,
 };
-use serde::{Deserialize, Serialize};
 use std::fs;
 use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
@@ -49,129 +48,16 @@ use std::time::Duration;
 use tempfile::TempDir;
 use tracing::{debug, info, warn};
 
+mod outcome;
+mod phases;
 mod runtime;
+mod sandbox;
+mod types;
 
-/// Sandbox mode for scriptlet execution
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum SandboxMode {
-    /// No sandboxing - direct execution
-    #[serde(rename = "never", alias = "none")]
-    None,
-    /// Automatic - sandbox based on script risk analysis
-    Auto,
-    /// Always sandbox all scripts
-    #[default]
-    Always,
-}
-
-impl SandboxMode {
-    /// Parse sandbox mode from string (auto, always, never)
-    pub fn parse(s: &str) -> Option<Self> {
-        match s.to_lowercase().as_str() {
-            "never" | "none" | "off" | "false" => Some(Self::None),
-            "auto" => Some(Self::Auto),
-            "always" | "on" | "true" => Some(Self::Always),
-            _ => None,
-        }
-    }
-
-    /// Stable string for diagnostics and changeset metadata.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::None => "never",
-            Self::Auto => "auto",
-            Self::Always => "always",
-        }
-    }
-}
-
-/// Sandbox boundary actually used for a scriptlet execution.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EffectiveSandbox {
-    /// Live-root protected mode with namespace isolation.
-    ProtectedLiveRoot,
-    /// Direct legacy execution on the live host.
-    Direct,
-    /// Alternate-root execution for bootstrap/offline targets.
-    TargetRoot,
-}
-
-impl EffectiveSandbox {
-    /// Stable string for diagnostics and changeset metadata.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::ProtectedLiveRoot => "protected-live-root",
-            Self::Direct => "direct",
-            Self::TargetRoot => "target-root",
-        }
-    }
-}
-
-/// Typed failure classification for scriptlet execution.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ScriptletFailureKind {
-    /// The script process ran and returned a non-zero exit status.
-    ScriptExited,
-    /// The script process exceeded the configured timeout.
-    ScriptTimedOut,
-    /// Namespace, mount, interpreter, or other sandbox setup failed.
-    SandboxSetupUnavailable,
-    /// Landlock/seccomp/capability enforcement setup failed.
-    EnforcementSetupFailed,
-}
-
-impl ScriptletFailureKind {
-    /// Stable string for diagnostics and changeset metadata.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::ScriptExited => "ScriptExited",
-            Self::ScriptTimedOut => "ScriptTimedOut",
-            Self::SandboxSetupUnavailable => "SandboxSetupUnavailable",
-            Self::EnforcementSetupFailed => "EnforcementSetupFailed",
-        }
-    }
-}
-
-/// Failure details for a scriptlet execution.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ScriptletFailureOutcome {
-    pub phase: String,
-    pub failure_kind: ScriptletFailureKind,
-    pub requested_sandbox_mode: SandboxMode,
-    pub effective_sandbox: EffectiveSandbox,
-    pub message: String,
-}
-
-/// Structured result of a scriptlet attempt.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ScriptletOutcome {
-    /// The scriptlet was intentionally skipped, usually because a target-root
-    /// interpreter is not available during early bootstrap.
-    Skipped {
-        phase: String,
-        requested_sandbox_mode: SandboxMode,
-        effective_sandbox: EffectiveSandbox,
-    },
-    /// The scriptlet completed successfully.
-    Success {
-        phase: String,
-        requested_sandbox_mode: SandboxMode,
-        effective_sandbox: EffectiveSandbox,
-    },
-    /// The scriptlet failed with typed context.
-    Failure(ScriptletFailureOutcome),
-}
-
-impl ScriptletOutcome {
-    /// Convert an outcome back into the historical `Result<()>` API.
-    pub fn into_result(self) -> Result<()> {
-        match self {
-            Self::Skipped { .. } | Self::Success { .. } => Ok(()),
-            Self::Failure(failure) => Err(Error::ScriptletError(failure.message)),
-        }
-    }
-}
+pub use outcome::{ScriptletFailureKind, ScriptletFailureOutcome, ScriptletOutcome};
+pub use phases::{phase_from_string, phase_to_string};
+pub use sandbox::{EffectiveSandbox, SandboxMode};
+pub use types::{ExecutionMode, PackageFormat};
 
 /// Default timeout for scriptlet execution (60 seconds)
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
@@ -193,51 +79,6 @@ const LIVE_SANDBOX_READONLY_ETC_FILES: [&str; 5] = [
     "/etc/shadow",
     "/etc/sudoers",
 ];
-
-/// Package format types for argument handling
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PackageFormat {
-    Rpm,
-    Deb,
-    Arch,
-}
-
-impl PackageFormat {
-    /// Parse from string representation
-    pub fn parse(s: &str) -> Option<Self> {
-        match s.to_lowercase().as_str() {
-            "rpm" => Some(Self::Rpm),
-            "deb" => Some(Self::Deb),
-            "arch" => Some(Self::Arch),
-            _ => None,
-        }
-    }
-
-    /// Convert to string representation
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Rpm => "rpm",
-            Self::Deb => "deb",
-            Self::Arch => "arch",
-        }
-    }
-}
-
-/// Execution mode determines arguments passed to scriptlets
-#[derive(Debug, Clone)]
-pub enum ExecutionMode {
-    /// Fresh install
-    Install,
-    /// Package removal
-    Remove,
-    /// Upgrade from old version (for NEW package scriptlets)
-    Upgrade { old_version: String },
-    /// Upgrade removal (for OLD package scriptlets during upgrade)
-    /// RPM: $1=1 (not 0, signaling "another version remains")
-    /// DEB: "upgrade <new_version>" (not "remove")
-    /// Arch: Should NOT be used - Arch skips old package scripts during upgrade
-    UpgradeRemoval { new_version: String },
-}
 
 /// Executor-facing view of a legacy bundle entry.
 pub struct LegacyScriptletExecution<'a> {
@@ -1467,42 +1308,14 @@ pub fn set_seccomp_warn_override(enabled: bool) {
     runtime::set_seccomp_warn_override(enabled);
 }
 
-/// Convert ScriptletPhase to string for database storage
-pub fn phase_to_string(phase: ScriptletPhase) -> String {
-    phase.to_string()
-}
-
-/// Parse phase string back to ScriptletPhase
-pub fn phase_from_string(s: &str) -> Option<ScriptletPhase> {
-    match s {
-        "pre-install" => Some(ScriptletPhase::PreInstall),
-        "post-install" => Some(ScriptletPhase::PostInstall),
-        "pre-remove" => Some(ScriptletPhase::PreRemove),
-        "post-remove" => Some(ScriptletPhase::PostRemove),
-        "pre-upgrade" => Some(ScriptletPhase::PreUpgrade),
-        "post-upgrade" => Some(ScriptletPhase::PostUpgrade),
-        "pre-transaction" => Some(ScriptletPhase::PreTransaction),
-        "post-transaction" => Some(ScriptletPhase::PostTransaction),
-        "trigger" => Some(ScriptletPhase::Trigger),
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::capability::enforcement::EnforcementMode;
+    use crate::packages::traits::ScriptletPhase;
     use std::sync::{LazyLock, Mutex};
 
     static ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
-
-    #[test]
-    fn test_package_format_from_str() {
-        assert_eq!(PackageFormat::parse("rpm"), Some(PackageFormat::Rpm));
-        assert_eq!(PackageFormat::parse("deb"), Some(PackageFormat::Deb));
-        assert_eq!(PackageFormat::parse("arch"), Some(PackageFormat::Arch));
-        assert_eq!(PackageFormat::parse("unknown"), None);
-    }
 
     #[test]
     fn test_rpm_args() {
@@ -1899,71 +1712,6 @@ mod tests {
         assert!(wrapper.contains("set -e"));
         assert!(wrapper.contains(content));
         assert!(wrapper.contains("post_install \"$@\""));
-    }
-
-    #[test]
-    fn test_phase_conversion() {
-        assert_eq!(phase_to_string(ScriptletPhase::PreInstall), "pre-install");
-        assert_eq!(
-            phase_from_string("pre-install"),
-            Some(ScriptletPhase::PreInstall)
-        );
-        assert_eq!(phase_from_string("invalid"), None);
-    }
-
-    #[test]
-    fn test_sandbox_mode_default_is_always() {
-        assert_eq!(SandboxMode::default(), SandboxMode::Always);
-    }
-
-    #[test]
-    fn test_sandbox_mode_parse() {
-        // "none" variants
-        assert_eq!(SandboxMode::parse("never"), Some(SandboxMode::None));
-        assert_eq!(SandboxMode::parse("none"), Some(SandboxMode::None));
-        assert_eq!(SandboxMode::parse("off"), Some(SandboxMode::None));
-        assert_eq!(SandboxMode::parse("false"), Some(SandboxMode::None));
-
-        // "auto"
-        assert_eq!(SandboxMode::parse("auto"), Some(SandboxMode::Auto));
-
-        // "always" variants
-        assert_eq!(SandboxMode::parse("always"), Some(SandboxMode::Always));
-        assert_eq!(SandboxMode::parse("on"), Some(SandboxMode::Always));
-        assert_eq!(SandboxMode::parse("true"), Some(SandboxMode::Always));
-
-        // Case insensitivity
-        assert_eq!(SandboxMode::parse("AUTO"), Some(SandboxMode::Auto));
-        assert_eq!(SandboxMode::parse("NEVER"), Some(SandboxMode::None));
-        assert_eq!(SandboxMode::parse("Always"), Some(SandboxMode::Always));
-
-        // Invalid
-        assert_eq!(SandboxMode::parse("invalid"), None);
-        assert_eq!(SandboxMode::parse(""), None);
-    }
-
-    #[test]
-    fn sandbox_mode_serde_round_trips_goal7_matrix_spellings() {
-        assert_eq!(
-            serde_json::from_str::<SandboxMode>("\"never\"").expect("never deserializes"),
-            SandboxMode::None
-        );
-        assert_eq!(
-            serde_json::from_str::<SandboxMode>("\"none\"").expect("none alias deserializes"),
-            SandboxMode::None
-        );
-        assert_eq!(
-            serde_json::from_str::<SandboxMode>("\"auto\"").expect("auto deserializes"),
-            SandboxMode::Auto
-        );
-        assert_eq!(
-            serde_json::from_str::<SandboxMode>("\"always\"").expect("always deserializes"),
-            SandboxMode::Always
-        );
-        assert_eq!(
-            serde_json::to_string(&SandboxMode::None).expect("serialize none"),
-            "\"never\""
-        );
     }
 
     #[test]
