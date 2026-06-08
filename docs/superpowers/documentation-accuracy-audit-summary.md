@@ -444,6 +444,13 @@ command orchestration, acquisition and conversion handoff, validation,
 dependency flow, execution-path safety, lifecycle/finalization, transaction
 execution, install options, source semantics, and source-policy resolution.
 
+The Phase 17 scriptlet module decomposition plan targets the current largest
+Rust hotspot, `crates/conary-core/src/scriptlet/mod.rs`. It keeps
+`scriptlet/mod.rs` as the public API hub while planning focused owners for
+scriptlet value types, typed outcomes, phase conversion, executor orchestration,
+distro argument mapping, protected sandbox policy, process execution, runtime
+helpers, and legacy bundle invocation contracts.
+
 ## Verification Commands
 
 - `bash scripts/docs-audit-inventory.sh`
@@ -518,9 +525,9 @@ public tester copy is tracked by
 
 ## Final Counts
 
-- Total tracked doc-like files audited: 160
+- Total tracked doc-like files audited: 161
 - `verified-no-change`: 13
-- `corrected`: 60
+- `corrected`: 61
 - `archived`: 73
 - `retained-historical`: 14
 - Remaining pending rows: 0
