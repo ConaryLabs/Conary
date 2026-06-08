@@ -68,7 +68,11 @@ mutation flows for local package operations.
 `docs/modules/test-fixtures.md`; `docs/operations/daily-driver-ux-matrix.md`.
 
 **Neighbor systems:** `crates/conary-core/src/transaction/`;
-`crates/conary-core/src/db/`; `crates/conary-core/src/scriptlet/`;
+`crates/conary-core/src/db/`; `crates/conary-core/src/scriptlet/mod.rs`;
+`crates/conary-core/src/scriptlet/executor.rs`;
+`crates/conary-core/src/scriptlet/sandbox.rs`;
+`crates/conary-core/src/scriptlet/process.rs`;
+`crates/conary-core/src/scriptlet/legacy.rs`;
 `crates/conary-core/src/ccs/legacy_replay.rs`; conaryd package jobs.
 
 **Focused proof:** `cargo test -p conary --test live_host_mutation_safety`;
@@ -170,7 +174,11 @@ install CCS packages, and preserve/replay legacy scriptlet metadata safely.
 `docs/superpowers/plans/2026-06-05-ccs-native-ecosystem-roadmap.md`.
 
 **Neighbor systems:** install orchestration, Remi publication, repository
-metadata, scriptlet sandboxing, fixture maps.
+metadata, scriptlet sandboxing (`crates/conary-core/src/scriptlet/mod.rs`,
+`crates/conary-core/src/scriptlet/executor.rs`,
+`crates/conary-core/src/scriptlet/sandbox.rs`,
+`crates/conary-core/src/scriptlet/process.rs`,
+`crates/conary-core/src/scriptlet/legacy.rs`), fixture maps.
 
 **Focused proof:** `cargo test -p conary-core golden_fixtures`;
 `cargo test -p conary-core support_matrix`;
