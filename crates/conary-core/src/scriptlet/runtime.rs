@@ -67,7 +67,7 @@ fn check_scriptlet_status(phase: &str, status: ExitStatus, context: &str) -> Res
     }
 }
 
-pub(super) fn set_seccomp_warn_override(enabled: bool) {
+pub fn set_seccomp_warn_override(enabled: bool) {
     SECCOMP_WARN_OVERRIDE.store(enabled, Ordering::Relaxed);
 }
 
@@ -156,5 +156,49 @@ pub(super) fn build_scriptlet_seccomp(mode: EnforcementMode) -> Option<seccompil
             warn!("Failed to build scriptlet seccomp filter: {e}");
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::capability::enforcement::EnforcementMode;
+
+    #[test]
+    fn test_build_scriptlet_seccomp_returns_filter() {
+        // On Linux with seccomp support, this should return Some(bpf).
+        // On other platforms or kernels without seccomp, it returns None.
+        let result = build_scriptlet_seccomp(EnforcementMode::Warn);
+        // We cannot assert Some unconditionally (CI may lack seccomp),
+        // but we verify the function does not panic and returns a valid option.
+        if crate::capability::enforcement::seccomp_enforce::check_seccomp_support() {
+            assert!(
+                result.is_some(),
+                "build_scriptlet_seccomp should return Some when seccomp is supported"
+            );
+        } else {
+            assert!(
+                result.is_none(),
+                "build_scriptlet_seccomp should return None when seccomp is unsupported"
+            );
+        }
+    }
+
+    #[test]
+    fn test_current_seccomp_mode_defaults_to_enforce() {
+        set_seccomp_warn_override(false);
+        assert_eq!(current_seccomp_mode(), EnforcementMode::Enforce);
+    }
+
+    #[test]
+    fn test_chroot_namespace_flags_include_mount_namespace() {
+        assert!(chroot_namespace_flags().contains(nix::sched::CloneFlags::CLONE_NEWNS));
+    }
+
+    #[test]
+    fn test_chroot_mount_propagation_is_private_recursive() {
+        let flags = chroot_mount_private_flags();
+        assert!(flags.contains(nix::mount::MsFlags::MS_PRIVATE));
+        assert!(flags.contains(nix::mount::MsFlags::MS_REC));
     }
 }
