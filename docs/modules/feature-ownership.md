@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-06-06
-revision: 1
-summary: Feature ownership cards with focused and cross-system verification gates
+last_updated: 2026-06-09
+revision: 2
+summary: Add model command decomposition ownership routing
 ---
 
 # Feature Ownership And Interaction Gates
@@ -124,6 +124,45 @@ when selected-generation handoff behavior changes.
 
 **Safety notes:** do not silently take over adopted packages or erase native
 package-manager authority without an explicit takeover path.
+
+## Declarative System Models And Replatform Planning
+
+**Capability:** diff, apply, check, snapshot, publish, lock, update, and
+remote-diff declarative system model files while preserving source-policy and
+replatform convergence behavior.
+
+**Start here:** `apps/conary/src/commands/model.rs`;
+`apps/conary/src/commands/model/context.rs`;
+`apps/conary/src/commands/model/presentation.rs`;
+`apps/conary/src/commands/model/diff.rs`;
+`apps/conary/src/commands/model/apply.rs`;
+`apps/conary/src/commands/model/check.rs`;
+`apps/conary/src/commands/model/snapshot.rs`;
+`apps/conary/src/commands/model/remote_diff.rs`;
+`apps/conary/src/commands/model/lock.rs`;
+`apps/conary/src/commands/model/publish.rs`;
+`crates/conary-core/src/model/parser.rs`;
+`crates/conary-core/src/model/replatform.rs`;
+`docs/modules/source-selection.md`.
+
+**Neighbor systems:** install/remove execution, update source-policy selection,
+repository remote include cache, derived package builds, live-host mutation
+acknowledgement, and conaryd package-job request compatibility.
+
+**Focused proof:** `cargo test -p conary --lib commands::model`.
+
+**Interaction gate:** `cargo test -p conary model`;
+`cargo test -p conary --test model_apply`;
+`cargo test -p conary --test live_host_mutation_safety model` when apply
+behavior or live-mutation safety changes.
+
+**Docs to update:** `docs/modules/source-selection.md`;
+`docs/llms/subsystem-map.md`; `docs/ARCHITECTURE.md`.
+
+**Safety notes:** preserve `model check` drift exit code 2, source-policy
+persistence semantics, executable replatform planning boundaries, lockfile
+reproducibility, remote include cache behavior, and refusal-before-live-mutation
+gates.
 
 ## Generation Build, Switch, Recovery, And Export
 

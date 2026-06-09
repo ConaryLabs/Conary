@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-06-02
-revision: 3
-summary: Add foreign legacy replay policy relationship to source selection
+last_updated: 2026-06-09
+revision: 4
+summary: Add model command child-module routing for source policy work
 ---
 
 # Source Selection Module (conary-core/src/repository/ + conary-core/src/model/)
@@ -281,4 +281,14 @@ affinity data.
   native-authority policy
 - `apps/conary/src/commands/update/collection.rs` for `update @collection`
   orchestration, member filtering, and per-member update dispatch
+- `apps/conary/src/commands/model.rs` for the model command hub
+- `apps/conary/src/commands/model/context.rs` for model loading and diff
+  enrichment
+- `apps/conary/src/commands/model/presentation.rs` for source-policy and
+  replatform summaries
+- `apps/conary/src/commands/model/apply.rs` for model apply execution and
+  replatform install dispatch
+- `apps/conary/src/commands/model/remote_diff.rs` and
+  `apps/conary/src/commands/model/lock.rs` for remote include drift and
+  lockfile behavior
 - `crates/conary-core/src/model/replatform.rs` for executable replatform planning
