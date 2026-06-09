@@ -131,8 +131,10 @@ fn runtime_generation_artifact_write_reuses_preverified_cas_inputs() {
 fn recursive_ccs_dependency_installs_defer_generation_publication_until_root_package() {
     let conversion_rs = fs::read_to_string(app_source("commands/install/conversion.rs"))
         .expect("failed to read commands/install/conversion.rs");
-    let install_rs = fs::read_to_string(app_source("commands/install/mod.rs"))
-        .expect("failed to read commands/install/mod.rs");
+    let ccs_transaction_rs = fs::read_to_string(app_source("commands/install/ccs_transaction.rs"))
+        .expect("failed to read commands/install/ccs_transaction.rs");
+    let transaction_rs = fs::read_to_string(app_source("commands/install/transaction.rs"))
+        .expect("failed to read commands/install/transaction.rs");
 
     assert!(
         conversion_rs.contains("install_converted_ccs_with_pending(opts, Vec::new(), false)"),
@@ -144,12 +146,12 @@ fn recursive_ccs_dependency_installs_defer_generation_publication_until_root_pac
         "recursive CCS dependency installs must defer generation publication until the root dependency closure is installed"
     );
     assert!(
-        install_rs.contains("pub defer_generation: bool")
-            && install_rs.contains("defer_generation: opts.defer_generation"),
+        ccs_transaction_rs.contains("pub defer_generation: bool")
+            && ccs_transaction_rs.contains("defer_generation: opts.defer_generation"),
         "CCS transaction options must carry the generation-publication boundary into transaction execution"
     );
 
-    let transaction_body = install_rs
+    let transaction_body = transaction_rs
         .split("fn execute_install_transaction")
         .nth(1)
         .expect("failed to isolate execute_install_transaction body");
