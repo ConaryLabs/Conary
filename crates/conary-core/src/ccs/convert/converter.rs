@@ -783,6 +783,44 @@ mod tests {
     fn scriptlet_bundle_types_are_publicly_exported() {
         let summary = crate::ccs::convert::ScriptletBundleSummary::default();
         assert_eq!(summary.publication_status, "public");
+        let nested_summary =
+            crate::ccs::convert::scriptlet_bundle::ScriptletBundleSummary::default();
+        assert_eq!(nested_summary.publication_status, "public");
+
+        let counts = crate::ccs::convert::ScriptletDecisionCountsSummary::default();
+        let nested_counts =
+            crate::ccs::convert::scriptlet_bundle::ScriptletDecisionCountsSummary::default();
+        assert_eq!(counts, nested_counts);
+
+        assert!(
+            std::any::type_name::<crate::ccs::convert::ScriptletBundleInput<'static>>()
+                .contains("ScriptletBundleInput")
+        );
+        assert!(
+            std::any::type_name::<
+                crate::ccs::convert::scriptlet_bundle::ScriptletBundleInput<'static>,
+            >()
+            .contains("ScriptletBundleInput")
+        );
+        assert!(
+            std::any::type_name::<crate::ccs::convert::ScriptletBundleBuild>()
+                .contains("ScriptletBundleBuild")
+        );
+        assert!(
+            std::any::type_name::<crate::ccs::convert::scriptlet_bundle::ScriptletBundleBuild>()
+                .contains("ScriptletBundleBuild")
+        );
+
+        let _root_builder: for<'a> fn(
+            crate::ccs::convert::ScriptletBundleInput<'a>,
+        )
+            -> anyhow::Result<crate::ccs::convert::ScriptletBundleBuild> =
+            crate::ccs::convert::build_legacy_scriptlet_bundle;
+        let _module_builder: for<'a> fn(
+            crate::ccs::convert::scriptlet_bundle::ScriptletBundleInput<'a>,
+        ) -> anyhow::Result<
+            crate::ccs::convert::scriptlet_bundle::ScriptletBundleBuild,
+        > = crate::ccs::convert::scriptlet_bundle::build_legacy_scriptlet_bundle;
     }
 
     fn make_test_metadata() -> PackageMetadata {
