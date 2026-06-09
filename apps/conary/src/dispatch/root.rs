@@ -22,12 +22,10 @@ use super::profile::dispatch_profile_command;
 use super::provenance::dispatch_provenance_command;
 use super::query::dispatch_query_command;
 use super::repo::dispatch_repo_command;
+use super::system::dispatch_system_command;
 use super::trust::dispatch_trust_command;
 use super::verify_derivation::dispatch_verify_derivation_command;
-use super::{
-    dispatch_automation_command, dispatch_ccs_command, dispatch_model_command,
-    dispatch_system_command,
-};
+use super::{dispatch_automation_command, dispatch_ccs_command, dispatch_model_command};
 use crate::cli::{self, Commands};
 use crate::commands;
 use crate::live_host_safety::{LiveMutationClass, MutationIntent};
