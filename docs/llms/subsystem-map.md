@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-06-09
-revision: 12
-summary: Add model command child-module routing
+revision: 13
+summary: Add dispatch child-router routing
 ---
 
 # Assistant Subsystem Map
@@ -122,6 +122,17 @@ summary: Add model command child-module routing
   `apps/conary-test/src/server/service.rs`,
   `apps/conary-test/src/server/mcp.rs`, and
   `apps/conary-test/src/engine/`
+- CLI command routing, live-mutation command labels, and namespace dispatch:
+  `apps/conary/src/dispatch.rs`,
+  `apps/conary/src/dispatch/root.rs`,
+  `apps/conary/src/dispatch/context.rs`,
+  `apps/conary/src/dispatch/system.rs`,
+  `apps/conary/src/dispatch/system_state.rs`,
+  `apps/conary/src/dispatch/system_generation.rs`,
+  `apps/conary/src/dispatch/ccs.rs`,
+  `apps/conary/src/dispatch/model.rs`,
+  `apps/conary/src/dispatch/automation.rs`, and
+  `apps/conary/src/dispatch/`
 - Agent operation contract and MCP adapter helpers:
   `crates/conary-agent-contract/src/` and `crates/conary-mcp/src/`
 - conaryd daemon routes and auth boundaries:

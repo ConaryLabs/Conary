@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-06-02
-revision: 2
-summary: Clarify installed legacy scriptlet bundle query output
+revision: 3
+summary: Refresh query dispatch owner paths
 ---
 
 # Query Module (apps/conary/src/commands/query/)
@@ -9,7 +9,8 @@ summary: Clarify installed legacy scriptlet bundle query output
 Package, file, dependency, and repository queries against the local SQLite
 database. Label management remains nested under `conary query`, while the
 CycloneDX SBOM surface now lives at the top-level `conary sbom` command even
-though its implementation still lives in `src/commands/query/sbom.rs`.
+though its implementation still lives in
+`apps/conary/src/commands/query/sbom.rs`.
 
 ## Data Flow: Query Dispatch
 
@@ -17,6 +18,8 @@ though its implementation still lives in `src/commands/query/sbom.rs`.
 conary query <subcommand> [args]
         |
   apps/conary/src/cli/query.rs -- Clap definition (QueryCommands enum)
+        |
+  apps/conary/src/dispatch/query.rs -- query namespace routing
         |
   apps/conary/src/commands/query/mod.rs -- Dispatch to handler
         |
@@ -30,12 +33,12 @@ conary query <subcommand> [args]
   +-- scripts                -> scripts.rs      (package files plus installed scriptlet/bundle state)
   +-- conflicts              -> dependency.rs   (file ownership overlap detection)
   +-- delta-stats            -> dependency.rs   (delta update statistics)
-  +-- label                  -> cli/label.rs + dispatch.rs   (label path, delegation, and provenance management)
+  +-- label                  -> cli/label.rs + dispatch/query.rs   (label path, delegation, and provenance management)
 
 Related top-level command:
 conary sbom [--profile ... | --derivation ...]
         |
-  apps/conary/src/dispatch.rs -> sbom.rs       (CycloneDX derivation export)
+  apps/conary/src/dispatch/root.rs -> commands/query/sbom.rs       (CycloneDX derivation export)
 ```
 
 ## Key Types

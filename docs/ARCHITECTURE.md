@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-06-09
-revision: 17
-summary: Note focused model command child modules
+revision: 18
+summary: Note focused dispatch child routers
 ---
 
 # Conary Architecture
@@ -14,7 +14,7 @@ and the data flow for core operations.
 
 ```
 apps/conary/ (CLI)
-  cli/ + app.rs + dispatch.rs
+  cli/ + app.rs + dispatch.rs + dispatch/
       |
       +-- install / update / remove
       +-- repo / query / model / ccs / collection
@@ -82,7 +82,8 @@ apps/conary/             CLI binary
 +-- src/
     +-- main.rs          Thin entrypoint
     +-- app.rs           Bootstrap and top-level app wiring
-    +-- dispatch.rs      Command routing and live-host safety gates
+    +-- dispatch.rs      Public dispatch entrypoint and child-router hub
+    +-- dispatch/        Root, system, CCS, model, automation, and namespace routers
     +-- cli/             Clap command definitions
     +-- commands/        Command implementations (install, repo, query, model hub + child modules, ccs, bootstrap, system)
 
