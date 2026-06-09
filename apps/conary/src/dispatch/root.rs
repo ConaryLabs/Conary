@@ -5,16 +5,28 @@ use std::path::Path;
 
 use anyhow::Result;
 
+use super::bootstrap::dispatch_bootstrap_command;
+use super::cache::dispatch_cache_command;
+use super::capability::dispatch_capability_command;
+use super::catalog::{
+    dispatch_canonical_command, dispatch_distro_command, dispatch_groups_command,
+    dispatch_registry_command,
+};
+use super::collection::dispatch_collection_command;
+use super::config::dispatch_config_command;
 use super::context::{legacy_replay_options, require_live_mutation};
+use super::derivation::dispatch_derivation_command;
+use super::derive::dispatch_derive_command;
+use super::federation::dispatch_federation_command;
+use super::profile::dispatch_profile_command;
+use super::provenance::dispatch_provenance_command;
+use super::query::dispatch_query_command;
+use super::repo::dispatch_repo_command;
+use super::trust::dispatch_trust_command;
+use super::verify_derivation::dispatch_verify_derivation_command;
 use super::{
-    dispatch_automation_command, dispatch_bootstrap_command, dispatch_cache_command,
-    dispatch_canonical_command, dispatch_capability_command, dispatch_ccs_command,
-    dispatch_collection_command, dispatch_config_command, dispatch_derivation_command,
-    dispatch_derive_command, dispatch_distro_command, dispatch_federation_command,
-    dispatch_groups_command, dispatch_model_command, dispatch_profile_command,
-    dispatch_provenance_command, dispatch_query_command, dispatch_registry_command,
-    dispatch_repo_command, dispatch_system_command, dispatch_trust_command,
-    dispatch_verify_derivation_command,
+    dispatch_automation_command, dispatch_ccs_command, dispatch_model_command,
+    dispatch_system_command,
 };
 use crate::cli::{self, Commands};
 use crate::commands;
