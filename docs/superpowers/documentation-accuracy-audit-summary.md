@@ -481,13 +481,13 @@ live-mutation context, system subrouters, CCS/model/automation routers, and
 small namespace routers under `apps/conary/src/dispatch/` without changing
 command routes, safety gate labels, live-mutation classes, or dry-run behavior.
 
-The Phase 22 generation builder decomposition plan targets the current
+The Phase 22 generation builder decomposition landed for the former
 generation builder hotspot, `crates/conary-core/src/generation/builder.rs`. It
-keeps `generation/builder.rs` as the public API hub while planning focused
-owners for generation creation and rebuild orchestration, root validation,
-CAS/runtime sysroot materialization, kernel/initramfs detection, boot asset
-resolution, and shared builder fixtures while preserving recovery rebuild paths
-and source-text runtime contract coverage.
+keeps `generation/builder.rs` as the public API hub while moving generation
+creation and rebuild orchestration, root validation, CAS/runtime sysroot
+materialization, kernel/initramfs detection, boot asset resolution, and shared
+builder fixtures into child modules while preserving recovery rebuild paths and
+source-text runtime contract coverage.
 
 ## Verification Commands
 

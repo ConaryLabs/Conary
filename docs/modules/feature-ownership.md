@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-06-09
-revision: 3
-summary: Add dispatch child-router ownership routing
+revision: 4
+summary: Add generation builder child-module ownership
 ---
 
 # Feature Ownership And Interaction Gates
@@ -206,7 +206,14 @@ gates.
 next boot, recover publication debt, and export raw/qcow2/ISO carriers.
 
 **Start here:** `crates/conary-core/src/generation/builder.rs`;
+`crates/conary-core/src/generation/builder/create.rs`;
+`crates/conary-core/src/generation/builder/rebuild.rs`;
+`crates/conary-core/src/generation/builder/boot_assets.rs`;
+`crates/conary-core/src/generation/builder/initramfs.rs`;
+`crates/conary-core/src/generation/builder/kernel.rs`;
+`crates/conary-core/src/generation/builder/root_validation.rs`;
 `crates/conary-core/src/generation/builder/runtime_inputs.rs`;
+`crates/conary-core/src/generation/builder/erofs.rs`;
 `crates/conary-core/src/generation/export.rs`;
 `crates/conary-core/src/generation/artifact.rs`;
 `crates/conary-core/src/generation/gc.rs`;

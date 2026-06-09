@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-06-09
-revision: 18
-summary: Note focused dispatch child routers
+revision: 19
+summary: Note generation builder child modules
 ---
 
 # Conary Architecture
@@ -99,8 +99,16 @@ crates/conary-core/      Core library crate
     |   +-- mod.rs       TransactionEngine, state machine (resolve/fetch/commit/build/select)
     |   +-- planner.rs   VFS preflight conflict detection
     +-- generation/      EROFS generation building and composefs mounting
-    |   +-- builder.rs   Build EROFS images from DB/adopted runtime state
+    |   +-- builder.rs   Public generation-builder hub
+    |   +-- builder/create.rs Generation creation orchestration
+    |   +-- builder/rebuild.rs Recovery rebuild orchestration
+    |   +-- builder/boot_assets.rs Runtime/generation boot asset resolution
+    |   +-- builder/initramfs.rs Dracut initramfs generation support
+    |   +-- builder/kernel.rs Kernel release discovery
+    |   +-- builder/root_validation.rs Self-contained runtime root validation
+    |   +-- builder/sysroot.rs CAS-backed runtime sysroot materialization
     |   +-- builder/runtime_inputs.rs CAS-backed runtime input classification and validation
+    |   +-- builder/erofs.rs Low-level EROFS image construction
     |   +-- artifact.rs  Generation artifact contract, CAS manifest, and boot assets
     |   +-- export.rs    Raw/qcow2 generation artifact disk export
     |   +-- mount.rs     composefs mount/unmount, current symlink
@@ -375,13 +383,18 @@ Current System State
 
 The primary builder for composefs generations. Uses the composefs-rs crate
 (v0.3.0) to produce EROFS images from DB state or validated installed-runtime
-inputs. Submodules: builder.rs (EROFS image construction),
-builder/runtime_inputs.rs (CAS-backed runtime classification and validation),
-artifact.rs (exportable generation contract and boot assets), export.rs
-(raw/qcow2 disk export from validated artifacts), mount.rs (composefs
-mount/unmount), metadata.rs (JSON metadata), gc.rs (old generation cleanup),
-etc_merge.rs (three-way /etc merge), delta.rs (EROFS image deltas),
-composefs.rs (runtime feature detection).
+inputs. Submodules: builder.rs (public generation-builder hub),
+builder/create.rs and builder/rebuild.rs (generation creation and recovery
+rebuild orchestration), builder/boot_assets.rs, builder/initramfs.rs,
+builder/kernel.rs, and builder/sysroot.rs (runtime boot asset and sysroot
+materialization support), builder/root_validation.rs and
+builder/runtime_inputs.rs (self-contained runtime input validation),
+builder/erofs.rs (low-level EROFS construction), artifact.rs (exportable
+generation contract and boot assets), export.rs (raw/qcow2 disk export from
+validated artifacts), mount.rs (composefs mount/unmount), metadata.rs (JSON
+metadata), gc.rs (old generation cleanup), etc_merge.rs (three-way /etc
+merge), delta.rs (EROFS image deltas), composefs.rs (runtime feature
+detection).
 
 ### composefs Integration
 
