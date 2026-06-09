@@ -1,7 +1,18 @@
 // apps/conaryd/src/daemon/routes/query.rs
 //! Daemon read-only package and query routes.
 
-use super::*;
+use super::db::run_db_query;
+use super::errors::{ApiResult, not_found_error};
+use super::types::{
+    DependencyInfo, HistoryEntry, PackageDetails, PackageSummary, SearchQuery, SharedState,
+};
+use axum::{
+    Router,
+    extract::{Path, Query, State},
+    response::Json,
+    routing::get,
+};
+use conary_core::db::models::{Changeset, DependencyEntry, GenerationPublication, Trove};
 
 pub(super) fn router() -> Router<SharedState> {
     Router::new()
@@ -180,7 +191,7 @@ async fn history_handler(State(state): State<SharedState>) -> ApiResult<Json<Vec
     let (changesets, publications) = run_db_query(&state, |conn| {
         Ok((
             Changeset::list_all(conn)?,
-            conary_core::db::models::GenerationPublication::pending_recoverable(conn)?,
+            GenerationPublication::pending_recoverable(conn)?,
         ))
     })
     .await?;
@@ -189,4 +200,183 @@ async fn history_handler(State(state): State<SharedState>) -> ApiResult<Json<Vec
         .map(|changeset| HistoryEntry::from_changeset_with_publication(changeset, &publications))
         .collect();
     Ok(Json(history))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::errors::INTERNAL_ERROR_DETAIL;
+    use super::super::test_support::{
+        body_bytes, body_json, create_test_state, create_test_state_with_db_path,
+        current_process_creds, test_router,
+    };
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn test_handler_list_packages_empty_db() {
+        let (state, _dir) = create_test_state();
+        let app = test_router(state, current_process_creds());
+
+        let request = Request::builder()
+            .uri("/v1/packages")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let json = body_json(response).await;
+        assert!(json.is_array());
+        assert_eq!(json.as_array().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_handler_get_package_not_found() {
+        let (state, _dir) = create_test_state();
+        let app = test_router(state, current_process_creds());
+
+        let request = Request::builder()
+            .uri("/v1/packages/nonexistent-pkg")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let json = body_json(response).await;
+        assert_eq!(json["status"], 404);
+        assert!(json["detail"].as_str().unwrap().contains("nonexistent-pkg"));
+    }
+
+    #[tokio::test]
+    async fn test_handler_get_package_files_not_found() {
+        let (state, _dir) = create_test_state();
+        let app = test_router(state, current_process_creds());
+
+        let request = Request::builder()
+            .uri("/v1/packages/nonexistent-pkg/files")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_handler_search_empty_results() {
+        let (state, _dir) = create_test_state();
+        let app = test_router(state, current_process_creds());
+
+        let request = Request::builder()
+            .uri("/v1/search?q=nonexistent")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let json = body_json(response).await;
+        assert!(json.is_array());
+        assert_eq!(json.as_array().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_handler_search_no_query_param() {
+        let (state, _dir) = create_test_state();
+        let app = test_router(state, current_process_creds());
+
+        let request = Request::builder()
+            .uri("/v1/search")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        // Should succeed with empty results (matches all with wildcard)
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let json = body_json(response).await;
+        assert!(json.is_array());
+    }
+
+    #[tokio::test]
+    async fn test_handler_depends_not_found() {
+        let (state, _dir) = create_test_state();
+        let app = test_router(state, current_process_creds());
+
+        let request = Request::builder()
+            .uri("/v1/depends/nonexistent-pkg")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_handler_rdepends_empty() {
+        let (state, _dir) = create_test_state();
+        let app = test_router(state, current_process_creds());
+
+        let request = Request::builder()
+            .uri("/v1/rdepends/nonexistent-pkg")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        // rdepends returns empty array (not 404) when no dependents exist
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let json = body_json(response).await;
+        assert!(json.is_array());
+        assert_eq!(json.as_array().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_handler_history_empty() {
+        let (state, _dir) = create_test_state();
+        let app = test_router(state, current_process_creds());
+
+        let request = Request::builder()
+            .uri("/v1/history")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let json = body_json(response).await;
+        assert!(json.is_array());
+        assert_eq!(json.as_array().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_internal_errors_are_sanitized_for_clients() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let bad_db_path = temp_dir.path().join("db-dir");
+        std::fs::create_dir_all(&bad_db_path).unwrap();
+        let (state, _guard) = create_test_state_with_db_path(bad_db_path.clone());
+        let app = test_router(state, current_process_creds());
+
+        let request = Request::builder()
+            .uri("/v1/packages")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let body = String::from_utf8(body_bytes(response).await).unwrap();
+        assert!(body.contains(INTERNAL_ERROR_DETAIL));
+        assert!(!body.contains("Database error"));
+        assert!(!body.contains(&bad_db_path.display().to_string()));
+    }
 }
