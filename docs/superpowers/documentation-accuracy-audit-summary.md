@@ -459,6 +459,13 @@ assembly, endpoint-owned tests, and shared test support while preserving
 `TransactionOperation`'s public route path and the hard-coded `check-doc-truth`
 route extraction owners.
 
+The Phase 19 model command decomposition plan targets the current largest Rust
+hotspot, `apps/conary/src/commands/model.rs`. It keeps `model.rs` as the stable
+command hub while planning focused owners for model loading and diff context,
+source-policy and replatform presentation, diff/check/snapshot command bodies,
+remote include drift reporting, lock/update behavior, apply orchestration, and
+model-only test support under `apps/conary/src/commands/model/`.
+
 ## Verification Commands
 
 - `bash scripts/docs-audit-inventory.sh`
@@ -533,9 +540,9 @@ public tester copy is tracked by
 
 ## Final Counts
 
-- Total tracked doc-like files audited: 162
+- Total tracked doc-like files audited: 163
 - `verified-no-change`: 13
-- `corrected`: 62
+- `corrected`: 63
 - `archived`: 73
 - `retained-historical`: 14
 - Remaining pending rows: 0
