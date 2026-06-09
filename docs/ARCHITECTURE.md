@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-06-02
-revision: 16
-summary: Note legacy scriptlet bundle replay preflight in package lifecycle
+last_updated: 2026-06-09
+revision: 17
+summary: Note focused model command child modules
 ---
 
 # Conary Architecture
@@ -84,7 +84,7 @@ apps/conary/             CLI binary
     +-- app.rs           Bootstrap and top-level app wiring
     +-- dispatch.rs      Command routing and live-host safety gates
     +-- cli/             Clap command definitions
-    +-- commands/        Command implementations (install, repo, query, model, ccs, bootstrap, system)
+    +-- commands/        Command implementations (install, repo, query, model hub + child modules, ccs, bootstrap, system)
 
 crates/conary-core/      Core library crate
 +-- src/

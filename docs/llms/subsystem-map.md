@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-06-06
-revision: 11
-summary: Stable subsystem pointers with feature ownership and interaction-gate routing
+last_updated: 2026-06-09
+revision: 12
+summary: Add model command child-module routing
 ---
 
 # Assistant Subsystem Map
@@ -34,7 +34,12 @@ summary: Stable subsystem pointers with feature ownership and interaction-gate r
   `apps/conary/src/commands/update/collection.rs`,
   `apps/conary/src/commands/update/pinning.rs`,
   `apps/conary/src/commands/update/delta_stats.rs`, and
-  `apps/conary/src/commands/model.rs`
+  `apps/conary/src/commands/model.rs`,
+  `apps/conary/src/commands/model/context.rs`,
+  `apps/conary/src/commands/model/presentation.rs`,
+  `apps/conary/src/commands/model/apply.rs`,
+  `apps/conary/src/commands/model/remote_diff.rs`, and
+  `apps/conary/src/commands/model/lock.rs`
 - Dependency resolution and package candidate ranking:
   `crates/conary-core/src/resolver/sat.rs`,
   `crates/conary-core/src/resolver/provider/`, and
