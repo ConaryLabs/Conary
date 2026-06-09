@@ -1,7 +1,21 @@
 // apps/conaryd/src/daemon/routes/events.rs
 //! Daemon event stream routes.
 
-use super::*;
+use super::auth::event_visible_to_requester;
+use super::errors::ApiError;
+use super::sse::acquire_sse_connection;
+use super::types::SharedState;
+use crate::daemon::auth::PeerCredentials;
+use axum::{
+    Router,
+    extract::{Extension, State},
+    response::sse::{Event, KeepAlive, Sse},
+    routing::get,
+};
+use futures::stream::{self, Stream};
+use std::{collections::HashMap, convert::Infallible, time::Duration};
+use tokio_stream::StreamExt;
+use tokio_stream::wrappers::BroadcastStream;
 
 pub(super) fn router() -> Router<SharedState> {
     Router::new().route("/events", get(events_handler))
@@ -54,4 +68,29 @@ async fn events_handler(
             .interval(Duration::from_secs(30))
             .text("keepalive"),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::test_support::{create_test_state, current_process_creds, test_router};
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use std::sync::atomic::Ordering;
+    use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn test_handler_events_rejects_when_sse_limit_reached() {
+        let (state, _dir) = create_test_state();
+        state.metrics.sse_connections.store(64, Ordering::Relaxed);
+        let app = test_router(state, current_process_creds());
+
+        let request = Request::builder()
+            .uri("/v1/events")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
 }
