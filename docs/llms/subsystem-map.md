@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-06-09
-revision: 13
-summary: Add dispatch child-router routing
+revision: 14
+summary: Add generation builder child-module routing
 ---
 
 # Assistant Subsystem Map
@@ -74,7 +74,14 @@ summary: Add dispatch child-router routing
   `docs/modules/test-fixtures.md`
 - Generation building, artifact export, composefs mounting, `/etc` merge, and GC:
   `crates/conary-core/src/generation/builder.rs`,
+  `crates/conary-core/src/generation/builder/create.rs`,
+  `crates/conary-core/src/generation/builder/rebuild.rs`,
+  `crates/conary-core/src/generation/builder/boot_assets.rs`,
+  `crates/conary-core/src/generation/builder/initramfs.rs`,
+  `crates/conary-core/src/generation/builder/kernel.rs`,
+  `crates/conary-core/src/generation/builder/root_validation.rs`,
   `crates/conary-core/src/generation/builder/runtime_inputs.rs`,
+  `crates/conary-core/src/generation/builder/erofs.rs`,
   `crates/conary-core/src/generation/artifact.rs`,
   `crates/conary-core/src/generation/export.rs`,
   `crates/conary-core/src/image/repart.rs`,
