@@ -474,12 +474,12 @@ mapping, native format metadata projection, evidence digesting, summaries, and
 shared fixtures into child modules without changing conversion output or public
 API paths.
 
-The Phase 21 dispatch decomposition plan opens the next hotspot lane by
-targeting `apps/conary/src/dispatch.rs`. It keeps `crate::dispatch::dispatch`
-as the public CLI dispatch entrypoint while planning child routers for root
-commands, shared live-mutation context, system subrouters, namespace routers,
-and dispatch ownership docs without changing command routes, safety gate
-labels, live-mutation classes, or dry-run behavior.
+The Phase 21 dispatch decomposition landed for the former
+`apps/conary/src/dispatch.rs` hotspot. It keeps `crate::dispatch::dispatch` as
+the public CLI dispatch entrypoint while moving root command routing, shared
+live-mutation context, system subrouters, CCS/model/automation routers, and
+small namespace routers under `apps/conary/src/dispatch/` without changing
+command routes, safety gate labels, live-mutation classes, or dry-run behavior.
 
 ## Verification Commands
 
@@ -556,8 +556,8 @@ public tester copy is tracked by
 ## Final Counts
 
 - Total tracked doc-like files audited: 165
-- `verified-no-change`: 13
-- `corrected`: 65
+- `verified-no-change`: 12
+- `corrected`: 66
 - `archived`: 73
 - `retained-historical`: 14
 - Remaining pending rows: 0

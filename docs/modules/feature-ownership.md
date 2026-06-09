@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-06-09
-revision: 2
-summary: Add model command decomposition ownership routing
+revision: 3
+summary: Add dispatch child-router ownership routing
 ---
 
 # Feature Ownership And Interaction Gates
@@ -35,6 +35,42 @@ Each ownership card uses these fields:
 - **Docs to update:** docs that should move with the feature.
 - **Safety notes:** persisted-state, trust, host mutation, fixture,
   private-path, or distro-scope boundaries.
+
+## CLI Dispatch And Command Routing
+
+**Capability:** route parsed CLI command variants to command implementations
+while preserving live-mutation labels, dry-run bypasses, command risk checks,
+and top-level command UX.
+
+**Start here:** `apps/conary/src/dispatch.rs`;
+`apps/conary/src/dispatch/root.rs`; `apps/conary/src/dispatch/context.rs`;
+`apps/conary/src/dispatch/`; `apps/conary/src/cli/`;
+`apps/conary/src/command_risk.rs`; `apps/conary/src/live_host_safety.rs`.
+
+**Neighbor systems:** command implementation modules under
+`apps/conary/src/commands/`, Clap command definitions under
+`apps/conary/src/cli/`, conaryd package-job compatibility, and integration
+tests that exercise CLI surfaces.
+
+**Focused proof:** `cargo check -p conary`;
+`cargo test -p conary --lib cli::tests`;
+`cargo test -p conary --test live_host_mutation_safety`;
+`cargo run -p conary -- system completions bash >/dev/null`.
+
+**Interaction gate:** `cargo test -p conary --test query`;
+`cargo test -p conary --test query_scripts`;
+`cargo test -p conary --test cli_daily_ux`;
+`cargo test -p conary --lib commands::model` when routing crosses query,
+completion, UX, model, or live-mutation behavior.
+
+**Docs to update:** `docs/ARCHITECTURE.md`;
+`docs/llms/subsystem-map.md`; `docs/modules/feature-ownership.md`;
+`docs/modules/query.md` when query or SBOM routing paths move.
+
+**Safety notes:** keep `command_risk::enforce_cli_policy` ahead of command
+routing, preserve `require_live_mutation` labels/classes/dry-run arguments
+exactly, and do not add new command surfaces without matching CLI and dispatch
+proof.
 
 ## Native Package Install, Update, Remove, And Live-Root Mutation
 
