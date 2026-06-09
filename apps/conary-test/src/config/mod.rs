@@ -292,8 +292,8 @@ ccs_file = "conary-test-fixture-1.0.0.ccs"
             assert_eq!(t11.timeout, 60);
             let t11_remove = t11.step[0].conary.as_deref().unwrap();
             assert!(
-                t11_remove.contains("--allow-live-system-mutation"),
-                "T11 remove must include the live-mutation guard"
+                has_apply_intent(t11_remove),
+                "T11 remove must include apply intent"
             );
 
             // Verify T15 uses stdout_contains_all
@@ -325,10 +325,10 @@ ccs_file = "conary-test-fixture-1.0.0.ccs"
                     "{id} should remove {package} before reinstalling"
                 );
                 assert!(
-                    pre_remove.contains("--allow-live-system-mutation")
+                    has_apply_intent(pre_remove)
                         && pre_remove.contains("--db-path ${DB_PATH}")
                         && pre_remove.contains("|| true"),
-                    "{id} pre-remove should be best-effort and use the test DB"
+                    "{id} pre-remove should be best-effort, use the test DB, and include apply intent"
                 );
 
                 let install = test.step[1].conary.as_deref().unwrap_or("");
