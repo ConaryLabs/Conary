@@ -241,7 +241,8 @@ apps/conaryd/            conaryd local daemon
 +-- src/
     +-- daemon/          conaryd local daemon
     |   +-- mod.rs       Daemon config defaults, runtime wiring, and JobKind re-export
-    |   +-- routes.rs    REST API endpoints
+    |   +-- routes.rs    Route hub and public route DTO re-exports
+    |   +-- routes/      Router assembly, API DTOs, errors, auth, DB/SSE helpers, endpoints
     |   +-- jobs.rs      Priority job queue with SQLite persistence
     |   +-- client.rs    CLI forwarding client with SSE
     |   +-- socket.rs    Unix socket listener and socket-file lifecycle (TCP currently rejected)

@@ -119,7 +119,14 @@ summary: Stable subsystem pointers with feature ownership and interaction-gate r
   `crates/conary-agent-contract/src/` and `crates/conary-mcp/src/`
 - conaryd daemon routes and auth boundaries:
   `apps/conaryd/src/daemon/mod.rs`,
-  `apps/conaryd/src/daemon/routes/`,
+  `apps/conaryd/src/daemon/routes.rs`,
+  `apps/conaryd/src/daemon/routes/router.rs`,
+  `apps/conaryd/src/daemon/routes/auth.rs`,
+  `apps/conaryd/src/daemon/routes/types.rs`,
+  `apps/conaryd/src/daemon/routes/errors.rs`,
+  `apps/conaryd/src/daemon/routes/db.rs`,
+  `apps/conaryd/src/daemon/routes/sse.rs`,
+  `apps/conaryd/src/daemon/routes/{system,transactions,query,events}.rs`,
   `apps/conaryd/src/daemon/auth.rs`, and
   `apps/conaryd/src/daemon/jobs.rs`
 
