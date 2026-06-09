@@ -73,40 +73,52 @@ fn live_generation_mounts_do_not_request_verity_from_digest_presence_alone() {
 
 #[test]
 fn generation_builder_stages_boot_assets_from_cas_sysroot_for_default_runtime_builds() {
-    let builder_rs = fs::read_to_string(core_source("generation/builder.rs"))
-        .expect("failed to read generation/builder.rs");
+    let boot_assets_rs = fs::read_to_string(core_source("generation/builder/boot_assets.rs"))
+        .expect("failed to read generation/builder/boot_assets.rs");
+    let sysroot_rs = fs::read_to_string(core_source("generation/builder/sysroot.rs"))
+        .expect("failed to read generation/builder/sysroot.rs");
+    let initramfs_rs = fs::read_to_string(core_source("generation/builder/initramfs.rs"))
+        .expect("failed to read generation/builder/initramfs.rs");
 
     assert!(
-        builder_rs.contains("resolve_generation_boot_asset_sources("),
+        boot_assets_rs.contains("resolve_generation_boot_asset_sources("),
         "runtime generation builds must route boot asset resolution through the generation-aware resolver"
     );
     assert!(
-        builder_rs.contains("materialize_runtime_generation_sysroot"),
+        sysroot_rs.contains("materialize_runtime_generation_sysroot"),
         "default runtime builds must materialize boot inputs from CAS-backed generation contents"
     );
     assert!(
-        builder_rs.contains(".arg(\"--sysroot\")") && builder_rs.contains(".arg(\"--kmoddir\")"),
+        initramfs_rs.contains(".arg(\"--sysroot\")")
+            && initramfs_rs.contains(".arg(\"--kmoddir\")"),
         "dracut must build initramfs content from the materialized generation sysroot, not the live root"
     );
 }
 
 #[test]
 fn runtime_generation_artifact_write_reuses_preverified_cas_inputs() {
-    let builder_rs = fs::read_to_string(core_source("generation/builder.rs"))
-        .expect("failed to read generation/builder.rs");
+    let create_rs = fs::read_to_string(core_source("generation/builder/create.rs"))
+        .expect("failed to read generation/builder/create.rs");
+    let rebuild_rs = fs::read_to_string(core_source("generation/builder/rebuild.rs"))
+        .expect("failed to read generation/builder/rebuild.rs");
     let artifact_rs = fs::read_to_string(core_source("generation/artifact.rs"))
         .expect("failed to read generation/artifact.rs");
 
-    assert!(
-        builder_rs.contains(
-            "verify_runtime_generation_cas_object_presence(generations_root, &cas_objects)?;"
-        ),
-        "runtime generation builds must check CAS object presence and size without rehashing every adopted object"
-    );
-    assert!(
-        builder_rs.contains("cas_verification: CasObjectVerification::AlreadyVerified"),
-        "runtime generation artifact writing must reuse the checked CAS set instead of hashing every object a second time"
-    );
+    for (label, source) in [
+        ("create.rs", create_rs.as_str()),
+        ("rebuild.rs", rebuild_rs.as_str()),
+    ] {
+        assert!(
+            source.contains(
+                "verify_runtime_generation_cas_object_presence(generations_root, &cas_objects)?;"
+            ),
+            "{label} must check CAS object presence and size without rehashing every adopted object"
+        );
+        assert!(
+            source.contains("cas_verification: CasObjectVerification::AlreadyVerified"),
+            "{label} must reuse the checked CAS set instead of hashing every object a second time"
+        );
+    }
     assert!(
         artifact_rs.contains("CasObjectVerification::AlreadyVerified")
             && artifact_rs
@@ -588,15 +600,15 @@ fn initramfs_generation_mounts_expose_usr_without_partial_generation_fallback() 
 
 #[test]
 fn installed_generation_export_boot_assets_force_conary_initramfs() {
-    let builder_rs = fs::read_to_string(core_source("generation/builder.rs"))
-        .expect("failed to read generation builder");
+    let boot_assets_rs = fs::read_to_string(core_source("generation/builder/boot_assets.rs"))
+        .expect("failed to read generation/builder/boot_assets.rs");
 
     assert!(
-        builder_rs.contains("InitramfsPolicy::GenerateConary"),
+        boot_assets_rs.contains("InitramfsPolicy::GenerateConary"),
         "installed-runtime generation export must generate a Conary-aware initramfs instead of reusing an adopted host initramfs"
     );
     assert!(
-        builder_rs.contains("resolve_generation_boot_asset_sources_with_tools"),
+        boot_assets_rs.contains("resolve_generation_boot_asset_sources_with_tools"),
         "the default /boot generation path must have an explicit boot-asset resolver that can force Conary initramfs generation"
     );
 }
