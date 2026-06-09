@@ -1,42 +1,19 @@
 // apps/conary/src/dispatch.rs
 //! Conary CLI command dispatch.
 
+mod context;
+
 use anyhow::Result;
 use clap::CommandFactory;
 use clap_complete::generate;
 use std::borrow::Cow;
 use std::io;
 
+use self::context::{legacy_replay_options, require_live_mutation};
 use crate::cli::{self, Cli, Commands};
 use crate::command_risk;
 use crate::commands;
-use crate::live_host_safety::{
-    LiveMutationClass, LiveMutationRequest, MutationIntent, require_mutation_intent,
-};
-
-fn require_live_mutation(
-    intent: MutationIntent,
-    command_label: Cow<'static, str>,
-    class: LiveMutationClass,
-    dry_run: bool,
-) -> Result<()> {
-    require_mutation_intent(&LiveMutationRequest {
-        command_label,
-        class,
-        dry_run,
-        intent,
-    })
-}
-
-fn legacy_replay_options(
-    allow_legacy_replay: bool,
-    allow_foreign_legacy_replay: bool,
-) -> commands::LegacyReplayOptions {
-    commands::LegacyReplayOptions {
-        allow_legacy_replay,
-        allow_foreign_legacy_replay,
-    }
-}
+use crate::live_host_safety::{LiveMutationClass, MutationIntent};
 
 pub async fn dispatch(cli: Cli) -> Result<()> {
     let allow_live_system_mutation = cli.allow_live_system_mutation;
