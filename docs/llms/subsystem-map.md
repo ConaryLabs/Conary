@@ -92,6 +92,8 @@ summary: Add model command child-module routing
   `crates/conary-core/src/ccs/binary_manifest.rs`,
   `crates/conary-core/src/ccs/chunking.rs`,
   `crates/conary-core/src/ccs/convert/`,
+  `crates/conary-core/src/ccs/convert/scriptlet_bundle.rs`,
+  `crates/conary-core/src/ccs/convert/scriptlet_bundle/`,
   `apps/conary/src/commands/ccs/install/command.rs`,
   `apps/conary/src/commands/ccs/install/dependency.rs`,
   `apps/conary/src/commands/ccs/payload_paths.rs`, and
