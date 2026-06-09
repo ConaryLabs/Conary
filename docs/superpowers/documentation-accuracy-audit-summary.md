@@ -451,13 +451,13 @@ scriptlet value types, typed outcomes, phase conversion, executor orchestration,
 distro argument mapping, protected sandbox policy, process execution, runtime
 helpers, and legacy bundle invocation contracts.
 
-The Phase 18 conaryd routes decomposition plan targets the current largest Rust
-hotspot, `apps/conaryd/src/daemon/routes.rs`. It keeps `routes.rs` as the
-public route hub while planning focused owners for API DTOs, error conversion,
-blocking DB query plumbing, route-level auth and visibility gates, SSE
-connection guarding, Axum router assembly, endpoint-owned tests, and shared test
-support while preserving `TransactionOperation`'s public route path and the
-hard-coded `check-doc-truth` route extraction owners.
+The Phase 18 conaryd routes decomposition split the daemon route hotspot while
+keeping `apps/conaryd/src/daemon/routes.rs` as the public route hub. Focused
+owners now cover API DTOs, error conversion, blocking DB query plumbing,
+route-level auth and visibility gates, SSE connection guarding, Axum router
+assembly, endpoint-owned tests, and shared test support while preserving
+`TransactionOperation`'s public route path and the hard-coded `check-doc-truth`
+route extraction owners.
 
 ## Verification Commands
 

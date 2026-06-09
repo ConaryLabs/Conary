@@ -239,7 +239,17 @@ package jobs, expose job state, and stream route lifecycle events.
 
 **Start here:** `apps/conaryd/src/daemon/mod.rs`;
 `apps/conaryd/src/daemon/routes.rs`;
-`apps/conaryd/src/daemon/routes/`; `apps/conaryd/src/daemon/jobs.rs`;
+`apps/conaryd/src/daemon/routes/router.rs`;
+`apps/conaryd/src/daemon/routes/auth.rs`;
+`apps/conaryd/src/daemon/routes/types.rs`;
+`apps/conaryd/src/daemon/routes/errors.rs`;
+`apps/conaryd/src/daemon/routes/db.rs`;
+`apps/conaryd/src/daemon/routes/sse.rs`;
+`apps/conaryd/src/daemon/routes/transactions.rs`;
+`apps/conaryd/src/daemon/routes/query.rs`;
+`apps/conaryd/src/daemon/routes/system.rs`;
+`apps/conaryd/src/daemon/routes/events.rs`;
+`apps/conaryd/src/daemon/jobs.rs`;
 `docs/modules/conaryd.md`.
 
 **Neighbor systems:** Conary CLI package commands, SQLite `daemon_jobs` state,

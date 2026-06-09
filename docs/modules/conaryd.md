@@ -22,7 +22,7 @@ implemented until Conary has a real DBus check and policy-file contract.
 ## Route Reference
 
 The route list below is checked by `scripts/check-doc-truth.sh` against
-`apps/conaryd/src/daemon/routes/*.rs`.
+`apps/conaryd/src/daemon/routes/{system,transactions,query,events}.rs`.
 
 <!-- conaryd-routes:start -->
 GET /health | Health check outside the v1 auth gate
@@ -51,3 +51,11 @@ GET /v1/rdepends/{name} | List reverse package dependencies
 GET /v1/history | List changeset history with publication status
 GET /v1/events | Stream daemon events
 <!-- conaryd-routes:end -->
+
+Route implementation ownership: `apps/conaryd/src/daemon/routes.rs` is the
+route hub; `routes/router.rs` owns Axum assembly; `routes/types.rs` owns API
+DTOs; `routes/errors.rs` owns API error conversion; `routes/auth.rs` owns
+route-level auth and job/event visibility gates; `routes/db.rs` owns blocking
+DB query plumbing; `routes/sse.rs` owns SSE connection guarding; and
+`routes/{system,query,transactions,events}.rs` own endpoint declarations and
+handlers.
