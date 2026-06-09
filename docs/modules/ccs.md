@@ -116,6 +116,12 @@ refuse before mutation. Entries with `legacy` decisions are replayed only after
 the bundle passes target, sandbox, lifecycle, timeout, and ordering preflight
 and the operator explicitly provides `--allow-legacy-replay`.
 
+Passive conversion bundle construction lives under
+`crates/conary-core/src/ccs/convert/scriptlet_bundle.rs` and
+`crates/conary-core/src/ccs/convert/scriptlet_bundle/`. The hub preserves the
+public conversion API while child modules own public DTOs, entry decisions,
+native ABI metadata projection, evidence digests, summaries, and fixtures.
+
 Core replay planning lives in
 `crates/conary-core/src/ccs/legacy_replay.rs`. The install-side adapter that
 binds that planner to local install/update/remove replay execution and audit

@@ -466,13 +466,13 @@ replatform presentation, diff/check/snapshot command bodies, remote include
 drift reporting, lock/update behavior, apply orchestration, and model-only test
 support under `apps/conary/src/commands/model/`.
 
-The Phase 20 CCS scriptlet bundle decomposition plan targets the current
-largest Rust hotspot, `crates/conary-core/src/ccs/convert/scriptlet_bundle.rs`.
-It keeps `scriptlet_bundle.rs` as the public conversion API hub while planning
-child modules for public bundle types, construction orchestration, entry
-decisions, native ABI contract mapping, native format metadata projection,
-evidence digesting, summaries, and shared fixtures without changing conversion
-output or public API paths.
+The Phase 20 CCS scriptlet bundle decomposition landed for the former
+`crates/conary-core/src/ccs/convert/scriptlet_bundle.rs` hotspot. It keeps
+`scriptlet_bundle.rs` as the public conversion API hub while moving public
+bundle types, construction orchestration, entry decisions, native ABI contract
+mapping, native format metadata projection, evidence digesting, summaries, and
+shared fixtures into child modules without changing conversion output or public
+API paths.
 
 ## Verification Commands
 

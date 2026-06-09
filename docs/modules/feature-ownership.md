@@ -200,6 +200,8 @@ install CCS packages, and preserve/replay legacy scriptlet metadata safely.
 
 **Start here:** `crates/conary-core/src/ccs/`;
 `crates/conary-core/src/ccs/convert/`;
+`crates/conary-core/src/ccs/convert/scriptlet_bundle.rs`;
+`crates/conary-core/src/ccs/convert/scriptlet_bundle/`;
 `crates/conary-core/src/ccs/legacy_replay.rs`;
 `apps/conary/src/commands/ccs/`;
 `apps/conary/src/commands/ccs/install.rs`;
