@@ -1,6 +1,8 @@
 // conary-core/src/ccs/convert/scriptlet_bundle.rs
 //! Passive legacy scriptlet bundle construction for legacy package conversion.
 
+mod classification;
+mod native_contracts;
 mod summary;
 #[cfg(test)]
 mod test_support;
@@ -12,28 +14,32 @@ pub use types::{
 };
 
 use crate::ccs::convert::effects::{
-    EntryClassification, ScriptletClassification, ScriptletClassificationReport,
-    ScriptletEffectEvidence,
+    ScriptletClassification, ScriptletClassificationReport, ScriptletEffectEvidence,
 };
 use crate::ccs::legacy_scriptlets::{
-    ArchInstallMetadata, DebMaintainerMetadata, EffectReplacement, ForeignReplayPolicy,
-    LEGACY_SCRIPTLET_SCHEMA_V1, LegacyScriptletBundle, LegacyScriptletEntry, LifecyclePath,
-    NativeInvocation, RpmTriggerMetadata as BundleRpmTriggerMetadata, RpmTriggerTargetConstraint,
-    ScriptletDecision, ScriptletEffect, SourceFormat, TransactionOrder, VersionScheme,
+    ArchInstallMetadata, DebMaintainerMetadata, ForeignReplayPolicy, LEGACY_SCRIPTLET_SCHEMA_V1,
+    LegacyScriptletBundle, LegacyScriptletEntry, NativeInvocation,
+    RpmTriggerMetadata as BundleRpmTriggerMetadata, RpmTriggerTargetConstraint, SourceFormat,
+    VersionScheme,
 };
 use crate::packages::common::PackageMetadata;
 use crate::packages::native_abi::{
     ArchAlpmHookAction, ArchAlpmHookMetadata, ArchAlpmHookOperation, ArchAlpmHookTrigger,
     ArchAlpmHookTriggerType, ArchFunctionExtractionStatus, ArchNativeScriptletMetadata,
     DebControlMember, DebMaintainerMode, DebNativeScriptletMetadata, DebTriggerAwaitMode,
-    DebTriggerDeclaration, DebTriggerDirective, NativeArgumentContract, NativeArgumentValue,
-    NativeInvocationContract, NativeLifecyclePath, NativeRootExpectation, NativeScriptletBody,
-    NativeScriptletBodyEncoding, NativeScriptletEntry, NativeScriptletKind,
-    NativeScriptletMetadata, NativeScriptletSupport, NativeStdinContract, NativeTransactionOrder,
-    NativeTransactionPosition, RpmNativeScriptletMetadata, RpmTriggerAction, RpmTriggerFamily,
+    DebTriggerDeclaration, DebTriggerDirective, NativeInvocationContract, NativeScriptletBody,
+    NativeScriptletEntry, NativeScriptletMetadata, NativeScriptletSupport, NativeStdinContract,
+    NativeTransactionOrder, RpmNativeScriptletMetadata, RpmTriggerAction, RpmTriggerFamily,
 };
-use crate::packages::traits::{Scriptlet, ScriptletPhase};
+use crate::packages::traits::Scriptlet;
 use std::collections::{BTreeMap, BTreeSet};
+
+use classification::{classification_entries_for, classify_entry};
+use native_contracts::{
+    encoded_native_body, flat_transaction_order, native_invocation, native_lifecycle_paths,
+    native_scriptlet_kind, native_stdin, native_transaction_order, native_transaction_position,
+    non_empty_or_default, phase_from_native_lifecycle, phase_from_scriptlet_phase,
+};
 use summary::{aggregate_status, decision_counts, summary_from_bundle};
 
 pub fn build_legacy_scriptlet_bundle(
@@ -249,199 +255,6 @@ fn build_native_entry(
     })
 }
 
-struct EntryOutcome {
-    decision: ScriptletDecision,
-    reason_code: String,
-    effects: Vec<ScriptletEffect>,
-    unknown_commands: Vec<String>,
-    blocked_classes: Vec<String>,
-}
-
-fn classify_entry(
-    classifications: &[&EntryClassification],
-    support: &NativeScriptletSupport,
-) -> EntryOutcome {
-    let effects = classifications
-        .iter()
-        .flat_map(|entry| match &entry.classification {
-            ScriptletClassification::Known { effects, .. } => effects
-                .iter()
-                .map(scriptlet_effect_from_evidence)
-                .collect::<Vec<_>>(),
-            _ => Vec::new(),
-        })
-        .collect::<Vec<_>>();
-    let unknown_commands = classifications
-        .iter()
-        .filter_map(|entry| match &entry.classification {
-            ScriptletClassification::Unknown { command, .. } => Some(command.clone()),
-            _ => None,
-        })
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect::<Vec<_>>();
-    let blocked_classes = classifications
-        .iter()
-        .filter_map(|entry| match &entry.classification {
-            ScriptletClassification::Blocked { class_id, .. } => Some(class_id.clone()),
-            _ => None,
-        })
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect::<Vec<_>>();
-
-    if let Some(reason_code) =
-        classifications
-            .iter()
-            .find_map(|entry| match &entry.classification {
-                ScriptletClassification::Blocked { reason_code, .. } => Some(reason_code.clone()),
-                _ => None,
-            })
-    {
-        return EntryOutcome {
-            decision: ScriptletDecision::Blocked,
-            reason_code,
-            effects,
-            unknown_commands,
-            blocked_classes,
-        };
-    }
-
-    if let NativeScriptletSupport::Unpreservable { reason_code } = support {
-        return EntryOutcome {
-            decision: ScriptletDecision::Blocked,
-            reason_code: reason_code.clone(),
-            effects,
-            unknown_commands,
-            blocked_classes,
-        };
-    }
-
-    if let Some(reason_code) =
-        classifications
-            .iter()
-            .find_map(|entry| match &entry.classification {
-                ScriptletClassification::Review { reason_code, .. } => Some(reason_code.clone()),
-                _ => None,
-            })
-    {
-        return EntryOutcome {
-            decision: ScriptletDecision::Review,
-            reason_code,
-            effects,
-            unknown_commands,
-            blocked_classes,
-        };
-    }
-
-    if let NativeScriptletSupport::DeferredReview { reason_code } = support {
-        return EntryOutcome {
-            decision: ScriptletDecision::Review,
-            reason_code: reason_code.clone(),
-            effects,
-            unknown_commands,
-            blocked_classes,
-        };
-    }
-
-    if let Some(reason_code) =
-        classifications
-            .iter()
-            .find_map(|entry| match &entry.classification {
-                ScriptletClassification::Unknown { reason_code, .. } => Some(reason_code.clone()),
-                _ => None,
-            })
-    {
-        return EntryOutcome {
-            decision: ScriptletDecision::Legacy,
-            reason_code,
-            effects,
-            unknown_commands,
-            blocked_classes,
-        };
-    }
-
-    let known_reason = classifications
-        .iter()
-        .find_map(|entry| match &entry.classification {
-            ScriptletClassification::Known { reason_code, .. } => Some(reason_code.clone()),
-            _ => None,
-        });
-    if let Some(reason_code) = known_reason {
-        let all_complete = !effects.is_empty()
-            && effects
-                .iter()
-                .all(|effect| effect.replacement == EffectReplacement::Complete);
-        return EntryOutcome {
-            decision: if all_complete {
-                ScriptletDecision::Replaced
-            } else {
-                ScriptletDecision::Review
-            },
-            reason_code,
-            effects,
-            unknown_commands,
-            blocked_classes,
-        };
-    }
-
-    EntryOutcome {
-        decision: ScriptletDecision::Review,
-        reason_code: support
-            .reason_code()
-            .unwrap_or("scriptlet-preserved-for-review")
-            .to_string(),
-        effects,
-        unknown_commands,
-        blocked_classes,
-    }
-}
-
-fn classification_entries_for<'a>(
-    report: &'a ScriptletClassificationReport,
-    id: &str,
-) -> Vec<&'a EntryClassification> {
-    report
-        .entries
-        .iter()
-        .filter(|entry| entry.entry_id == id)
-        .collect()
-}
-
-fn scriptlet_effect_from_evidence(evidence: &ScriptletEffectEvidence) -> ScriptletEffect {
-    ScriptletEffect {
-        kind: evidence.kind.clone(),
-        source: evidence.source.clone(),
-        confidence: evidence.confidence.clone(),
-        replacement: evidence.replacement.clone(),
-        adapter_id: evidence.adapter_id.clone(),
-        adapter_digest: evidence.adapter_digest.clone(),
-        command: evidence.command.clone(),
-        args: evidence.args.clone(),
-        path: evidence.path.clone(),
-        reason_code: evidence.reason_code.clone(),
-        extra: evidence.extra.clone(),
-    }
-}
-
-fn encoded_native_body(body: &NativeScriptletBody) -> (String, Option<String>) {
-    match body.encoding {
-        NativeScriptletBodyEncoding::Utf8 => (
-            body.text
-                .clone()
-                .unwrap_or_else(|| String::from_utf8_lossy(&body.bytes).into_owned()),
-            None,
-        ),
-        NativeScriptletBodyEncoding::Binary => {
-            use base64::Engine as _;
-            (
-                base64::engine::general_purpose::STANDARD.encode(&body.bytes),
-                Some("base64".to_string()),
-            )
-        }
-    }
-}
-
 fn project_format_metadata(
     native: &NativeScriptletEntry,
     extra: &mut BTreeMap<String, toml::Value>,
@@ -631,178 +444,6 @@ fn project_arch_install_metadata(
         new_version: None,
         wrapper_source_digest: metadata.function_body_sha256.clone(),
         extra: BTreeMap::new(),
-    }
-}
-
-fn native_invocation(invocation: &NativeInvocationContract) -> NativeInvocation {
-    NativeInvocation {
-        args: invocation
-            .args
-            .iter()
-            .map(native_argument_contract)
-            .collect(),
-        environment: invocation
-            .environment
-            .iter()
-            .map(|fact| match &fact.value {
-                Some(value) => format!("{}={value}", fact.name),
-                None => fact.name.clone(),
-            })
-            .collect(),
-        stdin: native_stdin(invocation.stdin).map(str::to_string),
-        chroot: Some(native_root(invocation.root).to_string()),
-        extra: BTreeMap::new(),
-    }
-}
-
-fn native_transaction_order(order: &NativeTransactionOrder) -> TransactionOrder {
-    TransactionOrder {
-        position: native_transaction_position(order.position).to_string(),
-        before: Vec::new(),
-        after: order.relative_to.iter().cloned().collect(),
-        extra: BTreeMap::new(),
-    }
-}
-
-fn flat_transaction_order(phase: ScriptletPhase) -> TransactionOrder {
-    let position = match phase {
-        ScriptletPhase::PreInstall
-        | ScriptletPhase::PreUpgrade
-        | ScriptletPhase::PreRemove
-        | ScriptletPhase::PreTransaction => "before-payload",
-        ScriptletPhase::PostInstall
-        | ScriptletPhase::PostUpgrade
-        | ScriptletPhase::PostRemove
-        | ScriptletPhase::PostTransaction => "after-payload",
-        ScriptletPhase::Trigger => "trigger",
-    };
-    TransactionOrder {
-        position: position.to_string(),
-        before: Vec::new(),
-        after: Vec::new(),
-        extra: BTreeMap::new(),
-    }
-}
-
-fn phase_from_scriptlet_phase(phase: ScriptletPhase) -> LifecyclePath {
-    match phase {
-        ScriptletPhase::PreInstall => LifecyclePath::PreInstall,
-        ScriptletPhase::PostInstall => LifecyclePath::PostInstall,
-        ScriptletPhase::PreRemove => LifecyclePath::PreRemove,
-        ScriptletPhase::PostRemove => LifecyclePath::PostRemove,
-        ScriptletPhase::PreUpgrade => LifecyclePath::PreUpgrade,
-        ScriptletPhase::PostUpgrade => LifecyclePath::PostUpgrade,
-        ScriptletPhase::PreTransaction => LifecyclePath::PreTransaction,
-        ScriptletPhase::PostTransaction => LifecyclePath::PostTransaction,
-        ScriptletPhase::Trigger => LifecyclePath::Trigger,
-    }
-}
-
-fn phase_from_native_lifecycle(path: NativeLifecyclePath) -> LifecyclePath {
-    match path {
-        NativeLifecyclePath::PreInstall => LifecyclePath::PreInstall,
-        NativeLifecyclePath::PostInstall | NativeLifecyclePath::Config => {
-            LifecyclePath::PostInstall
-        }
-        NativeLifecyclePath::PreUpgrade => LifecyclePath::PreUpgrade,
-        NativeLifecyclePath::PostUpgrade => LifecyclePath::PostUpgrade,
-        NativeLifecyclePath::PreRemove => LifecyclePath::PreRemove,
-        NativeLifecyclePath::PostRemove
-        | NativeLifecyclePath::Purge
-        | NativeLifecyclePath::Abort => LifecyclePath::PostRemove,
-        NativeLifecyclePath::PreTransaction | NativeLifecyclePath::PreUntransaction => {
-            LifecyclePath::PreTransaction
-        }
-        NativeLifecyclePath::PostTransaction | NativeLifecyclePath::PostUntransaction => {
-            LifecyclePath::PostTransaction
-        }
-        NativeLifecyclePath::Verify | NativeLifecyclePath::Trigger => LifecyclePath::Trigger,
-        NativeLifecyclePath::FileTrigger | NativeLifecyclePath::TransactionFileTrigger => {
-            LifecyclePath::FileTrigger
-        }
-    }
-}
-
-fn native_lifecycle_paths(native: &NativeScriptletEntry) -> Vec<String> {
-    let paths = if native.lifecycle_paths.is_empty() {
-        vec![native.primary_lifecycle]
-    } else {
-        native.lifecycle_paths.clone()
-    };
-    paths
-        .into_iter()
-        .map(|path| phase_from_native_lifecycle(path).as_str().to_string())
-        .collect()
-}
-
-fn non_empty_or_default(value: &str, default: &str) -> String {
-    if value.trim().is_empty() {
-        default.to_string()
-    } else {
-        value.to_string()
-    }
-}
-
-fn native_argument_contract(argument: &NativeArgumentContract) -> String {
-    format!(
-        "{}:{}={}",
-        argument.index,
-        argument.name,
-        native_argument_value(&argument.value)
-    )
-}
-
-fn native_argument_value(value: &NativeArgumentValue) -> String {
-    match value {
-        NativeArgumentValue::Action => "action".to_string(),
-        NativeArgumentValue::OldVersion => "old-version".to_string(),
-        NativeArgumentValue::NewVersion => "new-version".to_string(),
-        NativeArgumentValue::PackageInstanceCount => "package-instance-count".to_string(),
-        NativeArgumentValue::PackageName => "package-name".to_string(),
-        NativeArgumentValue::TriggerName => "trigger-name".to_string(),
-        NativeArgumentValue::TriggerNames => "trigger-names".to_string(),
-        NativeArgumentValue::TriggerCount => "trigger-count".to_string(),
-        NativeArgumentValue::FilePath => "file-path".to_string(),
-        NativeArgumentValue::InstalledVersion => "installed-version".to_string(),
-        NativeArgumentValue::Raw(value) => format!("raw:{value}"),
-    }
-}
-
-fn native_stdin(stdin: NativeStdinContract) -> Option<&'static str> {
-    match stdin {
-        NativeStdinContract::None => None,
-        NativeStdinContract::Debconf => Some("debconf"),
-        NativeStdinContract::Paths => Some("paths"),
-        NativeStdinContract::Unknown => Some("unknown"),
-    }
-}
-
-fn native_root(root: NativeRootExpectation) -> &'static str {
-    match root {
-        NativeRootExpectation::PackageManagerDefault => "package-manager-default",
-        NativeRootExpectation::InstallRoot => "install-root",
-        NativeRootExpectation::HostRoot => "host-root",
-        NativeRootExpectation::Unknown => "unknown",
-    }
-}
-
-fn native_transaction_position(position: NativeTransactionPosition) -> &'static str {
-    match position {
-        NativeTransactionPosition::BeforePayload => "before-payload",
-        NativeTransactionPosition::AfterPayload => "after-payload",
-        NativeTransactionPosition::BeforeTransaction => "before-transaction",
-        NativeTransactionPosition::AfterTransaction => "after-transaction",
-        NativeTransactionPosition::Untransaction => "untransaction",
-        NativeTransactionPosition::Verification => "verification",
-        NativeTransactionPosition::Trigger => "trigger",
-        NativeTransactionPosition::ControlArtifact => "control-artifact",
-    }
-}
-
-fn native_scriptlet_kind(kind: NativeScriptletKind) -> &'static str {
-    match kind {
-        NativeScriptletKind::Executable => "executable",
-        NativeScriptletKind::ControlArtifact => "control-artifact",
     }
 }
 
