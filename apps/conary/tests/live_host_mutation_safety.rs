@@ -162,6 +162,87 @@ fn collection_install_refusal_uses_collection_label() {
 }
 
 #[test]
+fn ccs_install_refuses_without_apply_intent_and_mentions_yes() {
+    let (_tmp, db_path) = common::setup_command_test_db();
+    let root = tempfile::tempdir().unwrap();
+    let package_dir = tempfile::tempdir().unwrap();
+    let package = package_dir.path().join("missing.ccs");
+
+    let output = run_conary(&[
+        "ccs",
+        "install",
+        package.to_str().unwrap(),
+        "--db-path",
+        &db_path,
+        "--root",
+        root.path().to_str().unwrap(),
+        "--sandbox",
+        "never",
+    ]);
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("conary ccs install"));
+    assert!(stderr.contains("--dry-run"));
+    assert!(stderr.contains("--yes"));
+    assert!(!stderr.contains("--allow-live-system-mutation"));
+}
+
+#[test]
+fn ccs_install_dry_run_bypasses_gate() {
+    let (_tmp, db_path) = common::setup_command_test_db();
+    let root = tempfile::tempdir().unwrap();
+    let package_dir = tempfile::tempdir().unwrap();
+    let package = package_dir.path().join("missing.ccs");
+
+    let output = run_conary(&[
+        "ccs",
+        "install",
+        package.to_str().unwrap(),
+        "--db-path",
+        &db_path,
+        "--root",
+        root.path().to_str().unwrap(),
+        "--sandbox",
+        "never",
+        "--dry-run",
+    ]);
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("conary ccs install"));
+    assert!(!stderr.contains("--allow-live-system-mutation"));
+    assert!(!stderr.contains("may mutate"));
+}
+
+#[test]
+fn ccs_install_with_yes_reaches_underlying_package_read() {
+    let (_tmp, db_path) = common::setup_command_test_db();
+    let root = tempfile::tempdir().unwrap();
+    let package_dir = tempfile::tempdir().unwrap();
+    let package = package_dir.path().join("missing.ccs");
+
+    let output = run_conary(&[
+        "ccs",
+        "install",
+        package.to_str().unwrap(),
+        "--db-path",
+        &db_path,
+        "--root",
+        root.path().to_str().unwrap(),
+        "--sandbox",
+        "never",
+        "--yes",
+    ]);
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("conary ccs install"));
+    assert!(!stderr.contains("--allow-live-system-mutation"));
+    assert!(!stderr.contains("may mutate"));
+}
+
+#[test]
 fn state_revert_refuses_without_live_mutation_flag() {
     let (_tmp, db_path) = common::setup_command_test_db();
 
