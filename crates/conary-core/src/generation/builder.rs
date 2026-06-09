@@ -13,10 +13,7 @@
 //!   snapshot, and builds a complete generation directory with EROFS
 //!   image and metadata JSON.
 
-use std::{
-    collections::{HashMap, HashSet},
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 use tracing::{info, warn};
 
@@ -30,10 +27,21 @@ use crate::generation::metadata::{
     GENERATION_FORMAT, GenerationMetadata, ROOT_SYMLINKS, clear_generation_pending,
     mark_generation_pending,
 };
+mod activation;
 mod erofs;
+mod kernel;
+mod root_validation;
 mod runtime_inputs;
 
+use kernel::{
+    collect_boot_kernel_releases, collect_module_kernel_releases, kernel_module_dir,
+    module_kernel_path, push_unique_release, regular_file_exists, system_root_for_boot_root,
+};
+use root_validation::validate_runtime_generation_root_is_self_contained;
+
+pub use activation::GenerationActivation;
 pub use erofs::{BuildResult, FileEntryRef, SymlinkEntryRef, build_erofs_image, hex_to_digest};
+pub use kernel::detect_kernel_version_from_troves;
 
 const CONARY_DRACUT_MODULE_SETUP: &str =
     include_str!("../../../../packaging/dracut/90conary/module-setup.sh");
@@ -43,24 +51,6 @@ const CONARY_DRACUT_GENERATOR: &str =
     include_str!("../../../../packaging/dracut/90conary/conary-generator.sh");
 const RUNTIME_DRACUT_ADD_MODULES: &str = "conary";
 const RUNTIME_DRACUT_OMIT_MODULES: &str = "systemd";
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GenerationActivation {
-    /// Publish the generated DB snapshot as the active state immediately.
-    ///
-    /// Use only for paths that also publish/mount the generation in the same
-    /// operation, such as composefs-native package mutation.
-    Active,
-    /// Leave the generated DB snapshot inactive until an explicit generation
-    /// switch selects it for the next boot.
-    Inactive,
-}
-
-impl GenerationActivation {
-    fn activates_state(self) -> bool {
-        matches!(self, Self::Active)
-    }
-}
 
 /// Build a complete generation from the current database state.
 ///
@@ -429,124 +419,6 @@ pub(crate) fn rebuild_generation_image_with_boot_root(
     );
 
     Ok(result)
-}
-
-fn validate_runtime_generation_root_is_self_contained(
-    file_refs: &[FileEntryRef],
-    symlink_refs: &[SymlinkEntryRef],
-) -> crate::Result<()> {
-    if generation_root_has_init_entrypoint(file_refs, symlink_refs) {
-        return Ok(());
-    }
-
-    Err(crate::error::Error::NotFound(
-        "exportable runtime generation is not self-contained: missing executable /sbin/init in the CAS-backed generation root; refusing to scrape the live host root to make the image bootable".to_string(),
-    ))
-}
-
-fn generation_root_has_init_entrypoint(
-    file_refs: &[FileEntryRef],
-    symlink_refs: &[SymlinkEntryRef],
-) -> bool {
-    let symlink_paths: HashSet<String> = symlink_refs
-        .iter()
-        .filter_map(|symlink| normalize_virtual_path(&symlink.path, "/"))
-        .collect();
-    let files: HashMap<String, u32> = file_refs
-        .iter()
-        .filter_map(|file| {
-            let path = normalize_virtual_path(&file.path, "/")?;
-            if symlink_paths.contains(&path) || hex_to_digest(&file.sha256_hash).is_err() {
-                return None;
-            }
-            Some((path, file.permissions))
-        })
-        .collect();
-    let symlinks = generation_symlink_map(symlink_refs);
-
-    resolve_virtual_path("/sbin/init", &symlinks)
-        .and_then(|resolved| files.get(&resolved).copied())
-        .is_some_and(|permissions| permissions & 0o111 != 0)
-}
-
-fn generation_symlink_map(symlink_refs: &[SymlinkEntryRef]) -> HashMap<String, String> {
-    let mut symlinks = HashMap::new();
-    for symlink in symlink_refs {
-        if let Some(path) = normalize_virtual_path(&symlink.path, "/") {
-            symlinks.insert(path, symlink.target.clone());
-        }
-    }
-    for (link, target) in ROOT_SYMLINKS {
-        symlinks.insert(format!("/{link}"), (*target).to_string());
-    }
-    symlinks
-}
-
-fn resolve_virtual_path(path: &str, symlinks: &HashMap<String, String>) -> Option<String> {
-    let mut current = normalize_virtual_path(path, "/")?;
-    for _ in 0..40 {
-        let Some(next) = rewrite_first_symlink_component(&current, symlinks) else {
-            return Some(current);
-        };
-        current = next;
-    }
-    None
-}
-
-fn rewrite_first_symlink_component(
-    path: &str,
-    symlinks: &HashMap<String, String>,
-) -> Option<String> {
-    let components: Vec<&str> = path
-        .trim_start_matches('/')
-        .split('/')
-        .filter(|component| !component.is_empty())
-        .collect();
-
-    for index in 0..components.len() {
-        let prefix = format!("/{}", components[..=index].join("/"));
-        let Some(target) = symlinks.get(&prefix) else {
-            continue;
-        };
-        let base = parent_virtual_path(&prefix);
-        let mut rewritten = normalize_virtual_path(target, &base)?;
-        for component in &components[index + 1..] {
-            if rewritten != "/" {
-                rewritten.push('/');
-            }
-            rewritten.push_str(component);
-        }
-        return normalize_virtual_path(&rewritten, "/");
-    }
-
-    None
-}
-
-fn normalize_virtual_path(path: &str, base: &str) -> Option<String> {
-    let combined = if path.starts_with('/') {
-        path.to_string()
-    } else {
-        format!("{}/{}", base.trim_end_matches('/'), path)
-    };
-    let mut components = Vec::new();
-    for component in combined.split('/') {
-        match component {
-            "" | "." => {}
-            ".." => {
-                components.pop()?;
-            }
-            component => components.push(component),
-        }
-    }
-    Some(format!("/{}", components.join("/")))
-}
-
-fn parent_virtual_path(path: &str) -> String {
-    let path = path.trim_end_matches('/');
-    match path.rsplit_once('/') {
-        Some(("", _)) | None => "/".to_string(),
-        Some((parent, _)) => parent.to_string(),
-    }
 }
 
 fn cas_objects_from_file_refs(file_refs: &[FileEntryRef]) -> Vec<CasObjectRef> {
@@ -1167,136 +1039,10 @@ fn write_dracut_module_file(path: &Path, contents: &str) -> crate::Result<()> {
     Ok(())
 }
 
-fn collect_boot_kernel_releases(
-    boot_root: &Path,
-    requested_version: &str,
-    releases: &mut Vec<String>,
-) {
-    let Ok(entries) = std::fs::read_dir(boot_root) else {
-        return;
-    };
-    let mut found = Vec::new();
-    for entry in entries.flatten() {
-        let Some(name) = entry.file_name().to_str().map(ToOwned::to_owned) else {
-            continue;
-        };
-        let Some(release) = name.strip_prefix("vmlinuz-") else {
-            continue;
-        };
-        if kernel_release_matches(requested_version, release) {
-            found.push(release.to_string());
-        }
-    }
-    found.sort();
-    for release in found {
-        push_unique_release(releases, release);
-    }
-}
-
-fn collect_module_kernel_releases(
-    system_root: &Path,
-    requested_version: &str,
-    releases: &mut Vec<String>,
-) {
-    let mut found = Vec::new();
-    for modules_root in [
-        system_root.join("lib/modules"),
-        system_root.join("usr/lib/modules"),
-    ] {
-        let Ok(entries) = std::fs::read_dir(modules_root) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let Some(release) = path.file_name().and_then(|name| name.to_str()) else {
-                continue;
-            };
-            if kernel_release_matches(requested_version, release)
-                && regular_file_exists(&path.join("vmlinuz"))
-            {
-                found.push(release.to_string());
-            }
-        }
-    }
-    found.sort();
-    for release in found {
-        push_unique_release(releases, release);
-    }
-}
-
-fn push_unique_release(releases: &mut Vec<String>, release: String) {
-    if !releases.iter().any(|existing| existing == &release) {
-        releases.push(release);
-    }
-}
-
-fn kernel_release_matches(requested_version: &str, release: &str) -> bool {
-    release == requested_version
-        || release
-            .strip_prefix(requested_version)
-            .is_some_and(|suffix| suffix.starts_with('.'))
-}
-
-fn module_kernel_path(system_root: &Path, release: &str) -> Option<PathBuf> {
-    kernel_module_dir(system_root, release)
-        .map(|(module_dir, _module_dir_arg)| module_dir.join("vmlinuz"))
-        .filter(|path| regular_file_exists(path))
-}
-
-fn kernel_module_dir(system_root: &Path, release: &str) -> Option<(PathBuf, &'static str)> {
-    [
-        (
-            system_root.join("lib/modules").join(release),
-            "/lib/modules",
-        ),
-        (
-            system_root.join("usr/lib/modules").join(release),
-            "/usr/lib/modules",
-        ),
-    ]
-    .into_iter()
-    .find(|(path, _module_dir_arg)| path.is_dir())
-}
-
-fn regular_file_exists(path: &Path) -> bool {
-    std::fs::metadata(path).is_ok_and(|metadata| metadata.file_type().is_file())
-}
-
-fn system_root_for_boot_root(boot_root: &Path) -> PathBuf {
-    if boot_root.file_name().is_some_and(|name| name == "boot") {
-        return boot_root
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("/"));
-    }
-
-    PathBuf::from("/")
-}
-
 /// Get kernel version from an already-loaded trove list.
 ///
 /// Looks for kernel-related packages in the trove list, falling back to
 /// the running kernel version from `/proc/version`.
-pub fn detect_kernel_version_from_troves(troves: &[Trove]) -> Option<String> {
-    for trove in troves {
-        if matches!(
-            trove.name.as_str(),
-            "kernel-core" | "kernel-modules-core" | "kernel-modules"
-        ) || trove.name.starts_with("linux-image")
-        {
-            return Some(trove.version.clone());
-        }
-    }
-
-    for trove in troves {
-        if trove.name.starts_with("kernel") || trove.name.starts_with("linux-image") {
-            return Some(trove.version.clone());
-        }
-    }
-    // Fall back to running kernel version from /proc/sys/kernel/osrelease
-    crate::generation::metadata::running_kernel_version()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1700,34 +1446,6 @@ mod tests {
         assert!(error.contains("/sbin/init"));
         assert!(!generations_root.join("0").exists());
     }
-
-    #[test]
-    fn runtime_root_init_detection_resolves_usr_merge_and_package_symlinks() {
-        let file_refs = vec![FileEntryRef {
-            path: "/usr/lib/systemd/systemd".to_string(),
-            sha256_hash: "a".repeat(64),
-            size: 6,
-            permissions: 0o755,
-            owner: None,
-            group_name: None,
-        }];
-        let symlink_refs = vec![SymlinkEntryRef {
-            path: "/usr/sbin/init".to_string(),
-            target: "../lib/systemd/systemd".to_string(),
-        }];
-
-        assert!(generation_root_has_init_entrypoint(
-            &file_refs,
-            &symlink_refs
-        ));
-    }
-
-    #[test]
-    fn detect_kernel_version_does_not_panic() {
-        let result = detect_kernel_version_from_troves(&[]);
-        assert!(result.is_some() || result.is_none());
-    }
-
     #[test]
     fn runtime_boot_asset_resolution_uses_arch_qualified_module_release() {
         use crate::db::models::TroveType;
@@ -1761,30 +1479,6 @@ mod tests {
             boot_root.join(format!("initramfs-{release}.img"))
         );
     }
-
-    #[test]
-    fn detect_kernel_version_prefers_payload_kernel_over_meta_package() {
-        use crate::db::models::TroveType;
-
-        let troves = vec![
-            Trove::new(
-                "kernel".to_string(),
-                "6.17.1-300.fc44".to_string(),
-                TroveType::Package,
-            ),
-            Trove::new(
-                "kernel-core".to_string(),
-                "6.19.10-300.fc44".to_string(),
-                TroveType::Package,
-            ),
-        ];
-
-        assert_eq!(
-            detect_kernel_version_from_troves(&troves).as_deref(),
-            Some("6.19.10-300.fc44")
-        );
-    }
-
     #[test]
     fn runtime_boot_asset_resolution_accepts_unversioned_boot_fixture_assets() {
         use crate::db::models::TroveType;
