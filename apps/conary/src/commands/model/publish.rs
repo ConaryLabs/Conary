@@ -10,7 +10,7 @@ use rusqlite::Connection;
 use tracing::info;
 
 use super::super::open_db;
-use super::load_model;
+use super::context::load_model;
 
 /// Validated inputs for a publish operation.
 struct PublishInputs {
