@@ -225,6 +225,11 @@ The repo moved materially after the last audit:
   accuracy audit as the tracked Markdown/doc-like gate while adding a separate
   implementation-to-claim ledger, validator, and PR-gate check for the TSV
   ledger itself.
+- The feature coherency Wave 1b system adopt plan continues that program with
+  one high-visibility CLI command family, adds parser-mode characterization
+  proof for `conary system adopt`, and records the single-package adopt dry-run
+  path as an honest deferred surface rather than broadening into route, MCP, or
+  whole-doc audits.
 - Refreshed assistant-facing docs again on 2026-05-22 for GPT-5.5/Codex-first
   work, removed tracked Claude active guidance/harness files, and kept
   Claude-era context only as archived history.
@@ -584,9 +589,9 @@ public tester copy is tracked by
 
 ## Final Counts
 
-- Total tracked doc-like files audited: 170
+- Total tracked doc-like files audited: 171
 - `verified-no-change`: 12
-- `corrected`: 71
+- `corrected`: 72
 - `archived`: 73
 - `retained-historical`: 14
 - Remaining pending rows: 0
