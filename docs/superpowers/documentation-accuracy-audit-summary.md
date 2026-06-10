@@ -230,6 +230,10 @@ The repo moved materially after the last audit:
   proof for `conary system adopt`, and records the single-package adopt dry-run
   path as an honest deferred surface rather than broadening into route, MCP, or
   whole-doc audits.
+- The system adopt single-package dry-run follow-up note gives the honest
+  deferred `conary system adopt <pkg> --dry-run` surface an active owner
+  artifact, separating the current truthful refusal from the future true-preview
+  or visibility-removal slice.
 - Refreshed assistant-facing docs again on 2026-05-22 for GPT-5.5/Codex-first
   work, removed tracked Claude active guidance/harness files, and kept
   Claude-era context only as archived history.
@@ -589,9 +593,9 @@ public tester copy is tracked by
 
 ## Final Counts
 
-- Total tracked doc-like files audited: 171
+- Total tracked doc-like files audited: 172
 - `verified-no-change`: 12
-- `corrected`: 72
+- `corrected`: 73
 - `archived`: 73
 - `retained-historical`: 14
 - Remaining pending rows: 0
