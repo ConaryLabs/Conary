@@ -32,6 +32,13 @@ write_ledger "$good" "$good_row"
 "$validator" "$good" >/dev/null
 "$validator" "$good" --scope-complete 1a-root-cli >/dev/null
 
+header_only="$tmpdir/header-only.tsv"
+printf '%s\n' "$header" > "$header_only"
+if "$validator" "$header_only" >"$tmpdir/out" 2>&1; then
+    fail "header-only ledger unexpectedly passed"
+fi
+grep -q "ledger has no rows" "$tmpdir/out" || fail "header-only ledger error was not clear"
+
 real_repo_row=$'CLI-ROOT-005\tconary root dispatch fixture\tpath:apps/conary/src/dispatch/root.rs:1-40\t\t1a-root-cli\tCLI Dispatch And Command Routing\tRoot dispatch paths exist in the repo\tLine-range and directory path pointers resolve against real repo files\tworks\tverified-no-change\t2026-06-09\tpath:apps/conary/src/dispatch/root.rs:1-40;path:apps/conary/src/dispatch/\tnone\ttest:cargo test -p conary --lib cli::tests\tverify\tKeep real path fixture green\tReal repo path fixture'
 real_repo="$tmpdir/real-repo.tsv"
 write_ledger "$real_repo" "$real_repo_row"
@@ -118,6 +125,14 @@ if "$validator" "$bad_repro" >"$tmpdir/out" 2>&1; then
 fi
 grep -q "invalid typed repro pointer" "$tmpdir/out" || fail "bad repro error was not clear"
 
+bad_command_semicolon="$tmpdir/bad-command-semicolon.tsv"
+bad_command_semicolon_row=$'CLI-ROOT-002\tconary root help\tcmd:cargo run -p conary -- --help\t\t1a-root-cli\tCLI Dispatch And Command Routing\tRoot help lists top-level commands and daily examples\tRoot help renders and examples are visible\tworks\tverified-no-change\t2026-06-09\tcmd:cargo run -p conary -- --help\tnone\tcmd:cargo run -p conary -- --help; echo not-a-pointer\tverify\tWave 1a root help evidence captured\tBad command pointer should fail'
+write_ledger "$bad_command_semicolon" "$bad_command_semicolon_row"
+if "$validator" "$bad_command_semicolon" >"$tmpdir/out" 2>&1; then
+    fail "semicolon-bearing command pointer unexpectedly passed"
+fi
+grep -q "invalid typed verification pointer" "$tmpdir/out" || fail "bad command pointer semicolon error was not clear"
+
 bad_route="$tmpdir/bad-route.tsv"
 bad_route_row=$'ROUTE-CONARYD-002\tconaryd transactions route\troute:GET/v1/transactions\t\tlater-route-wave\tconaryd Package Jobs And Daemon Routes\tRoute pointer grammar rejects missing method/path space\tRoute pointer syntax is invalid\tworks\tverified-no-change\t2026-06-09\troute:GET/v1/transactions\tnone\troute:GET/v1/transactions\tverify\tValidate bad route pointer grammar\tBad route pointer fixture'
 write_ledger "$bad_route" "$bad_route_row"
@@ -200,6 +215,16 @@ registry="$tmpdir/wave-scopes.tsv"
 } > "$registry"
 
 "${scope_validator[@]}" "$good" "$registry" >/dev/null
+
+bad_registry_header="$tmpdir/bad-wave-scopes-header.tsv"
+{
+    printf 'scope\tstatus\tnotes\n'
+    printf '1a-root-cli\tcompleted\tRoot CLI complete\n'
+} > "$bad_registry_header"
+if "${scope_validator[@]}" "$good" "$bad_registry_header" >"$tmpdir/out" 2>&1; then
+    fail "bad scope registry header unexpectedly passed"
+fi
+grep -q "unexpected scope registry header" "$tmpdir/out" || fail "bad scope registry header error was not clear"
 
 unknown_scope="$tmpdir/unknown-scope.tsv"
 unknown_scope_row="${good_row/1a-root-cli/typo-root-cli}"

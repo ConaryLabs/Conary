@@ -195,7 +195,6 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "experimental")]
     #[test]
     fn cli_rejects_removed_ai_subcommand_family() {
         let parsed = AutomationCli::try_parse_from(["automation", "ai", "find", "web server"]);

@@ -68,6 +68,31 @@ require_file() {
     fi
 }
 
+require_path() {
+    local path="$1"
+    if [[ ! -e "$path" ]]; then
+        report_error "required path is missing: $path"
+        return 1
+    fi
+}
+
+check_required_scan_paths() {
+    local path
+    local seen="|"
+    for path in \
+        "${DOCS_TRUTH_SCHEMA_CHECK_PATHS[@]}" \
+        "${PRODUCT_DOC_PATHS[@]}" \
+        "${POLICYKIT_DOC_PATHS[@]}" \
+        "${PARSER_PATHS[@]}"
+    do
+        if [[ "$seen" == *"|$path|"* ]]; then
+            continue
+        fi
+        seen+="$path|"
+        require_path "$path" || true
+    done
+}
+
 require_match() {
     local path="$1"
     local pattern="$2"
@@ -225,27 +250,82 @@ extract_code_routes() {
         "apps/conaryd/src/daemon/routes/query.rs"
         "apps/conaryd/src/daemon/routes/events.rs"
     )
-    local file line path method prefix
+    local file
 
     for file in "${files[@]}"; do
         if [[ ! -f "$file" ]]; then
             report_error "required route file is missing: $file"
-            continue
         fi
-
-        while IFS= read -r line; do
-            if [[ "$line" =~ \.route\(\"([^\"]+)\"[[:space:]]*,[[:space:]]*(get|post|delete)\( ]]; then
-                path="${BASH_REMATCH[1]}"
-                method="${BASH_REMATCH[2]^^}"
-                if [[ "$file" == "apps/conaryd/src/daemon/routes/system.rs" && "$path" == "/health" ]]; then
-                    prefix=""
-                else
-                    prefix="/v1"
-                fi
-                printf '%s %s%s\n' "$method" "$prefix" "$path"
-            fi
-        done < "$file"
     done
+
+    python3 - "${files[@]}" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+KNOWN_METHODS = {"get", "post", "put", "patch", "delete"}
+ROUTE_PATTERN = ".route("
+
+
+def route_calls(source):
+    start = 0
+    while True:
+        route_start = source.find(ROUTE_PATTERN, start)
+        if route_start == -1:
+            return
+
+        idx = route_start + len(ROUTE_PATTERN)
+        depth = 1
+        while idx < len(source) and depth:
+            char = source[idx]
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+            idx += 1
+
+        if depth != 0:
+            raise ValueError("unterminated .route(...) call")
+
+        yield source[route_start + len(ROUTE_PATTERN) : idx - 1]
+        start = idx
+
+
+def extract_path_and_handlers(route_body):
+    match = re.match(r'\s*"([^"]+)"\s*,\s*(.*)\s*$', route_body, re.S)
+    if not match:
+        raise ValueError(f"unsupported .route(...) shape: {route_body.strip()}")
+    return match.group(1), match.group(2)
+
+
+had_error = False
+for file_name in sys.argv[1:]:
+    path = Path(file_name)
+    if not path.is_file():
+        continue
+
+    source = path.read_text()
+    for route_body in route_calls(source):
+        route_path, handlers = extract_path_and_handlers(route_body)
+        calls = re.findall(r'(?:(?<=\.)|^|\s)([a-z_][a-z0-9_]*)\s*\(', handlers)
+        methods = [call for call in calls if call in KNOWN_METHODS]
+        unknown = [call for call in calls if call not in KNOWN_METHODS]
+
+        if not methods or unknown:
+            print(
+                f"ERROR: unsupported route method shape in {file_name}: {route_body.strip()}",
+                file=sys.stderr,
+            )
+            had_error = True
+            continue
+
+        prefix = "" if file_name.endswith("routes/system.rs") and route_path == "/health" else "/v1"
+        for method in methods:
+            print(f"{method.upper()} {prefix}{route_path}")
+
+if had_error:
+    sys.exit(1)
+PY
 }
 
 extract_doc_routes() {
@@ -255,7 +335,7 @@ extract_doc_routes() {
     awk '
         /<!-- conaryd-routes:start -->/ { in_routes = 1; next }
         /<!-- conaryd-routes:end -->/ { in_routes = 0; next }
-        in_routes && /^(GET|POST|DELETE) \// { print $1 " " $2 }
+        in_routes && /^(GET|POST|PUT|PATCH|DELETE) \// { print $1 " " $2 }
     ' "$doc"
 }
 
@@ -265,7 +345,9 @@ check_conaryd_routes() {
     doc_routes="$(mktemp)"
     trap 'rm -f "$code_routes" "$doc_routes"' RETURN
 
-    extract_code_routes | sort -u > "$code_routes"
+    if ! extract_code_routes | sort -u > "$code_routes"; then
+        report_error "conaryd route extraction failed"
+    fi
     extract_doc_routes | sort -u > "$doc_routes"
 
     local route_count
@@ -281,6 +363,124 @@ check_conaryd_routes() {
     require_match "docs/modules/conaryd.md" '/health.*outside the v1 auth gate|/health.*outside.*auth' '/health auth-boundary wording'
     require_match "docs/modules/conaryd.md" '/v1/\*.*behind the v1 gate|/v1/\*.*auth' '/v1 auth-boundary wording'
     require_match "docs/modules/conaryd.md" 'Preview stub|preview-stubbed|not implemented' 'preview-stubbed system route wording'
+}
+
+check_conary_cli_command_refs() {
+    local cli_file="apps/conary/src/cli/mod.rs"
+    require_file "$cli_file" || return
+
+    python3 - "$cli_file" "${PRODUCT_DOC_PATHS[@]}" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+cli_file = Path(sys.argv[1])
+scan_roots = [Path(path) for path in sys.argv[2:]]
+
+
+def kebab_case(name):
+    name = re.sub(r"([a-z0-9])([A-Z])", r"\1-\2", name)
+    name = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1-\2", name)
+    return name.replace("_", "-").lower()
+
+
+def commands_from_enum(path):
+    source = path.read_text()
+    enum_start = source.find("pub enum Commands")
+    if enum_start == -1:
+        raise ValueError(f"{path}: could not find pub enum Commands")
+
+    brace_start = source.find("{", enum_start)
+    if brace_start == -1:
+        raise ValueError(f"{path}: could not find Commands enum body")
+
+    depth = 1
+    idx = brace_start + 1
+    while idx < len(source) and depth:
+        char = source[idx]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+        idx += 1
+
+    if depth != 0:
+        raise ValueError(f"{path}: unterminated Commands enum")
+
+    body = source[brace_start + 1 : idx - 1]
+    depth = 1
+    pending_name = None
+    commands = {"help"}
+
+    for raw_line in body.splitlines():
+        stripped = raw_line.strip()
+        if depth == 1:
+            attr_match = re.search(r'#\[command\([^]]*name\s*=\s*"([^"]+)"', stripped)
+            if attr_match:
+                pending_name = attr_match.group(1)
+            else:
+                variant_match = re.match(r"([A-Z][A-Za-z0-9_]*)\b", stripped)
+                if variant_match:
+                    variant = variant_match.group(1)
+                    commands.add(pending_name or kebab_case(variant))
+                    pending_name = None
+
+        depth += raw_line.count("{")
+        depth -= raw_line.count("}")
+
+    if len(commands) <= 1:
+        raise ValueError(f"{path}: no Commands enum variants found")
+
+    return commands
+
+
+def iter_scan_files(paths):
+    extensions = {".md", ".mdx", ".rst", ".adoc", ".svelte"}
+    for root in paths:
+        if not root.exists():
+            continue
+        if root.is_file():
+            if root.suffix in extensions:
+                yield root
+            continue
+        for path in sorted(root.rglob("*")):
+            if not path.is_file() or path.suffix not in extensions:
+                continue
+            if "archive" in path.parts:
+                continue
+            yield path
+
+
+try:
+    root_commands = commands_from_enum(cli_file)
+except ValueError as error:
+    print(f"ERROR: {error}", file=sys.stderr)
+    sys.exit(1)
+
+historical_context = re.compile(
+    r"\b(retired|removed|deprecated|legacy|historical|archive|no longer|not live|not a live)\b",
+    re.IGNORECASE,
+)
+command_ref = re.compile(r"`conary\s+([A-Za-z0-9][A-Za-z0-9_-]*)(?:\s|`)")
+
+had_error = False
+for path in iter_scan_files(scan_roots):
+    for line_no, line in enumerate(path.read_text(errors="replace").splitlines(), 1):
+        if historical_context.search(line):
+            continue
+        for match in command_ref.finditer(line):
+            root_command = match.group(1)
+            if root_command not in root_commands:
+                print(
+                    f"ERROR: {path}:{line_no} mentions unknown conary root command "
+                    f"`conary {root_command}`: {line.strip()}",
+                    file=sys.stderr,
+                )
+                had_error = True
+
+if had_error:
+    sys.exit(1)
+PY
 }
 
 check_conary_core_surface() {
@@ -308,12 +508,14 @@ check_conary_core_surface() {
     done < <(rg -n -i -- "$pattern" "${active_paths[@]}" || true)
 }
 
+check_required_scan_paths
 check_schema_versions
 check_retired_commands
 check_preview_status
 check_preview_claim_drift
 check_policykit_truth
 check_conaryd_routes
+check_conary_cli_command_refs
 check_conary_core_surface
 
 if [[ "$errors" -ne 0 ]]; then
