@@ -13,8 +13,8 @@
 ## Current Repository Facts
 
 - Execution should start from the current `main` commit that contains this plan, with `HEAD` and `origin/main` synced. The historical Wave 1a closure tip before this plan was `272f1ae3e49710e2fc86fcff43d7d1b3705c9581`; do not reset to that historical SHA.
-- Current docs-audit inventory count with this committed plan is `171` tracked doc-like files.
-- `LC_ALL=C bash scripts/docs-audit-inventory.sh | tail -n +2 | wc -l` should continue to return `171`.
+- Current docs-audit inventory count with this committed plan and the active single-package dry-run follow-up note is `172` tracked doc-like files.
+- `LC_ALL=C bash scripts/docs-audit-inventory.sh | tail -n +2 | wc -l` should continue to return `172`.
 - The coherency ledger currently has four closed `1a-root-cli` rows and no `1b-system-adopt` rows.
 - `apps/conary/src/commands/adopt/system.rs` is 1236 lines. This is below the repo's 1500-line major-edit threshold, but it is still the main bulk-adoption command body; Wave 1b should avoid growing it unless evidence shows a bounded behavior repair.
 
@@ -38,6 +38,7 @@
 | `apps/conary/tests/cli_daily_ux.rs` | Existing daily UX references to `conary system adopt --refresh`. Run focused adopted-package filter. |
 | `apps/conary/build.rs` | Generated root manpage source. Run `cargo build -p conary` and inspect generated ignored manpage output. |
 | `docs/operations/daily-driver-ux-matrix.md` | Active doc repeats the `conary system adopt --refresh` guidance. Inspect only if command evidence shows that claim is stale. |
+| `docs/operations/system-adopt-single-package-dry-run-follow-up.md` | Active follow-up owner for true single-package adopt dry-run preview or removal of package-mode dry-run visibility. |
 | `docs/superpowers/feature-coherency-ledger.tsv` | Add and close `1b-system-adopt` rows. |
 | `docs/superpowers/documentation-accuracy-audit-*` | Register this Markdown plan and keep docs-audit checks green. |
 
@@ -288,6 +289,36 @@ In `apps/conary/src/cli/mod.rs`, inside the existing `#[cfg(test)] mod tests`, i
     }
 
     #[test]
+    fn parses_system_adopt_package_dry_run_refusal_surface() {
+        let cli = Cli::try_parse_from(["conary", "system", "adopt", "curl", "--dry-run"])
+            .expect("single-package dry-run should parse before runtime refuses it");
+
+        match cli.command {
+            Some(Commands::System(SystemCommands::Adopt {
+                packages,
+                full,
+                system,
+                status,
+                dry_run,
+                refresh,
+                convert,
+                sync_hook,
+                ..
+            })) => {
+                assert_eq!(packages, vec!["curl".to_string()]);
+                assert!(!full);
+                assert!(!system);
+                assert!(!status);
+                assert!(dry_run);
+                assert!(!refresh);
+                assert!(!convert);
+                assert!(!sync_hook);
+            }
+            _ => panic!("expected system adopt command"),
+        }
+    }
+
+    #[test]
     fn rejects_system_adopt_package_with_refresh_mode() {
         let err = match Cli::try_parse_from(["conary", "system", "adopt", "curl", "--refresh"]) {
             Ok(_) => panic!("package adopt must conflict with --refresh mode"),
@@ -348,7 +379,13 @@ If formatting fails, run `cargo fmt`, then rerun `cargo fmt --check`.
 Run:
 
 ```bash
+git status --short
+git diff --name-only
 git add apps/conary/src/cli/mod.rs
+if git diff --name-only -- apps/conary/src/cli/system.rs | rg -q '^apps/conary/src/cli/system.rs$'; then
+  git add apps/conary/src/cli/system.rs
+fi
+git diff --cached --name-only
 git commit -m "test: cover system adopt CLI mode parsing"
 ```
 
@@ -527,7 +564,13 @@ test -d "$scratch"
 rg -n --glob '!target/**' --glob '!docs/superpowers/plans/archive/**' --glob '!docs/superpowers/specs/archive/**' 'TODO|not implemented|stub|future|unsupported|broken' \
   apps/conary/src/cli/system.rs \
   apps/conary/src/dispatch/system.rs \
-  apps/conary/src/commands/adopt \
+  apps/conary/src/commands/adopt/mod.rs \
+  apps/conary/src/commands/adopt/packages.rs \
+  apps/conary/src/commands/adopt/system.rs \
+  apps/conary/src/commands/adopt/status.rs \
+  apps/conary/src/commands/adopt/refresh.rs \
+  apps/conary/src/commands/adopt/convert.rs \
+  apps/conary/src/commands/adopt/hooks.rs \
   docs/operations/daily-driver-ux-matrix.md \
   "$scratch/system-help.txt" \
   "$scratch/system-adopt-help.txt" \
@@ -545,6 +588,7 @@ The known in-scope hit is the single-package dry-run refusal. It must be either:
 - repaired inside this wave if help/runtime behavior disagree.
 
 Do not broaden the sweep to unrelated docs, conaryd routes, Remi, MCP, or codebase-wide comments.
+Do not sweep `apps/conary/src/commands/adopt/unadopt.rs` or `native_handoff.rs` in Wave 1b unless evidence shows a direct effect on the selected `conary system adopt` surface.
 
 - [ ] **Step 7: Capture source excerpts**
 
@@ -634,10 +678,9 @@ Expected:
 
 ```text
 !! apps/conary/man/
-!! man/
 ```
 
-If either generated directory appears as staged or tracked changes, stop and remove the accidental staged generated output before continuing.
+`!! man/` may also appear if another local step created the ignored root manpage directory. If either generated directory appears as staged or tracked changes, stop and remove the accidental staged generated output before continuing.
 
 ---
 
@@ -814,7 +857,7 @@ cat >> docs/superpowers/feature-coherency-ledger.tsv <<EOF
 CLI-ADOPT-001	conary system adopt help	cmd:cargo run -p conary -- system adopt --help		1b-system-adopt	Adoption, Unadoption, And Native-Authority Handoff	Parent system help and system adopt help advertise the selected adopt command family without overstating unsupported dry-run behavior	System and system-adopt help render successfully and system-adopt help states the selected modes and the single-package dry-run rejection	works	verified-no-change	${verified_date}	path:apps/conary/src/cli/system.rs;cmd:cargo run -p conary -- system --help;cmd:cargo run -p conary -- system adopt --help	none	cmd:cargo run -p conary -- system --help;cmd:cargo run -p conary -- system adopt --help	verify	Re-run system and system-adopt help capture before changing adopt flags or mode constraints	Wave 1b help evidence captured in scratch output
 CLI-ADOPT-002	system adopt parser and mode constraints	test:cargo test -p conary --lib cli::tests		1b-system-adopt	Adoption, Unadoption, And Native-Authority Handoff	System adopt Clap and pre-dispatch command-risk constraints keep mutually exclusive package, system, status, refresh, convert, sync-hook, and hidden hook-refresh modes coherent	Parser characterization covers system dry-run filters, refresh quiet hook path, from-sync-hook/full conflict, convert dry-run jobs, sync-hook removal, and selected rejection cases; command-risk tests cover hook-refresh classification	works	verified-no-change	${verified_date}	path:apps/conary/src/cli/system.rs;path:apps/conary/src/cli/mod.rs;path:apps/conary/src/command_risk.rs;test:cargo test -p conary --lib cli::tests;test:cargo test -p conary --lib command_risk::tests::	none	test:cargo test -p conary --lib cli::tests;test:cargo test -p conary --lib command_risk::tests::	verify	Re-run parser and command-risk tests before changing system adopt Clap constraints	Wave 1b added durable parser and pre-dispatch policy proof for selected system adopt modes
 CLI-ADOPT-003	system adopt dispatch and command modules	test:cargo test -p conary --lib commands::adopt		1b-system-adopt	Adoption, Unadoption, And Native-Authority Handoff	System adopt dispatch source routes parsed modes to the matching adopt command module, with focused module tests and selected binary safety tests covering behavior	Dispatch source maps sync hooks, convert, status, refresh, system adoption, package adoption, and package dry-run refusal to expected command paths; focused adopt module, command-risk, and safety tests pass	works	verified-no-change	${verified_date}	path:apps/conary/src/dispatch/system.rs;path:apps/conary/src/commands/adopt/mod.rs;test:cargo test -p conary --lib commands::adopt;test:cargo test -p conary --lib command_risk::tests::;test:cargo test -p conary --test live_host_mutation_safety system_adopt	none	test:cargo test -p conary --lib commands::adopt;test:cargo test -p conary --lib command_risk::tests::;test:cargo test -p conary --test live_host_mutation_safety system_adopt	verify	Re-run focused adopt module, command-risk, and live-mutation safety tests before changing adopt dispatch	System adopt command-module proof captured and closed in Wave 1b
-CLI-ADOPT-004	single-package system adopt dry-run	cmd:cargo run -p conary -- system adopt curl --dry-run		1b-system-adopt	Adoption, Unadoption, And Native-Authority Handoff	Single-package adoption dry-run is visible as an option but must not pretend to be implemented until it has a true non-mutating preview path	Runtime rejects single-package dry-run with a specific error and points to system-wide dry-run or non-dry-run package adoption; help states the same limitation	honest-deferred	deferred-owned	${verified_date}	path:apps/conary/src/cli/system.rs;path:apps/conary/src/dispatch/system.rs;path:docs/superpowers/specs/archive/2026-05-26-limited-preview-release-hardening-design.md;cmd:cargo run -p conary -- system adopt --help;cmd:cargo run -p conary -- system adopt curl --dry-run;test:cargo test -p conary --test live_host_mutation_safety system_adopt_package_dry_run_is_rejected_without_ack_prompt	cmd:cargo run -p conary -- system adopt curl --dry-run	cmd:cargo run -p conary -- system adopt --help;test:cargo test -p conary --test live_host_mutation_safety system_adopt_package_dry_run_is_rejected_without_ack_prompt	defer	Tracked by docs/superpowers/specs/archive/2026-05-26-limited-preview-release-hardening-design.md Plan A outcome; create a new active plan before implementing true single-package adopt dry-run preview or removing package-mode dry-run visibility	Honest deferred row: active help and runtime refusal both describe the current limitation and supported alternatives; historical release-hardening design required either true preview or a deliberate unsupported route
+CLI-ADOPT-004	single-package system adopt dry-run	cmd:cargo run -p conary -- system adopt curl --dry-run		1b-system-adopt	Adoption, Unadoption, And Native-Authority Handoff	Single-package adoption dry-run is visible as an option but must not pretend to be implemented until it has a true non-mutating preview path	Runtime rejects single-package dry-run with a specific error and points to system-wide dry-run or non-dry-run package adoption; help states the same limitation	honest-deferred	deferred-owned	${verified_date}	path:apps/conary/src/cli/system.rs;path:apps/conary/src/dispatch/system.rs;doc:docs/operations/system-adopt-single-package-dry-run-follow-up.md;path:docs/superpowers/specs/archive/2026-05-26-limited-preview-release-hardening-design.md;cmd:cargo run -p conary -- system adopt --help;cmd:cargo run -p conary -- system adopt curl --dry-run;test:cargo test -p conary --test live_host_mutation_safety system_adopt_package_dry_run_is_rejected_without_ack_prompt	cmd:cargo run -p conary -- system adopt curl --dry-run	cmd:cargo run -p conary -- system adopt --help;cmd:cargo run -p conary -- system adopt curl --dry-run;test:cargo test -p conary --test live_host_mutation_safety system_adopt_package_dry_run_is_rejected_without_ack_prompt	defer	Tracked by docs/operations/system-adopt-single-package-dry-run-follow-up.md; create a reviewed implementation plan before implementing true single-package adopt dry-run preview or removing package-mode dry-run visibility	Honest deferred row: active help and runtime refusal both describe the current limitation and supported alternatives; historical release-hardening design required either true preview or a deliberate unsupported route
 DOC-ADOPT-001	daily driver adopt refresh claim	doc:docs/operations/daily-driver-ux-matrix.md	CLI-ADOPT-001;CLI-ADOPT-003	1b-system-adopt	Adoption, Unadoption, And Native-Authority Handoff	Daily-driver UX docs route adopted install/update workflows to conary system adopt --refresh	The selected docs claim remains consistent with root help, system adopt help, parser, dispatch, and daily UX tests	works	verified-no-change	${verified_date}	doc:docs/operations/daily-driver-ux-matrix.md;cmd:cargo run -p conary -- system adopt --help;test:cargo test -p conary --test cli_daily_ux adopted	none	test:cargo test -p conary --test cli_daily_ux adopted	verify	Re-run daily UX adopted-package tests before changing adopt-refresh guidance	Scoped active-doc claim checked because it directly repeats the selected CLI guidance
 EOF
 ```
@@ -869,16 +912,41 @@ Expected:
 Run:
 
 ```bash
+set -euo pipefail
 bash scripts/test-coherency-ledger.sh
 bash scripts/check-coherency-ledger.sh docs/superpowers/feature-coherency-ledger.tsv --scope-complete 1a-root-cli
 bash scripts/check-coherency-ledger.sh docs/superpowers/feature-coherency-ledger.tsv --scope-complete 1b-system-adopt
 cargo fmt --check
 cargo check -p conary
+manpage_scratch="$(mktemp -d /tmp/conary-wave1b-final-manpage.XXXXXX)"
+cargo build -p conary
+test -f apps/conary/man/conary.1
+cp apps/conary/man/conary.1 "$manpage_scratch/conary.1"
+sed 's/\\-/-/g' "$manpage_scratch/conary.1" > "$manpage_scratch/conary.1.normalized"
+for pattern in \
+  "conary system adopt --refresh" \
+  "Daily workflow examples"
+do
+  if ! rg -n -- "$pattern" "$manpage_scratch/conary.1.normalized"; then
+    echo "ERROR: final root manpage missing required Wave 1b text: $pattern" >&2
+    exit 1
+  fi
+done
 cargo test -p conary --lib cli::tests
 cargo test -p conary --lib command_risk::tests::
 cargo test -p conary --lib commands::adopt
 cargo test -p conary --test live_host_mutation_safety system_adopt
 cargo test -p conary --test cli_daily_ux adopted
+dry_run_scratch="$(mktemp -d /tmp/conary-wave1b-final-dry-run.XXXXXX)"
+cargo run -p conary -- system init --db-path "$dry_run_scratch/conary.db" > "$dry_run_scratch/system-init.txt"
+set +e
+cargo run -p conary -- system adopt curl --dry-run --db-path "$dry_run_scratch/conary.db" > "$dry_run_scratch/adopt-package-dry-run.stdout" 2> "$dry_run_scratch/adopt-package-dry-run.stderr"
+dry_run_status=$?
+set -e
+test "$dry_run_status" -eq 1
+rg -n "single-package adoption dry-run is not implemented yet" "$dry_run_scratch/adopt-package-dry-run.stderr"
+rg -n "conary system adopt --system --dry-run" "$dry_run_scratch/adopt-package-dry-run.stderr"
+rg -n "rerun without --dry-run" "$dry_run_scratch/adopt-package-dry-run.stderr"
 completion="$(mktemp /tmp/conary-wave1b-completion.XXXXXX.bash)"
 cargo run -p conary -- system completions bash > "$completion"
 test -s "$completion"
