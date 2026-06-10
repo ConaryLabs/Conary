@@ -1,0 +1,3 @@
+wave_scope	status	notes
+1a-root-cli	completed	Root CLI help, root examples, generated root manpage, and top-level dispatch coverage closed in Wave 1a.
+1b-system-adopt	completed	System adopt help, parser constraints, dispatch, command modules, single-package dry-run deferral, and scoped daily-driver docs closed in Wave 1b.

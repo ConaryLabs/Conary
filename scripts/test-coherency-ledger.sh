@@ -10,6 +10,7 @@ fail() {
 }
 
 validator="scripts/check-coherency-ledger.sh"
+scope_validator=(bash scripts/check-coherency-wave-scopes.sh)
 header=$'id\tsurface\tsource\trelated_ids\twave_scope\towner\tclaim\tactual_or_gap\tstatus\tdisposition\tlast_verified\tevidence_sources\trepro\tverification\tdecision\tnext_slice\tnotes'
 
 tmpdir="$(mktemp -d)"
@@ -37,8 +38,8 @@ write_ledger "$real_repo" "$real_repo_row"
 "$validator" "$real_repo" >/dev/null
 
 valid_route_mcp="$tmpdir/valid-route-mcp.tsv"
-route_row=$'ROUTE-CONARYD-001\tconaryd transactions route\troute:GET /v1/transactions\t\tlater-route-wave\tConaryd Daemon Routes\tRoute pointer grammar accepts method and path\tRoute pointer syntax is valid\tworks\tverified-no-change\t2026-06-09\troute:GET /v1/transactions\tnone\troute:GET /v1/transactions\tverify\tValidate route pointer grammar\tRoute pointer fixture'
-mcp_row=$'MCP-REMI-001\tRemi MCP tool fixture\tmcp:remi/tool-name\t\tlater-mcp-wave\tAgent And MCP Surface\tMCP pointer grammar accepts server and tool\tMCP pointer syntax is valid\tworks\tverified-no-change\t2026-06-09\tmcp:remi/tool-name\tnone\tmcp:remi/tool-name\tverify\tValidate MCP pointer grammar\tMCP pointer fixture'
+route_row=$'ROUTE-CONARYD-001\tconaryd transactions route\troute:GET /v1/transactions\t\tlater-route-wave\tconaryd Package Jobs And Daemon Routes\tRoute pointer grammar accepts method and path\tRoute pointer syntax is valid\tworks\tverified-no-change\t2026-06-09\troute:GET /v1/transactions\tnone\troute:GET /v1/transactions\tverify\tValidate route pointer grammar\tRoute pointer fixture'
+mcp_row=$'MCP-REMI-001\tRemi MCP tool fixture\tmcp:remi/tool-name\t\tlater-mcp-wave\tAgent/MCP Operation Surfaces\tMCP pointer grammar accepts server and tool\tMCP pointer syntax is valid\tworks\tverified-no-change\t2026-06-09\tmcp:remi/tool-name\tnone\tmcp:remi/tool-name\tverify\tValidate MCP pointer grammar\tMCP pointer fixture'
 write_ledger "$valid_route_mcp" "$route_row" "$mcp_row"
 "$validator" "$valid_route_mcp" >/dev/null
 
@@ -48,6 +49,52 @@ if "$validator" "$bad_status" >"$tmpdir/out" 2>&1; then
     fail "invalid status unexpectedly passed"
 fi
 grep -q "invalid status" "$tmpdir/out" || fail "invalid status error was not clear"
+
+bad_final_no_newline="$tmpdir/bad-final-no-newline.tsv"
+printf '%s\n' "$header" > "$bad_final_no_newline"
+printf '%s' "${good_row/works/not-real-status}" >> "$bad_final_no_newline"
+if "$validator" "$bad_final_no_newline" >"$tmpdir/out" 2>&1; then
+    fail "invalid final row without trailing newline unexpectedly passed"
+fi
+grep -q "invalid status" "$tmpdir/out" || fail "no-final-newline invalid status error was not clear"
+
+trailing_tab="$tmpdir/trailing-tab.tsv"
+printf '%s\n%s\t\n' "$header" "$good_row" > "$trailing_tab"
+if "$validator" "$trailing_tab" >"$tmpdir/out" 2>&1; then
+    fail "row with trailing raw tab unexpectedly passed"
+fi
+grep -q "expected 17 fields" "$tmpdir/out" || fail "trailing tab error was not clear"
+
+bad_date="$tmpdir/bad-date.tsv"
+write_ledger "$bad_date" "${good_row/2026-06-09/2026-99-99}"
+if "$validator" "$bad_date" >"$tmpdir/out" 2>&1; then
+    fail "impossible last_verified date unexpectedly passed"
+fi
+grep -q "invalid last_verified date" "$tmpdir/out" || fail "bad date error was not clear"
+
+bad_decision="$tmpdir/bad-decision.tsv"
+bad_decision_row=$'CLI-ROOT-002\tconary root deferral fixture\tcmd:cargo run -p conary -- --help\t\t1a-root-cli\tCLI Dispatch And Command Routing\tDeferred row should use defer decision\tDeferred row has the wrong decision\t honest-deferred\tdeferred-owned\t2026-06-09\tcmd:cargo run -p conary -- --help\tnone\tcmd:cargo run -p conary -- --help\tremove\tOpen follow-up\tBad decision should fail'
+bad_decision_row="${bad_decision_row/$'\t honest-deferred'/$'\thonest-deferred'}"
+write_ledger "$bad_decision" "$bad_decision_row"
+if "$validator" "$bad_decision" >"$tmpdir/out" 2>&1; then
+    fail "honest-deferred/remove decision unexpectedly passed"
+fi
+grep -q "invalid decision for status" "$tmpdir/out" || fail "bad decision matrix error was not clear"
+
+bad_owner="$tmpdir/bad-owner.tsv"
+write_ledger "$bad_owner" "${good_row/CLI Dispatch And Command Routing/No Such Owner}"
+if "$validator" "$bad_owner" >"$tmpdir/out" 2>&1; then
+    fail "unknown feature owner unexpectedly passed"
+fi
+grep -q "owner does not match" "$tmpdir/out" || fail "bad owner error was not clear"
+
+md_as_path="$tmpdir/md-as-path.tsv"
+md_as_path_row=$'DOC-ROOT-001\tmarkdown pointer fixture\tpath:docs/llms/README.md\t\t1a-root-cli\tCLI Dispatch And Command Routing\tMarkdown pointers should use doc prefix\tMarkdown pointer used path prefix\tworks\tverified-no-change\t2026-06-09\tpath:docs/llms/README.md\tnone\tcmd:cargo run -p conary -- --help\tverify\tUse doc pointers for Markdown\tBad Markdown pointer should fail'
+write_ledger "$md_as_path" "$md_as_path_row"
+if "$validator" "$md_as_path" >"$tmpdir/out" 2>&1; then
+    fail "Markdown path: pointer unexpectedly passed"
+fi
+grep -q "Markdown pointer must use doc:" "$tmpdir/out" || fail "Markdown path pointer error was not clear"
 
 bad_evidence_pointer="$tmpdir/bad-evidence-pointer.tsv"
 write_ledger "$bad_evidence_pointer" "${good_row/path:apps\/conary\/src\/cli\/mod.rs/path:no-such-file.rs}"
@@ -72,7 +119,7 @@ fi
 grep -q "invalid typed repro pointer" "$tmpdir/out" || fail "bad repro error was not clear"
 
 bad_route="$tmpdir/bad-route.tsv"
-bad_route_row=$'ROUTE-CONARYD-002\tconaryd transactions route\troute:GET/v1/transactions\t\tlater-route-wave\tConaryd Daemon Routes\tRoute pointer grammar rejects missing method/path space\tRoute pointer syntax is invalid\tworks\tverified-no-change\t2026-06-09\troute:GET/v1/transactions\tnone\troute:GET/v1/transactions\tverify\tValidate bad route pointer grammar\tBad route pointer fixture'
+bad_route_row=$'ROUTE-CONARYD-002\tconaryd transactions route\troute:GET/v1/transactions\t\tlater-route-wave\tconaryd Package Jobs And Daemon Routes\tRoute pointer grammar rejects missing method/path space\tRoute pointer syntax is invalid\tworks\tverified-no-change\t2026-06-09\troute:GET/v1/transactions\tnone\troute:GET/v1/transactions\tverify\tValidate bad route pointer grammar\tBad route pointer fixture'
 write_ledger "$bad_route" "$bad_route_row"
 if "$validator" "$bad_route" >"$tmpdir/out" 2>&1; then
     fail "bad route pointer unexpectedly passed"
@@ -80,7 +127,7 @@ fi
 grep -q "invalid typed source pointer" "$tmpdir/out" || fail "bad route pointer error was not clear"
 
 bad_mcp="$tmpdir/bad-mcp.tsv"
-bad_mcp_row=$'MCP-REMI-002\tRemi MCP tool fixture\tmcp:remi\t\tlater-mcp-wave\tAgent And MCP Surface\tMCP pointer grammar rejects missing tool name\tMCP pointer syntax is invalid\tworks\tverified-no-change\t2026-06-09\tmcp:remi\tnone\tmcp:remi\tverify\tValidate bad MCP pointer grammar\tBad MCP pointer fixture'
+bad_mcp_row=$'MCP-REMI-002\tRemi MCP tool fixture\tmcp:remi\t\tlater-mcp-wave\tAgent/MCP Operation Surfaces\tMCP pointer grammar rejects missing tool name\tMCP pointer syntax is invalid\tworks\tverified-no-change\t2026-06-09\tmcp:remi\tnone\tmcp:remi\tverify\tValidate bad MCP pointer grammar\tBad MCP pointer fixture'
 write_ledger "$bad_mcp" "$bad_mcp_row"
 if "$validator" "$bad_mcp" >"$tmpdir/out" 2>&1; then
     fail "bad MCP pointer unexpectedly passed"
@@ -143,5 +190,28 @@ if "$validator" "$dangling_related" >"$tmpdir/out" 2>&1; then
     fail "dangling related_id unexpectedly passed"
 fi
 grep -q "dangling related_id" "$tmpdir/out" || fail "dangling related_id error was not clear"
+
+registry="$tmpdir/wave-scopes.tsv"
+{
+    printf 'wave_scope\tstatus\tnotes\n'
+    printf '1a-root-cli\tcompleted\tRoot CLI complete\n'
+    printf 'later-route-wave\tactive\tRoute fixture active\n'
+    printf 'later-mcp-wave\tactive\tMCP fixture active\n'
+} > "$registry"
+
+"${scope_validator[@]}" "$good" "$registry" >/dev/null
+
+unknown_scope="$tmpdir/unknown-scope.tsv"
+unknown_scope_row="${good_row/1a-root-cli/typo-root-cli}"
+write_ledger "$unknown_scope" "$unknown_scope_row"
+if "${scope_validator[@]}" "$unknown_scope" "$registry" >"$tmpdir/out" 2>&1; then
+    fail "unknown wave_scope unexpectedly passed scope registry check"
+fi
+grep -q "unregistered wave_scope" "$tmpdir/out" || fail "unknown scope error was not clear"
+
+if "${scope_validator[@]}" "$scope_open_thin" "$registry" >"$tmpdir/out" 2>&1; then
+    fail "completed scope with open row unexpectedly passed registry check"
+fi
+grep -q "scope completion blocked" "$tmpdir/out" || fail "completed scope open-row error was not clear"
 
 echo "Coherency ledger validator tests passed."

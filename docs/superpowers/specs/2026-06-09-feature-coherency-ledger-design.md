@@ -2,7 +2,9 @@
 
 ## Status
 
-Draft design; user review pending.
+Implemented through Waves 1a and 1b; active validator scripts are
+`scripts/check-coherency-ledger.sh`, `scripts/test-coherency-ledger.sh`, and
+`scripts/check-coherency-wave-scopes.sh`.
 
 ## Goal
 
@@ -166,10 +168,10 @@ honest and verified: implemented, repaired, deliberately deferred, merged, or
 removed from active claims. `status` describes the current condition;
 `disposition` records how the row was closed.
 
-Rows with `works` or `works-but-thin` status should be re-verified before being
-cited as current evidence if `last_verified` is more than 90 days old. The
-ledger validator may warn on stale verification dates; it should not block
-emergency repair work solely because older rows need refresh.
+Rows with `works`, `works-but-thin`, or `honest-deferred` status should be
+re-verified before being cited as current evidence if `last_verified` is more
+than 90 days old. The ledger validator warns on stale verification dates; it
+should not block emergency repair work solely because older rows need refresh.
 
 Untriaged findings belong in wave scratch output, not the durable ledger. Once a
 row is added to `feature-coherency-ledger.tsv`, it must already have enough
@@ -181,15 +183,24 @@ evidence to pick a status, owner, decision, next slice, and verification gate.
 - `works-but-thin` can remain `open` only inside the current wave, or close as
   `resolved-repaired`, `verified-no-change`, or `deferred-owned` after the
   missing proof, docs, UX, or edge-case slice is explicit.
-- `fix-now` closes only as `resolved-repaired`, `resolved-removed`, or
+- `fix-now` can remain `open` only inside the current wave with
+  `decision=fix`; it closes as `resolved-repaired`, `resolved-removed`, or
   `resolved-merged`.
-- `misleading` closes only as `resolved-repaired`, `resolved-removed`, or
-  `resolved-merged`; if the feature is intentionally unavailable, first make
-  the active surface honest, verify that refusal or documentation, then
-  reclassify it as `honest-deferred` with `deferred-owned`.
-- `duplicate-stale` closes only as `resolved-merged`, `resolved-removed`, or
-  `resolved-repaired`.
-- `honest-deferred` closes as `deferred-owned`.
+- `misleading` can remain `open` only inside the current wave with
+  `decision=fix` or `decision=remove`; it closes as `resolved-repaired`,
+  `resolved-removed`, or `resolved-merged`. If the feature is intentionally
+  unavailable, first make the active surface honest, verify that refusal or
+  documentation, then reclassify it as `honest-deferred` with
+  `deferred-owned`.
+- `duplicate-stale` can remain `open` only inside the current wave with
+  `decision=merge` or `decision=remove`; it closes as `resolved-merged`,
+  `resolved-removed`, or `resolved-repaired`.
+- `honest-deferred` can remain `open` only inside the current wave with
+  `decision=defer`; it closes as `deferred-owned`.
+
+`scripts/check-coherency-ledger.sh` enforces both the status/disposition matrix
+and the matching decision values. Scope completion is stricter than ordinary
+validation: a completed scope must have no `open` rows of any status.
 
 ## Review And Repair Workflow
 
@@ -262,8 +273,10 @@ selected scope, and passing focused verification before the next sub-wave
 begins. Carry-over is allowed only after the active surface is already honest
 and the row is reclassified to `honest-deferred` with `deferred-owned`, an
 owner, a next slice, and verification evidence. The ledger validator or report
-script should have a scope-completion mode that rejects open `fix-now`,
-`misleading`, and `duplicate-stale` rows in a completed scope.
+script must have a scope-completion mode that rejects any `open` row in a
+completed scope. Completed scopes are registered in
+`docs/superpowers/feature-coherency-wave-scopes.tsv`, and CI must run the
+scope-registry check so closed waves cannot silently reopen.
 
 Defer these to later, separate waves:
 

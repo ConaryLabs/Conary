@@ -29,7 +29,7 @@ is_allowed_family() {
 
 is_allowed_disposition() {
     case "$1" in
-        ""|verified-no-change|corrected|clarified-as-wip|reframed-as-historical|retained-historical|archived|deleted)
+        ""|verified-no-change|corrected|clarified-as-wip|reframed-as-historical|retained-historical|archived)
             return 0
             ;;
         *)
@@ -40,7 +40,7 @@ is_allowed_disposition() {
 
 is_historical_disposition() {
     case "$1" in
-        reframed-as-historical|retained-historical|archived|deleted)
+        reframed-as-historical|retained-historical|archived)
             return 0
             ;;
         *)
@@ -111,22 +111,16 @@ while IFS= read -r line; do
     [[ "$status" == "pending" || "$status" == "verified" ]] || fail "invalid status at $ledger_path:$line_no: $status"
     is_allowed_disposition "$disposition" || fail "invalid disposition at $ledger_path:$line_no: $disposition"
 
-    if [[ "$disposition" != "deleted" ]]; then
-        [[ -n "$path" ]] || fail "retained row has empty current path at $ledger_path:$line_no"
-        [[ -n "${current_paths["$path"]:-}" ]] || fail "retained row references non-tracked current path at $ledger_path:$line_no: $path"
-        ledger_retained_paths["$path"]=1
-    fi
+    [[ -n "$path" ]] || fail "retained row has empty current path at $ledger_path:$line_no"
+    [[ -n "${current_paths["$path"]:-}" ]] || fail "retained row references non-tracked current path at $ledger_path:$line_no: $path"
+    ledger_retained_paths["$path"]=1
 
     if [[ "$mode" == "--require-complete" ]]; then
         [[ "$status" != "pending" ]] || fail "pending row remains in complete mode at $ledger_path:$line_no: $origin_path"
         [[ -n "$disposition" ]] || fail "verified row lacks disposition in complete mode at $ledger_path:$line_no: $origin_path"
 
-        if [[ "$disposition" == "deleted" ]]; then
-            [[ -z "$path" ]] || fail "deleted row keeps a current path at $ledger_path:$line_no: $origin_path"
-        else
-            [[ -n "$claim_clusters" ]] || fail "retained row lacks claim_clusters in complete mode at $ledger_path:$line_no: $origin_path"
-            [[ -n "$evidence_sources" ]] || fail "retained row lacks evidence_sources in complete mode at $ledger_path:$line_no: $origin_path"
-        fi
+        [[ -n "$claim_clusters" ]] || fail "retained row lacks claim_clusters in complete mode at $ledger_path:$line_no: $origin_path"
+        [[ -n "$evidence_sources" ]] || fail "retained row lacks evidence_sources in complete mode at $ledger_path:$line_no: $origin_path"
 
         if [[ "$family" == "historical" ]]; then
             is_historical_disposition "$disposition" || fail "historical row lacks historical disposition at $ledger_path:$line_no: $origin_path"

@@ -1,5 +1,7 @@
 # Feature Coherency Ledger Wave 1a Implementation Plan
 
+> **Executed:** Wave 1a is closed in `docs/superpowers/feature-coherency-ledger.tsv`; do not rerun this plan. Treat embedded script and ledger snippets as planning-time snapshots and use the live files under `scripts/` and `docs/superpowers/` for current behavior.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Create the feature coherency ledger and validator, then execute Wave 1a against root CLI help, examples, dispatch coverage, and generated manpage behavior.
@@ -17,11 +19,11 @@
 - `docs/superpowers/specs/2026-06-09-feature-coherency-ledger-design.md` defines the ledger columns, closure matrix, source-pointer grammar, Wave 1a scope, and verification gates.
 - `docs/superpowers/documentation-accuracy-audit-ledger.tsv` remains the tracked Markdown/doc-like inventory and documentation truth ledger. It must not track `docs/superpowers/feature-coherency-ledger.tsv` unless docs-audit is separately redesigned to include TSV artifacts.
 - `scripts/check-doc-audit-ledger.sh` and `scripts/docs-audit-inventory.sh` are active PR-gate inputs.
-- `scripts/check-coherency-ledger.sh`, `scripts/test-coherency-ledger.sh`, and `docs/superpowers/feature-coherency-ledger.tsv` do not exist yet.
+- At planning time, `scripts/check-coherency-ledger.sh`, `scripts/test-coherency-ledger.sh`, and `docs/superpowers/feature-coherency-ledger.tsv` did not exist yet. They are active now; use the live files instead of this plan's embedded copies.
 - `apps/conary/build.rs` writes ignored local generated manpage output to `apps/conary/man/conary.1` via `clap_mangen` during `cargo build -p conary`.
 - `git ls-files apps/conary/man/conary.1 man/conary.1` returns no tracked manpage files today; generated manpage output is local evidence, not a committed artifact.
 - `cargo run -p conary -- --help` currently renders root help and daily workflow examples successfully.
-- `cargo test -p conary --lib cli::tests -- --list` currently lists 25 CLI unit tests.
+- At planning time, `cargo test -p conary --lib cli::tests -- --list` listed 25 CLI unit tests. Refresh this count at execution time rather than treating it as durable evidence.
 
 ## Non-Goals
 
@@ -204,6 +206,9 @@ The inventory diff and `git diff --check` commands should produce no output.
 - [ ] **Step 1: Create the failing test script**
 
 Create `scripts/test-coherency-ledger.sh` with this content:
+
+This block is a planning-time snapshot. After Wave 1a execution, use the live
+`scripts/test-coherency-ledger.sh` file as source of truth.
 
 ```bash
 #!/usr/bin/env bash

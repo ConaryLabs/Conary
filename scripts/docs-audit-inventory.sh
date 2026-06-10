@@ -89,5 +89,5 @@ while IFS= read -r path; do
 done < <(
     git ls-files \
         | grep -E '(^|/)(README\.md|AGENTS\.md|CONTRIBUTING\.md|ROADMAP\.md|CHANGELOG\.md|SECURITY\.md|.*\.md|.*\.mdx|.*\.rst|.*\.adoc|.*\.toml\.example)$' \
-        | sort
+        | LC_ALL=C sort
 )

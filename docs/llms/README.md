@@ -163,3 +163,9 @@ other non-UTC context.
 - For broad documentation work, use `scripts/docs-audit-inventory.sh` and
   `scripts/check-doc-audit-ledger.sh` so the tracked doc set, audit ledger, and
   current repo shape stay aligned.
+- For implementation-to-claim work, also check
+  `docs/superpowers/feature-coherency-ledger.tsv` with
+  `scripts/check-coherency-ledger.sh` and
+  `scripts/check-coherency-wave-scopes.sh`; grep the ledger for
+  `doc:<path>` or `path:<path>` before editing a doc or source file that may be
+  pinned by a coherency row.
