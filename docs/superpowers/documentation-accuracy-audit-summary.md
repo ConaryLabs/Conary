@@ -230,6 +230,10 @@ The repo moved materially after the last audit:
   proof for `conary system adopt`, and records the single-package adopt dry-run
   path as an honest deferred surface rather than broadening into route, MCP, or
   whole-doc audits.
+- The conaryd authorization fail-closed policy design records the Track 0
+  external-audit decision: root and the daemon identity remain trusted, default
+  admin-group write bypasses are removed, and non-root daemon writes stay denied
+  until a real PolicyKit DBus and policy-file contract exists.
 - The system adopt single-package dry-run follow-up note gives the honest
   deferred `conary system adopt <pkg> --dry-run` surface an active owner
   artifact, separating the current truthful refusal from the future true-preview
@@ -597,9 +601,9 @@ public tester copy is tracked by
 
 ## Final Counts
 
-- Total tracked doc-like files audited: 172
+- Total tracked doc-like files audited: 173
 - `verified-no-change`: 12
-- `corrected`: 73
+- `corrected`: 74
 - `archived`: 73
 - `retained-historical`: 14
 - Remaining pending rows: 0
