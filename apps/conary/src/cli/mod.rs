@@ -1014,6 +1014,27 @@ mod tests {
     }
 
     #[test]
+    fn system_adopt_full_help_only_names_consuming_modes() {
+        let mut command = Cli::command();
+        let help = command
+            .find_subcommand_mut("system")
+            .expect("system subcommand should exist")
+            .find_subcommand_mut("adopt")
+            .expect("system adopt subcommand should exist")
+            .render_long_help()
+            .to_string();
+
+        assert!(
+            help.contains("Used by: default (package adopt), --system"),
+            "system adopt --full help should name its consuming modes:\n{help}"
+        );
+        assert!(
+            !help.contains("Used by: default (package adopt), --system, --refresh"),
+            "system adopt --full help must not claim --refresh consumes --full:\n{help}"
+        );
+    }
+
+    #[test]
     fn export_rejects_legacy_db_argument() {
         let err = match Cli::try_parse_from([
             "conary", "export", "--output", "oci-out", "--db", "old.db",
