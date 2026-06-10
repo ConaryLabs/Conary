@@ -4,7 +4,7 @@
 
 **Goal:** Create the feature coherency ledger and validator, then execute Wave 1a against root CLI help, examples, dispatch coverage, and generated manpage behavior.
 
-**Architecture:** Keep the existing documentation accuracy audit ledger as the tracked Markdown inventory gate, and add a separate feature coherency ledger for implementation-to-claim surfaces. The first implementation slice creates `docs/superpowers/feature-coherency-ledger.tsv`, validates it with a focused shell script and tests, captures root CLI evidence into temporary files, then records or repairs Wave 1a rows until no selected-scope `fix-now`, `misleading`, or `duplicate-stale` row remains open.
+**Architecture:** Keep the existing documentation accuracy audit ledger as the tracked Markdown/doc-like inventory gate, and add a separate feature coherency ledger for implementation-to-claim surfaces. The first implementation slice creates `docs/superpowers/feature-coherency-ledger.tsv`, validates it with a focused shell script, tests, and PR-gate step, captures root CLI evidence into temporary files, then records or repairs Wave 1a rows until no selected-scope row remains open.
 
 **Tech Stack:** Bash, TSV, Cargo, Clap root help, `clap_mangen` via `apps/conary/build.rs`, docs-audit scripts, `docs/modules/feature-ownership.md`.
 
@@ -13,10 +13,9 @@
 ## Current Repository Facts
 
 - Repository root: `/home/peter/Conary`.
-- Current pushed `HEAD` and `origin/main`: `4468765fc729943e5e00ea529e8c64bc531b5a79`.
-- Local plan date from `date +%F`: `2026-06-09`.
+- The plan packet is already tracked in docs-audit metadata. Refresh `git rev-parse HEAD origin/main` and `date +%F` at execution time; do not reuse stale commit IDs or `last_verified` dates from this plan text.
 - `docs/superpowers/specs/2026-06-09-feature-coherency-ledger-design.md` defines the ledger columns, closure matrix, source-pointer grammar, Wave 1a scope, and verification gates.
-- `docs/superpowers/documentation-accuracy-audit-ledger.tsv` remains the tracked Markdown inventory and documentation truth ledger.
+- `docs/superpowers/documentation-accuracy-audit-ledger.tsv` remains the tracked Markdown/doc-like inventory and documentation truth ledger. It must not track `docs/superpowers/feature-coherency-ledger.tsv` unless docs-audit is separately redesigned to include TSV artifacts.
 - `scripts/check-doc-audit-ledger.sh` and `scripts/docs-audit-inventory.sh` are active PR-gate inputs.
 - `scripts/check-coherency-ledger.sh`, `scripts/test-coherency-ledger.sh`, and `docs/superpowers/feature-coherency-ledger.tsv` do not exist yet.
 - `apps/conary/build.rs` writes ignored local generated manpage output to `apps/conary/man/conary.1` via `clap_mangen` during `cargo build -p conary`.
@@ -29,8 +28,9 @@
 - Do not audit every active doc, conaryd route, Remi route, MCP tool, or agent contract in Wave 1a.
 - Do not add HTTP, MCP, or conaryd rows unless a selected root CLI surface directly advertises or depends on them.
 - Do not commit generated manpage files under ignored `apps/conary/man/` or `/man/`.
-- Do not leave selected-scope `fix-now`, `misleading`, or `duplicate-stale` rows open at the end of Wave 1a.
+- Do not leave any selected-scope row open at the end of Wave 1a.
 - Do not replace `docs/superpowers/documentation-accuracy-audit-ledger.tsv`.
+- Do not add `docs/superpowers/feature-coherency-ledger.tsv` to the documentation accuracy audit inventory, ledger, or summary counts.
 - Do not hide untriaged findings in the durable coherency ledger. Use temporary scratch files until a finding has owner, status, decision, next slice, and verification.
 
 ## File Responsibility Map
@@ -41,9 +41,10 @@
 | `docs/superpowers/feature-coherency-ledger.tsv` | Durable implementation-to-claim coherency ledger. |
 | `scripts/check-coherency-ledger.sh` | Validates ledger header, IDs, status/disposition/decision values, closure matrix, source pointers, dates, and scope-completion rules. |
 | `scripts/test-coherency-ledger.sh` | Shell tests for the coherency ledger validator using temporary ledger fixtures. |
-| `docs/superpowers/documentation-accuracy-audit-inventory.tsv` | Existing tracked-doc inventory, updated because this plan is a new tracked Markdown file. |
-| `docs/superpowers/documentation-accuracy-audit-ledger.tsv` | Existing tracked-doc ledger, updated with this plan row. |
-| `docs/superpowers/documentation-accuracy-audit-summary.md` | Summary counts and short active-planning note for this plan. |
+| `.github/workflows/pr-gate.yml` | Adds the coherency ledger validator to CI after the ledger file exists. |
+| `docs/superpowers/documentation-accuracy-audit-inventory.tsv` | Existing tracked-doc inventory. Verify it already contains this plan row; do not add the coherency TSV. |
+| `docs/superpowers/documentation-accuracy-audit-ledger.tsv` | Existing tracked-doc ledger. Verify it already contains this plan row; do not add the coherency TSV. |
+| `docs/superpowers/documentation-accuracy-audit-summary.md` | Summary counts and active-planning note for this plan. Verify current metadata; do not count the coherency TSV. |
 | `apps/conary/src/cli/mod.rs` | Root Clap command definition, examples, root help source. Read during Wave 1a; edit only if evidence shows a bounded root-help repair. |
 | `apps/conary/src/dispatch.rs` and `apps/conary/src/dispatch/` | Top-level dispatch routing. Read during Wave 1a; edit only if root command routing evidence shows a bounded repair. |
 | `apps/conary/build.rs` | Generated manpage source. Read during Wave 1a; edit only if manpage generation itself is broken. |
@@ -108,7 +109,7 @@ ID shape:
 {TYPE}-{SUBSYSTEM}-{NNN}
 ```
 
-Allowed ID type prefixes for Wave 1a:
+Global allowed ID type prefixes:
 
 ```text
 CLI
@@ -118,6 +119,8 @@ MCP
 AGENT
 OPS
 ```
+
+Wave 1a should use `CLI` and, if a selected CLI claim is repeated in active docs, `DOC`. `ROUTE`, `MCP`, `AGENT`, and `OPS` are accepted by the global validator for later waves only; do not use them in `wave_scope=1a-root-cli` unless root CLI help directly advertises that surface and the row is narrowly scoped to that root CLI claim.
 
 Accepted evidence pointer prefixes:
 
@@ -132,71 +135,47 @@ mcp:remi/tool-name
 
 ---
 
-### Task 0: Lock In The Plan Packet
+### Task 0: Verify The Already-Locked Plan Packet
 
 **Files:**
-- Create: `docs/superpowers/plans/2026-06-09-feature-coherency-ledger-wave1a-plan.md`
-- Modify: `docs/superpowers/documentation-accuracy-audit-inventory.tsv`
-- Modify: `docs/superpowers/documentation-accuracy-audit-ledger.tsv`
-- Modify: `docs/superpowers/documentation-accuracy-audit-summary.md`
+- Read: `docs/superpowers/plans/2026-06-09-feature-coherency-ledger-wave1a-plan.md`
+- Read: `docs/superpowers/documentation-accuracy-audit-inventory.tsv`
+- Read: `docs/superpowers/documentation-accuracy-audit-ledger.tsv`
+- Read: `docs/superpowers/documentation-accuracy-audit-summary.md`
 
-- [ ] **Step 1: Stage the new plan before regenerating inventory**
+- [ ] **Step 1: Confirm the plan packet is already tracked exactly once**
 
-`scripts/docs-audit-inventory.sh` reads `git ls-files`, so stage the new plan first.
+Do not add a second inventory or ledger row for this plan. It was locked before implementation began.
 
 Run:
 
 ```bash
-git add docs/superpowers/plans/2026-06-09-feature-coherency-ledger-wave1a-plan.md
-LC_ALL=C bash scripts/docs-audit-inventory.sh | tail -n +2 | wc -l
+git ls-files docs/superpowers/plans/2026-06-09-feature-coherency-ledger-wave1a-plan.md
+rg -n '^docs/superpowers/plans/2026-06-09-feature-coherency-ledger-wave1a-plan\.md\t' docs/superpowers/documentation-accuracy-audit-inventory.tsv
+rg -n '^docs/superpowers/plans/2026-06-09-feature-coherency-ledger-wave1a-plan\.md\t' docs/superpowers/documentation-accuracy-audit-ledger.tsv
 ```
 
 Expected:
 
 ```text
-169
+docs/superpowers/plans/2026-06-09-feature-coherency-ledger-wave1a-plan.md
 ```
 
-- [ ] **Step 2: Add the inventory row**
+The two `rg` commands should each print exactly one row for the plan. If either command prints zero rows or more than one row, fix the docs-audit metadata before continuing.
 
-Add this row to `docs/superpowers/documentation-accuracy-audit-inventory.tsv` in sorted order near the other active plans:
+- [ ] **Step 2: Refresh execution facts**
 
-```tsv
-docs/superpowers/plans/2026-06-09-feature-coherency-ledger-wave1a-plan.md	planning	maintainer
+Run:
+
+```bash
+date +%F
+git rev-parse HEAD origin/main
+git status --short --branch
 ```
 
-- [ ] **Step 3: Add the docs-audit ledger row**
+Use the date from this step for every `last_verified` value written during execution. Do not copy a hard-coded date from this plan.
 
-Add this row to `docs/superpowers/documentation-accuracy-audit-ledger.tsv` near the active planning rows:
-
-```tsv
-docs/superpowers/plans/2026-06-09-feature-coherency-ledger-wave1a-plan.md	docs/superpowers/plans/2026-06-09-feature-coherency-ledger-wave1a-plan.md	planning	maintainer	feature-coherency; wave1a; cli-root-help; implementation-plan	docs/superpowers/specs/2026-06-09-feature-coherency-ledger-design.md; docs/modules/feature-ownership.md; docs/llms/subsystem-map.md; apps/conary/src/cli/mod.rs; apps/conary/src/dispatch.rs; apps/conary/src/dispatch/; apps/conary/build.rs; scripts/check-doc-audit-ledger.sh; scripts/docs-audit-inventory.sh; scripts/check-doc-truth.sh	verified	corrected	Added the Wave 1a implementation plan for creating the feature coherency ledger, adding a ledger validator, auditing root CLI help/examples/dispatch/generated-manpage behavior, and closing selected-scope findings through repair, merge, removal, verified no-change, or honest deferral.
-```
-
-- [ ] **Step 4: Update the docs-audit summary counts and note**
-
-In `docs/superpowers/documentation-accuracy-audit-summary.md`, update the final counts to:
-
-```markdown
-- Total tracked doc-like files audited: 169
-- `verified-no-change`: 12
-- `corrected`: 70
-- `archived`: 73
-- `retained-historical`: 14
-- Remaining pending rows: 0
-```
-
-Add this paragraph near the active maintainability planning paragraphs:
-
-```markdown
-The feature coherency Wave 1a implementation plan starts the reviewed
-coherency ledger program with root CLI help, examples, top-level dispatch, and
-generated manpage behavior only. It keeps the existing documentation accuracy
-audit as the tracked Markdown gate while adding a separate implementation-to-
-claim ledger and validator.
-```
-
-- [ ] **Step 5: Verify the plan packet docs-audit metadata**
+- [ ] **Step 3: Verify the plan packet docs-audit metadata**
 
 Run:
 
@@ -214,25 +193,9 @@ Documentation audit ledger check passed (--require-complete).
 
 The inventory diff and `git diff --check` commands should produce no output.
 
-- [ ] **Step 6: Commit the plan packet**
-
-Run:
-
-```bash
-git status --short
-git add docs/superpowers/plans/2026-06-09-feature-coherency-ledger-wave1a-plan.md docs/superpowers/documentation-accuracy-audit-inventory.tsv docs/superpowers/documentation-accuracy-audit-ledger.tsv docs/superpowers/documentation-accuracy-audit-summary.md
-git commit -m "docs: plan feature coherency wave 1a"
-```
-
-Expected:
-
-```text
-[main <sha>] docs: plan feature coherency wave 1a
-```
-
 ---
 
-### Task 1: Add Coherency Ledger Validator Tests
+### Task 1: Add Coherency Ledger Validator Tests Locally
 
 **Files:**
 - Create: `scripts/test-coherency-ledger.sh`
@@ -283,12 +246,27 @@ if "$validator" "$bad_status" >"$tmpdir/out" 2>&1; then
 fi
 grep -q "invalid status" "$tmpdir/out" || fail "invalid status error was not clear"
 
-bad_pointer="$tmpdir/bad-pointer.tsv"
-write_ledger "$bad_pointer" "${good_row/path:apps\/conary\/src\/cli\/mod.rs/path:no-such-file.rs}"
-if "$validator" "$bad_pointer" >"$tmpdir/out" 2>&1; then
+bad_evidence_pointer="$tmpdir/bad-evidence-pointer.tsv"
+write_ledger "$bad_evidence_pointer" "${good_row/path:apps\/conary\/src\/cli\/mod.rs/path:no-such-file.rs}"
+if "$validator" "$bad_evidence_pointer" >"$tmpdir/out" 2>&1; then
     fail "missing path pointer unexpectedly passed"
 fi
 grep -q "referenced path does not exist" "$tmpdir/out" || fail "missing path error was not clear"
+
+bad_source="$tmpdir/bad-source.tsv"
+write_ledger "$bad_source" "${good_row/cmd:cargo run -p conary -- --help/not-a-typed-source}"
+if "$validator" "$bad_source" >"$tmpdir/out" 2>&1; then
+    fail "bad source pointer unexpectedly passed"
+fi
+grep -q "invalid typed source pointer" "$tmpdir/out" || fail "bad source error was not clear"
+
+bad_repro="$tmpdir/bad-repro.tsv"
+bad_repro_row=$'CLI-ROOT-002\tconary root help\tcmd:cargo run -p conary -- --help\t\t1a-root-cli\tCLI Dispatch And Command Routing\tRoot help lists top-level commands and daily examples\tRoot help renders and examples are visible\tworks\tverified-no-change\t2026-06-09\tpath:apps/conary/src/cli/mod.rs;cmd:cargo run -p conary -- --help\tbad-repro\tcmd:cargo run -p conary -- --help\tverify\tWave 1a root help evidence captured\tBad repro should fail'
+write_ledger "$bad_repro" "$bad_repro_row"
+if "$validator" "$bad_repro" >"$tmpdir/out" 2>&1; then
+    fail "bad repro pointer unexpectedly passed"
+fi
+grep -q "invalid typed repro pointer" "$tmpdir/out" || fail "bad repro error was not clear"
 
 missing_gap="$tmpdir/missing-gap.tsv"
 misleading_row=$'CLI-ROOT-002\tconary root help example\tcmd:cargo run -p conary -- --help\t\t1a-root-cli\tCLI Dispatch And Command Routing\tRoot help example should be runnable\t\tmisleading\topen\t2026-06-09\tcmd:cargo run -p conary -- --help\tcmd:cargo run -p conary -- --help\tcmd:cargo run -p conary -- --help\tfix\tFix or remove misleading example\tMissing gap should fail'
@@ -307,6 +285,31 @@ if "$validator" "$scope_open" --scope-complete 1a-root-cli >"$tmpdir/out" 2>&1; 
 fi
 grep -q "scope completion blocked" "$tmpdir/out" || fail "scope completion error was not clear"
 
+scope_open_works="$tmpdir/scope-open-works.tsv"
+open_works=$'CLI-ROOT-003\tconary root help example\tcmd:cargo run -p conary -- --help\t\t1a-root-cli\tCLI Dispatch And Command Routing\tRoot help example should be runnable\tRoot example route proof is still being captured\tworks\topen\t2026-06-09\tcmd:cargo run -p conary -- --help\tcmd:cargo run -p conary -- --help\tcmd:cargo run -p conary -- --help\tverify\tFinish root example proof\tOpen works row should block scope completion'
+write_ledger "$scope_open_works" "$open_works"
+"$validator" "$scope_open_works" >/dev/null
+if "$validator" "$scope_open_works" --scope-complete 1a-root-cli >"$tmpdir/out" 2>&1; then
+    fail "scope completion unexpectedly allowed open works row"
+fi
+grep -q "scope completion blocked" "$tmpdir/out" || fail "open works scope error was not clear"
+
+scope_open_thin="$tmpdir/scope-open-thin.tsv"
+open_thin=$'CLI-ROOT-004\tconary root help example\tcmd:cargo run -p conary -- --help\t\t1a-root-cli\tCLI Dispatch And Command Routing\tRoot help example should be runnable\tRoute proof is thin and still open\tworks-but-thin\topen\t2026-06-09\tcmd:cargo run -p conary -- --help\tcmd:cargo run -p conary -- --help\tcmd:cargo run -p conary -- --help\tharden\tFinish root example proof\tOpen works-but-thin row should block scope completion'
+write_ledger "$scope_open_thin" "$open_thin"
+"$validator" "$scope_open_thin" >/dev/null
+if "$validator" "$scope_open_thin" --scope-complete 1a-root-cli >"$tmpdir/out" 2>&1; then
+    fail "scope completion unexpectedly allowed open works-but-thin row"
+fi
+grep -q "scope completion blocked" "$tmpdir/out" || fail "open works-but-thin scope error was not clear"
+
+empty_scope="$tmpdir/empty-scope.tsv"
+write_ledger "$empty_scope" "$good_row"
+if "$validator" "$empty_scope" --scope-complete other-scope >"$tmpdir/out" 2>&1; then
+    fail "scope completion unexpectedly allowed an empty scope"
+fi
+grep -q "scope completion found no rows" "$tmpdir/out" || fail "empty scope error was not clear"
+
 bad_matrix="$tmpdir/bad-matrix.tsv"
 matrix_row=$'CLI-ROOT-004\tconary root help duplicate\tcmd:cargo run -p conary -- --help\t\t1a-root-cli\tCLI Dispatch And Command Routing\tDuplicate root path should be merged\tTwo root surfaces overlap\tduplicate-stale\tverified-no-change\t2026-06-09\tcmd:cargo run -p conary -- --help\tnone\tcmd:cargo run -p conary -- --help\tmerge\tMerge duplicate root surface\tBad matrix should fail'
 write_ledger "$bad_matrix" "$matrix_row"
@@ -314,6 +317,14 @@ if "$validator" "$bad_matrix" >"$tmpdir/out" 2>&1; then
     fail "invalid status/disposition matrix unexpectedly passed"
 fi
 grep -q "invalid disposition" "$tmpdir/out" || fail "bad matrix error was not clear"
+
+dangling_related="$tmpdir/dangling-related.tsv"
+dangling_row=$'CLI-ROOT-005\tconary root help duplicate\tcmd:cargo run -p conary -- --help\tCLI-ROOT-999\t1a-root-cli\tCLI Dispatch And Command Routing\tDuplicate root path should be merged\tTwo root surfaces overlap\tduplicate-stale\tresolved-merged\t2026-06-09\tcmd:cargo run -p conary -- --help\tcmd:cargo run -p conary -- --help\tcmd:cargo run -p conary -- --help\tmerge\tMerge duplicate root surface\tDangling related ID should fail'
+write_ledger "$dangling_related" "$dangling_row"
+if "$validator" "$dangling_related" >"$tmpdir/out" 2>&1; then
+    fail "dangling related_id unexpectedly passed"
+fi
+grep -q "dangling related_id" "$tmpdir/out" || fail "dangling related_id error was not clear"
 
 echo "Coherency ledger validator tests passed."
 ```
@@ -326,7 +337,7 @@ Run:
 chmod +x scripts/test-coherency-ledger.sh
 ```
 
-- [ ] **Step 3: Run the test to verify it fails before implementation**
+- [ ] **Step 3: Run the test to verify it fails before implementation, but do not commit yet**
 
 Run:
 
@@ -340,20 +351,7 @@ Expected:
 scripts/test-coherency-ledger.sh: line ...: scripts/check-coherency-ledger.sh: No such file or directory
 ```
 
-- [ ] **Step 4: Commit the failing test**
-
-Run:
-
-```bash
-git add scripts/test-coherency-ledger.sh
-git commit -m "test: add coherency ledger validator coverage"
-```
-
-Expected:
-
-```text
-[main <sha>] test: add coherency ledger validator coverage
-```
+Keep this red check local. Commit `scripts/test-coherency-ledger.sh` only after Task 2 creates the validator and the test script passes.
 
 ---
 
@@ -484,9 +482,10 @@ path_from_pointer() {
 validate_pointer() {
     local pointer="$1"
     local line_no="$2"
+    local field_name="${3:-evidence}"
     local ptr_path
 
-    [[ -n "$pointer" ]] || fail "empty evidence pointer at $ledger_path:$line_no"
+    [[ -n "$pointer" ]] || fail "empty $field_name pointer at $ledger_path:$line_no"
 
     case "$pointer" in
         path:*|doc:*)
@@ -494,23 +493,50 @@ validate_pointer() {
             [[ -e "$ptr_path" ]] || fail "referenced path does not exist at $ledger_path:$line_no: $pointer"
             ;;
         cmd:*)
-            [[ "${pointer#cmd:}" == *[![:space:]]* ]] || fail "empty command pointer at $ledger_path:$line_no"
+            [[ "${pointer#cmd:}" == *[![:space:]]* ]] || fail "empty $field_name command pointer at $ledger_path:$line_no"
             ;;
         test:*)
-            [[ "${pointer#test:}" == *[![:space:]]* ]] || fail "empty test pointer at $ledger_path:$line_no"
+            [[ "${pointer#test:}" == *[![:space:]]* ]] || fail "empty $field_name test pointer at $ledger_path:$line_no"
             ;;
         route:*)
             [[ "$pointer" =~ ^route:(GET|POST|PUT|PATCH|DELETE)[[:space:]]/ ]] \
-                || fail "invalid route pointer at $ledger_path:$line_no: $pointer"
+                || fail "invalid typed $field_name pointer at $ledger_path:$line_no: $pointer"
             ;;
         mcp:*)
             [[ "$pointer" =~ ^mcp:[^/[:space:]]+/[^/[:space:]]+$ ]] \
-                || fail "invalid MCP pointer at $ledger_path:$line_no: $pointer"
+                || fail "invalid typed $field_name pointer at $ledger_path:$line_no: $pointer"
             ;;
         *)
-            fail "invalid typed source pointer at $ledger_path:$line_no: $pointer"
+            fail "invalid typed $field_name pointer at $ledger_path:$line_no: $pointer"
             ;;
     esac
+}
+
+validate_pointer_list() {
+    local value="$1"
+    local line_no="$2"
+    local field_name="$3"
+
+    IFS=';' read -ra pointers <<< "$value"
+    for pointer in "${pointers[@]}"; do
+        validate_pointer "$pointer" "$line_no" "$field_name"
+    done
+}
+
+validate_optional_pointer_list() {
+    local value="$1"
+    local line_no="$2"
+    local field_name="$3"
+
+    [[ "$value" == "none" ]] && return 0
+    validate_pointer_list "$value" "$line_no" "$field_name"
+}
+
+validate_related_id_shape() {
+    local related_id="$1"
+    local line_no="$2"
+    [[ "$related_id" =~ ^(CLI|DOC|ROUTE|MCP|AGENT|OPS)-[A-Z0-9][A-Z0-9-]*-[0-9]{3}$ ]] \
+        || fail "invalid related_id at $ledger_path:$line_no: $related_id"
 }
 
 validate_date() {
@@ -547,8 +573,10 @@ maybe_warn_stale() {
 }
 
 declare -A seen_ids=()
+declare -a related_refs=()
 line_no=0
 header_seen=0
+scope_row_count=0
 
 while IFS= read -r line; do
     line_no=$((line_no + 1))
@@ -567,6 +595,14 @@ while IFS= read -r line; do
         || fail "invalid id at $ledger_path:$line_no: $id"
     [[ -z "${seen_ids["$id"]:-}" ]] || fail "duplicate id at $ledger_path:$line_no: $id"
     seen_ids["$id"]=1
+
+    if [[ -n "$related_ids" ]]; then
+        IFS=';' read -ra related_id_values <<< "$related_ids"
+        for related_id in "${related_id_values[@]}"; do
+            validate_related_id_shape "$related_id" "$line_no"
+            related_refs+=("$id|$related_id|$line_no")
+        done
+    fi
 
     [[ -n "$surface" ]] || fail "empty surface at $ledger_path:$line_no"
     [[ -n "$source" ]] || fail "empty source at $ledger_path:$line_no"
@@ -587,6 +623,10 @@ while IFS= read -r line; do
     is_allowed_decision "$decision" || fail "invalid decision at $ledger_path:$line_no: $decision"
     matrix_allows "$status" "$disposition" || fail "invalid disposition for status at $ledger_path:$line_no: $status/$disposition"
     validate_date "$last_verified" "$line_no"
+    validate_pointer_list "$source" "$line_no" "source"
+    validate_pointer_list "$evidence_sources" "$line_no" "evidence"
+    validate_optional_pointer_list "$repro" "$line_no" "repro"
+    validate_pointer_list "$verification" "$line_no" "verification"
 
     case "$status" in
         fix-now|misleading|duplicate-stale|works-but-thin)
@@ -599,23 +639,27 @@ while IFS= read -r line; do
             || fail "open row lacks required active-wave fields at $ledger_path:$line_no"
     fi
 
-    IFS=';' read -ra pointers <<< "$evidence_sources"
-    for pointer in "${pointers[@]}"; do
-        validate_pointer "$pointer" "$line_no"
-    done
-
-    if [[ -n "$scope_complete" && "$wave_scope" == "$scope_complete" && "$disposition" == "open" ]]; then
-        case "$status" in
-            fix-now|misleading|duplicate-stale)
-                fail "scope completion blocked by open $status row at $ledger_path:$line_no: $id"
-                ;;
-        esac
+    if [[ -n "$scope_complete" && "$wave_scope" == "$scope_complete" ]]; then
+        scope_row_count=$((scope_row_count + 1))
+        if [[ "$disposition" == "open" ]]; then
+            fail "scope completion blocked by open $status row at $ledger_path:$line_no: $id"
+        fi
     fi
 
     maybe_warn_stale "$status" "$last_verified" "$id"
 done < "$ledger_path"
 
 [[ "$header_seen" -eq 1 ]] || fail "ledger header missing from $ledger_path"
+
+for ref in "${related_refs[@]}"; do
+    IFS='|' read -r referrer related_id ref_line <<< "$ref"
+    [[ -n "${seen_ids["$related_id"]:-}" ]] \
+        || fail "dangling related_id at $ledger_path:$ref_line: $referrer references $related_id"
+done
+
+if [[ -n "$scope_complete" && "$scope_row_count" -eq 0 ]]; then
+    fail "scope completion found no rows for scope: $scope_complete"
+fi
 
 echo "Coherency ledger check passed."
 ```
@@ -663,9 +707,7 @@ Expected:
 
 **Files:**
 - Create: `docs/superpowers/feature-coherency-ledger.tsv`
-- Modify: `docs/superpowers/documentation-accuracy-audit-inventory.tsv`
-- Modify: `docs/superpowers/documentation-accuracy-audit-ledger.tsv`
-- Modify: `docs/superpowers/documentation-accuracy-audit-summary.md`
+- Modify: `.github/workflows/pr-gate.yml`
 
 - [ ] **Step 1: Create the empty ledger with the exact header**
 
@@ -689,51 +731,47 @@ Expected:
 Coherency ledger check passed.
 ```
 
-- [ ] **Step 3: Stage the ledger before regenerating docs-audit inventory**
+- [ ] **Step 3: Confirm the ledger is not part of docs-audit**
+
+`scripts/docs-audit-inventory.sh` only tracks Markdown/RST/ADOC/MDX and `*.toml.example` documentation-like files. Do not add `docs/superpowers/feature-coherency-ledger.tsv` to `docs/superpowers/documentation-accuracy-audit-inventory.tsv`, `docs/superpowers/documentation-accuracy-audit-ledger.tsv`, or `docs/superpowers/documentation-accuracy-audit-summary.md`.
 
 Run:
 
 ```bash
 git add docs/superpowers/feature-coherency-ledger.tsv
-LC_ALL=C bash scripts/docs-audit-inventory.sh | tail -n +2 | wc -l
+if bash scripts/docs-audit-inventory.sh | cut -f1 | rg -x 'docs/superpowers/feature-coherency-ledger.tsv'; then
+  echo "ERROR: docs-audit unexpectedly tracks feature-coherency-ledger.tsv" >&2
+  exit 1
+fi
+bash scripts/docs-audit-inventory.sh | diff -u docs/superpowers/documentation-accuracy-audit-inventory.tsv -
 ```
 
-Expected after Task 0 already added this plan:
+Expected:
 
 ```text
-170
 ```
 
-- [ ] **Step 4: Add the docs-audit metadata for the ledger**
+No output.
 
-Add this row to `docs/superpowers/documentation-accuracy-audit-inventory.tsv` in sorted order:
+- [ ] **Step 4: Add the coherency ledger validator to the PR gate**
 
-```tsv
-docs/superpowers/feature-coherency-ledger.tsv	planning	maintainer
+In `.github/workflows/pr-gate.yml`, add this step to the `docs-truth` job after `Check docs truth invariants`:
+
+```yaml
+      - name: Check feature coherency ledger
+        run: bash scripts/check-coherency-ledger.sh docs/superpowers/feature-coherency-ledger.tsv
 ```
 
-Add this row to `docs/superpowers/documentation-accuracy-audit-ledger.tsv` near the other `docs/superpowers/*.tsv` rows:
+Do not run `--scope-complete` in CI until Wave 1a rows have been recorded and closed in Task 5.
 
-```tsv
-docs/superpowers/feature-coherency-ledger.tsv	docs/superpowers/feature-coherency-ledger.tsv	planning	maintainer	feature-coherency; ledger; implementation-to-claim-truth	docs/superpowers/specs/2026-06-09-feature-coherency-ledger-design.md; docs/superpowers/plans/2026-06-09-feature-coherency-ledger-wave1a-plan.md; scripts/check-coherency-ledger.sh	verified	corrected	Added the feature coherency ledger as the implementation-to-claim repair queue that supplements the existing documentation accuracy audit ledger.
-```
-
-Update final counts in `docs/superpowers/documentation-accuracy-audit-summary.md`:
-
-```markdown
-- Total tracked doc-like files audited: 170
-- `verified-no-change`: 12
-- `corrected`: 71
-- `archived`: 73
-- `retained-historical`: 14
-- Remaining pending rows: 0
-```
-
-- [ ] **Step 5: Verify docs-audit and coherency metadata**
+- [ ] **Step 5: Verify docs-audit remains unchanged and coherency CI input works**
 
 Run:
 
 ```bash
+bash -n scripts/check-coherency-ledger.sh
+bash -n scripts/test-coherency-ledger.sh
+scripts/test-coherency-ledger.sh
 scripts/check-coherency-ledger.sh docs/superpowers/feature-coherency-ledger.tsv
 bash scripts/check-doc-audit-ledger.sh docs/superpowers/documentation-accuracy-audit-ledger.tsv --require-complete
 bash scripts/docs-audit-inventory.sh | diff -u docs/superpowers/documentation-accuracy-audit-inventory.tsv -
@@ -743,6 +781,7 @@ git diff --check
 Expected:
 
 ```text
+Coherency ledger validator tests passed.
 Coherency ledger check passed.
 Documentation audit ledger check passed (--require-complete).
 ```
@@ -754,7 +793,7 @@ The inventory diff and `git diff --check` commands should produce no output.
 Run:
 
 ```bash
-git add docs/superpowers/feature-coherency-ledger.tsv docs/superpowers/documentation-accuracy-audit-inventory.tsv docs/superpowers/documentation-accuracy-audit-ledger.tsv docs/superpowers/documentation-accuracy-audit-summary.md
+git add docs/superpowers/feature-coherency-ledger.tsv .github/workflows/pr-gate.yml
 git commit -m "docs: add feature coherency ledger"
 ```
 
@@ -825,8 +864,10 @@ Run:
 cargo run -p conary -- install --help > "$scratch/install-help.txt"
 cargo run -p conary -- update --help > "$scratch/update-help.txt"
 cargo run -p conary -- system --help > "$scratch/system-help.txt"
+cargo run -p conary -- system adopt --help > "$scratch/system-adopt-help.txt"
 cargo run -p conary -- system generation export --help > "$scratch/system-generation-export-help.txt"
 cargo run -p conary -- system completions --help > "$scratch/system-completions-help.txt"
+cargo run -p conaryd -- --help > "$scratch/conaryd-help.txt"
 ```
 
 Expected:
@@ -843,8 +884,11 @@ Run:
 ```bash
 cargo check -p conary
 cargo test -p conary --lib cli::tests
+cargo test -p conary --test cli_daily_ux
 cargo test -p conary --test live_host_mutation_safety
+cargo test -p conaryd
 cargo run -p conary -- system completions bash >/tmp/conary-completion.bash
+bash scripts/check-doc-truth.sh
 ```
 
 Expected:
@@ -863,7 +907,14 @@ Run:
 cargo build -p conary
 test -f apps/conary/man/conary.1
 cp apps/conary/man/conary.1 "$scratch/conary.1"
-rg -n "Daily workflow examples|conary install nginx --dry-run|conary system completions bash" "$scratch/conary.1"
+for pattern in \
+  "Daily workflow examples" \
+  "conary install nginx" \
+  "dry-run" \
+  "conary system completions bash"
+do
+  rg -n -- "$pattern" "$scratch/conary.1"
+done
 ```
 
 Expected:
@@ -871,7 +922,7 @@ Expected:
 ```text
 ```
 
-The `rg` command should print matching manpage lines. Do not stage `apps/conary/man/conary.1`; it is ignored generated output.
+Each required pattern must print at least one matching manpage line. If roff escaping prevents a literal dashed-option match, check stable surrounding text that proves the same example is present and record that exact inspection in the ledger row. Do not stage `apps/conary/man/conary.1`; it is ignored generated output.
 
 - [ ] **Step 6: Sweep the selected Wave 1a scope**
 
@@ -887,8 +938,10 @@ rg -n --glob '!target/**' --glob '!docs/superpowers/plans/archive/**' --glob '!d
   "$scratch/install-help.txt" \
   "$scratch/update-help.txt" \
   "$scratch/system-help.txt" \
+  "$scratch/system-adopt-help.txt" \
   "$scratch/system-generation-export-help.txt" \
   "$scratch/system-completions-help.txt" \
+  "$scratch/conaryd-help.txt" \
   "$scratch/conary.1" \
   README.md \
   docs/conaryopedia-v2.md \
@@ -989,13 +1042,16 @@ Do not commit the scratch directory or ignored manpage output.
 
 - [ ] **Step 1: Add baseline Wave 1a rows**
 
-Append rows to `docs/superpowers/feature-coherency-ledger.tsv` using the classification note. If the evidence shows no gap, use these rows:
+Append rows to `docs/superpowers/feature-coherency-ledger.tsv` using the classification note. If the evidence shows no gap, run:
 
-```tsv
-CLI-ROOT-001	conary root help	cmd:cargo run -p conary -- --help		1a-root-cli	CLI Dispatch And Command Routing	Root help renders top-level command list and daily workflow examples	Root help renders successfully and includes Usage, Commands, Options, and Daily workflow examples	works	verified-no-change	2026-06-09	path:apps/conary/src/cli/mod.rs;cmd:cargo run -p conary -- --help	none	cmd:cargo run -p conary -- --help	verify	Re-run root help during CLI help changes	Root help evidence captured in Wave 1a scratch output
-CLI-ROOT-002	root daily examples	cmd:cargo run -p conary -- --help		1a-root-cli	CLI Dispatch And Command Routing	Daily examples point at routed CLI commands and dry-run-first workflows	Root examples reference install dry-run, install yes, update dry-run, system adopt refresh, system completions, generation export, and conaryd apply-intent boundary	works	verified-no-change	2026-06-09	path:apps/conary/src/cli/mod.rs;cmd:cargo run -p conary -- --help;test:cargo test -p conary --test cli_daily_ux	none	cargo test -p conary --test cli_daily_ux	verify	Re-run root example route proof during CLI help changes	Example route proof captured and closed in Wave 1a
-CLI-ROOT-003	generated root manpage	cmd:cargo build -p conary		1a-root-cli	CLI Dispatch And Command Routing	Generated manpage mirrors root Clap help closely enough for root examples	Generated ignored local manpage exists after cargo build and includes root example strings	works	verified-no-change	2026-06-09	path:apps/conary/build.rs;cmd:cargo build -p conary	none	cmd:cargo build -p conary;rg -n "Daily workflow examples|conary install nginx --dry-run" apps/conary/man/conary.1	verify	Re-run build and sweep generated manpage during root help changes	Generated manpage remains ignored and should not be committed
-CLI-ROOT-004	top-level dispatch coverage	test:cargo test -p conary --lib cli::tests		1a-root-cli	CLI Dispatch And Command Routing	Top-level parsed commands remain covered by CLI and live-mutation routing tests	CLI tests and live-host mutation safety tests pass for the selected root scope	works	verified-no-change	2026-06-09	path:apps/conary/src/dispatch.rs;path:apps/conary/src/dispatch/root.rs;test:cargo test -p conary --lib cli::tests;test:cargo test -p conary --test live_host_mutation_safety	none	cargo check -p conary;cargo test -p conary --lib cli::tests;cargo test -p conary --test live_host_mutation_safety	verify	Re-run focused CLI routing proof before changing root dispatch	Root dispatch evidence captured through focused CLI tests
+```bash
+verified_date="$(date +%F)"
+cat >> docs/superpowers/feature-coherency-ledger.tsv <<EOF
+CLI-ROOT-001	conary root help	cmd:cargo run -p conary -- --help		1a-root-cli	CLI Dispatch And Command Routing	Root help renders top-level command list and daily workflow examples	Root help renders successfully and includes Usage, Commands, Options, and Daily workflow examples	works	verified-no-change	${verified_date}	path:apps/conary/src/cli/mod.rs;cmd:cargo run -p conary -- --help	none	cmd:cargo run -p conary -- --help	verify	Re-run root help during CLI help changes	Root help evidence captured in Wave 1a scratch output
+CLI-ROOT-002	root daily examples	cmd:cargo run -p conary -- --help		1a-root-cli	CLI Dispatch And Command Routing	Daily examples point at routed CLI commands, dry-run-first workflows, and the conaryd durable package-job boundary	Root examples route through install, update, system adopt refresh, system completions, generation export, and conaryd package-job proof	works	verified-no-change	${verified_date}	path:apps/conary/src/cli/mod.rs;cmd:cargo run -p conary -- --help;cmd:cargo run -p conary -- system adopt --help;test:cargo test -p conary --test cli_daily_ux;cmd:cargo run -p conaryd -- --help;test:cargo test -p conaryd;cmd:bash scripts/check-doc-truth.sh	none	test:cargo test -p conary --test cli_daily_ux;test:cargo test -p conaryd;cmd:bash scripts/check-doc-truth.sh	verify	Re-run root example route and conaryd-boundary proof during CLI help changes	Example route and conaryd-boundary proof captured and closed in Wave 1a
+CLI-ROOT-003	generated root manpage	cmd:cargo build -p conary		1a-root-cli	CLI Dispatch And Command Routing	Generated manpage mirrors root Clap help closely enough for root examples	Generated ignored local manpage exists after cargo build and includes each required root example string	works	verified-no-change	${verified_date}	path:apps/conary/build.rs;cmd:cargo build -p conary	none	cmd:cargo build -p conary;cmd:rg -n -- "Daily workflow examples" apps/conary/man/conary.1;cmd:rg -n -- "conary install nginx" apps/conary/man/conary.1;cmd:rg -n -- "dry-run" apps/conary/man/conary.1;cmd:rg -n -- "conary system completions bash" apps/conary/man/conary.1	verify	Re-run build and per-string generated manpage checks during root help changes	Generated manpage remains ignored and should not be committed
+CLI-ROOT-004	top-level dispatch coverage	test:cargo test -p conary --lib cli::tests		1a-root-cli	CLI Dispatch And Command Routing	Top-level parsed commands remain covered by CLI, daily UX, and live-mutation routing tests	CLI tests, daily UX tests, and live-host mutation safety tests pass for the selected root scope	works	verified-no-change	${verified_date}	path:apps/conary/src/dispatch.rs;path:apps/conary/src/dispatch/root.rs;test:cargo test -p conary --lib cli::tests;test:cargo test -p conary --test cli_daily_ux;test:cargo test -p conary --test live_host_mutation_safety	none	cmd:cargo check -p conary;test:cargo test -p conary --lib cli::tests;test:cargo test -p conary --test cli_daily_ux;test:cargo test -p conary --test live_host_mutation_safety	verify	Re-run focused CLI routing proof before changing root dispatch	Root dispatch evidence captured through focused CLI tests
+EOF
 ```
 
 If evidence shows a gap, change only the affected row:
@@ -1007,6 +1063,7 @@ If evidence shows a gap, change only the affected row:
 - `repro` must include the exact command or pointer that demonstrates the gap.
 - `next_slice` must name the exact repair or honest-deferral action.
 - Any temporary `disposition=open` row in `wave_scope=1a-root-cli` must be converted to a resolved, verified, merged, removed, or `deferred-owned` row before Wave 1a is called complete.
+- If the root help keeps a conaryd durable-package-job claim, `CLI-ROOT-002` cannot close as `works` until the conaryd proof above passes. If that proof is intentionally deferred, reword root help to be honest or reclassify the row as `honest-deferred` with `disposition=deferred-owned`.
 
 - [ ] **Step 2: Validate before scope completion**
 
@@ -1022,9 +1079,9 @@ Expected:
 Coherency ledger check passed.
 ```
 
-- [ ] **Step 3: Repair selected-scope blockers before completion**
+- [ ] **Step 3: Close every selected-scope open row before completion**
 
-If Task 5 Step 1 added any `1a-root-cli` row with `status=fix-now`, `status=misleading`, or `status=duplicate-stale` and `disposition=open`, do the smallest repair inside the selected scope:
+If Task 5 Step 1 added any `1a-root-cli` row with `disposition=open`, close it before scope completion. For `status=fix-now`, `status=misleading`, or `status=duplicate-stale`, do the smallest repair inside the selected scope:
 
 - For root help wording, edit `apps/conary/src/cli/mod.rs`.
 - For dispatch mismatch, edit `apps/conary/src/dispatch.rs` or the specific child module under `apps/conary/src/dispatch/`.
@@ -1068,12 +1125,15 @@ Run:
 ```bash
 cargo check -p conary
 cargo test -p conary --lib cli::tests
+cargo test -p conary --test cli_daily_ux
 cargo test -p conary --test live_host_mutation_safety
+cargo test -p conaryd
 cargo run -p conary -- system completions bash >/tmp/conary-completion.bash
 cargo build -p conary
 scripts/check-coherency-ledger.sh docs/superpowers/feature-coherency-ledger.tsv --scope-complete 1a-root-cli
 bash scripts/check-doc-audit-ledger.sh docs/superpowers/documentation-accuracy-audit-ledger.tsv --require-complete
 bash scripts/docs-audit-inventory.sh | diff -u docs/superpowers/documentation-accuracy-audit-inventory.tsv -
+bash scripts/check-doc-truth.sh
 git diff --check
 ```
 
@@ -1123,7 +1183,9 @@ scripts/test-coherency-ledger.sh
 scripts/check-coherency-ledger.sh docs/superpowers/feature-coherency-ledger.tsv --scope-complete 1a-root-cli
 cargo check -p conary
 cargo test -p conary --lib cli::tests
+cargo test -p conary --test cli_daily_ux
 cargo test -p conary --test live_host_mutation_safety
+cargo test -p conaryd
 cargo run -p conary -- system completions bash >/tmp/conary-completion.bash
 bash scripts/check-doc-audit-ledger.sh docs/superpowers/documentation-accuracy-audit-ledger.tsv --require-complete
 bash scripts/docs-audit-inventory.sh | diff -u docs/superpowers/documentation-accuracy-audit-inventory.tsv -
@@ -1202,8 +1264,12 @@ Both `git rev-parse` lines should be identical.
 ## Self-Review Checklist
 
 - [ ] The feature coherency ledger exists and has the exact header.
-- [ ] The ledger validator rejects bad status, bad source pointer, bad closure matrix, and open selected-scope blockers.
+- [ ] The coherency TSV is not registered in the docs-audit inventory, ledger, or summary counts.
+- [ ] The ledger validator is wired into `.github/workflows/pr-gate.yml`.
+- [ ] The ledger validator rejects bad status, bad source/repro/evidence pointers, bad closure matrix, dangling related IDs, empty completed scopes, and open selected-scope rows.
 - [ ] Wave 1a has no open row in `wave_scope=1a-root-cli`.
+- [ ] Root example proof includes `system adopt`, `cli_daily_ux`, and either conaryd proof or an honest conaryd deferral/wording repair.
+- [ ] Generated manpage output was checked with per-string assertions, not one broad alternation.
 - [ ] Generated manpage output was inspected but not committed.
 - [ ] Docs-audit ledger and inventory are in sync.
 - [ ] `docs/modules/feature-ownership.md` and `docs/llms/subsystem-map.md` are updated if root routing or "look here first" paths changed.
