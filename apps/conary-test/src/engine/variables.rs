@@ -139,6 +139,10 @@ pub fn expand_assertion(assertion: &Assertion, vars: &HashMap<String, String>) -
             .stderr_contains
             .as_ref()
             .map(|value| expand_variables(value, vars)),
+        stderr_not_contains: assertion
+            .stderr_not_contains
+            .as_ref()
+            .map(|value| expand_variables(value, vars)),
         file_exists: assertion
             .file_exists
             .as_ref()
@@ -371,6 +375,7 @@ mod tests {
         let assertion = Assertion {
             stdout_contains_all: Some(vec!["${PKG}".to_string(), "Version".to_string()]),
             stderr_contains: Some("${PKG}".to_string()),
+            stderr_not_contains: Some("${PKG}-panic".to_string()),
             file_checksum: Some(FileChecksum {
                 path: "/tmp/${PKG}".to_string(),
                 sha256: "${HELLO_SHA}".to_string(),
@@ -389,6 +394,10 @@ mod tests {
         assert_eq!(
             expanded.stderr_contains.as_deref(),
             Some("conary-test-fixture")
+        );
+        assert_eq!(
+            expanded.stderr_not_contains.as_deref(),
+            Some("conary-test-fixture-panic")
         );
         assert_eq!(
             expanded.file_checksum.as_ref().map(|chk| chk.path.as_str()),

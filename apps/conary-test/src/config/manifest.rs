@@ -6,6 +6,7 @@ use std::collections::HashMap;
 
 /// Top-level test manifest (one TOML file = one suite).
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TestManifest {
     pub suite: SuiteDef,
     pub test: Vec<TestDef>,
@@ -14,6 +15,7 @@ pub struct TestManifest {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SuiteDef {
     pub name: String,
     pub phase: u32,
@@ -28,6 +30,7 @@ pub struct SuiteDef {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TestDef {
     pub id: String,
     pub name: String,
@@ -59,6 +62,7 @@ pub struct TestDef {
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TestStep {
     /// Per-step timeout override in seconds. Falls back to the test-level
     /// timeout when absent.
@@ -145,12 +149,14 @@ impl TestStep {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FileChecksum {
     pub path: String,
     pub sha256: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct KillAfterLog {
     pub conary: String,
     pub pattern: String,
@@ -163,6 +169,7 @@ fn default_kill_timeout() -> u64 {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct QemuGuestCopy {
     pub source: String,
     pub dest: String,
@@ -196,6 +203,7 @@ impl QemuImageFormat {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct QemuBoot {
     pub image: String,
     #[serde(default)]
@@ -234,12 +242,14 @@ fn default_ssh_port() -> u16 {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct MockServerConfig {
     pub port: u16,
     pub routes: Vec<MockRoute>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct MockRoute {
     pub path: String,
     pub status: u16,
@@ -314,6 +324,7 @@ mod tests {
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Assertion {
     #[serde(default)]
     pub exit_code: Option<i32>,
@@ -340,6 +351,8 @@ pub struct Assertion {
     #[serde(default)]
     pub stderr_contains: Option<String>,
     #[serde(default)]
+    pub stderr_not_contains: Option<String>,
+    #[serde(default)]
     pub file_exists: Option<String>,
     #[serde(default)]
     pub file_not_exists: Option<String>,
@@ -348,6 +361,7 @@ pub struct Assertion {
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ResourceConstraints {
     #[serde(default)]
     pub tmpfs_size_mb: Option<u64>,
@@ -556,6 +570,59 @@ run = "echo hello"
         let err = manifest.validate().unwrap_err();
         assert!(err.to_string().contains("unknown runtime requirement"));
         assert!(err.to_string().contains("T01"));
+    }
+
+    #[test]
+    fn test_assertion_stderr_not_contains_parses() {
+        let toml = r#"
+[suite]
+name = "stderr-not-contains"
+phase = 4
+
+[[test]]
+id = "T01"
+name = "stderr_guard"
+description = "Rejects forbidden stderr text"
+timeout = 10
+
+[[test.step]]
+run = "true"
+
+[test.step.assert]
+stderr_not_contains = "panic"
+"#;
+        let manifest: TestManifest = toml::from_str(toml).unwrap();
+        assert_eq!(
+            manifest.test[0].step[0]
+                .assert
+                .as_ref()
+                .and_then(|assertion| assertion.stderr_not_contains.as_deref()),
+            Some("panic")
+        );
+    }
+
+    #[test]
+    fn test_unknown_assertion_field_is_rejected() {
+        let toml = r#"
+[suite]
+name = "unknown-assertion"
+phase = 4
+
+[[test]]
+id = "T01"
+name = "bad_assertion"
+description = "Has an unsupported assertion key"
+timeout = 10
+
+[[test.step]]
+run = "true"
+
+[test.step.assert]
+stderr_never_contains = "panic"
+"#;
+        let err = toml::from_str::<TestManifest>(toml).unwrap_err();
+        assert!(err.to_string().contains("unknown field"));
+        assert!(err.to_string().contains("stderr_never_contains"));
     }
 
     #[test]

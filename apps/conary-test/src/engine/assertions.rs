@@ -65,6 +65,11 @@ pub fn evaluate_assertion(
     {
         bail!("stderr does not contain \"{needle}\"");
     }
+    if let Some(ref needle) = assertion.stderr_not_contains
+        && stderr.contains(needle.as_str())
+    {
+        bail!("stderr unexpectedly contains \"{needle}\"");
+    }
     Ok(())
 }
 
@@ -133,5 +138,15 @@ mod tests {
         a.stdout_contains_any_if_success = Some(vec!["composefs".into(), "EROFS".into()]);
         assert!(evaluate_assertion(&a, 0, "using EROFS", "").is_ok());
         assert!(evaluate_assertion(&a, 0, "no match", "").is_err());
+    }
+
+    #[test]
+    fn test_stderr_not_contains_rejects_forbidden_text() {
+        let mut a = base_assertion();
+        a.stderr_not_contains = Some("panic".into());
+
+        assert!(evaluate_assertion(&a, 0, "", "warning only").is_ok());
+        assert!(evaluate_assertion(&a, 0, "", "thread aborted").is_ok());
+        assert!(evaluate_assertion(&a, 0, "", "panic: fixture failed").is_err());
     }
 }

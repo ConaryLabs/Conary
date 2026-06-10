@@ -1,6 +1,6 @@
 # tests/integration/remi/manifests/phase4-group-e.toml
 #
-# Phase 4, Group E: Cross-Distro Compatibility (T230-T249).
+# Phase 4, Group E: Cross-Distro Compatibility (T256-T277).
 #
 # Tests that verify Conary works correctly across distro boundaries:
 # CCS portability, canonical name mapping, dependency normalization,
@@ -65,12 +65,12 @@ local_native_target = "deb"
 local_native_glob = "*.deb"
 
 # --------------------------------------------------------------------------
-# T230: CCS fixture installs on any distro
+# T256: CCS fixture installs on any distro
 # --------------------------------------------------------------------------
 # CCS is the universal format -- a package built once should install everywhere.
 
 [[test]]
-id = "T230"
+id = "T256"
 name = "ccs_portable_install"
 description = "Install a CCS package and verify it works regardless of host distro"
 timeout = 60
@@ -95,16 +95,16 @@ stdout_contains_all = ["conary-test-fixture", "1.0.0"]
 file_exists = "/usr/share/conary-test/hello.txt"
 
 # --------------------------------------------------------------------------
-# T231: CCS upgrade portable across distros
+# T257: CCS upgrade portable across distros
 # --------------------------------------------------------------------------
 
 [[test]]
-id = "T231"
+id = "T257"
 name = "ccs_portable_upgrade"
 description = "Upgrade a CCS package from v1 to v2 on any distro"
 timeout = 60
 group = "E"
-depends_on = ["T230"]
+depends_on = ["T256"]
 
 [[test.step]]
 run = "${CONARY_BIN} ccs install --yes /opt/remi-tests/fixtures/conary-test-fixture/v2/output/conary-test-fixture-2.0.0.ccs --allow-unsigned --sandbox never --db-path ${DB_PATH}"
@@ -120,16 +120,16 @@ exit_code = 0
 stdout_contains = "2.0.0"
 
 # --------------------------------------------------------------------------
-# T232: CCS remove portable across distros
+# T258: CCS remove portable across distros
 # --------------------------------------------------------------------------
 
 [[test]]
-id = "T232"
+id = "T258"
 name = "ccs_portable_remove"
 description = "Remove a CCS package on any distro and verify clean removal"
 timeout = 60
 group = "E"
-depends_on = ["T231"]
+depends_on = ["T257"]
 
 [[test.step]]
 conary = "remove conary-test-fixture --no-scripts --yes"
@@ -147,11 +147,11 @@ stdout_not_contains = "conary-test-fixture"
 file_not_exists = "/usr/share/conary-test/hello.txt"
 
 # --------------------------------------------------------------------------
-# T232a: Build a local native fixture in the host distro format
+# T258a: Build a local native fixture in the host distro format
 # --------------------------------------------------------------------------
 
 [[test]]
-id = "T232a"
+id = "T258a"
 name = "native_local_fixture_build"
 description = "Build a local native fixture in the current distro format"
 timeout = 60
@@ -164,16 +164,16 @@ run = "rm -rf /tmp/phase4-native-output && CONARY_BIN=${CONARY_BIN} /opt/remi-te
 exit_code = 0
 
 # --------------------------------------------------------------------------
-# T232b: Install a local native package file
+# T258b: Install a local native package file
 # --------------------------------------------------------------------------
 
 [[test]]
-id = "T232b"
+id = "T258b"
 name = "native_local_file_install"
 description = "Install a local native package file generated for the current distro format"
 timeout = 120
 group = "E"
-depends_on = ["T232a"]
+depends_on = ["T258a"]
 
 [[test.step]]
 run = "PKG_FILE=$(ls /tmp/phase4-native-output/${local_native_glob} | head -1) && ${CONARY_BIN} install \"$PKG_FILE\" --db-path ${DB_PATH} --no-deps --yes --sandbox never"
@@ -201,11 +201,11 @@ exit_code = 0
 file_not_exists = "/usr/bin/phase4-runtime-fixture"
 
 # --------------------------------------------------------------------------
-# T233: Canonical name resolves to distro-native package
+# T259: Canonical name resolves to distro-native package
 # --------------------------------------------------------------------------
 
 [[test]]
-id = "T233"
+id = "T259"
 name = "canonical_registry_populated"
 description = "Sync canonical registry and verify it contains entries"
 timeout = 60
@@ -225,11 +225,11 @@ conary = "registry stats"
 exit_code = 0
 
 # --------------------------------------------------------------------------
-# T234: Canonical search returns results on all distros
+# T260: Canonical search returns results on all distros
 # --------------------------------------------------------------------------
 
 [[test]]
-id = "T234"
+id = "T260"
 name = "canonical_search_cross_distro"
 description = "Canonical search for a common tool returns results regardless of distro"
 timeout = 30
@@ -243,11 +243,11 @@ exit_code = 0
 stdout_contains = "curl"
 
 # --------------------------------------------------------------------------
-# T235: Distro repo sync works
+# T261: Distro repo sync works
 # --------------------------------------------------------------------------
 
 [[test]]
-id = "T235"
+id = "T261"
 name = "distro_repo_sync"
 description = "Sync the distro-native repository and verify metadata is fetched"
 timeout = 120
@@ -268,16 +268,16 @@ exit_code = 0
 stdout_contains = "${distro_repo}"
 
 # --------------------------------------------------------------------------
-# T236: Native package install via distro repo
+# T262: Native package install via distro repo
 # --------------------------------------------------------------------------
 
 [[test]]
-id = "T236"
+id = "T262"
 name = "native_package_install"
 description = "Install a native package from the distro repo -- resolver picks correct format"
 timeout = 120
 group = "E"
-depends_on = ["T235"]
+depends_on = ["T261"]
 
 [[test.step]]
 conary = "install tree --repo ${distro_repo} --no-deps --yes --sandbox never"
@@ -294,16 +294,16 @@ exit_code = 0
 stdout_contains = "tree"
 
 # --------------------------------------------------------------------------
-# T237: Native package has correct distro metadata
+# T263: Native package has correct distro metadata
 # --------------------------------------------------------------------------
 
 [[test]]
-id = "T237"
+id = "T263"
 name = "native_package_metadata"
 description = "Installed native package carries correct distro-specific metadata"
 timeout = 30
 group = "E"
-depends_on = ["T236"]
+depends_on = ["T262"]
 
 [[test.step]]
 conary = "list tree --info"
@@ -313,16 +313,16 @@ exit_code = 0
 stdout_contains = "tree"
 
 # --------------------------------------------------------------------------
-# T238: Dependency query shows normalized deps
+# T264: Dependency query shows normalized deps
 # --------------------------------------------------------------------------
 
 [[test]]
-id = "T238"
+id = "T264"
 name = "dependency_normalization"
 description = "Dependencies from different native formats are normalized to common types"
 timeout = 30
 group = "E"
-depends_on = ["T236"]
+depends_on = ["T262"]
 
 [[test.step]]
 conary = "query depends tree"
@@ -331,16 +331,16 @@ conary = "query depends tree"
 exit_code = 0
 
 # --------------------------------------------------------------------------
-# T239: Mixed CCS + native coexistence
+# T265: Mixed CCS + native coexistence
 # --------------------------------------------------------------------------
 
 [[test]]
-id = "T239"
+id = "T265"
 name = "mixed_ccs_native_coexistence"
 description = "CCS and native packages coexist in the same database without conflict"
 timeout = 60
 group = "E"
-depends_on = ["T236"]
+depends_on = ["T262"]
 
 # Install a CCS package alongside the native one
 [[test.step]]
@@ -373,11 +373,11 @@ stdout_contains = "tree"
 stdout_not_contains = "conary-test-fixture"
 
 # --------------------------------------------------------------------------
-# T240: Distro-specific package manager detected
+# T266: Distro-specific package manager detected
 # --------------------------------------------------------------------------
 
 [[test]]
-id = "T240"
+id = "T266"
 name = "distro_detection"
 description = "Conary correctly detects the host distro and reports it"
 timeout = 30
@@ -390,16 +390,16 @@ run = "${CONARY_BIN} distro list"
 exit_code = 0
 
 # --------------------------------------------------------------------------
-# T241: Generation build works with mixed package sources
+# T267: Generation build works with mixed package sources
 # --------------------------------------------------------------------------
 
 [[test]]
-id = "T241"
+id = "T267"
 name = "generation_mixed_sources"
 description = "Generation build succeeds with both CCS and native packages installed"
 timeout = 60
 group = "E"
-depends_on = ["T236"]
+depends_on = ["T262"]
 requires = ["composefs_runtime"]
 
 # Reinstall CCS fixture
@@ -422,17 +422,17 @@ stdout_contains = "Generation"
 run = "${CONARY_BIN} remove conary-test-fixture --no-scripts --yes --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} remove tree --no-scripts --yes --db-path ${DB_PATH} 2>/dev/null; true"
 
 # ==========================================================================
-# Distro Replatforming Tests (T242-T249)
+# Distro Replatforming Tests (T268-T275)
 # ==========================================================================
 # These tests verify that pinning to a different distro and applying the
 # model causes packages to converge toward the target distro.
 
 # --------------------------------------------------------------------------
-# T242: Distro pin set and verify
+# T268: Distro pin set and verify
 # --------------------------------------------------------------------------
 
 [[test]]
-id = "T242"
+id = "T268"
 name = "distro_pin_set"
 description = "Pin to the target replatform distro and verify the pin is stored"
 timeout = 30
@@ -453,16 +453,16 @@ exit_code = 0
 stdout_contains_all = ["${replatform_target}", "guarded"]
 
 # --------------------------------------------------------------------------
-# T243: Install packages from current distro before replatform
+# T269: Install packages from current distro before replatform
 # --------------------------------------------------------------------------
 
 [[test]]
-id = "T243"
+id = "T269"
 name = "pre_replatform_install"
 description = "Install native packages from the current distro to set up replatform baseline"
 timeout = 180
 group = "E"
-depends_on = ["T242"]
+depends_on = ["T268"]
 
 # Add the replatform target repo with Remi strategy (may already exist, ignore errors)
 [[test.step]]
@@ -499,16 +499,16 @@ exit_code = 0
 stdout_contains = "tree"
 
 # --------------------------------------------------------------------------
-# T244: Model diff shows replatform actions
+# T270: Model diff shows replatform actions
 # --------------------------------------------------------------------------
 
 [[test]]
-id = "T244"
+id = "T270"
 name = "replatform_model_diff"
 description = "Model diff with a distro pin shows replatform replacement proposals"
 timeout = 60
 group = "E"
-depends_on = ["T243"]
+depends_on = ["T269"]
 
 # Write a minimal system model
 [[test.step]]
@@ -524,16 +524,16 @@ run = "${CONARY_BIN} model diff -m /tmp/replatform-model.toml --db-path ${DB_PAT
 exit_code = 0
 
 # --------------------------------------------------------------------------
-# T245: Model apply executes replatform
+# T271: Model apply executes replatform
 # --------------------------------------------------------------------------
 
 [[test]]
-id = "T245"
+id = "T271"
 name = "replatform_model_apply"
 description = "Model apply with distro pin replaces packages from the target distro"
 timeout = 300
 group = "E"
-depends_on = ["T244"]
+depends_on = ["T270"]
 
 [[test.step]]
 run = "${CONARY_BIN} model apply -m /tmp/replatform-model.toml --db-path ${DB_PATH} --yes --sandbox never 2>&1; echo EXIT:$?"
@@ -550,16 +550,16 @@ exit_code = 0
 stdout_contains = "tree"
 
 # --------------------------------------------------------------------------
-# T246: Distro affinity shifts after replatform
+# T272: Distro affinity shifts after replatform
 # --------------------------------------------------------------------------
 
 [[test]]
-id = "T246"
+id = "T272"
 name = "replatform_affinity_shift"
 description = "After replatform apply, distro info shows affinity shifted toward target"
 timeout = 30
 group = "E"
-depends_on = ["T245"]
+depends_on = ["T271"]
 
 [[test.step]]
 conary = "distro info"
@@ -569,16 +569,16 @@ exit_code = 0
 stdout_contains = "${replatform_target}"
 
 # --------------------------------------------------------------------------
-# T247: Model check after replatform
+# T273: Model check after replatform
 # --------------------------------------------------------------------------
 
 [[test]]
-id = "T247"
+id = "T273"
 name = "replatform_model_check"
 description = "Model check confirms system matches the replatform model"
 timeout = 30
 group = "E"
-depends_on = ["T245"]
+depends_on = ["T271"]
 
 [[test.step]]
 run = "${CONARY_BIN} model check -m /tmp/replatform-model.toml --db-path ${DB_PATH} --verbose 2>&1; true"
@@ -587,11 +587,11 @@ run = "${CONARY_BIN} model check -m /tmp/replatform-model.toml --db-path ${DB_PA
 exit_code = 0
 
 # --------------------------------------------------------------------------
-# T248: Distro pin removal restores agnostic state
+# T274: Distro pin removal restores agnostic state
 # --------------------------------------------------------------------------
 
 [[test]]
-id = "T248"
+id = "T274"
 name = "distro_pin_remove"
 description = "Removing the distro pin returns system to distro-agnostic state"
 timeout = 30
@@ -612,11 +612,11 @@ exit_code = 0
 stdout_not_contains = "${replatform_target}"
 
 # --------------------------------------------------------------------------
-# T249: Mixing policy enforcement
+# T275: Mixing policy enforcement
 # --------------------------------------------------------------------------
 
 [[test]]
-id = "T249"
+id = "T275"
 name = "mixing_policy_strict"
 description = "Strict mixing policy blocks packages not from the pinned distro"
 timeout = 60
@@ -643,16 +643,16 @@ conary = "distro remove"
 exit_code = 0
 
 # --------------------------------------------------------------------------
-# T250: Takeover dry-run records a resumable plan on every supported PM
+# T276: Takeover dry-run records a resumable plan on every supported PM
 # --------------------------------------------------------------------------
 
 [[test]]
-id = "T250"
+id = "T276"
 name = "takeover_dry_run_cross_distro"
 description = "Takeover dry-run writes a planning record and reports the ready-to-activate generation contract"
 timeout = 180
 group = "E"
-depends_on = ["T249"]
+depends_on = ["T275"]
 
 [[test.step]]
 conary = "system takeover --dry-run"
@@ -669,16 +669,16 @@ exit_code = 0
 stdout_contains = "takeover-dry-run-record"
 
 # --------------------------------------------------------------------------
-# T251: Takeover owned path works across RPM, dpkg, and pacman
+# T277: Takeover owned path works across RPM, dpkg, and pacman
 # --------------------------------------------------------------------------
 
 [[test]]
-id = "T251"
+id = "T277"
 name = "takeover_owned_cross_distro"
 description = "Takeover ownership path completes across supported package managers without requiring activation"
 timeout = 300
 group = "E"
-depends_on = ["T250"]
+depends_on = ["T276"]
 fatal = true
 
 [[test.step]]

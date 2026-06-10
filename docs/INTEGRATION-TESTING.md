@@ -131,17 +131,21 @@ Common conary-test operations have CLI equivalents for human use:
 | `conary-test deploy rollout (--unit <name> \| --group <name>) [--ref <git-ref> \| --path <path>]` | Managed Forge deploy flow; trusted default source is a GitHub ref |
 | `conary-test run --suite <name> --distro <distro> --phase <N>` | Execute a test suite |
 | `conary-test deploy source [--ref <git-ref>]` | Deploy source and rebuild |
+| `conary-test deploy rebuild` | Rebuild binaries from the currently deployed source checkout |
 | `conary-test deploy restart` | Restart the test service |
 | `conary-test deploy status [--port <port>]` | Show running-binary status separately from local checkout state and drift |
 | `conary-test fixtures build [--groups all]` | Build test fixture CCS packages |
 | `conary-test fixtures publish` | Publish fixtures to Remi |
 | `conary-test logs <test-id> [--run <id>] [--step <N>]` | Retrieve test logs |
 | `conary-test health [--port <port>]` | Normalized health envelope with `mode`, `deploy_status`, optional `remi`, and optional `reason` |
+| `conary-test images build --distro <name>` | Build a container image for a configured distro |
+| `conary-test images list` | List locally built container images |
 | `conary-test images prune [--keep <N>]` | Remove old container images |
 | `conary-test images info <image>` | Inspect container image |
 | `conary-test manifests reload` | Reload TOML manifests without restart |
 
-Add `--json` to any command for machine-readable output.
+Commands with structured output accept `--json`; `conary-test run` emits a JSON
+result report by default.
 
 From a checkout, use
 `cargo run -p conary-test -- bootstrap check --json` before smoke validation to
@@ -462,7 +466,7 @@ Requires test fixture packages published to Remi.
 | E | T67-T71 | Remi client (sparse index, chunk fetch, OCI manifests) |
 | F | T72-T76 | Self-update (channel get/set/reset, version check, mock server) |
 
-### Phase 3: Adversarial (Groups G-O)
+### Phase 3: Adversarial (Groups G-P)
 
 Adversarial and stress tests.
 
@@ -472,22 +476,27 @@ Adversarial and stress tests.
 | N (container) | Container-based adversarial tests |
 | N (QEMU) | Kernel and boot QEMU tests |
 | O (QEMU) | Generation artifact export QEMU tests |
+| P (QEMU) | ISO generation export QEMU tests |
 | Composefs modernization (QEMU) | Focused atomic-generation fail-closed checks |
+| Active generation handoff | Selected-generation native authority handoff proof |
 
-### Phase 4: Feature Validation (Groups A-E)
+### Phase 4: Feature Validation
 
-Validates the active, user-facing command surface and checks that claimed
-features still match the current binary. Where a flow is intentionally
-preview-only or not yet implemented, the manifest asserts that it fails
-cleanly with an explicit message rather than pretending it is production-ready.
+Phase 4 currently contains 159 tests across seven manifests. It validates the
+active, user-facing command surface and checks that claimed features still match
+the current binary. Where a flow is intentionally preview-only or not yet
+implemented, the manifest asserts that it fails cleanly with an explicit
+message rather than pretending it is production-ready.
 
-| Group | Tests | Category |
-|-------|-------|----------|
-| A | T160-T176 | Config, distro, canonical, groups, registry |
-| B | T177-T195 | Label, model, collection, derive |
-| C | T196-T220 | CCS ops, query, repo management |
-| D | T221-T255 | Provenance, capability, trust, system ops, federation, automation |
-| E | T230-T251 | Cross-distro compatibility overlay: native package parity, distro policy, replatform, and takeover |
+| Suite | IDs | Count | Category |
+|-------|-----|-------|----------|
+| A | T160-T176 | 17 | Config, distro, canonical, groups, registry |
+| B | T177-T195 plus suffix IDs | 20 | Label, model, collection, derive |
+| C | T196-T220 plus suffix IDs | 32 | CCS ops, query, repo management |
+| D | T221-T255 plus suffix IDs | 41 | Provenance, capability, trust, system ops, federation, automation |
+| E | T256-T277 plus suffix IDs | 24 | Cross-distro compatibility overlay: native package parity, distro policy, replatform, and takeover |
+| Native package-manager parity | TNPM01-TNPM18 | 18 | Cross-distro native PM parity and daily-driver corpus |
+| Security advisory pipeline | TSEC01-TSEC07 | 7 | Trusted advisory ingestion and security update proof |
 
 Phase 4 is intentionally mixed:
 
@@ -529,11 +538,12 @@ expect_output = ["vmlinuz"]
 ```
 
 QEMU images are downloaded from `https://remi.conary.io/test-artifacts/` and
-cached locally. Plain `conary-test` runs can report QEMU skips when host tools
-or remote images are unavailable, but `scripts/local-qemu-validation.sh` treats
-any skipped QEMU test result as a failed release gate and separately requires
-boot/export markers in the logs. Keep that wrapper pointed only at published or
-generated fixtures that must be reproducible on a KVM-capable development host.
+cached locally. Plain `conary-test` runs report an explicit skipped result when
+host tools or remote images are unavailable, and
+`scripts/local-qemu-validation.sh` treats any skipped QEMU result as a failed
+release gate while separately requiring boot/export markers in the logs. Keep
+that wrapper pointed only at published or generated fixtures that must be
+reproducible on a KVM-capable development host.
 
 Generated-image suites can attach a scratch disk, copy files into or out of a
 guest, and then boot a host-local qcow2 or ISO produced by an earlier step:
@@ -612,14 +622,27 @@ Test results are written as JSON under
 
 ```json
 {
-  "distro": "fedora44",
-  "endpoint": "https://remi.conary.io",
-  "total": 37,
-  "passed": 37,
-  "failed": 0,
-  "skipped": 0,
-  "tests": [
-    {"id": "T01", "name": "health_check", "status": "pass", "duration_ms": 206}
+  "suite_name": "phase-1",
+  "phase": 1,
+  "status": "completed",
+  "summary": {
+    "total": 1,
+    "passed": 1,
+    "failed": 0,
+    "skipped": 0,
+    "cancelled": 0
+  },
+  "results": [
+    {
+      "id": "T01",
+      "name": "health_check",
+      "status": "passed",
+      "duration_ms": 206,
+      "message": null,
+      "stdout": null,
+      "stderr": null,
+      "attempts": []
+    }
   ]
 }
 ```
@@ -646,8 +669,13 @@ Test results are streamed to Remi's admin API as each test completes. If Remi is
 
 ## CI Integration
 
-Trusted integration validation now belongs to GitHub Actions, with Forge used
-as execution capacity rather than as an independent control plane.
+Trusted integration validation belongs to GitHub Actions, with Forge used as
+execution capacity rather than as an independent control plane. The current
+hosted lanes build the workspace, parse/list the TOML suite inventory, and run
+service smoke checks. Full TOML suite execution still requires a local or
+hosted container/QEMU-capable runner; do not describe a normal PR or merge run
+as having executed all 333 manifest tests unless that runner path is present in
+the specific workflow run.
 
 | Workflow | Trigger | Purpose |
 |----------|---------|---------|

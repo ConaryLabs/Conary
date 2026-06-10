@@ -20,12 +20,27 @@ run_suite() {
     local suite="$1"
     local log_file="$2"
     local marker_pattern="$3"
+    local result_dir="${LOG_DIR}/results/${suite}"
+    local result_file="${result_dir}/${DISTRO}-phase3.json"
 
     echo "[local-qemu-validation] running ${suite} for ${DISTRO}"
-    cargo run -p conary-test -- run --distro "${DISTRO}" --suite "${suite}" | tee "${log_file}"
+    mkdir -p "${result_dir}"
 
-    if rg '"status"[[:space:]]*:[[:space:]]*"(failed|skipped|cancelled)"|"(failed|skipped|cancelled)"[[:space:]]*:[[:space:]]*[1-9][0-9]*' "${log_file}" >/dev/null; then
-        fail "${suite} reported a failed, skipped, or cancelled QEMU test result; see ${log_file}"
+    set +e
+    CONARY_TEST_RESULTS_DIR="${result_dir}" \
+        cargo run -p conary-test -- run --distro "${DISTRO}" --phase 3 --suite "${suite}" \
+        | tee "${log_file}"
+    local run_status="${PIPESTATUS[0]}"
+    set -e
+
+    if [[ ! -f "${result_file}" ]]; then
+        fail "${suite} did not write expected result JSON ${result_file}; see ${log_file}"
+    fi
+
+    bash scripts/check-conary-test-result-gate.sh "${result_file}"
+
+    if [[ "${run_status}" -ne 0 ]]; then
+        fail "${suite} exited ${run_status}; see ${log_file}"
     fi
 
     rg "${marker_pattern}" "${log_file}" >/dev/null \
@@ -41,7 +56,7 @@ require_cmd rg
 mkdir -p "${LOG_DIR}"
 echo "[local-qemu-validation] logs: ${LOG_DIR}"
 
-cargo build -p conary -p conary-test --verbose
+cargo build -p conary -p conary-test -p remi -p conaryd --verbose
 
 run_suite \
     phase3-composefs-modernization \
