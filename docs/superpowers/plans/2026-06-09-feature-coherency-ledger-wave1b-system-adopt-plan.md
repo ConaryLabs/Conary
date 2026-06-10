@@ -373,6 +373,7 @@ Expected:
 ```
 
 If formatting fails, run `cargo fmt`, then rerun `cargo fmt --check`.
+The pasted test snippet is illustrative; `rustfmt` may rewrite array layout before the commit. Commit the formatted result, not the byte-for-byte snippet.
 
 - [ ] **Step 4: Commit parser proof**
 
@@ -412,7 +413,8 @@ Run:
 
 ```bash
 scratch="$(mktemp -d /tmp/conary-coherency-wave1b-system-adopt.XXXXXX)"
-printf '%s\n' "$scratch" > .git/info/wave1b-system-adopt-scratch
+scratch_file="$(git rev-parse --git-common-dir)/info/wave1b-system-adopt-scratch"
+printf '%s\n' "$scratch" > "$scratch_file"
 printf '%s\n' "$scratch"
 ```
 
@@ -425,10 +427,13 @@ Expected:
 For every later command block that uses `$scratch`, start by reloading and validating it:
 
 ```bash
-scratch="$(cat .git/info/wave1b-system-adopt-scratch)"
+scratch_file="$(git rev-parse --git-common-dir)/info/wave1b-system-adopt-scratch"
+scratch="$(cat "$scratch_file")"
 : "${scratch:?run Task 2 Step 1 first}"
 test -d "$scratch"
 ```
+
+Using `git rev-parse --git-common-dir` keeps the scratch pointer valid in the primary checkout and linked worktrees. If `test -d "$scratch"` fails because `/tmp` was cleaned, rerun Task 2 Step 1 and recapture the Task 2 evidence before continuing.
 
 - [ ] **Step 2: Capture help and version surfaces**
 
@@ -436,7 +441,8 @@ Run:
 
 ```bash
 set -euo pipefail
-scratch="$(cat .git/info/wave1b-system-adopt-scratch)"
+scratch_file="$(git rev-parse --git-common-dir)/info/wave1b-system-adopt-scratch"
+scratch="$(cat "$scratch_file")"
 : "${scratch:?run Task 2 Step 1 first}"
 test -d "$scratch"
 cargo run -p conary -- system --help > "$scratch/system-help.txt"
@@ -472,7 +478,8 @@ Run:
 
 ```bash
 set -euo pipefail
-scratch="$(cat .git/info/wave1b-system-adopt-scratch)"
+scratch_file="$(git rev-parse --git-common-dir)/info/wave1b-system-adopt-scratch"
+scratch="$(cat "$scratch_file")"
 : "${scratch:?run Task 2 Step 1 first}"
 test -d "$scratch"
 cargo run -p conary -- system init --db-path "$scratch/conary.db" > "$scratch/system-init.txt"
@@ -528,7 +535,8 @@ Run:
 
 ```bash
 set -euo pipefail
-scratch="$(cat .git/info/wave1b-system-adopt-scratch)"
+scratch_file="$(git rev-parse --git-common-dir)/info/wave1b-system-adopt-scratch"
+scratch="$(cat "$scratch_file")"
 : "${scratch:?run Task 2 Step 1 first}"
 test -d "$scratch"
 cargo build -p conary
@@ -558,7 +566,8 @@ Run:
 
 ```bash
 set -euo pipefail
-scratch="$(cat .git/info/wave1b-system-adopt-scratch)"
+scratch_file="$(git rev-parse --git-common-dir)/info/wave1b-system-adopt-scratch"
+scratch="$(cat "$scratch_file")"
 : "${scratch:?run Task 2 Step 1 first}"
 test -d "$scratch"
 rg -n --glob '!target/**' --glob '!docs/superpowers/plans/archive/**' --glob '!docs/superpowers/specs/archive/**' 'TODO|not implemented|stub|future|unsupported|broken' \
@@ -571,6 +580,7 @@ rg -n --glob '!target/**' --glob '!docs/superpowers/plans/archive/**' --glob '!d
   apps/conary/src/commands/adopt/refresh.rs \
   apps/conary/src/commands/adopt/convert.rs \
   apps/conary/src/commands/adopt/hooks.rs \
+  apps/conary/src/commands/adopt/cas_capture.rs \
   docs/operations/daily-driver-ux-matrix.md \
   "$scratch/system-help.txt" \
   "$scratch/system-adopt-help.txt" \
@@ -582,23 +592,30 @@ sed -n '1,240p' "$scratch/wave1b-system-adopt-sweep.txt"
 
 Expected:
 
-The known in-scope hit is the single-package dry-run refusal. It must be either:
+Known public in-scope hits may include:
 
-- recorded as `honest-deferred` with `disposition=deferred-owned`; or
-- repaired inside this wave if help/runtime behavior disagree.
+- the single-package dry-run runtime refusal in `apps/conary/src/dispatch/system.rs`, which must be recorded as `honest-deferred` with `disposition=deferred-owned` or repaired if help/runtime behavior disagree;
+- the unsupported package-manager sync-hook refusal in `apps/conary/src/commands/adopt/hooks.rs`, which is an honest runtime refusal and needs no repair unless help claims broader support;
+- the unsupported special-file refusal in `apps/conary/src/commands/adopt/cas_capture.rs`, which is an honest full-adoption helper refusal and needs no repair unless help claims broader support.
+
+Known non-public or contextual hits may include source comments, helper tests, and daily-driver matrix metadata. Classify them in `$scratch/classification.txt`; do not turn them into Wave 1b repairs unless they directly make the selected `conary system adopt` surface misleading.
 
 Do not broaden the sweep to unrelated docs, conaryd routes, Remi, MCP, or codebase-wide comments.
-Do not sweep `apps/conary/src/commands/adopt/unadopt.rs` or `native_handoff.rs` in Wave 1b unless evidence shows a direct effect on the selected `conary system adopt` surface.
+Do not sweep `apps/conary/src/commands/adopt/checkpoint.rs`, `conflicts.rs`, `outcome.rs`, `unadopt.rs`, or `native_handoff.rs` in Wave 1b unless evidence shows a direct effect on the selected `conary system adopt` surface.
 
 - [ ] **Step 7: Capture source excerpts**
 
 Run:
 
 ```bash
-scratch="$(cat .git/info/wave1b-system-adopt-scratch)"
+scratch_file="$(git rev-parse --git-common-dir)/info/wave1b-system-adopt-scratch"
+scratch="$(cat "$scratch_file")"
 : "${scratch:?run Task 2 Step 1 first}"
 test -d "$scratch"
 sed -n '80,170p' apps/conary/src/cli/system.rs > "$scratch/cli-system-adopt.rs.txt"
+sed -n '84,92p' apps/conary/src/commands/adopt/refresh.rs > "$scratch/adopt-refresh-signature.rs.txt"
+rg -n "Used by: default \\(package adopt\\), --system(, --refresh)?$" apps/conary/src/cli/system.rs > "$scratch/adopt-full-used-by.txt" || true
+rg -n "_full: bool" apps/conary/src/commands/adopt/refresh.rs > "$scratch/adopt-refresh-full-consumer.txt" || true
 sed -n '70,116p' apps/conary/src/dispatch/system.rs > "$scratch/dispatch-system-adopt.rs.txt"
 sed -n '1,80p' apps/conary/src/commands/adopt/mod.rs > "$scratch/commands-adopt-mod.rs.txt"
 sed -n '14,28p' docs/operations/daily-driver-ux-matrix.md > "$scratch/daily-driver-adopt-claim.md.txt"
@@ -606,7 +623,7 @@ sed -n '14,28p' docs/operations/daily-driver-ux-matrix.md > "$scratch/daily-driv
 
 Expected:
 
-The commands exit 0.
+The commands exit 0. If `adopt-full-used-by.txt` shows `--refresh` while `adopt-refresh-full-consumer.txt` shows `_full: bool`, classify that as a bounded help/runtime disagreement: the parser passes `--full` to refresh, but the refresh implementation intentionally ignores it.
 
 - [ ] **Step 8: Write a scratch classification note**
 
@@ -615,7 +632,8 @@ Create `$scratch/classification.txt` with exactly these filled sections:
 Before writing it, reload the persisted scratch path:
 
 ```bash
-scratch="$(cat .git/info/wave1b-system-adopt-scratch)"
+scratch_file="$(git rev-parse --git-common-dir)/info/wave1b-system-adopt-scratch"
+scratch="$(cat "$scratch_file")"
 : "${scratch:?run Task 2 Step 1 first}"
 test -d "$scratch"
 ```
@@ -693,14 +711,15 @@ Expected:
 - Modify only if evidence requires repair: `docs/operations/daily-driver-ux-matrix.md`
 - Test: focused commands from Task 2
 
-At current HEAD, the expected `apps/conary/src/cli/system.rs` and `apps/conary/src/dispatch/system.rs` structures below are already aligned. Treat Step 2 and Step 3 as check-only confirmations unless Task 2 evidence shows drift that must be repaired.
+At current HEAD, the single-package dry-run wording and dispatch structures below are already aligned. Treat Step 2 and Step 3 as check-only confirmations unless Task 2 evidence shows drift that must be repaired. If Task 2 exposes the bounded `--full`/`--refresh` annotation mismatch, repair that help wording before closing the `works` rows.
 
 - [ ] **Step 1: Check whether repair is required**
 
 Run:
 
 ```bash
-scratch="$(cat .git/info/wave1b-system-adopt-scratch)"
+scratch_file="$(git rev-parse --git-common-dir)/info/wave1b-system-adopt-scratch"
+scratch="$(cat "$scratch_file")"
 : "${scratch:?run Task 2 Step 1 first}"
 test -d "$scratch"
 test -f "$scratch/classification.txt"
@@ -721,15 +740,27 @@ If the status scan prints a `fix-now`, `misleading`, or `duplicate-stale` row, o
 
 - [ ] **Step 2: Repair help/runtime disagreement if present**
 
+If help says `--full` is used by `--refresh` while `cmd_adopt_refresh` still accepts `_full: bool`, make the help honest before closing `CLI-ADOPT-001` or `CLI-ADOPT-002` as `works`. The preferred Wave 1b repair is to remove `--refresh` from the `full` option's `Used by:` doc line:
+
+```rust
+        /// Copy files to CAS for full management (enables rollback)
+        /// Used by: default (package adopt), --system
+        #[arg(long, conflicts_with_all = ["status", "convert", "sync_hook", "from_sync_hook"])]
+        full: bool,
+```
+
+Do not make `--refresh --full` a behavioral feature in this wave unless you also add focused tests that prove the refresh path consumes it.
+
 If help says single-package dry-run works but runtime refuses it, either make the help honest or implement the preview. The preferred Wave 1b repair is honest wording only:
 
 Before editing, verify whether the honest wording is already present:
 
 ```bash
-scratch="$(cat .git/info/wave1b-system-adopt-scratch)"
+scratch_file="$(git rev-parse --git-common-dir)/info/wave1b-system-adopt-scratch"
+scratch="$(cat "$scratch_file")"
 : "${scratch:?run Task 2 Step 1 first}"
 test -d "$scratch"
-rg -n "Single-package dry-run is rejected" apps/conary/src/cli/system.rs
+rg -n "rejected until it has a true non-mutating preview path" apps/conary/src/cli/system.rs
 cargo run -p conary -- system adopt --help > "$scratch/system-adopt-help-before-repair.txt"
 rg -n "Single-package dry-run is rejected" "$scratch/system-adopt-help-before-repair.txt"
 ```
@@ -747,7 +778,8 @@ If both commands print a row, this repair is already satisfied; do not edit `app
 Run:
 
 ```bash
-scratch="$(cat .git/info/wave1b-system-adopt-scratch)"
+scratch_file="$(git rev-parse --git-common-dir)/info/wave1b-system-adopt-scratch"
+scratch="$(cat "$scratch_file")"
 : "${scratch:?run Task 2 Step 1 first}"
 test -d "$scratch"
 cargo fmt --check
@@ -867,6 +899,7 @@ If Task 2 or Task 3 found a different reality, change only the affected rows bef
 - use `status=misleading` only while the active help/docs overstate current behavior;
 - use `status=fix-now` only for a bounded repair required before scope completion;
 - use `status=honest-deferred` and `disposition=deferred-owned` only after the active surface gives a specific honest refusal or preview limitation;
+- do not close `CLI-ADOPT-001` or `CLI-ADOPT-002` as `works` while the `--full` help line still says `--refresh` uses it and the refresh implementation still ignores `_full`;
 - do not leave any `1b-system-adopt` row with `disposition=open` before Task 5.
 
 - [ ] **Step 2: Validate ledger and scope completion**
@@ -972,7 +1005,7 @@ Documentation truth checks passed.
 ```
 
 The docs-audit inventory diff and `git diff --check` should produce no output. Generated manpage directories may appear only as ignored output.
-The PR gate syntax-validates the coherency ledger, but completed wave scopes are enforced by this local `--scope-complete 1b-system-adopt` release gate.
+Because this plan pushes directly to `main`, the Task 5 commands are the enforcement gate for this slice. The PR gate only revalidates ledger syntax on future PRs; it does not replace the local `--scope-complete 1b-system-adopt` gate.
 
 - [ ] **Step 2: Push and prove sync**
 
