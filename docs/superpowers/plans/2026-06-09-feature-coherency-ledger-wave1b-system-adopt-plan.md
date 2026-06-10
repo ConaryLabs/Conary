@@ -31,6 +31,7 @@
 | --- | --- |
 | `apps/conary/src/cli/system.rs` | `SystemCommands::Adopt` Clap mode definitions and help text. Read and edit only if help or parser constraints drift. |
 | `apps/conary/src/cli/mod.rs` | Existing CLI parser tests. Add `system adopt` characterization tests here. |
+| `apps/conary/src/command_risk.rs` | Pre-dispatch risk classification for adoption dry-run labels and hidden `--from-sync-hook` policy. Run focused tests because dispatch intentionally ignores that flag after policy enforcement. |
 | `apps/conary/src/dispatch/system.rs` | Dispatch routing from `SystemCommands::Adopt` into package, system, status, refresh, convert, and sync-hook commands. Edit only for bounded dispatch honesty repairs. |
 | `apps/conary/src/commands/adopt/` | Adopt command implementations and focused unit tests. Run the full `cargo test -p conary --lib commands::adopt` suite as behavior proof, which is broader than the ownership card's narrower native-handoff and unadopt filters; avoid broad refactors in this wave. |
 | `apps/conary/tests/live_host_mutation_safety.rs` | Existing `system_adopt*` end-to-end CLI safety tests. Run focused filter. |
@@ -374,6 +375,7 @@ Run:
 
 ```bash
 scratch="$(mktemp -d /tmp/conary-coherency-wave1b-system-adopt.XXXXXX)"
+printf '%s\n' "$scratch" > .git/info/wave1b-system-adopt-scratch
 printf '%s\n' "$scratch"
 ```
 
@@ -383,11 +385,23 @@ Expected:
 /tmp/conary-coherency-wave1b-system-adopt.<suffix>
 ```
 
+For every later command block that uses `$scratch`, start by reloading and validating it:
+
+```bash
+scratch="$(cat .git/info/wave1b-system-adopt-scratch)"
+: "${scratch:?run Task 2 Step 1 first}"
+test -d "$scratch"
+```
+
 - [ ] **Step 2: Capture help and version surfaces**
 
 Run:
 
 ```bash
+set -euo pipefail
+scratch="$(cat .git/info/wave1b-system-adopt-scratch)"
+: "${scratch:?run Task 2 Step 1 first}"
+test -d "$scratch"
 cargo run -p conary -- system --help > "$scratch/system-help.txt"
 cargo run -p conary -- system adopt --help > "$scratch/system-adopt-help.txt"
 cargo run -p conary -- --help > "$scratch/root-help.txt"
@@ -407,6 +421,8 @@ Single-package dry-run is rejected until it has a true non-mutating preview path
 --quiet
 ```
 
+Treat these as required substrings, not exact line renderings; Clap may wrap or join doc-comment lines.
+
 Expected version output must include:
 
 ```text
@@ -418,6 +434,10 @@ conary
 Run:
 
 ```bash
+set -euo pipefail
+scratch="$(cat .git/info/wave1b-system-adopt-scratch)"
+: "${scratch:?run Task 2 Step 1 first}"
+test -d "$scratch"
 cargo run -p conary -- system init --db-path "$scratch/conary.db" > "$scratch/system-init.txt"
 cargo run -p conary -- system adopt --status --db-path "$scratch/conary.db" > "$scratch/adopt-status.txt"
 set +e
@@ -451,6 +471,7 @@ Run:
 ```bash
 cargo check -p conary
 cargo test -p conary --lib cli::tests
+cargo test -p conary --lib command_risk::tests::
 cargo test -p conary --lib commands::adopt
 cargo test -p conary --test live_host_mutation_safety system_adopt
 cargo test -p conary --test cli_daily_ux adopted
@@ -469,19 +490,24 @@ Documentation truth checks passed.
 Run:
 
 ```bash
+set -euo pipefail
+scratch="$(cat .git/info/wave1b-system-adopt-scratch)"
+: "${scratch:?run Task 2 Step 1 first}"
+test -d "$scratch"
 cargo build -p conary
 test -f apps/conary/man/conary.1
 cp apps/conary/man/conary.1 "$scratch/conary.1"
+sed 's/\\-/-/g' "$scratch/conary.1" > "$scratch/conary.1.normalized"
 for pattern in \
   "conary system adopt --refresh" \
   "Daily workflow examples"
 do
-  if ! rg -n -- "$pattern" "$scratch/conary.1"; then
+  if ! rg -n -- "$pattern" "$scratch/conary.1.normalized"; then
     echo "ERROR: root manpage missing required Wave 1b text: $pattern" >&2
     exit 1
   fi
 done
-rg -n -- "Adopt system packages" "$scratch/conary.1" || true
+rg -n -- "Adopt system packages" "$scratch/conary.1.normalized" || true
 ```
 
 Expected:
@@ -494,6 +520,10 @@ The root manpage only reflects root-level help, so the nested subcommand text `A
 Run:
 
 ```bash
+set -euo pipefail
+scratch="$(cat .git/info/wave1b-system-adopt-scratch)"
+: "${scratch:?run Task 2 Step 1 first}"
+test -d "$scratch"
 rg -n --glob '!target/**' --glob '!docs/superpowers/plans/archive/**' --glob '!docs/superpowers/specs/archive/**' 'TODO|not implemented|stub|future|unsupported|broken' \
   apps/conary/src/cli/system.rs \
   apps/conary/src/dispatch/system.rs \
@@ -502,7 +532,7 @@ rg -n --glob '!target/**' --glob '!docs/superpowers/plans/archive/**' --glob '!d
   "$scratch/system-help.txt" \
   "$scratch/system-adopt-help.txt" \
   "$scratch/root-help.txt" \
-  "$scratch/conary.1" \
+  "$scratch/conary.1.normalized" \
   > "$scratch/wave1b-system-adopt-sweep.txt" || true
 sed -n '1,240p' "$scratch/wave1b-system-adopt-sweep.txt"
 ```
@@ -521,6 +551,9 @@ Do not broaden the sweep to unrelated docs, conaryd routes, Remi, MCP, or codeba
 Run:
 
 ```bash
+scratch="$(cat .git/info/wave1b-system-adopt-scratch)"
+: "${scratch:?run Task 2 Step 1 first}"
+test -d "$scratch"
 sed -n '80,170p' apps/conary/src/cli/system.rs > "$scratch/cli-system-adopt.rs.txt"
 sed -n '70,116p' apps/conary/src/dispatch/system.rs > "$scratch/dispatch-system-adopt.rs.txt"
 sed -n '1,80p' apps/conary/src/commands/adopt/mod.rs > "$scratch/commands-adopt-mod.rs.txt"
@@ -534,6 +567,14 @@ The commands exit 0.
 - [ ] **Step 8: Write a scratch classification note**
 
 Create `$scratch/classification.txt` with exactly these filled sections:
+
+Before writing it, reload the persisted scratch path:
+
+```bash
+scratch="$(cat .git/info/wave1b-system-adopt-scratch)"
+: "${scratch:?run Task 2 Step 1 first}"
+test -d "$scratch"
+```
 
 ```text
 Wave scope: 1b-system-adopt
@@ -616,6 +657,9 @@ At current HEAD, the expected `apps/conary/src/cli/system.rs` and `apps/conary/s
 Run:
 
 ```bash
+scratch="$(cat .git/info/wave1b-system-adopt-scratch)"
+: "${scratch:?run Task 2 Step 1 first}"
+test -d "$scratch"
 test -f "$scratch/classification.txt"
 if rg -n '^- (Claim|Actual|Status|Decision|Verification|Public in scope|Non-public or out of scope|Requires repair before scope completion):[[:space:]]*$' "$scratch/classification.txt"; then
   echo "ERROR: classification note has empty required fields" >&2
@@ -639,6 +683,9 @@ If help says single-package dry-run works but runtime refuses it, either make th
 Before editing, verify whether the honest wording is already present:
 
 ```bash
+scratch="$(cat .git/info/wave1b-system-adopt-scratch)"
+: "${scratch:?run Task 2 Step 1 first}"
+test -d "$scratch"
 rg -n "Single-package dry-run is rejected" apps/conary/src/cli/system.rs
 cargo run -p conary -- system adopt --help > "$scratch/system-adopt-help-before-repair.txt"
 rg -n "Single-package dry-run is rejected" "$scratch/system-adopt-help-before-repair.txt"
@@ -657,6 +704,9 @@ If both commands print a row, this repair is already satisfied; do not edit `app
 Run:
 
 ```bash
+scratch="$(cat .git/info/wave1b-system-adopt-scratch)"
+: "${scratch:?run Task 2 Step 1 first}"
+test -d "$scratch"
 cargo fmt --check
 cargo run -p conary -- system adopt --help > "$scratch/system-adopt-help-after-repair.txt"
 rg -n "Single-package dry-run is rejected" "$scratch/system-adopt-help-after-repair.txt"
@@ -672,7 +722,7 @@ Single-package dry-run is rejected
 
 If a mode parses but dispatch routes it to the wrong implementation, edit only the relevant branch in `apps/conary/src/dispatch/system.rs`. The expected dispatch order is:
 
-The `from_sync_hook: _` field in the surrounding dispatch destructure is intentional. The hidden parser flag is preserved for the command implementation and sync-hook risk checks; do not remove it from the Clap definition or dispatch destructure as a cleanup while auditing this wave.
+The `from_sync_hook: _` field in the surrounding dispatch destructure is intentional. The hidden parser flag is retained in the Clap model for pre-dispatch `command_risk` classification, then ignored by dispatch after policy enforcement. Do not remove it from the Clap definition or dispatch destructure as a cleanup while auditing this wave.
 
 ```rust
             if sync_hook {
@@ -707,6 +757,7 @@ Run:
 
 ```bash
 cargo check -p conary
+cargo test -p conary --lib command_risk::tests::
 cargo test -p conary --test live_host_mutation_safety system_adopt
 ```
 
@@ -723,7 +774,13 @@ If Task 3 changed files, run:
 ```bash
 git diff --check
 git status --short
-git add apps/conary/src/cli/system.rs apps/conary/src/dispatch/system.rs apps/conary/src/commands/adopt docs/operations/daily-driver-ux-matrix.md
+git diff --name-only
+# Add only the exact files intentionally edited by Task 3. Do not stage whole
+# directories such as apps/conary/src/commands/adopt/.
+git add apps/conary/src/cli/system.rs apps/conary/src/dispatch/system.rs
+# If a tracked Markdown doc changed, update docs-audit ledger/summary metadata
+# in the same commit and include those exact files here.
+git diff --cached --name-only
 git commit -m "fix: align system adopt coherency"
 ```
 
@@ -734,6 +791,7 @@ Expected:
 ```
 
 If Task 3 changed no files, do not create an empty commit.
+If Task 3 changed a file under `apps/conary/src/commands/adopt/`, stage that exact file path after reviewing `git diff --name-only`. If Task 3 changed `docs/operations/daily-driver-ux-matrix.md`, also refresh `docs/superpowers/documentation-accuracy-audit-ledger.tsv` and `docs/superpowers/documentation-accuracy-audit-summary.md` as needed, rerun docs-audit checks, and stage only the exact touched docs-audit files.
 
 ---
 
@@ -748,11 +806,15 @@ Run:
 
 ```bash
 verified_date="$(date +%F)"
+if rg -n '^(CLI-ADOPT-00[1-4]|DOC-ADOPT-001)\t|^[^\t]*\t[^\t]*\t[^\t]*\t[^\t]*\t1b-system-adopt\t' docs/superpowers/feature-coherency-ledger.tsv; then
+  echo "ERROR: Wave 1b rows already exist; edit the existing rows instead of appending duplicates" >&2
+  exit 1
+fi
 cat >> docs/superpowers/feature-coherency-ledger.tsv <<EOF
-CLI-ADOPT-001	conary system adopt help	cmd:cargo run -p conary -- system adopt --help		1b-system-adopt	Adoption, Unadoption, And Native-Authority Handoff	System adopt help describes package, system, status, refresh, convert, and sync-hook modes plus the package dry-run limitation	System adopt help renders successfully and states the selected modes and the single-package dry-run rejection	works	verified-no-change	${verified_date}	path:apps/conary/src/cli/system.rs;cmd:cargo run -p conary -- system adopt --help	none	cmd:cargo run -p conary -- system adopt --help	verify	Re-run system adopt help capture before changing adopt flags or mode constraints	Wave 1b help evidence captured in scratch output
-CLI-ADOPT-002	system adopt parser and mode constraints	test:cargo test -p conary --lib cli::tests		1b-system-adopt	Adoption, Unadoption, And Native-Authority Handoff	System adopt Clap constraints keep mutually exclusive package, system, status, refresh, convert, and sync-hook modes coherent	Parser characterization covers system dry-run filters, refresh quiet hook path, convert dry-run jobs, sync-hook removal, and selected rejection cases	works	verified-no-change	${verified_date}	path:apps/conary/src/cli/system.rs;path:apps/conary/src/cli/mod.rs;test:cargo test -p conary --lib cli::tests	none	test:cargo test -p conary --lib cli::tests	verify	Re-run parser tests before changing system adopt Clap constraints	Wave 1b added durable parser proof for selected system adopt modes
-CLI-ADOPT-003	system adopt dispatch and command modules	test:cargo test -p conary --lib commands::adopt		1b-system-adopt	Adoption, Unadoption, And Native-Authority Handoff	System adopt dispatch routes each parsed mode to the matching adopt command module and existing focused tests cover command behavior	Dispatch maps sync hooks, convert, status, refresh, system adoption, package adoption, and package dry-run refusal to the expected command paths; focused adopt module and safety tests pass	works	verified-no-change	${verified_date}	path:apps/conary/src/dispatch/system.rs;path:apps/conary/src/commands/adopt/mod.rs;test:cargo test -p conary --lib commands::adopt;test:cargo test -p conary --test live_host_mutation_safety system_adopt	none	test:cargo test -p conary --lib commands::adopt;test:cargo test -p conary --test live_host_mutation_safety system_adopt	verify	Re-run focused adopt module and live-mutation safety tests before changing adopt dispatch	System adopt command-module proof captured and closed in Wave 1b
-CLI-ADOPT-004	single-package system adopt dry-run	cmd:cargo run -p conary -- system adopt curl --dry-run		1b-system-adopt	Adoption, Unadoption, And Native-Authority Handoff	Single-package adoption dry-run is visible as an option but must not pretend to be implemented until it has a true non-mutating preview path	Runtime rejects single-package dry-run with a specific error and points to system-wide dry-run or non-dry-run package adoption; help states the same limitation	honest-deferred	deferred-owned	${verified_date}	path:apps/conary/src/cli/system.rs;path:apps/conary/src/dispatch/system.rs;cmd:cargo run -p conary -- system adopt curl --dry-run;test:cargo test -p conary --test live_host_mutation_safety system_adopt_package_dry_run_is_rejected_without_ack_prompt	cmd:cargo run -p conary -- system adopt curl --dry-run	test:cargo test -p conary --test live_host_mutation_safety system_adopt_package_dry_run_is_rejected_without_ack_prompt	defer	Add a dedicated follow-up plan before implementing single-package adopt dry-run preview or removing package-mode dry-run visibility	Honest deferred row: active help and runtime refusal both describe the current limitation and supported alternatives
+CLI-ADOPT-001	conary system adopt help	cmd:cargo run -p conary -- system adopt --help		1b-system-adopt	Adoption, Unadoption, And Native-Authority Handoff	Parent system help and system adopt help advertise the selected adopt command family without overstating unsupported dry-run behavior	System and system-adopt help render successfully and system-adopt help states the selected modes and the single-package dry-run rejection	works	verified-no-change	${verified_date}	path:apps/conary/src/cli/system.rs;cmd:cargo run -p conary -- system --help;cmd:cargo run -p conary -- system adopt --help	none	cmd:cargo run -p conary -- system --help;cmd:cargo run -p conary -- system adopt --help	verify	Re-run system and system-adopt help capture before changing adopt flags or mode constraints	Wave 1b help evidence captured in scratch output
+CLI-ADOPT-002	system adopt parser and mode constraints	test:cargo test -p conary --lib cli::tests		1b-system-adopt	Adoption, Unadoption, And Native-Authority Handoff	System adopt Clap and pre-dispatch command-risk constraints keep mutually exclusive package, system, status, refresh, convert, sync-hook, and hidden hook-refresh modes coherent	Parser characterization covers system dry-run filters, refresh quiet hook path, from-sync-hook/full conflict, convert dry-run jobs, sync-hook removal, and selected rejection cases; command-risk tests cover hook-refresh classification	works	verified-no-change	${verified_date}	path:apps/conary/src/cli/system.rs;path:apps/conary/src/cli/mod.rs;path:apps/conary/src/command_risk.rs;test:cargo test -p conary --lib cli::tests;test:cargo test -p conary --lib command_risk::tests::	none	test:cargo test -p conary --lib cli::tests;test:cargo test -p conary --lib command_risk::tests::	verify	Re-run parser and command-risk tests before changing system adopt Clap constraints	Wave 1b added durable parser and pre-dispatch policy proof for selected system adopt modes
+CLI-ADOPT-003	system adopt dispatch and command modules	test:cargo test -p conary --lib commands::adopt		1b-system-adopt	Adoption, Unadoption, And Native-Authority Handoff	System adopt dispatch source routes parsed modes to the matching adopt command module, with focused module tests and selected binary safety tests covering behavior	Dispatch source maps sync hooks, convert, status, refresh, system adoption, package adoption, and package dry-run refusal to expected command paths; focused adopt module, command-risk, and safety tests pass	works	verified-no-change	${verified_date}	path:apps/conary/src/dispatch/system.rs;path:apps/conary/src/commands/adopt/mod.rs;test:cargo test -p conary --lib commands::adopt;test:cargo test -p conary --lib command_risk::tests::;test:cargo test -p conary --test live_host_mutation_safety system_adopt	none	test:cargo test -p conary --lib commands::adopt;test:cargo test -p conary --lib command_risk::tests::;test:cargo test -p conary --test live_host_mutation_safety system_adopt	verify	Re-run focused adopt module, command-risk, and live-mutation safety tests before changing adopt dispatch	System adopt command-module proof captured and closed in Wave 1b
+CLI-ADOPT-004	single-package system adopt dry-run	cmd:cargo run -p conary -- system adopt curl --dry-run		1b-system-adopt	Adoption, Unadoption, And Native-Authority Handoff	Single-package adoption dry-run is visible as an option but must not pretend to be implemented until it has a true non-mutating preview path	Runtime rejects single-package dry-run with a specific error and points to system-wide dry-run or non-dry-run package adoption; help states the same limitation	honest-deferred	deferred-owned	${verified_date}	path:apps/conary/src/cli/system.rs;path:apps/conary/src/dispatch/system.rs;path:docs/superpowers/specs/archive/2026-05-26-limited-preview-release-hardening-design.md;cmd:cargo run -p conary -- system adopt --help;cmd:cargo run -p conary -- system adopt curl --dry-run;test:cargo test -p conary --test live_host_mutation_safety system_adopt_package_dry_run_is_rejected_without_ack_prompt	cmd:cargo run -p conary -- system adopt curl --dry-run	cmd:cargo run -p conary -- system adopt --help;test:cargo test -p conary --test live_host_mutation_safety system_adopt_package_dry_run_is_rejected_without_ack_prompt	defer	Tracked by docs/superpowers/specs/archive/2026-05-26-limited-preview-release-hardening-design.md Plan A outcome; create a new active plan before implementing true single-package adopt dry-run preview or removing package-mode dry-run visibility	Honest deferred row: active help and runtime refusal both describe the current limitation and supported alternatives; historical release-hardening design required either true preview or a deliberate unsupported route
 DOC-ADOPT-001	daily driver adopt refresh claim	doc:docs/operations/daily-driver-ux-matrix.md	CLI-ADOPT-001;CLI-ADOPT-003	1b-system-adopt	Adoption, Unadoption, And Native-Authority Handoff	Daily-driver UX docs route adopted install/update workflows to conary system adopt --refresh	The selected docs claim remains consistent with root help, system adopt help, parser, dispatch, and daily UX tests	works	verified-no-change	${verified_date}	doc:docs/operations/daily-driver-ux-matrix.md;cmd:cargo run -p conary -- system adopt --help;test:cargo test -p conary --test cli_daily_ux adopted	none	test:cargo test -p conary --test cli_daily_ux adopted	verify	Re-run daily UX adopted-package tests before changing adopt-refresh guidance	Scoped active-doc claim checked because it directly repeats the selected CLI guidance
 EOF
 ```
@@ -813,10 +875,13 @@ bash scripts/check-coherency-ledger.sh docs/superpowers/feature-coherency-ledger
 cargo fmt --check
 cargo check -p conary
 cargo test -p conary --lib cli::tests
+cargo test -p conary --lib command_risk::tests::
 cargo test -p conary --lib commands::adopt
 cargo test -p conary --test live_host_mutation_safety system_adopt
 cargo test -p conary --test cli_daily_ux adopted
-cargo run -p conary -- system completions bash >/tmp/conary-completion.bash
+completion="$(mktemp /tmp/conary-wave1b-completion.XXXXXX.bash)"
+cargo run -p conary -- system completions bash > "$completion"
+test -s "$completion"
 bash scripts/check-doc-audit-ledger.sh docs/superpowers/documentation-accuracy-audit-ledger.tsv --require-complete
 LC_ALL=C bash scripts/docs-audit-inventory.sh | diff -u docs/superpowers/documentation-accuracy-audit-inventory.tsv -
 bash scripts/check-doc-truth.sh
@@ -839,6 +904,7 @@ Documentation truth checks passed.
 ```
 
 The docs-audit inventory diff and `git diff --check` should produce no output. Generated manpage directories may appear only as ignored output.
+The PR gate syntax-validates the coherency ledger, but completed wave scopes are enforced by this local `--scope-complete 1b-system-adopt` release gate.
 
 - [ ] **Step 2: Push and prove sync**
 
