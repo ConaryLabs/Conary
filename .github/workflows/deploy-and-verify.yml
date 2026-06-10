@@ -19,9 +19,6 @@ on:
         description: Skip live deployment and verify artifact handling only.
         required: false
         default: "true"
-      deploy_asset_ref:
-        description: Optional repo ref for checked-in deploy assets.
-        required: false
       bootstrap_remi_access:
         description: Install the Remi deploy helper and sudo policy using the bootstrap SSH key.
         required: false
@@ -50,8 +47,6 @@ jobs:
       artifact_patterns: ${{ steps.meta.outputs.artifact_patterns }}
       source_run: ${{ steps.meta.outputs.source_run }}
       environment: ${{ steps.meta.outputs.environment }}
-      deploy_asset_ref: ${{ steps.meta.outputs.deploy_asset_ref }}
-      bootstrap_exception: ${{ steps.meta.outputs.bootstrap_exception }}
     steps:
       - name: Resolve source run
         id: source
@@ -144,24 +139,6 @@ jobs:
             dry_run="$MANUAL_DRY_RUN"
           fi
 
-          manual_deploy_asset_ref="${{ github.event.inputs.deploy_asset_ref || '' }}"
-
-          if [[ "$SOURCE_RUN" == "24273700060" && "$tag_name" == "conaryd-v0.6.0" ]]; then
-            [[ -n "$manual_deploy_asset_ref" ]] || {
-              echo "bootstrap rerun requires deploy_asset_ref" >&2
-              exit 1
-            }
-            deploy_asset_ref="$manual_deploy_asset_ref"
-            bootstrap_exception="true"
-          else
-            [[ -z "$manual_deploy_asset_ref" ]] || {
-              echo "deploy_asset_ref is bootstrap-only and may only be used with source_run=24273700060" >&2
-              exit 1
-            }
-            deploy_asset_ref="$tag_name"
-            bootstrap_exception="false"
-          fi
-
           echo "product=${product}" >> "$GITHUB_OUTPUT"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "tag_name=${tag_name}" >> "$GITHUB_OUTPUT"
@@ -171,8 +148,6 @@ jobs:
           echo "artifact_patterns=${artifact_patterns}" >> "$GITHUB_OUTPUT"
           echo "source_run=${SOURCE_RUN}" >> "$GITHUB_OUTPUT"
           echo "environment=${TARGET_ENVIRONMENT}" >> "$GITHUB_OUTPUT"
-          echo "deploy_asset_ref=${deploy_asset_ref}" >> "$GITHUB_OUTPUT"
-          echo "bootstrap_exception=${bootstrap_exception}" >> "$GITHUB_OUTPUT"
 
   validate-routing:
     name: validate-routing
@@ -526,190 +501,11 @@ jobs:
             VERSION="$1"
             remote_bundle="$2"
             max_concurrent="$3"
+            sudo -n /usr/local/sbin/conary-remi-deploy configure-concurrency "$max_concurrent" --skip-restart
             sudo -n /usr/local/sbin/conary-remi-deploy deploy-remi "$VERSION" "$remote_bundle"
-            sudo -n /usr/local/sbin/conary-remi-deploy configure-concurrency "$max_concurrent"
           REMOTE_EOF
       - name: Verify remi health
         run: curl -fsS https://remi.conary.io/health >/dev/null
-
-  verify-conaryd:
-    name: verify-conaryd
-    needs: [resolve, validate-routing]
-    if: ${{ needs.resolve.outputs.product == 'conaryd' && needs.resolve.outputs.deploy_mode == 'remote_bundle' && github.event_name == 'workflow_dispatch' && needs.resolve.outputs.dry_run == 'true' }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          fetch-depth: 0
-          ref: ${{ needs.resolve.outputs.deploy_asset_ref }}
-      - name: Download source artifacts
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          SOURCE_RUN: ${{ needs.resolve.outputs.source_run }}
-        run: |
-          set -euo pipefail
-          if gh run download "$SOURCE_RUN" --dir source-artifacts; then
-            exit 0
-          fi
-
-          echo "gh run download failed for source_run=${SOURCE_RUN}; attempting release-asset fallback" >&2
-          rm -rf source-artifacts
-          source_tag="$(gh api "repos/${GH_REPO}/actions/runs/${SOURCE_RUN}" --jq '.head_branch')"
-          [[ -n "$source_tag" && "$source_tag" != "null" ]] || {
-            echo "source run has no head_branch for release fallback" >&2
-            exit 1
-          }
-
-          fallback_dir="source-artifacts/release-fallback"
-          mkdir -p "$fallback_dir"
-          gh release download "$source_tag" --repo "$GH_REPO" --dir "$fallback_dir"
-
-          metadata_file="${fallback_dir}/metadata.json"
-          [[ -f "$metadata_file" ]] || {
-            echo "release fallback metadata.json missing for ${source_tag}" >&2
-            exit 1
-          }
-
-          bundle_name="$(jq -r '.bundle_name' "$metadata_file")"
-          [[ -n "$bundle_name" && "$bundle_name" != "null" ]] || {
-            echo "release fallback bundle_name missing for ${source_tag}" >&2
-            exit 1
-          }
-
-          bundle_dir="source-artifacts/${bundle_name}"
-          mkdir -p "$bundle_dir"
-          find "$fallback_dir" -maxdepth 1 -type f -exec mv {} "$bundle_dir"/ \;
-          rmdir "$fallback_dir"
-      - name: Verify conaryd bundle
-        env:
-          VERSION: ${{ needs.resolve.outputs.version }}
-          BUNDLE_NAME: ${{ needs.resolve.outputs.bundle_name }}
-          DEPLOY_ASSET_REF: ${{ needs.resolve.outputs.deploy_asset_ref }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          bundle_dir=$(find source-artifacts -type d -name "$BUNDLE_NAME" -print -quit)
-          [[ -n "$bundle_dir" ]] || { echo "conaryd bundle artifact directory missing" >&2; exit 1; }
-          bundle=$(find "$bundle_dir" -maxdepth 1 -name "conaryd-${VERSION}-linux-x64.tar.gz" -print -quit)
-          [[ -n "$bundle" ]] || { echo "conaryd bundle missing" >&2; exit 1; }
-          helper="${GITHUB_WORKSPACE}/scripts/install-conaryd-on-forge.sh"
-          verifier="${GITHUB_WORKSPACE}/scripts/conaryd-health.sh"
-          unit="${GITHUB_WORKSPACE}/deploy/systemd/conaryd.service"
-          test -f "$helper"
-          test -f "$verifier"
-          test -f "$unit"
-          echo "[DRY RUN] deploy_asset_ref: $DEPLOY_ASSET_REF"
-          echo "[DRY RUN] conaryd bundle ready: $bundle"
-          echo "[DRY RUN] checked-in assets to stage:"
-          printf '  %s\n' "$helper" "$verifier" "$unit"
-
-  deploy-conaryd:
-    name: deploy-conaryd
-    needs: [resolve, validate-routing]
-    if: ${{ needs.resolve.outputs.product == 'conaryd' && needs.resolve.outputs.deploy_mode == 'remote_bundle' && needs.resolve.outputs.dry_run != 'true' }}
-    runs-on: ubuntu-latest
-    environment: ${{ needs.resolve.outputs.environment }}
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          fetch-depth: 0
-          ref: ${{ needs.resolve.outputs.deploy_asset_ref }}
-      - name: Download source artifacts
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          SOURCE_RUN: ${{ needs.resolve.outputs.source_run }}
-        run: |
-          set -euo pipefail
-          if gh run download "$SOURCE_RUN" --dir source-artifacts; then
-            exit 0
-          fi
-
-          echo "gh run download failed for source_run=${SOURCE_RUN}; attempting release-asset fallback" >&2
-          rm -rf source-artifacts
-          source_tag="$(gh api "repos/${GH_REPO}/actions/runs/${SOURCE_RUN}" --jq '.head_branch')"
-          [[ -n "$source_tag" && "$source_tag" != "null" ]] || {
-            echo "source run has no head_branch for release fallback" >&2
-            exit 1
-          }
-
-          fallback_dir="source-artifacts/release-fallback"
-          mkdir -p "$fallback_dir"
-          gh release download "$source_tag" --repo "$GH_REPO" --dir "$fallback_dir"
-
-          metadata_file="${fallback_dir}/metadata.json"
-          [[ -f "$metadata_file" ]] || {
-            echo "release fallback metadata.json missing for ${source_tag}" >&2
-            exit 1
-          }
-
-          bundle_name="$(jq -r '.bundle_name' "$metadata_file")"
-          [[ -n "$bundle_name" && "$bundle_name" != "null" ]] || {
-            echo "release fallback bundle_name missing for ${source_tag}" >&2
-            exit 1
-          }
-
-          bundle_dir="source-artifacts/${bundle_name}"
-          mkdir -p "$bundle_dir"
-          find "$fallback_dir" -maxdepth 1 -type f -exec mv {} "$bundle_dir"/ \;
-          rmdir "$fallback_dir"
-      - name: Deploy conaryd bundle
-        env:
-          VERSION: ${{ needs.resolve.outputs.version }}
-          BUNDLE_NAME: ${{ needs.resolve.outputs.bundle_name }}
-          CONARYD_SSH_KEY: ${{ secrets.CONARYD_SSH_KEY }}
-          CONARYD_SSH_TARGET: ${{ secrets.CONARYD_SSH_TARGET }}
-          DEPLOY_ASSET_REF: ${{ needs.resolve.outputs.deploy_asset_ref }}
-          BOOTSTRAP_EXCEPTION: ${{ needs.resolve.outputs.bootstrap_exception }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          bundle_dir=$(find source-artifacts -type d -name "$BUNDLE_NAME" -print -quit)
-          [[ -n "$bundle_dir" ]] || { echo "conaryd bundle artifact directory missing" >&2; exit 1; }
-          bundle=$(find "$bundle_dir" -maxdepth 1 -name "conaryd-${VERSION}-linux-x64.tar.gz" -print -quit)
-          [[ -n "$bundle" ]] || { echo "conaryd bundle missing" >&2; exit 1; }
-          helper="${GITHUB_WORKSPACE}/scripts/install-conaryd-on-forge.sh"
-          verifier="${GITHUB_WORKSPACE}/scripts/conaryd-health.sh"
-          unit="${GITHUB_WORKSPACE}/deploy/systemd/conaryd.service"
-          [[ -f "$helper" ]] || { echo "conaryd helper missing" >&2; exit 1; }
-          [[ -f "$verifier" ]] || { echo "conaryd verifier missing" >&2; exit 1; }
-          [[ -f "$unit" ]] || { echo "conaryd unit missing" >&2; exit 1; }
-          [[ -n "${CONARYD_SSH_KEY:-}" ]] || { echo "CONARYD_SSH_KEY is required" >&2; exit 1; }
-          [[ -n "${CONARYD_SSH_TARGET:-}" ]] || { echo "CONARYD_SSH_TARGET is required" >&2; exit 1; }
-          EXPECTED_SHA256="$(sha256sum "$bundle" | awk '{print $1}')"
-          remote_stage="/var/tmp/conaryd-deploy-${VERSION}"
-
-          mkdir -p ~/.ssh
-          echo "$CONARYD_SSH_KEY" > ~/.ssh/conaryd_key
-          chmod 600 ~/.ssh/conaryd_key
-          ssh_opts=(
-            -i ~/.ssh/conaryd_key
-            -o UserKnownHostsFile=deploy/ssh/forge-known-hosts
-            -o StrictHostKeyChecking=yes
-          )
-
-          echo "deploy_asset_ref=${DEPLOY_ASSET_REF}"
-          echo "bootstrap_exception=${BOOTSTRAP_EXCEPTION}"
-
-          ssh "${ssh_opts[@]}" "$CONARYD_SSH_TARGET" "rm -rf '${remote_stage}' && mkdir -p '${remote_stage}'"
-          scp "${ssh_opts[@]}" \
-            "$bundle" \
-            "$helper" \
-            "$verifier" \
-            "$unit" \
-            "${CONARYD_SSH_TARGET}:${remote_stage}/"
-
-          ssh "${ssh_opts[@]}" "$CONARYD_SSH_TARGET" \
-            "bash ${remote_stage}/install-conaryd-on-forge.sh \
-              --staging-dir ${remote_stage} \
-              --bundle ${remote_stage}/conaryd-${VERSION}-linux-x64.tar.gz \
-              --expected-version ${VERSION} \
-              --expected-sha256 ${EXPECTED_SHA256} \
-              --unit-file ${remote_stage}/conaryd.service \
-              --verifier ${remote_stage}/conaryd-health.sh"
 
   no-deploy-required:
     name: no-deploy-required

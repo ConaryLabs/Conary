@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_root=$(git rev-parse --show-toplevel)
+repo_root="${1:-$(git rev-parse --show-toplevel)}"
 cd "$repo_root"
 
 release_build=".github/workflows/release-build.yml"
@@ -51,6 +51,15 @@ require_artifact_matrix_row() {
         fail "release artifact matrix row for $product missing SBOM status"
     [[ "$row" == *"provenance"* || "$row" == *"SLSA"* ]] ||
         fail "release artifact matrix row for $product missing provenance status"
+}
+
+forbid_deploy_jobs_for_none_product() {
+    local product="$1"
+    local job
+
+    for job in "deploy-${product}" "verify-${product}"; do
+        forbid_match "$deploy_workflow" "^  ${job}:" "${job} job for deploy_mode=none product ${product}"
+    done
 }
 
 [[ -f "$artifact_matrix" ]] || fail "missing $artifact_matrix"
@@ -107,20 +116,12 @@ require_match "$deploy_workflow" 'no-deploy-required:' 'explicit no-deploy lane'
 require_match "$deploy_workflow" "needs\\.resolve\\.outputs\\.deploy_mode == 'none'" 'deploy_mode none handling'
 require_match "$deploy_workflow" 'conaryd:none' 'temporary conaryd no-deploy route'
 require_match "$deploy_workflow" 'BUNDLE_NAME: \$\{\{ needs\.resolve\.outputs\.bundle_name \}\}' 'bundle_name-driven artifact lookup'
-require_match "$deploy_workflow" 'deploy_asset_ref' 'bootstrap-only deploy asset ref input'
-require_match "$deploy_workflow" 'bootstrap_exception' 'bootstrap exception resolve output'
-require_match "$deploy_workflow" '24273700060' 'one-time conaryd bootstrap exception gate'
-require_match "$deploy_workflow" 'ref: \$\{\{ needs\.resolve\.outputs\.deploy_asset_ref \}\}' 'deploy assets checked out from resolved asset ref'
-require_match "$deploy_workflow" 'deploy/ssh/forge-known-hosts' 'pinned Forge host trust'
-require_match "$deploy_workflow" 'StrictHostKeyChecking=yes' 'strict host-key checking for conaryd'
-require_match "$deploy_workflow" 'scripts/install-conaryd-on-forge\.sh' 'checked-in conaryd helper staging'
-require_match "$deploy_workflow" 'scripts/conaryd-health\.sh' 'checked-in conaryd verifier staging'
-require_match "$deploy_workflow" 'deploy/systemd/conaryd\.service' 'checked-in conaryd unit staging'
-require_match "$deploy_workflow" 'EXPECTED_SHA256="\$\(sha256sum "\$bundle" \| awk' 'runner-side conaryd bundle hash computation'
-require_match "$deploy_workflow" "mkdir -p '\\\$\\{remote_stage\\}'" 'remote staging directory creation'
 require_match "$deploy_workflow" 'gh api "repos/\$\{?GH_REPO\}?/actions/runs/\$\{?SOURCE_RUN\}?" --jq '\''\.head_branch'\''' 'source-run head-branch lookup for release fallback'
 require_match "$deploy_workflow" 'gh release download "\$source_tag"' 'release-asset fallback for expired source-run artifacts'
 forbid_match "$deploy_workflow" 'CONARYD_VERIFY_URL' 'legacy public verify URL'
+forbid_match "$deploy_workflow" '24273700060' 'retired one-time conaryd bootstrap exception'
+forbid_match "$deploy_workflow" 'deploy_asset_ref' 'retired bootstrap-only deploy asset ref'
+forbid_match "$deploy_workflow" 'bootstrap_exception' 'retired bootstrap exception output'
 
 for product in conary remi; do
     require_artifact_matrix_row "$product"
@@ -132,11 +133,11 @@ done
 require_artifact_matrix_row conaryd
 conaryd_deploy_mode="$(bash scripts/release-matrix.sh field conaryd deploy_mode)"
 [[ "$conaryd_deploy_mode" == "none" ]] || fail "conaryd should be deploy_mode=none while Forge staging is paused"
+forbid_deploy_jobs_for_none_product conaryd
 
 require_artifact_matrix_row conary-test
 conary_test_deploy_mode="$(bash scripts/release-matrix.sh field conary-test deploy_mode)"
 [[ "$conary_test_deploy_mode" == "none" ]] || fail "conary-test should be deploy_mode=none"
-forbid_match "$deploy_workflow" 'deploy-conary-test:' 'conary-test deploy lane'
-forbid_match "$deploy_workflow" 'verify-conary-test:' 'conary-test verify lane'
+forbid_deploy_jobs_for_none_product conary-test
 
 echo "Release matrix workflow checks passed."
