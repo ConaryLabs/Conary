@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-06-09
-revision: 16
-summary: Add bootstrap command child-module routing
+last_updated: 2026-06-10
+revision: 17
+summary: Add conaryd package job adapter routing
 ---
 
 # Assistant Subsystem Map
@@ -135,7 +135,8 @@ summary: Add bootstrap command child-module routing
   `apps/conary/src/commands/bootstrap/state.rs`
 - Shared operation vocabulary and daemon-boundary ownership:
   `crates/conary-core/src/operations.rs`,
-  `apps/conaryd/src/daemon/mod.rs`, and
+  `apps/conaryd/src/daemon/mod.rs`,
+  `apps/conaryd/src/daemon/package_ops.rs`, and
   `apps/conaryd/src/daemon/routes/transactions.rs`
 - Remi admin, conversion, publication, artifact fixture, and MCP flows:
   `apps/remi/src/server/admin_service.rs`,
@@ -168,6 +169,7 @@ summary: Add bootstrap command child-module routing
   `crates/conary-agent-contract/src/` and `crates/conary-mcp/src/`
 - conaryd daemon routes and auth boundaries:
   `apps/conaryd/src/daemon/mod.rs`,
+  `apps/conaryd/src/daemon/package_ops.rs`,
   `apps/conaryd/src/daemon/routes.rs`,
   `apps/conaryd/src/daemon/routes/router.rs`,
   `apps/conaryd/src/daemon/routes/auth.rs`,
@@ -178,6 +180,11 @@ summary: Add bootstrap command child-module routing
   `apps/conaryd/src/daemon/routes/{system,transactions,query,events}.rs`,
   `apps/conaryd/src/daemon/auth.rs`, and
   `apps/conaryd/src/daemon/jobs.rs`
+
+  Package install/remove/update jobs currently adapt daemon requests into the
+  CLI command functions from the `conary` crate. When changing package-job
+  behavior, inspect both `apps/conaryd/src/daemon/package_ops.rs` and the
+  relevant CLI command owner under `apps/conary/src/commands/`.
 
 ## Stable Patterns
 
