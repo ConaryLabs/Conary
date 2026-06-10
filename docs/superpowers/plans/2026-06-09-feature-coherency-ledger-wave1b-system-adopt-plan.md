@@ -12,9 +12,9 @@
 
 ## Current Repository Facts
 
-- Starting point after Wave 1a: `main` and `origin/main` both point at `272f1ae3e49710e2fc86fcff43d7d1b3705c9581`.
-- Current docs-audit inventory count before adding this plan: `170` tracked doc-like files.
-- Adding this Markdown plan should make `bash scripts/docs-audit-inventory.sh | tail -n +2 | wc -l` return `171`.
+- Execution should start from the current `main` commit that contains this plan, with `HEAD` and `origin/main` synced. The historical Wave 1a closure tip before this plan was `272f1ae3e49710e2fc86fcff43d7d1b3705c9581`; do not reset to that historical SHA.
+- Current docs-audit inventory count with this committed plan is `171` tracked doc-like files.
+- `LC_ALL=C bash scripts/docs-audit-inventory.sh | tail -n +2 | wc -l` should continue to return `171`.
 - The coherency ledger currently has four closed `1a-root-cli` rows and no `1b-system-adopt` rows.
 - `apps/conary/src/commands/adopt/system.rs` is 1236 lines. This is below the repo's 1500-line major-edit threshold, but it is still the main bulk-adoption command body; Wave 1b should avoid growing it unless evidence shows a bounded behavior repair.
 
@@ -32,7 +32,7 @@
 | `apps/conary/src/cli/system.rs` | `SystemCommands::Adopt` Clap mode definitions and help text. Read and edit only if help or parser constraints drift. |
 | `apps/conary/src/cli/mod.rs` | Existing CLI parser tests. Add `system adopt` characterization tests here. |
 | `apps/conary/src/dispatch/system.rs` | Dispatch routing from `SystemCommands::Adopt` into package, system, status, refresh, convert, and sync-hook commands. Edit only for bounded dispatch honesty repairs. |
-| `apps/conary/src/commands/adopt/` | Adopt command implementations and focused unit tests. Run as behavior proof; avoid broad refactors in this wave. |
+| `apps/conary/src/commands/adopt/` | Adopt command implementations and focused unit tests. Run the full `cargo test -p conary --lib commands::adopt` suite as behavior proof, which is broader than the ownership card's narrower native-handoff and unadopt filters; avoid broad refactors in this wave. |
 | `apps/conary/tests/live_host_mutation_safety.rs` | Existing `system_adopt*` end-to-end CLI safety tests. Run focused filter. |
 | `apps/conary/tests/cli_daily_ux.rs` | Existing daily UX references to `conary system adopt --refresh`. Run focused adopted-package filter. |
 | `apps/conary/build.rs` | Generated root manpage source. Run `cargo build -p conary` and inspect generated ignored manpage output. |
@@ -76,6 +76,7 @@ Run:
 bash scripts/check-doc-audit-ledger.sh docs/superpowers/documentation-accuracy-audit-ledger.tsv --require-complete
 LC_ALL=C bash scripts/docs-audit-inventory.sh | diff -u docs/superpowers/documentation-accuracy-audit-inventory.tsv -
 bash scripts/check-coherency-ledger.sh docs/superpowers/feature-coherency-ledger.tsv --scope-complete 1a-root-cli
+bash scripts/check-doc-truth.sh
 git diff --check
 git status --short --branch
 ```
@@ -85,6 +86,7 @@ Expected:
 ```text
 Documentation audit ledger check passed (--require-complete).
 Coherency ledger check passed.
+Documentation truth checks passed.
 ## main...origin/main
 ```
 
@@ -189,6 +191,24 @@ In `apps/conary/src/cli/mod.rs`, inside the existing `#[cfg(test)] mod tests`, i
             }
             _ => panic!("expected system adopt command"),
         }
+    }
+
+    #[test]
+    fn rejects_system_adopt_from_sync_hook_with_full() {
+        let err = match Cli::try_parse_from([
+            "conary",
+            "system",
+            "adopt",
+            "--refresh",
+            "--quiet",
+            "--from-sync-hook",
+            "--full",
+        ]) {
+            Ok(_) => panic!("--from-sync-hook must conflict with --full"),
+            Err(err) => err,
+        };
+
+        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
     }
 
     #[test]
@@ -456,7 +476,10 @@ for pattern in \
   "conary system adopt --refresh" \
   "Daily workflow examples"
 do
-  rg -n -- "$pattern" "$scratch/conary.1" || true
+  if ! rg -n -- "$pattern" "$scratch/conary.1"; then
+    echo "ERROR: root manpage missing required Wave 1b text: $pattern" >&2
+    exit 1
+  fi
 done
 rg -n -- "Adopt system packages" "$scratch/conary.1" || true
 ```
@@ -607,11 +630,21 @@ Expected if no repair is needed:
 ```text
 ```
 
-If the final `rg` prints a row, do the smallest repair before Task 4.
+If the status scan prints a `fix-now`, `misleading`, or `duplicate-stale` row, or the repair-required pipeline prints a row, do the smallest repair before Task 4.
 
 - [ ] **Step 2: Repair help/runtime disagreement if present**
 
 If help says single-package dry-run works but runtime refuses it, either make the help honest or implement the preview. The preferred Wave 1b repair is honest wording only:
+
+Before editing, verify whether the honest wording is already present:
+
+```bash
+rg -n "Single-package dry-run is rejected" apps/conary/src/cli/system.rs
+cargo run -p conary -- system adopt --help > "$scratch/system-adopt-help-before-repair.txt"
+rg -n "Single-package dry-run is rejected" "$scratch/system-adopt-help-before-repair.txt"
+```
+
+If both commands print a row, this repair is already satisfied; do not edit `apps/conary/src/cli/system.rs` solely to match the snippet below.
 
 ```rust
         /// Show what would be adopted without making changes
@@ -638,6 +671,8 @@ Single-package dry-run is rejected
 - [ ] **Step 3: Repair dispatch mismatch if present**
 
 If a mode parses but dispatch routes it to the wrong implementation, edit only the relevant branch in `apps/conary/src/dispatch/system.rs`. The expected dispatch order is:
+
+The `from_sync_hook: _` field in the surrounding dispatch destructure is intentional. The hidden parser flag is preserved for the command implementation and sync-hook risk checks; do not remove it from the Clap definition or dispatch destructure as a cleanup while auditing this wave.
 
 ```rust
             if sync_hook {
