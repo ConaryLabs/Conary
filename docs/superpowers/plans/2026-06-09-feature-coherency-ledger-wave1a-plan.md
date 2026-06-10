@@ -95,7 +95,7 @@ verify
 Closure matrix:
 
 ```text
-works -> open, verified-no-change, resolved-repaired
+works -> verified-no-change, resolved-repaired
 works-but-thin -> open, resolved-repaired, verified-no-change, deferred-owned
 fix-now -> open, resolved-repaired, resolved-removed, resolved-merged
 misleading -> open, resolved-repaired, resolved-removed, resolved-merged
@@ -239,6 +239,17 @@ write_ledger "$good" "$good_row"
 "$validator" "$good" >/dev/null
 "$validator" "$good" --scope-complete 1a-root-cli >/dev/null
 
+real_repo_row=$'CLI-ROOT-005\tconary root dispatch fixture\tpath:apps/conary/src/dispatch/root.rs:1-40\t\t1a-root-cli\tCLI Dispatch And Command Routing\tRoot dispatch paths exist in the repo\tLine-range and directory path pointers resolve against real repo files\tworks\tverified-no-change\t2026-06-09\tpath:apps/conary/src/dispatch/root.rs:1-40;path:apps/conary/src/dispatch/\tnone\ttest:cargo test -p conary --lib cli::tests\tverify\tKeep real path fixture green\tReal repo path fixture'
+real_repo="$tmpdir/real-repo.tsv"
+write_ledger "$real_repo" "$real_repo_row"
+"$validator" "$real_repo" >/dev/null
+
+valid_route_mcp="$tmpdir/valid-route-mcp.tsv"
+route_row=$'ROUTE-CONARYD-001\tconaryd transactions route\troute:GET /v1/transactions\t\tlater-route-wave\tConaryd Daemon Routes\tRoute pointer grammar accepts method and path\tRoute pointer syntax is valid\tworks\tverified-no-change\t2026-06-09\troute:GET /v1/transactions\tnone\troute:GET /v1/transactions\tverify\tValidate route pointer grammar\tRoute pointer fixture'
+mcp_row=$'MCP-REMI-001\tRemi MCP tool fixture\tmcp:remi/tool-name\t\tlater-mcp-wave\tAgent And MCP Surface\tMCP pointer grammar accepts server and tool\tMCP pointer syntax is valid\tworks\tverified-no-change\t2026-06-09\tmcp:remi/tool-name\tnone\tmcp:remi/tool-name\tverify\tValidate MCP pointer grammar\tMCP pointer fixture'
+write_ledger "$valid_route_mcp" "$route_row" "$mcp_row"
+"$validator" "$valid_route_mcp" >/dev/null
+
 bad_status="$tmpdir/bad-status.tsv"
 write_ledger "$bad_status" "${good_row/works/not-real-status}"
 if "$validator" "$bad_status" >"$tmpdir/out" 2>&1; then
@@ -268,6 +279,22 @@ if "$validator" "$bad_repro" >"$tmpdir/out" 2>&1; then
 fi
 grep -q "invalid typed repro pointer" "$tmpdir/out" || fail "bad repro error was not clear"
 
+bad_route="$tmpdir/bad-route.tsv"
+bad_route_row=$'ROUTE-CONARYD-002\tconaryd transactions route\troute:GET/v1/transactions\t\tlater-route-wave\tConaryd Daemon Routes\tRoute pointer grammar rejects missing method/path space\tRoute pointer syntax is invalid\tworks\tverified-no-change\t2026-06-09\troute:GET/v1/transactions\tnone\troute:GET/v1/transactions\tverify\tValidate bad route pointer grammar\tBad route pointer fixture'
+write_ledger "$bad_route" "$bad_route_row"
+if "$validator" "$bad_route" >"$tmpdir/out" 2>&1; then
+    fail "bad route pointer unexpectedly passed"
+fi
+grep -q "invalid typed source pointer" "$tmpdir/out" || fail "bad route pointer error was not clear"
+
+bad_mcp="$tmpdir/bad-mcp.tsv"
+bad_mcp_row=$'MCP-REMI-002\tRemi MCP tool fixture\tmcp:remi\t\tlater-mcp-wave\tAgent And MCP Surface\tMCP pointer grammar rejects missing tool name\tMCP pointer syntax is invalid\tworks\tverified-no-change\t2026-06-09\tmcp:remi\tnone\tmcp:remi\tverify\tValidate bad MCP pointer grammar\tBad MCP pointer fixture'
+write_ledger "$bad_mcp" "$bad_mcp_row"
+if "$validator" "$bad_mcp" >"$tmpdir/out" 2>&1; then
+    fail "bad MCP pointer unexpectedly passed"
+fi
+grep -q "invalid typed source pointer" "$tmpdir/out" || fail "bad MCP pointer error was not clear"
+
 missing_gap="$tmpdir/missing-gap.tsv"
 misleading_row=$'CLI-ROOT-002\tconary root help example\tcmd:cargo run -p conary -- --help\t\t1a-root-cli\tCLI Dispatch And Command Routing\tRoot help example should be runnable\t\tmisleading\topen\t2026-06-09\tcmd:cargo run -p conary -- --help\tcmd:cargo run -p conary -- --help\tcmd:cargo run -p conary -- --help\tfix\tFix or remove misleading example\tMissing gap should fail'
 write_ledger "$missing_gap" "$misleading_row"
@@ -285,14 +312,13 @@ if "$validator" "$scope_open" --scope-complete 1a-root-cli >"$tmpdir/out" 2>&1; 
 fi
 grep -q "scope completion blocked" "$tmpdir/out" || fail "scope completion error was not clear"
 
-scope_open_works="$tmpdir/scope-open-works.tsv"
-open_works=$'CLI-ROOT-003\tconary root help example\tcmd:cargo run -p conary -- --help\t\t1a-root-cli\tCLI Dispatch And Command Routing\tRoot help example should be runnable\tRoot example route proof is still being captured\tworks\topen\t2026-06-09\tcmd:cargo run -p conary -- --help\tcmd:cargo run -p conary -- --help\tcmd:cargo run -p conary -- --help\tverify\tFinish root example proof\tOpen works row should block scope completion'
-write_ledger "$scope_open_works" "$open_works"
-"$validator" "$scope_open_works" >/dev/null
-if "$validator" "$scope_open_works" --scope-complete 1a-root-cli >"$tmpdir/out" 2>&1; then
-    fail "scope completion unexpectedly allowed open works row"
+bad_open_works="$tmpdir/bad-open-works.tsv"
+open_works=$'CLI-ROOT-003\tconary root help example\tcmd:cargo run -p conary -- --help\t\t1a-root-cli\tCLI Dispatch And Command Routing\tRoot help example should be runnable\tRoot example route proof is still being captured\tworks\topen\t2026-06-09\tcmd:cargo run -p conary -- --help\tcmd:cargo run -p conary -- --help\tcmd:cargo run -p conary -- --help\tverify\tFinish root example proof\tOpen works row should fail normal validation'
+write_ledger "$bad_open_works" "$open_works"
+if "$validator" "$bad_open_works" >"$tmpdir/out" 2>&1; then
+    fail "open works row unexpectedly passed"
 fi
-grep -q "scope completion blocked" "$tmpdir/out" || fail "open works scope error was not clear"
+grep -q "invalid disposition" "$tmpdir/out" || fail "open works matrix error was not clear"
 
 scope_open_thin="$tmpdir/scope-open-thin.tsv"
 open_thin=$'CLI-ROOT-004\tconary root help example\tcmd:cargo run -p conary -- --help\t\t1a-root-cli\tCLI Dispatch And Command Routing\tRoot help example should be runnable\tRoute proof is thin and still open\tworks-but-thin\topen\t2026-06-09\tcmd:cargo run -p conary -- --help\tcmd:cargo run -p conary -- --help\tcmd:cargo run -p conary -- --help\tharden\tFinish root example proof\tOpen works-but-thin row should block scope completion'
@@ -439,7 +465,7 @@ matrix_allows() {
     local disposition="$2"
 
     case "$status:$disposition" in
-        works:open|works:verified-no-change|works:resolved-repaired)
+        works:verified-no-change|works:resolved-repaired)
             return 0
             ;;
         works-but-thin:open|works-but-thin:resolved-repaired|works-but-thin:verified-no-change|works-but-thin:deferred-owned)
@@ -476,7 +502,10 @@ path_from_pointer() {
             return 1
             ;;
     esac
-    printf '%s\n' "$pointer" | sed -E 's/:[0-9]+(-[0-9]+)?$//'
+    if [[ "$pointer" =~ ^(.+):[0-9]+(-[0-9]+)?$ ]]; then
+        pointer="${BASH_REMATCH[1]}"
+    fi
+    printf '%s\n' "$pointer"
 }
 
 validate_pointer() {
@@ -493,9 +522,11 @@ validate_pointer() {
             [[ -e "$ptr_path" ]] || fail "referenced path does not exist at $ledger_path:$line_no: $pointer"
             ;;
         cmd:*)
+            # Syntax-only: execution is proven by the explicit verification commands.
             [[ "${pointer#cmd:}" == *[![:space:]]* ]] || fail "empty $field_name command pointer at $ledger_path:$line_no"
             ;;
         test:*)
+            # Syntax-only: execution is proven by the explicit verification commands.
             [[ "${pointer#test:}" == *[![:space:]]* ]] || fail "empty $field_name test pointer at $ledger_path:$line_no"
             ;;
         route:*)
@@ -943,10 +974,6 @@ rg -n --glob '!target/**' --glob '!docs/superpowers/plans/archive/**' --glob '!d
   "$scratch/system-completions-help.txt" \
   "$scratch/conaryd-help.txt" \
   "$scratch/conary.1" \
-  README.md \
-  docs/conaryopedia-v2.md \
-  docs/modules/feature-ownership.md \
-  docs/llms/subsystem-map.md \
   > "$scratch/wave1a-sweep.txt" || true
 sed -n '1,200p' "$scratch/wave1a-sweep.txt"
 ```
@@ -956,7 +983,7 @@ Expected:
 ```text
 ```
 
-The sweep may print lines. Each line must be fixed, ledgered, or marked non-public/out-of-scope in the Wave 1a notes before scope completion.
+The sweep may print lines. Each line must be fixed, ledgered, or marked non-public/out-of-scope in the Wave 1a notes before scope completion. Do not broaden this sweep to `README.md`, `docs/conaryopedia-v2.md`, `docs/modules/*.md`, or `docs/operations/*.md` during Wave 1a. If evidence in the selected CLI scope points at a specific active-doc overclaim, inspect and repair that exact doc claim only; broad active-doc claim sweeps belong to later waves.
 
 - [ ] **Step 7: Inspect root dispatch ownership**
 
@@ -1041,6 +1068,16 @@ Do not commit the scratch directory or ignored manpage output.
 - Modify only if evidence requires repair: `apps/conary/src/cli/mod.rs`, `apps/conary/src/dispatch.rs`, `apps/conary/src/dispatch/*`, `README.md`, `docs/conaryopedia-v2.md`, `docs/modules/feature-ownership.md`, `docs/llms/subsystem-map.md`
 
 - [ ] **Step 1: Add baseline Wave 1a rows**
+
+Before adding rows, verify the scratch classification note has been filled in:
+
+```bash
+test -f "$scratch/classification.txt"
+if rg -n '^- (Claim|Actual|Status|Decision|Verification|Public in scope|Non-public or out of scope|Requires repair before scope completion):[[:space:]]*$' "$scratch/classification.txt"; then
+  echo "ERROR: classification note has empty required fields" >&2
+  exit 1
+fi
+```
 
 Append rows to `docs/superpowers/feature-coherency-ledger.tsv` using the classification note. If the evidence shows no gap, run:
 
@@ -1155,13 +1192,13 @@ Run:
 git status --short
 git add docs/superpowers/feature-coherency-ledger.tsv apps/conary/src/cli/mod.rs apps/conary/src/dispatch.rs apps/conary/src/dispatch README.md docs/conaryopedia-v2.md docs/modules/feature-ownership.md docs/llms/subsystem-map.md
 git diff --cached --name-only
-git commit -m "docs: record feature coherency wave 1a"
+git commit -m "docs: close feature coherency wave 1a rows"
 ```
 
 Expected:
 
 ```text
-[main <sha>] docs: record feature coherency wave 1a
+[main <sha>] docs: close feature coherency wave 1a rows
 ```
 
 If only the ledger changed, `git add` will ignore unchanged paths and stage just `docs/superpowers/feature-coherency-ledger.tsv`.
@@ -1266,7 +1303,7 @@ Both `git rev-parse` lines should be identical.
 - [ ] The feature coherency ledger exists and has the exact header.
 - [ ] The coherency TSV is not registered in the docs-audit inventory, ledger, or summary counts.
 - [ ] The ledger validator is wired into `.github/workflows/pr-gate.yml`.
-- [ ] The ledger validator rejects bad status, bad source/repro/evidence pointers, bad closure matrix, dangling related IDs, empty completed scopes, and open selected-scope rows.
+- [ ] The ledger validator rejects bad status, bad source/repro/evidence/route/MCP pointers, bad closure matrix, dangling related IDs, empty completed scopes, and open selected-scope rows.
 - [ ] Wave 1a has no open row in `wave_scope=1a-root-cli`.
 - [ ] Root example proof includes `system adopt`, `cli_daily_ux`, and either conaryd proof or an honest conaryd deferral/wording repair.
 - [ ] Generated manpage output was checked with per-string assertions, not one broad alternation.
