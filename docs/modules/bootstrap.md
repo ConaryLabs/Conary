@@ -33,7 +33,7 @@ Host System (any Linux with gcc)
      |                 17 cross-compiled + 6 chroot packages
      |
   FinalSystemBuilder -- Phase 3: Final system (LFS Ch8)
-     |                   80 packages -- complete Linux system
+     |                   83 packages -- complete Linux system
      |                   Built inside chroot via ChrootEnv
      |
   configure_system() -- Phase 4: System configuration (LFS Ch9)

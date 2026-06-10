@@ -234,6 +234,10 @@ The repo moved materially after the last audit:
   deferred `conary system adopt <pkg> --dry-run` surface an active owner
   artifact, separating the current truthful refusal from the future true-preview
   or visibility-removal slice.
+- The active documentation accuracy audit does not support a `deleted`
+  disposition. Deleting a tracked doc removes it from the live inventory and
+  ledger in the same commit; retaining deletion history would require a separate
+  frozen-baseline design.
 - Refreshed assistant-facing docs again on 2026-05-22 for GPT-5.5/Codex-first
   work, removed tracked Claude active guidance/harness files, and kept
   Claude-era context only as archived history.

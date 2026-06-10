@@ -184,9 +184,9 @@ old process. That can fail with `Text file busy`.
 - `conary-test` is a supported build-and-release track in this phase, but it
   intentionally has no deployment lane
 - `deploy-and-verify` performs protected deployment and verification only for
-  deployable products (`conary`, `remi`, and `conaryd`)
-- The `conaryd` lane deploys only to the Forge local-only staging daemon today;
-  public production hosting for `conaryd` is still an open follow-up
+  deployable products (`conary` and `remi`)
+- The `conaryd` release track is build-and-release only until a replacement
+  staging host exists; its release matrix entry remains `deploy_mode=none`
 - Release verification is a GitHub workflow concern, not a Forgejo or
   Forge-hosted control-plane concern
 

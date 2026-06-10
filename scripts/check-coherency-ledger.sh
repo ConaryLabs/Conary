@@ -33,6 +33,16 @@ fi
 
 expected_header=$'id\tsurface\tsource\trelated_ids\twave_scope\towner\tclaim\tactual_or_gap\tstatus\tdisposition\tlast_verified\tevidence_sources\trepro\tverification\tdecision\tnext_slice\tnotes'
 
+declare -A allowed_owners=()
+while IFS= read -r owner_heading; do
+    case "$owner_heading" in
+        "How To Use This Map"|"Card Schema")
+            continue
+            ;;
+    esac
+    allowed_owners["$owner_heading"]=1
+done < <(sed -n 's/^## //p' docs/modules/feature-ownership.md)
+
 is_allowed_status() {
     case "$1" in
         works|works-but-thin|fix-now|honest-deferred|misleading|duplicate-stale)
@@ -95,6 +105,36 @@ matrix_allows() {
     esac
 }
 
+decision_allows() {
+    local status="$1"
+    local disposition="$2"
+    local decision="$3"
+
+    case "$status:$disposition:$decision" in
+        works:verified-no-change:verify|works:resolved-repaired:fix|works:resolved-repaired:harden)
+            return 0
+            ;;
+        works-but-thin:open:harden|works-but-thin:open:verify|works-but-thin:resolved-repaired:fix|works-but-thin:resolved-repaired:harden|works-but-thin:verified-no-change:verify|works-but-thin:deferred-owned:defer)
+            return 0
+            ;;
+        fix-now:open:fix|fix-now:resolved-repaired:fix|fix-now:resolved-removed:remove|fix-now:resolved-merged:merge)
+            return 0
+            ;;
+        misleading:open:fix|misleading:open:remove|misleading:resolved-repaired:fix|misleading:resolved-removed:remove|misleading:resolved-merged:merge)
+            return 0
+            ;;
+        duplicate-stale:open:merge|duplicate-stale:open:remove|duplicate-stale:resolved-merged:merge|duplicate-stale:resolved-removed:remove|duplicate-stale:resolved-repaired:fix)
+            return 0
+            ;;
+        honest-deferred:open:defer|honest-deferred:deferred-owned:defer)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
 path_from_pointer() {
     local pointer="$1"
     case "$pointer" in
@@ -125,6 +165,9 @@ validate_pointer() {
     case "$pointer" in
         path:*|doc:*)
             ptr_path="$(path_from_pointer "$pointer")"
+            if [[ "$ptr_path" == *.md || "$ptr_path" == *.mdx ]]; then
+                [[ "$pointer" == doc:* ]] || fail "Markdown pointer must use doc: at $ledger_path:$line_no: $pointer"
+            fi
             [[ -e "$ptr_path" ]] || fail "referenced path does not exist at $ledger_path:$line_no: $pointer"
             ;;
         cmd:*)
@@ -179,7 +222,12 @@ validate_related_id_shape() {
 validate_date() {
     local value="$1"
     local line_no="$2"
+    local normalized
     [[ "$value" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] \
+        || fail "invalid last_verified date at $ledger_path:$line_no: $value"
+    normalized="$(date -d "$value" +%F 2>/dev/null)" \
+        || fail "invalid last_verified date at $ledger_path:$line_no: $value"
+    [[ "$normalized" == "$value" ]] \
         || fail "invalid last_verified date at $ledger_path:$line_no: $value"
 }
 
@@ -189,7 +237,7 @@ maybe_warn_stale() {
     local id="$3"
 
     case "$status" in
-        works|works-but-thin)
+        works|works-but-thin|honest-deferred)
             ;;
         *)
             return 0
@@ -215,7 +263,7 @@ line_no=0
 header_seen=0
 scope_row_count=0
 
-while IFS= read -r line; do
+while IFS= read -r line || [[ -n "$line" ]]; do
     line_no=$((line_no + 1))
 
     if [[ "$line_no" -eq 1 ]]; then
@@ -223,6 +271,9 @@ while IFS= read -r line; do
         header_seen=1
         continue
     fi
+
+    field_count="$(awk -F '\t' '{print NF}' <<< "$line")"
+    [[ "$field_count" -eq 17 ]] || fail "expected 17 fields at $ledger_path:$line_no, found $field_count"
 
     normalized_line="${line//$'\t'/$'\x1f'}"
     IFS=$'\x1f' read -r id surface source related_ids wave_scope owner claim actual_or_gap status disposition last_verified evidence_sources repro verification decision next_slice notes extra <<< "$normalized_line"
@@ -245,6 +296,7 @@ while IFS= read -r line; do
     [[ -n "$source" ]] || fail "empty source at $ledger_path:$line_no"
     [[ -n "$wave_scope" ]] || fail "empty wave_scope at $ledger_path:$line_no"
     [[ -n "$owner" ]] || fail "empty owner at $ledger_path:$line_no"
+    [[ -n "${allowed_owners["$owner"]:-}" ]] || fail "owner does not match a feature ownership card at $ledger_path:$line_no: $owner"
     [[ -n "$claim" ]] || fail "empty claim at $ledger_path:$line_no"
     [[ -n "$status" ]] || fail "empty status at $ledger_path:$line_no"
     [[ -n "$disposition" ]] || fail "empty disposition at $ledger_path:$line_no"
@@ -259,6 +311,7 @@ while IFS= read -r line; do
     is_allowed_disposition "$disposition" || fail "invalid disposition at $ledger_path:$line_no: $disposition"
     is_allowed_decision "$decision" || fail "invalid decision at $ledger_path:$line_no: $decision"
     matrix_allows "$status" "$disposition" || fail "invalid disposition for status at $ledger_path:$line_no: $status/$disposition"
+    decision_allows "$status" "$disposition" "$decision" || fail "invalid decision for status/disposition at $ledger_path:$line_no: $status/$disposition/$decision"
     validate_date "$last_verified" "$line_no"
     validate_pointer_list "$source" "$line_no" "source"
     validate_pointer_list "$evidence_sources" "$line_no" "evidence"

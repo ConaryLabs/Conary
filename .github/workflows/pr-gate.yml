@@ -50,8 +50,14 @@ jobs:
         run: diff -u docs/superpowers/documentation-accuracy-audit-inventory.tsv <(bash scripts/docs-audit-inventory.sh)
       - name: Check docs truth invariants
         run: bash scripts/check-doc-truth.sh
+      - name: Test docs truth checker
+        run: bash scripts/test-doc-truth.sh
+      - name: Test feature coherency validator
+        run: bash scripts/test-coherency-ledger.sh
       - name: Check feature coherency ledger
         run: bash scripts/check-coherency-ledger.sh docs/superpowers/feature-coherency-ledger.tsv
+      - name: Check feature coherency completed scopes
+        run: bash scripts/check-coherency-wave-scopes.sh docs/superpowers/feature-coherency-ledger.tsv docs/superpowers/feature-coherency-wave-scopes.tsv
       - name: Check support bundle privacy
         run: bash scripts/test-support-bundle.sh
 
