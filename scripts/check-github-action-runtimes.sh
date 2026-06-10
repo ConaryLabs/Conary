@@ -2,74 +2,78 @@
 set -euo pipefail
 
 repo_root=$(git rev-parse --show-toplevel)
-cd "$repo_root"
+scan_root="${1:-$repo_root}"
 
-fail() {
-  echo "ERROR: $*" >&2
+if [[ ! -d "$scan_root" ]]; then
+  echo "ERROR: scan root does not exist: $scan_root" >&2
   exit 1
+fi
+
+cd "$scan_root"
+
+find_action_files() {
+  {
+    find .github/workflows -maxdepth 1 -type f \( -name '*.yml' -o -name '*.yaml' \) -print 2>/dev/null || true
+    find .github/actions -mindepth 2 -maxdepth 2 -type f -name action.yml -print 2>/dev/null || true
+    find .github/actions -mindepth 2 -maxdepth 2 -type f -name action.yaml -print 2>/dev/null || true
+  } | LC_ALL=C sort
 }
 
-require_ref() {
+extract_uses_refs() {
   local file="$1"
-  local pattern="$2"
-  local description="$3"
-
-  grep -Eq "$pattern" "$file" || fail "$description missing in $file"
+  awk -v file="$file" '
+    /^[[:space:]]*-?[[:space:]]*uses:[[:space:]]*/ {
+      ref = $0
+      sub(/^[[:space:]]*-?[[:space:]]*uses:[[:space:]]*/, "", ref)
+      sub(/[[:space:]]+#.*/, "", ref)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", ref)
+      gsub(/^["'\'']|["'\'']$/, "", ref)
+      if (ref != "") {
+        printf "%s:%d:%s\n", file, NR, ref
+      }
+    }
+  ' "$file"
 }
 
-forbid_ref() {
-  local file="$1"
-  local pattern="$2"
-  local description="$3"
+is_local_ref() {
+  [[ "$1" == ./* || "$1" == ../* ]]
+}
 
-  if grep -Eq "$pattern" "$file"; then
-    fail "$description unexpectedly present in $file"
+is_pinned_external_ref() {
+  [[ "$1" =~ @[0-9a-f]{40}$ ]]
+}
+
+mapfile -t action_files < <(find_action_files)
+if [[ "${#action_files[@]}" -eq 0 ]]; then
+  echo "ERROR: no GitHub workflow or action files found under $scan_root" >&2
+  exit 1
+fi
+
+violations=()
+while IFS= read -r entry; do
+  file="${entry%%:*}"
+  rest="${entry#*:}"
+  line="${rest%%:*}"
+  ref="${rest#*:}"
+
+  if is_local_ref "$ref"; then
+    continue
   fi
-}
+  if is_pinned_external_ref "$ref"; then
+    continue
+  fi
 
-require_ref .github/workflows/pr-gate.yml \
-  'actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd' \
-  'Node 24 checkout pin'
-require_ref .github/workflows/release-build.yml \
-  'actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd' \
-  'Node 24 checkout pin'
-require_ref .github/workflows/merge-validation.yml \
-  'actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd' \
-  'Node 24 checkout pin'
-require_ref .github/workflows/scheduled-ops.yml \
-  'actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd' \
-  'Node 24 checkout pin'
+  violations+=("${file}:${line}: unpinned external action ${ref}")
+done < <(
+  for file in "${action_files[@]}"; do
+    extract_uses_refs "$file"
+  done
+)
 
-require_ref .github/workflows/release-build.yml \
-  'actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7' \
-  'Node 24 cache pin'
-require_ref .github/actions/setup-rust-workspace/action.yml \
-  'actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7' \
-  'Node 24 setup action cache pin'
-require_ref .github/workflows/release-build.yml \
-  'actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f' \
-  'Node 24 upload-artifact pin'
-require_ref .github/workflows/release-build.yml \
-  'actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c' \
-  'Node 24 download-artifact pin'
-forbid_ref .github/workflows/pr-gate.yml \
-  'actions/dependency-review-action@' \
-  'dependency-review-action'
-forbid_ref .github/workflows/release-build.yml \
-  'softprops/action-gh-release@' \
-  'softprops action-gh-release'
-forbid_ref .github/workflows/pr-gate.yml \
-  'FORCE_JAVASCRIPT_ACTIONS_TO_NODE24:[[:space:]]*"?true"?' \
-  'forced Node 24 workflow override'
-forbid_ref .github/workflows/release-build.yml \
-  'FORCE_JAVASCRIPT_ACTIONS_TO_NODE24:[[:space:]]*"?true"?' \
-  'forced Node 24 workflow override'
+if [[ "${#violations[@]}" -ne 0 ]]; then
+  printf 'ERROR: unpinned GitHub Action references found:\n' >&2
+  printf '  %s\n' "${violations[@]}" >&2
+  exit 1
+fi
 
-require_ref .github/workflows/pr-gate.yml \
-  'dependency-graph/compare/' \
-  'custom dependency review API call'
-require_ref .github/workflows/release-build.yml \
-  'gh release create' \
-  'CLI GitHub release publication'
-
-echo "GitHub Actions runtime pins look Node 24-ready."
+echo "GitHub Actions runtime pins are fully pinned."

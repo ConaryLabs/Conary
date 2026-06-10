@@ -24,6 +24,28 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  workflow-runtime-policy:
+    name: workflow-runtime-policy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Check GitHub Actions runtime policy
+        run: bash scripts/check-github-action-runtimes.sh
+      - name: Test GitHub Actions runtime policy checker
+        run: bash scripts/test-github-action-runtimes.sh
+
+  release-matrix-policy:
+    name: release-matrix-policy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Check release matrix workflow alignment
+        run: bash scripts/check-release-matrix.sh
+      - name: Test release matrix policy
+        run: bash scripts/test-release-matrix.sh
+      - name: Test Remi deploy helper
+        run: bash scripts/test-remi-deploy-helper.sh
+
   docs-truth:
     name: docs-truth
     runs-on: ubuntu-latest
@@ -48,6 +70,63 @@ jobs:
         run: bash scripts/check-coherency-ledger.sh docs/superpowers/feature-coherency-ledger.tsv
       - name: Check feature coherency completed scopes
         run: bash scripts/check-coherency-wave-scopes.sh docs/superpowers/feature-coherency-ledger.tsv docs/superpowers/feature-coherency-wave-scopes.tsv
+
+  fmt:
+    name: fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: ./.github/actions/setup-rust-workspace
+        with:
+          components: rustfmt
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+  dependency-consistency:
+    name: dependency-consistency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Check Rust dependency consistency
+        run: python3 scripts/check-rust-dependency-consistency.py
+
+  clippy:
+    name: clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: ./.github/actions/setup-rust-workspace
+        with:
+          components: clippy
+      - name: Run clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  workspace-tests:
+    name: workspace-tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: ./.github/actions/setup-rust-workspace
+      - name: Run workspace tests
+        run: cargo test --workspace --exclude conary-test --verbose
+
+  conary-test-crate:
+    name: conary-test-crate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: ./.github/actions/setup-rust-workspace
+      - name: Test conary-test
+        run: cargo test -p conary-test --verbose
+
+  doctests:
+    name: doctests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: ./.github/actions/setup-rust-workspace
+      - name: Run doctests
+        run: cargo test --doc --workspace --verbose
 
   local-smoke:
     name: local-smoke
