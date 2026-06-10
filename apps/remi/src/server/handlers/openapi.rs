@@ -74,6 +74,65 @@ pub async fn openapi_spec() -> Response {
                     "responses": { "204": { "description": "Deleted" }, "404": { "description": "Not found" } }
                 }
             },
+            "/v1/admin/test-fixtures/{path}": {
+                "put": {
+                    "operationId": "uploadTestFixture",
+                    "summary": "Upload an integration-test fixture",
+                    "description": "Uploads a fixture blob under the requested catch-all path. Requires admin or test-data write authorization.",
+                    "tags": ["test-harness"],
+                    "security": [{ "bearerAuth": [] }],
+                    "parameters": [{ "name": "path", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Fixture path relative to the test fixture root" }],
+                    "requestBody": {
+                        "required": true,
+                        "content": { "application/octet-stream": { "schema": { "type": "string", "format": "binary" } } }
+                    },
+                    "responses": { "200": { "description": "Fixture uploaded" }, "401": { "description": "Invalid or missing token" }, "403": { "description": "Insufficient scope" } }
+                }
+            },
+            "/v1/admin/test-artifacts/{path}": {
+                "put": {
+                    "operationId": "uploadTestArtifact",
+                    "summary": "Upload an integration-test artifact",
+                    "description": "Uploads a test artifact blob under the requested catch-all path. Requires admin or test-data write authorization.",
+                    "tags": ["test-harness"],
+                    "security": [{ "bearerAuth": [] }],
+                    "parameters": [{ "name": "path", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Artifact path relative to the test artifact root" }],
+                    "requestBody": {
+                        "required": true,
+                        "content": { "application/octet-stream": { "schema": { "type": "string", "format": "binary" } } }
+                    },
+                    "responses": { "200": { "description": "Artifact uploaded" }, "401": { "description": "Invalid or missing token" }, "403": { "description": "Insufficient scope" } }
+                }
+            },
+            "/v1/admin/packages/{distro}": {
+                "post": {
+                    "operationId": "uploadPackage",
+                    "summary": "Upload a package artifact",
+                    "description": "Uploads a package artifact for the named distro so test harnesses and package workflows can publish inputs.",
+                    "tags": ["packages"],
+                    "security": [{ "bearerAuth": [] }],
+                    "parameters": [{ "name": "distro", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Distribution key for the uploaded package" }],
+                    "requestBody": {
+                        "required": true,
+                        "content": { "application/octet-stream": { "schema": { "type": "string", "format": "binary" } } }
+                    },
+                    "responses": { "200": { "description": "Package uploaded" }, "401": { "description": "Invalid or missing token" }, "403": { "description": "Insufficient scope" } }
+                }
+            },
+            "/v1/admin/packages/{distro}/{package}/scriptlet-review": {
+                "get": {
+                    "operationId": "getScriptletReviewArtifact",
+                    "summary": "Fetch scriptlet review artifact",
+                    "description": "Returns the scriptlet review artifact for a package uploaded through the admin package surface.",
+                    "tags": ["packages"],
+                    "security": [{ "bearerAuth": [] }],
+                    "parameters": [
+                        { "name": "distro", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Distribution key" },
+                        { "name": "package", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Package identifier" }
+                    ],
+                    "responses": { "200": { "description": "Scriptlet review artifact" }, "401": { "description": "Invalid or missing token" }, "404": { "description": "Artifact not found" } }
+                }
+            },
             "/v1/admin/events": {
                 "get": {
                     "operationId": "sseEvents",
@@ -174,6 +233,16 @@ pub async fn openapi_spec() -> Response {
                     "responses": { "202": { "description": "Sync started" }, "401": { "description": "Invalid or missing token" }, "404": { "description": "Repository not found" } }
                 }
             },
+            "/v1/admin/refresh": {
+                "post": {
+                    "operationId": "refreshRepos",
+                    "summary": "Refresh upstream repository state",
+                    "description": "Triggers a repository refresh across configured upstreams. Use repository sync endpoints for per-repo refreshes.",
+                    "tags": ["repos"],
+                    "security": [{ "bearerAuth": [] }],
+                    "responses": { "202": { "description": "Refresh queued" }, "401": { "description": "Invalid or missing token" }, "403": { "description": "Insufficient scope" } }
+                }
+            },
             "/v1/admin/federation/peers": {
                 "get": {
                     "operationId": "listPeers",
@@ -249,6 +318,115 @@ pub async fn openapi_spec() -> Response {
                         }}}
                     },
                     "responses": { "200": { "description": "Configuration updated" }, "400": { "description": "Invalid configuration" }, "401": { "description": "Invalid or missing token" } }
+                }
+            },
+            "/v1/admin/test-runs/gc": {
+                "delete": {
+                    "operationId": "testRunGarbageCollect",
+                    "summary": "Garbage collect old test-run data",
+                    "description": "Deletes expired test-run data and artifacts according to the server's retention policy.",
+                    "tags": ["test-harness"],
+                    "security": [{ "bearerAuth": [] }],
+                    "responses": { "200": { "description": "Garbage collection completed" }, "401": { "description": "Invalid or missing token" }, "403": { "description": "Insufficient scope" } }
+                }
+            },
+            "/v1/admin/test-health": {
+                "get": {
+                    "operationId": "testHealth",
+                    "summary": "Check test-data service health",
+                    "description": "Returns health information for the Remi test-data API.",
+                    "tags": ["test-harness"],
+                    "security": [{ "bearerAuth": [] }],
+                    "responses": { "200": { "description": "Test-data service health" }, "401": { "description": "Invalid or missing token" } }
+                }
+            },
+            "/v1/admin/test-runs": {
+                "get": {
+                    "operationId": "listTestRuns",
+                    "summary": "List test runs",
+                    "description": "Returns recorded integration-test runs with status and timing metadata.",
+                    "tags": ["test-harness"],
+                    "security": [{ "bearerAuth": [] }],
+                    "responses": { "200": { "description": "Array of test runs" }, "401": { "description": "Invalid or missing token" } }
+                },
+                "post": {
+                    "operationId": "createTestRun",
+                    "summary": "Create a test run",
+                    "description": "Creates a test-run record for harness result ingestion.",
+                    "tags": ["test-harness"],
+                    "security": [{ "bearerAuth": [] }],
+                    "requestBody": {
+                        "required": true,
+                        "content": { "application/json": { "schema": { "type": "object" } } }
+                    },
+                    "responses": { "201": { "description": "Test run created" }, "400": { "description": "Invalid request" }, "401": { "description": "Invalid or missing token" } }
+                }
+            },
+            "/v1/admin/test-runs/{id}": {
+                "get": {
+                    "operationId": "getTestRun",
+                    "summary": "Get test-run details",
+                    "description": "Returns a single test run by identifier.",
+                    "tags": ["test-harness"],
+                    "security": [{ "bearerAuth": [] }],
+                    "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Test run identifier" }],
+                    "responses": { "200": { "description": "Test run" }, "401": { "description": "Invalid or missing token" }, "404": { "description": "Test run not found" } }
+                },
+                "put": {
+                    "operationId": "updateTestRun",
+                    "summary": "Update a test run",
+                    "description": "Updates status or metadata for an existing test run.",
+                    "tags": ["test-harness"],
+                    "security": [{ "bearerAuth": [] }],
+                    "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Test run identifier" }],
+                    "requestBody": {
+                        "required": true,
+                        "content": { "application/json": { "schema": { "type": "object" } } }
+                    },
+                    "responses": { "200": { "description": "Test run updated" }, "400": { "description": "Invalid request" }, "401": { "description": "Invalid or missing token" }, "404": { "description": "Test run not found" } }
+                }
+            },
+            "/v1/admin/test-runs/{id}/results": {
+                "post": {
+                    "operationId": "pushTestResult",
+                    "summary": "Push a test result",
+                    "description": "Appends or updates result data for a test run.",
+                    "tags": ["test-harness"],
+                    "security": [{ "bearerAuth": [] }],
+                    "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Test run identifier" }],
+                    "requestBody": {
+                        "required": true,
+                        "content": { "application/json": { "schema": { "type": "object" } } }
+                    },
+                    "responses": { "200": { "description": "Result accepted" }, "400": { "description": "Invalid result" }, "401": { "description": "Invalid or missing token" }, "404": { "description": "Test run not found" } }
+                }
+            },
+            "/v1/admin/test-runs/{id}/tests/{test_id}": {
+                "get": {
+                    "operationId": "getTestDetail",
+                    "summary": "Get test detail",
+                    "description": "Returns one test's result detail within a test run.",
+                    "tags": ["test-harness"],
+                    "security": [{ "bearerAuth": [] }],
+                    "parameters": [
+                        { "name": "id", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Test run identifier" },
+                        { "name": "test_id", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Manifest test identifier" }
+                    ],
+                    "responses": { "200": { "description": "Test detail" }, "401": { "description": "Invalid or missing token" }, "404": { "description": "Test not found" } }
+                }
+            },
+            "/v1/admin/test-runs/{id}/tests/{test_id}/logs": {
+                "get": {
+                    "operationId": "getTestLogs",
+                    "summary": "Get test logs",
+                    "description": "Returns captured logs for one test within a test run.",
+                    "tags": ["test-harness"],
+                    "security": [{ "bearerAuth": [] }],
+                    "parameters": [
+                        { "name": "id", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Test run identifier" },
+                        { "name": "test_id", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Manifest test identifier" }
+                    ],
+                    "responses": { "200": { "description": "Test logs" }, "401": { "description": "Invalid or missing token" }, "404": { "description": "Logs not found" } }
                 }
             },
             "/v1/admin/audit": {
@@ -379,5 +557,63 @@ mod tests {
         assert!(!json_text.contains("/v1/admin/ci/workflows"));
         assert!(!json_text.contains("ci:read"));
         assert!(!json_text.contains("ci:trigger"));
+    }
+
+    #[tokio::test]
+    async fn openapi_spec_documents_external_admin_route_families() {
+        let resp = openapi_spec().await;
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let spec: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let paths = spec
+            .get("paths")
+            .and_then(serde_json::Value::as_object)
+            .expect("OpenAPI spec should contain a paths object");
+
+        for (path, methods) in [
+            ("/v1/admin/tokens", &["get", "post"][..]),
+            ("/v1/admin/tokens/{id}", &["delete"][..]),
+            ("/v1/admin/test-fixtures/{path}", &["put"][..]),
+            ("/v1/admin/test-artifacts/{path}", &["put"][..]),
+            ("/v1/admin/packages/{distro}", &["post"][..]),
+            (
+                "/v1/admin/packages/{distro}/{package}/scriptlet-review",
+                &["get"][..],
+            ),
+            ("/v1/admin/repos", &["get", "post"][..]),
+            ("/v1/admin/repos/{name}", &["get", "put", "delete"][..]),
+            ("/v1/admin/repos/{name}/sync", &["post"][..]),
+            ("/v1/admin/refresh", &["post"][..]),
+            ("/v1/admin/federation/peers", &["get", "post"][..]),
+            ("/v1/admin/federation/peers/{id}", &["delete"][..]),
+            ("/v1/admin/federation/peers/{id}/health", &["get"][..]),
+            ("/v1/admin/federation/config", &["get", "put"][..]),
+            ("/v1/admin/test-runs/gc", &["delete"][..]),
+            ("/v1/admin/test-health", &["get"][..]),
+            ("/v1/admin/test-runs", &["get", "post"][..]),
+            ("/v1/admin/test-runs/{id}", &["get", "put"][..]),
+            ("/v1/admin/test-runs/{id}/results", &["post"][..]),
+            ("/v1/admin/test-runs/{id}/tests/{test_id}", &["get"][..]),
+            (
+                "/v1/admin/test-runs/{id}/tests/{test_id}/logs",
+                &["get"][..],
+            ),
+            ("/v1/admin/audit", &["get", "delete"][..]),
+            ("/v1/admin/events", &["get"][..]),
+        ] {
+            let path_item = paths
+                .get(path)
+                .unwrap_or_else(|| panic!("OpenAPI spec missing path {path}"));
+
+            for method in methods {
+                assert!(
+                    path_item.get(*method).is_some(),
+                    "OpenAPI spec missing {method} operation for {path}"
+                );
+            }
+        }
     }
 }
