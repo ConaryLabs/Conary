@@ -16,8 +16,10 @@ where the operation can mutate the host. New package requests should send
 compatibility alias for existing clients during the migration window.
 
 PolicyKit authorization is currently fail-closed. Root and the daemon identity
-can perform daemon operations. Non-root PolicyKit write authorization is not
-implemented until Conary has a real DBus check and policy-file contract.
+can perform daemon operations. Other non-root peers may use read-oriented query
+surfaces but cannot perform daemon write operations while PolicyKit write
+authorization remains unimplemented. Membership in `sudo`, `wheel`, or a
+distribution-specific numeric GID is not a default daemon admin path.
 
 ## Route Reference
 

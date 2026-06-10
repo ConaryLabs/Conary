@@ -207,19 +207,6 @@ mod tests {
     }
 
     #[test]
-    fn test_require_auth_admin_group_allowed() {
-        let trusted_gid = 42_424;
-        let checker = AuthChecker::new().add_trusted_gid(trusted_gid);
-        let creds = Some(PeerCredentials {
-            pid: std::process::id(),
-            uid: nix::unistd::geteuid().as_raw(),
-            gid: trusted_gid,
-        });
-        assert!(require_auth(&checker, &creds, Action::Install).is_ok());
-        assert!(require_auth(&checker, &creds, Action::Remove).is_ok());
-    }
-
-    #[test]
     fn test_require_auth_regular_user_denied() {
         let checker = AuthChecker::new();
         let creds = Some(PeerCredentials {
