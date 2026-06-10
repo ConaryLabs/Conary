@@ -126,16 +126,23 @@ not cover the task or when you are debugging the underlying service path itself.
 - Use the normal admin account (`peter@ssh.conary.io`) plus passwordless,
   least-privilege `sudo`; root SSH login is not part of the supported deploy
   path.
-- Stage source under `~/conary-src/` on the admin account rather than under
-  `/root/`
 - Exclude `target/`, `.git/`, and `.worktrees/`
-- Build `remi`, stop the service before replacing the live binary, then restart
-  and verify the local health endpoint
 - The durable deploy entry point is the root-owned helper installed at
   `/usr/local/sbin/conary-remi-deploy`, with the sudo policy tracked in
   `deploy/sudoers/remi`. The helper owns privileged actions for publishing
   Conary release artifacts, replacing the Remi binary, and applying operational
   Remi concurrency config.
+- Normal Remi binary replacement is driven by GitHub Actions
+  `release-build` -> `deploy-and-verify`. The workflow stages the built bundle
+  on the host, then calls `/usr/local/sbin/conary-remi-deploy deploy-remi`.
+- When the workflow updates Remi conversion concurrency during a binary deploy,
+  it calls `configure-concurrency ... --skip-restart` before `deploy-remi` so
+  the rollout performs one service restart and one health check.
+- Conary release artifact publication through the same helper verifies the
+  CI-produced `SHA256SUMS` file from the staging directory before installing
+  files into `/conary/releases/<version>`. The helper copies that verified
+  checksum file as release evidence, refuses symlinked trust inputs, and
+  requires `<artifact>.ccs.sig` whenever a staged `.ccs` artifact is present.
 - Bootstrap or repair deploy access once from an existing privileged shell with
   `sudo scripts/install-remi-deploy-access.sh`. It installs
   `deploy/remi-deploy-helper.sh` to `/usr/local/sbin/conary-remi-deploy`,
@@ -143,6 +150,12 @@ not cover the task or when you are debugging the underlying service path itself.
   sudoers file with `visudo -cf`.
 - After bootstrap, `ssh peter@ssh.conary.io 'sudo -n /usr/local/sbin/conary-remi-deploy verify-access'`
   should succeed without prompting for a password.
+- `scripts/rebuild-remi.sh` is retired for production deploys. It now fails
+  closed and points operators back to the GitHub release/deploy flow and the
+  root-owned helper.
+- Host-local credential files such as ignored `deploy/.credentials.toml` are not
+  canonical deployment instructions; tracked operations docs and deploy helpers
+  are the source of truth.
 - The public frontends currently share the Remi host but deploy as two separate
   static sites:
   `conary.io` syncs to `/conary/site/`, while `remi.conary.io` syncs to

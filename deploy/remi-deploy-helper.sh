@@ -18,7 +18,7 @@ usage() {
 usage:
   conary-remi-deploy deploy-conary <version> <staging-dir>
   conary-remi-deploy deploy-remi <version> <bundle.tar.gz>
-  conary-remi-deploy configure-concurrency <max-concurrent>
+  conary-remi-deploy configure-concurrency <max-concurrent> [--skip-restart]
   conary-remi-deploy verify-access
 USAGE
     exit 2
@@ -102,6 +102,27 @@ deploy_conary() {
     shopt -u nullglob
     (( ${#files[@]} > 0 )) || die "staging directory is empty: $staging"
 
+    local checksum_file="${staging}/SHA256SUMS"
+    [[ -f "$checksum_file" && ! -L "$checksum_file" ]] ||
+        die "missing plain release checksum file: ${checksum_file}"
+    (
+        cd "$staging"
+        sha256sum -c SHA256SUMS >/dev/null
+    ) || die "release checksum verification failed for: $staging"
+
+    local ccs_source=""
+    shopt -s nullglob
+    local ccs_files=("$staging"/*.ccs)
+    shopt -u nullglob
+    for file in "${ccs_files[@]}"; do
+        [[ -f "$file" && ! -L "$file" ]] || die "refusing non-regular CCS artifact: $file"
+        [[ -f "${file}.sig" && ! -L "${file}.sig" ]] ||
+            die "missing plain CCS signature for: $file"
+        if [[ -z "$ccs_source" ]]; then
+            ccs_source="$file"
+        fi
+    done
+
     local file base
     for file in "${files[@]}"; do
         [[ -f "$file" && ! -L "$file" ]] || die "refusing non-regular release artifact: $file"
@@ -109,30 +130,9 @@ deploy_conary() {
         install_owned_file 0644 "$file" "${release_dir}/${base}"
     done
 
-    local ccs_source=""
-    shopt -s nullglob
-    for file in "$staging"/*.ccs; do
-        [[ -f "$file" && ! -L "$file" ]] || die "refusing non-regular CCS artifact: $file"
-        ccs_source="$file"
-        break
-    done
-    shopt -u nullglob
-
     if [[ -n "$ccs_source" ]]; then
         install_owned_file 0644 "$ccs_source" "${self_update_dir}/conary-${version}.ccs"
-        if [[ -f "${ccs_source}.sig" && ! -L "${ccs_source}.sig" ]]; then
-            install_owned_file 0644 "${ccs_source}.sig" "${self_update_dir}/conary-${version}.ccs.sig"
-        fi
-    fi
-
-    (
-        cd "$release_dir"
-        rm -f SHA256SUMS SHA256SUMS.tmp
-        sha256sum -- * > SHA256SUMS.tmp
-        mv SHA256SUMS.tmp SHA256SUMS
-    )
-    if [[ -z "$ROOT" ]]; then
-        chown conary:conary "${release_dir}/SHA256SUMS"
+        install_owned_file 0644 "${ccs_source}.sig" "${self_update_dir}/conary-${version}.ccs.sig"
     fi
 
     ln -sfn "$version" "${releases_root}/latest"
@@ -244,7 +244,10 @@ case "${1:-}" in
         deploy_remi "$2" "$3"
         ;;
     configure-concurrency)
-        [[ $# -eq 2 ]] || usage
+        [[ $# -eq 2 || ( $# -eq 3 && "$3" == "--skip-restart" ) ]] || usage
+        if [[ $# -eq 3 ]]; then
+            SKIP_RESTART=1
+        fi
         configure_concurrency "$2"
         ;;
     verify-access)

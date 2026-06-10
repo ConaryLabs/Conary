@@ -24,6 +24,14 @@ the absolute run date, distro, suite, and pass counts.
 | `conaryd` | binary, package artifacts, or source build | `.github/workflows/release-build.yml`, `scripts/release.sh conaryd`, `scripts/release-matrix.sh` | tester post must pin an exact commit or release tag | source-build-only until daemon preview artifacts are linked | checksums: pending for binaries; signature status: pending for binaries; SBOM/provenance status: pending for binaries; Unix-socket auth check; package-job queue smoke | local daemon preview | Forge staging deploy is paused; package jobs keep the CLI live-mutation acknowledgement boundary | `cargo build -p conaryd`; expected clean-VM build time must be measured before daemon tester post |
 | `conary-test` | binary, package artifacts, or source build | `.github/workflows/release-build.yml`, `scripts/release.sh conary-test`, `scripts/release-matrix.sh` | tester post must pin an exact commit or release tag | source-build-only until validation-tooling artifacts are linked | checksums: pending for binaries; signature status: pending for binaries; SBOM/provenance status: pending for binaries; suite inventory parse; fixture manifest check | validation tooling | QEMU/KVM suites require a capable local host while remote validation is paused | `cargo build -p conary-test`; expected clean-VM build time must be measured before validation tester post |
 
+Deploy-helper artifact publication uses CI-produced trust inputs as evidence:
+`conary-remi-deploy deploy-conary` verifies the staged `SHA256SUMS` file before
+installing release files, copies the verified checksum file into the installed
+release directory, refuses symlinked trust inputs, and requires a sibling
+`.ccs.sig` whenever a staged `.ccs` artifact is present. This does not by itself
+make public binary downloads preview-supported; rows remain source-build-only
+until concrete artifact URLs or paths are listed above.
+
 ## Evidence Command Block
 
 Run these commands from the repository root before publishing a limited-preview

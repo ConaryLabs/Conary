@@ -180,6 +180,37 @@ run_repo_matrix() {
     )
 }
 
+create_release_policy_fixture() {
+    local repo
+
+    repo="$(mktemp -d "${REPO_ROOT}/.tmp-release-matrix-test.XXXXXX")"
+    mkdir -p "$repo/scripts" "$repo/.github/workflows" "$repo/docs/operations"
+    cp "$REPO_ROOT/scripts/release-matrix.sh" "$repo/scripts/release-matrix.sh"
+    cp "$REPO_ROOT/.github/workflows/release-build.yml" "$repo/.github/workflows/release-build.yml"
+    cp "$REPO_ROOT/.github/workflows/deploy-and-verify.yml" "$repo/.github/workflows/deploy-and-verify.yml"
+    cp "$REPO_ROOT/.github/workflows/merge-validation.yml" "$repo/.github/workflows/merge-validation.yml"
+    cp "$REPO_ROOT/docs/operations/release-artifact-matrix.md" "$repo/docs/operations/release-artifact-matrix.md"
+    chmod +x "$repo/scripts/release-matrix.sh"
+    printf '%s\n' "$repo"
+}
+
+assert_check_release_matrix_fails() {
+    local repo="$1"
+    local expected="$2"
+    local output status
+
+    set +e
+    output="$(bash "$REPO_ROOT/scripts/check-release-matrix.sh" "$repo" 2>&1)"
+    status=$?
+    set -e
+
+    if [[ "$status" -eq 0 ]]; then
+        fail "check-release-matrix should fail for fixture containing $expected"
+    fi
+
+    assert_contains "$output" "$expected" "check-release-matrix failure should name $expected"
+}
+
 test_resolve_tag_remi_canonical() {
     local output
     output="$(run_matrix resolve-tag remi-v0.5.0 --format shell)"
@@ -310,6 +341,36 @@ test_release_dry_run_conary_test_uses_owned_manifest_baseline() {
     assert_contains "$output" "Tag: conary-test-v0.7.1" "conary-test should bump from the owned-manifest baseline"
 }
 
+test_check_release_matrix_rejects_conaryd_deploy_jobs_when_paused() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    cat >> "$repo/.github/workflows/deploy-and-verify.yml" <<'YAML'
+
+  deploy-conaryd:
+    name: deploy-conaryd
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo deploy
+YAML
+
+    assert_check_release_matrix_fails "$repo" "deploy-conaryd"
+}
+
+test_check_release_matrix_rejects_conary_test_deploy_jobs() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    cat >> "$repo/.github/workflows/deploy-and-verify.yml" <<'YAML'
+
+  verify-conary-test:
+    name: verify-conary-test
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo verify
+YAML
+
+    assert_check_release_matrix_fails "$repo" "verify-conary-test"
+}
+
 main() {
     local -a tests=(
         test_resolve_tag_remi_canonical
@@ -326,6 +387,8 @@ main() {
         test_release_dry_run_remi_prefers_highest_numeric_history
         test_release_dry_run_conaryd_canonical_history
         test_release_dry_run_conary_test_uses_owned_manifest_baseline
+        test_check_release_matrix_rejects_conaryd_deploy_jobs_when_paused
+        test_check_release_matrix_rejects_conary_test_deploy_jobs
     )
 
     local test_name
