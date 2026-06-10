@@ -90,8 +90,11 @@ feature surface, keep it only in the documentation accuracy ledger.
 - `surface`: command, route, MCP tool, doc claim, module feature, or operation.
 - `source`: where the surface is advertised, routed, or documented.
 - `related_ids`: other coherency rows that must move with this one, or empty.
+- `wave_scope`: wave and selected scope, such as `1a-root-cli`.
 - `owner`: owning subsystem or feature ownership card.
 - `claim`: concise statement of what the surface promises.
+- `actual_or_gap`: current behavior, missing behavior, contradiction, or thin
+  spot.
 - `status`: current classification.
 - `disposition`: closure method when the row is resolved.
 - `last_verified`: ISO 8601 date when the current status was last checked.
@@ -105,11 +108,27 @@ feature surface, keep it only in the documentation accuracy ledger.
 
 Avoid vague entries such as "needs work." If a row cannot name a concrete
 surface, owner, and next slice, it is not ready for the ledger.
+`actual_or_gap` is mandatory for `fix-now`, `misleading`, `duplicate-stale`,
+and `works-but-thin` rows.
 
 TSV fields must stay single-line. Encode embedded newlines as `\n`, tabs as
 `\t`, and multi-value lists with semicolons. The validation script should reject
 raw tabs inside fields, duplicate IDs, invalid status or disposition values,
-unknown ID prefixes, and referenced source paths that do not exist.
+unknown ID prefixes, and invalid typed source pointers.
+
+Use typed source pointers so the validator can distinguish filesystem paths
+from commands and logical surfaces:
+
+- `path:apps/conary/src/cli/mod.rs:10-40`
+- `doc:README.md:120-130`
+- `cmd:cargo run -p conary -- --help`
+- `test:cargo test -p conary --lib cli::tests`
+- `route:GET /v1/transactions`
+- `mcp:remi/tool-name`
+
+The validator should require path existence only for `path:` and `doc:`
+pointers. It may syntax-check the other pointer forms without pretending they
+are filesystem paths.
 
 ## Status Taxonomy
 
@@ -134,7 +153,8 @@ thin across two later waves without a changed next slice, reclassify it as
 
 ### Disposition Taxonomy
 
-- `open`: still being investigated or awaiting a repair decision.
+- `open`: active in the current wave and carrying non-empty `owner`,
+  `decision`, `next_slice`, `verification`, and `last_verified` fields.
 - `verified-no-change`: proof showed the current surface is honest.
 - `resolved-repaired`: implementation, tests, docs, or UX were fixed.
 - `resolved-removed`: stale claim or dead surface was removed.
@@ -150,6 +170,26 @@ Rows with `works` or `works-but-thin` status should be re-verified before being
 cited as current evidence if `last_verified` is more than 90 days old. The
 ledger validator may warn on stale verification dates; it should not block
 emergency repair work solely because older rows need refresh.
+
+Untriaged findings belong in wave scratch output, not the durable ledger. Once a
+row is added to `feature-coherency-ledger.tsv`, it must already have enough
+evidence to pick a status, owner, decision, next slice, and verification gate.
+
+### Closure Matrix
+
+- `works` closes as `verified-no-change` or `resolved-repaired`.
+- `works-but-thin` can remain `open` only inside the current wave, or close as
+  `resolved-repaired`, `verified-no-change`, or `deferred-owned` after the
+  missing proof, docs, UX, or edge-case slice is explicit.
+- `fix-now` closes only as `resolved-repaired`, `resolved-removed`, or
+  `resolved-merged`.
+- `misleading` closes only as `resolved-repaired`, `resolved-removed`, or
+  `resolved-merged`; if the feature is intentionally unavailable, first make
+  the active surface honest, verify that refusal or documentation, then
+  reclassify it as `honest-deferred` with `deferred-owned`.
+- `duplicate-stale` closes only as `resolved-merged`, `resolved-removed`, or
+  `resolved-repaired`.
+- `honest-deferred` closes as `deferred-owned`.
 
 ## Review And Repair Workflow
 
@@ -217,8 +257,13 @@ Sequence the first wave into sub-waves:
 - **Wave 1c+:** one additional command family at a time.
 
 Each sub-wave must leave behind at least one resolved row or one implemented
-repair, no unresolved `fix-now` row for the selected scope, and passing focused
-verification before the next sub-wave begins.
+repair, no unresolved `fix-now`, `misleading`, or `duplicate-stale` row for the
+selected scope, and passing focused verification before the next sub-wave
+begins. Carry-over is allowed only after the active surface is already honest
+and the row is reclassified to `honest-deferred` with `deferred-owned`, an
+owner, a next slice, and verification evidence. The ledger validator or report
+script should have a scope-completion mode that rejects open `fix-now`,
+`misleading`, and `duplicate-stale` rows in a completed scope.
 
 Defer these to later, separate waves:
 
@@ -264,6 +309,12 @@ Each wave should choose the smallest meaningful proof set:
   during `cargo build -p conary`; inspect or sweep that generated output for
   help-text drift, but do not commit ignored generated manpages unless the
   tracking policy changes.
+- Wave 1a proof: run `cargo check -p conary`, run the focused CLI tests from
+  the feature ownership card, run `cargo build -p conary` so the ignored
+  manpage is regenerated locally, capture root help and selected subcommand
+  help, then sweep the selected CLI/help/manpage/docs scope for
+  `TODO|not implemented|stub|future|unsupported|broken`. The sweep output must
+  be fixed, ledgered, or explicitly marked non-public or out of scope.
 - Command behavior changes: focused package tests listed in
   `docs/modules/feature-ownership.md`, plus integration tests when the change
   crosses command boundaries.
@@ -284,9 +335,10 @@ Each wave should choose the smallest meaningful proof set:
 - Coherency ledger changes: add a validation script, such as
   `scripts/check-coherency-ledger.sh`, with basic checks for the header,
   duplicate IDs, valid ID namespaces, valid status and disposition values,
-  single-line TSV fields, valid `last_verified` dates, existing referenced
-  source paths, and stale-date warnings before the first ledger is treated as
-  durable.
+  closure-matrix compatibility, single-line TSV fields, valid `last_verified`
+  dates, accepted source-pointer prefixes, existing `path:` and `doc:`
+  references, stale-date warnings, and scope-completion checks before the first
+  ledger is treated as durable.
 
 Broad gates such as `cargo clippy --workspace --all-targets -- -D warnings`
 and `cargo fmt --check` remain end-of-branch or high-risk verification gates,
@@ -297,8 +349,11 @@ not mandatory after every small ledger row.
 The design is successful when:
 
 - the first ledger exists and is populated by evidence, not vibes;
-- each first-wave finding has a status, decision, next slice, and verification;
-- bounded `fix-now` rows are repaired rather than parked;
+- each first-wave finding has a wave scope, status, decision, `actual_or_gap`
+  summary, next slice, and verification;
+- bounded `fix-now`, `misleading`, and `duplicate-stale` rows are repaired,
+  merged, removed, or reclassified to verified honest deferral rather than
+  parked;
 - active docs/help no longer overstate known unsupported surfaces discovered in
   the wave;
 - deferred rows are honest, specific, and owned;
@@ -312,9 +367,12 @@ The design is successful when:
 
 ## Implementation Planning Notes
 
-The implementation plan should start with the CLI/public-route inventory and
-ledger scaffolding, then execute one bounded repair wave. It should prefer
-small commits grouped by coherent surface area:
+The implementation plan should start with the CLI help, dispatch routing,
+generated manpage, and CLI-relevant active-doc claim inventory plus ledger
+scaffolding, then execute one bounded repair wave. HTTP, MCP, and conaryd
+public routes are out of Wave 1 unless a CLI command in the selected scope
+directly advertises or depends on that route. The plan should prefer small
+commits grouped by coherent surface area:
 
 - ledger scaffold and inventory script or manual extraction notes;
 - `scripts/check-coherency-ledger.sh` or an equivalent basic integrity gate;
