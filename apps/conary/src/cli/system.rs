@@ -93,7 +93,7 @@ pub enum SystemCommands {
         db: DbArgs,
 
         /// Copy files to CAS for full management (enables rollback)
-        /// Used by: default (package adopt), --system, --refresh
+        /// Used by: default (package adopt), --system
         #[arg(long, conflicts_with_all = ["status", "convert", "sync_hook", "from_sync_hook"])]
         full: bool,
 
