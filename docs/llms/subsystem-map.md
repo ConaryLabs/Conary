@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-06-09
-revision: 14
-summary: Add generation builder child-module routing
+revision: 15
+summary: Add remove command child-module routing
 ---
 
 # Assistant Subsystem Map
@@ -64,6 +64,14 @@ summary: Add generation builder child-module routing
   `apps/conary/src/commands/install/inner.rs`,
   `apps/conary/src/commands/install/batch.rs`,
   `apps/conary/src/commands/install/restore.rs`,
+  `apps/conary/src/commands/remove.rs`,
+  `apps/conary/src/commands/remove/command.rs`,
+  `apps/conary/src/commands/remove/autoremove.rs`,
+  `apps/conary/src/commands/remove/transaction.rs`,
+  `apps/conary/src/commands/remove/scriptlets.rs`,
+  `apps/conary/src/commands/remove/legacy_replay.rs`,
+  `apps/conary/src/commands/remove/execution_path.rs`,
+  `apps/conary/src/commands/remove/types.rs`,
   `crates/conary-core/src/scriptlet/mod.rs`,
   `crates/conary-core/src/scriptlet/executor.rs`,
   `crates/conary-core/src/scriptlet/arguments.rs`,
@@ -72,6 +80,8 @@ summary: Add generation builder child-module routing
   `crates/conary-core/src/scriptlet/legacy.rs`,
   `crates/conary-core/src/scriptlet/runtime.rs`, and
   `docs/modules/test-fixtures.md`
+- Remove command direct helper fixtures and tests:
+  `apps/conary/src/commands/remove/test_support.rs`
 - Generation building, artifact export, composefs mounting, `/etc` merge, and GC:
   `crates/conary-core/src/generation/builder.rs`,
   `crates/conary-core/src/generation/builder/create.rs`,

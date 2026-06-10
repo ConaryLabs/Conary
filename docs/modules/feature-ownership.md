@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-06-09
-revision: 4
-summary: Add generation builder child-module ownership
+revision: 5
+summary: Add remove command child-module ownership
 ---
 
 # Feature Ownership And Interaction Gates
@@ -101,6 +101,13 @@ mutation flows for local package operations.
 `apps/conary/src/commands/update/pinning.rs`;
 `apps/conary/src/commands/update/delta_stats.rs`;
 `apps/conary/src/commands/remove.rs`;
+`apps/conary/src/commands/remove/command.rs`;
+`apps/conary/src/commands/remove/autoremove.rs`;
+`apps/conary/src/commands/remove/transaction.rs`;
+`apps/conary/src/commands/remove/scriptlets.rs`;
+`apps/conary/src/commands/remove/legacy_replay.rs`;
+`apps/conary/src/commands/remove/execution_path.rs`;
+`apps/conary/src/commands/remove/types.rs`;
 `docs/modules/test-fixtures.md`; `docs/operations/daily-driver-ux-matrix.md`.
 
 **Neighbor systems:** `crates/conary-core/src/transaction/`;
@@ -111,7 +118,8 @@ mutation flows for local package operations.
 `crates/conary-core/src/scriptlet/legacy.rs`;
 `crates/conary-core/src/ccs/legacy_replay.rs`; conaryd package jobs.
 
-**Focused proof:** `cargo test -p conary --test live_host_mutation_safety`;
+**Focused proof:** `cargo test -p conary --lib commands::remove`;
+`cargo test -p conary --test live_host_mutation_safety`;
 `cargo test -p conary --lib legacy_replay`.
 
 **Interaction gate:** `cargo test -p conary --test bundle_replay`;

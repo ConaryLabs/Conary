@@ -489,6 +489,14 @@ materialization, kernel/initramfs detection, boot asset resolution, and shared
 builder fixtures into child modules while preserving recovery rebuild paths and
 source-text runtime contract coverage.
 
+The Phase 23 remove command decomposition landed for the former remove command
+hotspot, `apps/conary/src/commands/remove.rs`. It keeps `remove.rs` as the
+command hub while moving remove orchestration, autoremove fixed-point planning,
+transactional DB removal, execution-path detection, native and legacy scriptlet
+handling, and shared remove fixtures into child modules without changing CLI
+routes, state-restore integration, or legacy replay refusal-before-mutation
+behavior.
+
 ## Verification Commands
 
 - `bash scripts/docs-audit-inventory.sh`
