@@ -563,9 +563,9 @@ public tester copy is tracked by
 
 ## Final Counts
 
-- Total tracked doc-like files audited: 166
+- Total tracked doc-like files audited: 167
 - `verified-no-change`: 12
-- `corrected`: 67
+- `corrected`: 68
 - `archived`: 73
 - `retained-historical`: 14
 - Remaining pending rows: 0
