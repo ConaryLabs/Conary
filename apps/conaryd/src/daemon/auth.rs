@@ -133,21 +133,15 @@ impl PeerCredentials {
         }
     }
 
-    /// Check if the peer is a member of an admin group
-    ///
-    /// Checks the peer's primary GID and supplementary groups for
-    /// wheel (10) or sudo (27). Supplementary groups are read from
-    /// `/proc/{pid}/status` with UID cross-validation to mitigate
-    /// PID reuse races.
-    pub fn is_admin_group(&self) -> bool {
-        self.has_any_gid(&[10, 27])
-    }
-
     /// Check if the peer's primary or supplementary groups contain any of the given GIDs
     ///
     /// Reads supplementary groups from `/proc/{pid}/status` with UID
     /// cross-validation against SO_PEERCRED to detect PID reuse races.
     pub(crate) fn has_any_gid(&self, gids: &[u32]) -> bool {
+        if gids.is_empty() {
+            return false;
+        }
+
         if gids.contains(&self.gid) {
             return true;
         }
@@ -256,42 +250,19 @@ impl Action {
 
 /// Authorization checker
 pub struct AuthChecker {
-    /// Allow members of admin groups (wheel, sudo) full access
-    allow_admin_groups: bool,
     /// Require PolicyKit for non-root write operations
     require_polkit: bool,
-    /// Trusted GIDs that get full access
+    /// Explicit future-policy/test hook for trusted GIDs.
+    ///
+    /// Empty by default while PolicyKit remains the fail-closed production path.
     trusted_gids: Vec<u32>,
-}
-
-/// Resolve admin group GIDs at runtime using group name lookup.
-/// Falls back to well-known defaults (wheel=10, sudo=27) if lookup fails.
-fn resolve_admin_gids() -> Vec<u32> {
-    let mut gids = vec![0]; // root is always trusted
-
-    // Try to resolve "wheel" group
-    match nix::unistd::Group::from_name("wheel") {
-        Ok(Some(group)) => gids.push(group.gid.as_raw()),
-        _ => gids.push(10), // fallback to well-known GID
-    }
-
-    // Try to resolve "sudo" group
-    match nix::unistd::Group::from_name("sudo") {
-        Ok(Some(group)) => gids.push(group.gid.as_raw()),
-        _ => gids.push(27), // fallback to well-known GID
-    }
-
-    gids.sort_unstable();
-    gids.dedup();
-    gids
 }
 
 impl Default for AuthChecker {
     fn default() -> Self {
         Self {
-            allow_admin_groups: true,
             require_polkit: true,
-            trusted_gids: resolve_admin_gids(),
+            trusted_gids: Vec::new(),
         }
     }
 }
@@ -302,22 +273,20 @@ impl AuthChecker {
         Self::default()
     }
 
-    /// Disable admin group access (only root gets full access)
-    pub fn disable_admin_groups(mut self) -> Self {
-        self.allow_admin_groups = false;
-        self.trusted_gids.retain(|&gid| gid == 0);
-        self
-    }
-
     /// Disable PolicyKit requirement (all authenticated users get full access)
     pub fn disable_polkit(mut self) -> Self {
         self.require_polkit = false;
         self
     }
 
-    /// Add a trusted GID
+    /// Add an explicit trusted GID for tests or future reviewed policy.
+    ///
+    /// This is not used by the production default. The default checker keeps
+    /// non-root writes fail-closed until a real PolicyKit policy path exists.
     pub fn add_trusted_gid(mut self, gid: u32) -> Self {
         self.trusted_gids.push(gid);
+        self.trusted_gids.sort_unstable();
+        self.trusted_gids.dedup();
         self
     }
 
@@ -358,7 +327,9 @@ impl AuthChecker {
             return Permission::Full;
         }
 
-        // Check trusted GIDs (primary + supplementary)
+        // Explicit trusted-GID hooks are disabled by default while PolicyKit is
+        // stubbed. If a future reviewed policy opts in, check primary and
+        // supplementary groups with PID/UID revalidation in `has_any_gid`.
         if creds.has_any_gid(&self.trusted_gids) {
             return Permission::Full;
         }
@@ -603,34 +574,6 @@ mod tests {
     }
 
     #[test]
-    fn test_peer_credentials_is_admin_primary_gid() {
-        let wheel = PeerCredentials {
-            pid: 1000,
-            uid: 1000,
-            gid: 10, // wheel
-        };
-        assert!(wheel.is_admin_group());
-
-        let sudo = PeerCredentials {
-            pid: 1000,
-            uid: 1000,
-            gid: 27, // sudo
-        };
-        assert!(sudo.is_admin_group());
-
-        let user = PeerCredentials {
-            pid: 1000,
-            uid: 1000,
-            gid: 1000,
-        };
-        // May still pass if current process has wheel/sudo supplementary groups,
-        // but with pid=1000 pointing to a random process, supplementary lookup
-        // is unreliable. Only assert the primary GID path here.
-        // The supplementary path is tested via read_supplementary_groups below.
-        let _ = user.is_admin_group(); // exercise the code path
-    }
-
-    #[test]
     fn test_read_proc_status_current_process() {
         let pid = std::process::id();
         let result = PeerCredentials::read_proc_status(pid);
@@ -705,19 +648,29 @@ mod tests {
     }
 
     #[test]
-    fn test_auth_checker_admin_group() {
+    fn test_default_checker_does_not_trust_distribution_admin_gids() {
         let checker = AuthChecker::new();
-        let wheel_user = PeerCredentials {
-            pid: 1000,
-            uid: 1000,
-            gid: 10, // wheel
-        };
 
-        assert_eq!(checker.check(&wheel_user, Action::Query), Permission::Full);
-        assert_eq!(
-            checker.check(&wheel_user, Action::Install),
-            Permission::Full
-        );
+        for gid in [10, 27] {
+            let user = PeerCredentials {
+                pid: std::process::id(),
+                uid: synthetic_non_daemon_user().uid,
+                gid,
+            };
+
+            assert_eq!(checker.check(&user, Action::Query), Permission::ReadOnly);
+            assert_eq!(checker.check(&user, Action::Install), Permission::Denied);
+            assert_eq!(checker.check(&user, Action::CancelJob), Permission::Denied);
+        }
+    }
+
+    #[test]
+    fn test_explicit_trusted_gid_helper_grants_full_access() {
+        let user = synthetic_non_daemon_user();
+        let checker = AuthChecker::new().add_trusted_gid(user.gid);
+
+        assert_eq!(checker.check(&user, Action::Query), Permission::Full);
+        assert_eq!(checker.check(&user, Action::Install), Permission::Full);
     }
 
     #[test]
