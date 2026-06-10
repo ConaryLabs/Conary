@@ -5,6 +5,9 @@ use anyhow::Result;
 use crate::cli;
 use crate::commands;
 
+// The CLI enum lives in `cli/verify.rs`, while this dispatch file keeps the
+// user-visible root command name (`verify-derivation`) to avoid colliding with
+// trust/signature verification helpers.
 pub(super) async fn dispatch_verify_derivation_command(
     verify_cmd: cli::VerifyCommands,
 ) -> Result<()> {

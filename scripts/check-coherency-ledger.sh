@@ -261,6 +261,7 @@ declare -A seen_ids=()
 declare -a related_refs=()
 line_no=0
 header_seen=0
+data_row_count=0
 scope_row_count=0
 
 while IFS= read -r line || [[ -n "$line" ]]; do
@@ -271,6 +272,7 @@ while IFS= read -r line || [[ -n "$line" ]]; do
         header_seen=1
         continue
     fi
+    data_row_count=$((data_row_count + 1))
 
     field_count="$(awk -F '\t' '{print NF}' <<< "$line")"
     [[ "$field_count" -eq 17 ]] || fail "expected 17 fields at $ledger_path:$line_no, found $field_count"
@@ -340,6 +342,7 @@ while IFS= read -r line || [[ -n "$line" ]]; do
 done < "$ledger_path"
 
 [[ "$header_seen" -eq 1 ]] || fail "ledger header missing from $ledger_path"
+[[ "$data_row_count" -gt 0 ]] || fail "ledger has no rows: $ledger_path"
 
 for ref in "${related_refs[@]}"; do
     IFS='|' read -r referrer related_id ref_line <<< "$ref"

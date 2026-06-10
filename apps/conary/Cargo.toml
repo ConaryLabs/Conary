@@ -12,8 +12,6 @@ categories = ["command-line-utilities"]
 
 [features]
 default = []
-# Experimental features not ready for production use.
-experimental = []
 
 [dependencies]
 # Core library

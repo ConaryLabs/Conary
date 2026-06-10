@@ -49,6 +49,7 @@ Conary is being prepared as an adoption-led limited public preview.
 Remote Forge validation is paused pending a KVM-capable runner.
 The 2026-05-21 Group O local QEMU evidence is recorded.
 The 2026-05-21 Group P local QEMU evidence is recorded.
+Use `conary system adopt --refresh` to refresh adoption tracking.
 EOF
 
     cat > "$root/CHANGELOG.md" <<'EOF'
@@ -92,6 +93,7 @@ EOF
 
     cat > "$root/apps/conary/src/cli/mod.rs" <<'EOF'
 pub enum Commands {
+    Install,
     System,
 }
 EOF
@@ -149,6 +151,8 @@ pub(super) fn v1_router() -> Router<SharedState> {
     Router::new()
         .route("/version", get(version_handler))
         .route("/metrics", get(metrics_handler))
+        .route("/example", get(list_example_handler).post(create_example_handler))
+        .route("/example/{id}", put(update_example_handler).patch(patch_example_handler).delete(delete_example_handler))
         .route("/system/states", get(list_states_handler))
         .route("/system/rollback", post(rollback_handler))
         .route("/system/verify", post(verify_handler))
@@ -200,6 +204,11 @@ EOF
 GET /health | Health check
 GET /v1/version | Version info
 GET /v1/metrics | Metrics
+GET /v1/example | Example list
+POST /v1/example | Example create
+PUT /v1/example/{id} | Example update
+PATCH /v1/example/{id} | Example patch
+DELETE /v1/example/{id} | Example delete
 GET /v1/system/states | Preview stub
 POST /v1/system/rollback | Preview stub
 POST /v1/system/verify | Preview stub
@@ -272,6 +281,10 @@ break_retired_command_doc() {
     printf '\nRun conary adopt nginx\n' >> "$1/README.md"
 }
 
+break_cli_command_reference() {
+    printf '\nUse `conary verify` for package verification.\n' >> "$1/README.md"
+}
+
 break_retired_command_parser() {
     printf '#[command(alias = "adopt-system")]\npub struct Adopt;\n' > "$1/apps/conary/src/cli/mod.rs"
 }
@@ -324,8 +337,13 @@ break_atomic_takeover_claim() {
     printf '\n<p>Conary atomically takes over native packages during adoption.</p>\n' >> "$1/site/src/routes/install/+page.svelte"
 }
 
+break_required_scan_path() {
+    rm -rf "$1/docs/operations"
+}
+
 expect_pass
 expect_failure "schema drift" break_schema_version 'schema.*68.*SCHEMA_VERSION.*69'
+expect_failure "unknown CLI command reference" break_cli_command_reference 'unknown conary root command'
 expect_failure "retired command doc" break_retired_command_doc 'retired command'
 expect_failure "retired command parser" break_retired_command_parser 'retired command'
 expect_failure "PolicyKit overclaim" break_policykit_claim 'PolicyKit'
@@ -339,5 +357,6 @@ expect_failure "site schema drift" break_site_schema_version 'schema.*65.*SCHEMA
 expect_failure "every install EROFS claim" break_every_install_erofs_claim 'every install builds an EROFS generation'
 expect_failure "under a minute claim" break_under_a_minute_claim 'under-a-minute preview claim'
 expect_failure "atomic takeover claim" break_atomic_takeover_claim 'atomically absorbed/taken over'
+expect_failure "missing required scan path" break_required_scan_path 'required path is missing: docs/operations'
 
 echo "docs truth self-tests passed."

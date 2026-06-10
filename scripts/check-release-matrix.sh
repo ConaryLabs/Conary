@@ -62,6 +62,35 @@ forbid_deploy_jobs_for_none_product() {
     done
 }
 
+validate_deploy_routing_pairs() {
+    local allowed_pairs pair
+    allowed_pairs="$(
+        sed -n '/case "\$PRODUCT:\$DEPLOY_MODE"/,/;;/p' "$deploy_workflow" |
+            sed -nE 's/^[[:space:]]*([A-Za-z0-9:_|-]+)\)[[:space:]]*$/\1/p' |
+            head -n 1
+    )"
+    [[ -n "$allowed_pairs" ]] || fail "deploy validate-routing case arm not found"
+
+    declare -A expected=(
+        ["conary:release_bundle"]=1
+        ["remi:remote_bundle"]=1
+        ["conaryd:none"]=1
+        ["conary-test:none"]=1
+    )
+    declare -A seen=()
+
+    IFS='|' read -ra pairs <<< "$allowed_pairs"
+    for pair in "${pairs[@]}"; do
+        [[ -n "$pair" ]] || continue
+        [[ -n "${expected["$pair"]:-}" ]] || fail "unexpected deploy routing pair: $pair"
+        seen["$pair"]=1
+    done
+
+    for pair in "${!expected[@]}"; do
+        [[ -n "${seen["$pair"]:-}" ]] || fail "missing deploy routing pair: $pair"
+    done
+}
+
 [[ -f "$artifact_matrix" ]] || fail "missing $artifact_matrix"
 
 require_match "$release_build" 'conary-test-v\*' 'conary-test release trigger'
@@ -115,6 +144,7 @@ require_match "$deploy_workflow" 'No deploy lane defined for product=' 'explicit
 require_match "$deploy_workflow" 'no-deploy-required:' 'explicit no-deploy lane'
 require_match "$deploy_workflow" "needs\\.resolve\\.outputs\\.deploy_mode == 'none'" 'deploy_mode none handling'
 require_match "$deploy_workflow" 'conaryd:none' 'temporary conaryd no-deploy route'
+validate_deploy_routing_pairs
 require_match "$deploy_workflow" 'BUNDLE_NAME: \$\{\{ needs\.resolve\.outputs\.bundle_name \}\}' 'bundle_name-driven artifact lookup'
 require_match "$deploy_workflow" 'gh api "repos/\$\{?GH_REPO\}?/actions/runs/\$\{?SOURCE_RUN\}?" --jq '\''\.head_branch'\''' 'source-run head-branch lookup for release fallback'
 require_match "$deploy_workflow" 'gh release download "\$source_tag"' 'release-asset fallback for expired source-run artifacts'
