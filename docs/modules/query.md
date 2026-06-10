@@ -1,15 +1,16 @@
 ---
-last_updated: 2026-06-02
-revision: 3
-summary: Refresh query dispatch owner paths
+last_updated: 2026-06-10
+revision: 4
+summary: Clarify SBOM command routing
 ---
 
 # Query Module (apps/conary/src/commands/query/)
 
 Package, file, dependency, and repository queries against the local SQLite
 database. Label management remains nested under `conary query`, while the
-CycloneDX SBOM surface now lives at the top-level `conary sbom` command even
-though its implementation still lives in
+derivation-aware CycloneDX SBOM surface lives at the top-level `conary sbom`
+command in `apps/conary/src/commands/derivation_sbom.rs`. The installed-package
+database SBOM surface is `conary system sbom` and remains implemented in
 `apps/conary/src/commands/query/sbom.rs`.
 
 ## Data Flow: Query Dispatch
@@ -38,7 +39,14 @@ conary query <subcommand> [args]
 Related top-level command:
 conary sbom [--profile ... | --derivation ...]
         |
-  apps/conary/src/dispatch/root.rs -> commands/query/sbom.rs       (CycloneDX derivation export)
+  apps/conary/src/dispatch/root.rs -> commands/derivation_sbom.rs  (CycloneDX derivation export)
+
+Related system command:
+conary system sbom <package|all> [--format cyclonedx]
+        |
+  apps/conary/src/cli/system.rs -> apps/conary/src/dispatch/system.rs
+        |
+  apps/conary/src/commands/system.rs -> commands/query/sbom.rs     (installed package DB export)
 ```
 
 ## Key Types
@@ -84,10 +92,12 @@ Primary tables hit by queries:
   entries by native slot, lifecycle path, replay decision, reason code, and
   evidence digest without printing preserved raw script bodies by default.
 
-## Related SBOM Command
+## Related SBOM Commands
 
-`cmd_sbom()` lives in this module tree, but the user-facing surface is the
-top-level `conary sbom` command rather than `conary query sbom`.
+`cmd_derivation_sbom()` handles the top-level `conary sbom` command. It lives
+outside this module tree in `apps/conary/src/commands/derivation_sbom.rs`
+because it exports derivation/profile metadata rather than installed-package
+query rows.
 
 It produces CycloneDX JSON from derivation data, targeting either a single
 derivation or a named profile.
@@ -98,6 +108,11 @@ Each component includes:
 - Tool metadata (vendor: ConaryLabs, version from Cargo)
 
 Output to stdout or file via `--output`.
+
+`cmd_sbom()` in `apps/conary/src/commands/query/sbom.rs` handles
+`conary system sbom`. That path reads the local package database and exports an
+installed-package SBOM for one package or `all`; it is not the top-level
+derivation SBOM command.
 
 ## Architecture Context
 
