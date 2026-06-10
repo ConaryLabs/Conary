@@ -6,6 +6,7 @@ cd "$repo_root"
 
 release_build=".github/workflows/release-build.yml"
 deploy_workflow=".github/workflows/deploy-and-verify.yml"
+merge_workflow=".github/workflows/merge-validation.yml"
 artifact_matrix="docs/operations/release-artifact-matrix.md"
 
 fail() {
@@ -72,8 +73,30 @@ require_match "$release_build" 'build-conary-test:' 'conary-test build lane'
 require_match "$release_build" 'publish-remi:' 'remi release publication lane'
 require_match "$release_build" 'publish-conaryd:' 'conaryd release publication lane'
 require_match "$release_build" 'publish-conary-test:' 'conary-test release publication lane'
+require_match "$release_build" 'workspace-validation:' 'release workspace validation lane'
+require_match "$release_build" 'workspace-validation:[\s\S]*needs: prepare' 'release workspace validation should depend on prepare'
+require_match "$release_build" 'cargo fmt --check' 'release formatting validation'
+require_match "$release_build" 'cargo clippy --workspace --all-targets -- -D warnings' 'release clippy validation'
+require_match "$release_build" 'cargo test --workspace --exclude conary-test --verbose' 'release workspace test validation'
+require_match "$release_build" 'cargo test -p conary-test --verbose' 'release conary-test validation'
+require_match "$release_build" 'cargo test --doc --workspace --verbose' 'release doctest validation'
+require_match "$release_build" 'build-ccs:[\s\S]*needs: \[prepare, workspace-validation\]' 'ccs build should need workspace validation'
+require_match "$release_build" 'build-remi:[\s\S]*needs: \[prepare, workspace-validation\]' 'remi build should need workspace validation'
+require_match "$release_build" 'publish-remi:[\s\S]*needs: \[prepare, workspace-validation, build-remi\]' 'remi publish should need workspace validation'
 require_match "$release_build" 'name: \$\{\{ needs\.prepare\.outputs\.bundle_name \}\}' 'dynamic bundle artifact naming'
 require_match "$release_build" 'gh release create' 'CLI-based GitHub release publication'
+
+require_match "$merge_workflow" 'workflow-runtime-policy:' 'merge validation workflow runtime policy job'
+require_match "$merge_workflow" 'bash scripts/test-github-action-runtimes\.sh' 'merge validation action checker test'
+require_match "$merge_workflow" 'release-matrix-policy:' 'merge validation release matrix policy job'
+require_match "$merge_workflow" 'bash scripts/test-release-matrix\.sh' 'merge validation release matrix test'
+require_match "$merge_workflow" 'bash scripts/test-remi-deploy-helper\.sh' 'merge validation deploy helper test'
+require_match "$merge_workflow" 'fmt:' 'merge validation formatting job'
+require_match "$merge_workflow" 'dependency-consistency:' 'merge validation dependency consistency job'
+require_match "$merge_workflow" 'clippy:' 'merge validation clippy job'
+require_match "$merge_workflow" 'workspace-tests:' 'merge validation workspace test job'
+require_match "$merge_workflow" 'conary-test-crate:' 'merge validation conary-test job'
+require_match "$merge_workflow" 'doctests:' 'merge validation doctest job'
 
 require_match "$deploy_workflow" 'bundle_name: \$\{\{ steps\.meta\.outputs\.bundle_name \}\}' 'deploy resolve bundle_name output'
 require_match "$deploy_workflow" 'deploy_mode: \$\{\{ steps\.meta\.outputs\.deploy_mode \}\}' 'deploy resolve deploy_mode output'

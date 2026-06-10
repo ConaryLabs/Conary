@@ -86,10 +86,30 @@ jobs:
           path: release-metadata/metadata.json
           retention-days: 5
 
+  workspace-validation:
+    name: workspace-validation
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: ./.github/actions/setup-rust-workspace
+        with:
+          components: clippy,rustfmt
+      - name: Check formatting
+        run: cargo fmt --check
+      - name: Run clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Run workspace tests
+        run: cargo test --workspace --exclude conary-test --verbose
+      - name: Test conary-test
+        run: cargo test -p conary-test --verbose
+      - name: Run doctests
+        run: cargo test --doc --workspace --verbose
+
   build-ccs:
     name: build-ccs
     if: ${{ needs.prepare.outputs.product == 'conary' }}
-    needs: prepare
+    needs: [prepare, workspace-validation]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -150,7 +170,7 @@ jobs:
   build-rpm:
     name: build-rpm
     if: ${{ needs.prepare.outputs.product == 'conary' }}
-    needs: prepare
+    needs: [prepare, workspace-validation]
     runs-on: ubuntu-latest
     container:
       image: registry.fedoraproject.org/fedora:43
@@ -200,7 +220,7 @@ jobs:
   build-deb:
     name: build-deb
     if: ${{ needs.prepare.outputs.product == 'conary' }}
-    needs: prepare
+    needs: [prepare, workspace-validation]
     runs-on: ubuntu-latest
     container:
       image: docker.io/library/ubuntu:26.04
@@ -252,7 +272,7 @@ jobs:
   build-arch:
     name: build-arch
     if: ${{ needs.prepare.outputs.product == 'conary' }}
-    needs: prepare
+    needs: [prepare, workspace-validation]
     runs-on: ubuntu-latest
     container:
       image: docker.io/library/archlinux:latest
@@ -308,7 +328,7 @@ jobs:
   bundle-conary:
     name: bundle-conary
     if: ${{ needs.prepare.outputs.product == 'conary' }}
-    needs: [prepare, build-ccs, build-rpm, build-deb, build-arch]
+    needs: [prepare, workspace-validation, build-ccs, build-rpm, build-deb, build-arch]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -378,7 +398,7 @@ jobs:
   build-remi:
     name: build-remi
     if: ${{ needs.prepare.outputs.product == 'remi' }}
-    needs: prepare
+    needs: [prepare, workspace-validation]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -437,7 +457,7 @@ jobs:
   publish-remi:
     name: publish-remi
     if: ${{ needs.prepare.outputs.product == 'remi' && needs.prepare.outputs.dry_run != 'true' }}
-    needs: [prepare, build-remi]
+    needs: [prepare, workspace-validation, build-remi]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -467,7 +487,7 @@ jobs:
   build-conaryd:
     name: build-conaryd
     if: ${{ needs.prepare.outputs.product == 'conaryd' }}
-    needs: prepare
+    needs: [prepare, workspace-validation]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -526,7 +546,7 @@ jobs:
   publish-conaryd:
     name: publish-conaryd
     if: ${{ needs.prepare.outputs.product == 'conaryd' && needs.prepare.outputs.dry_run != 'true' }}
-    needs: [prepare, build-conaryd]
+    needs: [prepare, workspace-validation, build-conaryd]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -556,7 +576,7 @@ jobs:
   build-conary-test:
     name: build-conary-test
     if: ${{ needs.prepare.outputs.product == 'conary-test' }}
-    needs: prepare
+    needs: [prepare, workspace-validation]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -615,7 +635,7 @@ jobs:
   publish-conary-test:
     name: publish-conary-test
     if: ${{ needs.prepare.outputs.product == 'conary-test' && needs.prepare.outputs.dry_run != 'true' }}
-    needs: [prepare, build-conary-test]
+    needs: [prepare, workspace-validation, build-conary-test]
     runs-on: ubuntu-latest
     permissions:
       contents: write
