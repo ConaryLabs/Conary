@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-06-09
-revision: 6
-summary: Add bootstrap command child-module ownership
+last_updated: 2026-06-10
+revision: 7
+summary: Refresh assistant command routing
 ---
 
 # Feature Ownership And Interaction Gates
@@ -78,8 +78,14 @@ proof.
 mutation flows for local package operations.
 
 **Start here:** `apps/conary/src/commands/install/mod.rs`;
+`apps/conary/src/commands/install/` for child modules;
 `apps/conary/src/commands/install/command.rs`;
 `apps/conary/src/commands/install/acquire.rs`;
+`apps/conary/src/commands/install/blocklist.rs`;
+`apps/conary/src/commands/install/ccs_transaction.rs`;
+`apps/conary/src/commands/install/conversion.rs`;
+`apps/conary/src/commands/install/dep_mode.rs`;
+`apps/conary/src/commands/install/dep_resolution.rs`;
 `apps/conary/src/commands/install/validation.rs`;
 `apps/conary/src/commands/install/dependencies.rs`;
 `apps/conary/src/commands/install/execute.rs`;
@@ -91,7 +97,11 @@ mutation flows for local package operations.
 `apps/conary/src/commands/install/legacy_replay.rs`;
 `apps/conary/src/commands/install/inner.rs`;
 `apps/conary/src/commands/install/batch.rs`;
+`apps/conary/src/commands/install/prepare.rs`;
+`apps/conary/src/commands/install/resolve.rs`;
 `apps/conary/src/commands/install/restore.rs`;
+`apps/conary/src/commands/install/scriptlets.rs`;
+`apps/conary/src/commands/install/system_pm.rs`;
 `apps/conary/src/commands/update/mod.rs`;
 `apps/conary/src/commands/update/package.rs`;
 `apps/conary/src/commands/update/source_policy.rs`;
@@ -108,6 +118,8 @@ mutation flows for local package operations.
 `apps/conary/src/commands/remove/legacy_replay.rs`;
 `apps/conary/src/commands/remove/execution_path.rs`;
 `apps/conary/src/commands/remove/types.rs`;
+`apps/conary/src/commands/system.rs`;
+`apps/conary/src/commands/live_root.rs`;
 `docs/modules/test-fixtures.md`; `docs/operations/daily-driver-ux-matrix.md`.
 
 **Neighbor systems:** `crates/conary-core/src/transaction/`;
@@ -116,7 +128,9 @@ mutation flows for local package operations.
 `crates/conary-core/src/scriptlet/sandbox.rs`;
 `crates/conary-core/src/scriptlet/process.rs`;
 `crates/conary-core/src/scriptlet/legacy.rs`;
-`crates/conary-core/src/ccs/legacy_replay.rs`; conaryd package jobs.
+`crates/conary-core/src/ccs/legacy_replay.rs`;
+`apps/conary/src/commands/state.rs`;
+`apps/conary/src/commands/provenance.rs`; conaryd package jobs.
 
 **Focused proof:** `cargo test -p conary --lib commands::remove`;
 `cargo test -p conary --test live_host_mutation_safety`;
@@ -141,7 +155,16 @@ legacy replay refusal gates.
 takeover, recover selected-generation handoff state, and provide non-destructive
 escape hatches.
 
-**Start here:** `apps/conary/src/commands/adopt/mod.rs`;
+**Start here:** `apps/conary/src/cli/system.rs` ->
+`apps/conary/src/dispatch/system.rs` ->
+`apps/conary/src/commands/adopt/`;
+`apps/conary/src/commands/adopt/mod.rs`;
+`apps/conary/src/commands/adopt/system.rs`;
+`apps/conary/src/commands/adopt/packages.rs`;
+`apps/conary/src/commands/adopt/refresh.rs`;
+`apps/conary/src/commands/adopt/convert.rs`;
+`apps/conary/src/commands/adopt/hooks.rs`;
+`apps/conary/src/commands/adopt/status.rs`;
 `apps/conary/src/commands/adopt/unadopt.rs`;
 `apps/conary/src/commands/adopt/native_handoff.rs`;
 `docs/modules/source-selection.md`; `docs/ARCHITECTURE.md`.
@@ -225,6 +248,9 @@ next boot, recover publication debt, and export raw/qcow2/ISO carriers.
 `crates/conary-core/src/generation/export.rs`;
 `crates/conary-core/src/generation/artifact.rs`;
 `crates/conary-core/src/generation/gc.rs`;
+`apps/conary/src/commands/system.rs`;
+`apps/conary/src/commands/state.rs`;
+`apps/conary/src/commands/provenance.rs`;
 `docs/operations/post-generation-export-follow-up-roadmap.md`.
 
 **Neighbor systems:** transaction commit, SQLite generation state, image

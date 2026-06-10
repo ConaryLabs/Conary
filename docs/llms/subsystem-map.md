@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-06-10
-revision: 17
-summary: Add conaryd package job adapter routing
+revision: 18
+summary: Refresh assistant command routing
 ---
 
 # Assistant Subsystem Map
@@ -50,8 +50,14 @@ summary: Add conaryd package job adapter routing
 - Install orchestration, legacy replay install adapter behavior, and live-root
   preflight:
   `apps/conary/src/commands/install/mod.rs`,
+  `apps/conary/src/commands/install/` for child modules,
   `apps/conary/src/commands/install/command.rs`,
   `apps/conary/src/commands/install/acquire.rs`,
+  `apps/conary/src/commands/install/blocklist.rs`,
+  `apps/conary/src/commands/install/ccs_transaction.rs`,
+  `apps/conary/src/commands/install/conversion.rs`,
+  `apps/conary/src/commands/install/dep_mode.rs`,
+  `apps/conary/src/commands/install/dep_resolution.rs`,
   `apps/conary/src/commands/install/validation.rs`,
   `apps/conary/src/commands/install/dependencies.rs`,
   `apps/conary/src/commands/install/execute.rs`,
@@ -63,7 +69,12 @@ summary: Add conaryd package job adapter routing
   `apps/conary/src/commands/install/legacy_replay.rs`,
   `apps/conary/src/commands/install/inner.rs`,
   `apps/conary/src/commands/install/batch.rs`,
+  `apps/conary/src/commands/install/prepare.rs`,
+  `apps/conary/src/commands/install/resolve.rs`,
   `apps/conary/src/commands/install/restore.rs`,
+  `apps/conary/src/commands/install/scriptlets.rs`,
+  `apps/conary/src/commands/install/system_pm.rs`,
+  `apps/conary/src/commands/live_root.rs`,
   `apps/conary/src/commands/remove.rs`,
   `apps/conary/src/commands/remove/command.rs`,
   `apps/conary/src/commands/remove/autoremove.rs`,
@@ -99,10 +110,24 @@ summary: Add conaryd package job adapter routing
   `crates/conary-core/src/generation/etc_merge.rs`, and
   `crates/conary-core/src/generation/gc.rs`
 - Adoption, unadoption, and selected-generation native-authority handoff:
+  `apps/conary/src/cli/system.rs` ->
+  `apps/conary/src/dispatch/system.rs` ->
+  `apps/conary/src/commands/adopt/`,
   `apps/conary/src/commands/adopt/mod.rs`,
+  `apps/conary/src/commands/adopt/system.rs`,
+  `apps/conary/src/commands/adopt/packages.rs`,
+  `apps/conary/src/commands/adopt/refresh.rs`,
+  `apps/conary/src/commands/adopt/convert.rs`,
+  `apps/conary/src/commands/adopt/hooks.rs`,
+  `apps/conary/src/commands/adopt/status.rs`,
   `apps/conary/src/commands/adopt/unadopt.rs`,
   `apps/conary/src/commands/adopt/native_handoff.rs`, and
   `apps/conary/tests/integration/remi/manifests/phase3-active-generation-handoff.toml`
+- System state, rollback, verify, GC, provenance, and live-root helpers:
+  `apps/conary/src/commands/system.rs`,
+  `apps/conary/src/commands/state.rs`,
+  `apps/conary/src/commands/provenance.rs`, and
+  `apps/conary/src/commands/live_root.rs`
 - CCS package building, chunking, verification, conversion, install, and
   fixture proof:
   `crates/conary-core/src/ccs/builder.rs`,
