@@ -21,6 +21,16 @@ surfaces but cannot perform daemon write operations while PolicyKit write
 authorization remains unimplemented. Membership in `sudo`, `wheel`, or a
 distribution-specific numeric GID is not a default daemon admin path.
 
+## Package Job Execution Boundary
+
+Daemon install, remove, and update jobs are queued and tracked by `conaryd`, but
+the package operation executor in `apps/conaryd/src/daemon/package_ops.rs`
+currently calls the CLI command functions from the `conary` crate
+(`cmd_install`, `cmd_remove`, and `cmd_update`). Changes to package-job behavior
+therefore need both daemon-route/job proof and the owning CLI package-command
+proof; `package_ops.rs` is the adapter boundary, not an independent package
+manager implementation.
+
 ## Route Reference
 
 The route list below is checked by `scripts/check-doc-truth.sh` against
