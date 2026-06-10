@@ -1,6 +1,11 @@
 // src/commands/remove.rs
 //! Package removal commands
 
+mod execution_path;
+#[cfg(test)]
+pub(super) mod test_support;
+mod types;
+
 use super::open_db;
 use super::progress::{RemovePhase, RemoveProgress};
 use super::{
@@ -27,21 +32,10 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tracing::{info, warn};
 
-pub(crate) struct RemoveInnerResult {
-    pub(crate) changeset_id: i64,
-    pub(crate) snapshot: TroveSnapshot,
-    trove: Trove,
-    stored_scriptlets: Vec<ScriptletEntry>,
-    scriptlet_format: ScriptletPackageFormat,
-    removed_count: usize,
-    dirs_removed: usize,
-    #[allow(dead_code)]
-    planned_pre_remove: Option<LegacyReplayPlan>,
-    legacy_bundle: Option<LegacyScriptletBundle>,
-    legacy_pre_outcomes: Vec<ScriptletOutcome>,
-    legacy_audit_context: Option<LegacyRemoveReplayAuditContext>,
-    planned_post_remove: Option<LegacyReplayPlan>,
-}
+use execution_path::{RemoveExecutionPath, remove_execution_path};
+use types::{LegacyRemoveReplayAuditContext, RemoveInnerResult};
+
+pub(crate) use types::RemoveScriptletOptions;
 
 struct PreparedRemove {
     snapshot: TroveSnapshot,
@@ -59,46 +53,6 @@ struct PreparedRemove {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct LegacyRemoveReplayAuditContext {
-    target_id: String,
-    source_target_id: String,
-    target_compatibility: String,
-    foreign_replay_policy: String,
-    host_policy: HostForeignReplayPolicy,
-    feature_gate_enabled: bool,
-    foreign_override: bool,
-    evidence_digest: Option<String>,
-    compatibility: crate::commands::LegacyReplayCompatibilityAudit,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct RemoveScriptletOptions {
-    no_scripts: bool,
-    sandbox_mode: SandboxMode,
-    legacy_replay: LegacyReplayOptions,
-}
-
-impl RemoveScriptletOptions {
-    pub(crate) fn new(
-        no_scripts: bool,
-        sandbox_mode: SandboxMode,
-        legacy_replay: LegacyReplayOptions,
-    ) -> Self {
-        Self {
-            no_scripts,
-            sandbox_mode,
-            legacy_replay,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RemoveExecutionPath {
-    GenerationAware,
-    MutableLiveRoot,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 enum AutoremoveSkipReason {
     AdoptedNativeAuthority,
     Pinned,
@@ -109,13 +63,6 @@ enum AutoremoveSkipReason {
 struct AutoremovePlan {
     removable: Vec<Trove>,
     skipped: Vec<(Trove, AutoremoveSkipReason)>,
-}
-
-#[cfg(test)]
-#[derive(Debug, Default, PartialEq, Eq)]
-struct DirectRemovalStats {
-    files_removed: usize,
-    dirs_removed: usize,
 }
 
 /// Remove an installed package
@@ -388,37 +335,6 @@ pub async fn cmd_remove(
     // so individual file failure tracking is not applicable.
 
     Ok(())
-}
-
-fn remove_execution_path(db_path: &str) -> Result<RemoveExecutionPath> {
-    let runtime_root =
-        conary_core::runtime_root::ConaryRuntimeRoot::from_db_path(PathBuf::from(db_path));
-    let current_link = runtime_root.root().join("current");
-    let has_current_link = match std::fs::symlink_metadata(&current_link) {
-        Ok(metadata) if metadata.file_type().is_symlink() && !current_link.exists() => {
-            let target = std::fs::read_link(&current_link)
-                .with_context(|| format!("Failed to read {}", current_link.display()))?;
-            anyhow::bail!(
-                "current generation symlink {} -> {} is dangling",
-                current_link.display(),
-                target.display()
-            );
-        }
-        Ok(_) => true,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
-        Err(error) => {
-            return Err(error)
-                .with_context(|| format!("Failed to inspect {}", current_link.display()));
-        }
-    };
-    if !has_current_link && std::env::var_os("CONARY_TEST_SKIP_GENERATION_MOUNT").is_some() {
-        return Ok(RemoveExecutionPath::GenerationAware);
-    }
-    let current = conary_core::generation::mount::current_generation(runtime_root.root())?;
-    Ok(match current {
-        Some(_) => RemoveExecutionPath::GenerationAware,
-        None => RemoveExecutionPath::MutableLiveRoot,
-    })
 }
 
 fn run_post_remove_scriptlet(
@@ -779,74 +695,6 @@ fn print_remove_summary(remove_result: &RemoveInnerResult, stats: &crate::comman
     if stats.dirs_removed > 0 {
         println!("  Directories removed: {}", stats.dirs_removed);
     }
-}
-
-#[cfg(test)]
-fn snapshot_path_under_root(root: &Path, path: &str) -> PathBuf {
-    root.join(path.strip_prefix('/').unwrap_or(path))
-}
-
-#[cfg(test)]
-fn snapshot_entry_is_dir(file: &FileSnapshot) -> bool {
-    file.path.ends_with('/') || (file.permissions as u32 & 0o170000) == 0o040000
-}
-
-#[cfg(test)]
-fn remove_files_from_live_root(
-    root: &Path,
-    snapshot: &TroveSnapshot,
-) -> Result<DirectRemovalStats> {
-    let mut stats = DirectRemovalStats::default();
-    let mut dirs = Vec::new();
-
-    for file in &snapshot.files {
-        let path = snapshot_path_under_root(root, &file.path);
-        if snapshot_entry_is_dir(file) {
-            dirs.push(path);
-            continue;
-        }
-
-        match std::fs::symlink_metadata(&path) {
-            Ok(metadata) if metadata.is_dir() => {
-                dirs.push(path);
-            }
-            Ok(_) => {
-                std::fs::remove_file(&path)
-                    .with_context(|| format!("Failed to remove package file {}", path.display()))?;
-                stats.files_removed += 1;
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                warn!(
-                    "Package file {} was already absent during removal",
-                    path.display()
-                );
-            }
-            Err(error) => {
-                return Err(error)
-                    .with_context(|| format!("Failed to inspect package file {}", path.display()));
-            }
-        }
-    }
-
-    dirs.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
-    dirs.dedup();
-    for dir in dirs {
-        match std::fs::remove_dir(&dir) {
-            Ok(()) => stats.dirs_removed += 1,
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    std::io::ErrorKind::NotFound | std::io::ErrorKind::DirectoryNotEmpty
-                ) => {}
-            Err(error) => {
-                return Err(error).with_context(|| {
-                    format!("Failed to remove package directory {}", dir.display())
-                });
-            }
-        }
-    }
-
-    Ok(stats)
 }
 
 /// Inner remove helper for callers that own the transaction lifecycle.
@@ -1374,6 +1222,7 @@ fn autoremove_identity(trove: &Trove) -> (String, String, Option<String>) {
 
 #[cfg(test)]
 mod tests {
+    use super::test_support::remove_snapshot;
     use super::*;
     use conary_core::ccs::legacy_scriptlets::{
         DecisionCounts, ForeignReplayPolicy, LEGACY_SCRIPTLET_SCHEMA_V1, LegacyScriptletBundle,
@@ -1384,28 +1233,6 @@ mod tests {
     use conary_core::db::models::{InstallSource, InstalledLegacyScriptletBundle, TroveType};
     use std::collections::BTreeMap;
     use tempfile::TempDir;
-
-    fn file_snapshot(path: &str, permissions: i32) -> FileSnapshot {
-        FileSnapshot {
-            path: path.to_string(),
-            sha256_hash: "0".repeat(64),
-            size: 1,
-            permissions,
-            symlink_target: None,
-        }
-    }
-
-    fn remove_snapshot(files: Vec<FileSnapshot>) -> TroveSnapshot {
-        TroveSnapshot {
-            name: "fixture".to_string(),
-            version: "1.0.0".to_string(),
-            architecture: Some("x86_64".to_string()),
-            description: None,
-            install_source: "Package".to_string(),
-            installed_from_repository_id: None,
-            files,
-        }
-    }
 
     #[test]
     fn autoremove_plan_classifies_authority_and_safety_skips() {
@@ -1675,44 +1502,6 @@ mod tests {
             .expect("changeset metadata");
         serde_json::from_str(&raw.expect("changeset metadata should be present"))
             .expect("changeset metadata is JSON")
-    }
-
-    #[test]
-    fn direct_live_root_removal_deletes_files_symlinks_and_empty_dirs() {
-        let tmp = TempDir::new().unwrap();
-        let root = tmp.path();
-        std::fs::create_dir_all(root.join("usr/bin")).unwrap();
-        std::fs::create_dir_all(root.join("usr/share/fixture")).unwrap();
-        std::fs::write(root.join("usr/bin/fixture"), "fixture").unwrap();
-        std::fs::write(root.join("usr/share/fixture/readme"), "fixture").unwrap();
-        std::os::unix::fs::symlink("fixture", root.join("usr/bin/fixture-link")).unwrap();
-
-        let snapshot = remove_snapshot(vec![
-            file_snapshot("/usr/bin/fixture", 0o100755),
-            file_snapshot("/usr/bin/fixture-link", 0o120777),
-            file_snapshot("/usr/share/fixture/readme", 0o100644),
-            file_snapshot("/usr/share/fixture/", 0o040755),
-        ]);
-
-        let stats = remove_files_from_live_root(root, &snapshot).unwrap();
-
-        assert_eq!(stats.files_removed, 3);
-        assert_eq!(stats.dirs_removed, 1);
-        assert!(!root.join("usr/bin/fixture").exists());
-        assert!(!root.join("usr/bin/fixture-link").exists());
-        assert!(!root.join("usr/share/fixture").exists());
-        assert!(root.join("usr/share").exists());
-    }
-
-    #[test]
-    fn direct_live_root_removal_ignores_already_missing_paths() {
-        let tmp = TempDir::new().unwrap();
-        let snapshot = remove_snapshot(vec![file_snapshot("/usr/bin/missing", 0o100755)]);
-
-        let stats = remove_files_from_live_root(tmp.path(), &snapshot).unwrap();
-
-        assert_eq!(stats.files_removed, 0);
-        assert_eq!(stats.dirs_removed, 0);
     }
 
     #[tokio::test]
