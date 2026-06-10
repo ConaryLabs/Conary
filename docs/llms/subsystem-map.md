@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-06-09
-revision: 15
-summary: Add remove command child-module routing
+revision: 16
+summary: Add bootstrap command child-module routing
 ---
 
 # Assistant Subsystem Map
@@ -119,6 +119,20 @@ summary: Add remove command child-module routing
   `crates/conary-core/src/trust/verify.rs`,
   `crates/conary-core/src/trust/client.rs`, and
   `crates/conary-core/src/trust/keys.rs`
+- System bootstrap from scratch, prerequisite validation, seed generation,
+  image creation, and run orchestration:
+  `apps/conary/src/commands/bootstrap/mod.rs`,
+  `apps/conary/src/commands/bootstrap/setup.rs`,
+  `apps/conary/src/commands/bootstrap/phases.rs`,
+  `apps/conary/src/commands/bootstrap/image.rs`,
+  `apps/conary/src/commands/bootstrap/run.rs`,
+  `apps/conary/src/commands/bootstrap/run_record.rs`,
+  `apps/conary/src/commands/bootstrap/run_artifact.rs`,
+  `apps/conary/src/commands/bootstrap/seed.rs`,
+  `apps/conary/src/commands/bootstrap/convergence.rs`,
+  `apps/conary/src/commands/bootstrap/cleanup.rs`,
+  `apps/conary/src/commands/bootstrap/types.rs`, and
+  `apps/conary/src/commands/bootstrap/state.rs`
 - Shared operation vocabulary and daemon-boundary ownership:
   `crates/conary-core/src/operations.rs`,
   `apps/conaryd/src/daemon/mod.rs`, and

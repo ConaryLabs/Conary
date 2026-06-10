@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-06-09
-revision: 20
-summary: Note remove command child modules
+revision: 21
+summary: Note bootstrap command child modules
 ---
 
 # Conary Architecture
@@ -85,7 +85,7 @@ apps/conary/             CLI binary
     +-- dispatch.rs      Public dispatch entrypoint and child-router hub
     +-- dispatch/        Root, system, CCS, model, automation, and namespace routers
     +-- cli/             Clap command definitions
-    +-- commands/        Command implementations (install, repo, query, model/remove hubs + child modules, ccs, bootstrap, system)
+    +-- commands/        Command implementations (install, repo, query, model/remove/bootstrap hubs + child modules, ccs, system)
 
 crates/conary-core/      Core library crate
 +-- src/

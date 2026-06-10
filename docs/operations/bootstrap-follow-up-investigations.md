@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-05-12
-revision: 3
-summary: Deferred architecture follow-ups after composefs atomic activation, bootstrap self-hosting, and generation-export milestones
+last_updated: 2026-06-09
+revision: 4
+summary: Route bootstrap artifact follow-ups to command child modules
 ---
 
 # Bootstrap Follow-Up Investigations
@@ -139,7 +139,10 @@ Relevant files:
 - `crates/conary-core/src/generation/metadata.rs`
 - `crates/conary-core/src/provenance/slsa.rs`
 - `apps/conary/src/commands/provenance.rs`
-- `apps/conary/src/commands/bootstrap/mod.rs`
+- `apps/conary/src/commands/bootstrap/image.rs`
+- `apps/conary/src/commands/bootstrap/run.rs`
+- `apps/conary/src/commands/bootstrap/run_artifact.rs`
+- `apps/conary/src/commands/bootstrap/seed.rs`
 
 ### 5. Keep CCS/CAS Canonical And Treat Compatibility Paths As Projections
 
