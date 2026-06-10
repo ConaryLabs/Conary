@@ -189,6 +189,26 @@ subscriptions, SSE streaming, mutations, or smoke execution.
 | `deploy_status` | Get service-owned deployment status (binary provenance, runtime, WAL pending, service state) |
 | `flush_pending` | Flush pending WAL items to Remi |
 
+## CLI And MCP Surface Relationship
+
+The CLI and MCP surfaces intentionally overlap, but they are not mirrors. The
+CLI is the local human/operator entrypoint for `run`, `serve`, `list`,
+`bootstrap check`, `bootstrap smoke`, image lifecycle commands, deploy
+source/rebuild/restart/status/rollout commands, fixture build/publish, logs,
+health, and manifest reload.
+
+The MCP server is the remote/service orchestration surface. It overlaps with
+suite listing, run start, test logs, image lifecycle, deploy/rebuild/restart
+status, fixture build/publish, and manifest reload, but it also exposes
+server-state operations that do not have direct CLI commands:
+`get_run`, `list_runs`, `get_test`, `list_distros`, `cancel_run`,
+`rerun_test`, `get_run_artifacts`, `cleanup_containers`, and `flush_pending`.
+
+Conversely, `serve`, `bootstrap check`, `bootstrap smoke`, `deploy rollout`,
+and `health` remain CLI-only. When adding or renaming operations, update both
+surfaces only when the workflow needs both local-human and remote-agent access;
+otherwise document the intentional asymmetry here.
+
 Remote Forge validation is temporarily paused while Conary replaces the old VPS
 runner with a KVM-capable host. Use `scripts/local-qemu-validation.sh` on a
 local KVM-capable development machine for temporary QEMU release evidence.
