@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-06-09
-revision: 5
-summary: Add remove command child-module ownership
+revision: 6
+summary: Add bootstrap command child-module ownership
 ---
 
 # Feature Ownership And Interaction Gates
@@ -367,7 +367,18 @@ SSE lifecycle, socket auth, and live-host mutation boundaries.
 **Capability:** validate bootstrap prerequisites, build self-hosting images,
 run dry-run smoke checks, and support local QEMU validation.
 
-**Start here:** `apps/conary/src/commands/bootstrap/`;
+**Start here:** `apps/conary/src/commands/bootstrap/mod.rs`;
+`apps/conary/src/commands/bootstrap/setup.rs`;
+`apps/conary/src/commands/bootstrap/phases.rs`;
+`apps/conary/src/commands/bootstrap/image.rs`;
+`apps/conary/src/commands/bootstrap/run.rs`;
+`apps/conary/src/commands/bootstrap/run_record.rs`;
+`apps/conary/src/commands/bootstrap/run_artifact.rs`;
+`apps/conary/src/commands/bootstrap/seed.rs`;
+`apps/conary/src/commands/bootstrap/convergence.rs`;
+`apps/conary/src/commands/bootstrap/cleanup.rs`;
+`apps/conary/src/commands/bootstrap/types.rs`;
+`apps/conary/src/commands/bootstrap/state.rs`;
 `apps/conary-test/src/bootstrap.rs`;
 `docs/modules/bootstrap.md`;
 `docs/operations/bootstrap-selfhosting-vm.md`;
@@ -376,7 +387,9 @@ run dry-run smoke checks, and support local QEMU validation.
 **Neighbor systems:** recipe versions, image generation, QEMU validation,
 container runtime availability, ignored local artifact paths.
 
-**Focused proof:** `cargo run -p conary-test -- bootstrap check --json`;
+**Focused proof:** `cargo test -p conary --lib commands::bootstrap`;
+`cargo test -p conary --test bootstrap_workflow`;
+`cargo run -p conary-test -- bootstrap check --json`;
 `cargo run -p conary-test -- bootstrap smoke --dry-run --json`.
 
 **Interaction gate:** `cargo run -p conary-test -- bootstrap smoke --json` only

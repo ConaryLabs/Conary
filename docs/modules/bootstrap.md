@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-05-19
-revision: 10
-summary: Document bootstrap inputs, complete generation artifact output, self-host VM overlay, current runtime-export validation, and manifest comparison commands
+last_updated: 2026-06-09
+revision: 11
+summary: Add CLI bootstrap command child-module ownership
 ---
 
 # Bootstrap Module (conary-core/src/bootstrap/)
@@ -11,6 +11,14 @@ without an existing package manager. The package selection and stage structure
 track LFS 13.0-systemd, with recipe-level deviations documented in-tree where
 Conary intentionally diverges (for example, systemd-boot instead of standalone
 GRUB in the qcow2 path).
+
+## CLI Command Owners
+
+The CLI-facing bootstrap commands live under `apps/conary/src/commands/bootstrap/`.
+`mod.rs` is a command hub; focused child modules own setup/status commands,
+phase-build commands, image generation, bootstrap-run orchestration,
+run-record state transitions, generation artifact writing, seed commands,
+convergence checks, and cleanup.
 
 ## Data Flow: Bootstrap Pipeline
 
