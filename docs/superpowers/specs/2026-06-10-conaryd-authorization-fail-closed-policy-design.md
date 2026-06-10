@@ -2,8 +2,9 @@
 
 ## Status
 
-Policy approved for implementation planning. Track 0 from the external audit
-response queue.
+Policy approved for implementation via
+`docs/superpowers/plans/2026-06-10-conaryd-authorization-fail-closed-implementation-plan.md`.
+Track 0 from the external audit response queue.
 
 ## Goal
 
@@ -68,17 +69,20 @@ proper action-specific policy contract.
 
 The implementation plan should keep this small:
 
-1. Add failing auth tests that show non-root GID `10`, GID `27`, and an
-   explicitly added trusted GID do not bypass PolicyKit by default.
+1. Add failing auth tests that show non-root GID `10` and GID `27` do not
+   receive full access from the default checker.
 2. Remove hardcoded group fallback behavior from `resolve_admin_gids`.
 3. Change `AuthChecker::default()` so default trusted groups do not grant
    non-root write access.
-4. Keep `AuthChecker::disable_admin_groups()` only if it remains useful for
+4. Remove `PeerCredentials::is_admin_group()` if no production path uses it, or
+   rename/document it so it cannot be mistaken for the default authorization
+   policy.
+5. Keep `AuthChecker::disable_admin_groups()` only if it remains useful for
    tests; it should not be needed for production safety.
-5. Decide whether `AuthChecker::add_trusted_gid()` remains as a test-only or
+6. Decide whether `AuthChecker::add_trusted_gid()` remains as a test-only or
    future-policy helper. If retained, it must not be used by default and must be
-   documented as an explicit override.
-6. Update module comments and `docs/modules/conaryd.md` so they describe the
+   documented as an explicit override that is outside the production default.
+7. Update module comments and `docs/modules/conaryd.md` so they describe the
    same policy as the code.
 
 The preferred end state is simpler than the current model: authorization checks

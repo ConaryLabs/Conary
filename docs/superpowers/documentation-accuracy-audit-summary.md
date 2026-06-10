@@ -234,6 +234,11 @@ The repo moved materially after the last audit:
   external-audit decision: root and the daemon identity remain trusted, default
   admin-group write bypasses are removed, and non-root daemon writes stay denied
   until a real PolicyKit DBus and policy-file contract exists.
+- The external audit response packet now splits the Fable/Gemini/DeepSeek
+  findings into one umbrella register plus focused design and implementation
+  packets for conaryd authorization, conary-test evidence trust, release and CI
+  safety, deploy artifact integrity, public surface and agent routing truth,
+  and remaining validator soundness follow-up.
 - The system adopt single-package dry-run follow-up note gives the honest
   deferred `conary system adopt <pkg> --dry-run` surface an active owner
   artifact, separating the current truthful refusal from the future true-preview
@@ -601,9 +606,9 @@ public tester copy is tracked by
 
 ## Final Counts
 
-- Total tracked doc-like files audited: 173
+- Total tracked doc-like files audited: 185
 - `verified-no-change`: 12
-- `corrected`: 74
+- `corrected`: 86
 - `archived`: 73
 - `retained-historical`: 14
 - Remaining pending rows: 0
