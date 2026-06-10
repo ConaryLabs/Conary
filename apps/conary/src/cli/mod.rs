@@ -1168,6 +1168,236 @@ mod tests {
     }
 
     #[test]
+    fn parses_system_adopt_system_dry_run_filters() {
+        let cli = Cli::try_parse_from([
+            "conary",
+            "system",
+            "adopt",
+            "--system",
+            "--dry-run",
+            "--pattern",
+            "lib*",
+            "--exclude",
+            "kernel*",
+            "--explicit-only",
+        ])
+        .expect("system adopt --system dry-run filters should parse");
+
+        match cli.command {
+            Some(Commands::System(SystemCommands::Adopt {
+                packages,
+                full,
+                system,
+                status,
+                dry_run,
+                pattern,
+                exclude,
+                explicit_only,
+                refresh,
+                convert,
+                sync_hook,
+                ..
+            })) => {
+                assert!(packages.is_empty());
+                assert!(!full);
+                assert!(system);
+                assert!(!status);
+                assert!(dry_run);
+                assert_eq!(pattern.as_deref(), Some("lib*"));
+                assert_eq!(exclude.as_deref(), Some("kernel*"));
+                assert!(explicit_only);
+                assert!(!refresh);
+                assert!(!convert);
+                assert!(!sync_hook);
+            }
+            _ => panic!("expected system adopt command"),
+        }
+    }
+
+    #[test]
+    fn parses_system_adopt_refresh_quiet_from_sync_hook() {
+        let cli = Cli::try_parse_from([
+            "conary",
+            "system",
+            "adopt",
+            "--refresh",
+            "--quiet",
+            "--from-sync-hook",
+        ])
+        .expect("installed sync hook refresh path should parse");
+
+        match cli.command {
+            Some(Commands::System(SystemCommands::Adopt {
+                packages,
+                full,
+                system,
+                status,
+                dry_run,
+                refresh,
+                convert,
+                sync_hook,
+                quiet,
+                from_sync_hook,
+                ..
+            })) => {
+                assert!(packages.is_empty());
+                assert!(!full);
+                assert!(!system);
+                assert!(!status);
+                assert!(!dry_run);
+                assert!(refresh);
+                assert!(!convert);
+                assert!(!sync_hook);
+                assert!(quiet);
+                assert!(from_sync_hook);
+            }
+            _ => panic!("expected system adopt command"),
+        }
+    }
+
+    #[test]
+    fn rejects_system_adopt_from_sync_hook_with_full() {
+        let err = match Cli::try_parse_from([
+            "conary",
+            "system",
+            "adopt",
+            "--refresh",
+            "--quiet",
+            "--from-sync-hook",
+            "--full",
+        ]) {
+            Ok(_) => panic!("--from-sync-hook must conflict with --full"),
+            Err(err) => err,
+        };
+
+        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn parses_system_adopt_convert_dry_run_jobs() {
+        let cli = Cli::try_parse_from([
+            "conary",
+            "system",
+            "adopt",
+            "--convert",
+            "--dry-run",
+            "--jobs",
+            "4",
+            "--no-chunking",
+        ])
+        .expect("system adopt --convert dry-run jobs should parse");
+
+        match cli.command {
+            Some(Commands::System(SystemCommands::Adopt {
+                packages,
+                convert,
+                dry_run,
+                jobs,
+                no_chunking,
+                system,
+                status,
+                refresh,
+                sync_hook,
+                ..
+            })) => {
+                assert!(packages.is_empty());
+                assert!(convert);
+                assert!(dry_run);
+                assert_eq!(jobs, Some(4));
+                assert!(no_chunking);
+                assert!(!system);
+                assert!(!status);
+                assert!(!refresh);
+                assert!(!sync_hook);
+            }
+            _ => panic!("expected system adopt command"),
+        }
+    }
+
+    #[test]
+    fn parses_system_adopt_sync_hook_remove_hook() {
+        let cli =
+            Cli::try_parse_from(["conary", "system", "adopt", "--sync-hook", "--remove-hook"])
+                .expect("system adopt --sync-hook --remove-hook should parse");
+
+        match cli.command {
+            Some(Commands::System(SystemCommands::Adopt {
+                packages,
+                sync_hook,
+                remove_hook,
+                system,
+                status,
+                refresh,
+                convert,
+                ..
+            })) => {
+                assert!(packages.is_empty());
+                assert!(sync_hook);
+                assert!(remove_hook);
+                assert!(!system);
+                assert!(!status);
+                assert!(!refresh);
+                assert!(!convert);
+            }
+            _ => panic!("expected system adopt command"),
+        }
+    }
+
+    #[test]
+    fn parses_system_adopt_package_dry_run_refusal_surface() {
+        let cli = Cli::try_parse_from(["conary", "system", "adopt", "curl", "--dry-run"])
+            .expect("single-package dry-run should parse before runtime refuses it");
+
+        match cli.command {
+            Some(Commands::System(SystemCommands::Adopt {
+                packages,
+                full,
+                system,
+                status,
+                dry_run,
+                refresh,
+                convert,
+                sync_hook,
+                ..
+            })) => {
+                assert_eq!(packages, vec!["curl".to_string()]);
+                assert!(!full);
+                assert!(!system);
+                assert!(!status);
+                assert!(dry_run);
+                assert!(!refresh);
+                assert!(!convert);
+                assert!(!sync_hook);
+            }
+            _ => panic!("expected system adopt command"),
+        }
+    }
+
+    #[test]
+    fn rejects_system_adopt_package_with_refresh_mode() {
+        let err = match Cli::try_parse_from(["conary", "system", "adopt", "curl", "--refresh"]) {
+            Ok(_) => panic!("package adopt must conflict with --refresh mode"),
+            Err(err) => err,
+        };
+
+        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn rejects_system_adopt_quiet_without_refresh() {
+        let err = match Cli::try_parse_from(["conary", "system", "adopt", "--quiet"]) {
+            Ok(_) => panic!("--quiet must remain scoped to --refresh"),
+            Err(err) => err,
+        };
+
+        let rendered = err.to_string();
+        assert!(
+            rendered.contains("--refresh"),
+            "quiet error should point users back to --refresh: {rendered}"
+        );
+    }
+
+    #[test]
     fn cli_rejects_bootstrap_image_from_generation() {
         let err = match Cli::try_parse_from([
             "conary",
