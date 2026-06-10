@@ -497,6 +497,13 @@ handling, and shared remove fixtures into child modules without changing CLI
 routes, state-restore integration, or legacy replay refusal-before-mutation
 behavior.
 
+The Phase 24 bootstrap command decomposition plan targets the current largest
+Rust hotspot, `apps/conary/src/commands/bootstrap/mod.rs`. It keeps
+`bootstrap/mod.rs` as the command hub while planning focused owners for setup
+and status commands, phase-build commands, image generation, bootstrap-run
+record handling, generation artifact writing, seed commands, convergence
+commands, and cleanup.
+
 ## Verification Commands
 
 - `bash scripts/docs-audit-inventory.sh`
@@ -571,9 +578,9 @@ public tester copy is tracked by
 
 ## Final Counts
 
-- Total tracked doc-like files audited: 167
+- Total tracked doc-like files audited: 168
 - `verified-no-change`: 12
-- `corrected`: 68
+- `corrected`: 69
 - `archived`: 73
 - `retained-historical`: 14
 - Remaining pending rows: 0
