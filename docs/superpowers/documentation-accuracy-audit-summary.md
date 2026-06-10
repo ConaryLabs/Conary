@@ -219,6 +219,11 @@ The repo moved materially after the last audit:
   headline public promise.
 - Refreshed assistant-facing docs to route broad doc work through the inventory
   and ledger checker, and added the post-generation export roadmap to the map.
+- The feature coherency Wave 1a implementation plan starts the reviewed
+  coherency ledger program with root CLI help, examples, top-level dispatch,
+  and generated manpage behavior only. It keeps the existing documentation
+  accuracy audit as the tracked Markdown gate while adding a separate
+  implementation-to-claim ledger and validator.
 - Refreshed assistant-facing docs again on 2026-05-22 for GPT-5.5/Codex-first
   work, removed tracked Claude active guidance/harness files, and kept
   Claude-era context only as archived history.
@@ -578,9 +583,9 @@ public tester copy is tracked by
 
 ## Final Counts
 
-- Total tracked doc-like files audited: 168
+- Total tracked doc-like files audited: 169
 - `verified-no-change`: 12
-- `corrected`: 69
+- `corrected`: 70
 - `archived`: 73
 - `retained-historical`: 14
 - Remaining pending rows: 0
