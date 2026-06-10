@@ -1,6 +1,6 @@
 # tests/integration/remi/manifests/phase3-group-l.toml
 #
-# Phase 3, Group L: Lifecycle Robustness (T128-T138).
+# Phase 3, Group L: Lifecycle Robustness (T128-T130a).
 #
 # Variables: ${REMI_ENDPOINT}, ${DB_PATH}, ${CONARY_BIN}
 #
@@ -118,11 +118,11 @@ stdout_contains_any = ["trunc", "size", "failed", "end of file"]
 stdout_not_contains = "Updated successfully"
 
 # --------------------------------------------------------------------------
-# T138: Version-specific self-update metadata
+# T130a: Version-specific self-update metadata
 # --------------------------------------------------------------------------
 
 [[test]]
-id = "T138"
+id = "T130a"
 name = "self_update_check_specific_version"
 description = "Self-update --check --version should query the version-specific metadata endpoint instead of bailing"
 timeout = 60

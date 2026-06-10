@@ -73,11 +73,17 @@ where
         total_elapsed += elapsed;
         last_exec = exec;
 
-        if status == TestStatus::Passed {
-            pass_count += 1;
-        } else {
-            fail_count += 1;
-            last_failure = message;
+        match status {
+            TestStatus::Passed => {
+                pass_count += 1;
+            }
+            TestStatus::Skipped => {
+                return Ok((TestStatus::Skipped, message, total_elapsed, last_exec));
+            }
+            TestStatus::Failed | TestStatus::Cancelled => {
+                fail_count += 1;
+                last_failure = message;
+            }
         }
 
         let remaining = attempts.saturating_sub(pass_count + fail_count);
@@ -576,6 +582,7 @@ impl TestRunner {
         let timeout = Duration::from_secs(test_def.timeout);
         let mut last_exec: Option<ExecResult> = None;
         let mut failure: Option<String> = None;
+        let mut skipped: Option<String> = None;
 
         let ctx = ExecutionContext {
             conary_bin: &self.config.paths.conary_bin,
@@ -606,6 +613,27 @@ impl TestRunner {
                 });
             }
 
+            if matches!(action, StepAction::QemuBoot(_))
+                && crate::engine::qemu::is_skip_exit_code(step_result.exit_code)
+            {
+                let message = step_result
+                    .stdout
+                    .lines()
+                    .next()
+                    .filter(|line| !line.trim().is_empty())
+                    .or_else(|| {
+                        step_result
+                            .stderr
+                            .lines()
+                            .next()
+                            .filter(|line| !line.trim().is_empty())
+                    })
+                    .unwrap_or("qemu boot skipped")
+                    .to_string();
+                skipped = Some(message);
+                break;
+            }
+
             if let Some(msg) = step_result.failure {
                 failure = Some(msg);
                 break;
@@ -630,9 +658,10 @@ impl TestRunner {
         }
 
         let elapsed = start.elapsed().as_millis() as u64;
-        let (status, message) = match failure {
-            Some(msg) => (TestStatus::Failed, Some(msg)),
-            None => (TestStatus::Passed, None),
+        let (status, message) = match (failure, skipped) {
+            (Some(msg), _) => (TestStatus::Failed, Some(msg)),
+            (None, Some(msg)) => (TestStatus::Skipped, Some(msg)),
+            (None, None) => (TestStatus::Passed, None),
         };
 
         Ok((status, message, elapsed, last_exec))
@@ -1556,8 +1585,10 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(suite.passed(), 1);
+        assert_eq!(suite.passed(), 0);
+        assert_eq!(suite.skipped(), 1);
         assert_eq!(suite.failed(), 0);
+        assert_eq!(suite.results[0].status, TestStatus::Skipped);
         assert!(
             suite.results[0]
                 .stdout

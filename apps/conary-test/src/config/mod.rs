@@ -6,8 +6,9 @@ pub mod manifest;
 pub use distro::{DistroConfig, GlobalConfig, TestPackage};
 pub use manifest::{Assertion, StepType, TestDef, TestManifest};
 
-use anyhow::Result;
-use std::path::Path;
+use anyhow::{Result, bail};
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 pub fn load_manifest(path: &Path) -> Result<TestManifest> {
     let content = std::fs::read_to_string(path)?;
@@ -20,6 +21,33 @@ pub fn load_global_config(path: &Path) -> Result<GlobalConfig> {
     let content = std::fs::read_to_string(path)?;
     let config: GlobalConfig = toml::from_str(&content)?;
     config.apply_env_overrides()
+}
+
+pub fn validate_unique_test_ids(manifests: &[(PathBuf, TestManifest)]) -> Result<()> {
+    let mut locations_by_id: BTreeMap<String, Vec<String>> = BTreeMap::new();
+
+    for (path, manifest) in manifests {
+        for test in &manifest.test {
+            locations_by_id
+                .entry(test.id.clone())
+                .or_default()
+                .push(path.display().to_string());
+        }
+    }
+
+    let duplicates: Vec<String> = locations_by_id
+        .into_iter()
+        .filter_map(|(id, locations)| {
+            (locations.len() > 1)
+                .then(|| format!("duplicate test id `{id}` in {}", locations.join(", ")))
+        })
+        .collect();
+
+    if !duplicates.is_empty() {
+        bail!("duplicate manifest test IDs:\n{}", duplicates.join("\n"));
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -37,6 +65,55 @@ mod tests {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../conary/tests/fixtures")
             .join(path)
+    }
+
+    fn minimal_manifest_with_id(id: &str) -> TestManifest {
+        TestManifest {
+            suite: manifest::SuiteDef {
+                name: format!("suite-{id}"),
+                phase: 1,
+                setup: Vec::new(),
+                mock_server: None,
+                timeout: None,
+            },
+            test: vec![manifest::TestDef {
+                id: id.to_string(),
+                name: format!("test-{id}"),
+                description: "duplicate id test".to_string(),
+                timeout: 10,
+                flaky: None,
+                retries: None,
+                retry_delay_ms: None,
+                step: Vec::new(),
+                resources: None,
+                depends_on: None,
+                fatal: None,
+                group: None,
+                skip: None,
+                requires: Vec::new(),
+            }],
+            distro_overrides: Default::default(),
+        }
+    }
+
+    #[test]
+    fn test_validate_unique_test_ids_reports_duplicate_locations() {
+        let manifests = vec![
+            (
+                PathBuf::from("phase-a.toml"),
+                minimal_manifest_with_id("T01"),
+            ),
+            (
+                PathBuf::from("phase-b.toml"),
+                minimal_manifest_with_id("T01"),
+            ),
+        ];
+
+        let err = validate_unique_test_ids(&manifests).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("duplicate test id `T01`"));
+        assert!(msg.contains("phase-a.toml"));
+        assert!(msg.contains("phase-b.toml"));
     }
 
     fn is_package_remove_segment(segment: &str) -> bool {
@@ -1028,7 +1105,7 @@ ccs_file = "conary-test-fixture-1.0.0.ccs"
             let manifest = load_manifest(&path).unwrap();
             assert_eq!(manifest.suite.phase, 3);
 
-            for id in ["T128", "T129", "T130", "T138"] {
+            for id in ["T128", "T129", "T130", "T130a"] {
                 let test = manifest
                     .test
                     .iter()

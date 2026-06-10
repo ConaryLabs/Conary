@@ -64,6 +64,12 @@ cargo run -p conary-test -- list
 
 # Build container images
 cargo run -p conary-test -- images build --distro fedora44
+
+# List built container images
+cargo run -p conary-test -- images list
+
+# Rebuild binaries from the currently deployed source checkout
+cargo run -p conary-test -- deploy rebuild
 ```
 
 `bootstrap smoke` is a local developer proof loop for a checkout. It may build
@@ -119,7 +125,7 @@ apps/conary/tests/integration/remi/manifests/
   phase4-group-b.toml       # T177-T195 (Label/Model/Collection/Derive)
   phase4-group-c.toml       # T196-T220 (CCS ops / query / repo management)
   phase4-group-d.toml       # T221-T255 (Provenance/Capability/Trust/System/Federation/Automation)
-  phase4-group-e.toml       # T230-T251 (Cross-distro compatibility overlay: distro policy/replatform/takeover)
+  phase4-group-e.toml       # T256-T277 (Cross-distro compatibility overlay: distro policy/replatform/takeover)
   phase4-native-pm-parity.toml  # Three-distro native package-manager parity proof
   phase4-security-advisory-pipeline.toml  # Trusted advisory ingestion and security update proof
 ```

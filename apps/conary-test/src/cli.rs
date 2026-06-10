@@ -314,6 +314,19 @@ fn manifests_for_phase(phase: u32) -> Result<Vec<PathBuf>> {
     Ok(manifests)
 }
 
+fn load_manifest_entries(
+    paths: &[PathBuf],
+) -> Result<Vec<(PathBuf, conary_test::config::TestManifest)>> {
+    let mut manifests = Vec::new();
+    for path in paths {
+        let manifest = conary_test::config::load_manifest(path)
+            .with_context(|| format!("failed to load manifest: {}", path.display()))?;
+        manifests.push((path.clone(), manifest));
+    }
+    conary_test::config::validate_unique_test_ids(&manifests)?;
+    Ok(manifests)
+}
+
 /// Resolve the containerfile path for a distro.
 fn containerfile_path(
     config: &conary_test::config::distro::GlobalConfig,
@@ -458,6 +471,7 @@ fn run_single_distro(
             }
             None => manifests_for_phase(phase)?,
         };
+        let _loaded_manifest_entries = load_manifest_entries(&manifest_paths)?;
 
         // Check if all manifests contain only QEMU boot steps — if so,
         // skip container setup entirely (QEMU tests boot their own VMs).
@@ -706,38 +720,31 @@ fn main() -> Result<()> {
                 return Ok(());
             }
 
+            let paths: Vec<PathBuf> = entries.iter().map(|entry| entry.path()).collect();
+            let manifests = load_manifest_entries(&paths)?;
+
             if json {
-                let mut suites = Vec::new();
-                for entry in entries {
-                    let path = entry.path();
-                    if let Ok(manifest) = conary_test::config::load_manifest(&path) {
-                        suites.push(serde_json::json!({
+                let suites: Vec<_> = manifests
+                    .iter()
+                    .map(|(_, manifest)| {
+                        serde_json::json!({
                             "name": manifest.suite.name,
                             "phase": manifest.suite.phase,
                             "test_count": manifest.test.len(),
-                        }));
-                    }
-                }
+                        })
+                    })
+                    .collect();
                 println!("{}", serde_json::to_string_pretty(&suites)?);
             } else {
                 println!("{:<30} {:<8} TESTS", "NAME", "PHASE");
                 println!("{}", "-".repeat(50));
-                for entry in entries {
-                    let path = entry.path();
-                    match conary_test::config::load_manifest(&path) {
-                        Ok(manifest) => {
-                            println!(
-                                "{:<30} {:<8} {}",
-                                manifest.suite.name,
-                                manifest.suite.phase,
-                                manifest.test.len()
-                            );
-                        }
-                        Err(e) => {
-                            let name = path.file_name().unwrap_or_default().to_string_lossy();
-                            tracing::warn!(file = %name, error = %e, "Failed to parse manifest");
-                        }
-                    }
+                for (_, manifest) in manifests {
+                    println!(
+                        "{:<30} {:<8} {}",
+                        manifest.suite.name,
+                        manifest.suite.phase,
+                        manifest.test.len()
+                    );
                 }
             }
             Ok(())

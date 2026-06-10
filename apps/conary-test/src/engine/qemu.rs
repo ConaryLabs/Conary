@@ -17,6 +17,7 @@ use crate::container::backend::ExecResult;
 const DEFAULT_ARTIFACT_BASE_URL: &str = "https://remi.conary.io/test-artifacts";
 const GUEST_CONARY_STAGING_PATH: &str = "/tmp/conary-host";
 const GUEST_CONARY_INSTALL_PATH: &str = "/usr/bin/conary";
+pub const QEMU_SKIP_EXIT_CODE: i32 = 77;
 
 /// Well-known filename for the conaryOS test SSH private key.
 const TEST_SSH_KEY_NAME: &str = "conaryos-test-key";
@@ -343,10 +344,14 @@ fn resolve_qemu_image_path(config: &QemuBoot) -> Result<PathBuf> {
 
 fn skipped_result(message: String) -> ExecResult {
     ExecResult {
-        exit_code: 0,
+        exit_code: QEMU_SKIP_EXIT_CODE,
         stdout: message,
         stderr: String::new(),
     }
+}
+
+pub fn is_skip_exit_code(exit_code: i32) -> bool {
+    exit_code == QEMU_SKIP_EXIT_CODE
 }
 
 fn append_command_output(
