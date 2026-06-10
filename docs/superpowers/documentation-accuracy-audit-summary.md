@@ -222,8 +222,9 @@ The repo moved materially after the last audit:
 - The feature coherency Wave 1a implementation plan starts the reviewed
   coherency ledger program with root CLI help, examples, top-level dispatch,
   and generated manpage behavior only. It keeps the existing documentation
-  accuracy audit as the tracked Markdown gate while adding a separate
-  implementation-to-claim ledger and validator.
+  accuracy audit as the tracked Markdown/doc-like gate while adding a separate
+  implementation-to-claim ledger, validator, and PR-gate check for the TSV
+  ledger itself.
 - Refreshed assistant-facing docs again on 2026-05-22 for GPT-5.5/Codex-first
   work, removed tracked Claude active guidance/harness files, and kept
   Claude-era context only as archived history.
