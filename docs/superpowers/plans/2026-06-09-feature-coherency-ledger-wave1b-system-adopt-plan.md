@@ -74,8 +74,8 @@ Run:
 
 ```bash
 bash scripts/check-doc-audit-ledger.sh docs/superpowers/documentation-accuracy-audit-ledger.tsv --require-complete
-bash scripts/docs-audit-inventory.sh | diff -u docs/superpowers/documentation-accuracy-audit-inventory.tsv -
-scripts/check-coherency-ledger.sh docs/superpowers/feature-coherency-ledger.tsv --scope-complete 1a-root-cli
+LC_ALL=C bash scripts/docs-audit-inventory.sh | diff -u docs/superpowers/documentation-accuracy-audit-inventory.tsv -
+bash scripts/check-coherency-ledger.sh docs/superpowers/feature-coherency-ledger.tsv --scope-complete 1a-root-cli
 git diff --check
 git status --short --branch
 ```
@@ -454,16 +454,17 @@ test -f apps/conary/man/conary.1
 cp apps/conary/man/conary.1 "$scratch/conary.1"
 for pattern in \
   "conary system adopt --refresh" \
-  "Daily workflow examples" \
-  "Adopt system packages"
+  "Daily workflow examples"
 do
   rg -n -- "$pattern" "$scratch/conary.1" || true
 done
+rg -n -- "Adopt system packages" "$scratch/conary.1" || true
 ```
 
 Expected:
 
 The root manpage must include the root daily example `conary system adopt --refresh`. It may not include full nested `system adopt` help text. If `Adopt system packages` is absent from the root manpage, record that as non-public/out-of-scope for Wave 1b rather than a defect, because the generated artifact is the root manpage.
+The root manpage only reflects root-level help, so the nested subcommand text `Adopt system packages` is expected to be absent unless the generator starts expanding nested commands.
 
 - [ ] **Step 6: Sweep the selected Wave 1b scope**
 
@@ -584,6 +585,8 @@ If either generated directory appears as staged or tracked changes, stop and rem
 - Modify only if evidence requires repair: selected files under `apps/conary/src/commands/adopt/`
 - Modify only if evidence requires repair: `docs/operations/daily-driver-ux-matrix.md`
 - Test: focused commands from Task 2
+
+At current HEAD, the expected `apps/conary/src/cli/system.rs` and `apps/conary/src/dispatch/system.rs` structures below are already aligned. Treat Step 2 and Step 3 as check-only confirmations unless Task 2 evidence shows drift that must be repaired.
 
 - [ ] **Step 1: Check whether repair is required**
 
@@ -731,8 +734,8 @@ If Task 2 or Task 3 found a different reality, change only the affected rows bef
 Run:
 
 ```bash
-scripts/check-coherency-ledger.sh docs/superpowers/feature-coherency-ledger.tsv
-scripts/check-coherency-ledger.sh docs/superpowers/feature-coherency-ledger.tsv --scope-complete 1b-system-adopt
+bash scripts/check-coherency-ledger.sh docs/superpowers/feature-coherency-ledger.tsv
+bash scripts/check-coherency-ledger.sh docs/superpowers/feature-coherency-ledger.tsv --scope-complete 1b-system-adopt
 ```
 
 Expected:
@@ -769,9 +772,9 @@ Expected:
 Run:
 
 ```bash
-scripts/test-coherency-ledger.sh
-scripts/check-coherency-ledger.sh docs/superpowers/feature-coherency-ledger.tsv --scope-complete 1a-root-cli
-scripts/check-coherency-ledger.sh docs/superpowers/feature-coherency-ledger.tsv --scope-complete 1b-system-adopt
+bash scripts/test-coherency-ledger.sh
+bash scripts/check-coherency-ledger.sh docs/superpowers/feature-coherency-ledger.tsv --scope-complete 1a-root-cli
+bash scripts/check-coherency-ledger.sh docs/superpowers/feature-coherency-ledger.tsv --scope-complete 1b-system-adopt
 cargo fmt --check
 cargo check -p conary
 cargo test -p conary --lib cli::tests
@@ -780,7 +783,7 @@ cargo test -p conary --test live_host_mutation_safety system_adopt
 cargo test -p conary --test cli_daily_ux adopted
 cargo run -p conary -- system completions bash >/tmp/conary-completion.bash
 bash scripts/check-doc-audit-ledger.sh docs/superpowers/documentation-accuracy-audit-ledger.tsv --require-complete
-bash scripts/docs-audit-inventory.sh | diff -u docs/superpowers/documentation-accuracy-audit-inventory.tsv -
+LC_ALL=C bash scripts/docs-audit-inventory.sh | diff -u docs/superpowers/documentation-accuracy-audit-inventory.tsv -
 bash scripts/check-doc-truth.sh
 git diff --check
 git status --short --ignored apps/conary/man man
