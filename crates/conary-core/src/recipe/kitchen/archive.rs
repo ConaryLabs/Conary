@@ -6,7 +6,7 @@ use crate::error::{Error, Result};
 use crate::hash::{HashAlgorithm, hash_bytes};
 use crate::recipe::kitchen::config::SourceChecksumPolicy;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use tracing::warn;
 
@@ -23,12 +23,82 @@ fn gnu_fetch_candidates(url: &str) -> Vec<String> {
     candidates
 }
 
+fn has_url_scheme(input: &str) -> bool {
+    let Some(colon_index) = input.find(':') else {
+        return false;
+    };
+
+    let scheme = &input[..colon_index];
+    let mut bytes = scheme.bytes();
+    let Some(first) = bytes.next() else {
+        return false;
+    };
+
+    first.is_ascii_alphabetic()
+        && bytes.all(|byte| {
+            matches!(
+                byte,
+                b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'+' | b'-' | b'.'
+            )
+        })
+}
+
+fn local_source_path(source: &str) -> Option<PathBuf> {
+    if let Some(path) = source.strip_prefix("file://") {
+        return Some(PathBuf::from(path));
+    }
+
+    if has_url_scheme(source) {
+        return None;
+    }
+
+    Some(PathBuf::from(source))
+}
+
+fn copy_local_source(source: &Path, dest: &Path) -> Result<()> {
+    let metadata = fs::metadata(source).map_err(|e| {
+        Error::DownloadError(format!(
+            "Failed to stat local source {}: {e}",
+            source.display()
+        ))
+    })?;
+
+    if !metadata.file_type().is_file() {
+        return Err(Error::DownloadError(format!(
+            "Local source must be a regular file: {}",
+            source.display()
+        )));
+    }
+
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent).map_err(|e| {
+            Error::IoError(format!(
+                "Failed to create directory {}: {e}",
+                parent.display()
+            ))
+        })?;
+    }
+
+    fs::copy(source, dest).map_err(|e| {
+        Error::DownloadError(format!(
+            "Failed to copy {} to {}: {e}",
+            source.display(),
+            dest.display()
+        ))
+    })?;
+
+    Ok(())
+}
+
 /// Download a file from a URL
 pub fn download_file(url: &str, dest: &Path) -> Result<()> {
-    // Reject non-HTTP(S) URL schemes to prevent file:// and other injections
     if !url.starts_with("http://") && !url.starts_with("https://") {
+        if let Some(source_path) = local_source_path(url) {
+            return copy_local_source(&source_path, dest);
+        }
+
         return Err(Error::DownloadError(format!(
-            "Only http:// and https:// URLs are supported for source downloads, got: {}",
+            "Only http://, https://, file://, and local paths are supported for source downloads, got: {}",
             &url[..url.len().min(50)]
         )));
     }
@@ -195,6 +265,43 @@ pub fn apply_patch(source_dir: &Path, patch_path: &Path, strip: u32) -> Result<(
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    fn make_fifo(path: &Path) {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+
+        let path_c = CString::new(path.as_os_str().as_bytes()).unwrap();
+        let result = unsafe { libc::mkfifo(path_c.as_ptr(), 0o600) };
+        assert_eq!(
+            result,
+            0,
+            "mkfifo failed: {}",
+            std::io::Error::last_os_error()
+        );
+    }
+
+    #[cfg(unix)]
+    fn spawn_fifo_writer(path: PathBuf, content: &'static [u8]) -> std::thread::JoinHandle<()> {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+        use std::time::Duration;
+
+        std::thread::spawn(move || {
+            let path_c = CString::new(path.as_os_str().as_bytes()).unwrap();
+            for _ in 0..100 {
+                let fd = unsafe { libc::open(path_c.as_ptr(), libc::O_WRONLY | libc::O_NONBLOCK) };
+                if fd >= 0 {
+                    let _ = unsafe { libc::write(fd, content.as_ptr().cast(), content.len()) };
+                    unsafe {
+                        libc::close(fd);
+                    }
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        })
+    }
+
     #[test]
     fn test_verify_checksum_format() {
         // Just testing the format parsing (not actual file content)
@@ -229,5 +336,34 @@ mod tests {
                 "https://ftp.gnu.org/gnu/bash/bash-5.3.tar.gz".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn download_file_accepts_local_path_sources() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.tar");
+        let dest = dir.path().join("dest.tar");
+        std::fs::write(&source, b"archive").unwrap();
+        download_file(source.to_str().unwrap(), &dest).unwrap();
+        assert_eq!(std::fs::read(dest).unwrap(), b"archive");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn download_file_rejects_local_non_regular_sources() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.pipe");
+        let dest = dir.path().join("dest.tar");
+        make_fifo(&source);
+        let writer = spawn_fifo_writer(source.clone(), b"archive");
+
+        let error = download_file(source.to_str().unwrap(), &dest).unwrap_err();
+        writer.join().unwrap();
+
+        assert!(
+            error.to_string().contains("regular file"),
+            "expected regular-file rejection, got: {error}"
+        );
+        assert!(!dest.exists());
     }
 }

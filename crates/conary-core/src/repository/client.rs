@@ -15,8 +15,8 @@ use indicatif::ProgressBar;
 use reqwest::Client;
 use reqwest::header;
 use std::fs::{self, File, OpenOptions};
-use std::io::Write;
-use std::path::Path;
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
@@ -114,6 +114,198 @@ pub fn validate_url_scheme(url: &str) -> Result<()> {
             url
         )))
     }
+}
+
+pub(crate) fn is_file_or_local_reference(url_or_path: &str) -> bool {
+    url_or_path.starts_with("file://") || !has_url_scheme(url_or_path)
+}
+
+fn has_url_scheme(input: &str) -> bool {
+    let Some(colon_index) = input.find(':') else {
+        return false;
+    };
+
+    let scheme = &input[..colon_index];
+    let mut bytes = scheme.bytes();
+    let Some(first) = bytes.next() else {
+        return false;
+    };
+
+    first.is_ascii_alphabetic()
+        && bytes.all(|byte| {
+            matches!(
+                byte,
+                b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'+' | b'-' | b'.'
+            )
+        })
+}
+
+fn local_path_from_reference(url_or_path: &str) -> Option<PathBuf> {
+    if let Some(path) = url_or_path.strip_prefix("file://") {
+        return Some(PathBuf::from(path));
+    }
+
+    if has_url_scheme(url_or_path) {
+        return None;
+    }
+
+    Some(PathBuf::from(url_or_path))
+}
+
+fn temp_path_for(dest_path: &Path) -> PathBuf {
+    let file_name = dest_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("download");
+    dest_path.with_file_name(format!(".{file_name}.tmp"))
+}
+
+fn verify_local_source_metadata(source_path: &Path, expected_size: Option<u64>) -> Result<()> {
+    let metadata = fs::metadata(source_path).map_err(|e| {
+        Error::DownloadError(format!(
+            "Failed to stat local source {}: {e}",
+            source_path.display()
+        ))
+    })?;
+
+    if !metadata.file_type().is_file() {
+        return Err(Error::DownloadError(format!(
+            "Local source must be a regular file: {}",
+            source_path.display()
+        )));
+    }
+
+    if let Some(expected_size) = expected_size
+        && metadata.len() != expected_size
+    {
+        return Err(Error::DownloadError(format!(
+            "Local source file size mismatch for {}: expected {} bytes, got {} bytes",
+            source_path.display(),
+            expected_size,
+            metadata.len()
+        )));
+    }
+
+    Ok(())
+}
+
+fn copy_local_file(source_path: &Path, dest_path: &Path, expected_size: Option<u64>) -> Result<()> {
+    verify_local_source_metadata(source_path, expected_size)?;
+
+    if let Some(parent) = dest_path.parent() {
+        fs::create_dir_all(parent).map_err(|e| {
+            Error::IoError(format!(
+                "Failed to create directory {}: {e}",
+                parent.display()
+            ))
+        })?;
+    }
+
+    let temp_path = temp_path_for(dest_path);
+
+    let result = copy_local_file_bounded(source_path, &temp_path, expected_size);
+    if let Err(e) = result {
+        let _ = fs::remove_file(&temp_path);
+        return Err(e);
+    }
+
+    if let Err(e) = fs::rename(&temp_path, dest_path) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(Error::IoError(format!(
+            "Failed to move {} to {}: {e}",
+            temp_path.display(),
+            dest_path.display()
+        )));
+    }
+
+    Ok(())
+}
+
+fn copy_local_file_bounded(
+    source_path: &Path,
+    temp_path: &Path,
+    expected_size: Option<u64>,
+) -> Result<()> {
+    let mut source = File::open(source_path).map_err(|e| {
+        Error::DownloadError(format!(
+            "Failed to open local source {}: {e}",
+            source_path.display()
+        ))
+    })?;
+    let mut dest = File::create(temp_path).map_err(|e| {
+        Error::DownloadError(format!(
+            "Failed to create temporary copy {}: {e}",
+            temp_path.display()
+        ))
+    })?;
+
+    let mut copied = 0u64;
+    let mut buffer = [0u8; 8192];
+    loop {
+        let read = source.read(&mut buffer).map_err(|e| {
+            Error::DownloadError(format!(
+                "Failed to read local source {}: {e}",
+                source_path.display()
+            ))
+        })?;
+        if read == 0 {
+            break;
+        }
+
+        copied += read as u64;
+        if let Some(expected_size) = expected_size
+            && copied > expected_size
+        {
+            return Err(Error::DownloadError(format!(
+                "Local source file size mismatch for {}: expected {} bytes, read more than {} bytes",
+                source_path.display(),
+                expected_size,
+                expected_size
+            )));
+        }
+
+        dest.write_all(&buffer[..read]).map_err(|e| {
+            Error::DownloadError(format!(
+                "Failed to write temporary copy {}: {e}",
+                temp_path.display()
+            ))
+        })?;
+    }
+
+    if let Some(expected_size) = expected_size
+        && copied != expected_size
+    {
+        return Err(Error::DownloadError(format!(
+            "Local source file size mismatch for {}: expected {} bytes, copied {} bytes",
+            source_path.display(),
+            expected_size,
+            copied
+        )));
+    }
+
+    Ok(())
+}
+
+pub async fn download_static_or_http_file(url_or_path: &str, dest_path: &Path) -> Result<()> {
+    download_static_or_http_file_with_expected_size(url_or_path, dest_path, None).await
+}
+
+pub(crate) async fn download_static_or_http_file_with_expected_size(
+    url_or_path: &str,
+    dest_path: &Path,
+    expected_size: Option<u64>,
+) -> Result<()> {
+    if url_or_path.starts_with("http://") || url_or_path.starts_with("https://") {
+        return RepositoryClient::new()?
+            .download_file(url_or_path, dest_path)
+            .await;
+    }
+
+    if let Some(source_path) = local_path_from_reference(url_or_path) {
+        return copy_local_file(&source_path, dest_path, expected_size);
+    }
+
+    validate_url_scheme(url_or_path)
 }
 
 /// Stream HTTP response to file with optional progress tracking
