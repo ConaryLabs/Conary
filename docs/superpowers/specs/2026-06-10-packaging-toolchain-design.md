@@ -36,6 +36,8 @@ suite is green:
 - **M0 — static-repo child spec (hard gate).** The standalone static-repo spec in
   `docs/specs/` is written, reviewed, and approved before any M1a implementation
   begins. No publish/repo-add code lands against an unapproved format.
+  Deliverable: `docs/specs/static-repo-format-v1.md` (drafted; gate opens on
+  review approval).
 - **M1a — recipe-only static path.** `conary cook` for recipe-driven builds (no
   inference yet); `conary publish` to a static repo; `conary repo add` of a static
   repo; install from it. The smallest end-to-end loop that proves the format and the
@@ -521,6 +523,14 @@ TUF timestamp refresh is currently a 501 stub
   fingerprint/TUF exclusively (clap-enforced). No removal in v1.
 
 ## Revision notes (2026-06-10)
+
+**M0 drafting (2026-06-10):** the child spec resolves three delegated
+decisions: `consistent_snapshot = false` in v1 (the current client only
+fetches unversioned snapshot/targets filenames; reverse-order upload + hash
+pinning fail safe — versioned filenames are the v2 path); two operator
+keypairs (root + publish) rather than one, so a publish-key compromise is
+root-recoverable; timestamp expiry defaults to 30 days with
+`conary publish --refresh` as the re-sign path.
 
 **Round 7 (same day — verb naming):** the canonical front door is `conary cook`,
 not `conary build`. Rationale: cook already exists and already means "build a
