@@ -59,7 +59,7 @@ Expected: `format!("{next_version}.root.json")` rotation probe; literal unversio
 - [ ] **Step 4: key file format + index shapes + url validation**
 
 ```bash
-grep -n 'struct KeyFile\|algorithm\|key_id' crates/conary-core/src/ccs/signing.rs | head -8
+grep -n -B2 -A6 'struct KeyFile' crates/conary-core/src/ccs/signing.rs
 grep -n 'pub struct RepositoryMetadata\|pub struct PackageMetadata' -A 14 crates/conary-core/src/repository/metadata.rs | head -40
 grep -n 'pub fn validate_url_scheme' crates/conary-core/src/repository/client.rs
 ```
@@ -177,7 +177,7 @@ Rules:
   MUST be rejected by the publisher.
 - `index.json`, `keys/package-keys.json`, `metadata/targets.json`,
   `metadata/snapshot.json`, `metadata/timestamp.json`, and
-  `metadata/root.json` are replaced atomically per publish (§7).
+  `metadata/root.json` are replaced atomically per publish (§5.3).
 - Clients MUST support `http://`, `https://`; and MUST support `file://`
   URLs and bare local paths for every fetch in this spec (repo identity,
   TUF metadata, index, packages). Implementation note (M1a): this requires
@@ -539,7 +539,7 @@ from the destination, not from local state.
 
 ### 5.2 Initial publish (ceremony)
 
-1. Ensure keys exist (§10.1); generate if absent.
+1. Ensure keys exist (§7.1); generate if absent.
 2. Build root v1 via `trust/ceremony.rs::create_initial_root(root_key,
    publish_key, publish_key, publish_key, 365 days)` — publish key fills
    targets/snapshot/timestamp roles. `consistent_snapshot = false`.
@@ -593,7 +593,10 @@ from the destination, not from local state.
 - `conary-repo.toml` `root_key_ids` equals the root-role keyid set.
 - Every package entry's filename parses as `<name>-<version>-<release>-<arch>.ccs`
   and matches its entry fields.
-- No targets path escapes the repo root (`..`, absolute, or URL paths).
+- Every targets/index path passes the §3 normalization rule (resolve,
+  RFC 3986 normalize, reject root-escape / absolute / scheme-carrying /
+  percent-encoded-traversal paths) — the producer enforces exactly the
+  rule clients verify.
 
 ### 5.5 Refresh (`conary publish --refresh <target>`)
 
@@ -741,7 +744,7 @@ git commit -m "docs: static repo spec - publish algorithm"
 ### 6.5 `conary repo reset-trust <name>`
 
 Explicit operator-initiated unpinning, required after a repo's root key is
-lost/replaced (§10.4): deletes the repo's rows from `tuf_roots`,
+lost/replaced (§7.4): deletes the repo's rows from `tuf_roots`,
 `tuf_metadata`, `tuf_keys`, `tuf_targets`, and its package trust keys, then
 prints that the next `repo add`/sync re-establishes trust per §6.1. There is
 no silent re-pin: a root-key change without reset-trust keeps hard-failing
@@ -882,7 +885,7 @@ scope here.
 | MITM at first contact | `--fingerprint` (out-of-band root key IDs); interactive-only TOFU otherwise |
 | Tampered index / package list | index.json and keys file are TUF targets; verify-before-parse |
 | Tampered package | targets sha256+length; CCS Ed25519 signature |
-| Rollback (downgrade metadata) | per-role version monotonicity + `index_version` monotonicity |
+| Rollback (downgrade metadata) | TUF role version monotonicity; `index_version == targets.version` binds the index to it |
 | Freeze (replay stale repo) | metadata expirations (§4.5) |
 | Mix-and-match | snapshot pins targets hash; timestamp pins snapshot hash; snapshot-consistency check |
 | Torn publish | reverse-order upload (§5.3.4): partial states fail hash verification, fail-safe |
@@ -953,7 +956,7 @@ Parent spec (`docs/superpowers/specs/2026-06-10-packaging-toolchain-design.md`, 
 |---|---|
 | index↔TUF bridge (`index_version: u64`, index sha256 as target, verify-before-parse) | §3, §6.2 |
 | Atomic publish, reverse verification order | §5.3.4 |
-| `conary-repo.toml` exact schema + root.json relationship | §2, §6.1.4 |
+| `conary-repo.toml` exact schema + root.json relationship | §2, §6.1 |
 | Expirations, refresh, rollback/freeze protection | §4.5, §5.5, §6.4, §9 |
 | Key lifecycle: placement, rotation, revocation, backup, loss, reset-trust | §7, §6.5 |
 | File-based TUF generator (distinct from Remi DB-backed) | §5 (+§11 Remi note) |
@@ -1013,8 +1016,9 @@ bash scripts/docs-audit-inventory.sh > docs/superpowers/documentation-accuracy-a
 Append a ledger row (TSV, 9 columns: origin_path, path, family, audience,
 claim_clusters, evidence_sources, status, disposition, notes) to
 `docs/superpowers/documentation-accuracy-audit-ledger.tsv` for
-`docs/specs/static-repo-format-v1.md`, family `spec` matching whatever the
-regenerated inventory assigned it, mirroring the `ccs-format-v1.md` row's
+`docs/specs/static-repo-format-v1.md`, family `canonical` and audience
+`contributor` (what the inventory script assigns `docs/specs/*` — `spec`
+is not an allowed ledger family), mirroring the `ccs-format-v1.md` row's
 style; evidence sources: the parent spec, the M0 plan, and
 `crates/conary-core/src/trust/{metadata,generate,ceremony,client}.rs`.
 
@@ -1085,7 +1089,7 @@ Cache-Control values and CDN invalidation specified; chunks layout no
 longer falsely claims to match Remi (which uses chunks/objects/<hh>/<rest>).
 
 **DeepSeek round:** two blockers — a second dead `§13` cross-reference in
-§4.3 (rationale now inlined) and `root_version` in the §5.3.3 generation
+§4.3 (rationale now inlined) and `root_version` in the §5.3 step 3 generation
 chain made explicit (it is the *current* published root version, not
 +1, except during rotation — a wrong value hard-fails every client);
 `expires_hours` vs `expires_days` footgun called out; retired-key removal
@@ -1102,3 +1106,12 @@ sha256("abc"). **Declined:** a `version` field in package-keys.json
 stale file fails verification — a version field would be a redundant
 second mechanism, same reasoning as the index_version simplification);
 markdown-anchor cross-references (§ refs are the established style here).
+
+**GPT final gate (NO-GO → fixed):** Task 12 ledger family corrected to
+`canonical`/`contributor` (`spec` is not an allowed family; the inventory
+classifies `docs/specs/*` as canonical); dead §7/§10.1/§10.4/§6.1.4
+references fixed to §5.3/§7.1/§7.4/§6.1; §5.4 producer lint now references
+the §3 normalization rule verbatim instead of the old shorthand; Task 1
+KeyFile grep made deterministic; §9 rollback mitigation rephrased to
+TUF-role monotonicity + index equality binding. GPT confirmed the
+package-keys version-field decline as correct.
