@@ -459,9 +459,11 @@ Client-side work:
   trust-on-first-use confirmation; the key is pinned thereafter.
 - **Trust-mechanism exclusivity:** `--fingerprint` marks a CCS/static (TUF) repo;
   the existing GPG flags (`--gpg-key`, `--no-gpg-check`, `--gpg-strict`) apply to
-  legacy/distro repos only. The two sets are mutually exclusive, enforced at parse
-  time via clap conflict rules — three parallel trust paths is two too many for one
-  repo.
+  legacy/distro repos only. The two sets are mutually exclusive: clap rejects
+  explicit `--fingerprint` + GPG flag combinations at parse time, and command
+  execution rejects GPG flags after probing a repo as static because static-ness is
+  not knowable before the probe — three parallel trust paths is two too many for
+  one repo.
 - Metadata trust via the existing TUF implementation; package signatures via Ed25519
   per the CCS format.
 
