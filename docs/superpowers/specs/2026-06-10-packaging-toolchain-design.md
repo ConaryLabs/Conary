@@ -18,7 +18,7 @@ is the tutorial: **"Package your first software in 5 minutes"** must fit on one 
 | Scope | Build toolchain + publishing designed together, end to end |
 | Primary persona | Both upstream devs and distro maintainers via one flow: inference for source trees, recipe file as the explicit escalation path |
 | Inference model | Invisible defaults — no file written; `--explain` shows inferences; `conary new` materializes a pre-filled recipe when overrides are needed |
-| Build environment | Host by default (fast iteration); hermetic via `--hermetic` and always for publish |
+| Build environment | Host by default (fast iteration); isolated via `--isolated` and always for publish. The flag is stable across milestones — it requests the strongest isolation available (M1a: sandboxed; M2+: hermetic); the provenance hardening field, not the flag, carries the truth claim |
 | Publish targets (v1) | Static repo (dir / rsync / S3-compatible) **and** authenticated push to Remi |
 | Architecture | "Approach 1+": unify around the existing recipe format; spend innovation budget on differentiators (record mode, agent-native diagnostics, watch mode, universal ingestion), all in v1 scope |
 
@@ -67,7 +67,7 @@ surface:
 
 | Surface | M1a | M1b | M2 | M3 |
 |---------|-----|-----|----|----|
-| `build` (recipe), `--recipe`, `--hermetic`, `publish` (project form, static), `repo add` static | ✓ | | | |
+| `build` (recipe), `--recipe`, `--isolated`, `publish` (project form, static), `repo add` static | ✓ | | | |
 | `build` (inference, tarball/git), `new`, `try`/`status`/`rollback`/`keep`, `--explain` | | ✓ | | |
 | `build` (foreign pkgs), `publish` (artifact form, attestation-gated), publish lint gates, Remi push, hermetic-publish enforcement | | | ✓ | |
 | `--record`, `--json`, `try --watch`, MCP packaging tools | | | | ✓ |
@@ -106,7 +106,10 @@ Flags (milestone in brackets; a flag does not appear in `--help` before its
 milestone — see the availability matrix):
 
 - `--recipe <path>` [M1a] — explicit recipe selection
-- `--hermetic` [M1a] — run in Kitchen isolation instead of on the host
+- `--isolated` [M1a] — run in Kitchen isolation instead of on the host. The flag
+  name is deliberately not `--hermetic`: it requests the strongest isolation the
+  current milestone provides (M1a: container sandbox, network allowed; M2+: offline
+  hermetic), and the provenance hardening field records which one you actually got
 - `--explain` [M1b] — print every inferred decision (build system, steps, deps,
   components)
 - `--record` [M3] — packaging by demonstration (see Differentiators)
@@ -124,11 +127,19 @@ serializable — not debug-printf. Help text distinguishes this command from the
 existing `conary system generation build` (which builds a system generation, not a
 package); both surfaces cross-reference each other.
 
-Every built package carries a **provenance class** in its manifest:
-`native-built` (recipe or inference, hermetic), `inferred-source` (inference,
-host build), `recorded-draft` (record mode output), or `foreign-converted`
-(.rpm/.deb/.pkg.tar.zst conversion). Publish lint gates key off the class — e.g.
-`recorded-draft` is never publishable directly (see Record mode).
+Every built package carries two **orthogonal** provenance fields in its manifest:
+
+- **Origin class** (how the build was described): `native-built` (explicit recipe),
+  `inferred-source` (build-system inference), `recorded-draft` (record mode output),
+  or `foreign-converted` (.rpm/.deb/.pkg.tar.zst conversion).
+- **Hardening level** (how the build was executed): `host`, `sandboxed` (container
+  isolation, network allowed), `hermetic` (offline, pinned inputs — M2), `attested`
+  (hermetic + signed attestation — M2).
+
+Publish lint gates key off both — e.g. `recorded-draft` is never publishable
+directly regardless of hardening (see Record mode), and from M2 the default publish
+gate requires `attested`. An M1a project-form publish is typically
+`native-built` + `sandboxed`; the old single-axis taxonomy conflated these.
 
 ### `conary try [pkg.ccs]`
 
@@ -150,7 +161,8 @@ the opposite of "try means safe."
 - `conary try status` shows the active session; `conary try rollback` ends it;
   `conary try keep` promotes the generation permanently (global activation happens
   here, and only here, with the same semantics and caveats as any generation switch).
-- `conary try --activate` exists for the cases that genuinely need host-global
+- `conary try <pkg.ccs> --activate` (the flag rides the same form as a normal try,
+  no separate subcommand) exists for the cases that genuinely need host-global
   activation before keep/rollback (e.g. testing a system daemon under the real init);
   it prints the live-switch risk plainly and is not the documented default path.
 - **At most one try session at a time** (v1); starting a second is an error that
@@ -181,7 +193,11 @@ the opposite of "try means safe."
   before M1b lands: an optional `reversible: bool` per hook, defaulting to `true`
   for declarative variants (users/groups/directories/systemd/tmpfiles/sysctl/
   alternatives) and `false` for `ScriptHook` (`post_install`/`pre_remove`) and all
-  legacy scriptlets.
+  legacy scriptlets. One guard on that default: declarative hooks are only
+  generation-scoped when the hook executor targets the generation/namespace root —
+  a declarative hook executed against the host root fails closed exactly like a
+  scriptlet. The M1b plan verifies the executor's targeting before the defaults
+  apply.
 - **Session data model (new — no precedent in the generations system):** a
   `try_sessions` table: `id`, `previous_generation_id`, `try_generation_id`,
   `package_path`, `started_at`, `status` (`active`|`orphaned`|`kept`|`rolled_back`),
@@ -297,7 +313,7 @@ separate keygen ceremony.
 New module in conary-core:
 
 ```
-resolve input → plan (recipe or inference) → execute via Kitchen (host | hermetic)
+resolve input → plan (recipe or inference) → execute via Kitchen (host | isolated)
   → capture DESTDIR → classify components → generate CCS manifest → CcsBuilder
   → sign (if key configured) → .ccs
 ```
@@ -356,7 +372,7 @@ arbitrary ways:
    shapes (missing header → candidate dependency suggestions, undefined reference →
    missing link dep, etc.): `Diagnostic` with ranked suggestions.
 3. **Fallback capture** — anything else: the relevant log excerpt, the failing
-   command, and generic next steps (`--explain`, rerun in `--hermetic`, open a recipe).
+   command, and generic next steps (`--explain`, rerun in `--isolated`, open a recipe).
 
 The rule stands in tiered form: a newcomer never sees a bare exit code with *no* next
 step — but tier 3 promises a starting point, not a diagnosis.
@@ -494,6 +510,17 @@ TUF timestamp refresh is currently a 501 stub
   fingerprint/TUF exclusively (clap-enforced). No removal in v1.
 
 ## Revision notes (2026-06-10)
+
+**Round 6 (same day, GPT consistency pass — final):** the isolation flag is renamed
+`--isolated` and held stable across milestones (it requests the strongest isolation
+available; the provenance hardening field, not the flag name, carries the truth
+claim — avoiding both M1a overclaim and an M2 flag rename); provenance split into
+two orthogonal fields, origin class (native-built / inferred-source / recorded-draft
+/ foreign-converted) and hardening level (host / sandboxed / hermetic / attested);
+declarative hooks default reversible **only** when the hook executor targets the
+generation root — host-root execution fails closed like a scriptlet; `--activate`
+written unambiguously as `conary try <pkg.ccs> --activate`. Reviewer reported no
+critical findings and confirmed the guest execution model as the right pivot.
 
 **Round 5 (same day — Gemini + DeepSeek, reviewed independently):** the two biggest
 catches both survived four GPT rounds. (1) **Try got a guest execution model**: the
