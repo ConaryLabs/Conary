@@ -64,9 +64,9 @@ surface:
 
 | Surface | M1a | M1b | M2 | M3 |
 |---------|-----|-----|----|----|
-| `build` (recipe), `--recipe`, `--hermetic`, `publish` (static), `repo add` static | ✓ | | | |
+| `build` (recipe), `--recipe`, `--hermetic`, `publish` (project form, static), `repo add` static | ✓ | | | |
 | `build` (inference, tarball/git), `new`, `try`/`status`/`rollback`/`keep`, `--explain` | | ✓ | | |
-| `build` (foreign pkgs), publish lint gates, Remi push, hermetic-publish enforcement | | | ✓ | |
+| `build` (foreign pkgs), `publish` (artifact form, attestation-gated), publish lint gates, Remi push, hermetic-publish enforcement | | | ✓ | |
 | `--record`, `--json`, `try --watch`, MCP packaging tools | | | | ✓ |
 
 ## The four verbs
@@ -144,7 +144,9 @@ Because it is the centerpiece, try gets an explicit **state machine**, not vibes
   package wrote, external effects. Hook policy: try **refuses** packages that declare
   hooks with non-generation-scoped lifecycle effects (db migrations, irreversible
   state changes) unless the package declares reversible cleanup or the user passes
-  `--allow-irreversible`. "Try means safe" must be literally true by default; most
+  `--allow-irreversible`. The policy **fails closed**: hooks that are unknown,
+  unclassified, or legacy scriptlets are treated as non-generation-scoped — an
+  incomplete declaration is never an escape hatch. "Try means safe" must be literally true by default; most
   CCS hooks are declarative (units/tmpfiles/sysctl) and generation-scoped, so the
   refusal bites rarely. Hook reversibility is a manifest field and a publish lint.
 - Try requires the same privileges as `conary install`.
@@ -314,7 +316,9 @@ must define: `index.json` and all packages/chunks as TUF *targets* (the index si
 beside `metadata/` but is protected by it — that is the standard TUF pattern, not a
 parallel trust path); atomic publish (write-new-then-flip, so a reader never sees a
 torn repo); metadata expirations and refresh expectations; rollback/freeze protection;
-and key rotation/revocation.
+and the operator key lifecycle — rotation, revocation, backup, and loss recovery,
+stated plainly, because the auto-generated first-publish key *is* the repo authority
+and users must understand what losing it means.
 
 Client-side work:
 
@@ -350,7 +354,9 @@ TUF timestamp refresh is currently a 501 stub
 ## Rollout and compatibility
 
 - Bootstrap recipes continue to work unchanged; Kitchen extraction is refactoring
-  beneath them, validated by the existing 333-test integration matrix.
+  beneath them, validated by the existing bootstrap and integration suites — child
+  plans name the exact suites and result-gate commands rather than citing the matrix
+  in aggregate.
 - `conary cook` / `conary ccs build` are not removed in v1; they are demoted in docs.
 - The new commands ship gated until the integration suite is green, then graduate.
   The conary CLI currently has **no** cargo features (`default = []` in
@@ -375,6 +381,14 @@ TUF timestamp refresh is currently a 501 stub
 - **Remi push auth:** static bearer token in v1; token management UX deferred.
 
 ## Revision notes (2026-06-10)
+
+**Round 4 (same day, final):** availability matrix distinguishes project-form publish
+(M1a) from artifact-form publish (M2, attestation-gated); try hook policy fails
+closed on unknown/unclassified/legacy-scriptlet hooks; static-repo child spec must
+cover the operator key lifecycle including backup/loss recovery; rollout no longer
+cites the integration matrix in aggregate — child plans name exact suites and
+result-gate commands. Reviewer reported no critical findings; spec declared ready for
+child-spec planning.
 
 **Round 3 (same day):** static-repo child spec promoted to an explicit M0 hard gate;
 per-flag milestone labels on the `build` surface and `--hermetic`/`--recipe` added to
