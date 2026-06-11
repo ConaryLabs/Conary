@@ -243,6 +243,11 @@ The repo moved materially after the last audit:
   deferred `conary system adopt <pkg> --dry-run` surface an active owner
   artifact, separating the current truthful refusal from the future true-preview
   or visibility-removal slice.
+- The distro adoption gap analysis and packaging toolchain design record the
+  repo-grounded path from first package to static or Remi-backed publication,
+  including the `conary new` / `conary build` / `conary try` / `conary publish`
+  front door, static repository format, recipe-centered authoring, and
+  hermetic-publish boundary now under review.
 - The active documentation accuracy audit does not support a `deleted`
   disposition. Deleting a tracked doc removes it from the live inventory and
   ledger in the same commit; retaining deletion history would require a separate
@@ -606,9 +611,9 @@ public tester copy is tracked by
 
 ## Final Counts
 
-- Total tracked doc-like files audited: 185
+- Total tracked doc-like files audited: 187
 - `verified-no-change`: 12
-- `corrected`: 44
+- `corrected`: 46
 - `archived`: 115
 - `retained-historical`: 14
 - Remaining pending rows: 0
