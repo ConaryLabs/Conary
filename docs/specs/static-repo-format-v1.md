@@ -278,3 +278,141 @@ a deliberate freeze-protection vs. operator-burden tradeoff for static
 repos; see §5.5 (refresh) and §9 (threats). Expired metadata is a hard
 client error whose message MUST name the remedy (operator runs
 `conary publish --refresh`).
+
+## 5. Publish Algorithm (Producer Requirements)
+
+Any producer (`conary publish` M1a, Remi M2, third-party tooling) MUST
+behave as follows. The publisher is **stateless**: current versions are read
+from the destination, not from local state.
+
+### 5.1 Read destination state
+
+1. Fetch `metadata/timestamp.json`, `metadata/snapshot.json`,
+   `metadata/targets.json`, `metadata/root.json` from the destination.
+2. All absent → initial publish (§5.2). Partially absent → destination is
+   damaged; refuse unless `--force-reinit` (which re-runs §5.2 and is loud
+   about it).
+3. Verify fetched metadata with the operator's own public keys (the
+   operator trusts their own repo; this check catches destination
+   tampering/corruption before building on top of it). Verification
+   failure → hard error, never silently re-sign.
+4. Compare destination versions against the local version watermark
+   (`~/.config/conary/keys/<repo-name>/last-published.toml`, or the
+   `--state-file <path>` override for CI). Destination versions **lower**
+   than the watermark → hard error naming both (a compromised or rolled-back
+   destination is replaying old signed state; re-signing on top would
+   launder the rollback into fresh signatures). `--accept-destination-state`
+   overrides, loudly. A missing watermark (first publish from this machine)
+   skips the check with a notice. Version regression implies **content**
+   regression too: a publisher rebuilding from a rolled-back index would
+   silently drop packages published in the hidden versions — the watermark
+   gate is what prevents that, which is why overriding it is loud.
+5. **Single-writer rule:** concurrent publishes to one destination are
+   unsupported and MUST fail rather than interleave (two writers can both
+   derive version N+1 and clobber each other). Where the backend supports
+   it, the publisher SHOULD use conditional writes (S3 `If-Match`/ETag;
+   atomic rename for file/rsync destinations); regardless of backend, the
+   publisher MUST re-fetch `metadata/timestamp.json` immediately before
+   uploading the new timestamp (§5.3.4 step d) and abort if its version
+   changed since §5.1.
+
+### 5.2 Initial publish (ceremony)
+
+1. Ensure keys exist (§7.1); generate if absent.
+2. Build root v1 via `trust/ceremony.rs::create_initial_root(root_key,
+   publish_key, publish_key, publish_key, 365 days)` — publish key fills
+   targets/snapshot/timestamp roles. `consistent_snapshot = false`.
+3. Write `conary-repo.toml` with the root-role key IDs.
+4. Proceed to §5.3 with all role versions starting at 1.
+
+### 5.3 Incremental publish (per publish)
+
+1. Stage new `.ccs` files under `packages/<name>/`. Refuse to overwrite an
+   existing artifact path with different content (immutability, §1).
+2. Build the new target set: every `.ccs` under `packages/`,
+   `index.json`, `keys/package-keys.json` — each with length + sha256.
+   (Compute the index bytes first: `index_version = targets_next`, where
+   `targets_next = current targets.version + 1`, or 1 on initial publish.)
+3. Generate metadata via `trust/generate.rs`:
+   `generate_targets(targets_next)` → `generate_snapshot(root_version,
+   targets, snapshot_next)` → `generate_timestamp(snapshot,
+   timestamp_next)`; each role's version = its destination version + 1.
+   **`root_version` is NOT a role-to-bump:** it is the version of the
+   currently published root (read in §5.1) — incremented only when this
+   publish itself performs a root rotation (§7.2). A snapshot pinning a
+   nonexistent root version hard-fails every client's consistency check.
+   Expiry-parameter footgun: `generate_timestamp` takes **`expires_hours`**
+   (720 = the 30-day default) while `generate_targets`/`generate_snapshot`
+   take `expires_days` — passing 30 meaning "days" yields a 30-hour
+   timestamp.
+4. Upload in **reverse verification order** — each step completes before
+   the next begins:
+   a. `packages/**` (new artifacts) and `keys/package-keys.json`
+   b. `index.json` and `metadata/targets.json`
+   c. `metadata/snapshot.json`
+   d. `metadata/timestamp.json`
+   On rotation only: new `metadata/{N}.root.json` and `metadata/root.json`
+   upload during step (a).
+   A client reading mid-publish sees old timestamp → old, complete state;
+   or new timestamp whose hash chain only references already-uploaded
+   files. Torn states fail hash verification — clients never act on them.
+   One exception: during a **root rotation**, a client that probes the new
+   `{N+1}.root.json` (uploaded in step a) before the new snapshot lands
+   will fail snapshot consistency (old snapshot pins root vN) — a brief
+   retryable window, fail-safe but not "old complete state".
+5. A failed publish is re-run from the top; §5.1 re-reads whatever
+   landed, and immutable artifacts already uploaded are skipped.
+6. After a fully successful publish, write the new role versions to the
+   local watermark (§5.1 step 4).
+
+### 5.4 Publisher lints (MUST pass before upload)
+
+- Index invariants of §3 hold (index↔targets path/hash/size equality,
+  `index_version == targets.version`).
+- `conary-repo.toml` `root_key_ids` equals the root-role keyid set.
+- Every package entry's filename parses as `<name>-<version>-<release>-<arch>.ccs`
+  and matches its entry fields.
+- Every targets/index path passes the §3 normalization rule (resolve,
+  RFC 3986 normalize, reject root-escape / absolute / scheme-carrying /
+  percent-encoded-traversal paths) — the producer enforces exactly the
+  rule clients verify.
+
+### 5.5 Refresh (`conary publish --refresh <target>`)
+
+Re-signs without content change. Roles are selected by expiry (within 25%
+of lifetime), then expanded to the **minimal closed cascade set** — the
+snapshot pins the root and targets versions (`generate_snapshot` writes
+`meta["root.json"].version`; the client's `verify_snapshot_consistency`
+checks it against the *current* root), so a role bump that isn't cascaded
+strands clients on a consistency failure:
+
+- root bump ⇒ snapshot + timestamp bump
+- targets bump (also: any index/package-keys change) ⇒ snapshot + timestamp
+- snapshot bump ⇒ timestamp
+- timestamp always bumps
+
+If targets is re-signed, `index_version` bumps with it and the index is
+re-uploaded — invariant 3 of §3 always holds. The re-uploaded index is
+byte-identical to the previous one except `index_version` and `generated`
+(package entries, hashes, and sizes MUST NOT be recomputed or reordered
+during a refresh). Upload ordering of §5.3.4 applies.
+
+### 5.6 Serving and caching guidance (non-normative)
+
+With `consistent_snapshot = false`, a client syncing mid-publish can fetch a
+new `targets.json` against an old `snapshot.json` (or vice versa) and fail
+hash verification — fail-safe, but a transient denial of service. CDNs with
+per-file TTLs widen this window. Operators serving via CDN SHOULD set short
+TTLs (≤60 s) on `conary-repo.toml`, `index.json`, `keys/package-keys.json`,
+and everything under `metadata/` except `{N}.root.json` — concretely
+`Cache-Control: max-age=60` (or `no-cache` for `timestamp.json`), and
+`Cache-Control: public, max-age=31536000, immutable` for `packages/**` and
+`{N}.root.json`. Publish pipelines targeting a CDN SHOULD invalidate
+`metadata/*`, `index.json`, and `keys/*` as a post-upload step.
+S3-compatible backends do not guarantee read-after-**overwrite**
+consistency: each §5.3.4 step completes only when the uploaded object is
+confirmed visible (read-back or ETag check) before the next step begins,
+and the §5.1 destination reads SHOULD bypass caches (no-cache request
+headers or cache-busting query). CDN-served
+production repos are the primary motivation for the v2 consistent-snapshot
+upgrade (§11).
