@@ -110,3 +110,70 @@ Field rules:
 The fingerprint format everywhere in this spec is the bare 64-hex key ID.
 Operators SHOULD publish it out-of-band (website, README) for
 `--fingerprint` verification.
+
+## 3. Package Index: `index.json`
+
+The resolver's view of the repo. It is a TUF target: clients MUST verify its
+sha256+length against the verified `targets.json` entry for path
+`index.json` **before parsing** (§6.2). No code path may parse an unverified
+index.
+
+    {
+      "schema": 1,
+      "name": "acme-tools",
+      "index_version": 7,
+      "generated": "2026-06-10T18:00:00Z",
+      "packages": [
+        {
+          "name": "acme-widget",
+          "version": "1.4.2",
+          "release": "1",
+          "arch": "x86_64",
+          "path": "packages/acme-widget/acme-widget-1.4.2-1-x86_64.ccs",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "size": 1048576,
+          "description": "Widget frobnicator",
+          "dependencies": ["libfoo >= 2.0"]
+        }
+      ]
+    }
+
+Field rules:
+
+- `schema` (u64): MUST be `1`; reject unknown majors.
+- `index_version` (u64): MUST equal the `version` of the targets metadata
+  generated in the same publish (§5.3). Clients enforce the equality only;
+  rollback protection is inherited from TUF targets-version monotonicity,
+  so no separate `index_version` history is kept. The field exists because
+  the legacy client shape (`RepositoryMetadata.version`) is a free-form
+  string with no monotonicity guarantee, and the equality check is what
+  binds the parsed index to the verified TUF state.
+- `generated`: RFC 3339 UTC; informational only — clients MUST NOT make
+  trust decisions on it (expiry lives in TUF metadata).
+- Package entries: `name`, `version`, `release`, `arch` are required and
+  MUST match the artifact filename `<name>-<version>-<release>-<arch>.ccs`.
+  `arch` values follow `uname -m` (`x86_64`, `aarch64`, `riscv64`) or
+  `noarch`. `sha256` is bare lowercase hex of the `.ccs` file; `size` in
+  bytes. `path` is repo-root-relative: consumers MUST resolve it against
+  the repo base, normalize per RFC 3986, and reject the entry if the
+  normalized result escapes the repo root, is absolute, carries a scheme,
+  or contains percent-encoded sequences decoding to `/` or `..` (a naive
+  `..`-substring check both misses encoded traversals and false-positives
+  on names like `foo..bar`).
+  `description` and `dependencies` are optional; dependency strings use the
+  CCS manifest dependency syntax.
+
+Consistency invariants (publisher MUST enforce, client MUST check on use):
+
+1. Every package entry has a `targets.json` entry at the identical path
+   whose sha256 and length equal the index entry's `sha256`/`size`.
+2. `index.json` itself and `keys/package-keys.json` have `targets.json`
+   entries.
+3. `index_version == targets.version`.
+
+Mapping note (M1a client work, non-normative): index entries map onto the
+existing client model `repository/metadata.rs::PackageMetadata` as
+name→name, version→version, arch→architecture, sha256→checksum,
+size→size, `<repo-url>/<path>`→download_url, dependencies→dependencies;
+`release` rides alongside; `delta_from`/`security_advisory` are absent in
+static-repo v1.
