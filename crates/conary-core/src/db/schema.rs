@@ -11,7 +11,7 @@ use rusqlite::Connection;
 use tracing::info;
 
 /// Current schema version
-pub const SCHEMA_VERSION: i32 = 71;
+pub const SCHEMA_VERSION: i32 = 72;
 
 /// Initialize the schema version tracking table
 fn init_schema_version(conn: &Connection) -> Result<()> {
@@ -195,6 +195,7 @@ fn apply_migration(conn: &Connection, version: i32) -> Result<()> {
         69 => migrations::migrate_v69(conn),
         70 => migrations::migrate_v70(conn),
         71 => migrations::migrate_v71(conn),
+        72 => migrations::migrate_v72(conn),
         _ => Err(crate::error::Error::InitError(format!(
             "Unknown migration version: {}",
             version
@@ -261,6 +262,7 @@ mod tests {
         assert!(tables.contains(&"flavors".to_string()));
         assert!(tables.contains(&"provenance".to_string()));
         assert!(tables.contains(&"dependencies".to_string()));
+        assert!(tables.contains(&"repository_package_keys".to_string()));
         assert!(tables.contains(&"schema_version".to_string()));
     }
 
@@ -374,10 +376,9 @@ mod tests {
     fn migration_v71_creates_installed_legacy_scriptlet_bundles_table() {
         let (_temp, conn) = create_test_db_at_version(70);
 
-        migrate(&conn).unwrap();
+        apply_migration_version(&conn, 71).unwrap();
 
-        assert_eq!(get_schema_version(&conn).unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 71);
+        assert_eq!(get_schema_version(&conn).unwrap(), 71);
 
         let columns: Vec<(String, String, bool)> = conn
             .prepare("PRAGMA table_info(installed_legacy_scriptlet_bundles)")
@@ -464,6 +465,93 @@ mod tests {
                 && table == "changesets"
                 && on_delete.eq_ignore_ascii_case("SET NULL")
         }));
+    }
+
+    #[test]
+    fn migration_v72_creates_repository_package_keys_table() {
+        let (_temp, conn) = create_test_db_at_version(71);
+
+        migrate(&conn).unwrap();
+
+        assert_eq!(get_schema_version(&conn).unwrap(), SCHEMA_VERSION);
+        assert_eq!(SCHEMA_VERSION, 72);
+
+        let columns: Vec<(String, String, bool, Option<String>, i32)> = conn
+            .prepare("PRAGMA table_info(repository_package_keys)")
+            .unwrap()
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i32>(3)? != 0,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, i32>(5)?,
+                ))
+            })
+            .unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap();
+        let column_names: Vec<&str> = columns
+            .iter()
+            .map(|(name, _, _, _, _)| name.as_str())
+            .collect();
+
+        for required in [
+            "repository_id",
+            "public_key",
+            "key_id",
+            "status",
+            "synced_at",
+        ] {
+            assert!(
+                column_names.contains(&required),
+                "missing repository package key column {required}"
+            );
+        }
+
+        assert!(columns.iter().any(|(name, ty, required, _, pk)| {
+            name == "repository_id" && ty == "INTEGER" && *required && *pk == 1
+        }));
+        assert!(columns.iter().any(|(name, ty, required, _, pk)| {
+            name == "public_key" && ty == "TEXT" && *required && *pk == 2
+        }));
+        assert!(
+            columns
+                .iter()
+                .any(|(name, ty, required, _, _)| name == "key_id" && ty == "TEXT" && !*required)
+        );
+        assert!(
+            columns
+                .iter()
+                .any(|(name, ty, required, _, _)| name == "status" && ty == "TEXT" && *required)
+        );
+        assert!(columns.iter().any(|(name, ty, required, default, _)| {
+            name == "synced_at"
+                && ty == "TEXT"
+                && *required
+                && default
+                    .as_deref()
+                    .is_some_and(|value| value.contains("strftime('%Y-%m-%dT%H:%M:%SZ', 'now')"))
+        }));
+
+        let create_sql: String = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'repository_package_keys'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(create_sql.contains("status IN ('active', 'retired')"));
+        assert!(create_sql.contains("REFERENCES repositories(id) ON DELETE CASCADE"));
+
+        let indexes: Vec<String> = conn
+            .prepare("PRAGMA index_list(repository_package_keys)")
+            .unwrap()
+            .query_map([], |row| row.get(1))
+            .unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap();
+        assert!(indexes.contains(&"idx_repository_package_keys_repo".to_string()));
     }
 
     #[test]
