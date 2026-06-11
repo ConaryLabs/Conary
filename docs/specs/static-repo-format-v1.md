@@ -423,3 +423,89 @@ upload step completes only when the uploaded object is confirmed visible
 destination reads SHOULD bypass caches (no-cache request headers or
 cache-busting query). CDN-served production repos are the primary motivation
 for a future v2 consistent-snapshot upgrade.
+
+## 6. Client Behavior
+
+### 6.1 `repo add` (static repo detection and trust establishment)
+
+`conary repo add <name> <url|path> [--fingerprint <64-hex>]...`
+
+1. Probe `<url>/conary-repo.toml`. Present → static repo flow (below).
+   Absent → existing repo-type flows; not this spec.
+2. Static repos use TUF exclusively. Enforcement is two-stage because
+   static-ness isn't knowable at parse time: clap conflict rules reject
+   GPG flags (`--gpg-key`, `--no-gpg-check`, `--gpg-strict`) combined with
+   `--fingerprint`; and after the probe identifies a static repo, command
+   execution rejects any GPG flags that were passed without
+   `--fingerprint`.
+3. Fetch `<url>/metadata/root.json`; parse as `Signed<RootMetadata>`;
+   verify self-signed (root-role threshold met by its own keys) and
+   unexpired.
+4. Compute the root-role keyid set; verify it equals
+   `conary-repo.toml::trust.root_key_ids` — mismatch is a hard error
+   naming both sets.
+5. Trust pinning:
+   - With `--fingerprint` (repeatable): provided set MUST equal the
+     root-role keyid set; mismatch → hard error, nothing persisted.
+   - Without: display name, description, and the keyid set; require
+     explicit interactive confirmation (TOFU). Non-interactive contexts
+     MUST fail instead of prompting. The confirmation text MUST note that
+     TOFU cannot detect a replayed *old* root whose keys were later
+     rotated or compromised — an on-path attacker can pin a stale
+     identity. `--fingerprint` is the production path; TOFU is for
+     casual/first-look use. "Non-interactive" is defined: stdin is not a
+     terminal, or `CONARY_NON_INTERACTIVE=1` is set.
+6. Persist: repository row with `tuf_enabled = true`,
+   `tuf_root_url = <url>/metadata`; bootstrap the verified root via the
+   existing `TufClient::bootstrap` path (persists root, role keys,
+   pinned versions).
+
+### 6.2 Update (sync)
+
+1. Run the existing TUF update flow (`trust/client.rs::update`) against
+   `<url>/metadata`: root-rotation probe → timestamp → snapshot →
+   targets, with signature, expiry, monotonicity, and snapshot-consistency
+   checks. M1a strengthening: for static repos the client MUST hard-fail
+   when the snapshot lacks `meta` entries for `root.json` or
+   `targets.json` (the current `verify_snapshot_consistency` checks the
+   root pin only **if the entry exists** — presence itself must become a
+   static-repo requirement, or the §4.1 invariant is unenforced).
+2. Fetch `<url>/index.json`; verify length and sha256 against the
+   verified targets entry for path `index.json` **before parsing**.
+3. Parse; verify `schema == 1` and `index_version == targets.version`.
+4. Fetch + verify `keys/package-keys.json` the same way (targets entry,
+   then parse); update the repo's package trust policy
+   (`TrustPolicy { trusted_keys: <base64 keys>, allow_unsigned: false }`).
+5. Map package entries into the client package model (§3 mapping note).
+
+### 6.3 Install
+
+1. Download `<url>/<path>` for the selected entry.
+2. Verify sha256 + length against the **targets** entry (the index served
+   resolution; targets is the verification source — they are equal by §3
+   invariant 1, and disagreement is treated as repo corruption).
+3. Verify the CCS package signature against the repo's trust policy
+   (existing `ccs/verify.rs::verify_package`).
+
+### 6.4 Failure semantics
+
+- Expired metadata: hard error; message MUST say the repo's metadata
+  expired and that the operator must run `conary publish --refresh`.
+- Version decrease (any TUF role): hard error naming the stored vs.
+  offered versions (rollback protection; existing client behavior).
+  `index_version` needs no separate history tracking — it MUST equal the
+  verified `targets.version` (§3), so its rollback protection is inherited
+  from the TUF layer.
+- Hash mismatch on index/keys/package fetch: retryable error ("repository
+  is being updated or is corrupted; try again shortly") — this is the
+  torn-publish window of §5.3 step 4 failing safe. Persistent mismatch
+  through a CDN usually means mixed-TTL caching; see §5.6.
+
+### 6.5 `conary repo reset-trust <name>`
+
+Explicit operator-initiated unpinning, required after a repo's root key is
+lost/replaced (§7.4): deletes the repo's rows from `tuf_roots`,
+`tuf_metadata`, `tuf_keys`, `tuf_targets`, and its package trust keys, then
+prints that the next `repo add`/sync re-establishes trust per §6.1. There is
+no silent re-pin: a root-key change without reset-trust keeps hard-failing
+verification.
