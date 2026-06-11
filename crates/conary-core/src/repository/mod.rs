@@ -34,6 +34,7 @@ pub mod latest_signal;
 pub mod parsers;
 pub mod resolution_policy;
 pub mod selector;
+pub mod static_repo;
 pub mod versioning;
 
 pub mod chunk_fetcher;
@@ -71,6 +72,10 @@ pub use resolution::{
 };
 pub use retry::{RetryConfig, with_retry};
 pub use selector::{PackageSelector, PackageWithRepo, SelectionOptions};
+pub use static_repo::{
+    PackageKeyEntry, PackageKeyStatus, PackageKeysFile, RepoIdentity, StaticIndex,
+    StaticPackageEntry,
+};
 pub use substituter::{SubstituterChain, SubstituterResult, SubstituterSource};
 pub use sync::{
     current_timestamp, maybe_fetch_gpg_key, needs_sync, parse_timestamp, sync_repository,
