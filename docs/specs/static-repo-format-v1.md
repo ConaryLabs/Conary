@@ -596,3 +596,64 @@ signed; and SHOULD shorten timestamp expiry for the next publishes.
 The spec deliberately provides no root-loss escape hatch that skips
 client-side reset-trust: an unverifiable "trust my new key" path is the
 attack this format exists to prevent.
+
+## 8. Chunk Store (`chunks/`) — RESERVED
+
+Layout reserved for delta fetch. Two existing conventions are candidates:
+the core CAS layout `chunks/<hh>/<rest-of-sha256>`
+(`filesystem/cas.rs::object_path`) and Remi's
+`chunks/objects/<hh>/<rest-of-sha256>`
+(`apps/remi/src/server/handlers/mod.rs::cas_object_path`); the exact
+sublayout is decided with delta semantics, not here. v1 repos MUST NOT
+require chunks for correct operation; semantics (which chunks exist, how
+clients discover them, TUF protection strategy for high-cardinality chunk
+sets) are defined alongside delta publishing and are explicitly out of
+scope here.
+
+## 9. Security Considerations
+
+| Threat | Mitigation |
+|--------|------------|
+| MITM at first contact | `--fingerprint` (out-of-band root key IDs); interactive-only TOFU otherwise |
+| Tampered index / package list | index.json and keys file are TUF targets; verify-before-parse |
+| Tampered package | targets sha256+length; CCS Ed25519 signature |
+| Rollback (downgrade metadata) | TUF role version monotonicity; `index_version == targets.version` binds the index to it |
+| Freeze (replay stale repo) | metadata expirations (§4.5) |
+| Mix-and-match | snapshot pins targets hash; timestamp pins snapshot hash; snapshot-consistency check |
+| Torn publish | reverse-order upload (§5.3 step 4): partial states fail hash verification, fail-safe |
+| Publish-key compromise | root-signed rotation (§7.2/§7.3) |
+| Root-key compromise/loss | new identity + explicit client reset-trust (§7.4); no silent re-pin |
+| Destination replays old signed state to the publisher | version watermark / `--state-file` gate (§5.1); re-signing a rollback requires explicit override |
+| One compromised package key signs any package (flat authority) | single-publish-key default; repo partitioning; delegations in v2 (§4.4) |
+| Path traversal via index/targets paths | path rules (§3) + publisher lints (§5.4); clients MUST reject non-relative paths |
+
+## 10. Conformance
+
+**Producer** MUST: emit the layout of §1; satisfy §3 invariants and §5.4
+lints; publish in §5.3 step 4 upload order; never mutate published artifacts
+or historical roots; keep `conary-repo.toml::root_key_ids` synchronized with
+root.json.
+
+**Client** MUST: implement §6.1 trust establishment (GPG/TUF exclusivity
+included); never parse index/keys before hash verification; enforce expiry +
+monotonicity; treat §6.4 failure semantics; support file:// and local paths;
+and validate every index/targets path **before** any URL or filesystem join,
+per the §3 normalization rule (resolve, RFC 3986 normalize, reject
+root-escape / absolute / scheme-carrying / percent-encoded-traversal paths
+-- with `file://` repos a traversal escapes into the local filesystem, so
+this is load-bearing, not hygiene).
+
+## 11. Compatibility and Evolution
+
+- v2 candidates: `consistent_snapshot = true` with versioned
+  `{N}.targets.json`/`{N}.snapshot.json` filenames (removes the publish-window
+  transient failures and makes aggressive CDN caching safe -- the recommended
+  path for production CDN-served repos; requires client fetch support first);
+  TUF delegations (multi-publisher repos / per-path authority); chunk/delta
+  semantics (§8).
+- Versioning: `schema` majors in `conary-repo.toml`/`index.json` gate
+  breaking changes; TUF `spec_version` stays 1.0.31 per the in-tree
+  implementation.
+- Remi (M2) MUST produce byte-format-identical repos (it is "one producer of
+  the same format" per the parent spec); its DB-backed TUF serving and this
+  file-based layout share `trust/` types and generation functions.
