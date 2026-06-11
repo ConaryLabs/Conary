@@ -47,6 +47,7 @@ docs/operations/post-generation-export-follow-up-roadmap.md	canonical	contributo
 docs/operations/release-artifact-matrix.md	canonical	contributor
 docs/operations/system-adopt-single-package-dry-run-follow-up.md	canonical	contributor
 docs/specs/ccs-format-v1.md	canonical	contributor
+docs/specs/static-repo-format-v1.md	canonical	contributor
 docs/superpowers/archive/2026-04-04-codebase-simplification-retrospective.md	historical	historical
 docs/superpowers/archive/2026-04-10-release-hardening-checklist.md	historical	historical
 docs/superpowers/daily-driver-readiness-completion-audit-2026-05-22.md	planning	maintainer
