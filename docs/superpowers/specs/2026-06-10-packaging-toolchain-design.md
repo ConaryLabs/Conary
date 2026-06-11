@@ -36,7 +36,7 @@ suite is green:
 - **M0 — static-repo child spec (hard gate).** The standalone static-repo spec in
   `docs/specs/` is written, reviewed, and approved before any M1a implementation
   begins. No publish/repo-add code lands against an unapproved format.
-- **M1a — recipe-only static path.** `conary build` for recipe-driven builds (no
+- **M1a — recipe-only static path.** `conary cook` for recipe-driven builds (no
   inference yet); `conary publish` to a static repo; `conary repo add` of a static
   repo; install from it. The smallest end-to-end loop that proves the format and the
   trust story. Packages published before M2 hardening carry an honest **hardening
@@ -47,7 +47,7 @@ suite is green:
 - **M1b — inference + try.** Build-system inference for the core build systems,
   `conary new` materialization, `conary try` (state machine, no watch). Internal
   ordering: inference lands first via the `conary new --from .` path (materialize →
-  inspect → build with explicit recipe), then bare inference-mode `conary build` —
+  inspect → build with explicit recipe), then bare inference-mode `conary cook` —
   so the two surfaces share one tested engine and cannot diverge. The "first package
   in 5 minutes" tutorial must pass at the end of M1b — that is the M1 exit gate.
 - **M2 — publish hardening + Remi push.** Hermetic-publish requirements (below),
@@ -67,12 +67,19 @@ surface:
 
 | Surface | M1a | M1b | M2 | M3 |
 |---------|-----|-----|----|----|
-| `build` (recipe), `--recipe`, `--isolated`, `publish` (project form, static), `repo add` static | ✓ | | | |
-| `build` (inference, tarball/git), `new`, `try`/`status`/`rollback`/`keep`, `--explain` | | ✓ | | |
-| `build` (foreign pkgs), `publish` (artifact form, attestation-gated), publish lint gates, Remi push, hermetic-publish enforcement | | | ✓ | |
+| `cook` (recipe), `--recipe`, `--isolated`, `publish` (project form, static), `repo add` static | ✓ | | | |
+| `cook` (inference, tarball/git), `new`, `try`/`status`/`rollback`/`keep`, `--explain` | | ✓ | | |
+| `cook` (foreign pkgs), `publish` (artifact form, attestation-gated), publish lint gates, Remi push, hermetic-publish enforcement | | | ✓ | |
 | `--record`, `--json`, `try --watch`, MCP packaging tools | | | | ✓ |
 
 ## The four verbs
+
+The journey is `new → cook → try → publish` — recipe, kitchen, cook: the vocabulary
+is a deliberate nod to the original Conary, and it is the *only* documented path.
+`conary build` exists as a **hidden compatibility alias** for `cook` (muscle memory
+from cargo/go/npm, and agents that reflexively type it) — it works, help points it
+at `cook`, and no tutorial or doc ever uses it. One visible path; the alias is a
+courtesy, not a fifth concept. (`BuildPipeline` stays as the internal engine name.)
 
 ### `conary new [name]`
 
@@ -85,11 +92,11 @@ One verb, two modes, both meaning "give me a recipe file":
   defaults need overriding. Help text and tutorials teach the explicit `--from .`
   form; the bare form is a convenience, not the documentation surface.
 
-Upstream developers who never need overrides never run it — `conary build` alone
+Upstream developers who never need overrides never run it — `conary cook` alone
 suffices. There is no separate `conary recipe init`; recipe materialization is not a
 fifth concept.
 
-### `conary build [TARGET]`
+### `conary cook [TARGET]`
 
 The universal front door. TARGET may be:
 
@@ -123,9 +130,10 @@ field in the recipe; cross builds take it from the existing `[cross].target`.
 
 `--explain` output is human-readable but backed by a structured `InferenceTrace`
 type (each node: detector, confidence, decision, evidence) so it is testable and
-serializable — not debug-printf. Help text distinguishes this command from the
-existing `conary system generation build` (which builds a system generation, not a
-package); both surfaces cross-reference each other.
+serializable — not debug-printf. The earlier `build`-verb collision with
+`conary system generation build` is mooted by `cook` being canonical; the hidden
+`build` alias's help text points to `cook` and cross-references the generation
+surface for anyone who meant that.
 
 Every built package carries two **orthogonal** provenance fields in its manifest:
 
@@ -303,8 +311,10 @@ separate keygen ceremony.
 - Inference produces a synthetic in-memory `Recipe`, so the engine has exactly one
   input type. `conary new` (in a source tree) serializes the inferred recipe to disk,
   pre-filled, when the user needs to override something.
-- `conary cook` and `conary ccs build` remain as plumbing commands but leave the
-  primary documentation.
+- `conary cook` is **promoted, not demoted**: the existing recipe-only cook surface
+  grows into the universal front door described above (its CLI shape is extended,
+  not forked). `conary ccs build` remains as plumbing and leaves the primary
+  documentation.
 - The bootstrap pipeline becomes a consumer of the same build pipeline — conaryOS
   dogfoods the toolchain third parties use.
 
@@ -331,7 +341,7 @@ with `--explain` and resolved by an explicit recipe.
 
 ### Record mode — packaging by demonstration
 
-`conary build --record` opens a shell; the user builds their software the way they
+`conary cook --record` opens a shell; the user builds their software the way they
 always do. Conary traces the session and **derives the recipe**: commands run, files
 read (dependency evidence), files installed (manifest), plus suggested capability
 declarations. To be precise about what exists: the `capability/` module provides the
@@ -342,7 +352,7 @@ the design and gets a prototype spike before commitment.
 
 Reliability bar: record mode output is **always a draft** — it emits a recipe marked
 `recorded-draft` plus a trace report, and a recorded session is never directly
-publishable. The draft must pass a normal (non-recorded) `conary build`, at which
+publishable. The draft must pass a normal (non-recorded) `conary cook`, at which
 point it is an ordinary recipe like any other. Derive build/install steps and the
 file manifest dependably; dependency suggestions are advisory. Tracing must also
 handle the unglamorous realities (secrets in environment, network fetches during the
@@ -359,7 +369,7 @@ Diagnostic { phase, code, message, evidence, suggestions: [{description, patch}]
 
 Rendered for humans as: what happened, why probably, and the exact next command or
 recipe edit to try. Emitted as JSON under `--json`. Exposed through `conary-mcp` as
-packaging tools (`build`, `diagnose`, `try`, `publish`) so an agent can drive the
+packaging tools (`cook`, `diagnose`, `try`, `publish`) so an agent can drive the
 entire package-fix-rebuild loop.
 
 Diagnostics come in three honest tiers, because arbitrary build systems fail in
@@ -386,7 +396,7 @@ daily-use value.
 
 ### Universal ingestion
 
-`conary build <git-url | tarball | .deb | .rpm | .pkg.tar.zst>` — one verb, always
+`conary cook <git-url | tarball | .deb | .rpm | .pkg.tar.zst>` — one verb, always
 ends in a `.ccs`. Ecosystem refs (`crate:foo`, `pypi:bar`) are roadmap, not v1.
 
 ## Static repo format (new spec, to live in `docs/specs/`)
@@ -466,7 +476,7 @@ TUF timestamp refresh is currently a 501 stub
 - **Unit:** inference detectors against fixture source trees (one per build system,
   plus ambiguous-tree cases); recipe parsing/serialization golden tests; static repo
   index round-trip.
-- **Integration (conary-test, new suite):** build → try → rollback → publish →
+- **Integration (conary-test, new suite):** cook → try → rollback → publish →
   `repo add` → install-from-static-repo, with a plain nginx container serving the
   repo, across fedora44 / ubuntu-26.04 / arch. Record-mode smoke test on a simple
   autotools package. Remi push test against the existing test deployment.
@@ -510,6 +520,17 @@ TUF timestamp refresh is currently a 501 stub
   fingerprint/TUF exclusively (clap-enforced). No removal in v1.
 
 ## Revision notes (2026-06-10)
+
+**Round 7 (same day — verb naming):** the canonical front door is `conary cook`,
+not `conary build`. Rationale: cook already exists and already means "build a
+package from a recipe" (promoting it is less churn than introducing a competing
+verb); it dissolves the `conary system generation build` ambiguity outright; and
+recipe → kitchen → cook → try → publish preserves the project's heritage vocabulary
+as a coherent user journey. `conary build` becomes a hidden compatibility alias
+(works, help redirects to `cook`, never documented) — one visible path, the alias
+is a courtesy for muscle memory and agents. `BuildPipeline` remains the internal
+engine name. The earlier round-1 decision to demote cook to plumbing is reversed:
+cook is promoted into the front door; only `conary ccs build` stays plumbing.
 
 **Round 6 (same day, GPT consistency pass — final):** the isolation flag is renamed
 `--isolated` and held stable across milestones (it requests the strongest isolation
