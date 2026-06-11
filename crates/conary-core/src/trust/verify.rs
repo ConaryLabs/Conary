@@ -158,6 +158,42 @@ pub fn verify_snapshot_consistency(
     Ok(())
 }
 
+/// Verify strict static-repository snapshot consistency.
+///
+/// Static repositories must publish a complete snapshot that explicitly pins
+/// both root and targets metadata. This is stricter than the generic helper
+/// because static publish/sync relies on those references as a closed metadata
+/// set rather than accepting partially populated TUF snapshots.
+pub fn verify_static_snapshot_consistency(
+    snapshot: &SnapshotMetadata,
+    expected_root_version: u64,
+    expected_targets_version: u64,
+) -> TrustResult<()> {
+    let Some(root_meta) = snapshot.meta.get("root.json") else {
+        return Err(TrustError::ConsistencyError(
+            "Snapshot missing mandatory root.json reference".to_string(),
+        ));
+    };
+    let Some(targets_meta) = snapshot.meta.get("targets.json") else {
+        return Err(TrustError::ConsistencyError(
+            "Snapshot missing mandatory targets.json reference".to_string(),
+        ));
+    };
+    if root_meta.version != expected_root_version {
+        return Err(TrustError::ConsistencyError(format!(
+            "Snapshot pins root.json v{} but expected v{}",
+            root_meta.version, expected_root_version
+        )));
+    }
+    if targets_meta.version != expected_targets_version {
+        return Err(TrustError::ConsistencyError(format!(
+            "Snapshot pins targets.json v{} but expected v{}",
+            targets_meta.version, expected_targets_version
+        )));
+    }
+    Ok(())
+}
+
 /// Verify that a hash matches the expected value from a MetaFile reference
 ///
 /// When `require_hash` is true, returns an error if the metadata reference
@@ -423,6 +459,19 @@ mod tests {
 
         let result = verify_snapshot_consistency(&snapshot, 3, None);
         assert!(matches!(result, Err(TrustError::ConsistencyError(_))));
+    }
+
+    #[test]
+    fn static_snapshot_consistency_requires_root_and_targets_entries() {
+        let snapshot = SnapshotMetadata {
+            type_field: "snapshot".to_string(),
+            spec_version: TUF_SPEC_VERSION.to_string(),
+            version: 1,
+            expires: chrono::Utc::now() + chrono::Duration::days(1),
+            meta: BTreeMap::new(),
+        };
+        let err = verify_static_snapshot_consistency(&snapshot, 1, 1).unwrap_err();
+        assert!(err.to_string().contains("root.json"));
     }
 
     #[test]

@@ -15,29 +15,42 @@
 //! 7. Persist verified state to database in a single transaction
 
 use crate::hash;
+use crate::repository::static_repo::RepoLocation;
 use crate::trust::metadata::{
-    Role, RootMetadata, Signed, SnapshotMetadata, TargetsMetadata, TimestampMetadata,
+    MetaFile, Role, RootMetadata, Signed, SnapshotMetadata, TargetsMetadata, TimestampMetadata,
     VerifiedTufState,
 };
 use crate::trust::verify::{
     extract_role_keys, verify_metadata_hash, verify_not_expired, verify_root, verify_signatures,
-    verify_snapshot_consistency, verify_version_increase,
+    verify_snapshot_consistency, verify_static_snapshot_consistency, verify_version_increase,
 };
 use crate::trust::{TrustError, TrustResult};
 use rusqlite::{Connection, OptionalExtension, params};
 use std::collections::BTreeMap;
 use tracing::{debug, info};
 
+/// TUF update behavior for repository-specific invariants.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TufUpdateMode {
+    /// Generic TUF client behavior for existing Remi/trust callers.
+    Generic,
+    /// Static repository behavior requiring complete root/targets snapshot pins.
+    StaticRepo,
+}
+
 /// TUF client for a single repository
 pub struct TufClient {
     repo_id: i64,
     tuf_base_url: String,
+    tuf_location: RepoLocation,
+    update_mode: TufUpdateMode,
 }
 
 /// Blocking DB state required before an async TUF update.
 pub(crate) struct TufUpdateState {
     trusted_root: Signed<RootMetadata>,
     stored_timestamp_version: Option<u64>,
+    stored_timestamp_hash: Option<String>,
     stored_snapshot_version: Option<u64>,
     stored_targets_version: Option<u64>,
     stored_snapshot: Option<Signed<SnapshotMetadata>>,
@@ -58,13 +71,39 @@ pub(crate) struct TufUpdateSnapshot {
 impl TufClient {
     /// Create a new TUF client for a repository
     pub fn new(repo_id: i64, repo_url: &str, tuf_root_url: Option<&str>) -> TrustResult<Self> {
+        Self::new_with_mode(repo_id, repo_url, tuf_root_url, TufUpdateMode::Generic)
+    }
+
+    /// Create a new static-repository TUF client.
+    pub fn new_static(
+        repo_id: i64,
+        repo_url: &str,
+        tuf_root_url: Option<&str>,
+    ) -> TrustResult<Self> {
+        Self::new_with_mode(repo_id, repo_url, tuf_root_url, TufUpdateMode::StaticRepo)
+    }
+
+    /// Create a new TUF client with an explicit update mode.
+    pub fn new_with_mode(
+        repo_id: i64,
+        repo_url: &str,
+        tuf_root_url: Option<&str>,
+        update_mode: TufUpdateMode,
+    ) -> TrustResult<Self> {
         let tuf_base_url = tuf_root_url
             .map(String::from)
             .unwrap_or_else(|| format!("{}/tuf", repo_url.trim_end_matches('/')));
+        let tuf_location = RepoLocation::parse(&tuf_base_url).map_err(|error| {
+            TrustError::FetchError(format!(
+                "Invalid TUF metadata location {tuf_base_url}: {error}"
+            ))
+        })?;
 
         Ok(Self {
             repo_id,
             tuf_base_url,
+            tuf_location,
+            update_mode,
         })
     }
 
@@ -83,6 +122,7 @@ impl TufClient {
         Ok(TufUpdateState {
             trusted_root: self.load_trusted_root(conn)?,
             stored_timestamp_version: self.load_metadata_version(conn, "timestamp")?,
+            stored_timestamp_hash: self.load_metadata_hash(conn, "timestamp")?,
             stored_snapshot_version: self.load_metadata_version(conn, "snapshot")?,
             stored_targets_version: self.load_metadata_version(conn, "targets")?,
             stored_snapshot: self.load_stored_snapshot_optional(conn)?,
@@ -98,6 +138,7 @@ impl TufClient {
         let TufUpdateState {
             trusted_root,
             stored_timestamp_version,
+            stored_timestamp_hash,
             stored_snapshot_version,
             stored_targets_version,
             stored_snapshot,
@@ -109,6 +150,9 @@ impl TufClient {
         // until no newer root is available. This ensures all subsequent metadata
         // is verified against the latest root keys.
         let (current_root, rotated_roots) = self.check_root_rotation(&trusted_root).await?;
+        if self.update_mode == TufUpdateMode::StaticRepo {
+            self.verify_signed_metadata_not_expired(Role::Root, &current_root)?;
+        }
 
         // Step 2: Fetch and verify timestamp using (possibly updated) root keys
         let timestamp_bytes = self.fetch_metadata("timestamp.json").await?;
@@ -117,11 +161,83 @@ impl TufClient {
 
         let (ts_keys, ts_threshold) = extract_role_keys(&current_root.signed, Role::Timestamp)?;
         verify_signatures(&signed_timestamp, Role::Timestamp, &ts_keys, ts_threshold)?;
-        verify_not_expired(Role::Timestamp, &signed_timestamp.signed.expires)?;
+        self.verify_signed_metadata_not_expired(Role::Timestamp, &signed_timestamp)?;
 
         // Check version monotonicity against stored timestamp
         if let Some(stored_v) = stored_timestamp_version {
-            verify_version_increase(Role::Timestamp, signed_timestamp.signed.version, stored_v)?;
+            match signed_timestamp.signed.version.cmp(&stored_v) {
+                std::cmp::Ordering::Greater => {}
+                std::cmp::Ordering::Equal => {
+                    if self.update_mode != TufUpdateMode::StaticRepo {
+                        verify_version_increase(
+                            Role::Timestamp,
+                            signed_timestamp.signed.version,
+                            stored_v,
+                        )?;
+                    }
+                    let offered_hash = metadata_hash_for_persistence(&signed_timestamp)?;
+                    if stored_timestamp_hash.as_deref() != Some(offered_hash.as_str()) {
+                        return Err(TrustError::ConsistencyError(
+                            "Timestamp version matches stored version but metadata bytes/hash differ"
+                                .to_string(),
+                        ));
+                    }
+                    let signed_snapshot = stored_snapshot.ok_or_else(|| {
+                        TrustError::ConsistencyError("No stored snapshot found".to_string())
+                    })?;
+                    let signed_targets = stored_targets.ok_or_else(|| {
+                        TrustError::ConsistencyError("No stored targets found".to_string())
+                    })?;
+                    let snapshot_ref = signed_timestamp
+                        .signed
+                        .meta
+                        .get("snapshot.json")
+                        .ok_or_else(|| {
+                            TrustError::ConsistencyError(
+                                "Timestamp missing snapshot.json reference".to_string(),
+                            )
+                        })?;
+                    self.verify_cached_metadata_ref(
+                        snapshot_ref,
+                        Role::Snapshot,
+                        &signed_snapshot,
+                    )?;
+                    let targets_ref =
+                        signed_snapshot
+                            .signed
+                            .meta
+                            .get("targets.json")
+                            .ok_or_else(|| {
+                                TrustError::ConsistencyError(
+                                    "Snapshot missing targets.json reference".to_string(),
+                                )
+                            })?;
+                    self.verify_cached_metadata_ref(targets_ref, Role::Targets, &signed_targets)?;
+                    self.verify_signed_metadata_not_expired(Role::Snapshot, &signed_snapshot)?;
+                    self.verify_signed_metadata_not_expired(Role::Targets, &signed_targets)?;
+                    self.verify_snapshot_consistency(
+                        &signed_snapshot.signed,
+                        current_root.signed.version,
+                        signed_targets.signed.version,
+                    )?;
+                    return Ok(TufUpdateSnapshot {
+                        current_root,
+                        rotated_roots,
+                        signed_timestamp,
+                        signed_snapshot,
+                        signed_targets,
+                        snapshot_changed: false,
+                        targets_changed: false,
+                    });
+                }
+                std::cmp::Ordering::Less => {
+                    verify_version_increase(
+                        Role::Timestamp,
+                        signed_timestamp.signed.version,
+                        stored_v,
+                    )?;
+                }
+            }
         }
 
         // Step 3: Check if snapshot needs updating
@@ -146,7 +262,7 @@ impl TufClient {
             let (snap_keys, snap_threshold) =
                 extract_role_keys(&current_root.signed, Role::Snapshot)?;
             verify_signatures(&signed, Role::Snapshot, &snap_keys, snap_threshold)?;
-            verify_not_expired(Role::Snapshot, &signed.signed.expires)?;
+            self.verify_signed_metadata_not_expired(Role::Snapshot, &signed)?;
 
             if let Some(stored_v) = stored_snapshot_version {
                 verify_version_increase(Role::Snapshot, signed.signed.version, stored_v)?;
@@ -154,9 +270,12 @@ impl TufClient {
 
             signed
         } else {
-            stored_snapshot.ok_or_else(|| {
+            let signed = stored_snapshot.ok_or_else(|| {
                 TrustError::ConsistencyError("No stored snapshot found".to_string())
-            })?
+            })?;
+            self.verify_cached_metadata_ref(snapshot_ref, Role::Snapshot, &signed)?;
+            self.verify_signed_metadata_not_expired(Role::Snapshot, &signed)?;
+            signed
         };
 
         // Step 4: Check if targets needs updating
@@ -175,7 +294,7 @@ impl TufClient {
             verify_type_field(&signed.signed.type_field, "targets")?;
             let (tgt_keys, tgt_threshold) = extract_role_keys(&current_root.signed, Role::Targets)?;
             verify_signatures(&signed, Role::Targets, &tgt_keys, tgt_threshold)?;
-            verify_not_expired(Role::Targets, &signed.signed.expires)?;
+            self.verify_signed_metadata_not_expired(Role::Targets, &signed)?;
 
             if let Some(stored_v) = stored_targets_version {
                 verify_version_increase(Role::Targets, signed.signed.version, stored_v)?;
@@ -183,16 +302,20 @@ impl TufClient {
 
             signed
         } else {
-            stored_targets.ok_or_else(|| {
+            let signed = stored_targets.ok_or_else(|| {
                 TrustError::ConsistencyError("No stored targets found".to_string())
-            })?
+            })?;
+            if let Some(tr) = targets_ref {
+                self.verify_cached_metadata_ref(tr, Role::Targets, &signed)?;
+            }
+            self.verify_signed_metadata_not_expired(Role::Targets, &signed)?;
+            signed
         };
 
-        // Verify snapshot consistency
-        verify_snapshot_consistency(
+        self.verify_snapshot_consistency(
             &signed_snapshot.signed,
             current_root.signed.version,
-            Some(signed_targets.signed.version),
+            signed_targets.signed.version,
         )?;
 
         Ok(TufUpdateSnapshot {
@@ -260,7 +383,7 @@ impl TufClient {
         // Verify root is self-signed
         let (root_keys, root_threshold) = extract_role_keys(&signed_root.signed, Role::Root)?;
         verify_signatures(&signed_root, Role::Root, &root_keys, root_threshold)?;
-        verify_not_expired(Role::Root, &signed_root.signed.expires)?;
+        self.verify_signed_metadata_not_expired(Role::Root, &signed_root)?;
 
         // Store the root
         self.persist_root(conn, &signed_root)?;
@@ -303,7 +426,7 @@ impl TufClient {
             // Verify against the current trusted root's keys
             let (old_keys, old_threshold) = extract_role_keys(&current.signed, Role::Root)?;
             verify_root(&new_root, &old_keys, old_threshold)?;
-            verify_not_expired(Role::Root, &new_root.signed.expires)?;
+            self.verify_signed_metadata_not_expired(Role::Root, &new_root)?;
             verify_version_increase(Role::Root, new_root.signed.version, current.signed.version)?;
 
             info!(
@@ -337,50 +460,95 @@ impl TufClient {
         filename: &str,
         allow_not_found: bool,
     ) -> TrustResult<Option<Vec<u8>>> {
-        let url = format!("{}/{}", self.tuf_base_url, filename);
-        debug!("Fetching TUF metadata: {}", url);
+        if let Ok(metadata_display) = self.tuf_location.join_display(filename) {
+            debug!(
+                "Fetching TUF metadata from {}: {}",
+                self.tuf_base_url, metadata_display
+            );
+        } else {
+            debug!(
+                "Fetching TUF metadata from {}: {}",
+                self.tuf_base_url, filename
+            );
+        }
 
-        let response = reqwest::get(&url)
+        if allow_not_found {
+            return self
+                .tuf_location
+                .try_fetch_bytes(filename, Self::MAX_TUF_METADATA_SIZE)
+                .await
+                .map_err(|error| {
+                    TrustError::FetchError(format!("Failed to fetch {filename}: {error}"))
+                });
+        }
+
+        self.tuf_location
+            .fetch_bytes(filename, Self::MAX_TUF_METADATA_SIZE)
             .await
-            .map_err(|e| TrustError::FetchError(format!("Failed to fetch {filename}: {e}")))?;
+            .map(Some)
+            .map_err(|error| TrustError::FetchError(format!("Failed to fetch {filename}: {error}")))
+    }
 
-        if allow_not_found && response.status() == reqwest::StatusCode::NOT_FOUND {
-            return Ok(None);
+    fn verify_snapshot_consistency(
+        &self,
+        snapshot: &SnapshotMetadata,
+        expected_root_version: u64,
+        expected_targets_version: u64,
+    ) -> TrustResult<()> {
+        match self.update_mode {
+            TufUpdateMode::Generic => verify_snapshot_consistency(
+                snapshot,
+                expected_root_version,
+                Some(expected_targets_version),
+            ),
+            TufUpdateMode::StaticRepo => verify_static_snapshot_consistency(
+                snapshot,
+                expected_root_version,
+                expected_targets_version,
+            ),
         }
+    }
 
-        if !response.status().is_success() {
-            return Err(TrustError::FetchError(format!(
-                "HTTP {} fetching {filename}",
-                response.status()
+    fn verify_signed_metadata_not_expired<T: TufMetadataFields>(
+        &self,
+        role: Role,
+        signed: &Signed<T>,
+    ) -> TrustResult<()> {
+        self.verify_not_expired(role, signed.signed.expires())
+    }
+
+    fn verify_cached_metadata_ref<T: serde::Serialize + TufMetadataFields>(
+        &self,
+        meta_ref: &MetaFile,
+        role: Role,
+        signed: &Signed<T>,
+    ) -> TrustResult<()> {
+        let cached_version = signed.signed.version();
+        if meta_ref.version != cached_version {
+            return Err(TrustError::ConsistencyError(format!(
+                "Cached {role}.json version {} does not match parent reference v{}",
+                cached_version, meta_ref.version
             )));
         }
 
-        // Check Content-Length before downloading body
-        if let Some(content_length) = response.content_length()
-            && content_length > Self::MAX_TUF_METADATA_SIZE
-        {
-            return Err(TrustError::FetchError(format!(
-                "TUF metadata {filename} exceeds size limit: {content_length} bytes \
-                 (max {} bytes)",
-                Self::MAX_TUF_METADATA_SIZE
-            )));
-        }
+        let json = serde_json::to_string(signed)?;
+        verify_metadata_hash(meta_ref, json.as_bytes(), true)
+    }
 
-        let max_size = Self::MAX_TUF_METADATA_SIZE as usize;
-        let body = response
-            .bytes()
-            .await
-            .map_err(|e| TrustError::FetchError(format!("Failed to read {filename}: {e}")))?;
-
-        if body.len() > max_size {
-            return Err(TrustError::FetchError(format!(
-                "TUF metadata {filename} exceeds size limit: {} bytes (max {} bytes)",
-                body.len(),
-                Self::MAX_TUF_METADATA_SIZE
-            )));
-        }
-
-        Ok(Some(body.to_vec()))
+    fn verify_not_expired(
+        &self,
+        role: Role,
+        expires: &chrono::DateTime<chrono::Utc>,
+    ) -> TrustResult<()> {
+        verify_not_expired(role, expires).map_err(|error| match (self.update_mode, error) {
+            (TufUpdateMode::StaticRepo, TrustError::MetadataExpired { role, expires }) => {
+                TrustError::VerificationFailed(format!(
+                    "TUF metadata expired: {role} expired at {expires}; \
+                 refresh static repository metadata with `conary publish --refresh`"
+                ))
+            }
+            (_, error) => error,
+        })
     }
 
     /// Try to fetch metadata, returning `None` for HTTP 404 / not found.
@@ -435,6 +603,20 @@ impl TufClient {
             .optional()?;
 
         Ok(version.and_then(|v| u64::try_from(v).ok()))
+    }
+
+    /// Load the stored persistence hash for a metadata role.
+    fn load_metadata_hash(&self, conn: &Connection, role: &str) -> TrustResult<Option<String>> {
+        let hash = conn
+            .query_row(
+                "SELECT metadata_hash FROM tuf_metadata
+                 WHERE repository_id = ?1 AND role = ?2",
+                params![self.repo_id, role],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        Ok(hash)
     }
 
     /// Load stored snapshot metadata from the database
@@ -511,7 +693,7 @@ impl TufClient {
         signed: &Signed<T>,
     ) -> TrustResult<()> {
         let json = serde_json::to_string(signed)?;
-        let hash = hash::sha256(json.as_bytes());
+        let hash = metadata_hash_for_persistence(signed)?;
 
         conn.execute(
             "INSERT OR REPLACE INTO tuf_metadata
@@ -650,6 +832,13 @@ fn verify_type_field(type_field: &str, expected: &str) -> TrustResult<()> {
     Ok(())
 }
 
+fn metadata_hash_for_persistence<T: serde::Serialize + TufMetadataFields>(
+    signed: &Signed<T>,
+) -> TrustResult<String> {
+    let json = serde_json::to_string(signed)?;
+    Ok(hash::sha256(json.as_bytes()))
+}
+
 /// Trait for extracting common fields from TUF metadata types
 pub trait TufMetadataFields {
     fn version(&self) -> u64;
@@ -695,6 +884,294 @@ impl TufMetadataFields for TimestampMetadata {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ccs::signing::SigningKeyPair;
+    use crate::db::testing::create_test_db;
+    use crate::trust::ceremony::create_initial_root_single_key;
+    use crate::trust::generate::{generate_snapshot, generate_targets, generate_timestamp};
+    use crate::trust::keys::sign_tuf_metadata;
+    use std::path::{Path, PathBuf};
+
+    struct StaticMetadataFixture {
+        _tempdir: tempfile::TempDir,
+        metadata_dir: PathBuf,
+        key: SigningKeyPair,
+        root: Signed<RootMetadata>,
+        snapshot: Signed<SnapshotMetadata>,
+        targets: Signed<TargetsMetadata>,
+    }
+
+    impl StaticMetadataFixture {
+        fn new() -> Self {
+            let tempdir = tempfile::tempdir().unwrap();
+            let metadata_dir = tempdir.path().join("metadata");
+            std::fs::create_dir_all(&metadata_dir).unwrap();
+
+            let key = SigningKeyPair::generate();
+            let root = create_initial_root_single_key(&key, 365).unwrap();
+            let targets = generate_targets(&[], &key, 1, 30).unwrap();
+            let snapshot = generate_snapshot(root.signed.version, &targets, &key, 1, 7).unwrap();
+            let timestamp = generate_timestamp(&snapshot, &key, 1, 6).unwrap();
+
+            write_signed_metadata(&metadata_dir, "root.json", &root);
+            write_signed_metadata(&metadata_dir, "targets.json", &targets);
+            write_signed_metadata(&metadata_dir, "snapshot.json", &snapshot);
+            write_signed_metadata(&metadata_dir, "timestamp.json", &timestamp);
+
+            Self {
+                _tempdir: tempdir,
+                metadata_dir,
+                key,
+                root,
+                snapshot,
+                targets,
+            }
+        }
+
+        fn client(&self, repo_id: i64) -> TufClient {
+            let metadata_url = format!("file://{}", self.metadata_dir.display());
+            TufClient::new_static(repo_id, "file:///unused", Some(&metadata_url)).unwrap()
+        }
+
+        fn generic_client(&self, repo_id: i64) -> TufClient {
+            let metadata_url = format!("file://{}", self.metadata_dir.display());
+            TufClient::new(repo_id, "file:///unused", Some(&metadata_url)).unwrap()
+        }
+
+        fn bootstrap(&self, client: &TufClient, conn: &Connection) {
+            let root_json = serde_json::to_vec(&self.root).unwrap();
+            client.bootstrap(conn, &root_json).unwrap();
+        }
+
+        fn write_greater_snapshot_without_root(&self) {
+            let mut snapshot =
+                generate_snapshot(self.root.signed.version, &self.targets, &self.key, 2, 7)
+                    .unwrap();
+            snapshot.signed.meta.remove("root.json");
+            snapshot.signatures = vec![sign_tuf_metadata(&self.key, &snapshot.signed).unwrap()];
+            let timestamp = generate_timestamp(&snapshot, &self.key, 2, 6).unwrap();
+
+            write_signed_metadata(&self.metadata_dir, "snapshot.json", &snapshot);
+            write_signed_metadata(&self.metadata_dir, "timestamp.json", &timestamp);
+        }
+
+        fn write_expired_timestamp(&self) {
+            let snapshot =
+                generate_snapshot(self.root.signed.version, &self.targets, &self.key, 1, 7)
+                    .unwrap();
+            let timestamp = generate_timestamp(&snapshot, &self.key, 1, -1).unwrap();
+            write_signed_metadata(&self.metadata_dir, "snapshot.json", &snapshot);
+            write_signed_metadata(&self.metadata_dir, "timestamp.json", &timestamp);
+        }
+
+        fn write_same_version_timestamp_with_different_bytes(&self) {
+            let snapshot =
+                generate_snapshot(self.root.signed.version, &self.targets, &self.key, 1, 7)
+                    .unwrap();
+            let mut timestamp = generate_timestamp(&snapshot, &self.key, 1, 6).unwrap();
+            timestamp.signed.expires += chrono::Duration::seconds(1);
+            timestamp.signatures = vec![sign_tuf_metadata(&self.key, &timestamp.signed).unwrap()];
+            write_signed_metadata(&self.metadata_dir, "timestamp.json", &timestamp);
+        }
+
+        fn write_timestamp_for_stored_snapshot_version(
+            &self,
+            conn: &Connection,
+            repo_id: i64,
+            version: u64,
+        ) {
+            let snapshot: Signed<SnapshotMetadata> =
+                load_stored_signed_metadata(conn, repo_id, "snapshot");
+            let timestamp = generate_timestamp(&snapshot, &self.key, version, 6).unwrap();
+            write_signed_metadata(&self.metadata_dir, "timestamp.json", &timestamp);
+        }
+
+        fn write_timestamp_for_cached_snapshot_with_bad_hash(&self, version: u64) {
+            let mut timestamp = generate_timestamp(&self.snapshot, &self.key, version, 6).unwrap();
+            set_bad_hash(timestamp.signed.meta.get_mut("snapshot.json").unwrap());
+            timestamp.signatures = vec![sign_tuf_metadata(&self.key, &timestamp.signed).unwrap()];
+            write_signed_metadata(&self.metadata_dir, "timestamp.json", &timestamp);
+        }
+
+        fn write_timestamp_for_cached_snapshot_without_hash(&self, version: u64) {
+            let mut timestamp = generate_timestamp(&self.snapshot, &self.key, version, 6).unwrap();
+            timestamp
+                .signed
+                .meta
+                .get_mut("snapshot.json")
+                .unwrap()
+                .hashes = None;
+            timestamp.signatures = vec![sign_tuf_metadata(&self.key, &timestamp.signed).unwrap()];
+            write_signed_metadata(&self.metadata_dir, "timestamp.json", &timestamp);
+        }
+
+        fn write_snapshot_for_cached_targets_with_bad_hash(&self) {
+            let mut snapshot =
+                generate_snapshot(self.root.signed.version, &self.targets, &self.key, 2, 7)
+                    .unwrap();
+            set_bad_hash(snapshot.signed.meta.get_mut("targets.json").unwrap());
+            snapshot.signatures = vec![sign_tuf_metadata(&self.key, &snapshot.signed).unwrap()];
+            let timestamp = generate_timestamp(&snapshot, &self.key, 2, 6).unwrap();
+
+            write_signed_metadata(&self.metadata_dir, "snapshot.json", &snapshot);
+            write_signed_metadata(&self.metadata_dir, "timestamp.json", &timestamp);
+        }
+
+        fn write_snapshot_for_cached_targets_without_hash(&self) {
+            let mut snapshot =
+                generate_snapshot(self.root.signed.version, &self.targets, &self.key, 2, 7)
+                    .unwrap();
+            snapshot.signed.meta.get_mut("targets.json").unwrap().hashes = None;
+            snapshot.signatures = vec![sign_tuf_metadata(&self.key, &snapshot.signed).unwrap()];
+            let timestamp = generate_timestamp(&snapshot, &self.key, 2, 6).unwrap();
+
+            write_signed_metadata(&self.metadata_dir, "snapshot.json", &snapshot);
+            write_signed_metadata(&self.metadata_dir, "timestamp.json", &timestamp);
+        }
+
+        fn expire_stored_snapshot(&self, conn: &Connection, repo_id: i64) {
+            let mut snapshot: Signed<SnapshotMetadata> =
+                load_stored_signed_metadata(conn, repo_id, "snapshot");
+            snapshot.signed.expires = chrono::Utc::now() - chrono::Duration::hours(1);
+            snapshot.signatures = vec![sign_tuf_metadata(&self.key, &snapshot.signed).unwrap()];
+            update_stored_signed_metadata(conn, repo_id, "snapshot", &snapshot);
+
+            let timestamp = generate_timestamp(&snapshot, &self.key, 1, 6).unwrap();
+            write_signed_metadata(&self.metadata_dir, "timestamp.json", &timestamp);
+            update_stored_signed_metadata(conn, repo_id, "timestamp", &timestamp);
+        }
+
+        fn expire_stored_targets(&self, conn: &Connection, repo_id: i64) {
+            let mut targets: Signed<TargetsMetadata> =
+                load_stored_signed_metadata(conn, repo_id, "targets");
+            targets.signed.expires = chrono::Utc::now() - chrono::Duration::hours(1);
+            targets.signatures = vec![sign_tuf_metadata(&self.key, &targets.signed).unwrap()];
+            update_stored_signed_metadata(conn, repo_id, "targets", &targets);
+
+            let mut snapshot: Signed<SnapshotMetadata> =
+                load_stored_signed_metadata(conn, repo_id, "snapshot");
+            let targets_json = serde_json::to_string(&targets).unwrap();
+            let mut hashes = std::collections::BTreeMap::new();
+            hashes.insert(
+                "sha256".to_string(),
+                metadata_hash_for_persistence(&targets).unwrap(),
+            );
+            let targets_ref = snapshot.signed.meta.get_mut("targets.json").unwrap();
+            targets_ref.length = Some(targets_json.len() as u64);
+            targets_ref.hashes = Some(hashes);
+            snapshot.signatures = vec![sign_tuf_metadata(&self.key, &snapshot.signed).unwrap()];
+            update_stored_signed_metadata(conn, repo_id, "snapshot", &snapshot);
+        }
+
+        fn alter_stored_targets_same_version(&self, conn: &Connection, repo_id: i64) {
+            let mut targets: Signed<TargetsMetadata> =
+                load_stored_signed_metadata(conn, repo_id, "targets");
+            targets.signed.expires += chrono::Duration::seconds(1);
+            targets.signatures = vec![sign_tuf_metadata(&self.key, &targets.signed).unwrap()];
+            update_stored_signed_metadata(conn, repo_id, "targets", &targets);
+        }
+
+        fn expire_stored_root(&self, conn: &Connection, repo_id: i64) {
+            let mut root: Signed<RootMetadata> = conn
+                .query_row(
+                    "SELECT signed_metadata FROM tuf_roots
+                     WHERE repository_id = ?1
+                     ORDER BY version DESC LIMIT 1",
+                    params![repo_id],
+                    |row| {
+                        let json: String = row.get(0)?;
+                        Ok(serde_json::from_str(&json).unwrap())
+                    },
+                )
+                .unwrap();
+            root.signed.expires = chrono::Utc::now() - chrono::Duration::hours(1);
+            root.signatures = vec![sign_tuf_metadata(&self.key, &root.signed).unwrap()];
+            let json = serde_json::to_string(&root).unwrap();
+            conn.execute(
+                "UPDATE tuf_roots
+                 SET signed_metadata = ?1, expires_at = ?2
+                 WHERE repository_id = ?3 AND version = ?4",
+                params![
+                    json,
+                    root.signed.expires.to_rfc3339(),
+                    repo_id,
+                    root.signed.version as i64,
+                ],
+            )
+            .unwrap();
+            update_stored_signed_metadata(conn, repo_id, "root", &root);
+        }
+    }
+
+    fn write_signed_metadata<T: serde::Serialize>(
+        metadata_dir: &Path,
+        filename: &str,
+        signed: &Signed<T>,
+    ) {
+        let bytes = serde_json::to_vec(signed).unwrap();
+        std::fs::write(metadata_dir.join(filename), bytes).unwrap();
+    }
+
+    fn set_bad_hash(meta: &mut crate::trust::MetaFile) {
+        let mut hashes = std::collections::BTreeMap::new();
+        hashes.insert("sha256".to_string(), "bad-hash".to_string());
+        meta.hashes = Some(hashes);
+    }
+
+    fn load_stored_signed_metadata<T: serde::de::DeserializeOwned>(
+        conn: &Connection,
+        repo_id: i64,
+        role: &str,
+    ) -> Signed<T> {
+        let json: String = conn
+            .query_row(
+                "SELECT signed_metadata FROM tuf_metadata WHERE repository_id = ?1 AND role = ?2",
+                params![repo_id, role],
+                |row| row.get(0),
+            )
+            .unwrap();
+        serde_json::from_str(&json).unwrap()
+    }
+
+    fn update_stored_signed_metadata<T: serde::Serialize + TufMetadataFields>(
+        conn: &Connection,
+        repo_id: i64,
+        role: &str,
+        signed: &Signed<T>,
+    ) {
+        let json = serde_json::to_string(signed).unwrap();
+        let hash = metadata_hash_for_persistence(signed).unwrap();
+        conn.execute(
+            "UPDATE tuf_metadata
+             SET signed_metadata = ?1, metadata_hash = ?2, expires_at = ?3
+             WHERE repository_id = ?4 AND role = ?5",
+            params![
+                json,
+                hash,
+                signed.signed.expires().to_rfc3339(),
+                repo_id,
+                role,
+            ],
+        )
+        .unwrap();
+    }
+
+    fn stored_metadata_version(conn: &Connection, repo_id: i64, role: &str) -> i64 {
+        conn.query_row(
+            "SELECT version FROM tuf_metadata WHERE repository_id = ?1 AND role = ?2",
+            params![repo_id, role],
+            |row| row.get(0),
+        )
+        .unwrap()
+    }
+
+    fn insert_test_repository(conn: &Connection) -> i64 {
+        conn.execute(
+            "INSERT INTO repositories (name, url) VALUES (?1, ?2)",
+            params!["static-test", "file:///static-test"],
+        )
+        .unwrap();
+        conn.last_insert_rowid()
+    }
 
     #[test]
     fn test_tuf_client_new() {
@@ -714,5 +1191,226 @@ mod tests {
     fn test_tuf_client_new_strips_trailing_slash() {
         let client = TufClient::new(1, "https://repo.example.com/", None).unwrap();
         assert_eq!(client.tuf_base_url, "https://repo.example.com/tuf");
+    }
+
+    #[tokio::test]
+    async fn static_file_repo_update_accepts_identical_timestamp_bytes_without_rollback() {
+        let (_db, conn) = create_test_db();
+        let repo_id = insert_test_repository(&conn);
+        let fixture = StaticMetadataFixture::new();
+        let client = fixture.client(repo_id);
+        fixture.bootstrap(&client, &conn);
+
+        let first = client.update(&conn).await.unwrap();
+        assert_eq!(first.timestamp_version, 1);
+
+        let second = client.update(&conn).await.unwrap();
+        assert_eq!(
+            (
+                second.timestamp_version,
+                second.snapshot_version,
+                second.targets_version
+            ),
+            (1, 1, 1)
+        );
+    }
+
+    #[tokio::test]
+    async fn static_equal_timestamp_rejects_altered_cached_targets_hash() {
+        let (_db, conn) = create_test_db();
+        let repo_id = insert_test_repository(&conn);
+        let fixture = StaticMetadataFixture::new();
+        let client = fixture.client(repo_id);
+        fixture.bootstrap(&client, &conn);
+        client.update(&conn).await.unwrap();
+
+        fixture.alter_stored_targets_same_version(&conn, repo_id);
+        let err = client.update(&conn).await.unwrap_err();
+        assert!(err.to_string().contains("Hash mismatch"));
+    }
+
+    #[tokio::test]
+    async fn static_update_rejects_equal_timestamp_version_with_different_bytes() {
+        let (_db, conn) = create_test_db();
+        let repo_id = insert_test_repository(&conn);
+        let fixture = StaticMetadataFixture::new();
+        let client = fixture.client(repo_id);
+        fixture.bootstrap(&client, &conn);
+        client.update(&conn).await.unwrap();
+
+        fixture.write_same_version_timestamp_with_different_bytes();
+        let err = client.update(&conn).await.unwrap_err();
+        assert!(err.to_string().contains("metadata bytes/hash differ"));
+    }
+
+    #[tokio::test]
+    async fn generic_equal_timestamp_version_remains_rollback_even_when_hash_matches() {
+        let (_db, conn) = create_test_db();
+        let repo_id = insert_test_repository(&conn);
+        let fixture = StaticMetadataFixture::new();
+        let client = fixture.generic_client(repo_id);
+        fixture.bootstrap(&client, &conn);
+        client.update(&conn).await.unwrap();
+
+        let err = client.update(&conn).await.unwrap_err();
+        assert!(matches!(
+            err,
+            TrustError::RollbackAttack {
+                role,
+                new: 1,
+                stored: 1
+            } if role == "timestamp"
+        ));
+    }
+
+    #[tokio::test]
+    async fn static_update_rejects_greater_snapshot_missing_root_before_persistence() {
+        let (_db, conn) = create_test_db();
+        let repo_id = insert_test_repository(&conn);
+        let fixture = StaticMetadataFixture::new();
+        let client = fixture.client(repo_id);
+        fixture.bootstrap(&client, &conn);
+        client.update(&conn).await.unwrap();
+
+        fixture.write_greater_snapshot_without_root();
+        let err = client.update(&conn).await.unwrap_err();
+        assert!(err.to_string().contains("root.json"));
+
+        let stored_timestamp_version: i64 = conn
+            .query_row(
+                "SELECT version FROM tuf_metadata WHERE repository_id = ?1 AND role = 'timestamp'",
+                params![repo_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored_timestamp_version, 1);
+    }
+
+    #[tokio::test]
+    async fn static_update_expired_metadata_names_publish_refresh_remedy() {
+        let (_db, conn) = create_test_db();
+        let repo_id = insert_test_repository(&conn);
+        let fixture = StaticMetadataFixture::new();
+        fixture.write_expired_timestamp();
+        let client = fixture.client(repo_id);
+        fixture.bootstrap(&client, &conn);
+
+        let err = client.update(&conn).await.unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("timestamp"));
+        assert!(message.contains("conary publish --refresh"));
+    }
+
+    #[tokio::test]
+    async fn static_update_rechecks_cached_root_expiry_with_refresh_remedy() {
+        let (_db, conn) = create_test_db();
+        let repo_id = insert_test_repository(&conn);
+        let fixture = StaticMetadataFixture::new();
+        let client = fixture.client(repo_id);
+        fixture.bootstrap(&client, &conn);
+
+        fixture.expire_stored_root(&conn, repo_id);
+        let err = client.update(&conn).await.unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("root"));
+        assert!(message.contains("conary publish --refresh"));
+    }
+
+    #[tokio::test]
+    async fn static_equal_timestamp_rechecks_cached_snapshot_expiry_with_refresh_remedy() {
+        let (_db, conn) = create_test_db();
+        let repo_id = insert_test_repository(&conn);
+        let fixture = StaticMetadataFixture::new();
+        let client = fixture.client(repo_id);
+        fixture.bootstrap(&client, &conn);
+        client.update(&conn).await.unwrap();
+
+        fixture.expire_stored_snapshot(&conn, repo_id);
+        let err = client.update(&conn).await.unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("snapshot"));
+        assert!(message.contains("conary publish --refresh"));
+    }
+
+    #[tokio::test]
+    async fn static_greater_timestamp_rechecks_cached_targets_expiry_before_persistence() {
+        let (_db, conn) = create_test_db();
+        let repo_id = insert_test_repository(&conn);
+        let fixture = StaticMetadataFixture::new();
+        let client = fixture.client(repo_id);
+        fixture.bootstrap(&client, &conn);
+        client.update(&conn).await.unwrap();
+
+        fixture.expire_stored_targets(&conn, repo_id);
+        fixture.write_timestamp_for_stored_snapshot_version(&conn, repo_id, 2);
+        let err = client.update(&conn).await.unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("targets"));
+        assert!(message.contains("conary publish --refresh"));
+
+        assert_eq!(stored_metadata_version(&conn, repo_id, "timestamp"), 1);
+    }
+
+    #[tokio::test]
+    async fn static_update_rejects_bad_timestamp_hash_for_cached_snapshot_without_persistence() {
+        let (_db, conn) = create_test_db();
+        let repo_id = insert_test_repository(&conn);
+        let fixture = StaticMetadataFixture::new();
+        let client = fixture.client(repo_id);
+        fixture.bootstrap(&client, &conn);
+        client.update(&conn).await.unwrap();
+
+        fixture.write_timestamp_for_cached_snapshot_with_bad_hash(2);
+        let err = client.update(&conn).await.unwrap_err();
+        assert!(err.to_string().contains("Hash mismatch"));
+        assert_eq!(stored_metadata_version(&conn, repo_id, "timestamp"), 1);
+    }
+
+    #[tokio::test]
+    async fn static_update_rejects_missing_timestamp_hash_for_cached_snapshot_without_persistence()
+    {
+        let (_db, conn) = create_test_db();
+        let repo_id = insert_test_repository(&conn);
+        let fixture = StaticMetadataFixture::new();
+        let client = fixture.client(repo_id);
+        fixture.bootstrap(&client, &conn);
+        client.update(&conn).await.unwrap();
+
+        fixture.write_timestamp_for_cached_snapshot_without_hash(2);
+        let err = client.update(&conn).await.unwrap_err();
+        assert!(err.to_string().contains("missing required sha256 hash"));
+        assert_eq!(stored_metadata_version(&conn, repo_id, "timestamp"), 1);
+    }
+
+    #[tokio::test]
+    async fn static_update_rejects_bad_snapshot_hash_for_cached_targets_without_persistence() {
+        let (_db, conn) = create_test_db();
+        let repo_id = insert_test_repository(&conn);
+        let fixture = StaticMetadataFixture::new();
+        let client = fixture.client(repo_id);
+        fixture.bootstrap(&client, &conn);
+        client.update(&conn).await.unwrap();
+
+        fixture.write_snapshot_for_cached_targets_with_bad_hash();
+        let err = client.update(&conn).await.unwrap_err();
+        assert!(err.to_string().contains("Hash mismatch"));
+        assert_eq!(stored_metadata_version(&conn, repo_id, "timestamp"), 1);
+        assert_eq!(stored_metadata_version(&conn, repo_id, "snapshot"), 1);
+    }
+
+    #[tokio::test]
+    async fn static_update_rejects_missing_snapshot_hash_for_cached_targets_without_persistence() {
+        let (_db, conn) = create_test_db();
+        let repo_id = insert_test_repository(&conn);
+        let fixture = StaticMetadataFixture::new();
+        let client = fixture.client(repo_id);
+        fixture.bootstrap(&client, &conn);
+        client.update(&conn).await.unwrap();
+
+        fixture.write_snapshot_for_cached_targets_without_hash();
+        let err = client.update(&conn).await.unwrap_err();
+        assert!(err.to_string().contains("missing required sha256 hash"));
+        assert_eq!(stored_metadata_version(&conn, repo_id, "timestamp"), 1);
+        assert_eq!(stored_metadata_version(&conn, repo_id, "snapshot"), 1);
     }
 }
