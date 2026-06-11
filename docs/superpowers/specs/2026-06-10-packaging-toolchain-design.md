@@ -33,10 +33,16 @@ Everything in this spec is v1 *design* scope, but implementation lands in gated
 milestones — a later milestone does not start until the previous one's integration
 suite is green:
 
-- **M1a — recipe-only static path.** Static-repo child spec written and approved;
-  `conary build` for recipe-driven builds (no inference yet); `conary publish` to a
-  static repo; `conary repo add` of a static repo; install from it. The smallest
-  end-to-end loop that proves the format and the trust story.
+- **M0 — static-repo child spec (hard gate).** The standalone static-repo spec in
+  `docs/specs/` is written, reviewed, and approved before any M1a implementation
+  begins. No publish/repo-add code lands against an unapproved format.
+- **M1a — recipe-only static path.** `conary build` for recipe-driven builds (no
+  inference yet); `conary publish` to a static repo; `conary repo add` of a static
+  repo; install from it. The smallest end-to-end loop that proves the format and the
+  trust story. Packages published before M2 hardening carry an honest **hardening
+  level** in provenance (`hermetic` but not `attested`) and publish prints that this
+  is a preview repo, not reproducible release evidence; M2 flips the default gate to
+  require `attested`.
 - **M1b — inference + try.** Build-system inference for the core build systems,
   `conary new` materialization, `conary try` (state machine, no watch). The "first
   package in 5 minutes" tutorial must pass at the end of M1b — that is the M1 exit
@@ -58,7 +64,7 @@ surface:
 
 | Surface | M1a | M1b | M2 | M3 |
 |---------|-----|-----|----|----|
-| `build` (recipe), `publish` (static), `repo add` static | ✓ | | | |
+| `build` (recipe), `--recipe`, `--hermetic`, `publish` (static), `repo add` static | ✓ | | | |
 | `build` (inference, tarball/git), `new`, `try`/`status`/`rollback`/`keep`, `--explain` | | ✓ | | |
 | `build` (foreign pkgs), publish lint gates, Remi push, hermetic-publish enforcement | | | ✓ | |
 | `--record`, `--json`, `try --watch`, MCP packaging tools | | | | ✓ |
@@ -71,8 +77,10 @@ One verb, two modes, both meaning "give me a recipe file":
 
 - `conary new <name>` — scaffolds a package project for third-party software
   (distro-maintainer flow): a minimal `recipe.toml` and nothing else.
-- `conary new` (no args, inside a source tree) — materializes the recipe that
-  inference would use, pre-filled, for when invisible defaults need overriding.
+- `conary new --from .` (or bare `conary new` inside a source tree — same thing) —
+  materializes the recipe that inference would use, pre-filled, for when invisible
+  defaults need overriding. Help text and tutorials teach the explicit `--from .`
+  form; the bare form is a convenience, not the documentation surface.
 
 Upstream developers who never need overrides never run it — `conary build` alone
 suffices. There is no separate `conary recipe init`; recipe materialization is not a
@@ -91,13 +99,15 @@ The universal front door. TARGET may be:
 Routing: recipe present → recipe drives the build; bare source tree → build-system
 inference (cargo, cmake, meson, autotools, npm, python, go); foreign package → convert.
 
-Flags:
+Flags (milestone in brackets; a flag does not appear in `--help` before its
+milestone — see the availability matrix):
 
-- `--explain` — print every inferred decision (build system, steps, deps, components)
-- `--hermetic` — run in Kitchen isolation instead of on the host
-- `--record` — packaging by demonstration (see Differentiators)
-- `--json` — structured diagnostics output
-- `--recipe <path>` — explicit recipe selection
+- `--recipe <path>` [M1a] — explicit recipe selection
+- `--hermetic` [M1a] — run in Kitchen isolation instead of on the host
+- `--explain` [M1b] — print every inferred decision (build system, steps, deps,
+  components)
+- `--record` [M3] — packaging by demonstration (see Differentiators)
+- `--json` [M3] — structured diagnostics output
 
 Output: `./dist/<name>-<version>-<release>-<arch>.ccs`, path printed on success.
 Architecture/platform identity is part of the artifact name and the repo index
@@ -131,9 +141,12 @@ Because it is the centerpiece, try gets an explicit **state machine**, not vibes
 - **Rollback scope is generation/filesystem rollback, stated honestly:** it reverts
   generation-owned filesystem state (the package's files, links, units). It does not
   un-happen runtime side effects — services that ran, `/var` mutations, data the
-  package wrote, external effects. Hook policy: in M1, try warns when a package
-  declares hooks with non-generation-scoped lifecycle effects (db migrations,
-  irreversible state changes) unless the package declares reversible cleanup.
+  package wrote, external effects. Hook policy: try **refuses** packages that declare
+  hooks with non-generation-scoped lifecycle effects (db migrations, irreversible
+  state changes) unless the package declares reversible cleanup or the user passes
+  `--allow-irreversible`. "Try means safe" must be literally true by default; most
+  CCS hooks are declarative (units/tmpfiles/sysctl) and generation-scoped, so the
+  refusal bites rarely. Hook reversibility is a manifest field and a publish lint.
 - Try requires the same privileges as `conary install`.
 - `--watch` (M3) composes build + try from the package project directory (it does not
   take a prebuilt `.ccs`): inotify on the source tree → incremental rebuild →
@@ -166,7 +179,11 @@ requires (M2):
   (the recipe format already has the field; inference-only builds record checksums at
   first fetch), git inputs by commit hash, local directories by tree hash with a
   dirty-state policy (uncommitted changes → publish warns and records the tree hash
-  as untracked-dirty; CI mode refuses).
+  as untracked-dirty; CI mode refuses). Tree-hash scope is defined, not implied: in a
+  git repo, hash exactly the git-tracked files (ignored files, `.git/`, build outputs
+  like `dist/` and `target/` are out — this also keeps secrets and generated
+  artifacts out of provenance); outside a git repo, hash all files minus a default
+  ignore set, with a warning that identity is weaker.
 - **Offline build:** after prefetch, the hermetic build environment has **no network
   access at all**. Fetching happens before the sandbox, never inside it.
 - **Build-dependency lock:** the exact resolved versions of `requires`/`makedepends`
@@ -358,6 +375,15 @@ TUF timestamp refresh is currently a 501 stub
 - **Remi push auth:** static bearer token in v1; token management UX deferred.
 
 ## Revision notes (2026-06-10)
+
+**Round 3 (same day):** static-repo child spec promoted to an explicit M0 hard gate;
+per-flag milestone labels on the `build` surface and `--hermetic`/`--recipe` added to
+the availability matrix; try now **refuses** irreversibly-hooked packages by default
+(`--allow-irreversible` escape hatch; reversibility is a manifest field + publish
+lint); tree-hash scope defined (git-tracked files only in a repo; default ignore set
+plus warning outside one); pre-M2 publishes carry an honest hardening level
+(`hermetic`, not `attested`) and announce preview status; `conary new --from .` added
+as the explicit, documented form of bare `new`.
 
 **Round 2 (same day):** try rollback scope stated honestly (generation/filesystem
 only, with a hook policy for non-generation-scoped effects; boot-time orphan
