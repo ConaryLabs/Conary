@@ -358,15 +358,20 @@ watermark only gates regressions and never derives the next version.
    d. `metadata/timestamp.json`
    On root metadata update (rotation or root refresh): new
    `metadata/{root_next}.root.json` and `metadata/root.json` upload during
-   step (a).
+   step (a). On root-key rotation, the updated `conary-repo.toml` also
+   uploads during step (a); until both `root.json` and `conary-repo.toml`
+   agree and are visible, `repo add` can hit the §6.1 root-key-set mismatch
+   and MUST report it as a retryable "repository is being updated" state
+   rather than silently accepting either identity.
    A client reading mid-publish either sees a complete hash chain whose
    referenced files are already uploaded, or a fail-safe hash mismatch caused
    by mixed old/new mutable files. Torn states fail verification — clients
    never act on them.
-   One exception: during a **root rotation**, a client that probes the new
-   `{N+1}.root.json` (uploaded in step a) before the new snapshot lands
-   will fail snapshot consistency (old snapshot pins root vN) — a brief
-   retryable window, fail-safe but not "old complete state".
+   One exception: during a **root metadata update** (rotation or refresh), a
+   client that probes the new `{N+1}.root.json` (uploaded in step a) before
+   the new snapshot lands will fail snapshot consistency (old snapshot pins
+   root vN) — a brief retryable window, fail-safe but not "old complete
+   state".
 5. A failed publish is re-run from the top; §5.1 re-reads whatever
    landed, and immutable artifacts already uploaded are skipped.
 6. After a fully successful publish, write the new role versions to the
@@ -443,7 +448,10 @@ for a future v2 consistent-snapshot upgrade.
    unexpired.
 4. Compute the root-role keyid set; verify it equals
    `conary-repo.toml::trust.root_key_ids` — mismatch is a hard error
-   naming both sets.
+   naming both sets. Because `root.json` and `conary-repo.toml` are
+   unversioned mutable files during root-key rotation, a client MAY re-fetch
+   both with cache bypass before failing; a mismatch that survives that retry
+   is persistent corruption or identity disagreement, not TOFU.
 5. Trust pinning:
    - With `--fingerprint` (repeatable): provided set MUST equal the
      root-role keyid set; mismatch → hard error, nothing persisted.
@@ -540,16 +548,23 @@ after, a transient exposure window M1a fixes). The existing
 in an output dir) remains low-level plumbing; `conary publish` wraps the
 same `KeyFile` format and is the documented path — there is no
 two-key ceremony command today, and M1a builds it into publish rather than
-extending `trust key gen`. Generation MUST print both generated key IDs
-(fingerprints) and this exact warning: the root key **is** the repo's
-identity — store `root.private` offline if possible, and back up the whole
-directory; losing it means clients must manually re-trust (§7.4).
+extending `trust key gen`. Generation MUST print both generated key IDs: the
+repo fingerprint (the root-role key ID accepted by
+`repo add --fingerprint`) and the publish key ID (operator bookkeeping; not
+accepted as `repo add --fingerprint`). It MUST also print this exact warning:
+the root key **is** the repo's identity — store `root.private` offline if
+possible, and back up the whole directory; losing it means clients must
+manually re-trust (§7.4).
 
 ### 7.2 Rotation (keys still held)
 
-- Rotate publish key: generate new keypair; produce root vN+1 via
-  `trust/ceremony.rs::rotate_key` updating targets/snapshot/timestamp role
-  keyids; publish per §5.3 including the new `{N+1}.root.json` and updated
+- Rotate publish key: generate new keypair; produce root vN+1 that replaces
+  the old publish key in every TUF role it backs (targets, snapshot,
+  timestamp) in one root version. The existing
+  `trust/ceremony.rs::rotate_key` helper is role-singular plumbing; M1a MUST
+  batch-update all three publish-backed roles or add a `rotate_publish_key`
+  helper rather than calling `rotate_key` once and leaving two roles on the
+  old key. Publish per §5.3 including the new `{N+1}.root.json` and updated
   `root.json`, regenerated `keys/package-keys.json` (old key moves to
   `status: "retired"` so existing artifacts keep verifying; new key is
   `"active"`), and a `conary-repo.toml` left unchanged (root keys did not
@@ -558,7 +573,8 @@ directory; losing it means clients must manually re-trust (§7.4).
 - Rotate root key: same mechanism; root vN+1 MUST be signed by **both**
   old and new root keys (TUF rotation rule, enforced by the existing
   client root-chain verification); `conary-repo.toml::root_key_ids` is
-  updated to the new set. Out-of-band fingerprints SHOULD be re-published.
+  updated to the new set and uploaded under the §5.3 root-key-rotation
+  ordering. Out-of-band fingerprints SHOULD be re-published.
 
 ### 7.3 Revocation
 
@@ -574,7 +590,7 @@ signed; and SHOULD shorten timestamp expiry for the next publishes.
 | Lost                  | Recoverable? | Procedure |
 |-----------------------|--------------|-----------|
 | publish key (root ok) | Yes          | §7.2 publish-key rotation |
-| root key              | No           | New repo identity: re-run ceremony (§5.2) with new keys; clients hard-fail until each runs `conary repo reset-trust` + re-adds with the new fingerprint |
+| root key              | No           | New repo identity: re-run ceremony (§5.2) with new keys; clients hard-fail until each runs `conary repo reset-trust` plus one of the explicit §6.5 re-pin paths with the new repo fingerprint |
 | both                  | No           | Same as root loss |
 
 The spec deliberately provides no root-loss escape hatch that skips
