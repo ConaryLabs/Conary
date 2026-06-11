@@ -416,10 +416,17 @@ Already-bootstrapped clients discover rotations by probing
           "algorithm": "ed25519",
           "public_key": "<base64 32-byte Ed25519 public key>",
           "key_id": "publish",
+          "status": "active",
           "comment": "primary publishing key"
         }
       ]
     }
+
+`status` is `"active"` (signs new packages) or `"retired"` (no longer
+signs, still trusted so previously published artifacts keep verifying).
+Clients import both into `trusted_keys`. A **compromised** key is neither:
+it is removed from the file entirely, and every artifact it signed MUST be
+removed or republished (re-signed, new release number) — §7.3.
 
 `public_key` is base64 — matching the CCS `PackageSignature.public_key` and
 `TrustPolicy.trusted_keys` encoding (`ccs/verify.rs`), which differs from
@@ -507,6 +514,14 @@ from the destination, not from local state.
    launder the rollback into fresh signatures). `--accept-destination-state`
    overrides, loudly. A missing watermark (first publish from this machine)
    skips the check with a notice.
+5. **Single-writer rule:** concurrent publishes to one destination are
+   unsupported and MUST fail rather than interleave (two writers can both
+   derive version N+1 and clobber each other). Where the backend supports
+   it, the publisher SHOULD use conditional writes (S3 `If-Match`/ETag;
+   atomic rename for file/rsync destinations); regardless of backend, the
+   publisher MUST re-fetch `metadata/timestamp.json` immediately before
+   uploading the new timestamp (§5.3.4 step d) and abort if its version
+   changed since §5.1.
 
 ### 5.2 Initial publish (ceremony)
 
@@ -540,6 +555,10 @@ from the destination, not from local state.
    A client reading mid-publish sees old timestamp → old, complete state;
    or new timestamp whose hash chain only references already-uploaded
    files. Torn states fail hash verification — clients never act on them.
+   One exception: during a **root rotation**, a client that probes the new
+   `{N+1}.root.json` (uploaded in step a) before the new snapshot lands
+   will fail snapshot consistency (old snapshot pins root vN) — a brief
+   retryable window, fail-safe but not "old complete state".
 5. A failed publish is re-run from the top; §5.1 re-reads whatever
    landed, and immutable artifacts already uploaded are skipped.
 6. After a fully successful publish, write the new role versions to the
@@ -556,11 +575,21 @@ from the destination, not from local state.
 
 ### 5.5 Refresh (`conary publish --refresh <target>`)
 
-Re-signs without content change: bump + re-sign timestamp (always), and
-snapshot/targets/root only if within 25% of expiry. No package or index
-bytes change unless targets is re-signed (then `index_version` bumps with
-it and the index is re-uploaded — invariant 3 of §3 always holds). Upload
-ordering of §5.3.4 applies.
+Re-signs without content change. Roles are selected by expiry (within 25%
+of lifetime), then expanded to the **minimal closed cascade set** — the
+snapshot pins the root and targets versions (`generate_snapshot` writes
+`meta["root.json"].version`; the client's `verify_snapshot_consistency`
+checks it against the *current* root), so a role bump that isn't cascaded
+strands clients on a consistency failure:
+
+- root bump ⇒ snapshot + timestamp bump
+- targets bump (also: any index/package-keys change) ⇒ snapshot + timestamp
+- snapshot bump ⇒ timestamp
+- timestamp always bumps
+
+If targets is re-signed, `index_version` bumps with it and the index is
+re-uploaded — invariant 3 of §3 always holds. Upload ordering of §5.3.4
+applies.
 
 ### 5.6 Serving and caching guidance (non-normative)
 
@@ -569,8 +598,11 @@ new `targets.json` against an old `snapshot.json` (or vice versa) and fail
 hash verification — fail-safe, but a transient denial of service. CDNs with
 per-file TTLs widen this window. Operators serving via CDN SHOULD set short
 TTLs (≤60 s) on `conary-repo.toml`, `index.json`, `keys/package-keys.json`,
-and everything under `metadata/` except `{N}.root.json`; `packages/**` and
-`{N}.root.json` are immutable and safe to cache indefinitely. CDN-served
+and everything under `metadata/` except `{N}.root.json` — concretely
+`Cache-Control: max-age=60` (or `no-cache` for `timestamp.json`), and
+`Cache-Control: public, max-age=31536000, immutable` for `packages/**` and
+`{N}.root.json`. Publish pipelines targeting a CDN SHOULD invalidate
+`metadata/*`, `index.json`, and `keys/*` as a post-upload step. CDN-served
 production repos are the primary motivation for the v2 consistent-snapshot
 upgrade (§11).
 ```
@@ -608,10 +640,12 @@ git commit -m "docs: static repo spec - publish algorithm"
 
 1. Probe `<url>/conary-repo.toml`. Present → static repo flow (below).
    Absent → existing repo-type flows; not this spec.
-2. Static repos use TUF exclusively: the GPG flags (`--gpg-key`,
-   `--no-gpg-check`, `--gpg-strict`) MUST be rejected at parse time
-   (clap conflict) when the target is a static repo / `--fingerprint` is
-   present.
+2. Static repos use TUF exclusively. Enforcement is two-stage because
+   static-ness isn't knowable at parse time: clap conflict rules reject
+   GPG flags (`--gpg-key`, `--no-gpg-check`, `--gpg-strict`) combined with
+   `--fingerprint`; and after the probe identifies a static repo, command
+   execution rejects any GPG flags that were passed without
+   `--fingerprint`.
 3. Fetch `<url>/metadata/root.json`; parse as `Signed<RootMetadata>`;
    verify self-signed (root-role threshold met by its own keys) and
    unexpired.
@@ -638,7 +672,11 @@ git commit -m "docs: static repo spec - publish algorithm"
 1. Run the existing TUF update flow (`trust/client.rs::update`) against
    `<url>/metadata`: root-rotation probe → timestamp → snapshot →
    targets, with signature, expiry, monotonicity, and snapshot-consistency
-   checks.
+   checks. M1a strengthening: for static repos the client MUST hard-fail
+   when the snapshot lacks `meta` entries for `root.json` or
+   `targets.json` (the current `verify_snapshot_consistency` checks the
+   root pin only **if the entry exists** — presence itself must become a
+   static-repo requirement, or the §4.1 invariant is unenforced).
 2. Fetch `<url>/index.json`; verify length and sha256 against the
    verified targets entry for path `index.json` **before parsing**.
 3. Parse; verify `schema == 1` and `index_version == targets.version`.
@@ -710,8 +748,8 @@ git commit -m "docs: static repo spec - client behavior"
 
 ### 7.1 Generation and storage
 
-First publish (or `conary trust key gen`) creates, under
-`~/.config/conary/keys/<repo-name>/`:
+First publish (`conary publish` against a fresh destination) creates,
+under `~/.config/conary/keys/<repo-name>/`:
 
     root.private     root.public
     publish.private  publish.public
@@ -721,7 +759,12 @@ Files use the existing CCS key format (`ccs/signing.rs::KeyFile` TOML):
 The key directory MUST be created mode 0700 **before** any key is written,
 and private key files MUST be created 0600 at open time — not written then
 chmod'd (the current `save_to_files` writes first and tightens permissions
-after, a transient exposure window M1a fixes). Generation MUST print both root key IDs
+after, a transient exposure window M1a fixes). The existing
+`conary trust key gen` (single TUF role → `{role}.private`/`{role}.public`
+in an output dir) remains low-level plumbing; `conary publish` wraps the
+same `KeyFile` format and is the documented path — there is no
+two-key ceremony command today, and M1a builds it into publish rather than
+extending `trust key gen`. Generation MUST print both root key IDs
 (fingerprints) and this exact warning: the root key **is** the repo's
 identity — store `root.private` offline if possible, and back up the whole
 directory; losing it means clients must manually re-trust (§7.4).
@@ -731,9 +774,11 @@ directory; losing it means clients must manually re-trust (§7.4).
 - Rotate publish key: generate new keypair; produce root vN+1 via
   `trust/ceremony.rs::rotate_key` updating targets/snapshot/timestamp role
   keyids; publish per §5.3 including the new `{N+1}.root.json` and updated
-  `root.json`, regenerated `keys/package-keys.json`, and a
-  `conary-repo.toml` left unchanged (root keys did not change). Clients
-  pick up the rotation via root-version probing; no user action.
+  `root.json`, regenerated `keys/package-keys.json` (old key moves to
+  `status: "retired"` so existing artifacts keep verifying; new key is
+  `"active"`), and a `conary-repo.toml` left unchanged (root keys did not
+  change). Clients pick up the rotation via root-version probing; no user
+  action.
 - Rotate root key: same mechanism; root vN+1 MUST be signed by **both**
   old and new root keys (TUF rotation rule, enforced by the existing
   client root-chain verification); `conary-repo.toml::root_key_ids` is
@@ -741,10 +786,12 @@ directory; losing it means clients must manually re-trust (§7.4).
 
 ### 7.3 Revocation
 
-Revocation = rotation that removes the compromised key. For a compromised
-publish key the operator MUST also bump targets/snapshot/timestamp versions
-past anything the attacker may have signed and SHOULD shorten timestamp
-expiry for the next publishes.
+Revocation = rotation that **removes** the compromised key (not
+"retired" — retired keys stay trusted; compromised keys must not). The
+operator MUST also: remove or republish (re-sign under the new key, new
+release) every artifact the compromised key signed; bump
+targets/snapshot/timestamp versions past anything the attacker may have
+signed; and SHOULD shorten timestamp expiry for the next publishes.
 
 ### 7.4 Loss matrix
 
@@ -787,9 +834,12 @@ git commit -m "docs: static repo spec - operator key lifecycle"
 ```markdown
 ## 8. Chunk Store (`chunks/`) — RESERVED
 
-Layout reserved for delta fetch: `chunks/<hh>/<rest-of-sha256>` (two-level
-split after 2 hex chars, matching the CAS object layout in
-`filesystem/cas.rs::object_path` and Remi's chunk store). v1 repos MUST NOT
+Layout reserved for delta fetch. Two existing conventions are candidates:
+the core CAS layout `chunks/<hh>/<rest-of-sha256>`
+(`filesystem/cas.rs::object_path`) and Remi's
+`chunks/objects/<hh>/<rest-of-sha256>` (`apps/remi/src/server/handlers/
+mod.rs::cas_object_path`); the exact sublayout is decided with delta
+semantics, not here. v1 repos MUST NOT
 require chunks for correct operation; semantics (which chunks exist, how
 clients discover them, TUF protection strategy for high-cardinality chunk
 sets) are defined alongside delta publishing and are explicitly out of
@@ -919,17 +969,44 @@ root-recoverable; timestamp expiry defaults to 30 days with
 `conary publish --refresh` as the re-sign path.
 ```
 
-- [ ] **Step 3: Mirror the registration convention for spec docs**
+- [ ] **Step 3: Register the new spec in the docs-audit gates (CI-blocking)**
+
+The PR gate (`.github/workflows/pr-gate.yml`) diffs the committed inventory
+against `scripts/docs-audit-inventory.sh` output and requires every tracked
+`.md` in the ledger (`scripts/check-doc-audit-ledger.sh --require-complete`).
+
+```bash
+bash scripts/docs-audit-inventory.sh > docs/superpowers/documentation-accuracy-audit-inventory.tsv
+```
+
+Append a ledger row (TSV, 9 columns: origin_path, path, family, audience,
+claim_clusters, evidence_sources, status, disposition, notes) to
+`docs/superpowers/documentation-accuracy-audit-ledger.tsv` for
+`docs/specs/static-repo-format-v1.md`, family `spec` matching whatever the
+regenerated inventory assigned it, mirroring the `ccs-format-v1.md` row's
+style; evidence sources: the parent spec, the M0 plan, and
+`crates/conary-core/src/trust/{metadata,generate,ceremony,client}.rs`.
+
+Then verify both gates pass:
+
+```bash
+diff -u docs/superpowers/documentation-accuracy-audit-inventory.tsv <(bash scripts/docs-audit-inventory.sh)
+bash scripts/check-doc-audit-ledger.sh docs/superpowers/documentation-accuracy-audit-ledger.tsv --require-complete
+bash scripts/check-doc-truth.sh
+```
+Expected: empty diff; "Documentation audit ledger check passed"; truth check passes.
+
+- [ ] **Step 4: Mirror any other registration conventions**
 
 ```bash
 grep -rn 'ccs-format-v1' docs/superpowers/documentation-accuracy-audit-summary.md docs/ARCHITECTURE.md AGENTS.md 2>/dev/null
 ```
-Wherever `ccs-format-v1.md` is listed as a tracked/canonical doc, add `static-repo-format-v1.md` in the same style. If it appears nowhere actionable (only in archived plans), skip — the audit cycle picks up new specs.
+Wherever `ccs-format-v1.md` is listed as a tracked/canonical doc, add `static-repo-format-v1.md` in the same style. If it appears nowhere actionable (only in archived plans), skip.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add docs/specs/static-repo-format-v1.md docs/superpowers/specs/2026-06-10-packaging-toolchain-design.md docs/superpowers/documentation-accuracy-audit-summary.md
+git add docs/specs/static-repo-format-v1.md docs/superpowers/specs/2026-06-10-packaging-toolchain-design.md docs/superpowers/documentation-accuracy-audit-*.tsv docs/superpowers/documentation-accuracy-audit-summary.md
 git commit -m "docs: register static repo spec and sync parent design"
 ```
 
@@ -956,3 +1033,22 @@ explicit conformance MUST (load-bearing for file:// repos); key directory
 after write); `index_version` rollback tracking simplified to the equality
 check (protection inherited from TUF targets monotonicity) — which also
 fixed a stale §7.2 cross-reference.
+
+**GPT round:** docs-audit registration made an explicit CI-gated Task 12
+step (inventory regen + ledger row + gate commands) — and the M0 plan
+itself was registered immediately since HEAD was already failing the
+ledger check; `--refresh` gained mandatory version cascades (root ⇒
+snapshot+timestamp, targets ⇒ snapshot+timestamp, snapshot ⇒ timestamp —
+snapshot pins the root version, so un-cascaded bumps strand clients);
+single-writer rule + re-fetch-timestamp-before-final-upload + conditional
+writes for concurrent-publisher safety; package-keys.json gained a
+`status: active|retired` field (retired keys keep old artifacts verifying;
+compromised keys are removed and their artifacts republished); GPG/TUF
+exclusivity split into parse-time (clap, --fingerprint conflicts) and
+execution-time (post-probe) enforcement; static repos must hard-fail on
+snapshots missing root.json/targets.json meta entries (current verifier
+only checks the pin if present); key-generation story corrected
+(`trust key gen` is single-role plumbing; publish owns the two-key
+ceremony); root-rotation transient failure window documented;
+Cache-Control values and CDN invalidation specified; chunks layout no
+longer falsely claims to match Remi (which uses chunks/objects/<hh>/<rest>).
