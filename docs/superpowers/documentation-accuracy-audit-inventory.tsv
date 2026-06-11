@@ -50,6 +50,7 @@ docs/specs/ccs-format-v1.md	canonical	contributor
 docs/superpowers/archive/2026-04-04-codebase-simplification-retrospective.md	historical	historical
 docs/superpowers/archive/2026-04-10-release-hardening-checklist.md	historical	historical
 docs/superpowers/daily-driver-readiness-completion-audit-2026-05-22.md	planning	maintainer
+docs/superpowers/distro-adoption-gap-analysis-2026-06-10.md	planning	maintainer
 docs/superpowers/documentation-accuracy-audit-summary.md	planning	maintainer
 docs/superpowers/limited-preview-release-checkpoint-2026-05-16.md	planning	maintainer
 docs/superpowers/limited-preview-subreddit-tester-post-2026-05-19.md	planning	maintainer
@@ -133,6 +134,7 @@ docs/superpowers/plans/archive/2026-06-10-release-ci-safety-plan.md	historical	h
 docs/superpowers/plans/archive/2026-06-10-validator-soundness-follow-up-plan.md	historical	historical
 docs/superpowers/project-maintainability-dead-surface-inventory-2026-06-06.md	planning	maintainer
 docs/superpowers/release-security-waivers-2026-05-06.md	planning	maintainer
+docs/superpowers/specs/2026-06-10-packaging-toolchain-design.md	planning	maintainer
 docs/superpowers/specs/archive/2026-04-10-all-tracks-release-hardening-design.md	historical	historical
 docs/superpowers/specs/archive/2026-04-10-conaryd-forge-staging-deployment-design.md	historical	historical
 docs/superpowers/specs/archive/2026-04-16-bootstrap-self-hosting-vm-design.md	historical	historical
