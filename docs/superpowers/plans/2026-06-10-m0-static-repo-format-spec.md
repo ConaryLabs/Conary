@@ -20,7 +20,7 @@ The parent spec delegated these to M0. This plan decides them so the spec tasks 
 4. **Package-signing public keys distribute via a TUF target** `keys/package-keys.json`, not via `conary-repo.toml` (parent: identity file carries fingerprints only, never key material). Client imports them into the repo's `TrustPolicy.trusted_keys` only after TUF verification.
 5. **Bootstrap fetches the latest `metadata/root.json`** and verifies it self-signed against the pinned/TOFU fingerprints (the fingerprint is the trust anchor, so chain-walking from `1.root.json` is unnecessary at first contact). All historical `{N}.root.json` files remain published so already-bootstrapped clients can walk rotations.
 6. **Default expirations:** root 365 d, targets 90 d, snapshot 90 d, timestamp 30 d. The 30-day timestamp trades freeze-protection window for hobby-operator viability; `conary publish --refresh <target>` re-signs metadata without rebuilding content, and publish warns when any metadata has <25% lifetime remaining.
-7. **The publisher is stateless:** publish reads current metadata versions from the *destination* (verifying with the operator's own public keys), derives next versions, and regenerates. No local version-state file; CI-friendly; destination absent → initial-publish ceremony.
+7. **The publisher is stateless-by-default, with a rollback tripwire:** publish reads current metadata versions from the *destination* (verifying with the operator's own public keys) and derives next versions from them — but a compromised destination could replay old, validly-signed state and trick the publisher into re-signing a rollback fresh. So the publisher also keeps a local **version watermark** (beside the keys) recording the last versions it published: destination behind the watermark → hard error (`--accept-destination-state` to override, loudly). CI pipelines MAY pass `--state-file <path>` (committed to VCS) as the authoritative watermark. The watermark gates; it is never the version source.
 
 Task 12 reflects refinements 1, 2 and 6 back into the parent spec's revision notes (one paragraph) so parent and child never contradict.
 
@@ -304,10 +304,12 @@ Field rules:
 
 - `schema` (u64): MUST be `1`; reject unknown majors.
 - `index_version` (u64): MUST equal the `version` of the targets metadata
-  generated in the same publish (§7.2). Monotonic; clients treat a decrease
-  as a rollback attack (hard error). This field exists because the
-  legacy client shape (`RepositoryMetadata.version`) is a free-form string
-  with no monotonicity guarantee.
+  generated in the same publish (§5.3). Clients enforce the equality only;
+  rollback protection is inherited from TUF targets-version monotonicity,
+  so no separate `index_version` history is kept. The field exists because
+  the legacy client shape (`RepositoryMetadata.version`) is a free-form
+  string with no monotonicity guarantee, and the equality check is what
+  binds the parsed index to the verified TUF state.
 - `generated`: RFC 3339 UTC; informational only — clients MUST NOT make
   trust decisions on it (expiry lives in TUF metadata).
 - Package entries: `name`, `version`, `release`, `arch` are required and
@@ -426,6 +428,11 @@ a default repo. Clients import these into the repo's package trust policy
 only after TUF verification of this file (§6.2), and verify installed
 packages with `allow_unsigned = false` for static repos.
 
+Authority is **flat** in v1: every listed key may sign any package in the
+repo (no per-path constraint until TUF delegations, v2). Operators SHOULD
+keep a single publishing key; teams needing per-publisher authority SHOULD
+partition into separate repos until delegations land.
+
 ### 4.5 Expirations (publisher defaults)
 
 | Metadata  | Default lifetime |
@@ -492,6 +499,14 @@ from the destination, not from local state.
    operator trusts their own repo; this check catches destination
    tampering/corruption before building on top of it). Verification
    failure → hard error, never silently re-sign.
+4. Compare destination versions against the local version watermark
+   (`~/.config/conary/keys/<repo-name>/last-published.toml`, or the
+   `--state-file <path>` override for CI). Destination versions **lower**
+   than the watermark → hard error naming both (a compromised or rolled-back
+   destination is replaying old signed state; re-signing on top would
+   launder the rollback into fresh signatures). `--accept-destination-state`
+   overrides, loudly. A missing watermark (first publish from this machine)
+   skips the check with a notice.
 
 ### 5.2 Initial publish (ceremony)
 
@@ -527,6 +542,8 @@ from the destination, not from local state.
    files. Torn states fail hash verification — clients never act on them.
 5. A failed publish is re-run from the top; §5.1 re-reads whatever
    landed, and immutable artifacts already uploaded are skipped.
+6. After a fully successful publish, write the new role versions to the
+   local watermark (§5.1 step 4).
 
 ### 5.4 Publisher lints (MUST pass before upload)
 
@@ -544,6 +561,18 @@ snapshot/targets/root only if within 25% of expiry. No package or index
 bytes change unless targets is re-signed (then `index_version` bumps with
 it and the index is re-uploaded — invariant 3 of §3 always holds). Upload
 ordering of §5.3.4 applies.
+
+### 5.6 Serving and caching guidance (non-normative)
+
+With `consistent_snapshot = false`, a client syncing mid-publish can fetch a
+new `targets.json` against an old `snapshot.json` (or vice versa) and fail
+hash verification — fail-safe, but a transient denial of service. CDNs with
+per-file TTLs widen this window. Operators serving via CDN SHOULD set short
+TTLs (≤60 s) on `conary-repo.toml`, `index.json`, `keys/package-keys.json`,
+and everything under `metadata/` except `{N}.root.json`; `packages/**` and
+`{N}.root.json` are immutable and safe to cache indefinitely. CDN-served
+production repos are the primary motivation for the v2 consistent-snapshot
+upgrade (§11).
 ```
 
 - [ ] **Step 2: Verify generator signatures match the calls described**
@@ -594,7 +623,11 @@ git commit -m "docs: static repo spec - publish algorithm"
      root-role keyid set; mismatch → hard error, nothing persisted.
    - Without: display name, description, and the keyid set; require
      explicit interactive confirmation (TOFU). Non-interactive contexts
-     MUST fail instead of prompting.
+     MUST fail instead of prompting. The confirmation text MUST note that
+     TOFU cannot detect a replayed *old* root whose keys were later
+     rotated or compromised — an on-path attacker can pin a stale
+     identity. `--fingerprint` is the production path; TOFU is for
+     casual/first-look use.
 6. Persist: repository row with `tuf_enabled = true`,
    `tuf_root_url = <url>/metadata`; bootstrap the verified root via the
    existing `TufClient::bootstrap` path (persists root, role keys,
@@ -627,12 +660,15 @@ git commit -m "docs: static repo spec - publish algorithm"
 
 - Expired metadata: hard error; message MUST say the repo's metadata
   expired and that the operator must run `conary publish --refresh`.
-- Version decrease (any role, or `index_version`): hard error naming the
-  stored vs. offered versions (rollback protection; existing client
-  behavior).
+- Version decrease (any TUF role): hard error naming the stored vs.
+  offered versions (rollback protection; existing client behavior).
+  `index_version` needs no separate history tracking — it MUST equal the
+  verified `targets.version` (§3), so its rollback protection is inherited
+  from the TUF layer.
 - Hash mismatch on index/keys/package fetch: retryable error ("repository
   is being updated or is corrupted; try again shortly") — this is the
-  torn-publish window of §5.3.4 failing safe.
+  torn-publish window of §5.3.4 failing safe. Persistent mismatch through a
+  CDN usually means mixed-TTL caching; see §5.6.
 
 ### 6.5 `conary repo reset-trust <name>`
 
@@ -681,8 +717,11 @@ First publish (or `conary trust key gen`) creates, under
     publish.private  publish.public
 
 Files use the existing CCS key format (`ccs/signing.rs::KeyFile` TOML):
-`algorithm = "ed25519"`, `key = "<base64 32 bytes>"`, optional `key_id`;
-private files mode 0600. Generation MUST print both root key IDs
+`algorithm = "ed25519"`, `key = "<base64 32 bytes>"`, optional `key_id`.
+The key directory MUST be created mode 0700 **before** any key is written,
+and private key files MUST be created 0600 at open time — not written then
+chmod'd (the current `save_to_files` writes first and tightens permissions
+after, a transient exposure window M1a fixes). Generation MUST print both root key IDs
 (fingerprints) and this exact warning: the root key **is** the repo's
 identity — store `root.private` offline if possible, and back up the whole
 directory; losing it means clients must manually re-trust (§7.4).
@@ -769,6 +808,8 @@ scope here.
 | Torn publish | reverse-order upload (§5.3.4): partial states fail hash verification, fail-safe |
 | Publish-key compromise | root-signed rotation (§7.2/§7.3) |
 | Root-key compromise/loss | new identity + explicit client reset-trust (§7.4); no silent re-pin |
+| Destination replays old signed state to the publisher | version watermark / `--state-file` gate (§5.1); re-signing a rollback requires explicit override |
+| One compromised package key signs any package (flat authority) | single-publish-key default; repo partitioning; delegations in v2 (§4.4) |
 | Path traversal via index/targets paths | path rules (§3) + publisher lints (§5.4); clients MUST reject non-relative paths |
 
 ## 10. Conformance
@@ -781,15 +822,19 @@ root.json.
 **Client** MUST: implement §6.1 trust establishment (GPG/TUF exclusivity
 included); never parse index/keys before hash verification; enforce
 expiry + monotonicity; treat §6.4 failure semantics; support file:// and
-local paths.
+local paths; and validate every index/targets path **before** any URL or
+filesystem join — reject absolute paths, `..` segments, and embedded
+schemes (with `file://` repos a traversal escapes into the local
+filesystem, so this is load-bearing, not hygiene).
 
 ## 11. Compatibility and Evolution
 
 - v2 candidates: `consistent_snapshot = true` with versioned
-  `{N}.targets.json`/`{N}.snapshot.json` filenames (removes the brief
-  fail-safe unavailability window during publish; requires client fetch
-  support first); TUF delegations (multi-publisher repos); chunk/delta
-  semantics (§8).
+  `{N}.targets.json`/`{N}.snapshot.json` filenames (removes the publish-
+  window transient failures and makes aggressive CDN caching safe — the
+  recommended path for production CDN-served repos; requires client fetch
+  support first); TUF delegations (multi-publisher repos / per-path
+  authority); chunk/delta semantics (§8).
 - Versioning: `schema` majors in `conary-repo.toml`/`index.json` gate
   breaking changes; TUF `spec_version` stays 1.0.31 per the in-tree
   implementation.
@@ -895,3 +940,19 @@ git commit -m "docs: register static repo spec and sync parent design"
 - [ ] **Step 1: Report completion**
 
 M0 deliverable drafted. The gate does **not** open yet: per the parent spec, the child spec must be reviewed and approved. Hand the spec to the external review gauntlet (GPT / Gemini / DeepSeek, same prompt pattern as the parent spec used, with the repo-grounding instructions). Triage findings with verification against `crates/conary-core/src/trust/` before adopting. M1a planning starts only after approval.
+
+---
+
+## Review amendments (2026-06-10)
+
+**Gemini round:** stateless publisher gained a local version watermark +
+`--state-file` rollback tripwire (a compromised destination could otherwise
+launder old signed state into fresh signatures); §5.6 CDN/TTL guidance added
+and the mid-publish transient-failure window documented; flat package-key
+authority called out with single-key recommendation (§4.4, §9); TOFU
+confirmation must warn about old-root replay; client path validation made an
+explicit conformance MUST (load-bearing for file:// repos); key directory
+0700-before-write and 0600-at-open required (current `save_to_files` chmods
+after write); `index_version` rollback tracking simplified to the equality
+check (protection inherited from TUF targets monotonicity) — which also
+fixed a stale §7.2 cross-reference.
