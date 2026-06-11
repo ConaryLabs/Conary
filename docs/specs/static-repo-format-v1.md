@@ -54,7 +54,7 @@ implemented in `crates/conary-core/src/json.rs`.
       packages/
         <name>/
           <name>-<version>-<release>-<arch>.ccs
-      chunks/                           # RESERVED (§11); absent in v1 repos
+      chunks/                           # RESERVED (§8); absent in v1 repos
 
 Rules:
 
@@ -620,7 +620,7 @@ scope here.
 | Rollback (downgrade metadata) | TUF role version monotonicity; `index_version == targets.version` binds the index to it |
 | Freeze (replay stale repo) | metadata expirations (§4.5) |
 | Mix-and-match | snapshot pins targets hash; timestamp pins snapshot hash; snapshot-consistency check |
-| Torn publish | reverse-order upload (§5.3 step 4): partial states fail hash verification, fail-safe |
+| Torn publish | reverse-order upload (§5.3 step 4): partial states fail hash verification or root/snapshot consistency checks, fail-safe/retryable |
 | Publish-key compromise | root-signed rotation (§7.2/§7.3) |
 | Root-key compromise/loss | new identity + explicit client reset-trust (§7.4); no silent re-pin |
 | Destination replays old signed state to the publisher | version watermark / `--state-file` gate (§5.1); re-signing a rollback requires explicit override |
@@ -637,8 +637,8 @@ root.json.
 **Client** MUST: implement §6.1 trust establishment (GPG/TUF exclusivity
 included); never parse index/keys before hash verification; enforce expiry +
 monotonicity; treat §6.4 failure semantics; support file:// and local paths;
-and validate every index/targets path **before** any URL or filesystem join,
-per the §3 normalization rule (resolve, RFC 3986 normalize, reject
+and validate every index/targets path **before** fetch/open/use by resolving
+and normalizing against the repo base per the §3 normalization rule (reject
 root-escape / absolute / scheme-carrying / percent-encoded-traversal paths
 -- with `file://` repos a traversal escapes into the local filesystem, so
 this is load-bearing, not hygiene).
