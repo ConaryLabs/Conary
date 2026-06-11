@@ -17,7 +17,7 @@ is the tutorial: **"Package your first software in 5 minutes"** must fit on one 
 |----------|--------|
 | Scope | Build toolchain + publishing designed together, end to end |
 | Primary persona | Both upstream devs and distro maintainers via one flow: inference for source trees, recipe file as the explicit escalation path |
-| Inference model | Invisible defaults — no file written; `--explain` shows inferences; `conary recipe init` materializes a pre-filled recipe when overrides are needed |
+| Inference model | Invisible defaults — no file written; `--explain` shows inferences; `conary new` materializes a pre-filled recipe when overrides are needed |
 | Build environment | Host by default (fast iteration); hermetic via `--hermetic` and always for publish |
 | Publish targets (v1) | Static repo (dir / rsync / S3-compatible) **and** authenticated push to Remi |
 | Architecture | "Approach 1+": unify around the existing recipe format; spend innovation budget on differentiators (record mode, agent-native diagnostics, watch mode, universal ingestion), all in v1 scope |
@@ -33,28 +33,50 @@ Everything in this spec is v1 *design* scope, but implementation lands in gated
 milestones — a later milestone does not start until the previous one's integration
 suite is green:
 
-- **M1 — the static-repo path.** `conary build` (recipe-driven + inference for the
-  core build systems), basic `conary try` (no watch), `conary publish` to a static
-  repo, `conary repo add` of a static repo, install from it. This is the
-  smallest end-to-end loop that proves the product. The "first package in 5 minutes"
-  tutorial must pass at the end of M1.
+- **M1a — recipe-only static path.** Static-repo child spec written and approved;
+  `conary build` for recipe-driven builds (no inference yet); `conary publish` to a
+  static repo; `conary repo add` of a static repo; install from it. The smallest
+  end-to-end loop that proves the format and the trust story.
+- **M1b — inference + try.** Build-system inference for the core build systems,
+  `conary new` materialization, `conary try` (state machine, no watch). The "first
+  package in 5 minutes" tutorial must pass at the end of M1b — that is the M1 exit
+  gate.
 - **M2 — publish hardening + Remi push.** Hermetic-publish requirements (below),
-  provenance classes and publish lint gates, Remi upload endpoint (which requires
-  finishing Remi's TUF timestamp refresh — currently a 501 stub in
-  `apps/remi/src/server/handlers/tuf.rs`).
+  provenance classes and publish lint gates, foreign-package ingestion
+  (.rpm/.deb/.pkg.tar.zst), Remi upload endpoint (which requires finishing Remi's TUF
+  timestamp refresh — currently a 501 stub in `apps/remi/src/server/handlers/tuf.rs`).
 - **M3 — differentiators.** Watch mode, agent-native diagnostics / MCP surface,
   record mode (prototype spike first; see Record mode).
 
-Universal ingestion is split: directory/recipe/tarball/git in M1; foreign packages
-(.rpm/.deb/.pkg.tar.zst) in M2 alongside the provenance-class gates they require.
+Universal ingestion is split: directory/recipe in M1a, tarball/git in M1b, foreign
+packages in M2 alongside the provenance-class gates they require.
+
+### Command/flag availability by milestone
+
+A verb or flag appears in `--help` only once its milestone lands — no aspirational
+surface:
+
+| Surface | M1a | M1b | M2 | M3 |
+|---------|-----|-----|----|----|
+| `build` (recipe), `publish` (static), `repo add` static | ✓ | | | |
+| `build` (inference, tarball/git), `new`, `try`/`status`/`rollback`/`keep`, `--explain` | | ✓ | | |
+| `build` (foreign pkgs), publish lint gates, Remi push, hermetic-publish enforcement | | | ✓ | |
+| `--record`, `--json`, `try --watch`, MCP packaging tools | | | | ✓ |
 
 ## The four verbs
 
-### `conary new <name>`
+### `conary new [name]`
 
-Scaffolds a package project for third-party software (distro-maintainer flow): a
-minimal `recipe.toml` and nothing else. Upstream developers in their own source tree
-never need it — they run `conary build` directly.
+One verb, two modes, both meaning "give me a recipe file":
+
+- `conary new <name>` — scaffolds a package project for third-party software
+  (distro-maintainer flow): a minimal `recipe.toml` and nothing else.
+- `conary new` (no args, inside a source tree) — materializes the recipe that
+  inference would use, pre-filled, for when invisible defaults need overriding.
+
+Upstream developers who never need overrides never run it — `conary build` alone
+suffices. There is no separate `conary recipe init`; recipe materialization is not a
+fifth concept.
 
 ### `conary build [TARGET]`
 
@@ -101,18 +123,36 @@ Because it is the centerpiece, try gets an explicit **state machine**, not vibes
   restores the previous generation; `conary try keep` promotes it permanently.
 - **At most one try session at a time** (v1); starting a second is an error that
   names the active one.
-- **Crash/reboot safety:** the session record is durable. On boot or on the next
-  conary invocation, an orphaned try session is reported and the user is prompted to
-  rollback or keep — a crashed try never silently becomes the permanent system.
-- Try requires the same privileges as `conary install`; service restarts triggered by
-  the package's hooks apply within the session and revert with rollback.
+- **Crash/reboot safety:** the session record is durable. The next conary invocation
+  detects an orphaned try session and prompts to rollback or keep — a crashed try
+  never silently becomes the permanent system. (Proactive boot-time notification — a
+  systemd unit or login message — is later hardening, not M1; detection in M1 happens
+  at next invocation.)
+- **Rollback scope is generation/filesystem rollback, stated honestly:** it reverts
+  generation-owned filesystem state (the package's files, links, units). It does not
+  un-happen runtime side effects — services that ran, `/var` mutations, data the
+  package wrote, external effects. Hook policy: in M1, try warns when a package
+  declares hooks with non-generation-scoped lifecycle effects (db migrations,
+  irreversible state changes) unless the package declares reversible cleanup.
+- Try requires the same privileges as `conary install`.
 - `--watch` (M3) composes build + try from the package project directory (it does not
   take a prebuilt `.ccs`): inotify on the source tree → incremental rebuild →
   hot-swap the throwaway generation.
 
-### `conary publish <target>`
+### `conary publish [WHAT] <target>`
 
-Signs and publishes. Targets:
+Signs and publishes. Concrete forms (no ambiguity about what gets published):
+
+- `conary publish <target>` — publishes the **current project** (a recipe is present
+  or inference applies); triggers the hermetic rebuild. The default, and the only
+  form where rebuild happens.
+- `conary publish <pkg.ccs> <target>` — publishes an existing artifact. Gated on its
+  provenance class: the artifact must carry a hermetic-build attestation (M2), else
+  publish refuses and says to run the project form.
+- Publishing "everything in dist/" is deliberately not a form; multi-package publish
+  is one project at a time (CI loops over projects).
+
+Targets:
 
 - a static repo: local directory, `rsync://`/SSH, or S3-compatible bucket
 - a Remi instance: authenticated upload (bearer token, v1-simple)
@@ -121,12 +161,18 @@ Publish **always rebuilds `--hermetic` first**. Host builds are for iterating, n
 for shipping. Hermetic alone is not a trust claim, so the publish build additionally
 requires (M2):
 
-- **Pinned sources:** every source/patch must carry a checksum (the recipe format
-  already has the field); inference-only builds get checksums recorded at first fetch.
-- **Offline build:** network access inside the hermetic environment is limited to
-  fetching the pinned, checksummed sources — nothing else.
+- **Pinned sources, fetch split from build:** publish *prefetches* all sources into
+  the source cache, verifying identity per input kind — tarballs/patches by checksum
+  (the recipe format already has the field; inference-only builds record checksums at
+  first fetch), git inputs by commit hash, local directories by tree hash with a
+  dirty-state policy (uncommitted changes → publish warns and records the tree hash
+  as untracked-dirty; CI mode refuses).
+- **Offline build:** after prefetch, the hermetic build environment has **no network
+  access at all**. Fetching happens before the sandbox, never inside it.
 - **Build-dependency lock:** the exact resolved versions of `requires`/`makedepends`
-  used in the hermetic build are recorded in the package's provenance.
+  used in the hermetic build are recorded in the package's provenance, resolved
+  against a named repo snapshot (not "whatever the resolver finds today"). The lock
+  schema is defined in the M2 plan before publish hardening lands.
 - **Attestation:** the build emits a provenance record (reusing the
   `DerivationExecutor` CAS capture) embedded in the manifest.
 - **Divergence diagnostic:** if the hermetic output differs from the last host build
@@ -148,8 +194,8 @@ separate keygen ceremony.
   format expresses every install-time field; only then does the primary documentation
   drop them. The recipe is authoritative wherever both could apply.
 - Inference produces a synthetic in-memory `Recipe`, so the engine has exactly one
-  input type. `conary recipe init` serializes the inferred recipe to disk, pre-filled,
-  when the user needs to override something.
+  input type. `conary new` (in a source tree) serializes the inferred recipe to disk,
+  pre-filled, when the user needs to override something.
 - `conary cook` and `conary ccs build` remain as plumbing commands but leave the
   primary documentation.
 - The bootstrap pipeline becomes a consumer of the same build pipeline — conaryOS
@@ -256,10 +302,11 @@ and key rotation/revocation.
 Client-side work:
 
 - Lift the current `file://` rejection in the repository client.
-- `conary repo add <url|path> --fingerprint <fp>` is the **documented happy path**:
-  repo operators publish their key fingerprint out-of-band (website, README) and the
-  add verifies it. Bare `repo add` without a fingerprint shows the fingerprint and
-  requires an explicit trust-on-first-use confirmation; the key is pinned thereafter.
+- `conary repo add <name> <url|path> --fingerprint <fp>` is the **documented happy
+  path** (matching the existing `repo add <name> <url>` CLI shape): repo operators
+  publish their key fingerprint out-of-band (website, README) and the add verifies
+  it. Without `--fingerprint`, the add shows the fingerprint and requires an explicit
+  trust-on-first-use confirmation; the key is pinned thereafter.
 - Metadata trust via the existing TUF implementation; package signatures via Ed25519
   per the CCS format.
 
@@ -312,7 +359,19 @@ TUF timestamp refresh is currently a 501 stub
 
 ## Revision notes (2026-06-10)
 
-Revised after external review (GPT). Adopted: mandatory milestone ordering within v1
+**Round 2 (same day):** try rollback scope stated honestly (generation/filesystem
+only, with a hook policy for non-generation-scoped effects; boot-time orphan
+notification deferred to hardening); hermetic publish split into
+prefetch-then-offline with per-input-kind source identity (checksum / commit hash /
+tree hash + dirty policy) and a repo-snapshot-resolved dependency lock; `publish`
+argument forms made concrete; M1 split into M1a (recipe-only static path) and M1b
+(inference + try, tutorial exit gate); command/flag availability matrix added so no
+milestone ships aspirational `--help` surface; `repo add` aligned to the existing
+`<name> <url>` shape; `conary recipe init` eliminated by folding recipe
+materialization into `conary new` (rejected the suggested `build --init-recipe` — an
+action flag that doesn't build is worse DX than reusing the existing verb).
+
+**Round 1:** Revised after external review (GPT). Adopted: mandatory milestone ordering within v1
 (static-repo path first); hermetic-publish trust requirements (pinned sources, offline
 build, dep lock, attestation, divergence diagnostic); static-repo child spec as a
 hard pre-implementation gate with index-as-TUF-target and corrected
