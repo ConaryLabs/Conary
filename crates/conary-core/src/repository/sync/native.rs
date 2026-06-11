@@ -29,8 +29,27 @@ pub(super) fn persist_native_sync_rows(
 
     let tx = conn.unchecked_transaction()?;
 
-    RepositoryPackage::delete_by_repository(&tx, repo_id)?;
-    RepositoryPackage::batch_insert_with_ids(&tx, repo_packages)?;
+    persist_synced_package_rows(&tx, repo_id, repo_packages, synced_packages)?;
+    link_canonical_ids(&tx, repo_id)?;
+
+    repo.last_sync = Some(current_timestamp());
+    repo.update(&tx)?;
+
+    tx.commit()?;
+
+    Ok(count)
+}
+
+pub(super) fn persist_synced_package_rows(
+    conn: &Connection,
+    repo_id: i64,
+    repo_packages: &mut [RepositoryPackage],
+    synced_packages: Vec<SyncedPackageRow>,
+) -> Result<usize> {
+    let count = synced_packages.len();
+
+    RepositoryPackage::delete_by_repository(conn, repo_id)?;
+    RepositoryPackage::batch_insert_with_ids(conn, repo_packages)?;
 
     let mut repo_provides = Vec::new();
     let mut repo_requirements = Vec::new();
@@ -65,10 +84,10 @@ pub(super) fn persist_native_sync_rows(
         }
     }
 
-    RepositoryProvide::batch_insert(&tx, &repo_provides)?;
-    RepositoryRequirement::batch_insert(&tx, &repo_requirements)?;
+    RepositoryProvide::batch_insert(conn, &repo_provides)?;
+    RepositoryRequirement::batch_insert(conn, &repo_requirements)?;
 
-    DbRequirementGroup::batch_insert_with_ids(&tx, &mut all_groups)?;
+    DbRequirementGroup::batch_insert_with_ids(conn, &mut all_groups)?;
     let mut grouped_clauses = Vec::new();
     for (group, clauses) in all_groups.iter().zip(all_group_clauses) {
         let group_id = group.id.ok_or_else(|| {
@@ -80,14 +99,7 @@ pub(super) fn persist_native_sync_rows(
                 .map(|clause| clause.with_group(group_id)),
         );
     }
-    RepositoryRequirement::batch_insert(&tx, &grouped_clauses)?;
-
-    link_canonical_ids(&tx, repo_id)?;
-
-    repo.last_sync = Some(current_timestamp());
-    repo.update(&tx)?;
-
-    tx.commit()?;
+    RepositoryRequirement::batch_insert(conn, &grouped_clauses)?;
 
     Ok(count)
 }

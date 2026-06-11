@@ -3,6 +3,7 @@
 pub mod format;
 pub mod location;
 pub mod paths;
+pub(crate) mod sync;
 
 pub use format::{
     PackageKeyEntry, PackageKeyStatus, PackageKeysFile, RepoIdentity, RepoIdentityRepo,
