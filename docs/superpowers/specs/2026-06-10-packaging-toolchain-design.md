@@ -215,7 +215,7 @@ the opposite of "try means safe."
   CCS hooks are declarative (units/tmpfiles/sysctl) and generation-scoped, so the
   refusal bites rarely. Hook reversibility is a manifest field and a publish lint.
 - Try requires the same privileges as `conary install`.
-- `--watch` (M3) composes build + try from the package project directory (it does not
+- `--watch` (M3) composes cook + try from the package project directory (it does not
   take a prebuilt `.ccs`): inotify on the source tree → incremental rebuild →
   hot-swap the throwaway generation.
 
@@ -389,7 +389,7 @@ step — but tier 3 promises a starting point, not a diagnosis.
 
 ### Watch mode
 
-`conary try --watch` runs from the package project directory (it composes build + try,
+`conary try --watch` runs from the package project directory (it composes cook + try,
 rather than taking a prebuilt `.ccs`): inotify on the source tree → incremental rebuild
 → hot-swap the throwaway generation. Small lift over `try`; outsized demo and
 daily-use value.
@@ -489,7 +489,8 @@ TUF timestamp refresh is currently a 501 stub
   beneath them, validated by the existing bootstrap and integration suites — child
   plans name the exact suites and result-gate commands rather than citing the matrix
   in aggregate.
-- `conary cook` / `conary ccs build` are not removed in v1; they are demoted in docs.
+- `conary cook` is the primary packaging front door; `conary ccs build` remains
+  supported as plumbing and leaves the primary documentation.
 - The new commands ship gated until the integration suite is green, then graduate.
   The conary CLI currently has **no** cargo features (`default = []` in
   `apps/conary/Cargo.toml`), so the gate is introduced as part of this work: either a
