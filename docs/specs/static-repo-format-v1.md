@@ -43,7 +43,7 @@ implemented in `crates/conary-core/src/json.rs`.
       conary-repo.toml                  # identity + trust fingerprints (§2)
       index.json                        # package index (§3); TUF-protected target
       keys/
-        package-keys.json               # package-signing pubkeys (§6.4); TUF target
+        package-keys.json               # package-signing pubkeys (§4.4); TUF target
       metadata/
         root.json                       # latest root, for bootstrap (copy of N.root.json)
         1.root.json                     # every historical root version, immutable
@@ -456,9 +456,12 @@ for a future v2 consistent-snapshot upgrade.
      casual/first-look use. "Non-interactive" is defined: stdin is not a
      terminal, or `CONARY_NON_INTERACTIVE=1` is set.
 6. Persist: repository row with `tuf_enabled = true`,
-   `tuf_root_url = <url>/metadata`; bootstrap the verified root via the
-   existing `TufClient::bootstrap` path (persists root, role keys,
-   pinned versions).
+   `tuf_root_url = <url>/metadata`, `gpg_check = false`,
+   `gpg_strict = false`, and `gpg_key_url = NULL`; bootstrap the verified
+   root via the existing `TufClient::bootstrap` path (persists root, role
+   keys, pinned versions). Static repo install/sync paths MUST use TUF
+   metadata plus CCS package signatures only; legacy GPG state is disabled,
+   not merely ignored by convention.
 
 ### 6.2 Update (sync)
 
@@ -474,8 +477,10 @@ for a future v2 consistent-snapshot upgrade.
    verified targets entry for path `index.json` **before parsing**.
 3. Parse; verify `schema == 1` and `index_version == targets.version`.
 4. Fetch + verify `keys/package-keys.json` the same way (targets entry,
-   then parse); update the repo's package trust policy
-   (`TrustPolicy { trusted_keys: <base64 keys>, allow_unsigned: false }`).
+   then parse); reject any key entry whose `status` is not `"active"` or
+   `"retired"`; update the repo's package trust policy with
+   `TrustPolicy::strict(<all active + retired package-keys public_key
+   values>)`.
 5. Map package entries into the client package model (§3 mapping note).
 
 ### 6.3 Install
@@ -505,7 +510,12 @@ for a future v2 consistent-snapshot upgrade.
 
 Explicit operator-initiated unpinning, required after a repo's root key is
 lost/replaced (§7.4): deletes the repo's rows from `tuf_roots`,
-`tuf_metadata`, `tuf_keys`, `tuf_targets`, and its package trust keys, then
-prints that the next `repo add`/sync re-establishes trust per §6.1. There is
-no silent re-pin: a root-key change without reset-trust keeps hard-failing
+`tuf_metadata`, `tuf_keys`, `tuf_targets`, and its package trust keys, while
+leaving the repository URL configured as a static repo. Re-establishment is
+an explicit bootstrap, not a silent repair: either `reset-trust` marks the
+repo so the next sync detects "no trusted root" and re-runs §6.1
+fingerprint/TOFU establishment before `trust/client.rs::update`, or the CLI
+provides an explicit `repo add --replace` path that performs §6.1 for the
+existing name. A plain duplicate-name `repo add` rejection cannot be the only
+re-pin path. A root-key change without reset-trust keeps hard-failing
 verification.
