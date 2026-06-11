@@ -40,13 +40,16 @@ suite is green:
   inference yet); `conary publish` to a static repo; `conary repo add` of a static
   repo; install from it. The smallest end-to-end loop that proves the format and the
   trust story. Packages published before M2 hardening carry an honest **hardening
-  level** in provenance (`hermetic` but not `attested`) and publish prints that this
-  is a preview repo, not reproducible release evidence; M2 flips the default gate to
-  require `attested`.
+  level** in provenance (`sandboxed` — Kitchen container isolation with network
+  still allowed; the `hermetic` label is reserved for M2's offline builds) and
+  publish prints that this is a preview repo, not reproducible release evidence; M2
+  flips the default gate to require `attested`.
 - **M1b — inference + try.** Build-system inference for the core build systems,
-  `conary new` materialization, `conary try` (state machine, no watch). The "first
-  package in 5 minutes" tutorial must pass at the end of M1b — that is the M1 exit
-  gate.
+  `conary new` materialization, `conary try` (state machine, no watch). Internal
+  ordering: inference lands first via the `conary new --from .` path (materialize →
+  inspect → build with explicit recipe), then bare inference-mode `conary build` —
+  so the two surfaces share one tested engine and cannot diverge. The "first package
+  in 5 minutes" tutorial must pass at the end of M1b — that is the M1 exit gate.
 - **M2 — publish hardening + Remi push.** Hermetic-publish requirements (below),
   provenance classes and publish lint gates, foreign-package ingestion
   (.rpm/.deb/.pkg.tar.zst), Remi upload endpoint (which requires finishing Remi's TUF
@@ -111,7 +114,15 @@ milestone — see the availability matrix):
 
 Output: `./dist/<name>-<version>-<release>-<arch>.ccs`, path printed on success.
 Architecture/platform identity is part of the artifact name and the repo index
-identity from day one (no arch-less filenames to migrate later).
+identity from day one (no arch-less filenames to migrate later). Arch is determined
+as: host architecture by default (`uname -m`), overridable via a `[package]` `arch`
+field in the recipe; cross builds take it from the existing `[cross].target`.
+
+`--explain` output is human-readable but backed by a structured `InferenceTrace`
+type (each node: detector, confidence, decision, evidence) so it is testable and
+serializable — not debug-printf. Help text distinguishes this command from the
+existing `conary system generation build` (which builds a system generation, not a
+package); both surfaces cross-reference each other.
 
 Every built package carries a **provenance class** in its manifest:
 `native-built` (recipe or inference, hermetic), `inferred-source` (inference,
@@ -124,21 +135,39 @@ host build), `recorded-draft` (record mode output), or `foreign-converted`
 Installs the freshly built package into a **throwaway generation**. This loop is the
 centerpiece DX: no other packaging system can offer install-with-instant-total-undo.
 
-Because it is the centerpiece, try gets an explicit **state machine**, not vibes:
+Because it is the centerpiece, try gets an explicit **state machine**, not vibes —
+and a **guest execution model**, because the obvious implementation is dangerous: the
+existing live generation switch bind-mounts the new `/usr` over the host's
+(`apps/conary/src/commands/generation/switch.rs` warns in-code that processes with
+open file descriptors under `/usr` may crash). A try that can crash your desktop is
+the opposite of "try means safe."
 
-- `conary try <pkg.ccs>` starts a try session: creates the throwaway generation,
-  switches to it, records the session (previous generation id, started-at, package)
-  in the database.
-- `conary try status` shows the active session; `conary try rollback` ends it and
-  restores the previous generation; `conary try keep` promotes it permanently.
+- `conary try <pkg.ccs>` creates the throwaway generation and opens a shell (or runs
+  `try <pkg.ccs> -- <cmd>`) **inside that generation's mount namespace**
+  (bubblewrap/chroot-style). The host's global root is untouched; other users and
+  running processes are unaffected. Exiting the shell tears the namespace down —
+  rollback in the default model is trivially total.
+- `conary try status` shows the active session; `conary try rollback` ends it;
+  `conary try keep` promotes the generation permanently (global activation happens
+  here, and only here, with the same semantics and caveats as any generation switch).
+- `conary try --activate` exists for the cases that genuinely need host-global
+  activation before keep/rollback (e.g. testing a system daemon under the real init);
+  it prints the live-switch risk plainly and is not the documented default path.
 - **At most one try session at a time** (v1); starting a second is an error that
   names the active one.
 - **Crash/reboot safety:** the session record is durable. The next conary invocation
   detects an orphaned try session and prompts to rollback or keep — a crashed try
-  never silently becomes the permanent system. (Proactive boot-time notification — a
-  systemd unit or login message — is later hardening, not M1; detection in M1 happens
-  at next invocation.)
-- **Rollback scope is generation/filesystem rollback, stated honestly:** it reverts
+  never silently becomes the permanent system. In non-interactive contexts (daemons,
+  scripts, CI) orphan detection **fails closed**: no prompt, log the error, and for
+  an orphaned `--activate` session trigger automatic rollback to the previous
+  generation. (Proactive boot-time notification — a systemd unit or login message —
+  is later hardening, not M1; detection in M1 happens at next invocation.)
+- **Service teardown on activated rollback:** rolling back an `--activate` session
+  must `systemctl stop`/`disable` every service the package's manifest declares
+  *before* reverting the filesystem — otherwise the unit file vanishes while the
+  process still runs, leaving orphans systemd can no longer manage.
+- **Rollback scope stated honestly (applies chiefly to `--activate` sessions;
+  namespace sessions are contained by construction):** rollback reverts
   generation-owned filesystem state (the package's files, links, units). It does not
   un-happen runtime side effects — services that ran, `/var` mutations, data the
   package wrote, external effects. Hook policy: try **refuses** packages that declare
@@ -146,7 +175,19 @@ Because it is the centerpiece, try gets an explicit **state machine**, not vibes
   state changes) unless the package declares reversible cleanup or the user passes
   `--allow-irreversible`. The policy **fails closed**: hooks that are unknown,
   unclassified, or legacy scriptlets are treated as non-generation-scoped — an
-  incomplete declaration is never an escape hatch. "Try means safe" must be literally true by default; most
+  incomplete declaration is never an escape hatch. The classification field this
+  gate reads does not exist yet (the current `Hooks` struct in
+  `ccs/manifest.rs` carries no reversibility metadata); minimal schema, defined
+  before M1b lands: an optional `reversible: bool` per hook, defaulting to `true`
+  for declarative variants (users/groups/directories/systemd/tmpfiles/sysctl/
+  alternatives) and `false` for `ScriptHook` (`post_install`/`pre_remove`) and all
+  legacy scriptlets.
+- **Session data model (new — no precedent in the generations system):** a
+  `try_sessions` table: `id`, `previous_generation_id`, `try_generation_id`,
+  `package_path`, `started_at`, `status` (`active`|`orphaned`|`kept`|`rolled_back`),
+  with single-active-session enforced by a partial unique index on
+  `status = 'active'`. Crash recovery queries for `active`, compares against actual
+  generation state, then applies the orphan policy above. "Try means safe" must be literally true by default; most
   CCS hooks are declarative (units/tmpfiles/sysctl) and generation-scoped, so the
   refusal bites rarely. Hook reversibility is a manifest field and a publish lint.
 - Try requires the same privileges as `conary install`.
@@ -159,8 +200,9 @@ Because it is the centerpiece, try gets an explicit **state machine**, not vibes
 Signs and publishes. Concrete forms (no ambiguity about what gets published):
 
 - `conary publish <target>` — publishes the **current project** (a recipe is present
-  or inference applies); triggers the hermetic rebuild. The default, and the only
-  form where rebuild happens.
+  or inference applies); triggers the isolated rebuild (`sandboxed` in M1a,
+  `hermetic` from M2 — see below). The default, and the only form where rebuild
+  happens.
 - `conary publish <pkg.ccs> <target>` — publishes an existing artifact. Gated on its
   provenance class: the artifact must carry a hermetic-build attestation (M2), else
   publish refuses and says to run the project form.
@@ -172,9 +214,19 @@ Targets:
 - a static repo: local directory, `rsync://`/SSH, or S3-compatible bucket
 - a Remi instance: authenticated upload (bearer token, v1-simple)
 
-Publish **always rebuilds `--hermetic` first**. Host builds are for iterating, never
-for shipping. Hermetic alone is not a trust claim, so the publish build additionally
-requires (M2):
+Publish **always rebuilds in isolation first**. Host builds are for iterating, never
+for shipping. What "isolation" means is milestone-honest, because the label must
+never overclaim:
+
+- **M1a:** publish rebuilds with Kitchen container isolation, which already exists
+  (`use_isolation` in `recipe/kitchen/config.rs`) — but network is still allowed, so
+  provenance is stamped `hardening: sandboxed`, **not** `hermetic`. Publish prints
+  that the repo is a preview, not reproducible release evidence.
+- **M2:** the offline prefetch-then-build model below lands; only those builds earn
+  `hardening: hermetic` (plus `attested` once signed). M2 flips the publish gate to
+  require it.
+
+The full M2 requirements:
 
 - **Pinned sources, fetch split from build:** publish *prefetches* all sources into
   the source cache, verifying identity per input kind — tarballs/patches by checksum
@@ -190,13 +242,24 @@ requires (M2):
   access at all**. Fetching happens before the sandbox, never inside it.
 - **Build-dependency lock:** the exact resolved versions of `requires`/`makedepends`
   used in the hermetic build are recorded in the package's provenance, resolved
-  against a named repo snapshot (not "whatever the resolver finds today"). The lock
-  schema is defined in the M2 plan before publish hardening lands.
-- **Attestation:** the build emits a provenance record (reusing the
-  `DerivationExecutor` CAS capture) embedded in the manifest.
+  against a named repo snapshot — concretely, the **TUF snapshot version pinned at
+  build time**; the lock records repo URL, snapshot version, and resolved versions,
+  and re-resolution replays against that snapshot. Exact schema defined in the M2
+  plan before publish hardening lands.
+- **Attestation (defined, not hand-waved):** an Ed25519 signature **by the
+  publisher's key** over the build's input identities (recipe hash, source
+  checksums/commit/tree hashes, dependency-lock snapshot version) and output
+  identity (file-manifest merkle root), embedded in the manifest provenance as a
+  `build-attestation` entry. The existing `DerivationExecutor` CAS capture informs
+  this but is build-log-level today — the structured, signed attestation is new
+  work, not reuse.
 - **Divergence diagnostic:** if the hermetic output differs from the last host build
   of the same tree, publish says so and shows what changed — that delta is exactly
-  the dishonest-dependency signal we're hunting.
+  the dishonest-dependency signal we're hunting. To make this implementable and not
+  a false-positive firehose: host builds record a `host_build_record` (tree hash,
+  output manifest hash) at build time, and both build modes set standard
+  reproducibility controls (`SOURCE_DATE_EPOCH`, build-path mapping) so known
+  nondeterminism doesn't drown the signal.
 
 First-ever publish auto-generates an Ed25519 keypair under `~/.config/conary/keys/`,
 prints the fingerprint, and embeds the public key in repo metadata. There is no
@@ -207,6 +270,15 @@ separate keygen ceremony.
 - The existing recipe TOML (`crates/conary-core/src/recipe/format.rs`) is the single
   human-facing format, **extended** to absorb the fields currently unique to
   `ccs.toml`: hooks, capability overrides, component classification rules.
+- **The recipe schema gains a local-source variant.** Today `SourceSection` mandates
+  a remote `archive` URL + checksum, and the cook path unconditionally downloads it —
+  which silently breaks the upstream-developer persona (a materialized recipe would
+  ignore the developer's local tree). `source` becomes an enum: remote archive (as
+  today) or `path = "."`, where the build uses the local workspace (bind-mounted into
+  the sandbox for isolated builds). For hermetic builds of a path source, the sandbox
+  receives **exactly the git-tracked files** — never untracked files — so the
+  recorded tree hash is an honest description of the build input; the CLI warns
+  about untracked files before building.
 - The CCS manifest becomes a **generated artifact**. Humans never write `ccs.toml` in
   the primary flow. Migration boundary: `ccs.toml` and the `conary ccs init/build`
   surface remain supported as the low-level manifest/debug layer until the recipe
@@ -246,9 +318,11 @@ with `--explain` and resolved by an explicit recipe.
 `conary build --record` opens a shell; the user builds their software the way they
 always do. Conary traces the session and **derives the recipe**: commands run, files
 read (dependency evidence), files installed (manifest), plus suggested capability
-declarations. The `capability/` landlock/seccomp infrastructure informs the approach,
-but recording requires a tracing mechanism (seccomp-notify or fanotify) — this is the
-riskiest technical bet in the design and gets a prototype spike before commitment.
+declarations. To be precise about what exists: the `capability/` module provides the
+**declaration schema** record mode would populate — it is not an observation
+mechanism. The recording path (seccomp-notify/fanotify → trace → derived recipe and
+capabilities) is entirely new infrastructure. This is the riskiest technical bet in
+the design and gets a prototype spike before commitment.
 
 Reliability bar: record mode output is **always a draft** — it emits a recipe marked
 `recorded-draft` plus a trace report, and a recorded session is never directly
@@ -311,23 +385,55 @@ repo/
 ```
 
 This layout is normative only in outline. **A standalone static-repo spec in
-`docs/specs/` is a mandatory gate before M1 implementation of publish/repo-add.** It
-must define: `index.json` and all packages/chunks as TUF *targets* (the index sits
-beside `metadata/` but is protected by it — that is the standard TUF pattern, not a
-parallel trust path); atomic publish (write-new-then-flip, so a reader never sees a
-torn repo); metadata expirations and refresh expectations; rollback/freeze protection;
-and the operator key lifecycle — rotation, revocation, backup, and loss recovery,
-stated plainly, because the auto-generated first-publish key *is* the repo authority
-and users must understand what losing it means.
+`docs/specs/` is a mandatory gate (M0) before M1 implementation of publish/repo-add.**
+It must define:
+
+- **The index↔TUF bridge** — currently disconnected systems: `RepositoryMetadata`
+  (the index shape) has only a free-form `version: String`, and nothing ties index
+  content to TUF target entries. The child spec defines: index.json gains a
+  monotonic `index_version: u64` matching the TUF targets version; index.json's
+  sha256 is listed as a target in `targets.json`; and the client fetch order is
+  **download → verify hash against the TUF-verified target entry → only then
+  parse**. No code path parses an unverified index.
+- **Atomic publish for non-transactional backends** (S3, rsync, plain HTTP dirs):
+  upload in reverse verification order — packages/chunks first, then
+  `targets.json` + `index.json`, then `snapshot.json`, then `timestamp.json` (and
+  `root.json` only on rotation) — so a concurrent client never verifies against
+  metadata that references missing files.
+- **`conary-repo.toml`'s exact schema** and its relationship to TUF `root.json`
+  (the parent spec commits only to: human-readable identity + key fingerprints for
+  TOFU; it never carries full key material).
+- **Metadata expirations and refresh expectations**, rollback/freeze protection.
+- **The operator key lifecycle** — placement (where the pubkey lives and which copy
+  is authoritative), rotation, revocation, backup, and loss recovery, stated
+  plainly, because the auto-generated first-publish key *is* the repo authority.
+  Loss recovery includes the client side: a reset repo with a new key requires the
+  user to explicitly re-trust (e.g. `conary repo reset-trust <name>`), never a
+  silent re-pin. Until M0 defines key placement, M1a key generation warns that
+  lifecycle management is pending and the private key must be stored securely.
+- **A file-based TUF metadata generator.** Remi's TUF path regenerates from its
+  database; a static repo has no database — publish needs a generator that signs
+  metadata from files at publish time. These are different architectures sharing
+  the `trust/` types, and the child spec owns the file-based one.
 
 Client-side work:
 
-- Lift the current `file://` rejection in the repository client.
+- Lift the `file://` rejection in **all three** places it lives, not one: the
+  repository client (`validate_url_scheme` in `repository/client.rs`), the Kitchen
+  source fetcher (`download_file` in `recipe/kitchen/archive.rs`, so local-path/
+  `file://` recipe sources work), and the TUF transport (`TufClient` uses bare
+  `reqwest::get`, which cannot fetch `file://` — it needs a filesystem fallback for
+  local-path repos).
 - `conary repo add <name> <url|path> --fingerprint <fp>` is the **documented happy
   path** (matching the existing `repo add <name> <url>` CLI shape): repo operators
   publish their key fingerprint out-of-band (website, README) and the add verifies
   it. Without `--fingerprint`, the add shows the fingerprint and requires an explicit
   trust-on-first-use confirmation; the key is pinned thereafter.
+- **Trust-mechanism exclusivity:** `--fingerprint` marks a CCS/static (TUF) repo;
+  the existing GPG flags (`--gpg-key`, `--no-gpg-check`, `--gpg-strict`) apply to
+  legacy/distro repos only. The two sets are mutually exclusive, enforced at parse
+  time via clap conflict rules — three parallel trust paths is two too many for one
+  repo.
 - Metadata trust via the existing TUF implementation; package signatures via Ed25519
   per the CCS format.
 
@@ -379,10 +485,46 @@ TUF timestamp refresh is currently a 501 stub
   documented happy path; explicit-confirm TOFU with pinning is the fallback. Rotation
   and revocation are defined in the static-repo child spec.
 - **Remi push auth:** static bearer token in v1; token management UX deferred.
+- **Try session scope:** system-global state (it requires install privileges), but
+  the default guest execution model means other users are unaffected until
+  `try keep` or `--activate`.
+- **Attestation signer:** the publisher's Ed25519 key (the same authority that signs
+  packages) — no separate machine key.
+- **GPG repo infrastructure:** stays, for legacy/distro repos; CCS/static repos use
+  fingerprint/TUF exclusively (clap-enforced). No removal in v1.
 
 ## Revision notes (2026-06-10)
 
-**Round 4 (same day, final):** availability matrix distinguishes project-form publish
+**Round 5 (same day — Gemini + DeepSeek, reviewed independently):** the two biggest
+catches both survived four GPT rounds. (1) **Try got a guest execution model**: the
+naive implementation live-bind-mounts the new `/usr` over the host's (per the in-code
+warning in `generation/switch.rs`, running processes may crash) — so try now runs
+inside the throwaway generation's mount namespace by default, host untouched; global
+activation only via `try keep` or explicit `--activate`. This also resolved
+multi-user semantics and made default rollback containment-by-construction, with
+service teardown ordering defined for activated sessions. (2) **The recipe schema
+gains a local-source variant**: `SourceSection` mandates a remote archive+checksum
+and cook unconditionally downloads, which would have silently broken the
+upstream-developer persona; `source` becomes remote-or-path, with hermetic path
+builds receiving exactly git-tracked files. Also adopted: all three `file://`
+rejection sites enumerated (repo client, Kitchen fetcher, TufClient transport); the
+index↔TUF bridge defined (monotonic `index_version: u64`, index hash as TUF target,
+verify-before-parse); reverse-verification-order uploads for non-transactional
+backends; M1a publish semantics pinned (Kitchen isolation, network allowed,
+`hardening: sandboxed` — `hermetic` reserved for M2 offline builds); hook
+reversibility schema sketched (`reversible: bool`, declarative hooks default true,
+script hooks false); `try_sessions` table sketched; attestation defined (publisher
+Ed25519 signature over input/output identities — DerivationExecutor capture is
+build-log-level, so this is new work, not reuse); divergence diagnostic made
+implementable (`host_build_record` + `SOURCE_DATE_EPOCH`/path mapping);
+GPG-vs-fingerprint exclusivity via clap conflicts; `conary-repo.toml` schema and key
+placement deferred to M0 with a file-based TUF generator named as M0 scope;
+key-loss recovery requires explicit client re-trust; non-interactive orphan
+handling fails closed; M1b internal ordering (inference via `new --from .` first);
+arch determination defined; `--explain` backed by structured `InferenceTrace`;
+record mode's declaration-vs-observation gap stated.
+
+**Round 4 (same day):** availability matrix distinguishes project-form publish
 (M1a) from artifact-form publish (M2, attestation-gated); try hook policy fails
 closed on unknown/unclassified/legacy-scriptlet hooks; static-repo child spec must
 cover the operator key lifecycle including backup/loss recovery; rollout no longer
