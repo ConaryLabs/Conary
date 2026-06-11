@@ -240,6 +240,8 @@ Field rules:
 - `schema` (integer) MUST be `1`. Clients MUST reject unknown majors.
 - `repo.name`: `[a-z0-9][a-z0-9-]*`, max 64 chars. Shown at add time; the
   client-side repo name remains whatever the user passed to `repo add`.
+- `repo.description`: optional display text shown during trust establishment;
+  clients MUST NOT make trust or routing decisions from it.
 - `trust.root_key_ids`: non-empty array. MUST exactly equal (as a set) the
   keyids of the `root` role in the current root.json. A mismatch is a hard
   client error (§6.1) and a publisher lint error (§5.4).
@@ -293,7 +295,7 @@ index.
           "release": "1",
           "arch": "x86_64",
           "path": "packages/acme-widget/acme-widget-1.4.2-1-x86_64.ccs",
-          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "sha256": "30e14955ebf1352266dc2ff8067e68104607e750abb9d3b36582b8af909fcb58",
           "size": 1048576,
           "description": "Widget frobnicator",
           "dependencies": ["libfoo >= 2.0"]
@@ -304,6 +306,8 @@ index.
 Field rules:
 
 - `schema` (u64): MUST be `1`; reject unknown majors.
+- `name`: display identity matching `conary-repo.toml` `repo.name`; clients
+  MAY display it but MUST NOT trust it until `index.json` is TUF-verified.
 - `index_version` (u64): MUST equal the `version` of the targets metadata
   generated in the same publish (§5.3). Clients enforce the equality only;
   rollback protection is inherited from TUF targets-version monotonicity,
@@ -313,16 +317,20 @@ Field rules:
   binds the parsed index to the verified TUF state.
 - `generated`: RFC 3339 UTC; informational only — clients MUST NOT make
   trust decisions on it (expiry lives in TUF metadata).
+- `packages`: array of package entries. Empty is valid for a newly initialized
+  repo; clients MUST ignore unknown package-entry fields after verification.
 - Package entries: `name`, `version`, `release`, `arch` are required and
   MUST match the artifact filename `<name>-<version>-<release>-<arch>.ccs`.
   `arch` values follow `uname -m` (`x86_64`, `aarch64`, `riscv64`) or
   `noarch`. `sha256` is bare lowercase hex of the `.ccs` file; `size` in
-  bytes. `path` is repo-root-relative: consumers MUST resolve it against
-  the repo base, normalize per RFC 3986, and reject the entry if the
-  normalized result escapes the repo root, is absolute, carries a scheme,
-  or contains percent-encoded sequences decoding to `/` or `..` (a naive
-  `..`-substring check both misses encoded traversals and false-positives
-  on names like `foo..bar`).
+  bytes. The example hash/size pair above is the SHA-256 of a 1 MiB
+  zero-filled placeholder; real repos MUST compute both from the actual
+  `.ccs` bytes. `path` is repo-root-relative: consumers MUST resolve it
+  against the repo base, normalize per RFC 3986, and reject the entry if the
+  normalized result escapes the repo root, is absolute, carries a scheme, or
+  contains percent-encoded sequences decoding to `/` or `..` (a naive
+  `..`-substring check both misses encoded traversals and false-positives on
+  names like `foo..bar`).
   `description` and `dependencies` are optional; dependency strings use the
   CCS manifest dependency syntax.
 
@@ -431,20 +439,31 @@ Already-bootstrapped clients discover rotations by probing
       ]
     }
 
-`status` is `"active"` (signs new packages) or `"retired"` (no longer
-signs, still trusted so previously published artifacts keep verifying).
-Clients import both into `trusted_keys`. A **compromised** key is neither:
-it is removed from the file entirely, and every artifact it signed MUST be
-removed or republished (re-signed, new release number) — §7.3. A `retired`
-key MAY be dropped from the file once no entry in the current index
-references an artifact signed by it (fully superseded).
+Field rules:
 
-`public_key` is base64 — matching the CCS `PackageSignature.public_key` and
-`TrustPolicy.trusted_keys` encoding (`ccs/verify.rs`), which differs from
-TUF's hex `keyval.public`; both encodings of the same publish key appear in
-a default repo. Clients import these into the repo's package trust policy
-only after TUF verification of this file (§6.2), and verify installed
-packages with `allow_unsigned = false` for static repos.
+- `schema` (u64): MUST be `1`; reject unknown majors.
+- `keys`: array of package-signing public-key entries; empty is invalid for
+  a repo that publishes installable packages.
+- `algorithm`: MUST be `"ed25519"`.
+- `public_key`: base64 — matching the CCS `PackageSignature.public_key` and
+  `TrustPolicy.trusted_keys` encoding (`ccs/verify.rs`), which differs from
+  TUF's hex `keyval.public`; both encodings of the same publish key appear in
+  a default repo.
+- `key_id`: optional operator-facing label/fingerprint; clients MUST NOT use
+  it as the verification key material.
+- `status`: `"active"` (signs new packages) or `"retired"` (no longer signs,
+  still trusted so previously published artifacts keep verifying). Clients
+  import both into `trusted_keys`; unknown statuses are rejected (§6.2). A
+  **compromised** key is neither: it is removed from the file entirely, and
+  every artifact it signed MUST be removed or republished (re-signed, new
+  release number) — §7.3. A `retired` key MAY be dropped from the file once
+  no entry in the current index references an artifact signed by it (fully
+  superseded).
+- `comment`: optional human-readable text; clients ignore it.
+
+Clients import package keys into the repo's package trust policy only after
+TUF verification of this file (§6.2), and verify installed packages with
+`allow_unsigned = false` for static repos.
 
 Authority is **flat** in v1: every listed key may sign any package in the
 repo (no per-path constraint until TUF delegations, v2). Operators SHOULD
