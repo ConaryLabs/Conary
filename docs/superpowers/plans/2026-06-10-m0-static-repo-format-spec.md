@@ -229,7 +229,8 @@ Everything security-relevant in it is cross-checked against root.json (§6.1).
     # TUF root-role key IDs: SHA-256 of the OLPC-canonical JSON of each root
     # TufKey, lowercase hex (64 chars) — identical to the key IDs that appear
     # in root.json. These are the values `conary repo add --fingerprint`
-    # checks against.
+    # checks against. (The value below is illustrative — it is
+    # sha256("abc") — not a real key ID.)
     root_key_ids = [
       "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
     ]
@@ -316,7 +317,12 @@ Field rules:
   MUST match the artifact filename `<name>-<version>-<release>-<arch>.ccs`.
   `arch` values follow `uname -m` (`x86_64`, `aarch64`, `riscv64`) or
   `noarch`. `sha256` is bare lowercase hex of the `.ccs` file; `size` in
-  bytes; `path` repo-root-relative (no leading `/`, no `..`, no URL).
+  bytes. `path` is repo-root-relative: consumers MUST resolve it against
+  the repo base, normalize per RFC 3986, and reject the entry if the
+  normalized result escapes the repo root, is absolute, carries a scheme,
+  or contains percent-encoded sequences decoding to `/` or `..` (a naive
+  `..`-substring check both misses encoded traversals and false-positives
+  on names like `foo..bar`).
   `description` and `dependencies` are optional; dependency strings use the
   CCS manifest dependency syntax.
 
@@ -401,7 +407,10 @@ two-key layout.
 ### 4.3 Filenames and rotation
 
 `targets.json`, `snapshot.json`, `timestamp.json` are served unversioned
-(`consistent_snapshot = false`; rationale §13). Roots are dual-published:
+(`consistent_snapshot = false` — the existing client only fetches
+unversioned snapshot/targets filenames, and reverse-order upload + hash
+pinning already fails safe; §11 covers the v2 versioned-filename path).
+Roots are dual-published:
 `metadata/{N}.root.json` for every version N (immutable, complete history)
 plus `metadata/root.json` as a copy of the latest, used for bootstrap (§6.1).
 Already-bootstrapped clients discover rotations by probing
@@ -426,7 +435,9 @@ Already-bootstrapped clients discover rotations by probing
 signs, still trusted so previously published artifacts keep verifying).
 Clients import both into `trusted_keys`. A **compromised** key is neither:
 it is removed from the file entirely, and every artifact it signed MUST be
-removed or republished (re-signed, new release number) — §7.3.
+removed or republished (re-signed, new release number) — §7.3. A `retired`
+key MAY be dropped from the file once no entry in the current index
+references an artifact signed by it (fully superseded).
 
 `public_key` is base64 — matching the CCS `PackageSignature.public_key` and
 `TrustPolicy.trusted_keys` encoding (`ccs/verify.rs`), which differs from
@@ -513,7 +524,10 @@ from the destination, not from local state.
    destination is replaying old signed state; re-signing on top would
    launder the rollback into fresh signatures). `--accept-destination-state`
    overrides, loudly. A missing watermark (first publish from this machine)
-   skips the check with a notice.
+   skips the check with a notice. Version regression implies **content**
+   regression too: a publisher rebuilding from a rolled-back index would
+   silently drop packages published in the hidden versions — the watermark
+   gate is what prevents that, which is why overriding it is loud.
 5. **Single-writer rule:** concurrent publishes to one destination are
    unsupported and MUST fail rather than interleave (two writers can both
    derive version N+1 and clobber each other). Where the backend supports
@@ -544,6 +558,14 @@ from the destination, not from local state.
    `generate_targets(targets_next)` → `generate_snapshot(root_version,
    targets, snapshot_next)` → `generate_timestamp(snapshot,
    timestamp_next)`; each role's version = its destination version + 1.
+   **`root_version` is NOT a role-to-bump:** it is the version of the
+   currently published root (read in §5.1) — incremented only when this
+   publish itself performs a root rotation (§7.2). A snapshot pinning a
+   nonexistent root version hard-fails every client's consistency check.
+   Expiry-parameter footgun: `generate_timestamp` takes **`expires_hours`**
+   (720 = the 30-day default) while `generate_targets`/`generate_snapshot`
+   take `expires_days` — passing 30 meaning "days" yields a 30-hour
+   timestamp.
 4. Upload in **reverse verification order** — each step completes before
    the next begins:
    a. `packages/**` (new artifacts) and `keys/package-keys.json`
@@ -588,8 +610,10 @@ strands clients on a consistency failure:
 - timestamp always bumps
 
 If targets is re-signed, `index_version` bumps with it and the index is
-re-uploaded — invariant 3 of §3 always holds. Upload ordering of §5.3.4
-applies.
+re-uploaded — invariant 3 of §3 always holds. The re-uploaded index is
+byte-identical to the previous one except `index_version` and `generated`
+(package entries, hashes, and sizes MUST NOT be recomputed or reordered
+during a refresh). Upload ordering of §5.3.4 applies.
 
 ### 5.6 Serving and caching guidance (non-normative)
 
@@ -602,7 +626,12 @@ and everything under `metadata/` except `{N}.root.json` — concretely
 `Cache-Control: max-age=60` (or `no-cache` for `timestamp.json`), and
 `Cache-Control: public, max-age=31536000, immutable` for `packages/**` and
 `{N}.root.json`. Publish pipelines targeting a CDN SHOULD invalidate
-`metadata/*`, `index.json`, and `keys/*` as a post-upload step. CDN-served
+`metadata/*`, `index.json`, and `keys/*` as a post-upload step.
+S3-compatible backends do not guarantee read-after-**overwrite**
+consistency: each §5.3.4 step completes only when the uploaded object is
+confirmed visible (read-back or ETag check) before the next step begins,
+and the §5.1 destination reads SHOULD bypass caches (no-cache request
+headers or cache-busting query). CDN-served
 production repos are the primary motivation for the v2 consistent-snapshot
 upgrade (§11).
 ```
@@ -661,7 +690,8 @@ git commit -m "docs: static repo spec - publish algorithm"
      TOFU cannot detect a replayed *old* root whose keys were later
      rotated or compromised — an on-path attacker can pin a stale
      identity. `--fingerprint` is the production path; TOFU is for
-     casual/first-look use.
+     casual/first-look use. "Non-interactive" is defined: stdin is not a
+     terminal, or `CONARY_NON_INTERACTIVE=1` is set.
 6. Persist: repository row with `tuf_enabled = true`,
    `tuf_root_url = <url>/metadata`; bootstrap the verified root via the
    existing `TufClient::bootstrap` path (persists root, role keys,
@@ -722,7 +752,7 @@ verification.
 
 ```bash
 grep -n 'pub async fn update\|pub fn bootstrap' crates/conary-core/src/trust/client.rs
-grep -n 'tuf_roots\|tuf_metadata\|tuf_keys\|tuf_targets' crates/conary-core/src/db/migrations/v41_current.rs | head -6
+grep -rl 'CREATE TABLE tuf_roots' crates/conary-core/src/db/ | head -1 | xargs grep -n 'tuf_roots\|tuf_metadata\|tuf_keys\|tuf_targets' | head -6
 grep -n 'pub fn verify_package' crates/conary-core/src/ccs/verify.rs
 ```
 Expected: all present (tables may live in a different consolidated migration file — if so, locate with `grep -rn "CREATE TABLE tuf_roots" crates/conary-core/src/db/` and substitute; the spec text does not name the migration file, so no spec change needed).
@@ -873,9 +903,10 @@ root.json.
 included); never parse index/keys before hash verification; enforce
 expiry + monotonicity; treat §6.4 failure semantics; support file:// and
 local paths; and validate every index/targets path **before** any URL or
-filesystem join — reject absolute paths, `..` segments, and embedded
-schemes (with `file://` repos a traversal escapes into the local
-filesystem, so this is load-bearing, not hygiene).
+filesystem join, per the §3 normalization rule (resolve, RFC 3986
+normalize, reject root-escape / absolute / scheme-carrying /
+percent-encoded-traversal paths — with `file://` repos a traversal escapes
+into the local filesystem, so this is load-bearing, not hygiene).
 
 ## 11. Compatibility and Evolution
 
@@ -1052,3 +1083,22 @@ only checks the pin if present); key-generation story corrected
 ceremony); root-rotation transient failure window documented;
 Cache-Control values and CDN invalidation specified; chunks layout no
 longer falsely claims to match Remi (which uses chunks/objects/<hh>/<rest>).
+
+**DeepSeek round:** two blockers — a second dead `§13` cross-reference in
+§4.3 (rationale now inlined) and `root_version` in the §5.3.3 generation
+chain made explicit (it is the *current* published root version, not
++1, except during rotation — a wrong value hard-fails every client);
+`expires_hours` vs `expires_days` footgun called out; retired-key removal
+criterion added (droppable once fully superseded); watermark rationale
+extended with the content-regression consequence; S3
+read-after-overwrite verification required between upload steps; path
+rule rewritten as normalize-then-check with percent-encoding coverage
+(replacing the naive `..` substring rule); "non-interactive" defined
+(stdin not a TTY or CONARY_NON_INTERACTIVE=1); migration-file grep made
+filename-agnostic; refresh declared byte-stable for the index except
+`index_version`/`generated`; example fingerprint labeled as
+sha256("abc"). **Declined:** a `version` field in package-keys.json
+(the file's hash is pinned by the *current* verified targets entry, so a
+stale file fails verification — a version field would be a redundant
+second mechanism, same reasoning as the index_version simplification);
+markdown-anchor cross-references (§ refs are the established style here).
