@@ -519,3 +519,64 @@ provides an explicit `repo add --replace` path that performs §6.1 for the
 existing name. A plain duplicate-name `repo add` rejection cannot be the only
 re-pin path. A root-key change without reset-trust keeps hard-failing
 verification.
+
+## 7. Operator Key Lifecycle
+
+### 7.1 Generation and storage
+
+First publish (`conary publish` against a fresh destination) creates,
+under `~/.config/conary/keys/<repo-name>/`:
+
+    root.private     root.public
+    publish.private  publish.public
+
+Files use the existing CCS key format (`ccs/signing.rs::KeyFile` TOML):
+`algorithm = "ed25519"`, `key = "<base64 32 bytes>"`, optional `key_id`.
+The key directory MUST be created mode 0700 **before** any key is written,
+and private key files MUST be created 0600 at open time — not written then
+chmod'd (the current `save_to_files` writes first and tightens permissions
+after, a transient exposure window M1a fixes). The existing
+`conary trust key gen` (single TUF role → `{role}.private`/`{role}.public`
+in an output dir) remains low-level plumbing; `conary publish` wraps the
+same `KeyFile` format and is the documented path — there is no
+two-key ceremony command today, and M1a builds it into publish rather than
+extending `trust key gen`. Generation MUST print both generated key IDs
+(fingerprints) and this exact warning: the root key **is** the repo's
+identity — store `root.private` offline if possible, and back up the whole
+directory; losing it means clients must manually re-trust (§7.4).
+
+### 7.2 Rotation (keys still held)
+
+- Rotate publish key: generate new keypair; produce root vN+1 via
+  `trust/ceremony.rs::rotate_key` updating targets/snapshot/timestamp role
+  keyids; publish per §5.3 including the new `{N+1}.root.json` and updated
+  `root.json`, regenerated `keys/package-keys.json` (old key moves to
+  `status: "retired"` so existing artifacts keep verifying; new key is
+  `"active"`), and a `conary-repo.toml` left unchanged (root keys did not
+  change). Clients pick up the rotation via root-version probing; no user
+  action.
+- Rotate root key: same mechanism; root vN+1 MUST be signed by **both**
+  old and new root keys (TUF rotation rule, enforced by the existing
+  client root-chain verification); `conary-repo.toml::root_key_ids` is
+  updated to the new set. Out-of-band fingerprints SHOULD be re-published.
+
+### 7.3 Revocation
+
+Revocation = rotation that **removes** the compromised key (not
+"retired" — retired keys stay trusted; compromised keys must not). The
+operator MUST also: remove or republish (re-sign under the new key, new
+release) every artifact the compromised key signed; bump
+targets/snapshot/timestamp versions past anything the attacker may have
+signed; and SHOULD shorten timestamp expiry for the next publishes.
+
+### 7.4 Loss matrix
+
+| Lost                  | Recoverable? | Procedure |
+|-----------------------|--------------|-----------|
+| publish key (root ok) | Yes          | §7.2 publish-key rotation |
+| root key              | No           | New repo identity: re-run ceremony (§5.2) with new keys; clients hard-fail until each runs `conary repo reset-trust` + re-adds with the new fingerprint |
+| both                  | No           | Same as root loss |
+
+The spec deliberately provides no root-loss escape hatch that skips
+client-side reset-trust: an unverifiable "trust my new key" path is the
+attack this format exists to prevent.
