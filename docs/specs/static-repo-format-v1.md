@@ -36,3 +36,40 @@ MUST / MUST NOT / SHOULD / MAY per RFC 2119. "Operator" = the person or CI
 system that publishes the repo. "Client" = the conary package manager.
 "Canonical JSON" = OLPC canonical form (sorted keys, no whitespace), as
 implemented in `crates/conary-core/src/json.rs`.
+
+## 1. Repository Layout
+
+    <repo-root>/
+      conary-repo.toml                  # identity + trust fingerprints (§2)
+      index.json                        # package index (§3); TUF-protected target
+      keys/
+        package-keys.json               # package-signing pubkeys (§6.4); TUF target
+      metadata/
+        root.json                       # latest root, for bootstrap (copy of N.root.json)
+        1.root.json                     # every historical root version, immutable
+        2.root.json                     #   (present only after a rotation)
+        targets.json                    # unversioned filenames (consistent_snapshot=false)
+        snapshot.json
+        timestamp.json
+      packages/
+        <name>/
+          <name>-<version>-<release>-<arch>.ccs
+      chunks/                           # RESERVED (§11); absent in v1 repos
+
+Rules:
+
+- All paths are repo-root-relative; URL = `<repo-url>/<path>` with no
+  rewriting. A repo MUST be fully functional when served as plain files.
+- `packages/` artifacts and `{N}.root.json` files are **immutable once
+  published**: a publish MUST NOT overwrite an existing `.ccs` or historical
+  root. Same name-version-release-arch republished with different content
+  MUST be rejected by the publisher.
+- `index.json`, `keys/package-keys.json`, `metadata/targets.json`,
+  `metadata/snapshot.json`, `metadata/timestamp.json`, and
+  `metadata/root.json` are replaced atomically per publish (§5.3).
+- Clients MUST support `http://`, `https://`; and MUST support `file://`
+  URLs and bare local paths for every fetch in this spec (repo identity,
+  TUF metadata, index, packages). Implementation note (M1a): this requires
+  lifting HTTP-only checks in `repository/client.rs::validate_url_scheme`,
+  `recipe/kitchen/archive.rs::download_file`, and adding a filesystem
+  fallback to `trust/client.rs` metadata fetching.
