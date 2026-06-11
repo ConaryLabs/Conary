@@ -282,8 +282,9 @@ client error whose message MUST name the remedy (operator runs
 ## 5. Publish Algorithm (Producer Requirements)
 
 Any producer (`conary publish` M1a, Remi M2, third-party tooling) MUST
-behave as follows. The publisher is **stateless**: current versions are read
-from the destination, not from local state.
+behave as follows. The publisher is destination-derived with a local rollback
+watermark: current versions are read from the destination, while the local
+watermark only gates regressions and never derives the next version.
 
 ### 5.1 Read destination state
 
@@ -313,12 +314,12 @@ from the destination, not from local state.
    it, the publisher SHOULD use conditional writes (S3 `If-Match`/ETag;
    atomic rename for file/rsync destinations); regardless of backend, the
    publisher MUST re-fetch `metadata/timestamp.json` immediately before
-   uploading the new timestamp (§5.3.4 step d) and abort if its version
+   uploading the new timestamp (§5.3 step 4(d)) and abort if its version
    changed since §5.1.
 
 ### 5.2 Initial publish (ceremony)
 
-1. Ensure keys exist (§7.1); generate if absent.
+1. Ensure the root and publish keys exist; generate if absent.
 2. Build root v1 via `trust/ceremony.rs::create_initial_root(root_key,
    publish_key, publish_key, publish_key, 365 days)` — publish key fills
    targets/snapshot/timestamp roles. `consistent_snapshot = false`.
@@ -334,13 +335,17 @@ from the destination, not from local state.
    (Compute the index bytes first: `index_version = targets_next`, where
    `targets_next = current targets.version + 1`, or 1 on initial publish.)
 3. Generate metadata via `trust/generate.rs`:
-   `generate_targets(targets_next)` → `generate_snapshot(root_version,
-   targets, snapshot_next)` → `generate_timestamp(snapshot,
-   timestamp_next)`; each role's version = its destination version + 1.
-   **`root_version` is NOT a role-to-bump:** it is the version of the
-   currently published root (read in §5.1) — incremented only when this
-   publish itself performs a root rotation (§7.2). A snapshot pinning a
-   nonexistent root version hard-fails every client's consistency check.
+   `generate_targets(target_entries, publish_key, targets_next,
+   targets_expires_days)` → `generate_snapshot(root_version,
+   targets_metadata, publish_key, snapshot_next, snapshot_expires_days)` →
+   `generate_timestamp(snapshot_metadata, publish_key, timestamp_next,
+   timestamp_expires_hours)`; each bumped role's version = its destination
+   version + 1. **`root_version` is NOT a role-to-bump during ordinary
+   publishes:** it is the version of the currently published root (read in
+   §5.1), except when this publish also updates root metadata (root rotation
+   or root refresh), in which case snapshot pins the new root version. A
+   snapshot pinning a nonexistent root version hard-fails every client's
+   consistency check.
    Expiry-parameter footgun: `generate_timestamp` takes **`expires_hours`**
    (720 = the 30-day default) while `generate_targets`/`generate_snapshot`
    take `expires_days` — passing 30 meaning "days" yields a 30-hour
@@ -351,11 +356,13 @@ from the destination, not from local state.
    b. `index.json` and `metadata/targets.json`
    c. `metadata/snapshot.json`
    d. `metadata/timestamp.json`
-   On rotation only: new `metadata/{N}.root.json` and `metadata/root.json`
-   upload during step (a).
-   A client reading mid-publish sees old timestamp → old, complete state;
-   or new timestamp whose hash chain only references already-uploaded
-   files. Torn states fail hash verification — clients never act on them.
+   On root metadata update (rotation or root refresh): new
+   `metadata/{root_next}.root.json` and `metadata/root.json` upload during
+   step (a).
+   A client reading mid-publish either sees a complete hash chain whose
+   referenced files are already uploaded, or a fail-safe hash mismatch caused
+   by mixed old/new mutable files. Torn states fail verification — clients
+   never act on them.
    One exception: during a **root rotation**, a client that probes the new
    `{N+1}.root.json` (uploaded in step a) before the new snapshot lands
    will fail snapshot consistency (old snapshot pins root vN) — a brief
@@ -395,7 +402,7 @@ If targets is re-signed, `index_version` bumps with it and the index is
 re-uploaded — invariant 3 of §3 always holds. The re-uploaded index is
 byte-identical to the previous one except `index_version` and `generated`
 (package entries, hashes, and sizes MUST NOT be recomputed or reordered
-during a refresh). Upload ordering of §5.3.4 applies.
+during a refresh). Upload ordering of §5.3 step 4 applies.
 
 ### 5.6 Serving and caching guidance (non-normative)
 
@@ -409,10 +416,10 @@ and everything under `metadata/` except `{N}.root.json` — concretely
 `Cache-Control: public, max-age=31536000, immutable` for `packages/**` and
 `{N}.root.json`. Publish pipelines targeting a CDN SHOULD invalidate
 `metadata/*`, `index.json`, and `keys/*` as a post-upload step.
-S3-compatible backends do not guarantee read-after-**overwrite**
-consistency: each §5.3.4 step completes only when the uploaded object is
-confirmed visible (read-back or ETag check) before the next step begins,
-and the §5.1 destination reads SHOULD bypass caches (no-cache request
-headers or cache-busting query). CDN-served
-production repos are the primary motivation for the v2 consistent-snapshot
-upgrade (§11).
+Do not assume every S3-compatible backend, CDN path, or gateway guarantees
+overwrite visibility at the point the upload call returns: each §5.3 step 4
+upload step completes only when the uploaded object is confirmed visible
+(read-back or ETag check) before the next step begins, and the §5.1
+destination reads SHOULD bypass caches (no-cache request headers or
+cache-busting query). CDN-served production repos are the primary motivation
+for a future v2 consistent-snapshot upgrade.
