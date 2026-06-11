@@ -459,6 +459,7 @@ fn classify_repo(command: &cli::RepoCommands) -> CommandRiskPolicy {
         }
         cli::RepoCommands::Add { .. }
         | cli::RepoCommands::Remove { .. }
+        | cli::RepoCommands::ResetTrust { .. }
         | cli::RepoCommands::Enable { .. }
         | cli::RepoCommands::Disable { .. }
         | cli::RepoCommands::Sync { .. }

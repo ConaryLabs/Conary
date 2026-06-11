@@ -734,13 +734,77 @@ pub enum Commands {
 
 #[cfg(test)]
 mod tests {
-    use super::{CcsCommands, Cli, CliSandboxMode, Commands, GenerationCommands, SystemCommands};
+    use super::{
+        CcsCommands, Cli, CliSandboxMode, Commands, GenerationCommands, RepoCommands,
+        SystemCommands,
+    };
     use clap::{CommandFactory, Parser};
 
     #[test]
     fn cli_accepts_seccomp_warn_flag() {
         Cli::try_parse_from(["conary", "--seccomp-warn", "list"])
             .expect("--seccomp-warn should parse as a global CLI flag");
+    }
+
+    #[test]
+    fn repo_add_rejects_fingerprint_with_gpg_flags_at_parse_time() {
+        assert!(
+            Cli::try_parse_from([
+                "conary",
+                "repo",
+                "add",
+                "acme",
+                "file:///tmp/repo",
+                "--fingerprint",
+                "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+                "--no-gpg-check",
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn repo_reset_trust_parses() {
+        let cli = Cli::try_parse_from(["conary", "repo", "reset-trust", "acme"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Repo(RepoCommands::ResetTrust { .. }))
+        ));
+    }
+
+    #[test]
+    fn repo_add_replace_parses_for_static_repin() {
+        let cli = Cli::try_parse_from([
+            "conary",
+            "repo",
+            "add",
+            "acme",
+            "file:///tmp/repo",
+            "--fingerprint",
+            "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+            "--replace",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Repo(RepoCommands::Add { .. }))
+        ));
+    }
+
+    #[test]
+    fn repo_add_rejects_static_default_strategy_at_parse_time() {
+        assert!(
+            Cli::try_parse_from([
+                "conary",
+                "repo",
+                "add",
+                "native",
+                "https://example.invalid/repo",
+                "--default-strategy",
+                "static",
+            ])
+            .is_err()
+        );
     }
 
     #[test]
