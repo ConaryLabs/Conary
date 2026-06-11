@@ -44,6 +44,7 @@ pub mod registry;
 mod remove;
 mod replatform_rendering;
 mod repo;
+mod repo_static;
 mod restore;
 mod self_update;
 mod state;
@@ -153,6 +154,7 @@ pub use repo::{
     RepoAddOptions, cmd_key_import, cmd_key_list, cmd_key_remove, cmd_repo_add, cmd_repo_disable,
     cmd_repo_enable, cmd_repo_list, cmd_repo_remove, cmd_repo_sync, cmd_search,
 };
+pub use repo_static::cmd_repo_reset_trust;
 pub use restore::{cmd_restore, cmd_restore_all};
 pub use self_update::{SelfUpdateOptions, cmd_self_update};
 pub use state::{

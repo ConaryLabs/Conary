@@ -53,6 +53,18 @@ pub enum RepoCommands {
         #[arg(long)]
         gpg_strict: bool,
 
+        /// Static repository root key fingerprint; repeat for multi-key roots
+        #[arg(long = "fingerprint", value_name = "64-HEX", conflicts_with_all = ["gpg_key", "no_gpg_check", "gpg_strict"])]
+        fingerprints: Vec<String>,
+
+        /// Assume yes to interactive static repository trust prompts
+        #[arg(short = 'y', long)]
+        yes: bool,
+
+        /// Replace an existing static repository trust pin and repository row
+        #[arg(long)]
+        replace: bool,
+
         /// Default resolution strategy for packages from this repository
         ///
         /// When no per-package routing entry exists, use this strategy:
@@ -89,6 +101,16 @@ pub enum RepoCommands {
 
     /// Remove a repository
     Remove {
+        /// Repository name
+        name: String,
+
+        #[command(flatten)]
+        db: DbArgs,
+    },
+
+    /// Reset static repository trust and synced package visibility
+    #[command(name = "reset-trust")]
+    ResetTrust {
         /// Repository name
         name: String,
 

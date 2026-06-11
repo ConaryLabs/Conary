@@ -18,6 +18,9 @@ pub(super) async fn dispatch_repo_command(repo_cmd: cli::RepoCommands) -> Result
             gpg_key,
             no_gpg_check,
             gpg_strict,
+            fingerprints,
+            yes,
+            replace,
             default_strategy,
             remi_endpoint,
             remi_distro,
@@ -40,6 +43,9 @@ pub(super) async fn dispatch_repo_command(repo_cmd: cli::RepoCommands) -> Result
                 gpg_key,
                 no_gpg_check,
                 gpg_strict,
+                fingerprints,
+                yes,
+                replace,
                 default_strategy,
                 remi_endpoint,
                 remi_distro,
@@ -52,6 +58,10 @@ pub(super) async fn dispatch_repo_command(repo_cmd: cli::RepoCommands) -> Result
 
         cli::RepoCommands::Remove { name, db } => {
             commands::cmd_repo_remove(&name, &db.db_path).await
+        }
+
+        cli::RepoCommands::ResetTrust { name, db } => {
+            commands::cmd_repo_reset_trust(&name, &db.db_path).await
         }
 
         cli::RepoCommands::Enable { name, db } => {

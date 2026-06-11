@@ -21,6 +21,9 @@ pub struct RepoAddOptions {
     pub gpg_key: Option<String>,
     pub no_gpg_check: bool,
     pub gpg_strict: bool,
+    pub fingerprints: Vec<String>,
+    pub yes: bool,
+    pub replace: bool,
     pub default_strategy: Option<String>,
     pub remi_endpoint: Option<String>,
     pub remi_distro: Option<String>,
@@ -30,6 +33,18 @@ pub struct RepoAddOptions {
 /// Add a new repository
 pub async fn cmd_repo_add(opts: RepoAddOptions) -> Result<()> {
     info!("Adding repository: {} ({})", opts.name, opts.url);
+
+    if super::repo_static::try_cmd_repo_add_static(&opts).await? {
+        return Ok(());
+    }
+
+    if !opts.fingerprints.is_empty() {
+        anyhow::bail!("--fingerprint is only supported for static repositories");
+    }
+
+    if opts.replace {
+        anyhow::bail!("--replace is only supported for static repositories");
+    }
 
     // Validate remi strategy configuration
     if let Some(ref strategy) = opts.default_strategy
@@ -468,11 +483,13 @@ mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
         let db_path = temp_dir.path().join("conary.db");
         let db_path_string = db_path.to_string_lossy().to_string();
+        let repo_dir = temp_dir.path().join("repo");
+        std::fs::create_dir(&repo_dir).unwrap();
         conary_core::db::init(&db_path).unwrap();
 
         cmd_repo_add(RepoAddOptions {
             name: "security-supported".to_string(),
-            url: "https://example.test/repo".to_string(),
+            url: repo_dir.display().to_string(),
             db_path: db_path_string.clone(),
             content_url: None,
             priority: 50,
@@ -480,6 +497,9 @@ mod tests {
             gpg_key: None,
             no_gpg_check: true,
             gpg_strict: false,
+            fingerprints: Vec::new(),
+            yes: false,
+            replace: false,
             default_strategy: None,
             remi_endpoint: None,
             remi_distro: None,

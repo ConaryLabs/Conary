@@ -9,7 +9,7 @@
 //! - Snapshot consistency (mix-and-match protection)
 
 use crate::hash;
-use crate::trust::keys::canonical_json;
+use crate::trust::keys::{canonical_json, compute_key_id};
 use crate::trust::metadata::{MetaFile, Role, RootMetadata, Signed, SnapshotMetadata, TufKey};
 use crate::trust::{TrustError, TrustResult};
 use chrono::Utc;
@@ -32,6 +32,12 @@ pub fn verify_signatures<T: serde::Serialize>(
     keys: &BTreeMap<String, TufKey>,
     threshold: u64,
 ) -> TrustResult<()> {
+    if threshold == 0 {
+        return Err(TrustError::ConsistencyError(format!(
+            "{role} signature threshold must be at least 1"
+        )));
+    }
+
     let canonical = canonical_json(&signed.signed)?;
     let mut valid_count: u64 = 0;
     let mut seen_keyids = std::collections::HashSet::new();
@@ -227,18 +233,28 @@ pub fn extract_role_keys(
     root: &RootMetadata,
     role: Role,
 ) -> TrustResult<(BTreeMap<String, TufKey>, u64)> {
+    validate_root_key_ids(root)?;
+
     let role_name = role.to_string();
     let role_def = root.roles.get(&role_name).ok_or_else(|| {
         TrustError::ConsistencyError(format!(
             "Root metadata missing role definition: {role_name}"
         ))
     })?;
+    if role_def.threshold == 0 {
+        return Err(TrustError::ConsistencyError(format!(
+            "Role {role_name} threshold must be at least 1"
+        )));
+    }
 
     let mut role_keys = BTreeMap::new();
     for keyid in &role_def.keyids {
-        if let Some(key) = root.keys.get(keyid) {
-            role_keys.insert(keyid.clone(), key.clone());
-        }
+        let Some(key) = root.keys.get(keyid) else {
+            return Err(TrustError::ConsistencyError(format!(
+                "Role {role_name} references missing key ID {keyid}"
+            )));
+        };
+        role_keys.insert(keyid.clone(), key.clone());
     }
 
     if role_keys.is_empty() {
@@ -246,8 +262,27 @@ pub fn extract_role_keys(
             "No keys found for role {role_name}"
         )));
     }
+    if role_def.threshold > role_keys.len() as u64 {
+        return Err(TrustError::ConsistencyError(format!(
+            "Role {role_name} threshold {} exceeds available key count {}",
+            role_def.threshold,
+            role_keys.len()
+        )));
+    }
 
     Ok((role_keys, role_def.threshold))
+}
+
+fn validate_root_key_ids(root: &RootMetadata) -> TrustResult<()> {
+    for (key_id, key) in &root.keys {
+        let computed = compute_key_id(key)?;
+        if computed != *key_id {
+            return Err(TrustError::KeyError(format!(
+                "Root key ID {key_id} does not match canonical key ID {computed}"
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Verify a file's SHA-256 hash matches the expected value from a `MetaFile` reference
@@ -357,6 +392,20 @@ mod tests {
         let result = verify_signatures(&signed_root, Role::Root, &keys, 2);
         assert!(result.is_err());
         assert!(matches!(result, Err(TrustError::ThresholdNotMet { .. })));
+    }
+
+    #[test]
+    fn verify_signatures_rejects_zero_threshold() {
+        let keypair = SigningKeyPair::generate();
+        let expires = Utc::now() + Duration::days(365);
+        let signed_root = make_test_root(&keypair, 1, expires);
+
+        let (key_id, tuf_key) = signing_keypair_to_tuf_key(&keypair).unwrap();
+        let mut keys = BTreeMap::new();
+        keys.insert(key_id, tuf_key);
+
+        let result = verify_signatures(&signed_root, Role::Root, &keys, 0);
+        assert!(matches!(result, Err(TrustError::ConsistencyError(_))));
     }
 
     #[test]
@@ -539,6 +588,34 @@ mod tests {
         let (keys, threshold) = extract_role_keys(&signed_root.signed, Role::Targets).unwrap();
         assert_eq!(threshold, 1);
         assert_eq!(keys.len(), 1);
+    }
+
+    #[test]
+    fn extract_role_keys_rejects_mismatched_canonical_key_id() {
+        let victim_keypair = SigningKeyPair::generate();
+        let attacker_keypair = SigningKeyPair::generate();
+        let expires = Utc::now() + Duration::days(365);
+        let mut signed_root = make_test_root(&victim_keypair, 1, expires);
+        let victim_key_id = signed_root.signed.roles["root"].keyids[0].clone();
+        let (_, attacker_tuf_key) = signing_keypair_to_tuf_key(&attacker_keypair).unwrap();
+        signed_root
+            .signed
+            .keys
+            .insert(victim_key_id, attacker_tuf_key);
+
+        let result = extract_role_keys(&signed_root.signed, Role::Root);
+        assert!(matches!(result, Err(TrustError::KeyError(_))));
+    }
+
+    #[test]
+    fn extract_role_keys_rejects_zero_threshold() {
+        let keypair = SigningKeyPair::generate();
+        let expires = Utc::now() + Duration::days(365);
+        let mut signed_root = make_test_root(&keypair, 1, expires);
+        signed_root.signed.roles.get_mut("root").unwrap().threshold = 0;
+
+        let result = extract_role_keys(&signed_root.signed, Role::Root);
+        assert!(matches!(result, Err(TrustError::ConsistencyError(_))));
     }
 
     #[test]
