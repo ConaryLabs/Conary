@@ -1,47 +1,51 @@
 // conary-core/src/repository/sync/types.rs
 
 use crate::db::models::{
-    RepositoryPackage, RepositoryProvide, RepositoryRequirement,
+    RepositoryPackage, RepositoryPackageKey, RepositoryProvide, RepositoryRequirement,
     RepositoryRequirementGroup as DbRequirementGroup,
 };
 use std::collections::HashMap;
 
 /// A single synced package row with all its normalized capability data.
 #[derive(Debug, Clone)]
-pub(super) struct SyncedPackageRow {
-    pub(super) package: RepositoryPackage,
-    pub(super) provides: Vec<RepositoryProvide>,
-    pub(super) requirements: Vec<RepositoryRequirement>,
-    pub(super) requirement_groups: Vec<DbRequirementGroup>,
-    pub(super) requirement_group_clauses: Vec<Vec<RepositoryRequirement>>,
+pub(in crate::repository) struct SyncedPackageRow {
+    pub(in crate::repository) package: RepositoryPackage,
+    pub(in crate::repository) provides: Vec<RepositoryProvide>,
+    pub(in crate::repository) requirements: Vec<RepositoryRequirement>,
+    pub(in crate::repository) requirement_groups: Vec<DbRequirementGroup>,
+    pub(in crate::repository) requirement_group_clauses: Vec<Vec<RepositoryRequirement>>,
 }
 
 /// Owned package metadata ready to persist for a repository sync.
 #[derive(Debug, Clone)]
-pub(super) enum RepositorySyncSnapshot {
+pub(in crate::repository) enum RepositorySyncSnapshot {
     NativeRows(Vec<SyncedPackageRow>),
+    StaticRows {
+        packages: Vec<SyncedPackageRow>,
+        package_keys: Vec<RepositoryPackageKey>,
+    },
     JsonFallback(JsonRepositorySyncSnapshot),
 }
 
 /// Owned JSON fallback metadata ready to persist.
 #[derive(Debug, Clone)]
-pub(super) struct JsonRepositorySyncSnapshot {
-    pub(super) packages: Vec<RepositoryPackage>,
-    pub(super) deltas: Vec<JsonPackageDelta>,
+pub(in crate::repository) struct JsonRepositorySyncSnapshot {
+    pub(in crate::repository) packages: Vec<RepositoryPackage>,
+    pub(in crate::repository) deltas: Vec<JsonPackageDelta>,
 }
 
 /// Owned package delta data from JSON repository metadata.
 #[derive(Debug, Clone)]
-pub(super) struct JsonPackageDelta {
-    pub(super) package_name: String,
-    pub(super) from_version: String,
-    pub(super) to_version: String,
-    pub(super) from_hash: String,
-    pub(super) to_hash: String,
-    pub(super) delta_url: String,
-    pub(super) delta_size: i64,
-    pub(super) delta_checksum: String,
-    pub(super) target_size: i64,
+pub(in crate::repository) struct JsonPackageDelta {
+    pub(in crate::repository) package_name: String,
+    pub(in crate::repository) from_version: String,
+    pub(in crate::repository) to_version: String,
+    pub(in crate::repository) from_hash: String,
+    pub(in crate::repository) to_hash: String,
+    pub(in crate::repository) delta_url: String,
+    pub(in crate::repository) delta_size: i64,
+    pub(in crate::repository) delta_checksum: String,
+    pub(in crate::repository) target_size: i64,
 }
 
 /// Response from Remi metadata API (`GET /v1/{distro}/metadata`).
