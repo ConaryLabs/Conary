@@ -1093,6 +1093,29 @@ pub fn migrate_v71(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Version 72: Repository package signing keys
+pub fn migrate_v72(conn: &Connection) -> Result<()> {
+    debug!("Migrating to schema version 72");
+
+    conn.execute_batch(
+        "
+        CREATE TABLE repository_package_keys (
+            repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+            public_key TEXT NOT NULL,
+            key_id TEXT,
+            status TEXT NOT NULL CHECK (status IN ('active', 'retired')),
+            synced_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+            PRIMARY KEY (repository_id, public_key)
+        );
+        CREATE INDEX idx_repository_package_keys_repo
+            ON repository_package_keys(repository_id);
+        ",
+    )?;
+
+    info!("Schema version 72 applied successfully (repository package signing keys)");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
