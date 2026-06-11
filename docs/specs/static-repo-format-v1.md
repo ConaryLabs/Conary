@@ -59,14 +59,17 @@ implemented in `crates/conary-core/src/json.rs`.
 Rules:
 
 - All paths are repo-root-relative; URL = `<repo-url>/<path>` with no
-  rewriting. A repo MUST be fully functional when served as plain files.
+  rewriting. Clients normalize URL repo bases by stripping trailing `/`
+  before appending paths; bare local paths use filesystem joins. A repo MUST
+  be fully functional when served as plain files.
 - `packages/` artifacts and `{N}.root.json` files are **immutable once
   published**: a publish MUST NOT overwrite an existing `.ccs` or historical
   root. Same name-version-release-arch republished with different content
   MUST be rejected by the publisher.
 - `index.json`, `keys/package-keys.json`, `metadata/targets.json`,
-  `metadata/snapshot.json`, `metadata/timestamp.json`, and
-  `metadata/root.json` are replaced atomically per publish (§5.3).
+  `metadata/snapshot.json`, and `metadata/timestamp.json` are mutable and
+  replaced atomically when their role/file changes (§5.3). `metadata/root.json`
+  is replaced only on initial publish or root metadata update.
 - Clients MUST support `http://`, `https://`; and MUST support `file://`
   URLs and bare local paths for every fetch in this spec (repo identity,
   TUF metadata, index, packages). Implementation note (M1a): this requires
@@ -142,7 +145,9 @@ index.
 
 Field rules:
 
-- `schema` (u64): MUST be `1`; reject unknown majors.
+- `schema` (u64): MUST be `1`; reject unknown majors. On the wire this is a
+  JSON number; implementations deserialize it to `u64` and reject
+  non-integer or out-of-range values.
 - `name`: display identity matching `conary-repo.toml` `repo.name`; clients
   MAY display it but MUST NOT trust it until `index.json` is TUF-verified.
 - `index_version` (u64): MUST equal the `version` of the targets metadata
@@ -253,7 +258,9 @@ Already-bootstrapped clients discover rotations by probing
 
 Field rules:
 
-- `schema` (u64): MUST be `1`; reject unknown majors.
+- `schema` (u64): MUST be `1`; reject unknown majors. On the wire this is a
+  JSON number; implementations deserialize it to `u64` and reject
+  non-integer or out-of-range values.
 - `keys`: array of package-signing public-key entries; empty is invalid for
   a repo that publishes installable packages.
 - `algorithm`: MUST be `"ed25519"`.
@@ -315,7 +322,11 @@ watermark only gates regressions and never derives the next version.
 3. Verify fetched metadata with the operator's own public keys (the
    operator trusts their own repo; this check catches destination
    tampering/corruption before building on top of it). Verification
-   failure → hard error, never silently re-sign.
+   failure → hard error, never silently re-sign. The one explicit override is
+   `--force-reinit` for a destination that still contains old metadata but is
+   intentionally becoming a new repo identity after root-key loss (§7.4);
+   this MUST print that clients will hard-fail until they run reset-trust and
+   re-pin the new repo fingerprint, then re-run §5.2.
 4. Compare destination versions against the local version watermark
    (`~/.config/conary/keys/<repo-name>/last-published.toml`, or the
    `--state-file <path>` override for CI). Destination versions **lower**
@@ -375,13 +386,13 @@ watermark only gates regressions and never derives the next version.
    b. `index.json` and `metadata/targets.json`
    c. `metadata/snapshot.json`
    d. `metadata/timestamp.json`
-   On root metadata update (rotation or root refresh): new
+   On initial publish or root metadata update (rotation or root refresh): new
    `metadata/{root_next}.root.json` and `metadata/root.json` upload during
-   step (a). On root-key rotation, the updated `conary-repo.toml` also
-   uploads during step (a); until both `root.json` and `conary-repo.toml`
-   agree and are visible, `repo add` can hit the §6.1 root-key-set mismatch
-   and MUST report it as a retryable "repository is being updated" state
-   rather than silently accepting either identity.
+   step (a). On initial publish and root-key rotation, the updated
+   `conary-repo.toml` also uploads during step (a); until both `root.json` and
+   `conary-repo.toml` agree and are visible, `repo add` can hit the §6.1
+   root-key-set mismatch and MUST report it as a retryable "repository is
+   being updated" state rather than silently accepting either identity.
    A client reading mid-publish either sees a complete hash chain whose
    referenced files are already uploaded, or a fail-safe hash mismatch caused
    by mixed old/new mutable files. Torn states fail verification — clients
@@ -499,7 +510,15 @@ for a future v2 consistent-snapshot upgrade.
    when the snapshot lacks `meta` entries for `root.json` or
    `targets.json` (the current `verify_snapshot_consistency` checks the
    root pin only **if the entry exists** — presence itself must become a
-   static-repo requirement, or the §4.1 invariant is unenforced).
+   static-repo requirement, or the §4.1 invariant is unenforced). M1a
+   strengthening: the timestamp role MUST also support no-change syncs:
+   after signature and expiry verification, an offered timestamp version
+   equal to the stored timestamp version is successful only when the offered
+   signed metadata bytes (or their persisted `tuf_metadata.metadata_hash`)
+   match the stored timestamp metadata; then the client returns the stored
+   verified snapshot/targets state without treating equality as rollback.
+   Equal version with different bytes is a hard same-version metadata
+   mismatch; only a strictly lower timestamp version is rollback.
 2. Fetch `<url>/index.json`; verify length and sha256 against the
    verified targets entry for path `index.json` **before parsing**.
 3. Parse; verify `schema == 1` and `index_version == targets.version`.
@@ -525,6 +544,11 @@ for a future v2 consistent-snapshot upgrade.
   expired and that the operator must run `conary publish --refresh`.
 - Version decrease (any TUF role): hard error naming the stored vs.
   offered versions (rollback protection; existing client behavior).
+  Timestamp equality is not a decrease: if the offered timestamp version
+  equals the stored version and the signed metadata bytes/hash match the
+  stored timestamp metadata, the sync is a successful no-change operation.
+  Equal timestamp version with different bytes is a hard same-version
+  metadata mismatch.
   `index_version` needs no separate history tracking — it MUST equal the
   verified `targets.version` (§3), so its rollback protection is inherited
   from the TUF layer.
@@ -609,7 +633,7 @@ signed; and SHOULD shorten timestamp expiry for the next publishes.
 | Lost                  | Recoverable? | Procedure |
 |-----------------------|--------------|-----------|
 | publish key (root ok) | Yes          | §7.2 publish-key rotation |
-| root key              | No           | New repo identity: re-run ceremony (§5.2) with new keys; clients hard-fail until each runs `conary repo reset-trust` plus one of the explicit §6.5 re-pin paths with the new repo fingerprint |
+| root key              | No           | New repo identity: re-run ceremony (§5.2, via `--force-reinit` if old destination metadata remains) with new keys; clients hard-fail until each runs `conary repo reset-trust` plus one of the explicit §6.5 re-pin paths with the new repo fingerprint |
 | both                  | No           | Same as root loss |
 
 The spec deliberately provides no root-loss escape hatch that skips
@@ -636,7 +660,7 @@ scope here.
 | MITM at first contact | `--fingerprint` (out-of-band root key IDs); interactive-only TOFU otherwise |
 | Tampered index / package list | index.json and keys file are TUF targets; verify-before-parse |
 | Tampered package | targets sha256+length; CCS Ed25519 signature |
-| Rollback (downgrade metadata) | TUF role version monotonicity; `index_version == targets.version` binds the index to it |
+| Rollback (downgrade metadata) | TUF role version monotonicity; equal timestamp version is accepted only when the signed metadata bytes/hash match the stored timestamp; `index_version == targets.version` binds the index to it |
 | Freeze (replay stale repo) | metadata expirations (§4.5) |
 | Mix-and-match | snapshot pins targets hash; timestamp pins snapshot hash; snapshot-consistency check |
 | Torn publish | reverse-order upload (§5.3 step 4): partial states fail hash verification or root/snapshot consistency checks, fail-safe/retryable |

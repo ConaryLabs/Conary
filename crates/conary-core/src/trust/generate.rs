@@ -1,9 +1,9 @@
 // conary-core/src/trust/generate.rs
 
-//! Server-side TUF metadata generation
+//! TUF metadata generation
 //!
-//! Generates signed TUF metadata for repositories managed by the Remi server.
-//! Feature-gated behind `server` to avoid pulling in unnecessary code on clients.
+//! Generates signed TUF metadata for static publish flows and Remi-backed
+//! repositories.
 
 use crate::ccs::signing::SigningKeyPair;
 use crate::hash;
