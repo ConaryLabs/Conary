@@ -335,6 +335,23 @@ pub(super) async fn dispatch_command(
             .await
         }
 
+        Some(Commands::New {
+            name,
+            from,
+            output,
+            force,
+            explain,
+        }) => {
+            commands::cmd_new(
+                name.as_deref(),
+                from.as_deref(),
+                output.as_deref(),
+                force,
+                explain,
+            )
+            .await
+        }
+
         Some(Commands::Publish {
             what,
             target,

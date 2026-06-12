@@ -503,6 +503,28 @@ pub enum Commands {
         hermetic: bool,
     },
 
+    #[command(hide = true)] // removed in Task 14 after gates pass
+    New {
+        /// Package project name for scaffold mode
+        name: Option<String>,
+
+        /// Infer a recipe from an existing source tree
+        #[arg(long = "from")]
+        from: Option<String>,
+
+        /// Output directory for scaffold mode, or recipe path for --from mode
+        #[arg(short, long)]
+        output: Option<String>,
+
+        /// Overwrite an existing recipe.toml
+        #[arg(long)]
+        force: bool,
+
+        /// Print inference decisions
+        #[arg(long)]
+        explain: bool,
+    },
+
     /// Publish a recipe project to an M1a static repository
     Publish {
         /// Project-form destination, or artifact path for future M2 artifact-form publish
@@ -802,6 +824,18 @@ mod tests {
     fn cook_accepts_hidden_m1a_compatibility_flags() {
         assert!(Cli::try_parse_from(["conary", "cook", "--hermetic", "recipe.toml"]).is_ok());
         assert!(Cli::try_parse_from(["conary", "cook", "--no-isolation", "recipe.toml"]).is_ok());
+    }
+
+    #[test]
+    fn new_from_current_dir_parses_with_explain() {
+        let cli = Cli::try_parse_from(["conary", "new", "--from", ".", "--explain"]).unwrap();
+        match cli.command {
+            Some(Commands::New { from, explain, .. }) => {
+                assert_eq!(from.as_deref(), Some("."));
+                assert!(explain);
+            }
+            _ => panic!("unexpected command"),
+        }
     }
 
     #[test]

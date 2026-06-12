@@ -30,6 +30,7 @@ mod legacy_replay_policy;
 #[allow(dead_code)]
 mod live_root;
 mod model;
+mod new;
 mod operation_records;
 mod package_parsing;
 #[allow(dead_code)]
@@ -130,6 +131,7 @@ pub use model::{
     ApplyOptions, cmd_model_apply, cmd_model_check, cmd_model_diff, cmd_model_lock,
     cmd_model_publish, cmd_model_remote_diff, cmd_model_snapshot, cmd_model_update,
 };
+pub use new::cmd_new;
 #[allow(unused_imports)]
 pub(crate) use package_target::{
     InstalledPackageSelector, ResolvedInstalledPackage, format_installed_variant,
