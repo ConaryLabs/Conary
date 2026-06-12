@@ -40,8 +40,13 @@ fn bootstrap_gcc_recipes_stage_companion_libraries_via_additional_sources() {
         let recipe = parse_recipe_file(&path)
             .unwrap_or_else(|err| panic!("failed to parse {}: {err}", path.display()));
 
-        let urls: Vec<&str> = recipe
-            .source
+        let source = recipe.remote_source().unwrap_or_else(|| {
+            panic!(
+                "{} must use an archive source with GCC companion sources",
+                path.display()
+            )
+        });
+        let urls: Vec<&str> = source
             .additional
             .iter()
             .map(|source| source.url.as_str())
