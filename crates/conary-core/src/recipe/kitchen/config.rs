@@ -187,8 +187,8 @@ pub struct KitchenConfig {
     /// Directory containing the recipe file.
     ///
     /// Local `[source] path = ...` entries resolve relative to this directory.
-    /// Callers that construct recipes in memory can leave this unset to resolve
-    /// relative to the current working directory.
+    /// Local source recipes require this to be set to the recipe file directory.
+    /// Remote archive recipes are unaffected when this is unset.
     pub recipe_source_base_dir: Option<PathBuf>,
     /// Timeout for build operations
     pub timeout: Duration,
