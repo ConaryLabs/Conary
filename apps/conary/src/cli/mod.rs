@@ -508,7 +508,7 @@ pub enum Commands {
         /// Package project name for scaffold mode
         name: Option<String>,
 
-        /// Infer a recipe from an existing source tree
+        /// Infer a recipe from an existing source tree, archive, or git URL
         #[arg(long = "from")]
         from: Option<String>,
 
