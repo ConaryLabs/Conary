@@ -307,6 +307,7 @@ pub(super) async fn dispatch_command(
         }
 
         Some(Commands::Cook {
+            target,
             recipe,
             output,
             source_cache,
@@ -314,17 +315,20 @@ pub(super) async fn dispatch_command(
             keep_builddir,
             validate_only,
             fetch_only,
+            isolated,
             no_isolation,
             hermetic,
         }) => {
             commands::cmd_cook(
-                &recipe,
+                target.as_deref(),
+                recipe.as_deref(),
                 &output,
                 &source_cache,
                 jobs,
                 keep_builddir,
                 validate_only,
                 fetch_only,
+                isolated,
                 no_isolation,
                 hermetic,
             )

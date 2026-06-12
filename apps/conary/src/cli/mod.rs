@@ -453,16 +453,16 @@ pub enum Commands {
     },
 
     /// Cook a package from a recipe (build from source)
-    ///
-    /// Recipes are TOML files that describe how to build a package from source.
-    /// By default, the cooking process runs in an isolated container for security
-    /// and reproducibility. Network access is blocked during the build phase.
     Cook {
-        /// Path to recipe file (.recipe or .toml)
-        recipe: String,
+        /// Recipe file or directory containing recipe.toml
+        target: Option<String>,
+
+        /// Recipe file to cook
+        #[arg(long)]
+        recipe: Option<String>,
 
         /// Output directory for the built package
-        #[arg(short, long, default_value = ".")]
+        #[arg(short, long, default_value = "./dist")]
         output: String,
 
         /// Source cache directory
@@ -488,18 +488,18 @@ pub enum Commands {
         #[arg(long)]
         fetch_only: bool,
 
-        /// Disable container isolation (unsafe - allows network access during build)
-        ///
-        /// WARNING: This flag disables security protections and may produce
-        /// non-reproducible builds. Only use for debugging or in trusted environments.
+        /// Build inside the M1a sandboxed isolation path
         #[arg(long)]
+        isolated: bool,
+
+        /// Compatibility alias for the M1a host-build default
+        #[arg(long)]
+        #[arg(hide = true)]
         no_isolation: bool,
 
-        /// Enable hermetic mode (maximum isolation, no host mounts)
-        ///
-        /// Provides BuildStream-grade reproducibility guarantees by isolating
-        /// the build from host system libraries and toolchains.
+        /// Compatibility flag reserved for M2 hermetic cook/publish
         #[arg(long)]
+        #[arg(hide = true)]
         hermetic: bool,
     },
 
@@ -744,6 +744,19 @@ mod tests {
     fn cli_accepts_seccomp_warn_flag() {
         Cli::try_parse_from(["conary", "--seccomp-warn", "list"])
             .expect("--seccomp-warn should parse as a global CLI flag");
+    }
+
+    #[test]
+    fn cook_accepts_optional_target_and_recipe_flag() {
+        assert!(Cli::try_parse_from(["conary", "cook"]).is_ok());
+        assert!(Cli::try_parse_from(["conary", "cook", "--recipe", "recipe.toml"]).is_ok());
+        assert!(Cli::try_parse_from(["conary", "cook", "recipe.toml", "--isolated"]).is_ok());
+    }
+
+    #[test]
+    fn cook_accepts_hidden_m1a_compatibility_flags() {
+        assert!(Cli::try_parse_from(["conary", "cook", "--hermetic", "recipe.toml"]).is_ok());
+        assert!(Cli::try_parse_from(["conary", "cook", "--no-isolation", "recipe.toml"]).is_ok());
     }
 
     #[test]

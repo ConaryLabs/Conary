@@ -899,6 +899,14 @@ pub struct ManifestProvenance {
     #[serde(default)]
     pub build_deps: Vec<ProvenanceDep>,
 
+    /// M1a source/build origin class, such as native-built.
+    #[serde(default)]
+    pub origin_class: Option<String>,
+
+    /// M1a build hardening level, such as host or sandboxed.
+    #[serde(default)]
+    pub hardening_level: Option<String>,
+
     // === Signature Layer ===
     /// Signatures on this package
     #[serde(default)]
@@ -1084,6 +1092,18 @@ files = ["/etc/myapp/config.toml"]
         let toml = manifest.to_toml().unwrap();
         assert!(toml.contains("name = \"test\""));
         assert!(toml.contains("version = \"0.1.0\""));
+    }
+
+    #[test]
+    fn manifest_provenance_serializes_m1a_origin_and_hardening() {
+        let provenance = ManifestProvenance {
+            origin_class: Some("native-built".to_string()),
+            hardening_level: Some("sandboxed".to_string()),
+            ..Default::default()
+        };
+        let toml = toml::to_string(&provenance).unwrap();
+        assert!(toml.contains("origin_class"));
+        assert!(toml.contains("hardening_level"));
     }
 
     #[test]
