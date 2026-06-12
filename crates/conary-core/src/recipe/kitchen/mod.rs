@@ -347,19 +347,29 @@ impl Kitchen {
     /// Returns `true` if all source archives and patches are available locally,
     /// meaning the build can proceed without network access.
     pub fn sources_cached(&self, recipe: &Recipe) -> bool {
-        if let SourceSection::Remote(source) = &recipe.source {
-            // Check main archive
-            let key = source_cache_key(&source.checksum);
-            let cached_path = self.config.source_cache.join(&key);
-            if !cached_path.exists() {
-                return false;
-            }
-
-            // Check additional sources
-            for additional in &source.additional {
-                let key = source_cache_key(&additional.checksum);
+        match &recipe.source {
+            SourceSection::Remote(source) => {
+                // Check main archive
+                let key = source_cache_key(&source.checksum);
                 let cached_path = self.config.source_cache.join(&key);
                 if !cached_path.exists() {
+                    return false;
+                }
+
+                // Check additional sources
+                for additional in &source.additional {
+                    let key = source_cache_key(&additional.checksum);
+                    let cached_path = self.config.source_cache.join(&key);
+                    if !cached_path.exists() {
+                        return false;
+                    }
+                }
+            }
+            SourceSection::Local(source) => {
+                let Ok(source_path) = self.resolve_local_source(source) else {
+                    return false;
+                };
+                if !source_path.is_dir() {
                     return false;
                 }
             }
@@ -404,7 +414,7 @@ impl Kitchen {
         cache: &BuildCache,
         toolchain: &ToolchainInfo,
     ) -> Result<CookResult> {
-        let cache_key = cache.cache_key(recipe, toolchain);
+        let cache_key = cache.try_cache_key(recipe, toolchain)?;
 
         // Check cache first
         if let Some(entry) = cache.get_by_key(&cache_key)? {
@@ -591,6 +601,7 @@ impl Kitchen {
 mod tests {
     use super::*;
     use crate::hash;
+    use crate::recipe::CacheConfig;
     use crate::recipe::format::{
         BuildSection, LocalSourceSection, PackageSection, RemoteSourceSection, SourceSection,
     };
@@ -742,6 +753,76 @@ mod tests {
         assert!(
             error.to_string().contains("recipe source base dir"),
             "expected missing base dir error, got: {error}"
+        );
+    }
+
+    #[test]
+    fn test_sources_cached_returns_false_when_local_source_has_no_base_dir() {
+        let kitchen = Kitchen::new(KitchenConfig::default());
+        let mut recipe = make_test_recipe(&[]);
+        recipe.source = SourceSection::Local(LocalSourceSection {
+            path: PathBuf::from("./src"),
+        });
+
+        assert!(
+            !kitchen.sources_cached(&recipe),
+            "local sources without a recipe base dir should not be reported as cached"
+        );
+    }
+
+    #[test]
+    fn test_sources_cached_returns_false_when_local_source_is_not_directory() {
+        let dir = tempdir().unwrap();
+        let recipe_dir = dir.path().join("recipe");
+        fs::create_dir_all(&recipe_dir).unwrap();
+        fs::write(recipe_dir.join("src"), b"not a directory").unwrap();
+        let kitchen = Kitchen::new(KitchenConfig {
+            recipe_source_base_dir: Some(recipe_dir),
+            ..KitchenConfig::default()
+        });
+        let mut recipe = make_test_recipe(&[]);
+        recipe.source = SourceSection::Local(LocalSourceSection {
+            path: PathBuf::from("./src"),
+        });
+
+        assert!(
+            !kitchen.sources_cached(&recipe),
+            "local source files should not be reported as cached source directories"
+        );
+    }
+
+    #[test]
+    fn test_cook_cached_rejects_local_source_recipe() {
+        let dir = tempdir().unwrap();
+        let recipe_dir = dir.path().join("recipe");
+        let workspace = recipe_dir.join("src");
+        let output_dir = dir.path().join("out");
+        fs::create_dir_all(&workspace).unwrap();
+        fs::create_dir_all(&output_dir).unwrap();
+        let kitchen = Kitchen::new(KitchenConfig {
+            recipe_source_base_dir: Some(recipe_dir),
+            use_isolation: false,
+            ..KitchenConfig::default()
+        });
+        let cache = BuildCache::new(CacheConfig {
+            cache_dir: dir.path().join("cache"),
+            ..Default::default()
+        })
+        .unwrap();
+        let mut recipe = make_test_recipe(&[]);
+        recipe.source = SourceSection::Local(LocalSourceSection {
+            path: PathBuf::from("./src"),
+        });
+
+        let error = kitchen
+            .cook_cached(&recipe, &output_dir, &cache, &ToolchainInfo::default())
+            .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("local source recipes are not supported by cached cooking in M1a"),
+            "expected cached-cook local source rejection, got: {error}"
         );
     }
 }

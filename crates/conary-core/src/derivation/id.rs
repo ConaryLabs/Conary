@@ -12,6 +12,8 @@ use std::fmt;
 
 use crate::hash;
 
+use super::recipe_hash::RecipeHashError;
+
 /// Errors that can occur when validating derivation inputs.
 #[derive(Debug, thiserror::Error)]
 pub enum DerivationError {
@@ -23,6 +25,10 @@ pub enum DerivationError {
         /// The offending value.
         value: String,
     },
+
+    /// Recipe source hashing cannot produce a safe derivation input.
+    #[error(transparent)]
+    RecipeHash(#[from] RecipeHashError),
 }
 
 /// Version prefix for the canonical derivation format.

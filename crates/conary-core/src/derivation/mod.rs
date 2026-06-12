@@ -46,7 +46,9 @@ pub use pipeline::{Pipeline, PipelineConfig, PipelineError, PipelineEvent};
 pub use profile::{
     BuildProfile, ProfileDerivation, ProfileDiff, ProfileMetadata, ProfileSeedRef, ProfileStage,
 };
-pub use recipe_hash::{build_script_hash, expand_variables, source_hash};
+pub use recipe_hash::{
+    RecipeHashError, build_script_hash, expand_variables, source_hash, try_source_hash,
+};
 pub use recipe_loader::{RecipeLoaderError, find_recipe_path, load_recipes};
 pub use seed::{Seed, SeedError, SeedMetadata, SeedSource, SeedValidation};
 pub use seed_diff::{SeedDiffReport, diff_seed_dirs};

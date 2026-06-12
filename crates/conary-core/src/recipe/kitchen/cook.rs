@@ -95,7 +95,7 @@ fn translate_command_for_chroot(command: &str, sysroot: &Path) -> String {
     command.replace(prefix, "")
 }
 
-fn copy_dir_contents(source: &Path, dest: &Path) -> Result<()> {
+fn copy_dir_contents(source_root: &Path, source: &Path, dest: &Path) -> Result<()> {
     fs::create_dir_all(dest)?;
 
     for entry in fs::read_dir(source)? {
@@ -105,18 +105,31 @@ fn copy_dir_contents(source: &Path, dest: &Path) -> Result<()> {
         let file_type = entry.file_type()?;
 
         if file_type.is_dir() {
-            copy_dir_contents(&source_path, &dest_path)?;
+            copy_dir_contents(source_root, &source_path, &dest_path)?;
         } else if file_type.is_file() {
             fs::copy(&source_path, &dest_path)?;
         } else if file_type.is_symlink() {
             let target = fs::read_link(&source_path)?;
+            let resolved = source_path.canonicalize().map_err(|e| {
+                Error::ConfigError(format!(
+                    "Local source symlink target not found: {} -> {} ({e})",
+                    source_path.display(),
+                    target.display()
+                ))
+            })?;
+            if !resolved.starts_with(source_root) {
+                return Err(Error::ConfigError(format!(
+                    "Local source symlink must stay within the source directory: {} -> {}",
+                    source_path.display(),
+                    target.display()
+                )));
+            }
             #[cfg(unix)]
             std::os::unix::fs::symlink(target, &dest_path)?;
             #[cfg(not(unix))]
             {
-                let resolved = source_path.canonicalize()?;
                 if resolved.is_dir() {
-                    copy_dir_contents(&resolved, &dest_path)?;
+                    copy_dir_contents(source_root, &resolved, &dest_path)?;
                 } else {
                     fs::copy(&resolved, &dest_path)?;
                 }
@@ -252,6 +265,10 @@ impl<'a> Cook<'a> {
                     )));
                 }
 
+                self.provenance.upstream_url =
+                    Some(format!("local:{}", source.path.to_string_lossy()));
+                self.provenance.upstream_hash = None;
+
                 if !self.kitchen.config.use_isolation {
                     self.source_dir = resolved;
                     self.log_line(&format!(
@@ -261,7 +278,7 @@ impl<'a> Cook<'a> {
                     return Ok(());
                 }
 
-                copy_dir_contents(&resolved, &self.source_dir)?;
+                copy_dir_contents(&resolved, &resolved, &self.source_dir)?;
                 self.log_line(&format!("Prepared local source: {}", resolved.display()));
                 return Ok(());
             }
@@ -1059,6 +1076,100 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(cook.source_dir.join("nested/marker.txt")).unwrap(),
             "isolated copy"
+        );
+    }
+
+    #[test]
+    fn test_prep_local_path_source_records_local_provenance_marker() {
+        let dir = tempfile::tempdir().unwrap();
+        let recipe_dir = dir.path().join("recipe");
+        let workspace = recipe_dir.join("src");
+        std::fs::create_dir_all(&workspace).unwrap();
+
+        let kitchen = Kitchen::new(KitchenConfig {
+            recipe_source_base_dir: Some(recipe_dir),
+            use_isolation: false,
+            ..KitchenConfig::default()
+        });
+        let mut recipe = minimal_recipe();
+        recipe.source = SourceSection::Local(LocalSourceSection {
+            path: PathBuf::from("./src"),
+        });
+
+        let mut cook = Cook::new(&kitchen, &recipe).unwrap();
+        cook.prep().unwrap();
+
+        assert_eq!(cook.provenance.upstream_url.as_deref(), Some("local:./src"));
+        assert!(
+            cook.provenance.upstream_hash.is_none(),
+            "local source provenance should leave upstream_hash unset until tree hashing exists"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_prep_isolated_local_path_source_rejects_nested_relative_symlink_escape() {
+        let dir = tempfile::tempdir().unwrap();
+        let recipe_dir = dir.path().join("recipe");
+        let workspace = recipe_dir.join("src");
+        let outside = recipe_dir.join("outside");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("marker.txt"), "escaped").unwrap();
+        std::os::unix::fs::symlink("../outside/marker.txt", workspace.join("escape.txt")).unwrap();
+
+        let kitchen = Kitchen::new(KitchenConfig {
+            recipe_source_base_dir: Some(recipe_dir),
+            use_isolation: true,
+            ..KitchenConfig::default()
+        });
+        let mut recipe = minimal_recipe();
+        recipe.source = SourceSection::Local(LocalSourceSection {
+            path: PathBuf::from("./src"),
+        });
+
+        let mut cook = Cook::new(&kitchen, &recipe).unwrap();
+        let error = cook.prep().unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("Local source symlink must stay within the source directory"),
+            "expected nested symlink escape rejection, got: {error}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_prep_isolated_local_path_source_rejects_absolute_symlink_escape() {
+        let dir = tempfile::tempdir().unwrap();
+        let recipe_dir = dir.path().join("recipe");
+        let workspace = recipe_dir.join("src");
+        let outside = dir.path().join("outside");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let escaped = outside.join("marker.txt");
+        std::fs::write(&escaped, "escaped").unwrap();
+        std::os::unix::fs::symlink(&escaped, workspace.join("escape.txt")).unwrap();
+
+        let kitchen = Kitchen::new(KitchenConfig {
+            recipe_source_base_dir: Some(recipe_dir),
+            use_isolation: true,
+            ..KitchenConfig::default()
+        });
+        let mut recipe = minimal_recipe();
+        recipe.source = SourceSection::Local(LocalSourceSection {
+            path: PathBuf::from("./src"),
+        });
+
+        let mut cook = Cook::new(&kitchen, &recipe).unwrap();
+        let error = cook.prep().unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("Local source symlink must stay within the source directory"),
+            "expected absolute symlink escape rejection, got: {error}"
         );
     }
 
