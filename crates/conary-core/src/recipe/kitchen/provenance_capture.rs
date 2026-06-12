@@ -288,6 +288,12 @@ impl ProvenanceCapture {
                     dna_hash: d.dna_hash.clone(),
                 })
                 .collect(),
+            origin_class: Some("native-built".to_string()),
+            hardening_level: Some(if self.isolated {
+                "sandboxed".to_string()
+            } else {
+                "host".to_string()
+            }),
 
             // Signature layer (empty - signatures added post-build)
             signatures: Vec::new(),
@@ -413,6 +419,29 @@ mod tests {
         assert_eq!(manifest_prov.build_deps.len(), 1);
         assert_eq!(manifest_prov.build_deps[0].name, "gcc");
         assert!(manifest_prov.dna_hash.is_some());
+    }
+
+    #[test]
+    fn test_to_manifest_provenance_records_m1a_origin_and_hardening() {
+        let mut capture = ProvenanceCapture::new();
+        capture.record_isolation(false);
+        let host_provenance = capture.to_manifest_provenance();
+        assert_eq!(
+            host_provenance.origin_class.as_deref(),
+            Some("native-built")
+        );
+        assert_eq!(host_provenance.hardening_level.as_deref(), Some("host"));
+
+        capture.record_isolation(true);
+        let sandboxed_provenance = capture.to_manifest_provenance();
+        assert_eq!(
+            sandboxed_provenance.origin_class.as_deref(),
+            Some("native-built")
+        );
+        assert_eq!(
+            sandboxed_provenance.hardening_level.as_deref(),
+            Some("sandboxed")
+        );
     }
 
     #[test]
