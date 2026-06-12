@@ -124,13 +124,16 @@ fn tier2_required_recipes_use_repo_owned_sha256_checksums() {
             continue;
         }
 
+        let source = recipe.remote_source().unwrap_or_else(|| {
+            panic!("Tier 2 recipe {recipe_name} must use a remote archive source")
+        });
         assert!(
-            recipe.source.checksum.starts_with("sha256:"),
+            source.checksum.starts_with("sha256:"),
             "Tier 2 recipe {recipe_name} must use a repo-owned sha256 checksum, found {}",
-            recipe.source.checksum
+            source.checksum
         );
         assert!(
-            !recipe.source.checksum.contains("VERIFY_BEFORE_BUILD"),
+            !source.checksum.contains("VERIFY_BEFORE_BUILD"),
             "Tier 2 recipe {recipe_name} still contains a placeholder checksum"
         );
     }
@@ -141,14 +144,16 @@ fn conary_recipe_keeps_staged_workspace_contract() {
     let recipes = load_tier2_recipes();
     let recipe = recipes.get("conary").expect("missing Tier 2 recipe conary");
 
-    assert!(
-        recipe.source.archive.is_empty(),
-        "conary Tier 2 recipe must not fetch a remote archive"
-    );
-    assert!(
-        recipe.source.checksum.is_empty(),
-        "conary Tier 2 recipe must not declare a remote checksum"
-    );
+    if let Some(source) = recipe.remote_source() {
+        assert!(
+            source.archive.is_empty(),
+            "conary Tier 2 recipe must not fetch a remote archive"
+        );
+        assert!(
+            source.checksum.is_empty(),
+            "conary Tier 2 recipe must not declare a remote checksum"
+        );
+    }
     assert_eq!(
         recipe.build.requires,
         ["glibc", "openssl", "sqlite", "rust"],
