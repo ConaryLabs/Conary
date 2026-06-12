@@ -9,7 +9,7 @@
 //! - Running build commands in isolation
 //! - Packaging the result as CCS
 
-mod archive;
+pub(crate) mod archive;
 mod config;
 mod cook;
 pub mod makedepends;
@@ -36,6 +36,26 @@ use tracing::{debug, info, warn};
 /// Replaces ':' with '_' so "sha256:abc123" becomes "sha256_abc123"
 fn source_cache_key(checksum: &str) -> String {
     checksum.replace(':', "_")
+}
+
+fn has_url_scheme(input: &str) -> bool {
+    let Some(colon_index) = input.find(':') else {
+        return false;
+    };
+
+    let scheme = &input[..colon_index];
+    let mut bytes = scheme.bytes();
+    let Some(first) = bytes.next() else {
+        return false;
+    };
+
+    first.is_ascii_alphabetic()
+        && bytes.all(|byte| {
+            matches!(
+                byte,
+                b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'+' | b'-' | b'.'
+            )
+        })
 }
 
 /// The Kitchen: where recipes are cooked
@@ -543,7 +563,8 @@ impl Kitchen {
         info!("Downloading: {}", url);
         let temp_path = self.config.source_cache.join(format!("{}.tmp", cache_key));
 
-        download_file(url, &temp_path)?;
+        let resolved_url = self.recipe_relative_archive_source(url);
+        download_file(&resolved_url, &temp_path)?;
 
         // Verify checksum -- Some(actual) means mismatch
         if let Some(actual) =
@@ -559,6 +580,18 @@ impl Kitchen {
         // Move to final location
         fs::rename(&temp_path, &cached_path)?;
         Ok(cached_path)
+    }
+
+    fn recipe_relative_archive_source(&self, source: &str) -> String {
+        if has_url_scheme(source) || Path::new(source).is_absolute() {
+            return source.to_string();
+        }
+
+        self.config
+            .recipe_source_base_dir
+            .as_ref()
+            .map(|base_dir| base_dir.join(source).to_string_lossy().to_string())
+            .unwrap_or_else(|| source.to_string())
     }
 
     pub(crate) fn resolve_local_source(&self, source: &LocalSourceSection) -> Result<PathBuf> {
@@ -738,6 +771,38 @@ mod tests {
         assert_eq!(fetched, vec![cache.join(source_cache_key(&checksum))]);
         assert_eq!(fs::read(&fetched[0]).unwrap(), bytes);
         assert!(kitchen.sources_cached(&recipe));
+    }
+
+    #[test]
+    fn test_fetch_remote_archive_source_resolves_relative_to_recipe_base_dir() {
+        let dir = tempdir().unwrap();
+        let recipe_dir = dir.path().join("recipe");
+        let sources_dir = recipe_dir.join("sources");
+        let cache = dir.path().join("cache");
+        fs::create_dir_all(&sources_dir).unwrap();
+        let archive = sources_dir.join("source.tar");
+        let bytes = b"archive bytes";
+        fs::write(&archive, bytes).unwrap();
+
+        let checksum = hash::sha256_prefixed(bytes);
+        let kitchen = Kitchen::new(KitchenConfig {
+            source_cache: cache.clone(),
+            recipe_source_base_dir: Some(recipe_dir),
+            ..KitchenConfig::default()
+        });
+        let mut recipe = make_test_recipe(&[]);
+        recipe.source = SourceSection::Remote(RemoteSourceSection {
+            archive: "sources/source.tar".to_string(),
+            checksum: checksum.clone(),
+            signature: None,
+            additional: Vec::new(),
+            extract_dir: None,
+        });
+
+        let fetched = kitchen.fetch(&recipe).unwrap();
+
+        assert_eq!(fetched, vec![cache.join(source_cache_key(&checksum))]);
+        assert_eq!(fs::read(&fetched[0]).unwrap(), bytes);
     }
 
     #[test]
