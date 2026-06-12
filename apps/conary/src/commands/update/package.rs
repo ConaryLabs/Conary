@@ -5,6 +5,7 @@
 use super::super::install::{
     CcsTransactionInstallOptions, ComponentSelection, DepMode,
     repository_install_provenance_from_package, resolve_default_dep_mode_from_model,
+    verify_static_repository_ccs_package_if_needed,
 };
 use super::super::progress::{UpdatePhase, UpdateProgress};
 use super::super::{
@@ -222,6 +223,12 @@ fn preflight_prepared_full_update_legacy_replay(
         return Ok(());
     }
 
+    let repository_provenance = repository_install_provenance_from_package(repo_pkg, repo)?;
+    verify_static_repository_ccs_package_if_needed(
+        db_path,
+        pkg_path,
+        Some(&repository_provenance),
+    )?;
     let pkg = CcsPackage::parse(&pkg_path.to_string_lossy())
         .with_context(|| format!("failed to parse selected update CCS {}", pkg_path.display()))?;
     let ccs_opts = CcsTransactionInstallOptions {
@@ -236,7 +243,7 @@ fn preflight_prepared_full_update_legacy_replay(
         selection_reason: Some("Updated by conary update"),
         component_selection: ComponentSelection::Defaults,
         selected_manifest_components: None,
-        repository_provenance: Some(repository_install_provenance_from_package(repo_pkg, repo)?),
+        repository_provenance: Some(repository_provenance),
         legacy_replay,
     };
 
@@ -1314,6 +1321,116 @@ mod tests {
             .map(|trove| trove.version)
             .collect::<Vec<_>>();
         assert_eq!(installed_versions, vec!["1.0.0".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn static_ccs_update_verifies_signature_before_legacy_replay_preflight() {
+        let (_temp, db_path) = create_test_db();
+        let root = tempfile::tempdir().unwrap();
+        let package_dir = tempfile::tempdir().unwrap();
+        let _guard = crate::commands::composefs_ops::test_mount_skip_guard();
+
+        let package_path = build_test_ccs_package_with_bundle(
+            package_dir.path(),
+            "vim",
+            "2.0.0",
+            Some(legacy_upgrade_bundle("vim", "2.0.0")),
+        );
+        let package_bytes = std::fs::read(&package_path).unwrap();
+        let package_checksum = conary_core::hash::sha256(&package_bytes);
+        let package_size = i64::try_from(package_bytes.len()).unwrap();
+        let (package_url, _server_handle) = serve_test_file(package_path);
+
+        let mut conn = crate::commands::open_db(&db_path).unwrap();
+        DistroPin::set(&conn, "fedora-44", "strict").unwrap();
+        let mut repo = Repository::new("static-test".to_string(), package_url.clone());
+        repo.gpg_check = false;
+        repo.gpg_strict = false;
+        repo.default_strategy = Some("static".to_string());
+        repo.default_strategy_distro = Some("fedora-44".to_string());
+        let repo_id = repo.insert(&conn).unwrap();
+
+        conary_core::db::transaction(&mut conn, |tx| {
+            let mut changeset = Changeset::new("Install vim-1.0.0".to_string());
+            let changeset_id = changeset.insert(tx)?;
+            let mut installed = Trove::new_with_source(
+                "vim".to_string(),
+                "1.0.0".to_string(),
+                TroveType::Package,
+                InstallSource::Repository,
+            );
+            installed.architecture = Some("x86_64".to_string());
+            installed.source_distro = Some("fedora-44".to_string());
+            installed.version_scheme = Some("rpm".to_string());
+            installed.installed_from_repository_id = Some(repo_id);
+            installed.installed_by_changeset_id = Some(changeset_id);
+            installed.insert(tx)?;
+            changeset.update_status(tx, ChangesetStatus::Applied)?;
+            Ok::<_, conary_core::Error>(())
+        })
+        .unwrap();
+
+        let mut repo_pkg = RepositoryPackage::new(
+            repo_id,
+            "vim".to_string(),
+            "2.0.0".to_string(),
+            package_checksum.clone(),
+            package_size,
+            package_url.clone(),
+        );
+        repo_pkg.architecture = Some("x86_64".to_string());
+        repo_pkg.distro = Some("fedora-44".to_string());
+        repo_pkg.version_scheme = Some("rpm".to_string());
+        repo_pkg.insert(&conn).unwrap();
+
+        let mut resolution = PackageResolution::new(
+            repo_id,
+            "vim".to_string(),
+            vec![ResolutionStrategy::Binary {
+                url: package_url,
+                checksum: package_checksum,
+                delta_base: None,
+            }],
+        );
+        resolution.version = Some("2.0.0".to_string());
+        resolution.primary_strategy = PrimaryStrategy::Binary;
+        resolution.insert(&conn).unwrap();
+
+        let before_changesets = table_count(&conn, "changesets");
+        drop(conn);
+
+        let err = cmd_update(
+            Some("vim".to_string()),
+            &db_path,
+            root.path().to_str().unwrap(),
+            false,
+            false,
+            false,
+            SandboxMode::None,
+            None,
+            true,
+            None,
+            Some("x86_64".to_string()),
+            crate::commands::LegacyReplayOptions::default(),
+        )
+        .await
+        .expect_err("static unsigned update must fail before CCS preflight parses scriptlets");
+        let message = format!("{err:?}");
+        assert!(
+            message.contains("Static repository package signature verification failed"),
+            "{message}"
+        );
+        assert!(
+            !message.contains("LegacyReplayFeatureDisabled"),
+            "{message}"
+        );
+
+        let conn = crate::commands::open_db(&db_path).unwrap();
+        assert_eq!(
+            table_count(&conn, "changesets"),
+            before_changesets,
+            "static signature refusal must happen before update changeset insertion"
+        );
     }
 
     #[tokio::test]

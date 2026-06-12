@@ -93,6 +93,7 @@ impl RepositoryPackageKey {
             "SELECT public_key
              FROM repository_package_keys
              WHERE repository_id = ?1
+               AND status = 'active'
              ORDER BY public_key",
         )?;
 
@@ -269,7 +270,7 @@ mod tests {
     }
 
     #[test]
-    fn trusted_keys_for_repository_returns_active_and_retired_keys_in_order() {
+    fn trusted_keys_for_repository_returns_only_active_keys_in_order() {
         let (_temp, conn) = create_test_db();
         let repo_id = insert_repository(&conn, "trusted-keys");
 
@@ -297,13 +298,7 @@ mod tests {
 
         let trusted = RepositoryPackageKey::trusted_keys_for_repository(&conn, repo_id).unwrap();
 
-        assert_eq!(
-            trusted,
-            vec![
-                "a-active-public-key".to_string(),
-                "z-retired-public-key".to_string()
-            ]
-        );
+        assert_eq!(trusted, vec!["a-active-public-key".to_string()]);
     }
 
     #[test]

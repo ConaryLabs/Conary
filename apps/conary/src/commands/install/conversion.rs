@@ -15,6 +15,7 @@ use super::resolve::check_provides_dependencies;
 use super::{
     CcsTransactionInstallOptions, ComponentSelection, LegacyReplayOptions,
     RepositoryInstallProvenance, repository_install_provenance_from_package,
+    verify_static_repository_ccs_package_if_needed,
 };
 use anyhow::{Context, Result};
 use conary_core::capability::inference::InferenceOptions;
@@ -503,6 +504,12 @@ async fn install_converted_ccs_with_pending(
         legacy_replay,
     } = opts;
 
+    verify_static_repository_ccs_package_if_needed(
+        db_path,
+        Path::new(ccs_path),
+        repository_provenance.as_ref(),
+    )?;
+
     let ccs_pkg = CcsPackage::parse(ccs_path).context("Failed to parse converted CCS package")?;
     crate::commands::ccs::enforce_ccs_capability_policy(&ccs_pkg, false, None)?;
 
@@ -791,15 +798,20 @@ mod tests {
     use conary_core::capability::{
         CapabilityDeclaration, FilesystemCapabilities, NetworkCapabilities, SyscallCapabilities,
     };
-    use conary_core::ccs::builder::write_ccs_package;
+    use conary_core::ccs::SigningKeyPair;
+    use conary_core::ccs::builder::{write_ccs_package, write_signed_ccs_package};
     use conary_core::ccs::manifest::{DirectoryHook, ScriptHook};
     use conary_core::ccs::{BuildResult, CcsManifest, ComponentData, FileEntry, FileType};
-    use conary_core::db::models::{Repository, RepositoryPackage, RepositoryProvide, Trove};
+    use conary_core::db::models::{
+        Repository, RepositoryPackage, RepositoryPackageKey, RepositoryPackageKeyStatus,
+        RepositoryProvide, Trove,
+    };
     use conary_core::db::schema;
     use conary_core::hash;
     use conary_core::packages::traits::{
         Dependency, ExtractedFile, PackageFile, PackageFormat, Scriptlet,
     };
+    use conary_core::repository::RepositorySourceKind;
     use conary_core::version::VersionConstraint;
     use std::collections::HashMap;
 
@@ -965,6 +977,116 @@ mod tests {
         package_path
     }
 
+    fn write_runtime_signed_ccs_package(
+        temp_dir: &std::path::Path,
+        name: &str,
+        mut manifest: CcsManifest,
+        signing_key: Option<&SigningKeyPair>,
+    ) -> std::path::PathBuf {
+        let package_path = temp_dir.join(format!("{name}.ccs"));
+        let init_content = b"#!/bin/sh\nexec true\n".to_vec();
+        let init_hash = hash::sha256(&init_content);
+        let files = vec![FileEntry {
+            path: "/usr/sbin/init".to_string(),
+            hash: init_hash.clone(),
+            size: init_content.len() as u64,
+            mode: 0o100755,
+            component: "runtime".to_string(),
+            file_type: FileType::Regular,
+            target: None,
+            chunks: None,
+        }];
+        manifest.components.default = vec!["runtime".to_string()];
+        let result = BuildResult {
+            manifest,
+            components: HashMap::from([(
+                "runtime".to_string(),
+                ComponentData {
+                    name: "runtime".to_string(),
+                    files: files.clone(),
+                    hash: "runtime".to_string(),
+                    size: init_content.len() as u64,
+                },
+            )]),
+            files,
+            blobs: HashMap::from([(init_hash, init_content)]),
+            total_size: 0,
+            chunked: false,
+            chunk_stats: None,
+        };
+        if let Some(signing_key) = signing_key {
+            write_signed_ccs_package(&result, &package_path, signing_key).unwrap();
+        } else {
+            write_ccs_package(&result, &package_path).unwrap();
+        }
+        package_path
+    }
+
+    fn package_key(
+        repository_id: i64,
+        signing_key: &SigningKeyPair,
+        status: RepositoryPackageKeyStatus,
+    ) -> RepositoryPackageKey {
+        RepositoryPackageKey {
+            repository_id,
+            public_key: signing_key.public_key_base64(),
+            key_id: signing_key.key_id().map(str::to_string),
+            status,
+            synced_at: None,
+        }
+    }
+
+    fn insert_static_repository_with_keys(
+        db_path: &str,
+        key_pairs: &[(&SigningKeyPair, RepositoryPackageKeyStatus)],
+    ) -> i64 {
+        let conn = conary_core::db::open(db_path).unwrap();
+        let mut repo = Repository::new(
+            "static-install".to_string(),
+            "https://static.example.invalid/repo".to_string(),
+        );
+        repo.default_strategy = Some("static".to_string());
+        let repo_id = repo.insert(&conn).unwrap();
+        let keys = key_pairs
+            .iter()
+            .map(|(signing_key, status)| package_key(repo_id, signing_key, status.clone()))
+            .collect::<Vec<_>>();
+        RepositoryPackageKey::replace_for_repository(&conn, repo_id, &keys).unwrap();
+        repo_id
+    }
+
+    fn static_provenance(repository_id: i64) -> RepositoryInstallProvenance {
+        RepositoryInstallProvenance {
+            repository_id,
+            source_distro: Some("fedora".to_string()),
+            version_scheme: Some("rpm".to_string()),
+            source_kind: RepositorySourceKind::Static,
+        }
+    }
+
+    fn converted_install_options<'a>(
+        ccs_path: &'a std::path::Path,
+        db_path: &'a str,
+        install_root: &'a std::path::Path,
+        repository_provenance: Option<RepositoryInstallProvenance>,
+    ) -> ConvertedCcsInstallOptions<'a> {
+        ConvertedCcsInstallOptions {
+            ccs_path: ccs_path.to_str().unwrap(),
+            db_path,
+            root: install_root.to_str().unwrap(),
+            dry_run: false,
+            sandbox_mode: SandboxMode::None,
+            no_deps: true,
+            no_scripts: true,
+            allow_downgrade: false,
+            dep_mode: None,
+            yes: true,
+            dependency_passes_remaining: 0,
+            repository_provenance,
+            legacy_replay: LegacyReplayOptions::default(),
+        }
+    }
+
     #[tokio::test]
     async fn try_convert_to_ccs_rejects_inferred_prompted_capabilities_before_db_mutation() {
         let temp_dir = tempfile::tempdir().unwrap();
@@ -1056,6 +1178,205 @@ mod tests {
         .unwrap();
 
         assert!(install_root.join("var/lib/converted-hooked").is_dir());
+    }
+
+    #[tokio::test]
+    async fn static_repo_ccs_install_rejects_unsigned_package() {
+        let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let install_root = temp_dir.path().join("root");
+        let db_path = temp_dir.path().join("conary.db");
+        let db_path_str = db_path.to_str().unwrap();
+
+        std::fs::create_dir_all(&install_root).unwrap();
+        conary_core::db::init(db_path_str).unwrap();
+        stage_test_boot_assets(temp_dir.path());
+        let repo_id = insert_static_repository_with_keys(db_path_str, &[]);
+        let package_path = write_runtime_signed_ccs_package(
+            temp_dir.path(),
+            "static-unsigned",
+            CcsManifest::new_minimal("static-unsigned", "1.0.0"),
+            None,
+        );
+
+        let err = install_converted_ccs(converted_install_options(
+            &package_path,
+            db_path_str,
+            &install_root,
+            Some(static_provenance(repo_id)),
+        ))
+        .await
+        .unwrap_err();
+
+        assert!(
+            format!("{err:?}").contains("Static repository package signature verification failed"),
+            "static unsigned package should fail signature verification: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn static_repo_ccs_install_rejects_unlisted_signing_key() {
+        let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let install_root = temp_dir.path().join("root");
+        let db_path = temp_dir.path().join("conary.db");
+        let db_path_str = db_path.to_str().unwrap();
+
+        std::fs::create_dir_all(&install_root).unwrap();
+        conary_core::db::init(db_path_str).unwrap();
+        stage_test_boot_assets(temp_dir.path());
+        let listed_key = SigningKeyPair::generate().with_key_id("listed");
+        let unlisted_key = SigningKeyPair::generate().with_key_id("unlisted");
+        let repo_id = insert_static_repository_with_keys(
+            db_path_str,
+            &[(&listed_key, RepositoryPackageKeyStatus::Active)],
+        );
+        let package_path = write_runtime_signed_ccs_package(
+            temp_dir.path(),
+            "static-unlisted",
+            CcsManifest::new_minimal("static-unlisted", "1.0.0"),
+            Some(&unlisted_key),
+        );
+
+        let err = install_converted_ccs(converted_install_options(
+            &package_path,
+            db_path_str,
+            &install_root,
+            Some(static_provenance(repo_id)),
+        ))
+        .await
+        .unwrap_err();
+
+        assert!(
+            format!("{err:?}").contains("Static repository package signature verification failed"),
+            "static package signed by an unlisted key should fail: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn static_repo_ccs_install_accepts_active_package_key() {
+        let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let install_root = temp_dir.path().join("root");
+        let db_path = temp_dir.path().join("conary.db");
+        let db_path_str = db_path.to_str().unwrap();
+
+        std::fs::create_dir_all(&install_root).unwrap();
+        conary_core::db::init(db_path_str).unwrap();
+        stage_test_boot_assets(temp_dir.path());
+        let active_key = SigningKeyPair::generate().with_key_id("active");
+        let repo_id = insert_static_repository_with_keys(
+            db_path_str,
+            &[(&active_key, RepositoryPackageKeyStatus::Active)],
+        );
+        let package_path = write_runtime_signed_ccs_package(
+            temp_dir.path(),
+            "static-active",
+            CcsManifest::new_minimal("static-active", "1.0.0"),
+            Some(&active_key),
+        );
+
+        install_converted_ccs(converted_install_options(
+            &package_path,
+            db_path_str,
+            &install_root,
+            Some(static_provenance(repo_id)),
+        ))
+        .await
+        .unwrap();
+
+        let conn = conary_core::db::open(db_path_str).unwrap();
+        let trove_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM troves WHERE name = 'static-active'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(trove_count, 1);
+    }
+
+    #[tokio::test]
+    async fn static_repo_ccs_install_rejects_retired_only_package_key() {
+        let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let install_root = temp_dir.path().join("root");
+        let db_path = temp_dir.path().join("conary.db");
+        let db_path_str = db_path.to_str().unwrap();
+
+        std::fs::create_dir_all(&install_root).unwrap();
+        conary_core::db::init(db_path_str).unwrap();
+        stage_test_boot_assets(temp_dir.path());
+        let retired_key = SigningKeyPair::generate().with_key_id("retired");
+        let repo_id = insert_static_repository_with_keys(
+            db_path_str,
+            &[(&retired_key, RepositoryPackageKeyStatus::Retired)],
+        );
+        let package_path = write_runtime_signed_ccs_package(
+            temp_dir.path(),
+            "static-retired",
+            CcsManifest::new_minimal("static-retired", "1.0.0"),
+            Some(&retired_key),
+        );
+
+        let err = install_converted_ccs(converted_install_options(
+            &package_path,
+            db_path_str,
+            &install_root,
+            Some(static_provenance(repo_id)),
+        ))
+        .await
+        .unwrap_err();
+
+        assert!(
+            format!("{err:?}").contains("Static repository package signature verification failed"),
+            "static package signed only by a retired key should fail: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn non_static_repo_ccs_install_keeps_unsigned_behavior() {
+        let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let install_root = temp_dir.path().join("root");
+        let db_path = temp_dir.path().join("conary.db");
+        let db_path_str = db_path.to_str().unwrap();
+
+        std::fs::create_dir_all(&install_root).unwrap();
+        conary_core::db::init(db_path_str).unwrap();
+        stage_test_boot_assets(temp_dir.path());
+        let package_path = write_runtime_signed_ccs_package(
+            temp_dir.path(),
+            "remi-unsigned",
+            CcsManifest::new_minimal("remi-unsigned", "1.0.0"),
+            None,
+        );
+        let repo_id = insert_static_repository_with_keys(db_path_str, &[]);
+        let provenance = RepositoryInstallProvenance {
+            repository_id: repo_id,
+            source_distro: Some("fedora".to_string()),
+            version_scheme: Some("rpm".to_string()),
+            source_kind: RepositorySourceKind::Remi,
+        };
+
+        install_converted_ccs(converted_install_options(
+            &package_path,
+            db_path_str,
+            &install_root,
+            Some(provenance),
+        ))
+        .await
+        .unwrap();
+
+        let conn = conary_core::db::open(db_path_str).unwrap();
+        let trove_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM troves WHERE name = 'remi-unsigned'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(trove_count, 1);
     }
 
     #[tokio::test]
