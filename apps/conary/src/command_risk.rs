@@ -147,6 +147,7 @@ pub fn classify_cli(cli: &Cli) -> Option<CommandRiskPolicy> {
         )),
         Commands::Pin { .. } => Some(local_state("conary pin")),
         Commands::Unpin { .. } => Some(local_state("conary unpin")),
+        Commands::New { .. } => Some(local_state("conary new")),
         Commands::Search { .. }
         | Commands::List { .. }
         | Commands::Cook { .. }
@@ -833,6 +834,7 @@ mod tests {
             ["conary", "system", "init"].as_slice(),
             ["conary", "repo", "sync", "remi"].as_slice(),
             ["conary", "publish", "./repo"].as_slice(),
+            ["conary", "new", "--from", ".", "--explain"].as_slice(),
         ] {
             let policy = policy(args);
             assert_eq!(policy.risk, CommandRisk::LocalStateMutation);
