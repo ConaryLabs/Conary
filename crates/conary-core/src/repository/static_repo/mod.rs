@@ -3,6 +3,7 @@
 pub mod format;
 pub mod location;
 pub mod paths;
+pub mod publish;
 pub(crate) mod sync;
 
 pub use format::{

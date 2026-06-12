@@ -11,7 +11,13 @@ use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use rand_core_06::OsRng;
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::Path;
+use std::io::ErrorKind;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static PRIVATE_KEY_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+const PRIVATE_KEY_TEMP_ATTEMPTS: usize = 1024;
 
 /// A signing key pair for CCS packages
 pub struct SigningKeyPair {
@@ -89,22 +95,7 @@ impl SigningKeyPair {
         };
         let private_toml = toml::to_string_pretty(&private_data)
             .map_err(|e| Error::ParseError(format!("Failed to serialize private key: {}", e)))?;
-        fs::write(private_path, &private_toml).map_err(|e| {
-            Error::IoError(format!(
-                "Failed to write private key {}: {}",
-                private_path.display(),
-                e
-            ))
-        })?;
-
-        // Set restrictive permissions on private key
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = fs::metadata(private_path)?.permissions();
-            perms.set_mode(0o600);
-            fs::set_permissions(private_path, perms)?;
-        }
+        write_private_key_atomic(private_path, &private_toml)?;
 
         // Save public key
         let public_data = KeyFile {
@@ -114,6 +105,7 @@ impl SigningKeyPair {
         };
         let public_toml = toml::to_string_pretty(&public_data)
             .map_err(|e| Error::ParseError(format!("Failed to serialize public key: {}", e)))?;
+        ensure_parent_dir(public_path)?;
         fs::write(public_path, &public_toml).map_err(|e| {
             Error::IoError(format!(
                 "Failed to write public key {}: {}",
@@ -161,6 +153,111 @@ impl SigningKeyPair {
             key_id: key_file.key_id,
         })
     }
+}
+
+fn ensure_parent_dir(path: &Path) -> Result<()> {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent).map_err(|e| {
+            Error::IoError(format!(
+                "Failed to create key directory {}: {}",
+                parent.display(),
+                e
+            ))
+        })?;
+    }
+
+    Ok(())
+}
+
+fn write_private_key_atomic(private_path: &Path, private_toml: &str) -> Result<()> {
+    ensure_parent_dir(private_path)?;
+
+    let (tmp_private_path, mut file) = create_private_key_temp_file(private_path)?;
+
+    if let Err(error) = write_private_key_temp_file(&tmp_private_path, &mut file, private_toml) {
+        drop(file);
+        let _ = fs::remove_file(&tmp_private_path);
+        return Err(error);
+    }
+    drop(file);
+
+    let result = rename_private_key(&tmp_private_path, private_path);
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp_private_path);
+    }
+    result
+}
+
+fn create_private_key_temp_file(private_path: &Path) -> Result<(PathBuf, fs::File)> {
+    for _ in 0..PRIVATE_KEY_TEMP_ATTEMPTS {
+        let tmp_private_path = unique_private_key_temp_path(private_path);
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+
+        match options.open(&tmp_private_path) {
+            Ok(file) => return Ok((tmp_private_path, file)),
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(Error::IoError(format!(
+                    "Failed to write private key temp file {}: {}",
+                    tmp_private_path.display(),
+                    error
+                )));
+            }
+        }
+    }
+
+    Err(Error::IoError(format!(
+        "Failed to create unique private key temp file next to {} after {} attempts",
+        private_path.display(),
+        PRIVATE_KEY_TEMP_ATTEMPTS
+    )))
+}
+
+fn unique_private_key_temp_path(private_path: &Path) -> PathBuf {
+    let suffix = PRIVATE_KEY_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    private_path.with_extension(format!("private.tmp.{}.{}", std::process::id(), suffix))
+}
+
+fn write_private_key_temp_file(
+    tmp_private_path: &Path,
+    file: &mut fs::File,
+    private_toml: &str,
+) -> Result<()> {
+    file.write_all(private_toml.as_bytes()).map_err(|e| {
+        Error::IoError(format!(
+            "Failed to write private key temp file {}: {}",
+            tmp_private_path.display(),
+            e
+        ))
+    })?;
+    file.sync_all().map_err(|e| {
+        Error::IoError(format!(
+            "Failed to sync private key temp file {}: {}",
+            tmp_private_path.display(),
+            e
+        ))
+    })?;
+
+    Ok(())
+}
+
+fn rename_private_key(tmp_private_path: &Path, private_path: &Path) -> Result<()> {
+    fs::rename(tmp_private_path, private_path).map_err(|e| {
+        Error::IoError(format!(
+            "Failed to replace private key {} with temp file {}: {}",
+            private_path.display(),
+            tmp_private_path.display(),
+            e
+        ))
+    })
 }
 
 /// Key file format
@@ -233,6 +330,52 @@ mod tests {
         let loaded = SigningKeyPair::load_from_file(&private_path).unwrap();
         assert_eq!(loaded.public_key_base64(), original_public);
         assert_eq!(loaded.key_id(), Some("test-key"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn save_to_files_creates_private_key_0600() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp_dir = TempDir::new().unwrap();
+        let private_path = temp_dir.path().join("key.private");
+        let public_path = temp_dir.path().join("key.public");
+
+        SigningKeyPair::generate()
+            .save_to_files(&private_path, &public_path)
+            .unwrap();
+
+        let mode = fs::metadata(&private_path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+    }
+
+    #[test]
+    fn save_to_files_ignores_stale_fixed_temp_name_and_overwrites_private_key() {
+        let temp_dir = TempDir::new().unwrap();
+        let private_path = temp_dir.path().join("key.private");
+        let public_path = temp_dir.path().join("key.public");
+        let stale_temp_path =
+            private_path.with_extension(format!("private.tmp.{}", std::process::id()));
+        fs::write(&stale_temp_path, b"stale temp from earlier implementation").unwrap();
+
+        let first_keypair = SigningKeyPair::generate().with_key_id("first-key");
+        first_keypair
+            .save_to_files(&private_path, &public_path)
+            .unwrap();
+
+        let replacement_keypair = SigningKeyPair::generate().with_key_id("replacement-key");
+        let replacement_public = replacement_keypair.public_key_base64();
+        replacement_keypair
+            .save_to_files(&private_path, &public_path)
+            .unwrap();
+
+        let loaded = SigningKeyPair::load_from_file(&private_path).unwrap();
+        assert_eq!(loaded.public_key_base64(), replacement_public);
+        assert_eq!(loaded.key_id(), Some("replacement-key"));
+        assert_eq!(
+            fs::read(&stale_temp_path).unwrap(),
+            b"stale temp from earlier implementation"
+        );
     }
 
     #[test]
