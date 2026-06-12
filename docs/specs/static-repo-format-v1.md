@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-06-10
-revision: 1
+last_updated: 2026-06-12
+revision: 2
 summary: Normative specification of the static (file-based) Conary repository format — layout, conary-repo.toml, index.json, TUF metadata profile, publish algorithm, client behavior, and operator key lifecycle. M0 deliverable of the packaging toolchain design.
 ---
 
@@ -270,14 +270,16 @@ Field rules:
   a default repo.
 - `key_id`: optional operator-facing label/fingerprint; clients MUST NOT use
   it as the verification key material.
-- `status`: `"active"` (signs new packages) or `"retired"` (no longer signs,
-  still trusted so previously published artifacts keep verifying). Clients
-  import both into `trusted_keys`; unknown statuses are rejected (§6.2). A
-  **compromised** key is neither: it is removed from the file entirely, and
-  every artifact it signed MUST be removed or republished (re-signed, new
-  release number) — §7.3. A `retired` key MAY be dropped from the file once
-  no entry in the current index references an artifact signed by it (fully
-  superseded).
+- `status`: `"active"` (signs new packages and is imported into install trust)
+  or `"retired"` (no longer signs; retained for audit/history only). Clients
+  import only `active` keys into `trusted_keys`; unknown statuses are rejected
+  (§6.2). A **compromised** key is neither: it is removed from the file
+  entirely, and every artifact it signed MUST be removed or republished
+  (re-signed, new release number) — §7.3. A `retired` key MAY be dropped from
+  the file once no entry in the current index references an artifact signed by
+  it (fully superseded). M1a does not maintain a compatibility trust window for
+  retired keys; operators rotate by republishing current-index artifacts under
+  the active key.
 - `comment`: optional human-readable text; clients ignore it.
 
 Clients import package keys into the repo's package trust policy only after
@@ -525,8 +527,9 @@ for a future v2 consistent-snapshot upgrade.
 4. Fetch + verify `keys/package-keys.json` the same way (targets entry,
    then parse); reject any key entry whose `status` is not `"active"` or
    `"retired"`; update the repo's package trust policy with
-   `TrustPolicy::strict(<all active + retired package-keys public_key
-   values>)`.
+   `TrustPolicy::strict(<active package-keys public_key values>)`. Retired
+   keys are persisted for audit/history only and MUST NOT authorize package
+   installs in M1a.
 5. Map package entries into the client package model (§3 mapping note).
 
 ### 6.3 Install
@@ -608,11 +611,12 @@ manually re-trust (§7.4).
   batch-update all three publish-backed roles or add a `rotate_publish_key`
   helper rather than calling `rotate_key` once and leaving two roles on the
   old key. Publish per §5.3 including the new `{N+1}.root.json` and updated
-  `root.json`, regenerated `keys/package-keys.json` (old key moves to
-  `status: "retired"` so existing artifacts keep verifying; new key is
-  `"active"`), and a `conary-repo.toml` left unchanged (root keys did not
-  change). Clients pick up the rotation via root-version probing; no user
-  action.
+  `root.json`, regenerated `keys/package-keys.json` (old key may remain as
+  `status: "retired"` for audit/history; new key is `"active"`), and a
+  `conary-repo.toml` left unchanged (root keys did not change). Current-index
+  artifacts MUST be republished under the active key because retired keys do
+  not authorize installs in M1a. Clients pick up the rotation via root-version
+  probing; no user action.
 - Rotate root key: same mechanism; root vN+1 MUST be signed by **both**
   old and new root keys (TUF rotation rule, enforced by the existing
   client root-chain verification); `conary-repo.toml::root_key_ids` is
@@ -622,11 +626,12 @@ manually re-trust (§7.4).
 ### 7.3 Revocation
 
 Revocation = rotation that **removes** the compromised key (not
-"retired" — retired keys stay trusted; compromised keys must not). The
-operator MUST also: remove or republish (re-sign under the new key, new
-release) every artifact the compromised key signed; bump
-targets/snapshot/timestamp versions past anything the attacker may have
-signed; and SHOULD shorten timestamp expiry for the next publishes.
+"retired" — retired keys are audit/history markers, while compromised keys
+must disappear from the current key file). The operator MUST also: remove or
+republish (re-sign under the new key, new release) every artifact the
+compromised key signed; bump targets/snapshot/timestamp versions past anything
+the attacker may have signed; and SHOULD shorten timestamp expiry for the next
+publishes.
 
 ### 7.4 Loss matrix
 
