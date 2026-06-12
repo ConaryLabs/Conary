@@ -172,8 +172,9 @@ impl<'a> Cook<'a> {
         fs::create_dir_all(&source_dir)?;
         fs::create_dir_all(&dest_dir)?;
 
-        // Initialize provenance capture
         let mut provenance = ProvenanceCapture::new();
+        provenance.origin_class = kitchen.config.origin_class_override.clone();
+        provenance.source_provenance = kitchen.config.source_provenance_override.clone();
 
         // Record build dependencies from recipe
         for dep in &recipe.build.makedepends {
@@ -224,6 +225,8 @@ impl<'a> Cook<'a> {
         fs::create_dir_all(dest_dir)?;
 
         let mut provenance = ProvenanceCapture::new();
+        provenance.origin_class = kitchen.config.origin_class_override.clone();
+        provenance.source_provenance = kitchen.config.source_provenance_override.clone();
         for dep in &recipe.build.makedepends {
             provenance.add_build_dep(dep, "unknown", None);
         }
@@ -265,9 +268,11 @@ impl<'a> Cook<'a> {
                     )));
                 }
 
-                self.provenance.upstream_url =
-                    Some(format!("local:{}", source.path.to_string_lossy()));
-                self.provenance.upstream_hash = None;
+                if self.provenance.source_provenance.is_none() {
+                    self.provenance.upstream_url =
+                        Some(format!("local:{}", source.path.to_string_lossy()));
+                    self.provenance.upstream_hash = None;
+                }
 
                 if !self.kitchen.config.use_isolation {
                     self.source_dir = resolved;
