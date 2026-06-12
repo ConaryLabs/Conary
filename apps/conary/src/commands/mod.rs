@@ -37,6 +37,7 @@ mod package_target;
 mod profile;
 pub mod progress;
 mod provenance;
+mod publish;
 mod query;
 mod recipe_audit;
 mod redirect;
@@ -139,6 +140,7 @@ pub use provenance::{
     cmd_provenance_audit, cmd_provenance_diff, cmd_provenance_export, cmd_provenance_find_by_dep,
     cmd_provenance_register, cmd_provenance_show, cmd_provenance_verify,
 };
+pub use publish::{PublishOptions, cmd_publish};
 pub use query::{
     QueryOptions, ScriptQueryOptions, cmd_depends, cmd_deptree, cmd_history, cmd_list_components,
     cmd_query, cmd_query_component, cmd_query_reason, cmd_rdepends, cmd_repquery, cmd_sbom,

@@ -160,6 +160,7 @@ pub fn classify_cli(cli: &Cli) -> Option<CommandRiskPolicy> {
         | Commands::Sbom { .. }
         | Commands::VerifyDerivation(_)
         | Commands::Capability(_) => Some(read_only("conary read-only or non-host command")),
+        Commands::Publish { .. } => Some(local_state("conary publish")),
         Commands::System(command) => classify_system(command),
         Commands::Repo(command) => Some(classify_repo(command)),
         Commands::Config(command) => Some(classify_config(command)),
@@ -831,6 +832,7 @@ mod tests {
         for args in [
             ["conary", "system", "init"].as_slice(),
             ["conary", "repo", "sync", "remi"].as_slice(),
+            ["conary", "publish", "./repo"].as_slice(),
         ] {
             let policy = policy(args);
             assert_eq!(policy.risk, CommandRisk::LocalStateMutation);

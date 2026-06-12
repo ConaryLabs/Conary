@@ -7,14 +7,14 @@ use conary_core::recipe::{Kitchen, KitchenConfig, parse_recipe_file, validate_re
 use std::path::{Path, PathBuf};
 use tracing::info;
 
-fn recipe_source_base_dir(recipe_path: &Path) -> PathBuf {
+pub(crate) fn recipe_source_base_dir(recipe_path: &Path) -> PathBuf {
     recipe_path
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
-fn resolve_recipe_path(target: Option<&str>, recipe: Option<&str>) -> Result<PathBuf> {
+pub(crate) fn resolve_recipe_path(target: Option<&str>, recipe: Option<&str>) -> Result<PathBuf> {
     if let Some(recipe) = recipe {
         return Ok(PathBuf::from(recipe));
     }

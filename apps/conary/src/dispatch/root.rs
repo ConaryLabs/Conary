@@ -335,6 +335,35 @@ pub(super) async fn dispatch_command(
             .await
         }
 
+        Some(Commands::Publish {
+            what,
+            target,
+            recipe,
+            key_dir,
+            state_file,
+            refresh,
+            force_reinit,
+            accept_destination_state,
+            rotate_publish_key,
+            rotate_root_key,
+            yes,
+        }) => {
+            commands::cmd_publish(commands::PublishOptions {
+                what,
+                target,
+                recipe,
+                key_dir,
+                state_file,
+                refresh,
+                force_reinit,
+                accept_destination_state,
+                rotate_publish_key,
+                rotate_root_key,
+                yes,
+            })
+            .await
+        }
+
         Some(Commands::ConvertPkgbuild { pkgbuild, output }) => {
             commands::cmd_convert_pkgbuild(&pkgbuild, output.as_deref()).await
         }

@@ -503,6 +503,51 @@ pub enum Commands {
         hermetic: bool,
     },
 
+    /// Publish a recipe project to an M1a static repository
+    Publish {
+        /// Project-form destination, or artifact path for future M2 artifact-form publish
+        what: String,
+
+        /// Future M2 artifact-form target repository
+        target: Option<String>,
+
+        /// Recipe file to publish
+        #[arg(long)]
+        recipe: Option<String>,
+
+        /// Static repository key directory
+        #[arg(long)]
+        key_dir: Option<String>,
+
+        /// Static repository publish state file
+        #[arg(long)]
+        state_file: Option<String>,
+
+        /// Refresh expiring TUF metadata even when packages are unchanged
+        #[arg(long)]
+        refresh: bool,
+
+        /// Reinitialize repository identity at the destination
+        #[arg(long)]
+        force_reinit: bool,
+
+        /// Accept destination state below the local publish watermark
+        #[arg(long)]
+        accept_destination_state: bool,
+
+        /// Rotate the active publish key
+        #[arg(long)]
+        rotate_publish_key: bool,
+
+        /// Rotate the root identity key
+        #[arg(long)]
+        rotate_root_key: bool,
+
+        /// Assume yes to all prompts
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
+
     /// Convert an Arch Linux PKGBUILD to a Conary recipe
     ///
     /// Reads a PKGBUILD file and outputs the equivalent recipe in TOML format.
@@ -757,6 +802,45 @@ mod tests {
     fn cook_accepts_hidden_m1a_compatibility_flags() {
         assert!(Cli::try_parse_from(["conary", "cook", "--hermetic", "recipe.toml"]).is_ok());
         assert!(Cli::try_parse_from(["conary", "cook", "--no-isolation", "recipe.toml"]).is_ok());
+    }
+
+    #[test]
+    fn publish_project_form_parses() {
+        let cli = Cli::try_parse_from(["conary", "publish", "./repo", "--recipe", "recipe.toml"])
+            .unwrap();
+        let Some(Commands::Publish {
+            what,
+            target,
+            recipe,
+            refresh,
+            ..
+        }) = cli.command
+        else {
+            panic!("expected publish command");
+        };
+
+        assert_eq!(what, "./repo");
+        assert_eq!(target, None);
+        assert_eq!(recipe.as_deref(), Some("recipe.toml"));
+        assert!(!refresh);
+    }
+
+    #[test]
+    fn publish_artifact_form_is_rejected_in_m1a() {
+        let cli = Cli::try_parse_from(["conary", "publish", "dist/pkg.ccs", "./repo"]).unwrap();
+        let Some(Commands::Publish {
+            what,
+            target,
+            recipe,
+            ..
+        }) = cli.command
+        else {
+            panic!("expected publish command");
+        };
+
+        assert_eq!(what, "dist/pkg.ccs");
+        assert_eq!(target.as_deref(), Some("./repo"));
+        assert_eq!(recipe, None);
     }
 
     #[test]
