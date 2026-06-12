@@ -488,6 +488,11 @@ pub enum Commands {
         #[arg(long)]
         fetch_only: bool,
 
+        /// Print recipe inference trace
+        #[arg(long)]
+        #[arg(hide = true)]
+        explain: bool,
+
         /// Build inside the M1a sandboxed isolation path
         #[arg(long)]
         isolated: bool,
@@ -799,6 +804,12 @@ pub enum Commands {
     },
 }
 
+impl std::fmt::Debug for Commands {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Commands")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -824,6 +835,15 @@ mod tests {
     fn cook_accepts_hidden_m1a_compatibility_flags() {
         assert!(Cli::try_parse_from(["conary", "cook", "--hermetic", "recipe.toml"]).is_ok());
         assert!(Cli::try_parse_from(["conary", "cook", "--no-isolation", "recipe.toml"]).is_ok());
+    }
+
+    #[test]
+    fn cook_accepts_explain() {
+        let cli = Cli::try_parse_from(["conary", "cook", ".", "--explain"]).unwrap();
+        match cli.command {
+            Some(Commands::Cook { explain, .. }) => assert!(explain),
+            other => panic!("unexpected command: {other:?}"),
+        }
     }
 
     #[test]

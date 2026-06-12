@@ -148,9 +148,9 @@ pub fn classify_cli(cli: &Cli) -> Option<CommandRiskPolicy> {
         Commands::Pin { .. } => Some(local_state("conary pin")),
         Commands::Unpin { .. } => Some(local_state("conary unpin")),
         Commands::New { .. } => Some(local_state("conary new")),
+        Commands::Cook { .. } => Some(local_state("conary cook")),
         Commands::Search { .. }
         | Commands::List { .. }
-        | Commands::Cook { .. }
         | Commands::ConvertPkgbuild { .. }
         | Commands::RecipeAudit { .. }
         | Commands::Canonical(_)
@@ -825,6 +825,20 @@ mod tests {
             let policy = policy(args);
             assert_eq!(policy.risk, CommandRisk::LocalStateMutation);
             assert!(!policy.requires_ack());
+        }
+    }
+
+    #[test]
+    fn classify_cook_as_local_state_mutation_even_when_validate_only() {
+        for args in [
+            ["conary", "cook", "."].as_slice(),
+            ["conary", "cook", ".", "--validate-only"].as_slice(),
+            ["conary", "cook", ".", "--validate-only", "--explain"].as_slice(),
+        ] {
+            let policy = policy(args);
+            assert_eq!(policy.risk, CommandRisk::LocalStateMutation);
+            assert!(!policy.requires_ack());
+            assert_eq!(policy.command_label.as_ref(), "conary cook");
         }
     }
 

@@ -65,7 +65,7 @@ pub fn resolve_cook_target(
     };
 
     let path = Path::new(target);
-    if is_recipe_file(path) && path.is_file() {
+    if is_toml_file(path) && path.is_file() {
         return Ok(CookTarget::RecipeFile(path.canonicalize()?));
     }
     if looks_like_git_target(target) && !is_supported_archive_target(target) {
@@ -343,6 +343,14 @@ fn is_recipe_file(path: &Path) -> bool {
     path.file_name()
         .and_then(OsStr::to_str)
         .is_some_and(|name| name == "recipe.toml")
+}
+
+fn is_toml_file(path: &Path) -> bool {
+    is_recipe_file(path)
+        || path
+            .extension()
+            .and_then(OsStr::to_str)
+            .is_some_and(|extension| extension == "toml")
 }
 
 fn is_supported_archive_target(target: &str) -> bool {
@@ -665,6 +673,20 @@ version = "0.3.0"
     }
 
     #[test]
+    fn custom_toml_target_is_explicit_recipe() {
+        let dir = tempfile::tempdir().unwrap();
+        let recipe = dir.path().join("custom.toml");
+        fs::write(&recipe, "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n").unwrap();
+
+        let target = resolve_cook_target(Some(recipe.to_str().unwrap()), None).unwrap();
+
+        let CookTarget::RecipeFile(path) = target else {
+            panic!("existing positional TOML file should resolve as an explicit recipe");
+        };
+        assert_eq!(path, recipe.canonicalize().unwrap());
+    }
+
+    #[test]
     fn directory_with_recipe_toml_is_explicit_recipe() {
         let dir = tempfile::tempdir().unwrap();
         let recipe = dir.path().join("recipe.toml");
@@ -781,6 +803,22 @@ version = "0.3.0"
         fs::write(&target, b"not supported").unwrap();
 
         let error = resolve_new_from_target(target.to_str().unwrap()).unwrap_err();
+
+        assert!(
+            error.to_string().contains(
+                "supported target forms: directory, recipe.toml, .tar, .tar.gz, .tgz, or git URL"
+            ),
+            "expected supported forms message, got {error}"
+        );
+    }
+
+    #[test]
+    fn unsupported_cook_file_target_names_supported_forms() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("source.zip");
+        fs::write(&target, b"not supported").unwrap();
+
+        let error = resolve_cook_target(Some(target.to_str().unwrap()), None).unwrap_err();
 
         assert!(
             error.to_string().contains(

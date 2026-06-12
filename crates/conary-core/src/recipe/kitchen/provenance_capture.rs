@@ -8,6 +8,7 @@
 
 use crate::ccs::manifest::{ManifestProvenance, ProvenanceDep, ProvenancePatch};
 use crate::hash;
+use crate::recipe::inference::{SourceTargetKind, SourceTargetProvenance};
 use chrono::{DateTime, Utc};
 use std::collections::BTreeMap;
 use std::fs;
@@ -47,6 +48,12 @@ pub struct ProvenanceCapture {
     pub merkle_root: Option<String>,
     /// Individual file hashes for merkle tree
     file_hashes: BTreeMap<String, String>,
+
+    // === Inference Layer ===
+    /// Override for manifest origin_class.
+    pub origin_class: Option<String>,
+    /// Source target provenance captured before inferred recipe cooking.
+    pub source_provenance: Option<SourceTargetProvenance>,
 }
 
 /// A patch captured during the build
@@ -195,19 +202,20 @@ impl ProvenanceCapture {
     /// Compute the DNA hash from all provenance data
     pub fn compute_dna_hash(&self) -> String {
         let mut hasher = hash::Hasher::new(hash::HashAlgorithm::Sha256);
+        let (upstream_url, upstream_hash, git_commit) = self.manifest_source_fields();
 
         // Source layer
-        if let Some(url) = &self.upstream_url {
+        if let Some(url) = &upstream_url {
             hasher.update(b"source_url:");
             hasher.update(url.as_bytes());
             hasher.update(b"\n");
         }
-        if let Some(hash) = &self.upstream_hash {
+        if let Some(hash) = &upstream_hash {
             hasher.update(b"source_hash:");
             hasher.update(hash.as_bytes());
             hasher.update(b"\n");
         }
-        if let Some(commit) = &self.git_commit {
+        if let Some(commit) = &git_commit {
             hasher.update(b"git_commit:");
             hasher.update(commit.as_bytes());
             hasher.update(b"\n");
@@ -253,15 +261,44 @@ impl ProvenanceCapture {
         format!("sha256:{}", dna.value)
     }
 
+    fn manifest_source_fields(&self) -> (Option<String>, Option<String>, Option<String>) {
+        let mut upstream_url = self.upstream_url.clone();
+        let mut upstream_hash = self.upstream_hash.clone();
+        let mut git_commit = self.git_commit.clone();
+
+        if let Some(source) = &self.source_provenance {
+            match source.kind {
+                SourceTargetKind::Archive => {
+                    upstream_url = Some(source.original.clone());
+                    upstream_hash = source.archive_checksum.clone();
+                    git_commit = None;
+                }
+                SourceTargetKind::Git => {
+                    upstream_url = Some(source.original.clone());
+                    upstream_hash = None;
+                    git_commit = source.git_commit.clone();
+                }
+                SourceTargetKind::Directory => {
+                    upstream_url = Some(format!("local:{}", source.original));
+                    upstream_hash = None;
+                    git_commit = None;
+                }
+            }
+        }
+
+        (upstream_url, upstream_hash, git_commit)
+    }
+
     /// Convert to ManifestProvenance for inclusion in CCS manifest
     pub fn to_manifest_provenance(&self) -> ManifestProvenance {
         let dna_hash = self.compute_dna_hash();
+        let (upstream_url, upstream_hash, git_commit) = self.manifest_source_fields();
 
         ManifestProvenance {
             // Source layer
-            upstream_url: self.upstream_url.clone(),
-            upstream_hash: self.upstream_hash.clone(),
-            git_commit: self.git_commit.clone(),
+            upstream_url,
+            upstream_hash,
+            git_commit,
             fetch_timestamp: self.fetch_timestamp.map(|t| t.to_rfc3339()),
             patches: self
                 .patches
@@ -288,7 +325,11 @@ impl ProvenanceCapture {
                     dna_hash: d.dna_hash.clone(),
                 })
                 .collect(),
-            origin_class: Some("native-built".to_string()),
+            origin_class: Some(
+                self.origin_class
+                    .clone()
+                    .unwrap_or_else(|| "native-built".to_string()),
+            ),
             hardening_level: Some(if self.isolated {
                 "sandboxed".to_string()
             } else {

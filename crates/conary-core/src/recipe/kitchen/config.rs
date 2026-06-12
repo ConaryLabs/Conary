@@ -3,6 +3,7 @@
 //! Configuration types for the Kitchen build system
 
 use crate::recipe::format::BuildStage;
+use crate::recipe::inference::SourceTargetProvenance;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -190,6 +191,10 @@ pub struct KitchenConfig {
     /// Local source recipes require this to be set to the recipe file directory.
     /// Remote archive recipes are unaffected when this is unset.
     pub recipe_source_base_dir: Option<PathBuf>,
+    /// Override for CCS manifest origin_class.
+    pub origin_class_override: Option<String>,
+    /// Source-target provenance captured before recipe inference.
+    pub source_provenance_override: Option<SourceTargetProvenance>,
     /// Timeout for build operations
     pub timeout: Duration,
     /// Number of parallel jobs
@@ -244,6 +249,8 @@ impl Default for KitchenConfig {
         Self {
             source_cache: PathBuf::from("/var/cache/conary/sources"),
             recipe_source_base_dir: None,
+            origin_class_override: None,
+            source_provenance_override: None,
             timeout: Duration::from_secs(3600), // 1 hour
             jobs,
             allow_network: false,
