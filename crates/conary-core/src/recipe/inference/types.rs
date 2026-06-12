@@ -22,6 +22,16 @@ pub struct InferenceOptions {
     pub version_override: Option<String>,
 }
 
+impl InferenceOptions {
+    pub fn for_source_root(source_root: impl Into<PathBuf>) -> Self {
+        Self {
+            source_root: source_root.into(),
+            package_name_override: None,
+            version_override: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct InferenceTrace {
     pub events: Vec<InferenceEvent>,
