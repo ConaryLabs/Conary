@@ -165,6 +165,51 @@ pub fn rotate_key(
     })
 }
 
+/// Rotate the publish key across all roles backed by it in one root version.
+pub fn rotate_publish_key(
+    current_root: &Signed<RootMetadata>,
+    old_publish_key: &SigningKeyPair,
+    new_publish_key: &SigningKeyPair,
+    root_key: &SigningKeyPair,
+    expires_days: i64,
+) -> TrustResult<Signed<RootMetadata>> {
+    let expires = Utc::now() + Duration::days(expires_days);
+    let (old_key_id, _) = signing_keypair_to_tuf_key(old_publish_key)?;
+    let (new_key_id, new_tuf_key) = signing_keypair_to_tuf_key(new_publish_key)?;
+
+    let mut new_root = current_root.signed.clone();
+    new_root.version += 1;
+    new_root.expires = expires;
+    new_root.keys.insert(new_key_id.clone(), new_tuf_key);
+
+    for role_name in ["targets", "snapshot", "timestamp"] {
+        let role_def = new_root.roles.get_mut(role_name).ok_or_else(|| {
+            TrustError::ConsistencyError(format!(
+                "Cannot rotate publish key: role '{}' not found in root metadata",
+                role_name
+            ))
+        })?;
+        role_def.keyids.retain(|id| *id != old_key_id);
+        if !role_def.keyids.contains(&new_key_id) {
+            role_def.keyids.push(new_key_id.clone());
+        }
+    }
+
+    let old_key_still_referenced = new_root
+        .roles
+        .values()
+        .any(|role| role.keyids.contains(&old_key_id));
+    if !old_key_still_referenced {
+        new_root.keys.remove(&old_key_id);
+    }
+
+    let sig = sign_tuf_metadata(root_key, &new_root)?;
+    Ok(Signed {
+        signed: new_root,
+        signatures: vec![sig],
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -267,6 +312,38 @@ mod tests {
         assert!(
             !rotated.signed.keys.contains_key(&old_id),
             "Unreferenced old key must be removed from keys map"
+        );
+    }
+
+    #[test]
+    fn rotate_publish_key_moves_targets_snapshot_and_timestamp_together() {
+        let root_key = SigningKeyPair::generate();
+        let publish_key = SigningKeyPair::generate();
+        let initial =
+            create_initial_root(&root_key, &publish_key, &publish_key, &publish_key, 365).unwrap();
+
+        let new_publish_key = SigningKeyPair::generate();
+        let rotated =
+            rotate_publish_key(&initial, &publish_key, &new_publish_key, &root_key, 365).unwrap();
+
+        let (root_id, _) = signing_keypair_to_tuf_key(&root_key).unwrap();
+        let (old_publish_id, _) = signing_keypair_to_tuf_key(&publish_key).unwrap();
+        let (new_publish_id, _) = signing_keypair_to_tuf_key(&new_publish_key).unwrap();
+
+        assert_eq!(rotated.signed.version, 2);
+        assert_eq!(rotated.signed.roles["root"].keyids, vec![root_id.clone()]);
+        for role in ["targets", "snapshot", "timestamp"] {
+            assert_eq!(
+                rotated.signed.roles[role].keyids,
+                vec![new_publish_id.clone()],
+                "{role} should move to the new publish key"
+            );
+        }
+        assert!(rotated.signed.keys.contains_key(&root_id));
+        assert!(rotated.signed.keys.contains_key(&new_publish_id));
+        assert!(
+            !rotated.signed.keys.contains_key(&old_publish_id),
+            "old publish key should be removed when no role references it"
         );
     }
 
