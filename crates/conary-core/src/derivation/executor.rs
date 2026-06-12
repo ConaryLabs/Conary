@@ -15,7 +15,7 @@ use rusqlite::Connection;
 use tracing::info;
 
 use crate::filesystem::CasStore;
-use crate::recipe::{Kitchen, KitchenConfig, Recipe};
+use crate::recipe::{Kitchen, KitchenConfig, Recipe, SourceSection};
 
 use super::capture::{CaptureError, capture_output};
 use super::id::{DerivationError, DerivationId, DerivationInputs};
@@ -433,10 +433,15 @@ impl DerivationExecutor {
             .map_err(|e| ExecutorError::Cas(e.to_string()))?;
 
         // Step 6: Build provenance record (4 layers) and store as CAS object.
-        let source_prov = crate::provenance::SourceProvenance::from_tarball(
-            &recipe.source.archive,
-            &recipe.source.checksum,
-        );
+        let source_prov = match &recipe.source {
+            SourceSection::Remote(source) => {
+                crate::provenance::SourceProvenance::from_tarball(&source.archive, &source.checksum)
+            }
+            SourceSection::Local(source) => crate::provenance::SourceProvenance {
+                upstream_url: Some(format!("local:{}", source.path.display())),
+                ..Default::default()
+            },
+        };
 
         let mut build_prov = crate::provenance::BuildProvenance::new(&script_hash);
         build_prov

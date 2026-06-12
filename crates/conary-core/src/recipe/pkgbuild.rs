@@ -40,7 +40,8 @@
 //! - VCS packages (-git, -svn) need manual adjustment
 
 use crate::recipe::format::{
-    BuildSection, PackageSection, PatchInfo, PatchSection, Recipe, SourceSection,
+    BuildSection, PackageSection, PatchInfo, PatchSection, Recipe, RemoteSourceSection,
+    SourceSection,
 };
 use regex::Regex;
 use std::collections::HashMap;
@@ -287,13 +288,13 @@ pub fn convert_pkgbuild(content: &str) -> Result<ConversionResult, PkgbuildError
             license,
             homepage: url,
         },
-        source: SourceSection {
+        source: SourceSection::Remote(RemoteSourceSection {
             archive: source_url,
             checksum,
             signature: None,
             additional: additional_sources,
             extract_dir: None,
-        },
+        }),
         build: BuildSection {
             requires: build_requires,
             makedepends: Vec::new(), // PKGBUILD makedepends handled separately
@@ -621,17 +622,14 @@ source=("https://example.com/test-1.0.tar.gz")
 sha512sums=('SKIP')
 "#;
         let result = convert_pkgbuild(content).unwrap();
+        let source = result.recipe.remote_source().unwrap();
         assert!(
-            result
-                .recipe
-                .source
-                .checksum
-                .contains("sha256:VERIFY_BEFORE_BUILD"),
+            source.checksum.contains("sha256:VERIFY_BEFORE_BUILD"),
             "SKIP should be converted to placeholder, got: {}",
-            result.recipe.source.checksum
+            source.checksum
         );
         assert!(
-            !result.recipe.source.checksum.contains("SKIP"),
+            !source.checksum.contains("SKIP"),
             "Literal SKIP should not appear in output"
         );
     }

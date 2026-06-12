@@ -184,6 +184,12 @@ impl StageRegistry {
 pub struct KitchenConfig {
     /// Directory for downloaded sources
     pub source_cache: PathBuf,
+    /// Directory containing the recipe file.
+    ///
+    /// Local `[source] path = ...` entries resolve relative to this directory.
+    /// Callers that construct recipes in memory can leave this unset to resolve
+    /// relative to the current working directory.
+    pub recipe_source_base_dir: Option<PathBuf>,
     /// Timeout for build operations
     pub timeout: Duration,
     /// Number of parallel jobs
@@ -237,6 +243,7 @@ impl Default for KitchenConfig {
 
         Self {
             source_cache: PathBuf::from("/var/cache/conary/sources"),
+            recipe_source_base_dir: None,
             timeout: Duration::from_secs(3600), // 1 hour
             jobs,
             allow_network: false,

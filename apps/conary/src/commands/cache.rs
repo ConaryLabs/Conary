@@ -75,10 +75,16 @@ fn prefetch_profile_sources(profile: &BuildProfile, db_path: &str) -> Result<Sou
             )
         })?;
 
+        let source = recipe.remote_source().ok_or_else(|| {
+            anyhow::anyhow!(
+                "source prefetch for '{}' requires an archive source",
+                drv.package
+            )
+        })?;
         let target_path = sources_dir.join(recipe.archive_filename());
         let cached = target_path.exists()
             && runner
-                .verify_checksum(&drv.package, &recipe.source.checksum, &target_path)
+                .verify_checksum(&drv.package, &source.checksum, &target_path)
                 .is_ok();
 
         runner

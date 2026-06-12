@@ -3,7 +3,7 @@
 //! Recipe file parsing
 
 use crate::error::{Error, Result};
-use crate::recipe::format::{Recipe, is_remote_url};
+use crate::recipe::format::{Recipe, SourceSection, is_remote_url};
 use std::path::Path;
 
 /// Parse a recipe from a TOML string
@@ -35,24 +35,24 @@ pub fn validate_recipe(recipe: &Recipe) -> Result<Vec<String>> {
         ));
     }
 
-    // Validate checksum format.
-    // Only sha256 and xxh128 are supported by verify_file_checksum in archive.rs.
-    if !recipe.source.checksum.starts_with("sha256:")
-        && !recipe.source.checksum.starts_with("xxh128:")
-    {
-        return Err(Error::ParseError(format!(
-            "Invalid checksum format: {}. Expected sha256:... or xxh128:...",
-            recipe.source.checksum
-        )));
-    }
+    if let SourceSection::Remote(source) = &recipe.source {
+        // Validate checksum format.
+        // Only sha256 and xxh128 are supported by verify_file_checksum in archive.rs.
+        if !source.checksum.starts_with("sha256:") && !source.checksum.starts_with("xxh128:") {
+            return Err(Error::ParseError(format!(
+                "Invalid checksum format: {}. Expected sha256:... or xxh128:...",
+                source.checksum
+            )));
+        }
 
-    // Reject placeholder checksums that should be replaced before building
-    let checksum_upper = recipe.source.checksum.to_uppercase();
-    if checksum_upper.contains("VERIFY_BEFORE_BUILD") || checksum_upper.contains("FIXME") {
-        return Err(Error::ParseError(format!(
-            "Recipe contains placeholder checksum: {}. Replace with actual checksum before building.",
-            recipe.source.checksum
-        )));
+        // Reject placeholder checksums that should be replaced before building
+        let checksum_upper = source.checksum.to_uppercase();
+        if checksum_upper.contains("VERIFY_BEFORE_BUILD") || checksum_upper.contains("FIXME") {
+            return Err(Error::ParseError(format!(
+                "Recipe contains placeholder checksum: {}. Replace with actual checksum before building.",
+                source.checksum
+            )));
+        }
     }
 
     // Warn about missing fields
