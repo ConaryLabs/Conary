@@ -361,6 +361,7 @@ mod tests {
     use super::*;
     use conary_core::db::models::{ProvideEntry, Trove, TroveType};
     use conary_core::db::schema;
+    use conary_core::repository::RepositorySourceKind;
     use conary_core::resolver::MissingDependency;
     use conary_core::version::VersionConstraint;
     use rusqlite::Connection;
@@ -477,6 +478,7 @@ mod tests {
                     repository_id: 42,
                     source_distro: Some("fedora".to_string()),
                     version_scheme: Some("rpm".to_string()),
+                    source_kind: RepositorySourceKind::Remi,
                 }),
             },
             "tree",
@@ -494,5 +496,6 @@ mod tests {
         assert_eq!(provenance.repository_id, 42);
         assert_eq!(provenance.source_distro.as_deref(), Some("fedora"));
         assert_eq!(provenance.version_scheme.as_deref(), Some("rpm"));
+        assert_eq!(provenance.source_kind, RepositorySourceKind::Remi);
     }
 }

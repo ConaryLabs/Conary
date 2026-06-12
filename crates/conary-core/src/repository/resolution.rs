@@ -155,10 +155,18 @@ pub enum PackageSource {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RepositorySourceKind {
+    Native,
+    Remi,
+    Static,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepositorySourceMetadata {
     pub repository_id: i64,
     pub source_distro: Option<String>,
     pub version_scheme: Option<String>,
+    pub source_kind: RepositorySourceKind,
 }
 
 impl PackageSource {
@@ -821,6 +829,11 @@ fn repository_source_metadata(pkg_with_repo: &PackageWithRepo) -> RepositorySour
             &pkg_with_repo.repository,
         )
         .map(version_scheme_to_db_string),
+        source_kind: match pkg_with_repo.repository.default_strategy.as_deref() {
+            Some("static") => RepositorySourceKind::Static,
+            Some("remi") => RepositorySourceKind::Remi,
+            _ => RepositorySourceKind::Native,
+        },
     }
 }
 
@@ -1084,6 +1097,7 @@ mod tests {
         assert_eq!(metadata.repository_id, repo_id);
         assert_eq!(metadata.source_distro.as_deref(), Some("fedora"));
         assert_eq!(metadata.version_scheme.as_deref(), Some("rpm"));
+        assert_eq!(metadata.source_kind, RepositorySourceKind::Native);
     }
 
     #[test]
@@ -1104,6 +1118,44 @@ mod tests {
 
         assert_eq!(metadata.source_distro.as_deref(), Some("arch"));
         assert_eq!(metadata.version_scheme.as_deref(), Some("arch"));
+        assert_eq!(metadata.source_kind, RepositorySourceKind::Native);
+    }
+
+    #[test]
+    fn repository_source_metadata_tags_static_and_remi_sources() {
+        let (_temp, conn) = create_test_db();
+        conn.execute(
+            "INSERT INTO repositories (name, url, enabled, priority, default_strategy)
+             VALUES ('static-repo', 'https://static.example.invalid', 1, 10, 'static')",
+            [],
+        )
+        .unwrap();
+        let static_repo_id = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO repositories (name, url, enabled, priority, default_strategy)
+             VALUES ('remi-repo', 'https://remi.example.invalid', 1, 10, 'remi')",
+            [],
+        )
+        .unwrap();
+        let remi_repo_id = conn.last_insert_rowid();
+        let _static_pkg_id = create_test_package(&conn, static_repo_id, "static-tree", "1.0.0");
+        let _remi_pkg_id = create_test_package(&conn, remi_repo_id, "remi-tree", "1.0.0");
+
+        let static_pkg =
+            PackageSelector::find_best_package(&conn, "static-tree", &SelectionOptions::default())
+                .unwrap();
+        let remi_pkg =
+            PackageSelector::find_best_package(&conn, "remi-tree", &SelectionOptions::default())
+                .unwrap();
+
+        assert_eq!(
+            repository_source_metadata(&static_pkg).source_kind,
+            RepositorySourceKind::Static
+        );
+        assert_eq!(
+            repository_source_metadata(&remi_pkg).source_kind,
+            RepositorySourceKind::Remi
+        );
     }
 
     #[test]

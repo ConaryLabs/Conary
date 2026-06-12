@@ -770,6 +770,7 @@ mod tests {
                 repository_id: repo_id,
                 source_distro: Some("fedora".to_string()),
                 version_scheme: Some("rpm".to_string()),
+                source_kind: conary_core::repository::RepositorySourceKind::Native,
             }),
             legacy_replay: LegacyReplayOptions::default(),
             accepted_legacy_bundle: None,

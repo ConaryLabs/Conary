@@ -1328,21 +1328,26 @@ mod tests {
         }));
 
         let trusted = RepositoryPackageKey::trusted_keys_for_repository(&conn, repo_id).unwrap();
-        assert_eq!(trusted.len(), 2);
+        assert_eq!(trusted.len(), 1);
         assert!(trusted.contains(&fixture.active_key));
-        assert!(trusted.contains(&fixture.retired_key));
 
-        let stored_statuses: Vec<String> = conn
+        let stored_keys_and_statuses: Vec<(String, String)> = conn
             .prepare(
-                "SELECT status FROM repository_package_keys
+                "SELECT public_key, status FROM repository_package_keys
                  WHERE repository_id = ?1 ORDER BY status",
             )
             .unwrap()
-            .query_map([repo_id], |row| row.get(0))
+            .query_map([repo_id], |row| Ok((row.get(0)?, row.get(1)?)))
             .unwrap()
             .collect::<std::result::Result<Vec<_>, _>>()
             .unwrap();
-        assert_eq!(stored_statuses, vec!["active", "retired"]);
+        assert_eq!(
+            stored_keys_and_statuses,
+            vec![
+                (fixture.active_key.clone(), "active".to_string()),
+                (fixture.retired_key.clone(), "retired".to_string())
+            ]
+        );
     }
 
     #[test]

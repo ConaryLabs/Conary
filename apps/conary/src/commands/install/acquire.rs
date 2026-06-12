@@ -222,6 +222,7 @@ fn install_provenance_from_resolved(
             repository_id: provenance.repository_id,
             source_distro: provenance.source_distro.clone(),
             version_scheme: provenance.version_scheme.clone(),
+            source_kind: provenance.source_kind.clone(),
         })
 }
 
@@ -315,5 +316,35 @@ fn print_package_suggestions(conn: &rusqlite::Connection, package_name: &str) {
         }
         let stem = package_name.split('-').next().unwrap_or(package_name);
         eprintln!("\nUse 'conary canonical search {}' for more options.", stem);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use conary_core::repository::{RepositorySourceKind, RepositorySourceMetadata};
+    use std::path::PathBuf;
+
+    #[test]
+    fn install_provenance_from_resolved_copies_source_kind() {
+        let resolved = ResolvedPackage {
+            path: PathBuf::from("/tmp/example.ccs"),
+            _temp_dir: None,
+            source_type: ResolvedSourceType::Remi,
+            repository_provenance: Some(RepositorySourceMetadata {
+                repository_id: 77,
+                source_distro: Some("fedora".to_string()),
+                version_scheme: Some("rpm".to_string()),
+                source_kind: RepositorySourceKind::Static,
+            }),
+        };
+
+        let provenance = install_provenance_from_resolved(&resolved)
+            .expect("repository provenance should be copied");
+
+        assert_eq!(provenance.repository_id, 77);
+        assert_eq!(provenance.source_distro.as_deref(), Some("fedora"));
+        assert_eq!(provenance.version_scheme.as_deref(), Some("rpm"));
+        assert_eq!(provenance.source_kind, RepositorySourceKind::Static);
     }
 }

@@ -1354,6 +1354,7 @@ mod tests {
                 repository_id: 9,
                 source_distro: Some("arch".to_string()),
                 version_scheme: Some("arch".to_string()),
+                source_kind: conary_core::repository::RepositorySourceKind::Native,
             }),
             legacy_replay_state: LegacyReplayInstallState::default(),
         };

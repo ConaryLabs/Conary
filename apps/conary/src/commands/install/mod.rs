@@ -46,7 +46,10 @@ pub(super) use legacy_replay::{
     plan_ccs_old_installed_upgrade_legacy_replay,
 };
 pub use options::InstallOptions;
-pub(crate) use options::{RepositoryInstallProvenance, repository_install_provenance_from_package};
+pub(crate) use options::{
+    RepositoryInstallProvenance, repository_install_provenance_from_package,
+    verify_static_repository_ccs_package_if_needed,
+};
 pub use prepare::{ComponentSelection, UpgradeCheck};
 pub(crate) use restore::{
     add_prepared_install_to_target_state, build_target_state_view,
