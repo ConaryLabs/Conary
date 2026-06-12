@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-06-10
-revision: 18
-summary: Refresh assistant command routing
+last_updated: 2026-06-12
+revision: 19
+summary: Route static repository publishing
 ---
 
 # Assistant Subsystem Map
@@ -21,6 +21,15 @@ summary: Refresh assistant command routing
 
 - Repository sync, remote metadata, chunk retrieval, and Remi client behavior:
   `crates/conary-core/src/repository/`
+- Packaging and static repository publishing:
+  `docs/specs/static-repo-format-v1.md`,
+  `docs/superpowers/specs/2026-06-10-packaging-toolchain-design.md`,
+  `apps/conary/src/commands/publish.rs`,
+  `apps/conary/src/commands/cook.rs`,
+  `apps/conary/src/commands/repo_static.rs`,
+  `crates/conary-core/src/repository/static_repo/`,
+  `crates/conary-core/src/trust/`, and
+  `crates/conary-core/src/ccs/signing.rs`
 - Source selection, runtime policy mirrors, and replatform convergence:
   `crates/conary-core/src/repository/effective_policy.rs`,
   `crates/conary-core/src/model/parser.rs`,

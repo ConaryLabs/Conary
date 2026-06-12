@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-06-09
-revision: 21
-summary: Note bootstrap command child modules
+last_updated: 2026-06-12
+revision: 22
+summary: Route static repository publishing ownership
 ---
 
 # Conary Architecture
@@ -17,7 +17,7 @@ apps/conary/ (CLI)
   cli/ + app.rs + dispatch.rs + dispatch/
       |
       +-- install / update / remove
-      +-- repo / query / model / ccs / collection
+      +-- repo / publish / query / model / ccs / collection
       +-- system generation / state / takeover
       +-- bootstrap / provenance / capability / federation
       |
@@ -28,7 +28,7 @@ crates/conary-core/
       |               |             |                +-- composefs/EROFS
       |               |             +-- CAS + SQLite commit lifecycle
       |               +-- SAT resolution + routing policy
-      +-- remote metadata, Remi client, mirrors, substituters
+      +-- remote metadata, static repos, Remi client, mirrors, substituters
 
 Supporting workspace members
   apps/remi/         public/admin package service, search, federation, MCP
@@ -85,14 +85,14 @@ apps/conary/             CLI binary
     +-- dispatch.rs      Public dispatch entrypoint and child-router hub
     +-- dispatch/        Root, system, CCS, model, automation, and namespace routers
     +-- cli/             Clap command definitions
-    +-- commands/        Command implementations (install, repo, query, model/remove/bootstrap hubs + child modules, ccs, system)
+    +-- commands/        Command implementations (install, repo, publish, query, model/remove/bootstrap hubs + child modules, ccs, system)
 
 crates/conary-core/      Core library crate
 +-- src/
     +-- lib.rs           Internal workspace crate surface, not a stable external API
     +-- operations.rs    Shared operation vocabulary across CLI and daemon boundaries
     +-- db/              Database layer
-    |   +-- schema.rs    Schema v71, migration dispatcher
+    |   +-- schema.rs    Schema v72, migration dispatcher
     |   +-- migrations/  Migration functions grouped into v1_v20.rs, v21_v40.rs, v41_current.rs
     |   +-- models/      ORM-style model structs
     +-- transaction/     Composefs-native transaction engine
@@ -128,6 +128,7 @@ crates/conary-core/      Core library crate
     |   +-- conflict.rs  Conflict reporting and policy support
     |   +-- identity.rs  Dependency identity normalization
     +-- repository/      Remote package sources
+    |   +-- static_repo/ Static repository format, publishing, sync, and key persistence
     |   +-- metadata.rs  Index parsing (RPM repodata, DEB Packages, Arch DB)
     |   +-- remi.rs      Remi client (CCS chunk fetcher)
     |   +-- chunk_fetcher.rs ChunkFetcher trait + HTTP/local/composite impls
@@ -453,7 +454,7 @@ itself.
 Supports x86_64, aarch64, and riscv64 targets. Dry-run mode
 (`--dry-run`) validates the full pipeline without building.
 
-## Database Schema (v71)
+## Database Schema (v72)
 
 All runtime state lives in SQLite, and migrations are dispatched from
 `crates/conary-core/src/db/schema.rs`.
