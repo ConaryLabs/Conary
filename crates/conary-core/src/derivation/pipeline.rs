@@ -170,6 +170,10 @@ pub enum PipelineError {
     /// Installing a derivation into the sysroot failed.
     #[error("install error: {0}")]
     Install(String),
+
+    /// Recipe source hashing cannot produce a safe derivation input.
+    #[error(transparent)]
+    RecipeHash(#[from] recipe_hash::RecipeHashError),
 }
 
 // From<ComposeError> is derived via #[from] on the Compose variant above.
@@ -231,7 +235,7 @@ impl Pipeline {
                 .collect();
 
             let inputs = DerivationInputs {
-                source_hash: recipe_hash::source_hash(recipe),
+                source_hash: recipe_hash::try_source_hash(recipe)?,
                 build_script_hash: recipe_hash::build_script_hash(recipe),
                 dependency_ids,
                 build_env_hash: build_env_hash.clone(),
@@ -364,7 +368,7 @@ impl Pipeline {
                 // grows in topological order, same as the main loop).
                 let dep_ids = collect_dep_ids(recipe, &completed_seed);
                 let inputs = DerivationInputs {
-                    source_hash: recipe_hash::source_hash(recipe),
+                    source_hash: recipe_hash::try_source_hash(recipe)?,
                     build_script_hash: recipe_hash::build_script_hash(recipe),
                     dependency_ids: dep_ids,
                     build_env_hash: build_env_hash.clone(),
@@ -417,7 +421,7 @@ impl Pipeline {
             {
                 let dep_ids = collect_dep_ids(recipe, &acc.completed);
                 let inputs = DerivationInputs {
-                    source_hash: recipe_hash::source_hash(recipe),
+                    source_hash: recipe_hash::try_source_hash(recipe)?,
                     build_script_hash: recipe_hash::build_script_hash(recipe),
                     dependency_ids: dep_ids,
                     build_env_hash: build_env_hash.clone(),

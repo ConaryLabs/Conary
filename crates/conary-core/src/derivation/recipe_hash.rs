@@ -16,6 +16,16 @@ use std::collections::BTreeMap;
 use crate::hash;
 use crate::recipe::{Recipe, SourceSection};
 
+/// Errors from hashing recipe source inputs for derivation IDs.
+#[derive(Debug, thiserror::Error)]
+pub enum RecipeHashError {
+    /// Local source recipe hashing needs content provenance not available in M1a.
+    #[error(
+        "local source recipes are not supported by derivation IDs in M1a; use conary cook/publish or wait for M2 tree hashing"
+    )]
+    UnsupportedLocalSource,
+}
+
 /// Expand `%(name)s`-style variables in a template string.
 ///
 /// Variables come from two sources, applied in order:
@@ -117,6 +127,17 @@ pub fn source_hash(recipe: &Recipe) -> String {
     }
 
     hasher.finalize().value
+}
+
+/// Fallibly compute a SHA-256 hash of source inputs for derivation IDs.
+///
+/// Local source recipes are rejected in M1a because hashing only the path would
+/// make derivation IDs unsafe. M2 will add content tree hashing/provenance.
+pub fn try_source_hash(recipe: &Recipe) -> Result<String, RecipeHashError> {
+    match &recipe.source {
+        SourceSection::Remote(_) => Ok(source_hash(recipe)),
+        SourceSection::Local(_) => Err(RecipeHashError::UnsupportedLocalSource),
+    }
 }
 
 #[cfg(test)]
@@ -226,6 +247,22 @@ jobs = "8"
 
         let expanded = expand_variables("%(unknown)s stays", &recipe);
         assert_eq!(expanded, "%(unknown)s stays");
+    }
+
+    #[test]
+    fn try_source_hash_rejects_local_source_in_m1a() {
+        let mut recipe = parse_recipe(SAMPLE_RECIPE);
+        recipe.source =
+            SourceSection::Local(crate::recipe::LocalSourceSection { path: "src".into() });
+
+        let error = try_source_hash(&recipe).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("local source recipes are not supported by derivation IDs in M1a"),
+            "expected M1a unsupported local source error, got: {error}"
+        );
     }
 
     #[test]

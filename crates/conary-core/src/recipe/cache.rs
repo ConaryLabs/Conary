@@ -195,6 +195,14 @@ impl BuildCache {
         self.cache_key_with_deps(recipe, toolchain, None)
     }
 
+    /// Fallibly compute a cache key for a recipe and toolchain.
+    ///
+    /// Local source recipes are rejected in M1a because hashing only the path
+    /// would make cached cooking unsafe until M2 tree hashing exists.
+    pub fn try_cache_key(&self, recipe: &Recipe, toolchain: &ToolchainInfo) -> Result<String> {
+        self.try_cache_key_with_deps(recipe, toolchain, None)
+    }
+
     /// Compute a cache key including dependency content hashes
     ///
     /// This provides BuildStream-grade cache invalidation: if any dependency
@@ -248,6 +256,23 @@ impl BuildCache {
         );
 
         key
+    }
+
+    /// Fallibly compute a cache key including dependency content hashes.
+    pub fn try_cache_key_with_deps(
+        &self,
+        recipe: &Recipe,
+        toolchain: &ToolchainInfo,
+        dep_hashes: Option<&DependencyHashes>,
+    ) -> Result<String> {
+        if matches!(&recipe.source, SourceSection::Local(_)) {
+            return Err(crate::error::Error::ConfigError(
+                "local source recipes are not supported by cached cooking in M1a; use uncached conary cook/publish or wait for M2 tree hashing"
+                    .to_string(),
+            ));
+        }
+
+        Ok(self.cache_key_with_deps(recipe, toolchain, dep_hashes))
     }
 
     /// Hash a recipe's build-relevant content
@@ -383,7 +408,7 @@ impl BuildCache {
 
     /// Check if a cached build exists for the given recipe and toolchain
     pub fn get(&self, recipe: &Recipe, toolchain: &ToolchainInfo) -> Result<Option<CacheEntry>> {
-        let key = self.cache_key(recipe, toolchain);
+        let key = self.try_cache_key(recipe, toolchain)?;
         self.get_by_key(&key)
     }
 
@@ -484,7 +509,7 @@ impl BuildCache {
         toolchain: &ToolchainInfo,
         package_path: &Path,
     ) -> Result<CacheEntry> {
-        let key = self.cache_key(recipe, toolchain);
+        let key = self.try_cache_key(recipe, toolchain)?;
         self.put_with_key(&key, package_path, recipe)
     }
 
@@ -693,7 +718,9 @@ impl CacheStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::recipe::format::{BuildSection, PackageSection, RemoteSourceSection, SourceSection};
+    use crate::recipe::format::{
+        BuildSection, LocalSourceSection, PackageSection, RemoteSourceSection, SourceSection,
+    };
     use tempfile::TempDir;
 
     fn make_test_recipe(name: &str, version: &str) -> Recipe {
@@ -736,6 +763,14 @@ mod tests {
         }
     }
 
+    fn make_local_source_recipe() -> Recipe {
+        let mut recipe = make_test_recipe("local", "1.0.0");
+        recipe.source = SourceSection::Local(LocalSourceSection {
+            path: PathBuf::from("src"),
+        });
+        recipe
+    }
+
     #[test]
     fn test_cache_key_deterministic() {
         let temp = TempDir::new().unwrap();
@@ -752,6 +787,50 @@ mod tests {
         let key2 = cache.cache_key(&recipe, &toolchain);
 
         assert_eq!(key1, key2);
+    }
+
+    #[test]
+    fn test_get_rejects_local_source_recipe_cache_key() {
+        let temp = TempDir::new().unwrap();
+        let cache = BuildCache::new(CacheConfig {
+            cache_dir: temp.path().to_path_buf(),
+            ..Default::default()
+        })
+        .unwrap();
+        let recipe = make_local_source_recipe();
+        let toolchain = ToolchainInfo::default();
+
+        let error = cache.get(&recipe, &toolchain).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("local source recipes are not supported by cached cooking in M1a"),
+            "expected local-source cache rejection, got: {error}"
+        );
+    }
+
+    #[test]
+    fn test_put_rejects_local_source_recipe_cache_key() {
+        let temp = TempDir::new().unwrap();
+        let package = temp.path().join("local-1.0.0-1.ccs");
+        fs::write(&package, b"package").unwrap();
+        let cache = BuildCache::new(CacheConfig {
+            cache_dir: temp.path().join("cache"),
+            ..Default::default()
+        })
+        .unwrap();
+        let recipe = make_local_source_recipe();
+        let toolchain = ToolchainInfo::default();
+
+        let error = cache.put(&recipe, &toolchain, &package).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("local source recipes are not supported by cached cooking in M1a"),
+            "expected local-source cache rejection, got: {error}"
+        );
     }
 
     #[test]

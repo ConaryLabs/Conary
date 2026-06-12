@@ -308,7 +308,7 @@ impl DerivationExecutor {
         conn: &Connection,
     ) -> Result<ExecutionResult, ExecutorError> {
         // Step 1: Compute derivation ID from all inputs.
-        let src_hash = recipe_hash::source_hash(recipe);
+        let src_hash = recipe_hash::try_source_hash(recipe).map_err(DerivationError::from)?;
         let script_hash = recipe_hash::build_script_hash(recipe);
 
         let inputs = DerivationInputs {
@@ -663,6 +663,49 @@ install = "make install"
                 panic!("expected CacheHit, got Built");
             }
         }
+    }
+
+    #[test]
+    fn execute_rejects_local_source_recipe_before_build() {
+        let tmp = TempDir::new().unwrap();
+        let cas = test_cas(tmp.path());
+        let conn = setup_db();
+        let recipe: Recipe = toml::from_str(
+            r#"
+[package]
+name = "local"
+version = "1.0"
+
+[source]
+path = "src"
+
+[build]
+make = "true"
+install = "true"
+"#,
+        )
+        .expect("local source recipe must parse");
+        let sysroot = tmp.path().join("sysroot");
+        std::fs::create_dir_all(&sysroot).unwrap();
+
+        let executor =
+            DerivationExecutor::new(cas, tmp.path().join("cas"), ExecutorConfig::default());
+        let result = executor.execute(
+            &recipe,
+            "env_hash",
+            &BTreeMap::new(),
+            "x86_64-unknown-linux-gnu",
+            &sysroot,
+            &conn,
+        );
+
+        let error = result.unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("local source recipes are not supported by derivation IDs in M1a"),
+            "expected explicit M1a derivation rejection, got: {error}"
+        );
     }
 
     #[test]

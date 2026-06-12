@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use conary_core::derivation::executor::{DerivationExecutor, ExecutionResult, ExecutorConfig};
 use conary_core::derivation::id::{DerivationId, DerivationInputs};
-use conary_core::derivation::recipe_hash::{build_script_hash, source_hash};
+use conary_core::derivation::recipe_hash::{build_script_hash, try_source_hash};
 use conary_core::generation::mount::{MountOptions, mount_generation, unmount_generation};
 use conary_core::recipe::parse_recipe_file;
 use rusqlite::Connection;
@@ -187,7 +187,7 @@ pub async fn cmd_derivation_show(recipe: &Path, env_hash: &str) -> Result<()> {
     );
 
     let inputs = DerivationInputs {
-        source_hash: source_hash(&parsed),
+        source_hash: try_source_hash(&parsed)?,
         build_script_hash: build_script_hash(&parsed),
         dependency_ids: BTreeMap::new(),
         build_env_hash: env_hash.to_owned(),
