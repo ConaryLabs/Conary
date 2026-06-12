@@ -24,7 +24,7 @@ pub use provenance_capture::{CapturedDep, CapturedPatch, ProvenanceCapture};
 
 use crate::error::{Error, Result};
 use crate::recipe::cache::{BuildCache, ToolchainInfo};
-use crate::recipe::format::{Recipe, is_remote_url};
+use crate::recipe::format::{LocalSourceSection, Recipe, SourceSection, is_remote_url};
 use archive::{download_file, verify_file_checksum};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -292,17 +292,25 @@ impl Kitchen {
 
         let mut fetched = Vec::new();
 
-        // Fetch main source archive
-        let archive_url = recipe.archive_url();
-        info!("Fetching: {}", archive_url);
-        let path = self.fetch_source(&archive_url, &recipe.source.checksum)?;
-        fetched.push(path);
+        match &recipe.source {
+            SourceSection::Remote(source) => {
+                // Fetch main source archive
+                let archive_url = recipe.archive_url();
+                info!("Fetching: {}", archive_url);
+                let path = self.fetch_source(&archive_url, &source.checksum)?;
+                fetched.push(path);
 
-        // Fetch additional sources
-        for additional in &recipe.source.additional {
-            info!("Fetching additional: {}", additional.url);
-            let path = self.fetch_source(&additional.url, &additional.checksum)?;
-            fetched.push(path);
+                // Fetch additional sources
+                for additional in &source.additional {
+                    info!("Fetching additional: {}", additional.url);
+                    let path = self.fetch_source(&additional.url, &additional.checksum)?;
+                    fetched.push(path);
+                }
+            }
+            SourceSection::Local(source) => {
+                let source_path = self.resolve_local_source(source)?;
+                fetched.push(source_path);
+            }
         }
 
         // Fetch remote patches
@@ -339,22 +347,23 @@ impl Kitchen {
     /// Returns `true` if all source archives and patches are available locally,
     /// meaning the build can proceed without network access.
     pub fn sources_cached(&self, recipe: &Recipe) -> bool {
-        // Check main archive
-        let key = source_cache_key(&recipe.source.checksum);
-        let cached_path = self.config.source_cache.join(&key);
-        if !cached_path.exists() {
-            return false;
-        }
-
-        // Check additional sources
-        for additional in &recipe.source.additional {
-            let key = source_cache_key(&additional.checksum);
+        if let SourceSection::Remote(source) = &recipe.source {
+            // Check main archive
+            let key = source_cache_key(&source.checksum);
             let cached_path = self.config.source_cache.join(&key);
             if !cached_path.exists() {
                 return false;
             }
-        }
 
+            // Check additional sources
+            for additional in &source.additional {
+                let key = source_cache_key(&additional.checksum);
+                let cached_path = self.config.source_cache.join(&key);
+                if !cached_path.exists() {
+                    return false;
+                }
+            }
+        }
         // Check remote patches
         if let Some(patches) = &recipe.patches {
             for patch in &patches.files {
@@ -541,12 +550,50 @@ impl Kitchen {
         fs::rename(&temp_path, &cached_path)?;
         Ok(cached_path)
     }
+
+    pub(crate) fn resolve_local_source(&self, source: &LocalSourceSection) -> Result<PathBuf> {
+        let recipe_dir = self.config.recipe_source_base_dir.as_ref().ok_or_else(|| {
+            Error::ConfigError(
+                "Local source recipes require KitchenConfig.recipe_source_base_dir; set recipe source base dir to the recipe file directory"
+                    .to_string(),
+            )
+        })?;
+
+        let resolved = source
+            .resolve_against(recipe_dir)
+            .map_err(Error::ConfigError)?;
+
+        let canonical_recipe_dir = fs::canonicalize(recipe_dir).map_err(|e| {
+            Error::ConfigError(format!(
+                "Recipe source base dir not found: {} ({e})",
+                recipe_dir.display()
+            ))
+        })?;
+        let canonical_source = fs::canonicalize(&resolved).map_err(|e| {
+            Error::NotFound(format!(
+                "Local source path not found: {} ({e})",
+                resolved.display()
+            ))
+        })?;
+
+        if !canonical_source.starts_with(&canonical_recipe_dir) {
+            return Err(Error::ConfigError(format!(
+                "Local source path must stay within the recipe directory: {}",
+                resolved.display()
+            )));
+        }
+
+        Ok(canonical_source)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::recipe::format::{BuildSection, PackageSection, SourceSection};
+    use crate::hash;
+    use crate::recipe::format::{
+        BuildSection, LocalSourceSection, PackageSection, RemoteSourceSection, SourceSection,
+    };
     use std::fs;
     use tempfile::tempdir;
 
@@ -561,13 +608,13 @@ mod tests {
                 license: None,
                 homepage: None,
             },
-            source: SourceSection {
+            source: SourceSection::Remote(RemoteSourceSection {
                 archive: "https://example.com/test.tar.gz".to_string(),
                 checksum: "sha256:abc".to_string(),
                 signature: None,
                 additional: Vec::new(),
                 extract_dir: None,
-            },
+            }),
             build: BuildSection {
                 requires: Vec::new(),
                 makedepends: makedepends.iter().map(|s| s.to_string()).collect(),
@@ -651,5 +698,50 @@ mod tests {
             .unwrap();
 
         assert_eq!(resolved, cached_path);
+    }
+
+    #[test]
+    fn test_fetch_remote_archive_source_uses_archive_cache() {
+        let dir = tempdir().unwrap();
+        let archive = dir.path().join("source.tar");
+        let cache = dir.path().join("cache");
+        let bytes = b"archive bytes";
+        fs::write(&archive, bytes).unwrap();
+
+        let checksum = hash::sha256_prefixed(bytes);
+        let kitchen = Kitchen::new(KitchenConfig {
+            source_cache: cache.clone(),
+            ..KitchenConfig::default()
+        });
+        let mut recipe = make_test_recipe(&[]);
+        recipe.source = SourceSection::Remote(RemoteSourceSection {
+            archive: archive.to_string_lossy().to_string(),
+            checksum: checksum.clone(),
+            signature: None,
+            additional: Vec::new(),
+            extract_dir: None,
+        });
+
+        let fetched = kitchen.fetch(&recipe).unwrap();
+
+        assert_eq!(fetched, vec![cache.join(source_cache_key(&checksum))]);
+        assert_eq!(fs::read(&fetched[0]).unwrap(), bytes);
+        assert!(kitchen.sources_cached(&recipe));
+    }
+
+    #[test]
+    fn test_fetch_local_path_source_requires_recipe_source_base_dir() {
+        let kitchen = Kitchen::new(KitchenConfig::default());
+        let mut recipe = make_test_recipe(&[]);
+        recipe.source = SourceSection::Local(LocalSourceSection {
+            path: PathBuf::from("./src"),
+        });
+
+        let error = kitchen.fetch(&recipe).unwrap_err();
+
+        assert!(
+            error.to_string().contains("recipe source base dir"),
+            "expected missing base dir error, got: {error}"
+        );
     }
 }

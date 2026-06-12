@@ -11,7 +11,7 @@
 
 use crate::error::Result;
 use crate::hash::{HashAlgorithm, hash_bytes};
-use crate::recipe::format::{BuildStage, Recipe};
+use crate::recipe::format::{BuildStage, Recipe, SourceSection};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -263,21 +263,27 @@ impl BuildCache {
         ));
 
         // Source info
-        data.push_str(&format!(
-            "archive:{}\nchecksum:{}\n",
-            recipe.source.archive, recipe.source.checksum
-        ));
+        match &recipe.source {
+            SourceSection::Remote(source) => {
+                data.push_str(&format!(
+                    "archive:{}\nchecksum:{}\n",
+                    source.archive, source.checksum
+                ));
 
-        // Additional sources (sorted for determinism)
-        let mut additional: Vec<_> = recipe
-            .source
-            .additional
-            .iter()
-            .map(|a| format!("{}:{}", a.url, a.checksum))
-            .collect();
-        additional.sort();
-        for a in additional {
-            data.push_str(&format!("additional:{}\n", a));
+                // Additional sources (sorted for determinism)
+                let mut additional: Vec<_> = source
+                    .additional
+                    .iter()
+                    .map(|a| format!("{}:{}", a.url, a.checksum))
+                    .collect();
+                additional.sort();
+                for a in additional {
+                    data.push_str(&format!("additional:{}\n", a));
+                }
+            }
+            SourceSection::Local(source) => {
+                data.push_str(&format!("local-source:{}\n", source.path.display()));
+            }
         }
 
         // Patches (order matters for patches)
@@ -687,7 +693,7 @@ impl CacheStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::recipe::format::{BuildSection, PackageSection, SourceSection};
+    use crate::recipe::format::{BuildSection, PackageSection, RemoteSourceSection, SourceSection};
     use tempfile::TempDir;
 
     fn make_test_recipe(name: &str, version: &str) -> Recipe {
@@ -701,13 +707,13 @@ mod tests {
                 license: None,
                 homepage: None,
             },
-            source: SourceSection {
+            source: SourceSection::Remote(RemoteSourceSection {
                 archive: format!("https://example.com/{}-{}.tar.gz", name, version),
                 checksum: "sha256:abc123".to_string(),
                 signature: None,
                 additional: Vec::new(),
                 extract_dir: None,
-            },
+            }),
             build: BuildSection {
                 requires: Vec::new(),
                 makedepends: Vec::new(),

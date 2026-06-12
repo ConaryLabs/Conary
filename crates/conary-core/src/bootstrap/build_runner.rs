@@ -7,7 +7,7 @@
 
 use super::build_helpers;
 use super::config::BootstrapConfig;
-use crate::recipe::{Recipe, is_remote_url};
+use crate::recipe::{Recipe, SourceSection, is_remote_url};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -212,9 +212,15 @@ impl PackageBuildRunner {
         pkg_name: &str,
         recipe: &Recipe,
     ) -> Result<PathBuf, BuildRunnerError> {
+        let SourceSection::Remote(source) = &recipe.source else {
+            return Err(BuildRunnerError::SourceFetchFailed {
+                package: pkg_name.to_string(),
+                reason: "bootstrap source fetch requires an archive source".to_string(),
+            });
+        };
         let url = recipe.archive_url();
         let filename = recipe.archive_filename();
-        self.fetch_artifact_to_cache(pkg_name, &url, &recipe.source.checksum, &filename)
+        self.fetch_artifact_to_cache(pkg_name, &url, &source.checksum, &filename)
     }
 
     /// Verify a SHA-256 checksum, rejecting placeholders unless `skip_verify` is set.
@@ -292,7 +298,11 @@ impl PackageBuildRunner {
         package_root: &Path,
         src_dir: &Path,
     ) -> Result<(), BuildRunnerError> {
-        for additional in &recipe.source.additional {
+        let SourceSection::Remote(source) = &recipe.source else {
+            return Ok(());
+        };
+
+        for additional in &source.additional {
             let url = recipe.substitute(&additional.url, "");
             let filename = url.split('/').next_back().unwrap_or("additional.tar.gz");
             let cached_path =

@@ -8,7 +8,7 @@ pub(crate) mod helpers {
     use std::path::Path;
 
     use crate::filesystem::CasStore;
-    use crate::recipe::{BuildSection, PackageSection, Recipe, SourceSection};
+    use crate::recipe::{BuildSection, PackageSection, Recipe, RemoteSourceSection, SourceSection};
 
     /// Create a minimal test recipe with the given name and dependencies.
     pub fn make_recipe(name: &str, requires: &[&str], makedepends: &[&str]) -> Recipe {
@@ -22,13 +22,13 @@ pub(crate) mod helpers {
                 license: None,
                 homepage: None,
             },
-            source: SourceSection {
+            source: SourceSection::Remote(RemoteSourceSection {
                 archive: format!("https://example.com/{name}-1.0.tar.gz"),
                 checksum: "sha256:abc".to_string(),
                 signature: None,
                 additional: Vec::new(),
                 extract_dir: None,
-            },
+            }),
             build: BuildSection {
                 requires: requires.iter().map(|s| s.to_string()).collect(),
                 makedepends: makedepends.iter().map(|s| s.to_string()).collect(),

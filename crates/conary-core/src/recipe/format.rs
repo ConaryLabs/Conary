@@ -5,8 +5,10 @@
 //! Recipes are TOML files that describe how to build a package from source.
 //! The format is inspired by Foresight Linux but simplified for Rust parsing.
 
-use serde::{Deserialize, Serialize};
+use serde::de;
+use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
+use std::path::{Component, Path, PathBuf};
 
 /// A complete recipe for building a package
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,7 +66,9 @@ impl Recipe {
 
     /// Get the archive URL with variables substituted
     pub fn archive_url(&self) -> String {
-        self.substitute(&self.source.archive, "")
+        self.remote_source()
+            .map(|source| self.substitute(&source.archive, ""))
+            .unwrap_or_default()
     }
 
     /// Get the archive filename from the URL
@@ -74,6 +78,16 @@ impl Recipe {
             .next_back()
             .unwrap_or("source.tar.gz")
             .to_string()
+    }
+
+    /// Get the remote archive source section, if this recipe uses one.
+    pub fn remote_source(&self) -> Option<&RemoteSourceSection> {
+        self.source.remote()
+    }
+
+    /// Get the local path source section, if this recipe uses one.
+    pub fn local_source(&self) -> Option<&LocalSourceSection> {
+        self.source.local()
     }
 
     /// Check if this recipe requires cross-compilation
@@ -219,9 +233,96 @@ fn default_release() -> String {
     "1".to_string()
 }
 
-/// Source archive section
+/// Source section.
+#[derive(Debug, Clone, Serialize)]
+#[serde(untagged)]
+pub enum SourceSection {
+    /// Source fetched from an archive URL or local archive file.
+    Remote(RemoteSourceSection),
+    /// Source taken from a local workspace path relative to the recipe file.
+    Local(LocalSourceSection),
+}
+
+impl SourceSection {
+    /// Get the remote archive source, if present.
+    pub fn remote(&self) -> Option<&RemoteSourceSection> {
+        match self {
+            Self::Remote(source) => Some(source),
+            Self::Local(_) => None,
+        }
+    }
+
+    /// Get the local path source, if present.
+    pub fn local(&self) -> Option<&LocalSourceSection> {
+        match self {
+            Self::Remote(_) => None,
+            Self::Local(source) => Some(source),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for SourceSection {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawSourceSection {
+            #[serde(default)]
+            archive: Option<String>,
+            #[serde(default)]
+            checksum: Option<String>,
+            #[serde(default)]
+            path: Option<PathBuf>,
+            #[serde(default)]
+            signature: Option<String>,
+            #[serde(default)]
+            additional: Vec<AdditionalSource>,
+            #[serde(default)]
+            extract_dir: Option<String>,
+        }
+
+        let raw = RawSourceSection::deserialize(deserializer)?;
+
+        match (raw.archive, raw.path) {
+            (Some(archive), None) => {
+                let checksum = raw.checksum.ok_or_else(|| {
+                    de::Error::custom("[source] archive recipes require a 'checksum' field")
+                })?;
+                Ok(Self::Remote(RemoteSourceSection {
+                    archive,
+                    checksum,
+                    signature: raw.signature,
+                    additional: raw.additional,
+                    extract_dir: raw.extract_dir,
+                }))
+            }
+            (None, Some(path)) => {
+                if raw.checksum.is_some()
+                    || raw.signature.is_some()
+                    || !raw.additional.is_empty()
+                    || raw.extract_dir.is_some()
+                {
+                    return Err(de::Error::custom(
+                        "[source] path recipes cannot include archive-only fields",
+                    ));
+                }
+                LocalSourceSection::validate_path(&path).map_err(de::Error::custom)?;
+                Ok(Self::Local(LocalSourceSection { path }))
+            }
+            (Some(_), Some(_)) => Err(de::Error::custom(
+                "[source] cannot contain both 'archive' and 'path'",
+            )),
+            (None, None) => Err(de::Error::custom(
+                "[source] must contain either 'archive' or 'path'",
+            )),
+        }
+    }
+}
+
+/// Remote source archive section.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SourceSection {
+pub struct RemoteSourceSection {
     /// Primary source archive URL
     ///
     /// Supports `%(version)s` substitution.
@@ -242,6 +343,54 @@ pub struct SourceSection {
     /// Directory name after extraction (if different from archive name)
     #[serde(default)]
     pub extract_dir: Option<String>,
+}
+
+/// Local workspace source section.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LocalSourceSection {
+    /// Path to the local source workspace, relative to the recipe file.
+    pub path: PathBuf,
+}
+
+impl LocalSourceSection {
+    fn validate_path(path: &Path) -> std::result::Result<(), String> {
+        if path.as_os_str().is_empty() {
+            return Err("[source] path cannot be empty".to_string());
+        }
+        if path.is_absolute() {
+            return Err("[source] path must be relative to the recipe directory".to_string());
+        }
+        if path
+            .components()
+            .any(|component| matches!(component, Component::ParentDir))
+        {
+            return Err("[source] path must stay within the recipe directory".to_string());
+        }
+        Ok(())
+    }
+
+    /// Resolve this local source path against the directory containing the recipe.
+    pub fn resolve_against(&self, recipe_dir: &Path) -> std::result::Result<PathBuf, String> {
+        Self::validate_path(&self.path)?;
+
+        let mut resolved = recipe_dir.to_path_buf();
+        for component in self.path.components() {
+            match component {
+                Component::CurDir => {}
+                Component::Normal(part) => resolved.push(part),
+                Component::ParentDir => {
+                    return Err("[source] path must stay within the recipe directory".to_string());
+                }
+                Component::RootDir | Component::Prefix(_) => {
+                    return Err(
+                        "[source] path must be relative to the recipe directory".to_string()
+                    );
+                }
+            }
+        }
+
+        Ok(resolved)
+    }
 }
 
 /// Additional source archive
@@ -547,8 +696,11 @@ jobs = "4"
         assert_eq!(recipe.package.version, "1.24.0");
         assert_eq!(recipe.package.license.as_deref(), Some("BSD-2-Clause"));
 
-        assert!(recipe.source.archive.contains("%(version)s"));
-        assert!(recipe.source.checksum.starts_with("sha256:"));
+        let SourceSection::Remote(source) = &recipe.source else {
+            panic!("sample archive recipe should parse as remote source");
+        };
+        assert!(source.archive.contains("%(version)s"));
+        assert!(source.checksum.starts_with("sha256:"));
 
         assert_eq!(recipe.build.requires.len(), 3);
         assert!(recipe.build.configure.is_some());
@@ -571,6 +723,112 @@ jobs = "4"
     fn test_archive_filename() {
         let recipe: Recipe = toml::from_str(SAMPLE_RECIPE).unwrap();
         assert_eq!(recipe.archive_filename(), "nginx-1.24.0.tar.gz");
+    }
+
+    #[test]
+    fn test_remote_archive_recipe_parses_unchanged() {
+        let recipe: Recipe = toml::from_str(SAMPLE_RECIPE).unwrap();
+        let SourceSection::Remote(source) = recipe.source else {
+            panic!("archive recipe should parse as remote source");
+        };
+
+        assert_eq!(
+            source.archive,
+            "https://nginx.org/download/nginx-%(version)s.tar.gz"
+        );
+        assert_eq!(
+            source.checksum,
+            "sha256:77a2541637b92a621e3ee76571f6e9af0b4e6a6a1f5b0fd3d5c9cf6c8c55e3"
+        );
+        assert!(source.signature.is_none());
+        assert!(source.additional.is_empty());
+    }
+
+    #[test]
+    fn test_local_source_path_dot_parses() {
+        let recipe: Recipe = toml::from_str(
+            r#"
+[package]
+name = "local"
+version = "1.0"
+
+[source]
+path = "."
+
+[build]
+make = "true"
+"#,
+        )
+        .unwrap();
+
+        let SourceSection::Local(source) = recipe.source else {
+            panic!("path source should parse as local source");
+        };
+        assert_eq!(source.path, std::path::PathBuf::from("."));
+    }
+
+    #[test]
+    fn test_local_source_resolves_against_recipe_directory() {
+        let source = LocalSourceSection {
+            path: std::path::PathBuf::from("./src"),
+        };
+
+        assert_eq!(
+            source
+                .resolve_against(std::path::Path::new("/work/recipes/pkg"))
+                .unwrap(),
+            std::path::PathBuf::from("/work/recipes/pkg/src")
+        );
+    }
+
+    #[test]
+    fn test_source_rejects_archive_and_path() {
+        let error = toml::from_str::<Recipe>(
+            r#"
+[package]
+name = "ambiguous"
+version = "1.0"
+
+[source]
+archive = "https://example.invalid/pkg.tar.gz"
+checksum = "sha256:abc"
+path = "."
+
+[build]
+make = "true"
+"#,
+        )
+        .unwrap_err();
+
+        assert!(
+            error.to_string().contains("both 'archive' and 'path'"),
+            "expected clear ambiguous source error, got: {error}"
+        );
+    }
+
+    #[test]
+    fn test_local_source_rejects_parent_directory_escape() {
+        let error = toml::from_str::<Recipe>(
+            r#"
+[package]
+name = "escape"
+version = "1.0"
+
+[source]
+path = "../outside"
+
+[build]
+make = "true"
+"#,
+        )
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("must stay within the recipe directory"),
+            "expected outside path rejection, got: {error}"
+        );
     }
 
     #[test]

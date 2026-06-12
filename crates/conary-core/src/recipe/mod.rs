@@ -54,8 +54,8 @@ pub mod pkgbuild;
 
 pub use cache::{BuildCache, CacheConfig, CacheEntry, CacheStats, DependencyHashes, ToolchainInfo};
 pub use format::{
-    BuildSection, BuildStage, ComponentSection, CrossSection, PackageSection, PatchInfo,
-    PatchSection, Recipe, SourceSection, is_remote_url,
+    BuildSection, BuildStage, ComponentSection, CrossSection, LocalSourceSection, PackageSection,
+    PatchInfo, PatchSection, Recipe, RemoteSourceSection, SourceSection, is_remote_url,
 };
 pub use graph::{BootstrapPhase, BootstrapPlan, RecipeGraph};
 pub use kitchen::{

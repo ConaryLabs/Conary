@@ -6,7 +6,7 @@ use crate::ccs::builder::{CcsBuilder, write_ccs_package};
 use crate::ccs::manifest::{CcsManifest, ManifestProvenance, PackageDep};
 use crate::container::{BindMount, ContainerConfig, Sandbox};
 use crate::error::{Error, Result};
-use crate::recipe::format::{Recipe, is_remote_url};
+use crate::recipe::format::{Recipe, SourceSection, is_remote_url};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -93,6 +93,38 @@ fn translate_command_for_chroot(command: &str, sysroot: &Path) -> String {
         return command.to_string();
     }
     command.replace(prefix, "")
+}
+
+fn copy_dir_contents(source: &Path, dest: &Path) -> Result<()> {
+    fs::create_dir_all(dest)?;
+
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        let source_path = entry.path();
+        let dest_path = dest.join(entry.file_name());
+        let file_type = entry.file_type()?;
+
+        if file_type.is_dir() {
+            copy_dir_contents(&source_path, &dest_path)?;
+        } else if file_type.is_file() {
+            fs::copy(&source_path, &dest_path)?;
+        } else if file_type.is_symlink() {
+            let target = fs::read_link(&source_path)?;
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(target, &dest_path)?;
+            #[cfg(not(unix))]
+            {
+                let resolved = source_path.canonicalize()?;
+                if resolved.is_dir() {
+                    copy_dir_contents(&resolved, &dest_path)?;
+                } else {
+                    fs::copy(&resolved, &dest_path)?;
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
 
 /// A single cook operation
@@ -203,15 +235,45 @@ impl<'a> Cook<'a> {
 
     /// Phase 1: Prep - fetch all sources
     pub(crate) fn prep(&mut self) -> Result<()> {
+        let source = match &self.recipe.source {
+            SourceSection::Remote(source) => source,
+            SourceSection::Local(source) => {
+                let resolved = self.kitchen.resolve_local_source(source)?;
+                let metadata = fs::metadata(&resolved).map_err(|e| {
+                    Error::NotFound(format!(
+                        "Local source path not found: {} ({e})",
+                        resolved.display()
+                    ))
+                })?;
+                if !metadata.is_dir() {
+                    return Err(Error::ConfigError(format!(
+                        "Local source path must be a directory: {}",
+                        resolved.display()
+                    )));
+                }
+
+                if !self.kitchen.config.use_isolation {
+                    self.source_dir = resolved;
+                    self.log_line(&format!(
+                        "Using local source: {}",
+                        self.source_dir.display()
+                    ));
+                    return Ok(());
+                }
+
+                copy_dir_contents(&resolved, &self.source_dir)?;
+                self.log_line(&format!("Prepared local source: {}", resolved.display()));
+                return Ok(());
+            }
+        };
+
         // Fetch main source archive
         let archive_url = self.recipe.archive_url();
-        let archive_path = self
-            .kitchen
-            .fetch_source(&archive_url, &self.recipe.source.checksum)?;
+        let archive_path = self.kitchen.fetch_source(&archive_url, &source.checksum)?;
 
         // Record source fetch for provenance
         self.provenance
-            .record_source_fetch(&archive_url, &self.recipe.source.checksum);
+            .record_source_fetch(&archive_url, &source.checksum);
 
         // Copy to build directory
         let local_archive = self
@@ -223,7 +285,7 @@ impl<'a> Cook<'a> {
         self.log_line(&format!("Fetched source: {}", archive_url));
 
         // Fetch additional sources (with variable substitution)
-        for additional in &self.recipe.source.additional {
+        for additional in &source.additional {
             let url = self.recipe.substitute(&additional.url, "");
             let path = self.kitchen.fetch_source(&url, &additional.checksum)?;
             let filename = url.split('/').next_back().unwrap_or("additional.tar.gz");
@@ -262,6 +324,17 @@ impl<'a> Cook<'a> {
 
     /// Phase 2a: Unpack sources
     pub(crate) fn unpack(&mut self) -> Result<()> {
+        let source = match &self.recipe.source {
+            SourceSection::Remote(source) => source,
+            SourceSection::Local(_) => {
+                self.log_line(&format!(
+                    "Using local source at {}",
+                    self.source_dir.display()
+                ));
+                return Ok(());
+            }
+        };
+
         // Remember the staging dir where prep() placed additional archives.
         // source_dir may be rewritten below (single top-level dir detection),
         // but the staged files live in the original location.
@@ -294,7 +367,7 @@ impl<'a> Cook<'a> {
         }
 
         // Override with explicit extract_dir if specified
-        if let Some(extract_dir) = &self.recipe.source.extract_dir {
+        if let Some(extract_dir) = &source.extract_dir {
             self.source_dir = self.build_dir.as_path().join("source").join(extract_dir);
         }
 
@@ -302,7 +375,7 @@ impl<'a> Cook<'a> {
         // Archives were staged by prep() into the original staging_dir,
         // not the (possibly rewritten) source_dir.
         // Use the same substitution as prep() so templated filenames match.
-        for additional in &self.recipe.source.additional {
+        for additional in &source.additional {
             let substituted_url = self.recipe.substitute(&additional.url, "");
             let filename = substituted_url
                 .split('/')
@@ -768,7 +841,10 @@ impl<'a> Cook<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::recipe::format::{BuildSection, PackageSection, Recipe, SourceSection};
+    use crate::recipe::format::{
+        BuildSection, LocalSourceSection, PackageSection, Recipe, RemoteSourceSection,
+        SourceSection,
+    };
     use crate::recipe::kitchen::KitchenConfig;
     use std::collections::HashMap;
     use std::sync::{LazyLock, Mutex};
@@ -786,13 +862,13 @@ mod tests {
                 license: None,
                 homepage: None,
             },
-            source: SourceSection {
+            source: SourceSection::Remote(RemoteSourceSection {
                 archive: "https://example.invalid/test.tar.gz".to_string(),
                 checksum: "sha256:test".to_string(),
                 signature: None,
                 additional: Vec::new(),
                 extract_dir: None,
-            },
+            }),
             build: BuildSection {
                 requires: Vec::new(),
                 makedepends: Vec::new(),
@@ -897,6 +973,124 @@ mod tests {
         assert_eq!(
             translate_path_for_chroot(Path::new("/outside/build"), sysroot),
             PathBuf::from("/outside/build")
+        );
+    }
+
+    #[test]
+    fn test_prep_host_local_path_source_uses_workspace_as_source_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let recipe_dir = dir.path().join("recipe");
+        let workspace = recipe_dir.join("src");
+        let cache = dir.path().join("cache");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::write(workspace.join("marker.txt"), "local workspace").unwrap();
+
+        let kitchen = Kitchen::new(KitchenConfig {
+            source_cache: cache.clone(),
+            recipe_source_base_dir: Some(recipe_dir),
+            use_isolation: false,
+            ..KitchenConfig::default()
+        });
+        let mut recipe = minimal_recipe();
+        recipe.source = SourceSection::Local(LocalSourceSection {
+            path: PathBuf::from("./src"),
+        });
+
+        let mut cook = Cook::new(&kitchen, &recipe).unwrap();
+        cook.prep().unwrap();
+        cook.unpack().unwrap();
+
+        assert_eq!(cook.source_dir, workspace.canonicalize().unwrap());
+        assert!(!cook.source_dir.starts_with(&cook.build_dir));
+        assert_eq!(
+            std::fs::read_to_string(cook.source_dir.join("marker.txt")).unwrap(),
+            "local workspace"
+        );
+        assert!(
+            !cache.exists() || std::fs::read_dir(&cache).unwrap().next().is_none(),
+            "local path source prep should not fetch or cache an archive"
+        );
+    }
+
+    #[test]
+    fn test_prep_local_path_source_requires_recipe_source_base_dir() {
+        let mut recipe = minimal_recipe();
+        recipe.source = SourceSection::Local(LocalSourceSection {
+            path: PathBuf::from("./src"),
+        });
+
+        let kitchen = Kitchen::new(KitchenConfig {
+            use_isolation: false,
+            ..KitchenConfig::default()
+        });
+        let mut cook = Cook::new(&kitchen, &recipe).unwrap();
+
+        let error = cook.prep().unwrap_err();
+
+        assert!(
+            error.to_string().contains("recipe source base dir"),
+            "expected missing base dir error, got: {error}"
+        );
+    }
+
+    #[test]
+    fn test_prep_isolated_local_path_source_copies_workspace_into_build_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let recipe_dir = dir.path().join("recipe");
+        let workspace = recipe_dir.join("src");
+        std::fs::create_dir_all(workspace.join("nested")).unwrap();
+        std::fs::write(workspace.join("nested/marker.txt"), "isolated copy").unwrap();
+
+        let kitchen = Kitchen::new(KitchenConfig {
+            recipe_source_base_dir: Some(recipe_dir),
+            use_isolation: true,
+            ..KitchenConfig::default()
+        });
+        let mut recipe = minimal_recipe();
+        recipe.source = SourceSection::Local(LocalSourceSection {
+            path: PathBuf::from("./src"),
+        });
+
+        let mut cook = Cook::new(&kitchen, &recipe).unwrap();
+        cook.prep().unwrap();
+        cook.unpack().unwrap();
+
+        assert!(cook.source_dir.starts_with(&cook.build_dir));
+        assert_eq!(
+            std::fs::read_to_string(cook.source_dir.join("nested/marker.txt")).unwrap(),
+            "isolated copy"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_prep_local_path_source_rejects_symlink_escape() {
+        let dir = tempfile::tempdir().unwrap();
+        let recipe_dir = dir.path().join("recipe");
+        let outside = dir.path().join("outside");
+        std::fs::create_dir_all(&recipe_dir).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("marker.txt"), "escaped").unwrap();
+        std::os::unix::fs::symlink(&outside, recipe_dir.join("src")).unwrap();
+
+        let kitchen = Kitchen::new(KitchenConfig {
+            recipe_source_base_dir: Some(recipe_dir),
+            use_isolation: false,
+            ..KitchenConfig::default()
+        });
+        let mut recipe = minimal_recipe();
+        recipe.source = SourceSection::Local(LocalSourceSection {
+            path: PathBuf::from("./src"),
+        });
+
+        let mut cook = Cook::new(&kitchen, &recipe).unwrap();
+        let error = cook.prep().unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("must stay within the recipe directory"),
+            "expected symlink escape rejection, got: {error}"
         );
     }
 

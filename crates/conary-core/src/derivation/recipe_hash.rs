@@ -14,7 +14,7 @@
 use std::collections::BTreeMap;
 
 use crate::hash;
-use crate::recipe::Recipe;
+use crate::recipe::{Recipe, SourceSection};
 
 /// Expand `%(name)s`-style variables in a template string.
 ///
@@ -103,10 +103,17 @@ pub fn build_script_hash(recipe: &Recipe) -> String {
 pub fn source_hash(recipe: &Recipe) -> String {
     let mut hasher = hash::Hasher::new(hash::HashAlgorithm::Sha256);
 
-    hasher.update(format!("primary:{}\n", recipe.source.checksum).as_bytes());
+    match &recipe.source {
+        SourceSection::Remote(source) => {
+            hasher.update(format!("primary:{}\n", source.checksum).as_bytes());
 
-    for additional in &recipe.source.additional {
-        hasher.update(format!("additional:{}\n", additional.checksum).as_bytes());
+            for additional in &source.additional {
+                hasher.update(format!("additional:{}\n", additional.checksum).as_bytes());
+            }
+        }
+        SourceSection::Local(source) => {
+            hasher.update(format!("local:{}\n", source.path.display()).as_bytes());
+        }
     }
 
     hasher.finalize().value

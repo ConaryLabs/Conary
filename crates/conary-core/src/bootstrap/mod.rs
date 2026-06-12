@@ -466,9 +466,10 @@ impl Bootstrap {
                     match crate::recipe::parse_recipe_file(&path) {
                         Ok(recipe) => {
                             report.cross_tools_count += 1;
-                            if recipe.source.checksum.contains("VERIFY_BEFORE_BUILD")
-                                || recipe.source.checksum.contains("FIXME")
-                            {
+                            if recipe.remote_source().is_some_and(|source| {
+                                source.checksum.contains("VERIFY_BEFORE_BUILD")
+                                    || source.checksum.contains("FIXME")
+                            }) {
                                 report.placeholder_count += 1;
                                 report
                                     .errors
@@ -498,9 +499,10 @@ impl Bootstrap {
                 if path.extension().is_some_and(|e| e == "toml") {
                     match crate::recipe::parse_recipe_file(&path) {
                         Ok(recipe) => {
-                            if recipe.source.checksum.contains("VERIFY_BEFORE_BUILD")
-                                || recipe.source.checksum.contains("FIXME")
-                            {
+                            if recipe.remote_source().is_some_and(|source| {
+                                source.checksum.contains("VERIFY_BEFORE_BUILD")
+                                    || source.checksum.contains("FIXME")
+                            }) {
                                 report.placeholder_count += 1;
                             }
                             graph.add_from_recipe(&recipe);

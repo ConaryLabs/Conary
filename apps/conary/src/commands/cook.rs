@@ -7,6 +7,13 @@ use conary_core::recipe::{Kitchen, KitchenConfig, parse_recipe_file, validate_re
 use std::path::{Path, PathBuf};
 use tracing::info;
 
+fn recipe_source_base_dir(recipe_path: &Path) -> PathBuf {
+    recipe_path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
 /// Cook a package from a recipe
 ///
 /// # Arguments
@@ -65,6 +72,7 @@ pub async fn cmd_cook(
     // By default, isolation is ON. Use --no-isolation to disable.
     let mut config = KitchenConfig {
         source_cache: PathBuf::from(source_cache),
+        recipe_source_base_dir: Some(recipe_source_base_dir(recipe_path)),
         keep_builddir,
         use_isolation: !no_isolation, // Isolation is on by default
         pristine_mode: hermetic,      // Hermetic mode disables host mounts
@@ -153,4 +161,17 @@ pub async fn cmd_cook(
     );
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_recipe_source_base_dir_uses_recipe_parent() {
+        assert_eq!(
+            recipe_source_base_dir(Path::new("/work/recipes/pkg/recipe.toml")),
+            PathBuf::from("/work/recipes/pkg")
+        );
+    }
 }
