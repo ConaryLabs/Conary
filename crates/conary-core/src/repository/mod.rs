@@ -47,7 +47,9 @@ pub use dependencies::{
 };
 pub use download::{
     DownloadOptions, DownloadProgress, download_delta, download_package, download_package_verified,
-    download_package_verified_with_progress, download_package_with_progress, verify_checksum,
+    download_package_verified_with_progress, download_package_with_progress,
+    download_static_package_verified, download_static_package_verified_with_progress,
+    verify_checksum,
 };
 pub use effective_policy::{
     EffectiveSourcePolicy, SETTINGS_KEY_ALLOWED_DISTROS, SETTINGS_KEY_SELECTION_MODE,

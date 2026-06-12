@@ -990,7 +990,7 @@ Add tests proving:
 - static repo `.ccs` install fails when unsigned
 - static repo `.ccs` install fails when signed by an unlisted key
 - static repo `.ccs` install succeeds when signed by a TUF-verified active key
-- retired keys still verify previously published packages
+- static repo `.ccs` install fails when signed only by a retired key
 
 Use `SigningKeyPair`, `write_signed_ccs_package`, and `RepositoryPackageKey::replace_for_repository` to avoid network in unit tests.
 

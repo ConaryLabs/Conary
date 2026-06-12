@@ -56,6 +56,7 @@ async fn download_package_inner(
     dest_dir: &Path,
     options: Option<&DownloadOptions>,
     progress: Option<&ProgressBar>,
+    allow_local_file_reference: bool,
 ) -> Result<PathBuf> {
     if let Some((base_url, distro, name)) = parse_remi_download_url(&repo_pkg.download_url) {
         let client = RemiClient::new(&base_url)?;
@@ -76,15 +77,21 @@ async fn download_package_inner(
 
     // Construct destination path from URL filename or generate default
     let dest_path = construct_dest_path(repo_pkg, dest_dir);
-    let is_static_or_local = is_file_or_local_reference(&repo_pkg.download_url);
-    let download_path = if is_static_or_local {
+    let is_local_file_reference = is_file_or_local_reference(&repo_pkg.download_url);
+    if is_local_file_reference && !allow_local_file_reference {
+        return Err(Error::DownloadError(format!(
+            "local package reference '{}' is only supported for static repositories",
+            repo_pkg.download_url
+        )));
+    }
+    let download_path = if is_local_file_reference {
         staged_static_dest_path(&dest_path)
     } else {
         dest_path.clone()
     };
 
     // Download the file (with or without progress)
-    if is_static_or_local {
+    if is_local_file_reference {
         if let Err(e) = download_static_or_http_file_with_expected_size(
             &repo_pkg.download_url,
             &download_path,
@@ -120,7 +127,7 @@ async fn download_package_inner(
         return Err(e);
     }
 
-    if is_static_or_local && let Err(e) = std::fs::rename(&download_path, &dest_path) {
+    if is_local_file_reference && let Err(e) = std::fs::rename(&download_path, &dest_path) {
         let _ = std::fs::remove_file(&download_path);
         return Err(Error::IoError(format!(
             "Failed to move {} to {}: {e}",
@@ -243,7 +250,7 @@ async fn verify_gpg_signature(
 /// If verification fails, the corrupted/invalid file is removed before returning
 /// the error to prevent cache pollution.
 pub async fn download_package(repo_pkg: &RepositoryPackage, dest_dir: &Path) -> Result<PathBuf> {
-    download_package_inner(repo_pkg, dest_dir, None, None).await
+    download_package_inner(repo_pkg, dest_dir, None, None, false).await
 }
 
 /// Download a package with optional GPG signature verification
@@ -266,7 +273,21 @@ pub async fn download_package_verified(
     dest_dir: &Path,
     options: Option<&DownloadOptions>,
 ) -> Result<PathBuf> {
-    download_package_inner(repo_pkg, dest_dir, options, None).await
+    download_package_inner(repo_pkg, dest_dir, options, None, false).await
+}
+
+/// Download a package from a verified static repository.
+///
+/// Static repositories may legitimately publish local `file://` or bare-path
+/// package references after TUF has pinned the index and target payloads.
+/// Native/JSON repository downloads must use the generic helpers, which reject
+/// local file references.
+pub async fn download_static_package_verified(
+    repo_pkg: &RepositoryPackage,
+    dest_dir: &Path,
+    options: Option<&DownloadOptions>,
+) -> Result<PathBuf> {
+    download_package_inner(repo_pkg, dest_dir, options, None, true).await
 }
 
 /// Verify GPG signature for a downloaded package
@@ -454,7 +475,7 @@ pub async fn download_package_with_progress(
     dest_dir: &Path,
     progress_bar: Option<&ProgressBar>,
 ) -> Result<PathBuf> {
-    download_package_inner(repo_pkg, dest_dir, None, progress_bar).await
+    download_package_inner(repo_pkg, dest_dir, None, progress_bar, false).await
 }
 
 /// Download a package with progress and optional GPG verification
@@ -467,7 +488,17 @@ pub async fn download_package_verified_with_progress(
     options: Option<&DownloadOptions>,
     progress_bar: Option<&ProgressBar>,
 ) -> Result<PathBuf> {
-    download_package_inner(repo_pkg, dest_dir, options, progress_bar).await
+    download_package_inner(repo_pkg, dest_dir, options, progress_bar, false).await
+}
+
+/// Download a verified static-repository package with progress reporting.
+pub async fn download_static_package_verified_with_progress(
+    repo_pkg: &RepositoryPackage,
+    dest_dir: &Path,
+    options: Option<&DownloadOptions>,
+    progress_bar: Option<&ProgressBar>,
+) -> Result<PathBuf> {
+    download_package_inner(repo_pkg, dest_dir, options, progress_bar, true).await
 }
 
 /// Multi-progress manager for parallel downloads
@@ -716,7 +747,9 @@ mod tests {
             i64::try_from(content.len()).unwrap(),
         );
 
-        let downloaded = download_package(&package, &dest_dir).await.unwrap();
+        let downloaded = download_static_package_verified(&package, &dest_dir, None)
+            .await
+            .unwrap();
 
         assert_eq!(downloaded, dest_dir.join("static-file.ccs"));
         assert_eq!(std::fs::read(downloaded).unwrap(), content);
@@ -736,10 +769,37 @@ mod tests {
             i64::try_from(content.len()).unwrap(),
         );
 
-        let downloaded = download_package(&package, &dest_dir).await.unwrap();
+        let downloaded = download_static_package_verified(&package, &dest_dir, None)
+            .await
+            .unwrap();
 
         assert_eq!(downloaded, dest_dir.join("bare-local.ccs"));
         assert_eq!(std::fs::read(downloaded).unwrap(), content);
+    }
+
+    #[tokio::test]
+    async fn download_package_rejects_local_path_without_static_opt_in() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("native-local.ccs");
+        let dest_dir = dir.path().join("downloads");
+        let content = b"native package should not copy local paths";
+        std::fs::write(&source, content).unwrap();
+
+        let package = package_for_download(
+            source.to_str().unwrap().to_string(),
+            content,
+            i64::try_from(content.len()).unwrap(),
+        );
+
+        let error = download_package(&package, &dest_dir).await.unwrap_err();
+
+        assert!(
+            error.to_string().contains("local")
+                || error.to_string().contains("scheme")
+                || error.to_string().contains("URL"),
+            "expected local path rejection, got: {error}"
+        );
+        assert!(!dest_dir.join("native-local.ccs").exists());
     }
 
     #[tokio::test]
@@ -773,7 +833,9 @@ mod tests {
             i64::try_from(content.len() + 1).unwrap(),
         );
 
-        let error = download_package(&package, &dest_dir).await.unwrap_err();
+        let error = download_static_package_verified(&package, &dest_dir, None)
+            .await
+            .unwrap_err();
 
         assert!(
             error.to_string().contains("size"),
@@ -799,7 +861,9 @@ mod tests {
             i64::try_from(content.len() + 1).unwrap(),
         );
 
-        let error = download_package(&package, &dest_dir).await.unwrap_err();
+        let error = download_static_package_verified(&package, &dest_dir, None)
+            .await
+            .unwrap_err();
 
         assert!(
             error.to_string().contains("size"),
@@ -825,7 +889,9 @@ mod tests {
             i64::try_from(content.len() - 1).unwrap(),
         );
 
-        let error = download_package(&package, &dest_dir).await.unwrap_err();
+        let error = download_static_package_verified(&package, &dest_dir, None)
+            .await
+            .unwrap_err();
 
         assert!(
             error.to_string().contains("source file size"),
@@ -850,7 +916,9 @@ mod tests {
             i64::try_from(content.len()).unwrap(),
         );
 
-        let error = download_package(&package, &dest_dir).await.unwrap_err();
+        let error = download_static_package_verified(&package, &dest_dir, None)
+            .await
+            .unwrap_err();
         writer.join().unwrap();
 
         assert!(
@@ -875,7 +943,9 @@ mod tests {
             i64::try_from(content.len()).unwrap(),
         );
 
-        let downloaded = download_package(&package, &dest_dir).await.unwrap();
+        let downloaded = download_static_package_verified(&package, &dest_dir, None)
+            .await
+            .unwrap();
 
         assert_eq!(downloaded, dest_dir.join("download"));
         assert_eq!(std::fs::read(downloaded).unwrap(), content);

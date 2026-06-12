@@ -23,7 +23,8 @@ use crate::trust::ceremony::{create_initial_root, rotate_key, rotate_publish_key
 use crate::trust::generate::{generate_snapshot, generate_targets, generate_timestamp};
 use crate::trust::keys::{sign_tuf_metadata, signing_keypair_to_tuf_key};
 use crate::trust::metadata::{
-    Role, RootMetadata, Signed, SnapshotMetadata, TargetsMetadata, TimestampMetadata,
+    Role, RootMetadata, Signed, SnapshotMetadata, TargetDescription, TargetsMetadata,
+    TimestampMetadata,
 };
 use crate::trust::verify::{
     extract_role_keys, verify_metadata_hash, verify_signatures, verify_static_snapshot_consistency,
@@ -691,6 +692,15 @@ fn read_destination_state(repo_root: &Path, force_reinit: bool) -> Result<Destin
         targets_bytes.as_ref().expect("checked"),
         snapshot_bytes.as_ref().expect("checked"),
     )?;
+    let identity_bytes = read_optional(repo_root, "conary-repo.toml")?;
+    let index_bytes = read_optional(repo_root, "index.json")?;
+    let package_keys_bytes = read_optional(repo_root, "keys/package-keys.json")?;
+    verify_destination_target_payloads(
+        repo_root,
+        &targets.signed,
+        index_bytes.as_deref(),
+        package_keys_bytes.as_deref(),
+    )?;
 
     Ok(DestinationState {
         initial: false,
@@ -702,9 +712,9 @@ fn read_destination_state(repo_root: &Path, force_reinit: bool) -> Result<Destin
         targets_bytes,
         snapshot_bytes,
         timestamp_bytes,
-        identity_bytes: read_optional(repo_root, "conary-repo.toml")?,
-        index_bytes: read_optional(repo_root, "index.json")?,
-        package_keys_bytes: read_optional(repo_root, "keys/package-keys.json")?,
+        identity_bytes,
+        index_bytes,
+        package_keys_bytes,
     })
 }
 
@@ -732,13 +742,13 @@ fn verify_destination_metadata(
 
     let (timestamp_keys, timestamp_threshold) =
         extract_role_keys(&root.signed, Role::Timestamp).map_err(anyhow::Error::from)?;
-    let timestamp_signature_result = verify_signatures(
+    verify_signatures(
         timestamp,
         Role::Timestamp,
         &timestamp_keys,
         timestamp_threshold,
     )
-    .map_err(anyhow::Error::from);
+    .map_err(anyhow::Error::from)?;
 
     verify_static_snapshot_consistency(
         &snapshot.signed,
@@ -752,31 +762,32 @@ fn verify_destination_metadata(
         .get("targets.json")
         .context("snapshot metadata missing targets.json")?;
     verify_metadata_hash(targets_ref, targets_bytes, true).map_err(anyhow::Error::from)?;
-    let timestamp_pins_current_snapshot =
-        timestamp_pins_current_snapshot(timestamp, snapshot, snapshot_bytes)?;
-    if timestamp_pins_current_snapshot {
-        timestamp_signature_result?;
-    }
+    verify_timestamp_pins_current_snapshot(timestamp, snapshot, snapshot_bytes)?;
 
     Ok(())
 }
 
-fn timestamp_pins_current_snapshot(
+fn verify_timestamp_pins_current_snapshot(
     timestamp: &Signed<TimestampMetadata>,
     snapshot: &Signed<SnapshotMetadata>,
     snapshot_bytes: &[u8],
-) -> Result<bool> {
+) -> Result<()> {
     let snapshot_ref = timestamp
         .signed
         .meta
         .get("snapshot.json")
         .context("timestamp metadata missing snapshot.json")?;
     if snapshot_ref.version != snapshot.signed.version {
-        return Ok(false);
+        bail!(
+            "timestamp pins snapshot.json v{} but current snapshot is v{}",
+            snapshot_ref.version,
+            snapshot.signed.version
+        );
     }
-    if let Some(length) = snapshot_ref.length
-        && length != snapshot_bytes.len() as u64
-    {
+    let length = snapshot_ref
+        .length
+        .context("timestamp snapshot.json reference missing length")?;
+    if length != snapshot_bytes.len() as u64 {
         bail!(
             "timestamp pins snapshot.json length {} but current snapshot length is {}",
             length,
@@ -785,7 +796,63 @@ fn timestamp_pins_current_snapshot(
     }
     verify_metadata_hash(snapshot_ref, snapshot_bytes, true).map_err(anyhow::Error::from)?;
 
-    Ok(true)
+    Ok(())
+}
+
+fn verify_destination_target_payloads(
+    repo_root: &Path,
+    targets: &TargetsMetadata,
+    index_bytes: Option<&[u8]>,
+    package_keys_bytes: Option<&[u8]>,
+) -> Result<()> {
+    for (relative, target) in &targets.targets {
+        validate_repo_relative_path(relative)
+            .with_context(|| format!("destination target path {relative} is invalid"))?;
+        match relative.as_str() {
+            "index.json" => {
+                let bytes = index_bytes.context("destination target index.json is missing")?;
+                verify_target_payload(relative, target, bytes)?;
+            }
+            "keys/package-keys.json" => {
+                let bytes = package_keys_bytes
+                    .context("destination target keys/package-keys.json is missing")?;
+                verify_target_payload(relative, target, bytes)?;
+            }
+            _ => {
+                let bytes = fs::read(repo_root.join(relative))
+                    .with_context(|| format!("read destination target {relative}"))?;
+                verify_target_payload(relative, target, &bytes)?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn verify_target_payload(
+    relative: &str,
+    target: &TargetDescription,
+    actual_bytes: &[u8],
+) -> Result<()> {
+    if target.length != actual_bytes.len() as u64 {
+        bail!(
+            "destination target {relative} length mismatch: targets pins {}, actual {}",
+            target.length,
+            actual_bytes.len()
+        );
+    }
+    let expected_sha256 = target
+        .hashes
+        .get("sha256")
+        .with_context(|| format!("destination target {relative} missing sha256 hash"))?;
+    let actual_sha256 = hash::sha256(actual_bytes);
+    if expected_sha256 != &actual_sha256 {
+        bail!(
+            "destination target {relative} sha256 mismatch: expected {expected_sha256}, got {actual_sha256}"
+        );
+    }
+
+    Ok(())
 }
 
 fn verify_destination_matches_operator_keys(
@@ -1662,7 +1729,7 @@ mod tests {
     use crate::ccs::verify::{SignatureStatus, TrustPolicy, verify_package};
     use crate::packages::traits::PackageFormat;
     use crate::repository::static_repo::{
-        PackageKeyStatus, PackageKeysFile, RepoIdentity, RepoLocation, StaticIndex,
+        PackageKeyEntry, PackageKeyStatus, PackageKeysFile, RepoIdentity, RepoLocation, StaticIndex,
     };
     use crate::trust::keys::sign_tuf_metadata;
     use crate::trust::metadata::{
@@ -1889,6 +1956,99 @@ mod tests {
                 .signed
                 .version,
             before_timestamp.signed.version + 1
+        );
+    }
+
+    #[test]
+    fn publish_rejects_tampered_package_keys_before_refresh() {
+        let fixture = PublishFixture::new();
+        let package = fixture.build_package("widget", "1.0.0", "x86_64", b"hello\n");
+        publish_static_repo(fixture.options(vec![package])).unwrap();
+
+        let extra_key = SigningKeyPair::generate().with_key_id("extra");
+        let mut package_keys = read_package_keys(&fixture.repo_path("keys/package-keys.json"));
+        package_keys.keys.push(PackageKeyEntry {
+            algorithm: "ed25519".to_string(),
+            public_key: extra_key.public_key_base64(),
+            key_id: Some("extra".to_string()),
+            status: PackageKeyStatus::Active,
+            comment: Some("unauthorized injected key".to_string()),
+        });
+        fs::write(
+            fixture.repo_path("keys/package-keys.json"),
+            serde_json::to_vec_pretty(&package_keys).unwrap(),
+        )
+        .unwrap();
+
+        let mut options = fixture.options(Vec::new());
+        options.refresh = true;
+        let error = publish_static_repo_with_forced_refresh_for_test(
+            options,
+            ForcedRefreshForTest {
+                root: false,
+                targets: true,
+                snapshot: false,
+            },
+        )
+        .unwrap_err();
+
+        assert!(
+            error.to_string().contains("keys/package-keys.json"),
+            "expected package-keys target verification failure, got: {error:?}"
+        );
+    }
+
+    #[test]
+    fn publish_rejects_timestamp_that_does_not_pin_current_snapshot() {
+        let fixture = PublishFixture::new();
+        let package = fixture.build_package("widget", "1.0.0", "x86_64", b"hello\n");
+        publish_static_repo(fixture.options(vec![package])).unwrap();
+
+        let publish_key =
+            SigningKeyPair::load_from_file(&fixture.key_dir.join("publish.private")).unwrap();
+        let mut timestamp = read_timestamp(&fixture.repo_path("metadata/timestamp.json"));
+        let snapshot_ref = timestamp
+            .signed
+            .meta
+            .get_mut("snapshot.json")
+            .expect("timestamp pins snapshot");
+        snapshot_ref.version += 1;
+        timestamp.signatures = vec![sign_tuf_metadata(&publish_key, &timestamp.signed).unwrap()];
+        write_json(&fixture.repo_path("metadata/timestamp.json"), &timestamp);
+
+        let error = publish_static_repo(fixture.options(Vec::new())).unwrap_err();
+
+        assert!(
+            error.to_string().contains("timestamp") && error.to_string().contains("snapshot.json"),
+            "expected timestamp/snapshot consistency failure, got: {error:?}"
+        );
+    }
+
+    #[test]
+    fn publish_rejects_timestamp_that_omits_snapshot_length() {
+        let fixture = PublishFixture::new();
+        let package = fixture.build_package("widget", "1.0.0", "x86_64", b"hello\n");
+        publish_static_repo(fixture.options(vec![package])).unwrap();
+
+        let publish_key =
+            SigningKeyPair::load_from_file(&fixture.key_dir.join("publish.private")).unwrap();
+        let mut timestamp = read_timestamp(&fixture.repo_path("metadata/timestamp.json"));
+        let snapshot_ref = timestamp
+            .signed
+            .meta
+            .get_mut("snapshot.json")
+            .expect("timestamp pins snapshot");
+        snapshot_ref.length = None;
+        timestamp.signatures = vec![sign_tuf_metadata(&publish_key, &timestamp.signed).unwrap()];
+        write_json(&fixture.repo_path("metadata/timestamp.json"), &timestamp);
+
+        let error = publish_static_repo(fixture.options(Vec::new())).unwrap_err();
+
+        assert!(
+            error.to_string().contains("timestamp")
+                && error.to_string().contains("snapshot.json")
+                && error.to_string().contains("length"),
+            "expected missing snapshot length failure, got: {error:?}"
         );
     }
 
@@ -2242,7 +2402,7 @@ mod tests {
     }
 
     #[test]
-    fn publish_recovers_pending_publish_key_after_repo_commit_before_key_promotion() {
+    fn publish_rejects_pending_rotation_state_before_timestamp_upload() {
         let fixture = PublishFixture::new();
         let package = fixture.build_package("widget", "1.0.0", "x86_64", b"first\n");
         publish_static_repo(fixture.options(vec![package])).unwrap();
@@ -2253,7 +2413,7 @@ mod tests {
 
         let mut rotate = fixture.options(Vec::new());
         rotate.rotate_publish_key = true;
-        let rotated = publish_static_repo(rotate).unwrap();
+        publish_static_repo(rotate).unwrap();
         let rotated_key =
             SigningKeyPair::load_from_file(&fixture.key_dir.join("publish.private")).unwrap();
         save_key_pair(&rotated_key, &fixture.key_dir, "publish.pending").unwrap();
@@ -2264,17 +2424,20 @@ mod tests {
 
         let mut retry = fixture.options(Vec::new());
         retry.rotate_publish_key = true;
-        let recovered = publish_static_repo(retry).unwrap();
+        let error = publish_static_repo(retry).unwrap_err();
 
         let active_key =
             SigningKeyPair::load_from_file(&fixture.key_dir.join("publish.private")).unwrap();
-        assert_eq!(
+        assert_ne!(
             active_key.public_key_base64(),
             rotated_key.public_key_base64()
         );
-        assert_eq!(recovered.root_version, rotated.root_version);
-        assert!(!fixture.key_dir.join("publish.pending.private").exists());
-        assert!(!fixture.key_dir.join("publish.pending.public").exists());
+        assert!(
+            error.to_string().contains("timestamp"),
+            "expected torn timestamp/root state to fail closed, got: {error}"
+        );
+        assert!(fixture.key_dir.join("publish.pending.private").exists());
+        assert!(fixture.key_dir.join("publish.pending.public").exists());
     }
 
     #[test]
