@@ -48,6 +48,7 @@ pub mod audit;
 mod cache;
 mod format;
 mod graph;
+pub mod inference;
 mod kitchen;
 pub mod parser;
 pub mod pkgbuild;
@@ -58,6 +59,9 @@ pub use format::{
     PatchInfo, PatchSection, Recipe, RemoteSourceSection, SourceSection, is_remote_url,
 };
 pub use graph::{BootstrapPhase, BootstrapPlan, RecipeGraph};
+pub use inference::{
+    BuildSystem, InferenceEvent, InferenceOptions, InferenceResult, InferenceTrace,
+};
 pub use kitchen::{
     Cook, CookResult, Kitchen, KitchenConfig, MakedependsResolver, MakedependsResult, NoopResolver,
     SourceChecksumPolicy, StageConfig, StageRegistry,
