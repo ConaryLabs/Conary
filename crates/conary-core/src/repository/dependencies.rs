@@ -14,7 +14,10 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use tracing::{debug, info};
 
-use super::download::{DownloadOptions, DownloadProgress, download_package_verified_with_progress};
+use super::download::{
+    DownloadOptions, DownloadProgress, download_package_verified_with_progress,
+    download_static_package_verified_with_progress,
+};
 use super::selector::{PackageSelector, PackageWithRepo, SelectionOptions};
 
 /// Convert a `VersionConstraint` to a `RepoVersionConstraint` for native
@@ -534,8 +537,8 @@ pub async fn download_dependencies(
             None
         };
 
-        let result = match download_package_verified_with_progress(
-            &pkg_with_repo.package,
+        let result = match download_dependency_package(
+            pkg_with_repo,
             dest_dir,
             gpg_options.as_ref(),
             Some(pb),
@@ -597,6 +600,31 @@ pub async fn download_dependencies(
     }
 
     Ok(succeeded_results)
+}
+
+async fn download_dependency_package(
+    pkg_with_repo: &PackageWithRepo,
+    dest_dir: &Path,
+    gpg_options: Option<&DownloadOptions>,
+    progress_bar: Option<&indicatif::ProgressBar>,
+) -> Result<PathBuf> {
+    if pkg_with_repo.repository.default_strategy.as_deref() == Some("static") {
+        download_static_package_verified_with_progress(
+            &pkg_with_repo.package,
+            dest_dir,
+            gpg_options,
+            progress_bar,
+        )
+        .await
+    } else {
+        download_package_verified_with_progress(
+            &pkg_with_repo.package,
+            dest_dir,
+            gpg_options,
+            progress_bar,
+        )
+        .await
+    }
 }
 
 #[cfg(test)]

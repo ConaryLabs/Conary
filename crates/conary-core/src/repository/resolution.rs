@@ -64,7 +64,9 @@ use crate::repository::remi::RemiClient;
 use crate::repository::resolution_policy::ResolutionPolicy;
 use crate::repository::selector::{PackageSelector, PackageWithRepo, SelectionOptions};
 use crate::repository::versioning::{VersionScheme, resolve_package_version_scheme};
-use crate::repository::{DownloadOptions, download_package_verified};
+use crate::repository::{
+    DownloadOptions, download_package_verified, download_static_package_verified,
+};
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
@@ -801,10 +803,11 @@ impl<'a> PackageResolver<'a> {
         let (temp_dir, output_dir) = create_output_dir(options)?;
 
         // Use the package info we already have from repository selection
-        let path = download_package_verified(
+        let path = download_verified_legacy_package(
             &pkg_with_repo.package,
             &output_dir,
             options.gpg_options.as_ref(),
+            pkg_with_repo,
         )
         .await?;
 
@@ -829,11 +832,28 @@ fn repository_source_metadata(pkg_with_repo: &PackageWithRepo) -> RepositorySour
             &pkg_with_repo.repository,
         )
         .map(version_scheme_to_db_string),
-        source_kind: match pkg_with_repo.repository.default_strategy.as_deref() {
-            Some("static") => RepositorySourceKind::Static,
-            Some("remi") => RepositorySourceKind::Remi,
-            _ => RepositorySourceKind::Native,
-        },
+        source_kind: selected_repository_source_kind(pkg_with_repo),
+    }
+}
+
+async fn download_verified_legacy_package(
+    package: &RepositoryPackage,
+    output_dir: &Path,
+    gpg_options: Option<&DownloadOptions>,
+    pkg_with_repo: &PackageWithRepo,
+) -> Result<PathBuf> {
+    if selected_repository_source_kind(pkg_with_repo) == RepositorySourceKind::Static {
+        download_static_package_verified(package, output_dir, gpg_options).await
+    } else {
+        download_package_verified(package, output_dir, gpg_options).await
+    }
+}
+
+fn selected_repository_source_kind(pkg_with_repo: &PackageWithRepo) -> RepositorySourceKind {
+    match pkg_with_repo.repository.default_strategy.as_deref() {
+        Some("static") => RepositorySourceKind::Static,
+        Some("remi") => RepositorySourceKind::Remi,
+        _ => RepositorySourceKind::Native,
     }
 }
 
@@ -1032,6 +1052,53 @@ mod tests {
 
         assert_eq!(strategies.len(), 1);
         assert!(matches!(strategies[0], ResolutionStrategy::Remi { .. }));
+    }
+
+    #[tokio::test]
+    async fn static_repo_binary_routing_does_not_allow_local_download_url() {
+        let (_db_temp, conn) = create_test_db();
+        let repo_id = create_test_repo(&conn);
+        conn.execute(
+            "UPDATE repositories SET default_strategy = 'static' WHERE id = ?1",
+            [repo_id],
+        )
+        .unwrap();
+        let pkg_id = create_test_package(&conn, repo_id, "nginx", "1.24.0");
+
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("routed-local.ccs");
+        let output = temp.path().join("downloads");
+        let content = b"local route table payload is not TUF-pinned";
+        std::fs::write(&source, content).unwrap();
+        conn.execute(
+            "UPDATE repository_packages SET size = ?1 WHERE id = ?2",
+            rusqlite::params![i64::try_from(content.len()).unwrap(), pkg_id],
+        )
+        .unwrap();
+
+        let mut resolution = PackageResolution::binary(
+            repo_id,
+            "nginx".to_string(),
+            source.to_str().unwrap().to_string(),
+            crate::hash::sha256(content),
+        );
+        resolution.insert(&conn).unwrap();
+
+        let error = resolve_package(
+            &conn,
+            "nginx",
+            &ResolutionOptions {
+                output_dir: Some(output),
+                ..ResolutionOptions::default()
+            },
+        )
+        .await
+        .unwrap_err();
+
+        assert!(
+            error.to_string().contains("local package reference"),
+            "expected non-TUF-pinned local binary route to fail, got: {error}"
+        );
     }
 
     #[test]
