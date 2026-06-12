@@ -184,20 +184,27 @@ the opposite of "try means safe."
   an orphaned `--activate` session trigger automatic rollback to the previous
   generation. (Proactive boot-time notification — a systemd unit or login message —
   is later hardening, not M1; detection in M1 happens at next invocation.)
-- **Service teardown on activated rollback:** rolling back an `--activate` session
-  must `systemctl stop`/`disable` every service the package's manifest declares
-  *before* reverting the filesystem — otherwise the unit file vanishes while the
-  process still runs, leaving orphans systemd can no longer manage.
+- **Service teardown on activated rollback:** once service lifecycle hooks are
+  supported, rolling back an `--activate` session must `systemctl stop`/`disable`
+  every service the package's manifest declares *before* reverting the filesystem
+  — otherwise the unit file vanishes while the process still runs, leaving orphans
+  systemd can no longer manage. M1b rejects service start/stop/restart hooks
+  rather than pretending rollback can clean up service runtime state it never
+  recorded.
 - **Rollback scope stated honestly (applies chiefly to `--activate` sessions;
   namespace sessions are contained by construction):** rollback reverts
   generation-owned filesystem state (the package's files, links, units). It does not
   un-happen runtime side effects — services that ran, `/var` mutations, data the
   package wrote, external effects. Hook policy: try **refuses** packages that declare
   hooks with non-generation-scoped lifecycle effects (db migrations, irreversible
-  state changes) unless the package declares reversible cleanup or the user passes
-  `--allow-irreversible`. The policy **fails closed**: hooks that are unknown,
-  unclassified, or legacy scriptlets are treated as non-generation-scoped — an
-  incomplete declaration is never an escape hatch. The classification field this
+  state changes) unless that hook kind has an implemented safe execution model and
+  the package declares reversible cleanup or the user passes `--allow-irreversible`.
+  M1b only allows declarative hooks when the executor targets the generation or
+  namespace root; script hooks, legacy scriptlets, and service lifecycle hooks remain
+  M2 work even if `--allow-irreversible` is present. The policy **fails closed**:
+  hooks that are unknown, unclassified, or legacy scriptlets are treated as
+  non-generation-scoped — an incomplete declaration is never an escape hatch. The
+  classification field this
   gate reads does not exist yet (the current `Hooks` struct in
   `ccs/manifest.rs` carries no reversibility metadata); minimal schema, defined
   before M1b lands: an optional `reversible: bool` per hook, defaulting to `true`
@@ -211,8 +218,8 @@ the opposite of "try means safe."
 - **Session data model (new — no precedent in the generations system):** a
   `try_sessions` table: `id`, `previous_generation_id`, `try_generation_id`,
   `package_path`, `started_at`, `status` (`active`|`orphaned`|`kept`|`rolled_back`),
-  with single-active-session enforced by a partial unique index on
-  `status = 'active'`. Crash recovery queries for `active`, compares against actual
+  with single-open-session enforced by a partial unique index on
+  `status IN ('active', 'orphaned')`. Crash recovery queries for `active`, compares against actual
   generation state, then applies the orphan policy above. "Try means safe" must be literally true by default; most
   CCS hooks are declarative (units/tmpfiles/sysctl) and generation-scoped, so the
   refusal bites rarely. Hook reversibility is a manifest field and a publish lint.
@@ -596,8 +603,9 @@ child-spec planning.
 **Round 3 (same day):** static-repo child spec promoted to an explicit M0 hard gate;
 per-flag milestone labels on the `build` surface and `--hermetic`/`--recipe` added to
 the availability matrix; try now **refuses** irreversibly-hooked packages by default
-(`--allow-irreversible` escape hatch; reversibility is a manifest field + publish
-lint); tree-hash scope defined (git-tracked files only in a repo; default ignore set
+(`--allow-irreversible` escape hatch only for hook kinds with an implemented safe
+execution model; reversibility is a manifest field + publish lint); tree-hash scope
+defined (git-tracked files only in a repo; default ignore set
 plus warning outside one); pre-M2 publishes carry an honest hardening level
 (`hermetic`, not `attested`) and announce preview status; `conary new --from .` added
 as the explicit, documented form of bare `new`.
