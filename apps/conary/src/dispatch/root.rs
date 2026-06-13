@@ -88,15 +88,41 @@ fn is_try_management_action(command: &Commands) -> bool {
 }
 
 fn command_uses_try_session_preflight_db(command: &Commands) -> bool {
-    !matches!(
-        command,
+    match command {
         Commands::Cook { .. }
-            | Commands::New { .. }
-            | Commands::Publish {
-                target: Some(_),
-                ..
-            }
-    )
+        | Commands::New { .. }
+        | Commands::Publish { .. }
+        | Commands::Bootstrap(
+            cli::BootstrapCommands::VerifyConvergence { .. }
+            | cli::BootstrapCommands::DiffSeeds { .. },
+        )
+        | Commands::System(cli::SystemCommands::Completions { .. })
+        | Commands::Ccs(
+            cli::CcsCommands::Init { .. }
+            | cli::CcsCommands::Build { .. }
+            | cli::CcsCommands::Inspect { .. }
+            | cli::CcsCommands::Verify { .. }
+            | cli::CcsCommands::Sign { .. }
+            | cli::CcsCommands::Keygen { .. },
+        )
+        | Commands::Capability(
+            cli::CapabilityCommands::Validate { .. } | cli::CapabilityCommands::Generate { .. },
+        )
+        | Commands::Trust(cli::TrustCommands::KeyGen { .. }) => false,
+        Commands::Query(cli::QueryCommands::Scripts { package_path, .. }) => {
+            !query_scripts_target_uses_package_file(package_path)
+        }
+        _ => true,
+    }
+}
+
+fn query_scripts_target_uses_package_file(package_path: &str) -> bool {
+    let lower = package_path.to_ascii_lowercase();
+    Path::new(package_path).exists()
+        || lower.ends_with(".ccs")
+        || lower.ends_with(".rpm")
+        || lower.ends_with(".deb")
+        || lower.contains(".pkg.tar")
 }
 
 pub(super) fn run_try_session_preflight(cli: &crate::cli::Cli) -> Result<()> {
@@ -1505,7 +1531,45 @@ mod tests {
         for args in [
             ["conary", "cook", "."].as_slice(),
             ["conary", "new", "hello-m1b"].as_slice(),
+            ["conary", "publish", "./repo", "--recipe", "recipe.toml"].as_slice(),
             ["conary", "publish", "dist/pkg.ccs", "./repo"].as_slice(),
+            [
+                "conary",
+                "bootstrap",
+                "verify-convergence",
+                "--run-a",
+                "/tmp/run-a",
+                "--run-b",
+                "/tmp/run-b",
+            ]
+            .as_slice(),
+            [
+                "conary",
+                "bootstrap",
+                "diff-seeds",
+                "/tmp/seed-a",
+                "/tmp/seed-b",
+            ]
+            .as_slice(),
+            ["conary", "system", "completions", "bash"].as_slice(),
+            [
+                "conary",
+                "ccs",
+                "init",
+                "/tmp/ccs-demo",
+                "--name",
+                "ccs-demo",
+            ]
+            .as_slice(),
+            ["conary", "ccs", "build", "/tmp/ccs-demo"].as_slice(),
+            ["conary", "ccs", "inspect", "/tmp/pkg.ccs"].as_slice(),
+            ["conary", "ccs", "verify", "/tmp/pkg.ccs"].as_slice(),
+            ["conary", "ccs", "sign", "/tmp/pkg.ccs", "--key", "/tmp/key"].as_slice(),
+            ["conary", "ccs", "keygen", "--output", "/tmp/key"].as_slice(),
+            ["conary", "capability", "validate", "/tmp/ccs.toml"].as_slice(),
+            ["conary", "trust", "key-gen", "root", "--output", "/tmp"].as_slice(),
+            ["conary", "query", "scripts", "/tmp/pkg.ccs"].as_slice(),
+            ["conary", "query", "scripts", "/tmp/pkg.rpm"].as_slice(),
         ] {
             let cli = Cli::try_parse_from(args).unwrap();
             let command = cli.command.as_ref().expect("parsed command");
@@ -1513,6 +1577,10 @@ mod tests {
         }
 
         let cli = Cli::try_parse_from(["conary", "pin", "demo"]).unwrap();
+        let command = cli.command.as_ref().expect("parsed command");
+        assert!(super::command_uses_try_session_preflight_db(command));
+
+        let cli = Cli::try_parse_from(["conary", "query", "scripts", "bash"]).unwrap();
         let command = cli.command.as_ref().expect("parsed command");
         assert!(super::command_uses_try_session_preflight_db(command));
     }

@@ -164,11 +164,13 @@ fn recursive_ccs_dependency_installs_defer_generation_publication_until_root_pac
     );
 
     let transaction_body = transaction_rs
-        .split("fn execute_install_transaction")
+        .split("fn execute_install_transaction_inner")
         .nth(1)
-        .expect("failed to isolate execute_install_transaction body");
+        .expect("failed to isolate execute_install_transaction_inner body");
     let deferred_branch = transaction_body
-        .find("if ctx.defer_generation")
+        .find(
+            "if ctx.defer_generation && ctx.execution_path == PackageExecutionPath::GenerationAware {\n        engine.release_lock();\n        return Ok(InstallTransactionResult { changeset_id });",
+        )
         .expect("deferred CCS dependencies must skip generation rebuild");
     let publish_generation = transaction_body
         .find("generation::publication::publish_current_db_state")
