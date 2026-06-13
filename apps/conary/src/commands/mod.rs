@@ -175,6 +175,9 @@ pub use trust::{
     cmd_trust_disable, cmd_trust_enable, cmd_trust_init, cmd_trust_key_gen, cmd_trust_status,
     cmd_trust_verify,
 };
+pub(crate) use try_session::{
+    cmd_try_keep, cmd_try_package, cmd_try_rollback, cmd_try_status, rollback_active_try_session,
+};
 pub use update::{
     cmd_delta_stats, cmd_list_pinned, cmd_pin, cmd_unpin, cmd_update, cmd_update_group,
 };

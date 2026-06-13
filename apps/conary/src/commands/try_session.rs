@@ -189,6 +189,79 @@ pub(crate) struct TryStartOutcome {
     pub try_generation_id: i64,
 }
 
+pub(crate) async fn cmd_try_package(
+    db_path: &str,
+    package_path: &Path,
+    activate: bool,
+    allow_irreversible: bool,
+    run: &[String],
+) -> Result<()> {
+    let command = run.iter().map(String::as_str).collect::<Vec<_>>();
+    let outcome = begin_try_session(TryStartRequest {
+        db_path,
+        package_path,
+        activate,
+        allow_irreversible,
+        command: if command.is_empty() {
+            None
+        } else {
+            Some(command.as_slice())
+        },
+    })?;
+
+    println!("Try session {} is active", outcome.session_id);
+    println!("Package copy: {}", outcome.copied_package_path.display());
+    println!("Namespace root: {}", outcome.namespace_root.display());
+    println!("Generation: {}", outcome.try_generation_id);
+    if activate {
+        println!(
+            "Run `conary try keep` to keep it or `conary try rollback` to restore the previous generation."
+        );
+    } else {
+        println!("Run `conary try keep` to promote it or `conary try rollback` to discard it.");
+    }
+    Ok(())
+}
+
+pub(crate) async fn cmd_try_status(db_path: &str) -> Result<()> {
+    let live_conn = conary_core::db::open(db_path)?;
+    match TrySession::find_active_or_orphaned(&live_conn)? {
+        Some(session) => {
+            println!("Try session: {}", session.id);
+            println!("Status: {}", session.status.as_str());
+            println!("Mode: {}", session.mode.as_str());
+            if let Some(name) = &session.package_name {
+                println!("Package: {name}");
+            }
+            if let Some(version) = &session.package_version {
+                println!("Version: {version}");
+            }
+            if let Some(generation) = session.try_generation_id {
+                println!("Generation: {generation}");
+            }
+            if let Some(pid) = session.launcher_pid {
+                println!("Launcher PID: {pid}");
+            }
+        }
+        None => {
+            println!("No active try session");
+        }
+    }
+    Ok(())
+}
+
+pub(crate) async fn cmd_try_rollback(db_path: &str) -> Result<()> {
+    rollback_active_try_session(db_path)?;
+    println!("Try session rolled back");
+    Ok(())
+}
+
+pub(crate) async fn cmd_try_keep(db_path: &str) -> Result<()> {
+    keep_active_try_session(db_path)?;
+    println!("Try session kept");
+    Ok(())
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct TryInstallPlan {
     pub install_root: PathBuf,
@@ -308,6 +381,9 @@ pub(crate) fn begin_try_session(request: TryStartRequest<'_>) -> Result<TryStart
             request.db_path,
             built.generation_number,
         )?;
+        if request.command.is_none() {
+            record_activated_try_boot(&live_conn, &session.id, &current_boot_id())?;
+        }
     }
 
     if let Some(command) = request.command {
@@ -1204,6 +1280,7 @@ fn run_try_command_for_session(
     }
 }
 
+#[cfg(test)]
 fn launch_try_command(
     command: &[&str],
     namespace_root: &Path,
@@ -1305,6 +1382,23 @@ fn clear_try_launcher(conn: &rusqlite::Connection, session_id: &str) -> Result<(
          WHERE id = ?1
            AND status IN ('active', 'orphaned')",
         [session_id],
+    )?;
+    Ok(())
+}
+
+fn record_activated_try_boot(
+    conn: &rusqlite::Connection,
+    session_id: &str,
+    boot_id: &str,
+) -> Result<()> {
+    conn.execute(
+        "UPDATE try_sessions
+         SET launcher_pid = NULL,
+             launcher_boot_id = ?1,
+             updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+         WHERE id = ?2
+           AND status IN ('active', 'orphaned')",
+        rusqlite::params![boot_id, session_id],
     )?;
     Ok(())
 }
@@ -1614,6 +1708,31 @@ mod tests {
     fn create_current_generation_link(root: &Path, generation: i64) {
         std::fs::create_dir_all(root.join(format!("generations/{generation}"))).unwrap();
         conary_core::generation::mount::update_current_symlink(root, generation).unwrap();
+    }
+
+    #[test]
+    fn activated_no_command_session_records_boot_without_launcher_pid() -> anyhow::Result<()> {
+        let fixture = TryRuntimeFixture::new();
+        let conn = fixture.open();
+        let session = TrySession::create_active(
+            &conn,
+            CreateTrySession {
+                id: "try-activated-no-command",
+                package_path: "/tmp/demo.ccs",
+                package_name: Some("demo"),
+                package_version: Some("1.0.0"),
+                previous_generation_id: Some(1),
+                mode: TrySessionMode::Activated,
+                work_dir: "/tmp/try-activated-no-command",
+            },
+        )?;
+
+        record_activated_try_boot(&conn, &session.id, "boot-a")?;
+
+        let stored = stored_session(&fixture, &session.id);
+        assert_eq!(stored.launcher_boot_id.as_deref(), Some("boot-a"));
+        assert_eq!(stored.launcher_pid, None);
+        Ok(())
     }
 
     fn has_cas_object(root: &Path) -> bool {
