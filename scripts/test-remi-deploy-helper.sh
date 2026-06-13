@@ -52,6 +52,14 @@ make_release_staging() {
     )
 }
 
+make_site_staging() {
+    local staging="$1"
+
+    mkdir -p "$staging/assets"
+    printf '<!doctype html><title>Conary</title>\n' >"$staging/index.html"
+    printf 'console.log("ok");\n' >"$staging/assets/app.js"
+}
+
 run_helper() {
     local fake_root="$1"
     shift
@@ -135,6 +143,44 @@ test_deploy_conary_rejects_symlinked_ccs_signature() {
     expect_fail "symlinked CCS signature" run_helper "$fake_root" deploy-conary 0.8.0 "$staging"
 }
 
+test_deploy_site_replaces_site_root_from_staging() {
+    local fake_root="${tmpdir}/root-site"
+    local staging="${tmpdir}/staging-site"
+    write_config "$fake_root"
+    make_site_staging "$staging"
+    mkdir -p "$fake_root/conary/site"
+    printf 'old\n' >"$fake_root/conary/site/stale.txt"
+
+    run_helper "$fake_root" deploy-site site "$staging"
+
+    test -f "$fake_root/conary/site/index.html"
+    test -f "$fake_root/conary/site/assets/app.js"
+    test ! -e "$fake_root/conary/site/stale.txt"
+    test ! -e "$staging"
+}
+
+test_deploy_site_replaces_web_root_from_staging() {
+    local fake_root="${tmpdir}/root-web"
+    local staging="${tmpdir}/staging-web"
+    write_config "$fake_root"
+    make_site_staging "$staging"
+
+    run_helper "$fake_root" deploy-site web "$staging"
+
+    test -f "$fake_root/conary/web/index.html"
+    test -f "$fake_root/conary/web/assets/app.js"
+    test ! -e "$staging"
+}
+
+test_deploy_site_rejects_unknown_target() {
+    local fake_root="${tmpdir}/root-site-unknown"
+    local staging="${tmpdir}/staging-site-unknown"
+    write_config "$fake_root"
+    make_site_staging "$staging"
+
+    expect_fail "unknown site target" run_helper "$fake_root" deploy-site admin "$staging"
+}
+
 test_configure_concurrency_updates_config() {
     local fake_root="${tmpdir}/root-config"
     write_config "$fake_root"
@@ -160,6 +206,9 @@ main() {
     test_deploy_conary_requires_ccs_signature
     test_deploy_conary_rejects_symlinked_checksums
     test_deploy_conary_rejects_symlinked_ccs_signature
+    test_deploy_site_replaces_site_root_from_staging
+    test_deploy_site_replaces_web_root_from_staging
+    test_deploy_site_rejects_unknown_target
     test_configure_concurrency_updates_config
     test_configure_concurrency_accepts_skip_restart_flag
 

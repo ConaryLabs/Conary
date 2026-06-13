@@ -157,9 +157,10 @@ not cover the task or when you are debugging the underlying service path itself.
   canonical deployment instructions; tracked operations docs and deploy helpers
   are the source of truth.
 - The public frontends currently share the Remi host but deploy as two separate
-  static sites:
-  `conary.io` syncs to `/conary/site/`, while `remi.conary.io` syncs to
-  `/conary/web/`
+  static sites. `deploy/deploy-sites.sh` builds locally, stages the build output
+  under `/tmp` on `peter@ssh.conary.io`, then asks
+  `/usr/local/sbin/conary-remi-deploy deploy-site` to publish it into
+  `/conary/site/` for `conary.io` or `/conary/web/` for `remi.conary.io`.
 - The package frontend is the one wired into Remi's tracked config via
   `[web].root = "/conary/web"`; the main site remains a separate static root on
   the same host

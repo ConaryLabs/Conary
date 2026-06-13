@@ -45,6 +45,8 @@ jobs:
         run: bash scripts/test-release-matrix.sh
       - name: Test Remi deploy helper
         run: bash scripts/test-remi-deploy-helper.sh
+      - name: Test Remi static-site deploy wrapper
+        run: bash scripts/test-deploy-sites.sh
 
   docs-truth:
     name: docs-truth
