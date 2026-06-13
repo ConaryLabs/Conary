@@ -202,6 +202,7 @@ impl LegacyConverter {
                                         home: None,
                                         shell: None,
                                         group: None,
+                                        reversible: None,
                                     });
                                 }
                             }
@@ -209,12 +210,14 @@ impl LegacyConverter {
                                 captured_hooks.services.push(Service {
                                     name: svc,
                                     action: ServiceAction::Enable,
+                                    reversible: None,
                                 });
                             }
                             CapturedIntent::SystemdDisable(svc) => {
                                 captured_hooks.services.push(Service {
                                     name: svc,
                                     action: ServiceAction::Disable,
+                                    reversible: None,
                                 });
                             }
                             _ => tracing::debug!("Ignored captured intent: {:?}", intent),

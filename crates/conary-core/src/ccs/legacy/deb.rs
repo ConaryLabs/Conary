@@ -411,6 +411,7 @@ mod tests {
             home: Some("/var/lib/myapp".to_string()),
             shell: None,
             group: None,
+            reversible: None,
         });
 
         let converter = DebHookConverter;
@@ -425,9 +426,11 @@ mod tests {
         let hooks = Hooks {
             post_install: Some(crate::ccs::manifest::ScriptHook {
                 script: "echo installed > /var/lib/myapp/installed".to_string(),
+                reversible: None,
             }),
             pre_remove: Some(crate::ccs::manifest::ScriptHook {
                 script: "echo removed > /var/lib/myapp/removed".to_string(),
+                reversible: None,
             }),
             ..Default::default()
         };

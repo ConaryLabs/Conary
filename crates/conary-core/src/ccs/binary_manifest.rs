@@ -6,6 +6,7 @@
 //! A human-readable MANIFEST.toml is also included in packages for debugging.
 
 use crate::capability::CapabilityDeclaration;
+use crate::ccs::manifest::ServiceAction;
 use crate::hash;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -211,6 +212,9 @@ pub struct BinaryHooks {
     pub directories: Vec<BinaryDirectoryHook>,
 
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub services: Vec<BinaryServiceHook>,
+
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub systemd: Vec<BinarySystemdHook>,
 
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -226,7 +230,13 @@ pub struct BinaryHooks {
     pub post_install: Option<String>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub post_install_reversible: Option<bool>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pre_remove: Option<String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pre_remove_reversible: Option<bool>,
 }
 
 impl BinaryHooks {
@@ -234,10 +244,13 @@ impl BinaryHooks {
         self.users.is_empty()
             && self.groups.is_empty()
             && self.directories.is_empty()
+            && self.services.is_empty()
             && self.systemd.is_empty()
             && self.tmpfiles.is_empty()
             && self.post_install.is_none()
+            && self.post_install_reversible.is_none()
             && self.pre_remove.is_none()
+            && self.pre_remove_reversible.is_none()
             && self.sysctl.is_empty()
             && self.alternatives.is_empty()
     }
@@ -254,6 +267,8 @@ pub struct BinaryUserHook {
     pub shell: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reversible: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -261,6 +276,8 @@ pub struct BinaryGroupHook {
     pub name: String,
     #[serde(default)]
     pub system: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reversible: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -269,6 +286,16 @@ pub struct BinaryDirectoryHook {
     pub mode: u32,
     pub owner: String,
     pub group: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reversible: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BinaryServiceHook {
+    pub name: String,
+    pub action: ServiceAction,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reversible: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -276,6 +303,8 @@ pub struct BinarySystemdHook {
     pub unit: String,
     #[serde(default)]
     pub enable: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reversible: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -285,6 +314,8 @@ pub struct BinaryTmpfilesHook {
     pub mode: u32,
     pub owner: String,
     pub group: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reversible: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -293,6 +324,8 @@ pub struct BinarySysctlHook {
     pub value: String,
     #[serde(default)]
     pub only_if_lower: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reversible: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -300,6 +333,8 @@ pub struct BinaryAlternativeHook {
     pub name: String,
     pub path: String,
     pub priority: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reversible: Option<bool>,
 }
 
 /// Build provenance for binary manifest

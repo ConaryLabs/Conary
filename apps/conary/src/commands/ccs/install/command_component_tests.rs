@@ -207,6 +207,7 @@ async fn ccs_install_skips_post_install_hook_for_devel_only_component_selection(
             hook_marker.parent().unwrap().display(),
             hook_marker.display()
         ),
+        reversible: None,
     });
 
     let result = BuildResult {

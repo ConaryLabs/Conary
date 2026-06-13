@@ -416,6 +416,7 @@ pub struct ComponentOverride {
 
 /// Declarative hooks
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct Hooks {
     #[serde(default)]
     pub users: Vec<UserHook>,
@@ -448,6 +449,81 @@ pub struct Hooks {
     /// Pre-remove script hook (runs before files are removed)
     #[serde(default)]
     pub pre_remove: Option<ScriptHook>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HookExecutionRoot {
+    TryRoot,
+    GenerationRoot,
+    HostRoot,
+}
+
+impl Hooks {
+    pub fn has_script_hooks(&self) -> bool {
+        self.post_install.is_some() || self.pre_remove.is_some()
+    }
+
+    pub fn has_service_hooks(&self) -> bool {
+        !self.services.is_empty()
+    }
+
+    pub fn has_declarative_hooks(&self) -> bool {
+        !self.users.is_empty()
+            || !self.groups.is_empty()
+            || !self.directories.is_empty()
+            || !self.systemd.is_empty()
+            || !self.tmpfiles.is_empty()
+            || !self.sysctl.is_empty()
+            || !self.alternatives.is_empty()
+    }
+
+    pub fn has_irreversible_hooks_for_try_root(&self, execution_root: HookExecutionRoot) -> bool {
+        if matches!(execution_root, HookExecutionRoot::HostRoot) {
+            return self.has_script_hooks()
+                || self.has_service_hooks()
+                || self.has_declarative_hooks();
+        }
+
+        self.services
+            .iter()
+            .any(|hook| !hook.reversible.unwrap_or(false))
+            || self
+                .post_install
+                .as_ref()
+                .is_some_and(|hook| !hook.reversible.unwrap_or(false))
+            || self
+                .pre_remove
+                .as_ref()
+                .is_some_and(|hook| !hook.reversible.unwrap_or(false))
+            || self
+                .users
+                .iter()
+                .any(|hook| !hook.reversible.unwrap_or(true))
+            || self
+                .groups
+                .iter()
+                .any(|hook| !hook.reversible.unwrap_or(true))
+            || self
+                .directories
+                .iter()
+                .any(|hook| !hook.reversible.unwrap_or(true))
+            || self
+                .systemd
+                .iter()
+                .any(|hook| !hook.reversible.unwrap_or(true))
+            || self
+                .tmpfiles
+                .iter()
+                .any(|hook| !hook.reversible.unwrap_or(true))
+            || self
+                .sysctl
+                .iter()
+                .any(|hook| !hook.reversible.unwrap_or(true))
+            || self
+                .alternatives
+                .iter()
+                .any(|hook| !hook.reversible.unwrap_or(true))
+    }
 }
 
 /// Scriptlet-scoped declarations.
@@ -525,6 +601,9 @@ fn supported_scriptlet_capability_paths(name: &str) -> Option<&'static [&'static
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScriptHook {
     pub script: String,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reversible: Option<bool>,
 }
 
 pub type User = UserHook;
@@ -535,6 +614,9 @@ pub type Group = GroupHook;
 pub struct Service {
     pub name: String,
     pub action: ServiceAction,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reversible: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -563,6 +645,9 @@ pub struct UserHook {
 
     #[serde(default)]
     pub group: Option<String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reversible: Option<bool>,
 }
 
 /// Group creation hook
@@ -572,6 +657,9 @@ pub struct GroupHook {
 
     #[serde(default)]
     pub system: bool,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reversible: Option<bool>,
 }
 
 /// Directory creation hook (tmpfiles-style)
@@ -590,6 +678,9 @@ pub struct DirectoryHook {
 
     #[serde(default)]
     pub cleanup: Option<String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reversible: Option<bool>,
 }
 
 fn default_mode() -> String {
@@ -611,6 +702,9 @@ pub struct SystemdHook {
 
     #[serde(default)]
     pub enable: bool,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reversible: Option<bool>,
 }
 
 /// tmpfiles.d entry
@@ -629,6 +723,9 @@ pub struct TmpfilesHook {
 
     #[serde(default = "default_group")]
     pub group: String,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reversible: Option<bool>,
 }
 
 /// sysctl setting
@@ -639,6 +736,9 @@ pub struct SysctlHook {
 
     #[serde(default)]
     pub only_if_lower: bool,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reversible: Option<bool>,
 }
 
 /// Alternatives system hook
@@ -649,6 +749,9 @@ pub struct AlternativeHook {
 
     #[serde(default = "default_priority")]
     pub priority: i32,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reversible: Option<bool>,
 }
 
 fn default_priority() -> i32 {
@@ -1397,5 +1500,134 @@ replacement = "complete"
 
         assert!(err.to_string().contains("legacy scriptlet bundle"));
         assert!(err.to_string().contains("body_sha256 mismatch"));
+    }
+
+    #[test]
+    fn manifest_rejects_unknown_hook_keys() {
+        let toml = r#"
+[package]
+name = "future-hook"
+version = "1.0.0"
+description = "future hook"
+
+[[hooks.some_new_hook]]
+name = "must-not-be-dropped"
+"#;
+
+        let err = CcsManifest::parse(toml).expect_err("unknown hook must be rejected");
+        assert!(
+            err.to_string().contains("some_new_hook") || err.to_string().contains("unknown field"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn hooks_classify_script_service_and_declarative_entries() {
+        let mut hooks = Hooks::default();
+        assert!(!hooks.has_script_hooks());
+        assert!(!hooks.has_service_hooks());
+        assert!(!hooks.has_declarative_hooks());
+        assert!(!hooks.has_irreversible_hooks_for_try_root(HookExecutionRoot::HostRoot));
+
+        hooks.directories.push(DirectoryHook {
+            path: "/var/lib/conary-test".to_string(),
+            mode: "0755".to_string(),
+            owner: "root".to_string(),
+            group: "root".to_string(),
+            cleanup: None,
+            reversible: None,
+        });
+        assert!(hooks.has_declarative_hooks());
+        assert!(!hooks.has_irreversible_hooks_for_try_root(HookExecutionRoot::TryRoot));
+        assert!(!hooks.has_irreversible_hooks_for_try_root(HookExecutionRoot::GenerationRoot));
+        assert!(hooks.has_irreversible_hooks_for_try_root(HookExecutionRoot::HostRoot));
+
+        hooks.services.push(Service {
+            name: "conary-test.service".to_string(),
+            action: ServiceAction::Restart,
+            reversible: None,
+        });
+        assert!(hooks.has_service_hooks());
+        assert!(hooks.has_irreversible_hooks_for_try_root(HookExecutionRoot::TryRoot));
+
+        hooks.post_install = Some(ScriptHook {
+            script: "echo post-install".to_string(),
+            reversible: None,
+        });
+        assert!(hooks.has_script_hooks());
+        assert!(hooks.has_irreversible_hooks_for_try_root(HookExecutionRoot::GenerationRoot));
+    }
+
+    #[test]
+    fn omitted_reversible_fields_keep_wire_compatibility_and_m1b_defaults() {
+        let toml = r#"
+[package]
+name = "hook-defaults"
+version = "1.0.0"
+description = "hook defaults"
+
+[[hooks.users]]
+name = "hookuser"
+system = true
+
+[[hooks.services]]
+name = "hook-defaults.service"
+action = "restart"
+
+[hooks.post_install]
+script = "echo post-install"
+"#;
+
+        let manifest = CcsManifest::parse(toml).expect("parse manifest without reversible fields");
+
+        assert_eq!(manifest.hooks.users[0].reversible, None);
+        assert_eq!(manifest.hooks.services[0].reversible, None);
+        assert_eq!(
+            manifest
+                .hooks
+                .post_install
+                .as_ref()
+                .expect("post-install hook")
+                .reversible,
+            None
+        );
+        assert!(
+            manifest
+                .hooks
+                .has_irreversible_hooks_for_try_root(HookExecutionRoot::TryRoot)
+        );
+
+        let encoded = manifest.to_toml().expect("serialize manifest");
+        assert!(!encoded.contains("reversible"));
+
+        let declarative_only = CcsManifest::parse(
+            r#"
+[package]
+name = "declarative-defaults"
+version = "1.0.0"
+description = "declarative defaults"
+
+[[hooks.groups]]
+name = "hookgroup"
+system = true
+"#,
+        )
+        .expect("parse declarative manifest");
+
+        assert!(
+            !declarative_only
+                .hooks
+                .has_irreversible_hooks_for_try_root(HookExecutionRoot::TryRoot)
+        );
+        assert!(
+            !declarative_only
+                .hooks
+                .has_irreversible_hooks_for_try_root(HookExecutionRoot::GenerationRoot)
+        );
+        assert!(
+            declarative_only
+                .hooks
+                .has_irreversible_hooks_for_try_root(HookExecutionRoot::HostRoot)
+        );
     }
 }
