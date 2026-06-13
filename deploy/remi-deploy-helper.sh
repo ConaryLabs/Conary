@@ -18,6 +18,7 @@ usage() {
 usage:
   conary-remi-deploy deploy-conary <version> <staging-dir>
   conary-remi-deploy deploy-remi <version> <bundle.tar.gz>
+  conary-remi-deploy deploy-site <site|web> <staging-dir>
   conary-remi-deploy configure-concurrency <max-concurrent> [--skip-restart]
   conary-remi-deploy verify-access
 USAGE
@@ -48,6 +49,14 @@ validate_positive_int() {
     local value="$1"
     [[ "$value" =~ ^[0-9]+$ ]] || die "expected positive integer, got: $value"
     (( value >= 1 && value <= 128 )) || die "value out of allowed range 1..128: $value"
+}
+
+validate_site_target() {
+    local target="$1"
+    case "$target" in
+        site|web) ;;
+        *) die "invalid site target: $target" ;;
+    esac
 }
 
 real_tmp_path() {
@@ -184,6 +193,56 @@ deploy_remi() {
     fi
 }
 
+deploy_site() {
+    local site_target="$1"
+    local staging
+    validate_site_target "$site_target"
+    staging="$(real_tmp_path "$2")"
+    [[ -d "$staging" && ! -L "$staging" ]] ||
+        die "staging path is not a plain directory: $staging"
+    [[ -f "${staging}/index.html" && ! -L "${staging}/index.html" ]] ||
+        die "staging directory is missing plain index.html: $staging"
+
+    local conary_root parent target tmp backup
+    conary_root="$(root_path /conary)"
+    target="$(root_path "/conary/${site_target}")"
+    parent="$(dirname "$target")"
+    tmp="$(root_path "/conary/.${site_target}.next.$$")"
+    backup="$(root_path "/conary/.${site_target}.previous.$$")"
+
+    install_owned_dir 0750 "$conary_root"
+    rm -rf "$tmp" "$backup"
+    mkdir -p "$tmp"
+
+    if ! cp -a "${staging}/." "$tmp/"; then
+        rm -rf "$tmp"
+        die "failed to copy staged ${site_target} site"
+    fi
+
+    find "$tmp" -type d -exec chmod 0755 {} +
+    find "$tmp" -type f -exec chmod 0644 {} +
+    if [[ -z "$ROOT" ]]; then
+        chown -R conary:conary "$tmp"
+    fi
+
+    if [[ -e "$target" || -L "$target" ]]; then
+        [[ -d "$target" && ! -L "$target" ]] ||
+            die "target is not a plain directory: $target"
+        mv "$target" "$backup"
+    fi
+
+    if ! mv "$tmp" "$target"; then
+        if [[ -e "$backup" ]]; then
+            mv "$backup" "$target" || true
+        fi
+        rm -rf "$tmp"
+        die "failed to publish ${site_target} site"
+    fi
+
+    rm -rf "$backup" "$staging"
+    rmdir "$parent" 2>/dev/null || true
+}
+
 configure_concurrency() {
     local value="$1"
     validate_positive_int "$value"
@@ -242,6 +301,10 @@ case "${1:-}" in
     deploy-remi)
         [[ $# -eq 3 ]] || usage
         deploy_remi "$2" "$3"
+        ;;
+    deploy-site)
+        [[ $# -eq 3 ]] || usage
+        deploy_site "$2" "$3"
         ;;
     configure-concurrency)
         [[ $# -eq 2 || ( $# -eq 3 && "$3" == "--skip-restart" ) ]] || usage
