@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-06-12
-revision: 19
-summary: Route static repository publishing
+revision: 20
+summary: Route M1b package authoring and try workflow
 ---
 
 # Assistant Subsystem Map
@@ -21,12 +21,18 @@ summary: Route static repository publishing
 
 - Repository sync, remote metadata, chunk retrieval, and Remi client behavior:
   `crates/conary-core/src/repository/`
-- Packaging and static repository publishing:
+- Packaging, source inference, try sessions, and static repository publishing:
   `docs/specs/static-repo-format-v1.md`,
   `docs/superpowers/specs/2026-06-10-packaging-toolchain-design.md`,
+  `docs/guides/first-package.md`,
+  `crates/conary-core/src/recipe/inference/`,
+  `crates/conary-core/src/db/models/try_session.rs`,
+  `apps/conary/src/commands/new.rs`,
   `apps/conary/src/commands/publish.rs`,
   `apps/conary/src/commands/cook.rs`,
+  `apps/conary/src/commands/try_session.rs`,
   `apps/conary/src/commands/repo_static.rs`,
+  `apps/conary/tests/packaging_m1b.rs`,
   `crates/conary-core/src/repository/static_repo/`,
   `crates/conary-core/src/trust/`, and
   `crates/conary-core/src/ccs/signing.rs`

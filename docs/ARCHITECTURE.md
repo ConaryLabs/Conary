@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-06-12
-revision: 22
-summary: Route static repository publishing ownership
+revision: 23
+summary: Route M1b package authoring and try state
 ---
 
 # Conary Architecture
@@ -17,7 +17,7 @@ apps/conary/ (CLI)
   cli/ + app.rs + dispatch.rs + dispatch/
       |
       +-- install / update / remove
-      +-- repo / publish / query / model / ccs / collection
+      +-- repo / publish / cook / new / try / query / model / ccs / collection
       +-- system generation / state / takeover
       +-- bootstrap / provenance / capability / federation
       |
@@ -92,9 +92,10 @@ crates/conary-core/      Core library crate
     +-- lib.rs           Internal workspace crate surface, not a stable external API
     +-- operations.rs    Shared operation vocabulary across CLI and daemon boundaries
     +-- db/              Database layer
-    |   +-- schema.rs    Schema v72, migration dispatcher
+    |   +-- schema.rs    Schema v73, migration dispatcher
     |   +-- migrations/  Migration functions grouped into v1_v20.rs, v21_v40.rs, v41_current.rs
     |   +-- models/      ORM-style model structs
+    |   |   +-- try_session.rs M1b package try session state
     +-- transaction/     Composefs-native transaction engine
     |   +-- mod.rs       TransactionEngine, state machine (resolve/fetch/commit/build/select)
     |   +-- planner.rs   VFS preflight conflict detection
@@ -172,6 +173,7 @@ crates/conary-core/      Core library crate
     +-- recipe/          Source-based package building
     |   +-- format.rs    Recipe format types and build-stage definitions
     |   +-- parser.rs    TOML recipe parser
+    |   +-- inference/   Source-tree, archive, and git target recipe inference
     |   +-- kitchen/     Build environment (cook, fetch, provenance)
     |   +-- build graph  Multi-recipe build ordering
     |   +-- cache.rs     Build artifact cache
@@ -454,7 +456,7 @@ itself.
 Supports x86_64, aarch64, and riscv64 targets. Dry-run mode
 (`--dry-run`) validates the full pipeline without building.
 
-## Database Schema (v72)
+## Database Schema (v73)
 
 All runtime state lives in SQLite, and migrations are dispatched from
 `crates/conary-core/src/db/schema.rs`.
@@ -464,6 +466,7 @@ The stable table families are:
 - Installed state: troves, changesets, files, components, dependencies, and provides
 - Repository and resolution state: repositories, synced package metadata, capability inputs, labels, and canonical mapping data
 - System state and configuration: state snapshots, config tracking, triggers, redirects, and settings
+- Try state: active/kept/rolled-back package try sessions and selected generation metadata
 - Security and provenance: TUF metadata, provenance records, admin tokens, and audit data
 - Service and federation state: conversion/cache/download analytics, federation peers, and test-run persistence
 
