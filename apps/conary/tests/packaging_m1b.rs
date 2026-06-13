@@ -1,12 +1,20 @@
 // apps/conary/tests/packaging_m1b.rs
 
+mod common;
+
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use conary_core::ccs::CcsPackage;
+use conary_core::ccs::builder::write_ccs_package;
+use conary_core::ccs::{
+    BuildResult, CcsManifest, CcsPackage, ComponentData, FileEntry as CcsFileEntry, FileType,
+};
+use conary_core::db::models::{TrySession, TrySessionStatus};
 use conary_core::packages::PackageFormat;
 use conary_core::recipe::parse_recipe_file;
+use conary_core::runtime_root::ConaryRuntimeRoot;
 
 const PACKAGE_NAME: &str = "hello-m1b";
 const PACKAGE_VERSION: &str = "0.1.0";
@@ -117,6 +125,114 @@ fn new_from_git_target_materializes_persistent_source_then_cook_builds() {
     assert_success(&output);
 
     assert_cooked_hello_m1b(&fixture.package_path());
+}
+
+#[test]
+fn try_package_creates_session() {
+    let fixture = try_fixture_package();
+    let (_db_temp, db_path) = common::setup_command_test_db();
+    let runtime_root = ConaryRuntimeRoot::from_db_path(PathBuf::from(&db_path));
+    create_current_generation_link(&runtime_root, 7);
+    let before_current = fs::read_link(runtime_root.current_link()).unwrap();
+
+    let output = try_package(
+        &fixture.package_path(),
+        &db_path,
+        Some("/usr/bin/hello-m1b"),
+    );
+    assert_success(&output);
+    let stdout = stdout_text(&output);
+    let session_id = extract_try_session_id(&stdout);
+
+    assert_eq!(
+        fs::read_link(runtime_root.current_link()).unwrap(),
+        before_current
+    );
+    let session = active_try_session(&db_path).expect("active try session");
+    assert_eq!(session.id, session_id);
+    assert_eq!(session.status, TrySessionStatus::Active);
+    assert_eq!(session.package_name.as_deref(), Some(PACKAGE_NAME));
+    assert_eq!(session.package_version.as_deref(), Some(PACKAGE_VERSION));
+    let generation_id = session.try_generation_id.expect("try generation id");
+
+    let second = try_package(&fixture.package_path(), &db_path, None);
+    assert_failure(&second);
+    assert!(
+        output_text(&second).contains(&session_id),
+        "second try should name active session\n{}",
+        output_text(&second)
+    );
+
+    let status = try_action("status", &db_path);
+    assert_success(&status);
+    let status_stdout = stdout_text(&status);
+    assert!(
+        status_stdout.contains(&format!("Try session: {session_id}")),
+        "{status_stdout}"
+    );
+    assert!(status_stdout.contains("Status: active"), "{status_stdout}");
+    assert!(
+        status_stdout.contains("Package: hello-m1b"),
+        "{status_stdout}"
+    );
+    assert!(
+        status_stdout.contains(&format!("Generation: {generation_id}")),
+        "{status_stdout}"
+    );
+}
+
+#[test]
+fn try_rollback_clears_session() {
+    let fixture = try_fixture_package();
+    let (_db_temp, db_path) = common::setup_command_test_db();
+    let runtime_root = ConaryRuntimeRoot::from_db_path(PathBuf::from(&db_path));
+    create_current_generation_link(&runtime_root, 7);
+    let before_current = fs::read_link(runtime_root.current_link()).unwrap();
+
+    let output = try_package(&fixture.package_path(), &db_path, None);
+    assert_success(&output);
+    let session_id = extract_try_session_id(&stdout_text(&output));
+
+    let rollback = try_action("rollback", &db_path);
+    assert_success(&rollback);
+
+    let session = try_session_by_id(&db_path, &session_id).expect("rolled back session");
+    assert_eq!(session.status, TrySessionStatus::RolledBack);
+    assert_eq!(active_try_session(&db_path), None);
+    assert_eq!(
+        fs::read_link(runtime_root.current_link()).unwrap(),
+        before_current
+    );
+
+    let status = try_action("status", &db_path);
+    assert_success(&status);
+    assert!(stdout_text(&status).contains("No active try session"));
+}
+
+#[test]
+fn try_keep_promotes_generation() {
+    let fixture = try_fixture_package();
+    let (_db_temp, db_path) = common::setup_command_test_db();
+    let runtime_root = ConaryRuntimeRoot::from_db_path(PathBuf::from(&db_path));
+    create_current_generation_link(&runtime_root, 7);
+
+    let output = try_package(&fixture.package_path(), &db_path, None);
+    assert_success(&output);
+    let session_id = extract_try_session_id(&stdout_text(&output));
+    let try_generation_id = active_try_session(&db_path)
+        .expect("active try session")
+        .try_generation_id
+        .expect("try generation id");
+
+    let keep = try_action("keep", &db_path);
+    assert_success(&keep);
+
+    let session = try_session_by_id(&db_path, &session_id).expect("kept session");
+    assert_eq!(session.status, TrySessionStatus::Kept);
+    assert_eq!(
+        conary_core::generation::mount::current_generation(runtime_root.root()).unwrap(),
+        Some(try_generation_id)
+    );
 }
 
 struct CargoFixture {
@@ -231,6 +347,113 @@ fn cook(target: &Path, output_dir: &Path, source_cache: &Path) -> Output {
         .expect("failed to run conary cook")
 }
 
+fn try_fixture_package() -> CargoFixture {
+    let fixture = CargoFixture::new();
+    let target_dir = fixture.work_dir().join("cargo-target");
+    let output = Command::new("cargo")
+        .args(["build", "--release", "--target-dir"])
+        .arg(&target_dir)
+        .current_dir(fixture.source_dir())
+        .output()
+        .expect("failed to build try fixture with cargo");
+    assert_success(&output);
+
+    let binary = target_dir.join("release").join(PACKAGE_NAME);
+    let content = fs::read(&binary).unwrap_or_else(|error| {
+        panic!(
+            "failed to read built try fixture binary {}: {error}",
+            binary.display()
+        )
+    });
+    write_single_binary_ccs(&fixture.package_path(), content);
+    fixture
+}
+
+fn write_single_binary_ccs(package_path: &Path, content: Vec<u8>) {
+    fs::create_dir_all(package_path.parent().expect("package parent")).unwrap();
+    let hash = conary_core::hash::sha256(&content);
+    let file = CcsFileEntry {
+        path: format!("/usr/bin/{PACKAGE_NAME}"),
+        hash: hash.clone(),
+        size: content.len() as u64,
+        mode: 0o100755,
+        component: "runtime".to_string(),
+        file_type: FileType::Regular,
+        target: None,
+        chunks: None,
+    };
+    let total_size = file.size;
+    let result = BuildResult {
+        manifest: CcsManifest::new_minimal(PACKAGE_NAME, PACKAGE_VERSION),
+        components: HashMap::from([(
+            "runtime".to_string(),
+            ComponentData {
+                name: "runtime".to_string(),
+                files: vec![file.clone()],
+                hash: "runtime".to_string(),
+                size: file.size,
+            },
+        )]),
+        files: vec![file],
+        blobs: HashMap::from([(hash, content)]),
+        total_size,
+        chunked: false,
+        chunk_stats: None,
+    };
+    write_ccs_package(&result, package_path).unwrap();
+}
+
+fn try_package(package_path: &Path, db_path: &str, command: Option<&str>) -> Output {
+    let mut conary = Command::new(env!("CARGO_BIN_EXE_conary"));
+    conary
+        .env("CONARY_TEST_SKIP_GENERATION_MOUNT", "1")
+        .env("CONARY_TEST_TRY_LAUNCHER", "echo")
+        .arg("try")
+        .arg(package_path)
+        .arg("--db-path")
+        .arg(db_path);
+    if let Some(command) = command {
+        conary.arg("--").arg(command);
+    }
+    conary.output().expect("failed to run conary try")
+}
+
+fn try_action(action: &str, db_path: &str) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_conary"))
+        .env("CONARY_TEST_SKIP_GENERATION_MOUNT", "1")
+        .env("CONARY_TEST_TRY_LAUNCHER", "echo")
+        .args(["try", action, "--db-path", db_path])
+        .output()
+        .expect("failed to run conary try action")
+}
+
+fn active_try_session(db_path: &str) -> Option<TrySession> {
+    let conn = conary_core::db::open(db_path).unwrap();
+    TrySession::find_active_or_orphaned(&conn).unwrap()
+}
+
+fn try_session_by_id(db_path: &str, session_id: &str) -> Option<TrySession> {
+    let conn = conary_core::db::open(db_path).unwrap();
+    TrySession::find_by_id(&conn, session_id).unwrap()
+}
+
+fn create_current_generation_link(runtime_root: &ConaryRuntimeRoot, generation: i64) {
+    fs::create_dir_all(runtime_root.generation_path(generation)).unwrap();
+    conary_core::generation::mount::update_current_symlink(runtime_root.root(), generation)
+        .unwrap();
+}
+
+fn extract_try_session_id(stdout: &str) -> String {
+    stdout
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("Try session ")
+                .and_then(|rest| rest.strip_suffix(" is active"))
+        })
+        .unwrap_or_else(|| panic!("missing try session id in stdout:\n{stdout}"))
+        .to_string()
+}
+
 fn git(cwd: &Path, args: &[&str]) -> String {
     let output = Command::new("git")
         .args(args)
@@ -304,6 +527,14 @@ fn assert_cargo_build_omits_locked(recipe_path: &Path) {
 
 fn assert_success(output: &Output) {
     assert!(output.status.success(), "{}", output_text(output));
+}
+
+fn assert_failure(output: &Output) {
+    assert!(!output.status.success(), "{}", output_text(output));
+}
+
+fn stdout_text(output: &Output) -> String {
+    String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
 fn output_text(output: &Output) -> String {

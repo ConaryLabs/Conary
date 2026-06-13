@@ -230,21 +230,28 @@ fn classify_try(
     {
         return match target {
             "status" => read_only("conary try status"),
-            "rollback" => policy(
+            "rollback" => policy_with_intent(
                 "conary try rollback",
                 CommandRisk::ActiveHostMutation,
                 false,
+                true,
             ),
-            "keep" => policy("conary try keep", CommandRisk::ActiveHostMutation, false),
+            "keep" => policy_with_intent(
+                "conary try keep",
+                CommandRisk::ActiveHostMutation,
+                false,
+                true,
+            ),
             _ => unreachable!("reserved try action checked above"),
         };
     }
 
     if activate {
-        policy(
+        policy_with_intent(
             "conary try --activate",
             CommandRisk::ActiveHostMutation,
             false,
+            true,
         )
     } else {
         local_state("conary try")
@@ -884,6 +891,10 @@ mod tests {
         let activated = policy(&["conary", "try", "pkg.ccs", "--activate"]);
         assert_eq!(activated.risk, CommandRisk::ActiveHostMutation);
         assert!(activated.requires_ack());
+        assert!(
+            activated.apply_intent,
+            "--activate is the explicit host-global try intent"
+        );
 
         let status = policy(&["conary", "try", "status"]);
         assert_eq!(status.risk, CommandRisk::ReadOnly);
@@ -896,6 +907,10 @@ mod tests {
             let policy = policy(args);
             assert_eq!(policy.risk, CommandRisk::ActiveHostMutation);
             assert!(policy.requires_ack());
+            assert!(
+                policy.apply_intent,
+                "try management actions are explicit decisions"
+            );
         }
     }
 

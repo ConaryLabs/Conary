@@ -87,6 +87,10 @@ fn is_try_management_action(command: &Commands) -> bool {
     )
 }
 
+fn command_uses_try_session_preflight_db(command: &Commands) -> bool {
+    !matches!(command, Commands::Cook { .. } | Commands::New { .. })
+}
+
 pub(super) fn run_try_session_preflight(cli: &crate::cli::Cli) -> Result<()> {
     run_try_session_preflight_inner(cli, std::io::stdin().is_terminal())
 }
@@ -101,6 +105,9 @@ fn run_try_session_preflight_inner(cli: &crate::cli::Cli, interactive: bool) -> 
         return Ok(());
     };
     if is_try_management_action(command) {
+        return Ok(());
+    }
+    if !command_uses_try_session_preflight_db(command) {
         return Ok(());
     }
 
@@ -125,7 +132,7 @@ fn run_try_session_preflight_inner(cli: &crate::cli::Cli, interactive: bool) -> 
 
     match session.mode {
         TrySessionMode::Namespace => {
-            if namespace_try_session_is_live(&session, &current_boot_id) {
+            if namespace_try_session_is_decision_pending(&session, &current_boot_id) {
                 if allows_live_try_session {
                     return Ok(());
                 }
@@ -517,9 +524,16 @@ fn selected_update_channel_db_path(command: &cli::UpdateChannelAction) -> &str {
     }
 }
 
-fn namespace_try_session_is_live(session: &TrySession, current_boot_id: &str) -> bool {
-    session.launcher_boot_id.as_deref() == Some(current_boot_id)
-        && session.launcher_pid.is_some_and(try_launcher_pid_is_alive)
+fn namespace_try_session_is_decision_pending(session: &TrySession, current_boot_id: &str) -> bool {
+    if session
+        .launcher_boot_id
+        .as_deref()
+        .is_some_and(|boot_id| boot_id != current_boot_id)
+    {
+        return false;
+    }
+
+    session.launcher_pid.is_none_or(try_launcher_pid_is_alive)
 }
 
 fn activated_try_session_is_live(
@@ -1300,6 +1314,28 @@ mod tests {
     }
 
     #[test]
+    fn completed_namespace_preflight_stays_active_and_blocks_mutation() {
+        let _env_lock = lock_env();
+        let _boot_guard = EnvVarGuard::set("CONARY_TEST_BOOT_ID", "boot-a");
+        let fixture = TryPreflightFixture::new();
+        fixture.create_session("try-complete-ns", TrySessionMode::Namespace);
+
+        let err = run_try_session_preflight_for_test(&mutating_cli(&fixture), true)
+            .expect_err("decision-pending namespace try session should block mutating commands");
+
+        let message = err.to_string();
+        assert!(
+            message.contains("another try session is active"),
+            "{message}"
+        );
+        assert_message_mentions_try_actions(&message);
+        assert_eq!(
+            fixture.stored_session("try-complete-ns").status,
+            TrySessionStatus::Active
+        );
+    }
+
+    #[test]
     fn orphaned_namespace_preflight_marks_orphaned_and_blocks_command() {
         let _env_lock = lock_env();
         let _boot_guard = EnvVarGuard::set("CONARY_TEST_BOOT_ID", "boot-a");
@@ -1454,6 +1490,22 @@ mod tests {
 
         let command = cli.command.as_ref().expect("parsed command");
         assert_eq!(super::selected_db_path(command), super::DEFAULT_DB_PATH);
+    }
+
+    #[test]
+    fn commands_without_db_args_do_not_use_try_session_preflight_scope() {
+        for args in [
+            ["conary", "cook", "."].as_slice(),
+            ["conary", "new", "hello-m1b"].as_slice(),
+        ] {
+            let cli = Cli::try_parse_from(args).unwrap();
+            let command = cli.command.as_ref().expect("parsed command");
+            assert!(!super::command_uses_try_session_preflight_db(command));
+        }
+
+        let cli = Cli::try_parse_from(["conary", "pin", "demo"]).unwrap();
+        let command = cli.command.as_ref().expect("parsed command");
+        assert!(super::command_uses_try_session_preflight_db(command));
     }
 
     #[test]
