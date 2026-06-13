@@ -1116,6 +1116,41 @@ pub fn migrate_v72(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Version 73: Try session persistence
+pub fn migrate_v73(conn: &Connection) -> Result<()> {
+    debug!("Migrating to schema version 73");
+
+    conn.execute_batch(
+        "
+        CREATE TABLE try_sessions (
+            id TEXT PRIMARY KEY,
+            package_path TEXT NOT NULL,
+            package_name TEXT,
+            package_version TEXT,
+            previous_generation_id INTEGER,
+            try_generation_id INTEGER,
+            launcher_pid INTEGER,
+            launcher_boot_id TEXT,
+            status TEXT NOT NULL CHECK (status IN ('active', 'orphaned', 'kept', 'rolled_back')),
+            mode TEXT NOT NULL CHECK (mode IN ('namespace', 'activated')),
+            open_slot INTEGER NOT NULL DEFAULT 1 CHECK (open_slot = 1),
+            work_dir TEXT NOT NULL,
+            last_error TEXT,
+            started_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+            completed_at TEXT
+        );
+
+        CREATE UNIQUE INDEX idx_try_sessions_single_open
+            ON try_sessions(open_slot)
+            WHERE status IN ('active', 'orphaned');
+        ",
+    )?;
+
+    info!("Schema version 73 applied successfully (try session persistence)");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

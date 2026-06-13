@@ -11,7 +11,7 @@ use rusqlite::Connection;
 use tracing::info;
 
 /// Current schema version
-pub const SCHEMA_VERSION: i32 = 72;
+pub const SCHEMA_VERSION: i32 = 73;
 
 /// Initialize the schema version tracking table
 fn init_schema_version(conn: &Connection) -> Result<()> {
@@ -196,6 +196,7 @@ fn apply_migration(conn: &Connection, version: i32) -> Result<()> {
         70 => migrations::migrate_v70(conn),
         71 => migrations::migrate_v71(conn),
         72 => migrations::migrate_v72(conn),
+        73 => migrations::migrate_v73(conn),
         _ => Err(crate::error::Error::InitError(format!(
             "Unknown migration version: {}",
             version
@@ -471,10 +472,9 @@ mod tests {
     fn migration_v72_creates_repository_package_keys_table() {
         let (_temp, conn) = create_test_db_at_version(71);
 
-        migrate(&conn).unwrap();
+        apply_migration_version(&conn, 72).unwrap();
 
-        assert_eq!(get_schema_version(&conn).unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 72);
+        assert_eq!(get_schema_version(&conn).unwrap(), 72);
 
         let columns: Vec<(String, String, bool, Option<String>, i32)> = conn
             .prepare("PRAGMA table_info(repository_package_keys)")
@@ -552,6 +552,119 @@ mod tests {
             .collect::<std::result::Result<Vec<_>, _>>()
             .unwrap();
         assert!(indexes.contains(&"idx_repository_package_keys_repo".to_string()));
+    }
+
+    #[test]
+    fn migration_v73_creates_try_sessions_table() {
+        let (_temp, conn) = create_test_db_at_version(72);
+
+        migrate(&conn).unwrap();
+
+        assert_eq!(get_schema_version(&conn).unwrap(), SCHEMA_VERSION);
+        assert_eq!(SCHEMA_VERSION, 73);
+
+        let columns: Vec<(String, String, bool, Option<String>, i32)> = conn
+            .prepare("PRAGMA table_info(try_sessions)")
+            .unwrap()
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i32>(3)? != 0,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, i32>(5)?,
+                ))
+            })
+            .unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap();
+        let column_names: Vec<&str> = columns
+            .iter()
+            .map(|(name, _, _, _, _)| name.as_str())
+            .collect();
+
+        for required in [
+            "id",
+            "package_path",
+            "package_name",
+            "package_version",
+            "previous_generation_id",
+            "try_generation_id",
+            "launcher_pid",
+            "launcher_boot_id",
+            "status",
+            "mode",
+            "open_slot",
+            "work_dir",
+            "last_error",
+            "started_at",
+            "updated_at",
+            "completed_at",
+        ] {
+            assert!(
+                column_names.contains(&required),
+                "missing try_sessions column {required}"
+            );
+        }
+
+        assert!(
+            columns
+                .iter()
+                .any(|(name, ty, _, _, pk)| { name == "id" && ty == "TEXT" && *pk == 1 })
+        );
+        assert!(columns.iter().any(|(name, ty, required, _, _)| {
+            name == "package_path" && ty == "TEXT" && *required
+        }));
+        assert!(
+            columns
+                .iter()
+                .any(|(name, ty, required, _, _)| name == "status" && ty == "TEXT" && *required)
+        );
+        assert!(
+            columns
+                .iter()
+                .any(|(name, ty, required, _, _)| name == "mode" && ty == "TEXT" && *required)
+        );
+        assert!(columns.iter().any(|(name, ty, required, default, _)| {
+            name == "open_slot" && ty == "INTEGER" && *required && default.as_deref() == Some("1")
+        }));
+        assert!(columns.iter().any(|(name, ty, required, default, _)| {
+            name == "started_at"
+                && ty == "TEXT"
+                && *required
+                && default
+                    .as_deref()
+                    .is_some_and(|value| value.contains("strftime('%Y-%m-%dT%H:%M:%SZ', 'now')"))
+        }));
+        assert!(columns.iter().any(|(name, ty, required, default, _)| {
+            name == "updated_at"
+                && ty == "TEXT"
+                && *required
+                && default
+                    .as_deref()
+                    .is_some_and(|value| value.contains("strftime('%Y-%m-%dT%H:%M:%SZ', 'now')"))
+        }));
+
+        let create_sql: String = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'try_sessions'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(create_sql.contains("status IN ('active', 'orphaned', 'kept', 'rolled_back')"));
+        assert!(create_sql.contains("mode IN ('namespace', 'activated')"));
+        assert!(create_sql.contains("CHECK (open_slot = 1)"));
+
+        let index_sql: String = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'idx_try_sessions_single_open'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(index_sql.contains("ON try_sessions(open_slot)"));
+        assert!(index_sql.contains("WHERE status IN ('active', 'orphaned')"));
     }
 
     #[test]

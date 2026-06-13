@@ -57,6 +57,7 @@ mod subpackage;
 mod trigger;
 mod trigger_engine;
 mod trove;
+mod try_session;
 
 pub mod admin_token;
 pub mod audit_log;
@@ -103,6 +104,7 @@ pub use subpackage::{RelatedPackages, SubpackageRelationship, show_subpackage_gu
 pub use trigger::{ChangesetTrigger, Trigger, TriggerDependency, TriggerStatus};
 pub use trigger_engine::TriggerEngine;
 pub use trove::{InstallReason, InstallSource, Trove, TroveType};
+pub use try_session::{CreateTrySession, TrySession, TrySessionMode, TrySessionStatus};
 
 /// Format a byte count as a human-readable size string.
 ///
