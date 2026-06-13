@@ -387,9 +387,10 @@ mod tests {
     use std::env;
     use std::fs;
     use std::path::{Path, PathBuf};
-    use std::sync::{Mutex, OnceLock};
+    use std::sync::OnceLock;
 
     use conary_core::recipe::parse_recipe_file;
+    use tokio::sync::Mutex;
 
     use super::super::new::{cmd_new, prepare_new};
 
@@ -488,7 +489,7 @@ version = "0.4.0"
 
     #[tokio::test]
     async fn from_current_dir_writes_inferred_recipe_and_trace() {
-        let _lock = cwd_lock().lock().unwrap();
+        let _lock = cwd_lock().lock().await;
         let command_dir = tempfile::tempdir().unwrap();
         cargo_source_tree(command_dir.path());
         let _guard = CwdGuard::enter(command_dir.path());
@@ -517,7 +518,7 @@ version = "0.4.0"
 
     #[tokio::test]
     async fn bare_new_uses_current_dir_when_marker_is_supported() {
-        let _lock = cwd_lock().lock().unwrap();
+        let _lock = cwd_lock().lock().await;
         let dir = tempfile::tempdir().unwrap();
         cargo_source_tree(dir.path());
         let _guard = CwdGuard::enter(dir.path());
@@ -560,7 +561,7 @@ version = "0.4.0"
 
     #[tokio::test]
     async fn from_local_archive_writes_recipe_and_stable_archive_source() {
-        let _lock = cwd_lock().lock().unwrap();
+        let _lock = cwd_lock().lock().await;
         let command_dir = tempfile::tempdir().unwrap();
         let archive = command_dir.path().join("source.tgz");
         write_tar_archive(&archive);
@@ -581,7 +582,7 @@ version = "0.4.0"
 
     #[tokio::test]
     async fn from_local_archive_already_in_sources_reuses_input_archive() {
-        let _lock = cwd_lock().lock().unwrap();
+        let _lock = cwd_lock().lock().await;
         let command_dir = tempfile::tempdir().unwrap();
         let sources_dir = command_dir.path().join("sources");
         fs::create_dir(&sources_dir).unwrap();
@@ -602,7 +603,7 @@ version = "0.4.0"
 
     #[tokio::test]
     async fn from_local_archive_already_in_sources_is_safe_with_force() {
-        let _lock = cwd_lock().lock().unwrap();
+        let _lock = cwd_lock().lock().await;
         let command_dir = tempfile::tempdir().unwrap();
         let sources_dir = command_dir.path().join("sources");
         fs::create_dir(&sources_dir).unwrap();
@@ -623,7 +624,7 @@ version = "0.4.0"
             return;
         }
 
-        let _lock = cwd_lock().lock().unwrap();
+        let _lock = cwd_lock().lock().await;
         let command_dir = tempfile::tempdir().unwrap();
         let repo = command_dir.path().join("demo.git");
         fs::create_dir(&repo).unwrap();
@@ -652,7 +653,7 @@ version = "0.4.0"
             return;
         }
 
-        let _lock = cwd_lock().lock().unwrap();
+        let _lock = cwd_lock().lock().await;
         let command_dir = tempfile::tempdir().unwrap();
         let repo = command_dir.path().join("demo.git");
         fs::create_dir(&repo).unwrap();
@@ -683,7 +684,7 @@ version = "0.4.0"
             return;
         }
 
-        let _lock = cwd_lock().lock().unwrap();
+        let _lock = cwd_lock().lock().await;
         let command_dir = tempfile::tempdir().unwrap();
         let repo = command_dir.path().join("demo.git");
         fs::create_dir(&repo).unwrap();
@@ -720,7 +721,7 @@ version = "0.4.0"
 
     #[tokio::test]
     async fn named_new_scaffolds_recipe_under_name() {
-        let _lock = cwd_lock().lock().unwrap();
+        let _lock = cwd_lock().lock().await;
         let dir = tempfile::tempdir().unwrap();
         let _guard = CwdGuard::enter(dir.path());
 
