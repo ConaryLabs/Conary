@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-06-12
-revision: 20
-summary: Route M1b package authoring and try workflow
+last_updated: 2026-06-14
+revision: 21
+summary: Route M2 publish hardening design
 ---
 
 # Assistant Subsystem Map
@@ -24,6 +24,7 @@ summary: Route M1b package authoring and try workflow
 - Packaging, source inference, try sessions, and static repository publishing:
   `docs/specs/static-repo-format-v1.md`,
   `docs/superpowers/specs/2026-06-10-packaging-toolchain-design.md`,
+  `docs/superpowers/specs/2026-06-13-m2-publish-hardening-remi-design.md`,
   `docs/guides/first-package.md`,
   `crates/conary-core/src/recipe/inference/`,
   `crates/conary-core/src/db/models/try_session.rs`,

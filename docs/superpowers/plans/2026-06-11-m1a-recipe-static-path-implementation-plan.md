@@ -18,7 +18,7 @@ In scope:
 - Static repo v1 format from `docs/specs/static-repo-format-v1.md`.
 - File/local-path support for static repo metadata, index, packages, Kitchen source downloads, and recipe `[source] path = "."` local workspaces.
 - Package signing trust from TUF-verified `keys/package-keys.json`.
-- Preview-honest provenance: `origin_class = native-built`, `hardening_level = host|sandboxed`, never `hermetic` or `attested` in M1a.
+- Preview-honest provenance: `origin_class = native-built`, `hardening_level = host|sandboxed`, never `hermetic`, and no build attestation in M1a.
 
 Out of scope:
 
@@ -1786,7 +1786,7 @@ git commit -m "test(static-repo): finish M1a verification"
 - Do not accept GPG flags for static repos. Parse-time conflicts cover explicit `--fingerprint` plus GPG flags; execution-time rejection covers probed static repos with GPG flags.
 - Do not parse `index.json` or `keys/package-keys.json` until TUF target hash/length verification succeeds.
 - Do not let `--allow-unsigned` bypass static repo package signatures.
-- Do not claim `hermetic` or `attested` in M1a output/provenance.
+- Do not claim `hermetic` or emit build attestations in M1a output/provenance.
 - Keep `repository/sync.rs` as an orchestrator; put new static-specific code in child modules.
 - Keep `apps/conary/src/cli/mod.rs` edits narrow despite its current size; do not decompose it as part of M1a unless a focused parse-test-only child file already exists.
 

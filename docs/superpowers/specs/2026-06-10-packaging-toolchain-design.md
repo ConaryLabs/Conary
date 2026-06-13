@@ -45,7 +45,8 @@ suite is green:
   level** in provenance (`sandboxed` — Kitchen container isolation with network
   still allowed; the `hermetic` label is reserved for M2's offline builds) and
   publish prints that this is a preview repo, not reproducible release evidence; M2
-  flips the default gate to require `attested`.
+  flips the default gate to require `hermetic` plus a verified accepted build
+  attestation.
 - **M1b — inference + try.** Build-system inference for the core build systems,
   `conary new` materialization, `conary try` (state machine, no watch). Internal
   ordering: inference lands first via the `conary new --from .` path (materialize →
@@ -137,18 +138,20 @@ serializable — not debug-printf. The earlier `build`-verb collision with
 `build` alias's help text points to `cook` and cross-references the generation
 surface for anyone who meant that.
 
-Every built package carries two **orthogonal** provenance fields in its manifest:
+Every built package carries orthogonal provenance evidence in its manifest:
 
 - **Origin class** (how the build was described): `native-built` (explicit recipe),
   `inferred-source` (build-system inference), `recorded-draft` (record mode output),
   or `foreign-converted` (.rpm/.deb/.pkg.tar.zst conversion).
 - **Hardening level** (how the build was executed): `host`, `sandboxed` (container
-  isolation, network allowed), `hermetic` (offline, pinned inputs — M2), `attested`
-  (hermetic + signed attestation — M2).
+  isolation, network allowed), or `hermetic` (offline, pinned inputs — M2).
+- **Build attestation** (M2): a signed envelope over the hermetic build inputs,
+  policy identity, and output identity.
 
-Publish lint gates key off both — e.g. `recorded-draft` is never publishable
-directly regardless of hardening (see Record mode), and from M2 the default publish
-gate requires `attested`. An M1a project-form publish is typically
+Publish lint gates key off all of these — e.g. `recorded-draft` is never
+publishable directly regardless of hardening (see Record mode), and from M2 the
+default publish gate requires `hardening_level = "hermetic"` plus a verified
+accepted build attestation. An M1a project-form publish is typically
 `native-built` + `sandboxed`; the old single-axis taxonomy conflated these.
 
 ### `conary try [pkg.ccs]`
@@ -256,8 +259,8 @@ never overclaim:
   provenance is stamped `hardening: sandboxed`, **not** `hermetic`. Publish prints
   that the repo is a preview, not reproducible release evidence.
 - **M2:** the offline prefetch-then-build model below lands; only those builds earn
-  `hardening: hermetic` (plus `attested` once signed). M2 flips the publish gate to
-  require it.
+  `hardening: hermetic`. M2 flips the publish gate to require `hermetic` plus a
+  verified accepted build attestation.
 
 The full M2 requirements:
 
@@ -557,7 +560,8 @@ cook is promoted into the front door; only `conary ccs build` stays plumbing.
 available; the provenance hardening field, not the flag name, carries the truth
 claim — avoiding both M1a overclaim and an M2 flag rename); provenance split into
 two orthogonal fields, origin class (native-built / inferred-source / recorded-draft
-/ foreign-converted) and hardening level (host / sandboxed / hermetic / attested);
+/ foreign-converted) and hardening level (host / sandboxed / hermetic), with M2
+build attestations modeled as separate signed evidence;
 declarative hooks default reversible **only** when the hook executor targets the
 generation root — host-root execution fails closed like a scriptlet; `--activate`
 written unambiguously as `conary try <pkg.ccs> --activate`. Reviewer reported no
@@ -607,8 +611,9 @@ the availability matrix; try now **refuses** irreversibly-hooked packages by def
 execution model; reversibility is a manifest field + publish lint); tree-hash scope
 defined (git-tracked files only in a repo; default ignore set
 plus warning outside one); pre-M2 publishes carry an honest hardening level
-(`hermetic`, not `attested`) and announce preview status; `conary new --from .` added
-as the explicit, documented form of bare `new`.
+(`sandboxed`, not `hermetic`) and announce preview status; M2 publishability
+requires hermetic execution plus separate signed attestation evidence;
+`conary new --from .` added as the explicit, documented form of bare `new`.
 
 **Round 2 (same day):** try rollback scope stated honestly (generation/filesystem
 only, with a hook policy for non-generation-scoped effects; boot-time orphan
