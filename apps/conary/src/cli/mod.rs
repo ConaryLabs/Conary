@@ -490,10 +490,9 @@ pub enum Commands {
 
         /// Print recipe inference trace
         #[arg(long)]
-        #[arg(hide = true)]
         explain: bool,
 
-        /// Build inside the M1a sandboxed isolation path
+        /// Build inside the sandboxed isolation path
         #[arg(long)]
         isolated: bool,
 
@@ -508,7 +507,7 @@ pub enum Commands {
         hermetic: bool,
     },
 
-    #[command(hide = true)] // removed in Task 14 after gates pass
+    /// Create or infer a package recipe
     New {
         /// Package project name for scaffold mode
         name: Option<String>,
@@ -530,7 +529,7 @@ pub enum Commands {
         explain: bool,
     },
 
-    #[command(hide = true)] // removed in Task 14 after gates pass
+    /// Try a package artifact with explicit keep or rollback
     Try {
         /// Package artifact, or one of: status, rollback, keep
         target: Option<String>,
@@ -553,10 +552,11 @@ pub enum Commands {
 
     /// Publish a recipe project to an M1a static repository
     Publish {
-        /// Project-form destination, or artifact path for future M2 artifact-form publish
+        /// Project-form destination for static repository publishing
         what: String,
 
-        /// Future M2 artifact-form target repository
+        /// Reserved for future artifact-form publishing
+        #[arg(hide = true)]
         target: Option<String>,
 
         /// Recipe file to publish
@@ -843,6 +843,62 @@ mod tests {
     fn cli_accepts_seccomp_warn_flag() {
         Cli::try_parse_from(["conary", "--seccomp-warn", "list"])
             .expect("--seccomp-warn should parse as a global CLI flag");
+    }
+
+    fn root_help() -> String {
+        Cli::command().render_long_help().to_string()
+    }
+
+    fn subcommand_help(name: &str) -> String {
+        let mut command = Cli::command();
+        command
+            .find_subcommand_mut(name)
+            .unwrap_or_else(|| panic!("{name} subcommand should exist"))
+            .render_long_help()
+            .to_string()
+    }
+
+    #[test]
+    fn help_exposes_graduated_m1b_authoring_surfaces() {
+        let root = root_help();
+        assert!(root.contains("new"));
+        assert!(root.contains("try"));
+        assert!(root.contains("Create or infer a package recipe"));
+        assert!(root.contains("Try a package artifact"));
+
+        let cook = subcommand_help("cook");
+        assert!(cook.contains("--explain"));
+        assert!(!cook.contains("M1a"));
+
+        let new = subcommand_help("new");
+        assert!(new.contains("--from"));
+        assert!(new.contains("--explain"));
+
+        let try_help = subcommand_help("try");
+        assert!(try_help.contains("--activate"));
+        assert!(try_help.contains("--allow-irreversible"));
+        assert!(try_help.contains("status"));
+        assert!(try_help.contains("rollback"));
+        assert!(try_help.contains("keep"));
+    }
+
+    #[test]
+    fn help_omits_future_packaging_surfaces() {
+        let cook = subcommand_help("cook");
+        assert!(!cook.contains("--hermetic"));
+        assert!(!cook.contains("foreign"));
+
+        let publish = subcommand_help("publish");
+        assert!(!publish.contains("[TARGET]"));
+        assert!(!publish.contains("artifact-form"));
+        assert!(!publish.contains("artifact path"));
+        assert!(!publish.contains("attestation"));
+        assert!(!publish.contains("attest"));
+
+        let try_help = subcommand_help("try");
+        assert!(!try_help.contains("--watch"));
+        assert!(!try_help.contains("--record"));
+        assert!(!try_help.contains("--json"));
     }
 
     #[test]

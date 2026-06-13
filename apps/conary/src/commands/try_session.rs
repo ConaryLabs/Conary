@@ -1098,7 +1098,7 @@ fn decode_mountinfo_path(raw: &str) -> PathBuf {
 fn run_try_unmount(path: &Path) -> Result<()> {
     #[cfg(test)]
     if let Some(fail_path) = std::env::var_os("CONARY_TEST_TRY_UMOUNT_FAIL")
-        && PathBuf::from(fail_path) == path
+        && Path::new(&fail_path) == path
     {
         bail!(
             "forced try namespace unmount failure for {}",
@@ -1419,7 +1419,7 @@ fn find_command(command: &str) -> Option<PathBuf> {
 fn remove_dir_if_exists(path: PathBuf) -> Result<()> {
     #[cfg(test)]
     if let Some(fail_path) = std::env::var_os("CONARY_TEST_TRY_REMOVE_DIR_FAIL")
-        && PathBuf::from(fail_path) == path
+        && Path::new(&fail_path) == path
     {
         bail!(
             "forced try directory removal failure for {}",

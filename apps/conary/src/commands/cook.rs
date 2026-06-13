@@ -111,7 +111,7 @@ fn write_inference_trace(output: &mut impl Write, trace: &InferenceTrace) -> Res
 /// * `validate_only` - Only validate the recipe, don't cook
 /// * `fetch_only` - Only fetch sources, don't build
 /// * `explain` - Print inference trace for inferred source trees
-/// * `isolated` - Use the M1a sandboxed isolation path
+/// * `isolated` - Use the sandboxed isolation path
 /// * `no_isolation` - Hidden compatibility no-op for the M1a host default
 /// * `hermetic` - Hidden compatibility flag rejected until M2
 #[allow(clippy::too_many_arguments)]
@@ -166,7 +166,7 @@ async fn cmd_cook_with_output(
 ) -> Result<()> {
     if hermetic {
         anyhow::bail!(
-            "Hermetic cook/publish is an M2 feature; M1a supports host or --isolated builds only"
+            "Hermetic cook/publish is an M2 feature; M1b supports host or --isolated builds only"
         );
     }
 
@@ -845,6 +845,10 @@ edition = "2021"
         assert!(
             error.to_string().contains("M2"),
             "hermetic error should name M2: {error:#}"
+        );
+        assert!(
+            !error.to_string().contains("M1a"),
+            "hermetic error should not use stale M1a wording after M1b graduation: {error:#}"
         );
         assert!(
             !output_dir.exists(),

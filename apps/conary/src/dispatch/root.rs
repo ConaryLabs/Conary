@@ -88,7 +88,15 @@ fn is_try_management_action(command: &Commands) -> bool {
 }
 
 fn command_uses_try_session_preflight_db(command: &Commands) -> bool {
-    !matches!(command, Commands::Cook { .. } | Commands::New { .. })
+    !matches!(
+        command,
+        Commands::Cook { .. }
+            | Commands::New { .. }
+            | Commands::Publish {
+                target: Some(_),
+                ..
+            }
+    )
 }
 
 pub(super) fn run_try_session_preflight(cli: &crate::cli::Cli) -> Result<()> {
@@ -1497,6 +1505,7 @@ mod tests {
         for args in [
             ["conary", "cook", "."].as_slice(),
             ["conary", "new", "hello-m1b"].as_slice(),
+            ["conary", "publish", "dist/pkg.ccs", "./repo"].as_slice(),
         ] {
             let cli = Cli::try_parse_from(args).unwrap();
             let command = cli.command.as_ref().expect("parsed command");
@@ -1506,6 +1515,20 @@ mod tests {
         let cli = Cli::try_parse_from(["conary", "pin", "demo"]).unwrap();
         let command = cli.command.as_ref().expect("parsed command");
         assert!(super::command_uses_try_session_preflight_db(command));
+    }
+
+    #[tokio::test]
+    async fn artifact_form_publish_reaches_m2_rejection_without_preflight_db() {
+        let cli = Cli::try_parse_from(["conary", "publish", "dist/pkg.ccs", "./repo"]).unwrap();
+
+        let err = crate::dispatch::dispatch(cli)
+            .await
+            .expect_err("artifact-form publish should stop at the M2 gate");
+
+        assert_eq!(
+            err.to_string(),
+            "artifact-form publish requires M2 attestation support; run project-form publish from a recipe project"
+        );
     }
 
     #[test]
