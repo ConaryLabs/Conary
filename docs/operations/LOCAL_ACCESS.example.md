@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-04-02
-revision: 1
-summary: Template for local machine-specific access notes that must not be committed
+last_updated: 2026-06-13
+revision: 2
+summary: Template for local machine-specific access and remote-workbench notes that must not be committed
 ---
 
 # Local Access Notes Template
@@ -39,3 +39,11 @@ untracked.
 - Workstation-specific caveats
 - Useful local wrappers or shortcuts
 - Deployment notes that are too sensitive or host-specific for tracked docs
+
+## Remote Development Workbench
+
+- SSH alias for the unprivileged remote dev account
+- SSH alias or wrapper that attaches to the remote tmux work session
+- Optional mosh wrapper and port range
+- Remote checkout path, cache paths, and any local assumptions used by wrappers
+- Assistant CLI setup notes that do not include tokens or conversation history
