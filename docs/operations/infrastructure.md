@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-05-24
-revision: 8
-summary: Non-secret infrastructure, agent-operations transport, release, Remi deploy, and Forge staging guidance for Conary contributors and coding assistants
+last_updated: 2026-06-13
+revision: 9
+summary: Non-secret infrastructure, agent-operations transport, release, Remi deploy, remote development, and Forge staging guidance for Conary contributors and coding assistants
 ---
 
 # Infrastructure Overview
@@ -166,6 +166,62 @@ not cover the task or when you are debugging the underlying service path itself.
   the same host
 - `packages.conary.io` should be treated as the public compatibility alias for
   the same Remi origin, not as a separate host or deployment target
+
+#### Remi Remote Development Workbench
+
+The Remi host may also carry an isolated development workbench for Conary, but
+that workbench is not part of the production service contract. Keep development
+state under `/conary/dev`, use the unprivileged `conary-dev` account for
+day-to-day work, and keep production service paths such as `/conary/web`,
+`/conary/site`, `/conary/releases`, and systemd-owned Remi state out of dev
+workflows.
+
+When rebuilding the workbench from a privileged Remi shell, the non-secret
+baseline is:
+
+```bash
+sudo pacman -S --needed base-devel git rustup clang mold nodejs npm fd github-cli bubblewrap tmux mosh
+sudo useradd -m -d /conary/dev/home/conary-dev -s /bin/bash conary-dev
+sudo install -d -o conary-dev -g conary-dev /conary/dev/src
+sudo install -d -o conary-dev -g conary-dev /conary/dev/cache/cargo /conary/dev/cache/rustup /conary/dev/cache/npm /conary/dev/cache/target
+sudo loginctl enable-linger conary-dev
+```
+
+After the account exists, clone the repository as `conary-dev` into
+`/conary/dev/src/Conary`, set `CARGO_HOME`, `RUSTUP_HOME`, npm cache, and target
+cache paths under `/conary/dev/cache`, install Rust through rustup, and install
+the assistant CLIs without version pinning:
+
+```bash
+rustup toolchain install 1.96.0 --profile default
+rustup default 1.96.0
+npm install -g @openai/codex @anthropic-ai/claude-code
+```
+
+The durable interactive entry point is a `dev` wrapper in
+`/conary/dev/home/conary-dev/.local/bin/dev`. It should attach to a tmux session
+named `conary` in `/conary/dev/src/Conary`, creating the session when absent.
+Install `/usr/local/bin/dev` as a root-owned symlink or wrapper only after the
+user-owned script exists. Enable tmux history and mouse support in the
+`conary-dev` home directory rather than relying on workstation defaults.
+
+Use `ssh.conary.io` for SSH transport. Workstation-specific aliases such as
+`remi-dev`, `remi-work`, or mosh wrappers belong in the ignored
+`docs/operations/LOCAL_ACCESS.md`; do not commit private key paths, access
+tokens, recent-session history, or assistant cache directories. It is fine to
+copy minimal assistant auth/config after reviewing it, but do not copy local
+conversation history or package build artifacts wholesale. The remote Codex
+GitHub MCP token, when present, belongs in a private env file such as
+`/conary/dev/home/conary-dev/.config/codex/env`; Cloudflare MCP login remains an
+interactive `codex mcp login cloudflare-api` step unless a future tracked helper
+defines a safer bootstrap.
+
+After a laptop rebuild, restore the SSH private key locally, recreate the
+ignored SSH aliases from `docs/operations/LOCAL_ACCESS.md`, install `mosh` if
+the workstation should use it, and connect with the tmux-attaching alias. If the
+remote workbench itself is lost, rebuild the host packages, account, cache
+directories, rustup toolchain, assistant CLIs, and `dev` wrapper before copying
+any private auth material.
 
 Do not overwrite the live Remi binary while `remi.service` is still running the
 old process. That can fail with `Text file busy`.
