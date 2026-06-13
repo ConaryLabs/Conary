@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+
+fail() {
+    echo "ERROR: $*" >&2
+    exit 1
+}
+
+script="scripts/agentic-plan-review.sh"
+[[ -x "$script" ]] || fail "$script is not executable"
+
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+
+bin_dir="$tmp/bin"
+out_dir="$tmp/reviews"
+mkdir -p "$bin_dir" "$out_dir"
+
+cat > "$bin_dir/reasonix" <<'STUB'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'reasonix args:'
+printf ' [%s]' "$@"
+printf '\n'
+printf 'reasonix prompt contains target: '
+grep -q 'docs/superpowers/plans/2026-06-14-m2a-hermetic-publish-foundation-implementation-plan.md' && printf 'yes\n'
+STUB
+chmod +x "$bin_dir/reasonix"
+
+cat > "$bin_dir/agy" <<'STUB'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'agy args:'
+printf ' [%s]' "$@"
+printf '\n'
+printf 'agy prompt contains target: '
+for arg in "$@"; do
+    case "$arg" in
+        *docs/superpowers/plans/2026-06-14-m2a-hermetic-publish-foundation-implementation-plan.md*)
+            printf 'yes\n'
+            ;;
+    esac
+done
+STUB
+chmod +x "$bin_dir/agy"
+
+target="docs/superpowers/plans/2026-06-14-m2a-hermetic-publish-foundation-implementation-plan.md"
+
+help_output="$("$script" --help 2>&1)"
+grep -q "Usage: scripts/agentic-plan-review.sh" <<<"$help_output" \
+    || fail "help output did not include usage"
+grep -q "deepseek-pro" <<<"$help_output" \
+    || fail "help output did not name the default DeepSeek model"
+
+if "$script" "does-not-exist.md" --out-dir "$out_dir" >"$tmp/missing.out" 2>&1; then
+    fail "missing review target unexpectedly succeeded"
+fi
+grep -q "review target not found" "$tmp/missing.out" \
+    || fail "missing target did not produce a clear error"
+
+PATH="$bin_dir:$PATH" "$script" "$target" --out-dir "$out_dir" >"$tmp/run.out"
+
+grep -q "DeepSeek review:" "$tmp/run.out" \
+    || fail "script did not report the DeepSeek output path"
+grep -q "Gemini review:" "$tmp/run.out" \
+    || fail "script did not report the Gemini output path"
+
+deepseek_review="$(find "$out_dir" -type f -name '*deepseek-pro.md' -print -quit)"
+gemini_review="$(find "$out_dir" -type f -name '*gemini-35-flash-high.md' -print -quit)"
+
+[[ -n "$deepseek_review" ]] || fail "DeepSeek review file was not created"
+[[ -n "$gemini_review" ]] || fail "Gemini review file was not created"
+
+grep -q "model: deepseek-pro" "$deepseek_review" \
+    || fail "DeepSeek review metadata missing model"
+grep -q "review_tool: reasonix" "$deepseek_review" \
+    || fail "DeepSeek review metadata missing tool"
+grep -q "reasonix args: \\[run\\] \\[--model\\] \\[deepseek-pro\\]" "$deepseek_review" \
+    || fail "DeepSeek command did not use reasonix run with deepseek-pro"
+grep -q "reasonix prompt contains target: yes" "$deepseek_review" \
+    || fail "DeepSeek prompt did not include target"
+
+grep -q "model: Gemini 3.5 Flash (High)" "$gemini_review" \
+    || fail "Gemini review metadata missing model"
+grep -q "review_tool: agy" "$gemini_review" \
+    || fail "Gemini review metadata missing tool"
+grep -q "agy args: \\[--model\\] \\[Gemini 3.5 Flash (High)\\] \\[--print-timeout\\] \\[60m\\] \\[--print\\]" "$gemini_review" \
+    || fail "Gemini command did not use agy print with Gemini high model"
+grep -q "agy prompt contains target: yes" "$gemini_review" \
+    || fail "Gemini prompt did not include target"
+
+PATH="$bin_dir:$PATH" "$script" "$target" --out-dir "$out_dir" --only deepseek >"$tmp/deepseek-only.out"
+grep -q "DeepSeek review:" "$tmp/deepseek-only.out" \
+    || fail "deepseek-only mode did not run DeepSeek"
+if grep -q "Gemini review:" "$tmp/deepseek-only.out"; then
+    fail "deepseek-only mode unexpectedly ran Gemini"
+fi
+
+dry_out_dir="$tmp/dry-reviews"
+PATH="$bin_dir:$PATH" "$script" "$target" --out-dir "$dry_out_dir" --dry-run >"$tmp/dry-run.out"
+grep -q "DRY RUN" "$tmp/dry-run.out" \
+    || fail "dry-run output did not identify itself"
+grep -q "reasonix run --model deepseek-pro" "$tmp/dry-run.out" \
+    || fail "dry-run output did not show DeepSeek command"
+grep -q "agy --model 'Gemini 3.5 Flash (High)' --print-timeout 60m --print" "$tmp/dry-run.out" \
+    || fail "dry-run output did not show Gemini command"
+if [[ -d "$dry_out_dir" ]] && find "$dry_out_dir" -type f | grep -q .; then
+    fail "dry-run unexpectedly wrote review files"
+fi
+
+echo "Agentic plan review wrapper fixtures passed."
