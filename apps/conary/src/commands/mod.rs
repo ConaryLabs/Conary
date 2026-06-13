@@ -55,6 +55,7 @@ mod system;
 pub(crate) mod test_helpers;
 mod triggers;
 pub mod trust;
+pub(crate) mod try_session;
 mod update;
 mod update_channel;
 pub mod verify;

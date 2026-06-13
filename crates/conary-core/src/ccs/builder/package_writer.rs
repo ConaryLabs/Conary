@@ -294,8 +294,8 @@ fn convert_hooks_to_binary(
     hooks: &crate::ccs::manifest::Hooks,
 ) -> crate::Result<Option<super::super::binary_manifest::BinaryHooks>> {
     use crate::ccs::binary_manifest::{
-        BinaryAlternativeHook, BinaryDirectoryHook, BinaryGroupHook, BinaryHooks, BinarySysctlHook,
-        BinarySystemdHook, BinaryTmpfilesHook, BinaryUserHook,
+        BinaryAlternativeHook, BinaryDirectoryHook, BinaryGroupHook, BinaryHooks,
+        BinaryServiceHook, BinarySysctlHook, BinarySystemdHook, BinaryTmpfilesHook, BinaryUserHook,
     };
 
     let binary = BinaryHooks {
@@ -308,6 +308,7 @@ fn convert_hooks_to_binary(
                 home: u.home.clone(),
                 shell: u.shell.clone(),
                 group: u.group.clone(),
+                reversible: u.reversible,
             })
             .collect(),
         groups: hooks
@@ -316,6 +317,7 @@ fn convert_hooks_to_binary(
             .map(|g| BinaryGroupHook {
                 name: g.name.clone(),
                 system: g.system,
+                reversible: g.reversible,
             })
             .collect(),
         directories: hooks
@@ -327,15 +329,26 @@ fn convert_hooks_to_binary(
                     mode: parse_octal_mode(&d.mode)?,
                     owner: d.owner.clone(),
                     group: d.group.clone(),
+                    reversible: d.reversible,
                 })
             })
             .collect::<crate::Result<Vec<_>>>()?,
+        services: hooks
+            .services
+            .iter()
+            .map(|s| BinaryServiceHook {
+                name: s.name.clone(),
+                action: s.action.clone(),
+                reversible: s.reversible,
+            })
+            .collect(),
         systemd: hooks
             .systemd
             .iter()
             .map(|s| BinarySystemdHook {
                 unit: s.unit.clone(),
                 enable: s.enable,
+                reversible: s.reversible,
             })
             .collect(),
         tmpfiles: hooks
@@ -348,6 +361,7 @@ fn convert_hooks_to_binary(
                     mode: parse_octal_mode(&t.mode)?,
                     owner: t.owner.clone(),
                     group: t.group.clone(),
+                    reversible: t.reversible,
                 })
             })
             .collect::<crate::Result<Vec<_>>>()?,
@@ -358,6 +372,7 @@ fn convert_hooks_to_binary(
                 key: s.key.clone(),
                 value: s.value.clone(),
                 only_if_lower: s.only_if_lower,
+                reversible: s.reversible,
             })
             .collect(),
         alternatives: hooks
@@ -367,10 +382,13 @@ fn convert_hooks_to_binary(
                 name: a.name.clone(),
                 path: a.path.clone(),
                 priority: a.priority,
+                reversible: a.reversible,
             })
             .collect(),
         post_install: hooks.post_install.as_ref().map(|h| h.script.clone()),
+        post_install_reversible: hooks.post_install.as_ref().and_then(|h| h.reversible),
         pre_remove: hooks.pre_remove.as_ref().map(|h| h.script.clone()),
+        pre_remove_reversible: hooks.pre_remove.as_ref().and_then(|h| h.reversible),
     };
 
     if binary.is_empty() {

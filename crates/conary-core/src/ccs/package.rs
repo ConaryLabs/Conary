@@ -56,7 +56,7 @@ pub fn convert_binary_to_ccs_manifest(
     use crate::ccs::manifest::{
         AlternativeHook, BuildInfo, Capability, Components, Config, DirectoryHook, GroupHook,
         Hooks, Package, PackageDep, Platform, Provides, Requires, ScriptHook,
-        ScriptletDeclarations, Suggests, SysctlHook, SystemdHook, TmpfilesHook, UserHook,
+        ScriptletDeclarations, Service, Suggests, SysctlHook, SystemdHook, TmpfilesHook, UserHook,
     };
 
     let platform = bin.platform.as_ref().map(|p| Platform {
@@ -113,6 +113,7 @@ pub fn convert_binary_to_ccs_manifest(
                     home: u.home.clone(),
                     shell: u.shell.clone(),
                     group: u.group.clone(),
+                    reversible: u.reversible,
                 })
                 .collect(),
             groups: h
@@ -121,6 +122,7 @@ pub fn convert_binary_to_ccs_manifest(
                 .map(|g| GroupHook {
                     name: g.name.clone(),
                     system: g.system,
+                    reversible: g.reversible,
                 })
                 .collect(),
             directories: h
@@ -132,15 +134,25 @@ pub fn convert_binary_to_ccs_manifest(
                     owner: d.owner.clone(),
                     group: d.group.clone(),
                     cleanup: None,
+                    reversible: d.reversible,
                 })
                 .collect(),
-            services: Vec::new(), // Not yet supported in binary format
+            services: h
+                .services
+                .iter()
+                .map(|s| Service {
+                    name: s.name.clone(),
+                    action: s.action.clone(),
+                    reversible: s.reversible,
+                })
+                .collect(),
             systemd: h
                 .systemd
                 .iter()
                 .map(|s| SystemdHook {
                     unit: s.unit.clone(),
                     enable: s.enable,
+                    reversible: s.reversible,
                 })
                 .collect(),
             tmpfiles: h
@@ -152,6 +164,7 @@ pub fn convert_binary_to_ccs_manifest(
                     mode: format!("{:04o}", t.mode),
                     owner: t.owner.clone(),
                     group: t.group.clone(),
+                    reversible: t.reversible,
                 })
                 .collect(),
             sysctl: h
@@ -161,6 +174,7 @@ pub fn convert_binary_to_ccs_manifest(
                     key: s.key.clone(),
                     value: s.value.clone(),
                     only_if_lower: s.only_if_lower,
+                    reversible: s.reversible,
                 })
                 .collect(),
             alternatives: h
@@ -170,16 +184,17 @@ pub fn convert_binary_to_ccs_manifest(
                     name: a.name.clone(),
                     path: a.path.clone(),
                     priority: a.priority,
+                    reversible: a.reversible,
                 })
                 .collect(),
-            post_install: h
-                .post_install
-                .as_ref()
-                .map(|s| ScriptHook { script: s.clone() }),
-            pre_remove: h
-                .pre_remove
-                .as_ref()
-                .map(|s| ScriptHook { script: s.clone() }),
+            post_install: h.post_install.as_ref().map(|s| ScriptHook {
+                script: s.clone(),
+                reversible: h.post_install_reversible,
+            }),
+            pre_remove: h.pre_remove.as_ref().map(|s| ScriptHook {
+                script: s.clone(),
+                reversible: h.pre_remove_reversible,
+            }),
         })
         .unwrap_or_default();
 

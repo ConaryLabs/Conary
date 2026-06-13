@@ -195,6 +195,7 @@ impl ScriptletAnalyzer {
                 owner: "root".to_string(),
                 group: "root".to_string(),
                 cleanup: None,
+                reversible: None,
             };
 
             let params = [("path".to_string(), path)].into_iter().collect();
@@ -217,6 +218,7 @@ impl ScriptletAnalyzer {
                 let hook = SystemdHook {
                     unit: unit.to_string(),
                     enable: action == "enable",
+                    reversible: None,
                 };
 
                 let params = [
@@ -333,6 +335,7 @@ impl ScriptletAnalyzer {
             home,
             shell,
             group,
+            reversible: None,
         })
     }
 
@@ -363,7 +366,11 @@ impl ScriptletAnalyzer {
             i += 1;
         }
 
-        name.map(|n| GroupHook { name: n, system })
+        name.map(|n| GroupHook {
+            name: n,
+            system,
+            reversible: None,
+        })
     }
 
     /// Build a complete Hooks structure from detected hooks
@@ -554,6 +561,7 @@ useradd -r myapp
                 home: None,
                 shell: None,
                 group: None,
+                reversible: None,
             }),
             DetectedHook::User(UserHook {
                 name: "nginx".to_string(),
@@ -561,6 +569,7 @@ useradd -r myapp
                 home: Some("/var/lib/nginx".to_string()),
                 shell: None,
                 group: None,
+                reversible: None,
             }),
         ];
 

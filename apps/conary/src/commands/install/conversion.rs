@@ -1156,6 +1156,7 @@ mod tests {
             owner: "root".to_string(),
             group: "root".to_string(),
             cleanup: None,
+            reversible: None,
         });
         let package_path = write_runtime_ccs_package(temp_dir.path(), "converted-hooked", manifest);
 
@@ -1394,6 +1395,7 @@ mod tests {
         let mut manifest = CcsManifest::new_minimal("converted-post-hook-fails", "1.0.0");
         manifest.hooks.post_install = Some(ScriptHook {
             script: "exit 31".to_string(),
+            reversible: None,
         });
         let package_path =
             write_runtime_ccs_package(temp_dir.path(), "converted-post-hook-fails", manifest);

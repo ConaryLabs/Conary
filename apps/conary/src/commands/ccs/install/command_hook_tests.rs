@@ -52,6 +52,7 @@ async fn ccs_install_persists_pre_remove_hook() {
     let mut manifest = CcsManifest::new_minimal("pre-remove", "1.0.0");
     manifest.hooks.pre_remove = Some(ScriptHook {
         script: "echo removing pre-remove".to_string(),
+        reversible: None,
     });
     let result = BuildResult {
         manifest,
@@ -138,6 +139,7 @@ async fn ccs_install_marks_changeset_post_hooks_failed_after_post_install_error(
     let mut manifest = CcsManifest::new_minimal("post-hook-fails", "1.0.0");
     manifest.hooks.post_install = Some(ScriptHook {
         script: "exit 23".to_string(),
+        reversible: None,
     });
 
     let result = BuildResult {
@@ -227,6 +229,7 @@ async fn ccs_install_reverts_pre_hook_directories_when_deploy_fails() {
         owner: "root".to_string(),
         group: "root".to_string(),
         cleanup: None,
+        reversible: None,
     });
 
     let result = BuildResult {
