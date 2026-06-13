@@ -324,6 +324,7 @@ pinned by the repository.
 
 **Start here:** `docs/specs/static-repo-format-v1.md`;
 `docs/superpowers/specs/2026-06-10-packaging-toolchain-design.md`;
+`docs/superpowers/specs/2026-06-13-m2-publish-hardening-remi-design.md`;
 `docs/guides/first-package.md`;
 `crates/conary-core/src/recipe/inference/`;
 `crates/conary-core/src/db/models/try_session.rs`;
@@ -358,6 +359,7 @@ publish, trust establishment, sync, install, or package-signing boundaries.
 
 **Docs to update:** `docs/specs/static-repo-format-v1.md`;
 `docs/superpowers/specs/2026-06-10-packaging-toolchain-design.md`;
+`docs/superpowers/specs/2026-06-13-m2-publish-hardening-remi-design.md`;
 `docs/guides/first-package.md`;
 `docs/ARCHITECTURE.md`; `docs/llms/subsystem-map.md`;
 `docs/modules/feature-ownership.md`.

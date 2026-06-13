@@ -1019,7 +1019,7 @@ Parent spec (`docs/superpowers/specs/2026-06-10-packaging-toolchain-design.md`, 
 - Section numbering is sequential and all `§` cross-references resolve.
 - Every JSON/TOML example field appears in its field-rules list.
 - The example sha256 values are syntactically valid (64 lowercase hex).
-- Terms used identically with the parent spec: "hardening level", `sandboxed`/`hermetic`/`attested`, `--fingerprint`, `reset-trust`.
+- Terms used identically with the parent spec: "hardening level", `sandboxed`/`hermetic`, build-attestation gate, `--fingerprint`, `reset-trust`.
 - No "TBD"/"TODO": `grep -n 'TBD\|TODO' docs/specs/static-repo-format-v1.md` returns nothing.
 
 - [ ] **Step 3: Fix anything found inline, then commit**
