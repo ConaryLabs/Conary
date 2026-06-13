@@ -1051,6 +1051,7 @@ fn build_ccs_package_fixture_with_pre_remove_hook(
     manifest.legacy_scriptlets = bundle;
     manifest.hooks.pre_remove = Some(ScriptHook {
         script: pre_remove_script.to_string(),
+        reversible: None,
     });
 
     let result = CcsBuilder::new(manifest, &source_dir).build()?;
@@ -1074,6 +1075,7 @@ fn build_ccs_package_fixture_with_post_install_hook(
     manifest.legacy_scriptlets = bundle;
     manifest.hooks.post_install = Some(ScriptHook {
         script: post_install_script.to_string(),
+        reversible: None,
     });
 
     let result = CcsBuilder::new(manifest, &source_dir).build()?;
