@@ -34,6 +34,7 @@ pub(crate) use dependencies::resolve_default_dep_mode_from_model;
 #[allow(unused_imports)]
 pub(crate) use ccs_transaction::{
     CcsTransactionInstallOptions, CcsTransactionInstallResult, install_ccs_package_transactionally,
+    install_ccs_package_transactionally_with_config,
 };
 
 pub use legacy_replay::LegacyReplayOptions;
@@ -73,4 +74,7 @@ use lifecycle::{
 use prepare::check_upgrade_status;
 use semantics::{InstallSemantics, PreparedSourceKind, scheme_to_string};
 use source_policy::{build_resolution_policy, resolve_canonical_name};
-use transaction::{InstallTransactionResult, TransactionContext, execute_install_transaction};
+use transaction::{
+    InstallTransactionResult, TransactionContext, execute_install_transaction,
+    execute_install_transaction_with_config,
+};

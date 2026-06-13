@@ -322,6 +322,55 @@ pub(crate) fn build_generation_for_publication(
     })
 }
 
+pub(crate) fn build_inactive_generation_for_runtime(
+    conn: &Connection,
+    runtime_root: &ConaryRuntimeRoot,
+    summary: &str,
+    prev_etc_snapshot: Option<HashMap<String, String>>,
+) -> anyhow::Result<BuiltGeneration> {
+    if let Some(error) = forced_generation_rebuild_failure() {
+        return Err(error);
+    }
+
+    let current_gen = conary_core::generation::mount::current_generation(runtime_root.root())
+        .unwrap_or(None)
+        .unwrap_or(0);
+    let prev_etc = resolve_previous_etc_snapshot(conn, prev_etc_snapshot, current_gen)?;
+    let generations_dir = runtime_root.generations_dir();
+    let boot_root = boot_root_for_generation_build(runtime_root);
+    let (gen_num, build_result) =
+        conary_core::generation::builder::build_generation_from_db_with_boot_root_and_activation(
+            conn,
+            &generations_dir,
+            summary,
+            &boot_root,
+            conary_core::generation::builder::GenerationActivation::Inactive,
+        )
+        .map_err(|e| anyhow::anyhow!("Failed to build inactive try generation: {e}"))?;
+
+    info!(
+        "Built inactive try generation {gen_num} ({} bytes, {} CAS objects)",
+        build_result.image_size, build_result.cas_objects_referenced
+    );
+
+    apply_etc_merge_for_generation(conn, runtime_root, gen_num, &prev_etc)?;
+
+    if std::env::var_os("CONARY_TEST_SKIP_GENERATION_MOUNT").is_none() {
+        let gen_dir = generations_dir.join(gen_num.to_string());
+        enable_generation_rootfs_verity(&gen_dir, &build_result.image_path).map_err(|e| {
+            anyhow::anyhow!(
+                "Failed to enable fs-verity on try generation {gen_num} image {}: {e}",
+                build_result.image_path.display()
+            )
+        })?;
+    }
+
+    Ok(BuiltGeneration {
+        generation_number: gen_num,
+        state_number: gen_num,
+    })
+}
+
 pub(crate) fn publish_generation_link(db_path: &str, gen_num: i64) -> anyhow::Result<()> {
     let runtime_root = runtime_root_for_db_path(db_path);
     conary_core::generation::mount::update_current_symlink(runtime_root.root(), gen_num)

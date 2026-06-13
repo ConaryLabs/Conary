@@ -14,10 +14,10 @@ use super::{
     ComponentSelection, ExtractionResult, InstallPhase, InstallProgress, InstallSemantics,
     LegacyReplayOptions, RepositoryInstallProvenance, ScriptletContext, TransactionContext,
     UpgradeCheck, check_upgrade_status, execute_install_transaction,
-    finalize_install_without_snapshot, merge_old_upgrade_legacy_replay_state,
-    plan_ccs_fresh_install_legacy_replay, plan_ccs_old_installed_upgrade_legacy_replay,
-    preflight_extracted_live_root_file_ownership, prepare_install_environment_before_scriptlets,
-    run_pre_install_phase, show_dry_run_summary,
+    execute_install_transaction_with_config, finalize_install_without_snapshot,
+    merge_old_upgrade_legacy_replay_state, plan_ccs_fresh_install_legacy_replay,
+    plan_ccs_old_installed_upgrade_legacy_replay, preflight_extracted_live_root_file_ownership,
+    prepare_install_environment_before_scriptlets, run_pre_install_phase, show_dry_run_summary,
 };
 use anyhow::{Context, Result};
 use conary_core::components::{ComponentClassifier, ComponentType, should_run_scriptlets};
@@ -230,6 +230,24 @@ pub(crate) fn install_ccs_package_transactionally(
     pkg: &conary_core::ccs::CcsPackage,
     opts: CcsTransactionInstallOptions<'_>,
 ) -> Result<CcsTransactionInstallResult> {
+    install_ccs_package_transactionally_inner(conn, pkg, opts, None)
+}
+
+pub(crate) fn install_ccs_package_transactionally_with_config(
+    conn: &mut rusqlite::Connection,
+    pkg: &conary_core::ccs::CcsPackage,
+    opts: CcsTransactionInstallOptions<'_>,
+    transaction_config_override: conary_core::transaction::TransactionConfig,
+) -> Result<CcsTransactionInstallResult> {
+    install_ccs_package_transactionally_inner(conn, pkg, opts, Some(transaction_config_override))
+}
+
+fn install_ccs_package_transactionally_inner(
+    conn: &mut rusqlite::Connection,
+    pkg: &conary_core::ccs::CcsPackage,
+    opts: CcsTransactionInstallOptions<'_>,
+    transaction_config_override: Option<conary_core::transaction::TransactionConfig>,
+) -> Result<CcsTransactionInstallResult> {
     let progress = InstallProgress::single("Installing");
     let semantics = InstallSemantics::ccs();
     enforce_ccs_scriptlet_capability_gate(pkg, opts.no_scripts, opts.sandbox_mode)?;
@@ -307,8 +325,11 @@ pub(crate) fn install_ccs_package_transactionally(
         pkg,
         &selected_component_names,
     )?;
-    let execution_path =
-        prepare_install_environment_before_scriptlets(conn, opts.db_path, opts.root)?;
+    let execution_path = if transaction_config_override.is_some() {
+        super::PackageExecutionPath::GenerationAware
+    } else {
+        prepare_install_environment_before_scriptlets(conn, opts.db_path, opts.root)?
+    };
     preflight_extracted_live_root_file_ownership(conn, pkg, &extraction, execution_path)?;
     let legacy_execution_mode = build_execution_mode(old_trove.map(|trove| trove.version.as_str()));
     let old_legacy_pre_outcomes = if let Some(old_trove) = old_trove {
@@ -390,7 +411,18 @@ pub(crate) fn install_ccs_package_transactionally(
         legacy_replay: opts.legacy_replay,
         accepted_legacy_bundle: legacy_replay_state.accepted_bundle_to_persist.as_ref(),
     };
-    let tx_result = match execute_install_transaction(conn, pkg, &extraction, &tx_ctx, &progress) {
+    let tx_result = match if let Some(transaction_config_override) = transaction_config_override {
+        execute_install_transaction_with_config(
+            conn,
+            pkg,
+            &extraction,
+            &tx_ctx,
+            &progress,
+            transaction_config_override,
+        )
+    } else {
+        execute_install_transaction(conn, pkg, &extraction, &tx_ctx, &progress)
+    } {
         Ok(result) => result,
         Err(error) => {
             if pre_hooks_ran && let Err(revert_error) = hook_executor.revert_pre_hooks() {

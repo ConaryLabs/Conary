@@ -43,6 +43,35 @@ pub(super) fn execute_install_transaction(
     ctx: &TransactionContext<'_>,
     progress: &InstallProgress,
 ) -> Result<InstallTransactionResult> {
+    execute_install_transaction_inner(conn, pkg, extraction, ctx, progress, None)
+}
+
+pub(super) fn execute_install_transaction_with_config(
+    conn: &mut rusqlite::Connection,
+    pkg: &dyn PackageFormat,
+    extraction: &ExtractionResult,
+    ctx: &TransactionContext<'_>,
+    progress: &InstallProgress,
+    transaction_config: TransactionConfig,
+) -> Result<InstallTransactionResult> {
+    execute_install_transaction_inner(
+        conn,
+        pkg,
+        extraction,
+        ctx,
+        progress,
+        Some(transaction_config),
+    )
+}
+
+fn execute_install_transaction_inner(
+    conn: &mut rusqlite::Connection,
+    pkg: &dyn PackageFormat,
+    extraction: &ExtractionResult,
+    ctx: &TransactionContext<'_>,
+    progress: &InstallProgress,
+    transaction_config_override: Option<TransactionConfig>,
+) -> Result<InstallTransactionResult> {
     let _legacy_replay = ctx.legacy_replay;
     if ctx.execution_path == PackageExecutionPath::MutableLiveRoot {
         inner::preflight_live_root_file_ownership(
@@ -56,13 +85,17 @@ pub(super) fn execute_install_transaction(
     }
 
     let db_path_buf = PathBuf::from(ctx.db_path);
-    let tx_config = TransactionConfig::from_paths(PathBuf::from(ctx.root), db_path_buf);
+    let skip_recovery = transaction_config_override.is_some();
+    let tx_config = transaction_config_override
+        .unwrap_or_else(|| TransactionConfig::from_paths(PathBuf::from(ctx.root), db_path_buf));
     let mut engine =
         TransactionEngine::new(tx_config).context("Failed to create transaction engine")?;
 
-    engine
-        .recover(conn)
-        .context("Failed to recover incomplete transactions")?;
+    if !skip_recovery {
+        engine
+            .recover(conn)
+            .context("Failed to recover incomplete transactions")?;
+    }
 
     let tx_description = if let Some(old_trove) = ctx.old_trove_to_upgrade {
         format!(
