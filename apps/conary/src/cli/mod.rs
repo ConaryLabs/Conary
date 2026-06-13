@@ -530,6 +530,27 @@ pub enum Commands {
         explain: bool,
     },
 
+    #[command(hide = true)] // removed in Task 14 after gates pass
+    Try {
+        /// Package artifact, or one of: status, rollback, keep
+        target: Option<String>,
+
+        /// Activate globally instead of the default namespace try
+        #[arg(long)]
+        activate: bool,
+
+        /// Allow packages with irreversible hooks in activated mode
+        #[arg(long)]
+        allow_irreversible: bool,
+
+        /// Command to run inside the try session
+        #[arg(last = true)]
+        run: Vec<String>,
+
+        #[command(flatten)]
+        db: DbArgs,
+    },
+
     /// Publish a recipe project to an M1a static repository
     Publish {
         /// Project-form destination, or artifact path for future M2 artifact-form publish
@@ -1752,6 +1773,100 @@ mod tests {
         };
 
         assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn try_package_parses() {
+        let cli = Cli::try_parse_from(["conary", "try", "pkg.ccs"])
+            .expect("try package command should parse");
+        match cli.command {
+            Some(Commands::Try {
+                target,
+                activate,
+                allow_irreversible,
+                run,
+                ..
+            }) => {
+                assert_eq!(target.as_deref(), Some("pkg.ccs"));
+                assert!(!activate);
+                assert!(!allow_irreversible);
+                assert!(run.is_empty());
+            }
+            _ => panic!("expected try package command"),
+        }
+
+        let with_run = Cli::try_parse_from(["conary", "try", "pkg.ccs", "--", "/usr/bin/hello"])
+            .expect("try package run command should parse");
+        match with_run.command {
+            Some(Commands::Try { target, run, .. }) => {
+                assert_eq!(target.as_deref(), Some("pkg.ccs"));
+                assert_eq!(run, vec!["/usr/bin/hello"]);
+            }
+            _ => panic!("expected try package command with runner"),
+        }
+
+        let activated = Cli::try_parse_from(["conary", "try", "pkg.ccs", "--activate"])
+            .expect("activated try package command should parse");
+        match activated.command {
+            Some(Commands::Try {
+                target, activate, ..
+            }) => {
+                assert_eq!(target.as_deref(), Some("pkg.ccs"));
+                assert!(activate);
+            }
+            _ => panic!("expected activated try package command"),
+        }
+
+        let irreversible = Cli::try_parse_from([
+            "conary",
+            "try",
+            "pkg.ccs",
+            "--allow-irreversible",
+            "--activate",
+        ])
+        .expect("activated irreversible try package command should parse");
+        match irreversible.command {
+            Some(Commands::Try {
+                target,
+                activate,
+                allow_irreversible,
+                ..
+            }) => {
+                assert_eq!(target.as_deref(), Some("pkg.ccs"));
+                assert!(activate);
+                assert!(allow_irreversible);
+            }
+            _ => panic!("expected activated irreversible try package command"),
+        }
+
+        let watch = match Cli::try_parse_from(["conary", "try", "--watch"]) {
+            Ok(_) => panic!("try --watch is M3 and must not parse in M1b"),
+            Err(err) => err,
+        };
+        assert_eq!(watch.kind(), clap::error::ErrorKind::UnknownArgument);
+    }
+
+    #[test]
+    fn try_action_words_parse() {
+        for action in ["status", "rollback", "keep"] {
+            let cli = Cli::try_parse_from(["conary", "try", action])
+                .expect("try action word should parse");
+            match cli.command {
+                Some(Commands::Try {
+                    target,
+                    activate,
+                    allow_irreversible,
+                    run,
+                    ..
+                }) => {
+                    assert_eq!(target.as_deref(), Some(action));
+                    assert!(!activate);
+                    assert!(!allow_irreversible);
+                    assert!(run.is_empty());
+                }
+                _ => panic!("expected try action command"),
+            }
+        }
     }
 
     #[test]

@@ -149,6 +149,18 @@ pub fn classify_cli(cli: &Cli) -> Option<CommandRiskPolicy> {
         Commands::Unpin { .. } => Some(local_state("conary unpin")),
         Commands::New { .. } => Some(local_state("conary new")),
         Commands::Cook { .. } => Some(local_state("conary cook")),
+        Commands::Try {
+            target,
+            activate,
+            allow_irreversible,
+            run,
+            ..
+        } => Some(classify_try(
+            target.as_deref(),
+            *activate,
+            *allow_irreversible,
+            run,
+        )),
         Commands::Search { .. }
         | Commands::List { .. }
         | Commands::ConvertPkgbuild { .. }
@@ -201,6 +213,41 @@ pub fn classify_cli(cli: &Cli) -> Option<CommandRiskPolicy> {
         Commands::Provenance(command) => Some(classify_provenance(command)),
         Commands::Trust(command) => Some(classify_trust(command)),
         Commands::Federation(command) => Some(classify_federation(command)),
+    }
+}
+
+fn classify_try(
+    target: Option<&str>,
+    activate: bool,
+    allow_irreversible: bool,
+    run: &[String],
+) -> CommandRiskPolicy {
+    if let Some(target) = target
+        && matches!(target, "status" | "rollback" | "keep")
+        && !activate
+        && !allow_irreversible
+        && run.is_empty()
+    {
+        return match target {
+            "status" => read_only("conary try status"),
+            "rollback" => policy(
+                "conary try rollback",
+                CommandRisk::ActiveHostMutation,
+                false,
+            ),
+            "keep" => policy("conary try keep", CommandRisk::ActiveHostMutation, false),
+            _ => unreachable!("reserved try action checked above"),
+        };
+    }
+
+    if activate {
+        policy(
+            "conary try --activate",
+            CommandRisk::ActiveHostMutation,
+            false,
+        )
+    } else {
+        local_state("conary try")
     }
 }
 
@@ -825,6 +872,30 @@ mod tests {
             let policy = policy(args);
             assert_eq!(policy.risk, CommandRisk::LocalStateMutation);
             assert!(!policy.requires_ack());
+        }
+    }
+
+    #[test]
+    fn classify_try_commands_by_session_risk() {
+        let namespace = policy(&["conary", "try", "pkg.ccs"]);
+        assert_eq!(namespace.risk, CommandRisk::LocalStateMutation);
+        assert!(!namespace.requires_ack());
+
+        let activated = policy(&["conary", "try", "pkg.ccs", "--activate"]);
+        assert_eq!(activated.risk, CommandRisk::ActiveHostMutation);
+        assert!(activated.requires_ack());
+
+        let status = policy(&["conary", "try", "status"]);
+        assert_eq!(status.risk, CommandRisk::ReadOnly);
+        assert!(!status.requires_ack());
+
+        for args in [
+            ["conary", "try", "rollback"].as_slice(),
+            ["conary", "try", "keep"].as_slice(),
+        ] {
+            let policy = policy(args);
+            assert_eq!(policy.risk, CommandRisk::ActiveHostMutation);
+            assert!(policy.requires_ack());
         }
     }
 

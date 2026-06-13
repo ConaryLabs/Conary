@@ -1,9 +1,10 @@
 // apps/conary/src/dispatch/root.rs
 
 use std::borrow::Cow;
+use std::io::IsTerminal;
 use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{Context, Result, bail};
 
 use super::automation::dispatch_automation_command;
 use super::bootstrap::dispatch_bootstrap_command;
@@ -29,8 +30,528 @@ use super::system::dispatch_system_command;
 use super::trust::dispatch_trust_command;
 use super::verify_derivation::dispatch_verify_derivation_command;
 use crate::cli::{self, Commands};
+use crate::command_risk::{self, CommandRisk};
 use crate::commands;
 use crate::live_host_safety::{LiveMutationClass, MutationIntent};
+use conary_core::db::models::{TrySession, TrySessionMode};
+use conary_core::runtime_root::ConaryRuntimeRoot;
+
+const DEFAULT_DB_PATH: &str = "/var/lib/conary/conary.db";
+
+enum TryDispatchAction {
+    Package(String),
+    Status,
+    Rollback,
+    Keep,
+}
+
+fn try_dispatch_action(
+    target: Option<String>,
+    activate: bool,
+    allow_irreversible: bool,
+    run: &[String],
+) -> Result<TryDispatchAction> {
+    match target {
+        Some(target)
+            if is_reserved_try_action(&target)
+                && !activate
+                && !allow_irreversible
+                && run.is_empty() =>
+        {
+            Ok(match target.as_str() {
+                "status" => TryDispatchAction::Status,
+                "rollback" => TryDispatchAction::Rollback,
+                "keep" => TryDispatchAction::Keep,
+                _ => unreachable!("reserved try action checked above"),
+            })
+        }
+        Some(target) => Ok(TryDispatchAction::Package(target)),
+        None => bail!("conary try requires a package artifact or one of: status, rollback, keep"),
+    }
+}
+
+fn is_reserved_try_action(target: &str) -> bool {
+    matches!(target, "status" | "rollback" | "keep")
+}
+
+fn is_try_management_action(command: &Commands) -> bool {
+    matches!(
+        command,
+        Commands::Try {
+            target: Some(target),
+            activate: false,
+            allow_irreversible: false,
+            run,
+            ..
+        } if run.is_empty() && is_reserved_try_action(target)
+    )
+}
+
+pub(super) fn run_try_session_preflight(cli: &crate::cli::Cli) -> Result<()> {
+    run_try_session_preflight_inner(cli, std::io::stdin().is_terminal())
+}
+
+#[cfg(test)]
+fn run_try_session_preflight_for_test(cli: &crate::cli::Cli, interactive: bool) -> Result<()> {
+    run_try_session_preflight_inner(cli, interactive)
+}
+
+fn run_try_session_preflight_inner(cli: &crate::cli::Cli, interactive: bool) -> Result<()> {
+    let Some(command) = cli.command.as_ref() else {
+        return Ok(());
+    };
+    if is_try_management_action(command) {
+        return Ok(());
+    }
+
+    let db_path = selected_db_path(command);
+    let live_conn = match conary_core::db::open(db_path) {
+        Ok(conn) => conn,
+        Err(conary_core::Error::DatabaseNotFound(_)) => return Ok(()),
+        Err(error) => {
+            return Err(error).with_context(|| format!("failed to open Conary DB {db_path}"));
+        }
+    };
+    let Some(session) = TrySession::find_active_or_orphaned(&live_conn)? else {
+        return Ok(());
+    };
+
+    let policy = command_risk::classify_cli(cli);
+    let allows_live_try_session = policy.as_ref().is_some_and(|policy| {
+        policy.dry_run || matches!(policy.risk, CommandRisk::ReadOnly | CommandRisk::DryRunOnly)
+    });
+    let current_boot_id = current_boot_id();
+    let interactive = interactive && !env_forces_non_interactive();
+
+    match session.mode {
+        TrySessionMode::Namespace => {
+            if namespace_try_session_is_live(&session, &current_boot_id) {
+                if allows_live_try_session {
+                    return Ok(());
+                }
+                bail!(
+                    "another try session is active ({}); run `conary try status`, `conary try rollback`, or `conary try keep` before mutating Conary state",
+                    session.id
+                );
+            }
+            session.mark_orphaned(&live_conn)?;
+            bail!(
+                "orphaned try session {} requires cleanup; run `conary try status`, `conary try rollback`, or `conary try keep`",
+                session.id
+            );
+        }
+        TrySessionMode::Activated => {
+            let runtime_root = ConaryRuntimeRoot::from_db_path(db_path);
+            let current_generation =
+                conary_core::generation::mount::current_generation(runtime_root.root())?;
+            if activated_try_session_is_live(&session, &current_boot_id, current_generation) {
+                if allows_live_try_session {
+                    return Ok(());
+                }
+                bail!(
+                    "activated try session {} is active; run `conary try keep` or `conary try rollback` before mutating Conary state",
+                    session.id
+                );
+            }
+
+            session.mark_orphaned(&live_conn)?;
+            drop(live_conn);
+
+            if interactive {
+                bail!(
+                    "orphaned activated try session {} requires a decision; run `conary try keep` or `conary try rollback`",
+                    session.id
+                );
+            }
+
+            commands::rollback_active_try_session(db_path)
+                .context("automatic rollback of orphaned activated try session failed")?;
+            Ok(())
+        }
+    }
+}
+
+fn selected_db_path(command: &Commands) -> &str {
+    match command {
+        Commands::Install { common, .. }
+        | Commands::Remove { common, .. }
+        | Commands::Update { common, .. }
+        | Commands::Autoremove { common, .. } => &common.db.db_path,
+        Commands::Search { db, .. }
+        | Commands::List { db, .. }
+        | Commands::Pin { db, .. }
+        | Commands::Unpin { db, .. }
+        | Commands::Try { db, .. }
+        | Commands::SelfUpdate { db, .. }
+        | Commands::Sbom { db, .. } => &db.db_path,
+        Commands::Repo(command) => selected_repo_db_path(command),
+        Commands::Config(command) => selected_config_db_path(command),
+        Commands::Distro(command) => selected_distro_db_path(command),
+        Commands::Canonical(command) => selected_canonical_db_path(command),
+        Commands::Groups(command) => selected_groups_db_path(command),
+        Commands::Registry(command) => selected_registry_db_path(command),
+        Commands::Query(command) => selected_query_db_path(command),
+        Commands::Ccs(command) => selected_ccs_db_path(command),
+        Commands::Derive(command) => selected_derive_db_path(command),
+        Commands::Model(command) => selected_model_db_path(command),
+        Commands::Collection(command) => selected_collection_db_path(command),
+        Commands::Automation(command) => selected_automation_db_path(command),
+        Commands::Cache(command) => selected_cache_db_path(command),
+        Commands::Provenance(command) => selected_provenance_db_path(command),
+        Commands::Capability(command) => selected_capability_db_path(command),
+        Commands::Trust(command) => selected_trust_db_path(command),
+        Commands::Federation(command) => selected_federation_db_path(command),
+        Commands::VerifyDerivation(command) => selected_verify_db_path(command),
+        Commands::System(command) => selected_system_db_path(command),
+        _ => DEFAULT_DB_PATH,
+    }
+}
+
+fn selected_repo_db_path(command: &cli::RepoCommands) -> &str {
+    match command {
+        cli::RepoCommands::Add { db, .. }
+        | cli::RepoCommands::List { db, .. }
+        | cli::RepoCommands::Remove { db, .. }
+        | cli::RepoCommands::ResetTrust { db, .. }
+        | cli::RepoCommands::Enable { db, .. }
+        | cli::RepoCommands::Disable { db, .. }
+        | cli::RepoCommands::Sync { db, .. }
+        | cli::RepoCommands::KeyImport { db, .. }
+        | cli::RepoCommands::KeyList { db, .. }
+        | cli::RepoCommands::KeyRemove { db, .. } => &db.db_path,
+    }
+}
+
+fn selected_config_db_path(command: &cli::ConfigCommands) -> &str {
+    match command {
+        cli::ConfigCommands::List { db, .. } | cli::ConfigCommands::Backups { db, .. } => {
+            &db.db_path
+        }
+        cli::ConfigCommands::Diff { common, .. }
+        | cli::ConfigCommands::Backup { common, .. }
+        | cli::ConfigCommands::Restore { common, .. }
+        | cli::ConfigCommands::Check { common, .. } => &common.db.db_path,
+    }
+}
+
+fn selected_distro_db_path(command: &cli::DistroCommands) -> &str {
+    match command {
+        cli::DistroCommands::Set { db, .. }
+        | cli::DistroCommands::Remove { db, .. }
+        | cli::DistroCommands::List { db, .. }
+        | cli::DistroCommands::Info { db, .. }
+        | cli::DistroCommands::Mixing { db, .. }
+        | cli::DistroCommands::SelectionMode { db, .. } => &db.db_path,
+    }
+}
+
+fn selected_canonical_db_path(command: &cli::CanonicalCommands) -> &str {
+    match command {
+        cli::CanonicalCommands::Show { db, .. }
+        | cli::CanonicalCommands::Search { db, .. }
+        | cli::CanonicalCommands::Unmapped { db, .. } => &db.db_path,
+    }
+}
+
+fn selected_groups_db_path(command: &cli::GroupsCommands) -> &str {
+    match command {
+        cli::GroupsCommands::List { db, .. } | cli::GroupsCommands::Show { db, .. } => &db.db_path,
+    }
+}
+
+fn selected_registry_db_path(command: &cli::RegistryCommands) -> &str {
+    match command {
+        cli::RegistryCommands::Update { db, .. } | cli::RegistryCommands::Stats { db, .. } => {
+            &db.db_path
+        }
+    }
+}
+
+fn selected_query_db_path(command: &cli::QueryCommands) -> &str {
+    match command {
+        cli::QueryCommands::Depends { db, .. }
+        | cli::QueryCommands::Rdepends { db, .. }
+        | cli::QueryCommands::Deptree { db, .. }
+        | cli::QueryCommands::Whatprovides { db, .. }
+        | cli::QueryCommands::Whatbreaks { db, .. }
+        | cli::QueryCommands::Reason { db, .. }
+        | cli::QueryCommands::Repquery { db, .. }
+        | cli::QueryCommands::Component { db, .. }
+        | cli::QueryCommands::Components { db, .. }
+        | cli::QueryCommands::Scripts { db, .. }
+        | cli::QueryCommands::DeltaStats { db, .. }
+        | cli::QueryCommands::Conflicts { db, .. } => &db.db_path,
+        cli::QueryCommands::Label(command) => selected_label_db_path(command),
+    }
+}
+
+fn selected_label_db_path(command: &cli::LabelCommands) -> &str {
+    match command {
+        cli::LabelCommands::List { db, .. }
+        | cli::LabelCommands::Add { db, .. }
+        | cli::LabelCommands::Remove { db, .. }
+        | cli::LabelCommands::Path { db, .. }
+        | cli::LabelCommands::Show { db, .. }
+        | cli::LabelCommands::Set { db, .. }
+        | cli::LabelCommands::Query { db, .. }
+        | cli::LabelCommands::Link { db, .. }
+        | cli::LabelCommands::Delegate { db, .. } => &db.db_path,
+    }
+}
+
+fn selected_ccs_db_path(command: &cli::CcsCommands) -> &str {
+    match command {
+        cli::CcsCommands::Install { common, .. } => &common.db.db_path,
+        cli::CcsCommands::Export { db, .. }
+        | cli::CcsCommands::Shell { db, .. }
+        | cli::CcsCommands::Run { db, .. }
+        | cli::CcsCommands::Enhance { db, .. } => &db.db_path,
+        cli::CcsCommands::Init { .. }
+        | cli::CcsCommands::Build { .. }
+        | cli::CcsCommands::Inspect { .. }
+        | cli::CcsCommands::Verify { .. }
+        | cli::CcsCommands::Sign { .. }
+        | cli::CcsCommands::Keygen { .. } => DEFAULT_DB_PATH,
+    }
+}
+
+fn selected_derive_db_path(command: &cli::DeriveCommands) -> &str {
+    match command {
+        cli::DeriveCommands::List { db, .. }
+        | cli::DeriveCommands::Show { db, .. }
+        | cli::DeriveCommands::Create { db, .. }
+        | cli::DeriveCommands::Patch { db, .. }
+        | cli::DeriveCommands::Override { db, .. }
+        | cli::DeriveCommands::Build { db, .. }
+        | cli::DeriveCommands::Delete { db, .. }
+        | cli::DeriveCommands::Stale { db, .. } => &db.db_path,
+    }
+}
+
+fn selected_model_db_path(command: &cli::ModelCommands) -> &str {
+    match command {
+        cli::ModelCommands::Diff { db, .. }
+        | cli::ModelCommands::Check { db, .. }
+        | cli::ModelCommands::Snapshot { db, .. }
+        | cli::ModelCommands::Lock { db, .. }
+        | cli::ModelCommands::Update { db, .. }
+        | cli::ModelCommands::RemoteDiff { db, .. }
+        | cli::ModelCommands::Publish { db, .. } => &db.db_path,
+        cli::ModelCommands::Apply { common, .. } => &common.db.db_path,
+    }
+}
+
+fn selected_collection_db_path(command: &cli::CollectionCommands) -> &str {
+    match command {
+        cli::CollectionCommands::Create { db, .. }
+        | cli::CollectionCommands::List { db, .. }
+        | cli::CollectionCommands::Show { db, .. }
+        | cli::CollectionCommands::Add { db, .. }
+        | cli::CollectionCommands::Remove { db, .. }
+        | cli::CollectionCommands::Delete { db, .. } => &db.db_path,
+    }
+}
+
+fn selected_automation_db_path(command: &cli::AutomationCommands) -> &str {
+    match command {
+        cli::AutomationCommands::Status { db, .. }
+        | cli::AutomationCommands::Configure { db, .. }
+        | cli::AutomationCommands::History { db, .. } => &db.db_path,
+        cli::AutomationCommands::Check { common, .. }
+        | cli::AutomationCommands::Apply { common, .. }
+        | cli::AutomationCommands::Daemon { common, .. } => &common.db.db_path,
+    }
+}
+
+fn selected_cache_db_path(command: &cli::CacheCommands) -> &str {
+    match command {
+        cli::CacheCommands::Populate { db, .. } | cli::CacheCommands::Status { db, .. } => {
+            &db.db_path
+        }
+    }
+}
+
+fn selected_provenance_db_path(command: &cli::ProvenanceCommands) -> &str {
+    match command {
+        cli::ProvenanceCommands::Show { db, .. }
+        | cli::ProvenanceCommands::Verify { db, .. }
+        | cli::ProvenanceCommands::Diff { db, .. }
+        | cli::ProvenanceCommands::FindByDep { db, .. }
+        | cli::ProvenanceCommands::Export { db, .. }
+        | cli::ProvenanceCommands::Register { db, .. }
+        | cli::ProvenanceCommands::Audit { db, .. } => &db.db_path,
+    }
+}
+
+fn selected_capability_db_path(command: &cli::CapabilityCommands) -> &str {
+    match command {
+        cli::CapabilityCommands::Show { db, .. }
+        | cli::CapabilityCommands::List { db, .. }
+        | cli::CapabilityCommands::Audit { db, .. }
+        | cli::CapabilityCommands::Run { db, .. } => &db.db_path,
+        cli::CapabilityCommands::Validate { .. } | cli::CapabilityCommands::Generate { .. } => {
+            DEFAULT_DB_PATH
+        }
+    }
+}
+
+fn selected_trust_db_path(command: &cli::TrustCommands) -> &str {
+    match command {
+        cli::TrustCommands::Init { db, .. }
+        | cli::TrustCommands::Enable { db, .. }
+        | cli::TrustCommands::Disable { db, .. }
+        | cli::TrustCommands::Status { db, .. }
+        | cli::TrustCommands::Verify { db, .. } => &db.db_path,
+        cli::TrustCommands::KeyGen { .. } => DEFAULT_DB_PATH,
+    }
+}
+
+fn selected_federation_db_path(command: &cli::FederationCommands) -> &str {
+    match command {
+        cli::FederationCommands::Status { db, .. }
+        | cli::FederationCommands::Peers { db, .. }
+        | cli::FederationCommands::AddPeer { db, .. }
+        | cli::FederationCommands::RemovePeer { db, .. }
+        | cli::FederationCommands::Stats { db, .. }
+        | cli::FederationCommands::EnablePeer { db, .. }
+        | cli::FederationCommands::DisablePeer { db, .. }
+        | cli::FederationCommands::Test { db, .. }
+        | cli::FederationCommands::Scan { db, .. } => &db.db_path,
+    }
+}
+
+fn selected_verify_db_path(command: &cli::VerifyCommands) -> &str {
+    match command {
+        cli::VerifyCommands::Chain { db, .. }
+        | cli::VerifyCommands::Rebuild { db, .. }
+        | cli::VerifyCommands::Diverse { db, .. } => &db.db_path,
+    }
+}
+
+fn selected_system_db_path(command: &cli::SystemCommands) -> &str {
+    match command {
+        cli::SystemCommands::Init { db, .. }
+        | cli::SystemCommands::History { db, .. }
+        | cli::SystemCommands::Adopt { db, .. }
+        | cli::SystemCommands::Unadopt { db, .. }
+        | cli::SystemCommands::NativeHandoff { db, .. }
+        | cli::SystemCommands::Gc { db, .. }
+        | cli::SystemCommands::Sbom { db, .. }
+        | cli::SystemCommands::Takeover { db, .. } => &db.db_path,
+        cli::SystemCommands::Verify { common, .. }
+        | cli::SystemCommands::Restore { common, .. } => &common.db.db_path,
+        cli::SystemCommands::DbBackup { command } => selected_db_backup_db_path(command),
+        cli::SystemCommands::State(command) => selected_state_db_path(command),
+        cli::SystemCommands::Generation(command) => selected_generation_db_path(command),
+        cli::SystemCommands::Trigger(command) => selected_trigger_db_path(command),
+        cli::SystemCommands::Redirect(command) => selected_redirect_db_path(command),
+        cli::SystemCommands::UpdateChannel { action } => selected_update_channel_db_path(action),
+        cli::SystemCommands::Completions { .. } => DEFAULT_DB_PATH,
+    }
+}
+
+fn selected_db_backup_db_path(command: &cli::DbBackupCommands) -> &str {
+    match command {
+        cli::DbBackupCommands::List { db, .. }
+        | cli::DbBackupCommands::Verify { db, .. }
+        | cli::DbBackupCommands::Recover { db, .. } => &db.db_path,
+    }
+}
+
+fn selected_state_db_path(command: &cli::StateCommands) -> &str {
+    match command {
+        cli::StateCommands::List { db, .. }
+        | cli::StateCommands::Show { db, .. }
+        | cli::StateCommands::Diff { db, .. }
+        | cli::StateCommands::Revert { db, .. }
+        | cli::StateCommands::Prune { db, .. }
+        | cli::StateCommands::Create { db, .. } => &db.db_path,
+        cli::StateCommands::Rollback { common, .. } => &common.db.db_path,
+    }
+}
+
+fn selected_generation_db_path(command: &cli::GenerationCommands) -> &str {
+    match command {
+        cli::GenerationCommands::Build { db, .. }
+        | cli::GenerationCommands::Publish { db, .. }
+        | cli::GenerationCommands::Pending { db, .. }
+        | cli::GenerationCommands::VerifyDbBackup { db, .. }
+        | cli::GenerationCommands::RecoverDb { db, .. }
+        | cli::GenerationCommands::Gc { db, .. }
+        | cli::GenerationCommands::Recover { db, .. } => &db.db_path,
+        cli::GenerationCommands::List
+        | cli::GenerationCommands::Export { .. }
+        | cli::GenerationCommands::Switch { .. }
+        | cli::GenerationCommands::Rollback { .. }
+        | cli::GenerationCommands::Info { .. } => DEFAULT_DB_PATH,
+    }
+}
+
+fn selected_trigger_db_path(command: &cli::TriggerCommands) -> &str {
+    match command {
+        cli::TriggerCommands::List { db, .. }
+        | cli::TriggerCommands::Show { db, .. }
+        | cli::TriggerCommands::Enable { db, .. }
+        | cli::TriggerCommands::Disable { db, .. }
+        | cli::TriggerCommands::Add { db, .. }
+        | cli::TriggerCommands::Remove { db, .. }
+        | cli::TriggerCommands::Run { db, .. } => &db.db_path,
+    }
+}
+
+fn selected_redirect_db_path(command: &cli::RedirectCommands) -> &str {
+    match command {
+        cli::RedirectCommands::List { db, .. }
+        | cli::RedirectCommands::Add { db, .. }
+        | cli::RedirectCommands::Show { db, .. }
+        | cli::RedirectCommands::Remove { db, .. }
+        | cli::RedirectCommands::Resolve { db, .. } => &db.db_path,
+    }
+}
+
+fn selected_update_channel_db_path(command: &cli::UpdateChannelAction) -> &str {
+    match command {
+        cli::UpdateChannelAction::Get { db, .. }
+        | cli::UpdateChannelAction::Set { db, .. }
+        | cli::UpdateChannelAction::Reset { db, .. } => &db.db_path,
+    }
+}
+
+fn namespace_try_session_is_live(session: &TrySession, current_boot_id: &str) -> bool {
+    session.launcher_boot_id.as_deref() == Some(current_boot_id)
+        && session.launcher_pid.is_some_and(try_launcher_pid_is_alive)
+}
+
+fn activated_try_session_is_live(
+    session: &TrySession,
+    current_boot_id: &str,
+    current_generation: Option<i64>,
+) -> bool {
+    session.launcher_boot_id.as_deref() == Some(current_boot_id)
+        && session.try_generation_id.is_some()
+        && current_generation == session.try_generation_id
+        && session.launcher_pid.is_none_or(try_launcher_pid_is_alive)
+}
+
+fn current_boot_id() -> String {
+    if let Ok(value) = std::env::var("CONARY_TEST_BOOT_ID") {
+        return value;
+    }
+    std::fs::read_to_string("/proc/sys/kernel/random/boot_id")
+        .map(|value| value.trim().to_string())
+        .unwrap_or_else(|_| "unknown-boot".to_string())
+}
+
+fn env_forces_non_interactive() -> bool {
+    std::env::var("CONARY_NON_INTERACTIVE").as_deref() == Ok("1")
+}
+
+fn try_launcher_pid_is_alive(pid: i64) -> bool {
+    if pid <= 0 {
+        return false;
+    }
+    Path::new("/proc").join(pid.to_string()).exists()
+}
 
 pub(super) async fn dispatch_command(
     command: Option<Commands>,
@@ -354,6 +875,28 @@ pub(super) async fn dispatch_command(
             .await
         }
 
+        Some(Commands::Try {
+            target,
+            activate,
+            allow_irreversible,
+            run,
+            db,
+        }) => match try_dispatch_action(target, activate, allow_irreversible, &run)? {
+            TryDispatchAction::Package(package) => {
+                commands::cmd_try_package(
+                    &db.db_path,
+                    Path::new(&package),
+                    activate,
+                    allow_irreversible,
+                    &run,
+                )
+                .await
+            }
+            TryDispatchAction::Status => commands::cmd_try_status(&db.db_path).await,
+            TryDispatchAction::Rollback => commands::cmd_try_rollback(&db.db_path).await,
+            TryDispatchAction::Keep => commands::cmd_try_keep(&db.db_path).await,
+        },
+
         Some(Commands::Publish {
             what,
             target,
@@ -563,5 +1106,456 @@ pub(super) async fn dispatch_command(
             println!("Run 'conary --help' for usage information");
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::run_try_session_preflight_for_test;
+    use crate::cli::Cli;
+    use clap::Parser;
+    use conary_core::db::models::{CreateTrySession, TrySession, TrySessionMode, TrySessionStatus};
+    use std::ffi::OsString;
+    use std::path::Path;
+
+    struct TryPreflightFixture {
+        _temp: tempfile::TempDir,
+        db_path: std::path::PathBuf,
+        db_path_string: String,
+    }
+
+    impl TryPreflightFixture {
+        fn new() -> Self {
+            let temp = tempfile::tempdir().unwrap();
+            let db_path = temp.path().join("conary.db");
+            conary_core::db::init(&db_path).unwrap();
+            let db_path_string = db_path.to_string_lossy().into_owned();
+            Self {
+                _temp: temp,
+                db_path,
+                db_path_string,
+            }
+        }
+
+        fn open(&self) -> rusqlite::Connection {
+            conary_core::db::open(&self.db_path).unwrap()
+        }
+
+        fn parse_with_db(&self, args: &[&str]) -> Cli {
+            let mut full = args.to_vec();
+            full.extend(["--db-path", &self.db_path_string]);
+            Cli::try_parse_from(full).unwrap()
+        }
+
+        fn create_session(&self, id: &str, mode: TrySessionMode) -> TrySession {
+            TrySession::create_active(
+                &self.open(),
+                CreateTrySession {
+                    id,
+                    package_path: &self
+                        ._temp
+                        .path()
+                        .join(format!("{id}.ccs"))
+                        .to_string_lossy(),
+                    package_name: Some("demo"),
+                    package_version: Some("1.0.0"),
+                    previous_generation_id: Some(1),
+                    mode,
+                    work_dir: &self._temp.path().join("try").join(id).to_string_lossy(),
+                },
+            )
+            .unwrap()
+        }
+
+        fn stored_session(&self, id: &str) -> TrySession {
+            TrySession::find_by_id(&self.open(), id)
+                .unwrap()
+                .expect("stored try session")
+        }
+
+        fn set_current_generation(&self, generation: i64) {
+            std::fs::create_dir_all(self._temp.path().join(format!("generations/{generation}")))
+                .unwrap();
+            conary_core::generation::mount::update_current_symlink(self._temp.path(), generation)
+                .unwrap();
+        }
+    }
+
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+            let previous = std::env::var_os(key);
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            unsafe {
+                if let Some(previous) = &self.previous {
+                    std::env::set_var(self.key, previous);
+                } else {
+                    std::env::remove_var(self.key);
+                }
+            }
+        }
+    }
+
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn lock_env() -> std::sync::MutexGuard<'static, ()> {
+        ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn read_only_cli(fixture: &TryPreflightFixture) -> Cli {
+        fixture.parse_with_db(&["conary", "list"])
+    }
+
+    fn mutating_cli(fixture: &TryPreflightFixture) -> Cli {
+        fixture.parse_with_db(&["conary", "pin", "demo"])
+    }
+
+    fn dry_run_cli(fixture: &TryPreflightFixture) -> Cli {
+        fixture.parse_with_db(&["conary", "install", "demo", "--dry-run"])
+    }
+
+    fn set_launcher(session: &TrySession, fixture: &TryPreflightFixture, pid: i64, boot_id: &str) {
+        session.set_launcher(&fixture.open(), pid, boot_id).unwrap();
+    }
+
+    fn set_try_generation(session: &TrySession, fixture: &TryPreflightFixture, generation: i64) {
+        session
+            .set_try_generation(&fixture.open(), generation)
+            .unwrap();
+    }
+
+    fn assert_message_mentions_try_actions(message: &str) {
+        assert!(message.contains("try status"), "{message}");
+        assert!(message.contains("try rollback"), "{message}");
+        assert!(message.contains("try keep"), "{message}");
+    }
+
+    #[test]
+    fn live_namespace_read_only_preflight_allows_command() {
+        let _env_lock = lock_env();
+        let _boot_guard = EnvVarGuard::set("CONARY_TEST_BOOT_ID", "boot-a");
+        let fixture = TryPreflightFixture::new();
+        let session = fixture.create_session("try-live-ns", TrySessionMode::Namespace);
+        set_launcher(&session, &fixture, i64::from(std::process::id()), "boot-a");
+
+        run_try_session_preflight_for_test(&read_only_cli(&fixture), true).unwrap();
+
+        assert_eq!(
+            fixture.stored_session("try-live-ns").status,
+            TrySessionStatus::Active
+        );
+    }
+
+    #[test]
+    fn live_namespace_mutating_preflight_blocks_command() {
+        let _env_lock = lock_env();
+        let _boot_guard = EnvVarGuard::set("CONARY_TEST_BOOT_ID", "boot-a");
+        let fixture = TryPreflightFixture::new();
+        let session = fixture.create_session("try-live-ns", TrySessionMode::Namespace);
+        set_launcher(&session, &fixture, i64::from(std::process::id()), "boot-a");
+
+        let err = run_try_session_preflight_for_test(&mutating_cli(&fixture), true)
+            .expect_err("live namespace try session should block mutating commands");
+
+        let message = err.to_string();
+        assert!(
+            message.contains("another try session is active"),
+            "{message}"
+        );
+        assert_message_mentions_try_actions(&message);
+        assert_eq!(
+            fixture.stored_session("try-live-ns").status,
+            TrySessionStatus::Active
+        );
+    }
+
+    #[test]
+    fn live_namespace_dry_run_preflight_allows_command() {
+        let _env_lock = lock_env();
+        let _boot_guard = EnvVarGuard::set("CONARY_TEST_BOOT_ID", "boot-a");
+        let fixture = TryPreflightFixture::new();
+        let session = fixture.create_session("try-live-ns", TrySessionMode::Namespace);
+        set_launcher(&session, &fixture, i64::from(std::process::id()), "boot-a");
+
+        run_try_session_preflight_for_test(&dry_run_cli(&fixture), true).unwrap();
+
+        assert_eq!(
+            fixture.stored_session("try-live-ns").status,
+            TrySessionStatus::Active
+        );
+    }
+
+    #[test]
+    fn orphaned_namespace_preflight_marks_orphaned_and_blocks_command() {
+        let _env_lock = lock_env();
+        let _boot_guard = EnvVarGuard::set("CONARY_TEST_BOOT_ID", "boot-a");
+        let fixture = TryPreflightFixture::new();
+        let session = fixture.create_session("try-orphan-ns", TrySessionMode::Namespace);
+        set_launcher(&session, &fixture, 9_999_999, "boot-a");
+
+        let err = run_try_session_preflight_for_test(&read_only_cli(&fixture), false)
+            .expect_err("orphaned namespace try session should block ordinary commands");
+
+        let message = err.to_string();
+        assert!(message.contains("orphaned try session"), "{message}");
+        assert_message_mentions_try_actions(&message);
+        assert_eq!(
+            fixture.stored_session("try-orphan-ns").status,
+            TrySessionStatus::Orphaned
+        );
+    }
+
+    #[test]
+    fn live_activated_read_only_preflight_allows_command() {
+        let _env_lock = lock_env();
+        let _boot_guard = EnvVarGuard::set("CONARY_TEST_BOOT_ID", "boot-a");
+        let fixture = TryPreflightFixture::new();
+        fixture.set_current_generation(7);
+        let session = fixture.create_session("try-live-activated", TrySessionMode::Activated);
+        set_launcher(&session, &fixture, i64::from(std::process::id()), "boot-a");
+        set_try_generation(&session, &fixture, 7);
+
+        run_try_session_preflight_for_test(&read_only_cli(&fixture), true).unwrap();
+
+        assert_eq!(
+            fixture.stored_session("try-live-activated").status,
+            TrySessionStatus::Active
+        );
+    }
+
+    #[test]
+    fn live_activated_dry_run_preflight_allows_command() {
+        let _env_lock = lock_env();
+        let _boot_guard = EnvVarGuard::set("CONARY_TEST_BOOT_ID", "boot-a");
+        let fixture = TryPreflightFixture::new();
+        fixture.set_current_generation(7);
+        let session = fixture.create_session("try-live-activated", TrySessionMode::Activated);
+        set_launcher(&session, &fixture, i64::from(std::process::id()), "boot-a");
+        set_try_generation(&session, &fixture, 7);
+
+        run_try_session_preflight_for_test(&dry_run_cli(&fixture), true).unwrap();
+
+        assert_eq!(
+            fixture.stored_session("try-live-activated").status,
+            TrySessionStatus::Active
+        );
+    }
+
+    #[test]
+    fn live_activated_mutating_preflight_blocks_command() {
+        let _env_lock = lock_env();
+        let _boot_guard = EnvVarGuard::set("CONARY_TEST_BOOT_ID", "boot-a");
+        let fixture = TryPreflightFixture::new();
+        fixture.set_current_generation(7);
+        let session = fixture.create_session("try-live-activated", TrySessionMode::Activated);
+        set_launcher(&session, &fixture, i64::from(std::process::id()), "boot-a");
+        set_try_generation(&session, &fixture, 7);
+
+        let err = run_try_session_preflight_for_test(&mutating_cli(&fixture), true)
+            .expect_err("live activated try session should block mutating commands");
+
+        let message = err.to_string();
+        assert!(message.contains("activated try session"), "{message}");
+        assert!(message.contains("is active"), "{message}");
+        assert!(message.contains("try rollback"), "{message}");
+        assert!(message.contains("try keep"), "{message}");
+        assert_eq!(
+            fixture.stored_session("try-live-activated").status,
+            TrySessionStatus::Active
+        );
+    }
+
+    #[test]
+    fn orphaned_activated_interactive_preflight_marks_orphaned_and_blocks_command() {
+        let _env_lock = lock_env();
+        let _boot_guard = EnvVarGuard::set("CONARY_TEST_BOOT_ID", "boot-a");
+        let fixture = TryPreflightFixture::new();
+        fixture.set_current_generation(8);
+        let session = fixture.create_session("try-orphan-activated", TrySessionMode::Activated);
+        set_launcher(&session, &fixture, i64::from(std::process::id()), "boot-a");
+        set_try_generation(&session, &fixture, 7);
+
+        let err = run_try_session_preflight_for_test(&read_only_cli(&fixture), true)
+            .expect_err("orphaned activated interactive preflight should block command");
+
+        let message = err.to_string();
+        assert!(
+            message.contains("orphaned activated try session"),
+            "{message}"
+        );
+        assert!(message.contains("try rollback"), "{message}");
+        assert!(message.contains("try keep"), "{message}");
+        assert_eq!(
+            fixture.stored_session("try-orphan-activated").status,
+            TrySessionStatus::Orphaned
+        );
+    }
+
+    #[test]
+    fn orphaned_activated_env_forced_non_interactive_attempts_rollback() {
+        let _env_lock = lock_env();
+        let _boot_guard = EnvVarGuard::set("CONARY_TEST_BOOT_ID", "boot-a");
+        let _non_interactive_guard = EnvVarGuard::set("CONARY_NON_INTERACTIVE", "1");
+        let fixture = TryPreflightFixture::new();
+        fixture.set_current_generation(8);
+        let session = fixture.create_session("try-orphan-activated", TrySessionMode::Activated);
+        set_launcher(&session, &fixture, i64::from(std::process::id()), "boot-a");
+        set_try_generation(&session, &fixture, 7);
+
+        let err = run_try_session_preflight_for_test(&read_only_cli(&fixture), true)
+            .expect_err("CONARY_NON_INTERACTIVE=1 should force automatic rollback");
+
+        let message = err.to_string();
+        assert!(message.contains("automatic rollback"), "{message}");
+        assert_eq!(
+            fixture.stored_session("try-orphan-activated").status,
+            TrySessionStatus::Orphaned
+        );
+    }
+
+    #[test]
+    fn orphaned_activated_non_interactive_preflight_attempts_rollback() {
+        let _env_lock = lock_env();
+        let _boot_guard = EnvVarGuard::set("CONARY_TEST_BOOT_ID", "boot-a");
+        let fixture = TryPreflightFixture::new();
+        fixture.set_current_generation(8);
+        let session = fixture.create_session("try-orphan-activated", TrySessionMode::Activated);
+        set_launcher(&session, &fixture, i64::from(std::process::id()), "boot-a");
+        set_try_generation(&session, &fixture, 7);
+
+        let err = run_try_session_preflight_for_test(&read_only_cli(&fixture), false)
+            .expect_err("rollback attempt should surface rollback error for invalid test package");
+
+        let message = err.to_string();
+        assert!(message.contains("automatic rollback"), "{message}");
+        assert_eq!(
+            fixture.stored_session("try-orphan-activated").status,
+            TrySessionStatus::Orphaned
+        );
+    }
+
+    #[test]
+    fn preflight_uses_default_db_path_for_commands_without_db_args() {
+        let cli = Cli::try_parse_from(["conary", "cook", "."]).unwrap();
+
+        let command = cli.command.as_ref().expect("parsed command");
+        assert_eq!(super::selected_db_path(command), super::DEFAULT_DB_PATH);
+    }
+
+    #[test]
+    fn nested_db_command_preflights_selected_db_path() {
+        let _env_lock = lock_env();
+        let _boot_guard = EnvVarGuard::set("CONARY_TEST_BOOT_ID", "boot-a");
+        let fixture = TryPreflightFixture::new();
+        let session = fixture.create_session("try-nested-db", TrySessionMode::Namespace);
+        set_launcher(&session, &fixture, 9_999_999, "boot-a");
+
+        let cli = fixture.parse_with_db(&["conary", "repo", "list"]);
+        let err = run_try_session_preflight_for_test(&cli, true)
+            .expect_err("nested repo command should inspect the selected active-session DB");
+
+        let message = err.to_string();
+        assert!(message.contains("orphaned try session"), "{message}");
+        assert_eq!(
+            fixture.stored_session("try-nested-db").status,
+            TrySessionStatus::Orphaned
+        );
+    }
+
+    #[test]
+    fn try_action_commands_skip_orphan_preflight() {
+        let _env_lock = lock_env();
+        let fixture = TryPreflightFixture::new();
+        let session = fixture.create_session("try-action", TrySessionMode::Namespace);
+        set_launcher(&session, &fixture, 9_999_999, "old-boot");
+
+        for action in ["status", "rollback", "keep"] {
+            let cli = fixture.parse_with_db(&["conary", "try", action]);
+            run_try_session_preflight_for_test(&cli, false).unwrap();
+        }
+
+        assert_eq!(
+            fixture.stored_session("try-action").status,
+            TrySessionStatus::Active
+        );
+    }
+
+    #[test]
+    fn database_not_found_is_no_active_try_session() {
+        let missing_db = tempfile::tempdir()
+            .unwrap()
+            .path()
+            .join("missing")
+            .join("conary.db");
+        let db_path = missing_db.to_string_lossy();
+        let cli = Cli::try_parse_from(["conary", "list", "--db-path", &db_path]).unwrap();
+
+        run_try_session_preflight_for_test(&cli, true).unwrap();
+    }
+
+    #[test]
+    fn package_named_try_action_requires_explicit_path_prefix() {
+        let fixture = TryPreflightFixture::new();
+        for package in ["./status", "./rollback", "./keep"] {
+            let cli = fixture.parse_with_db(&["conary", "try", package]);
+            run_try_session_preflight_for_test(&cli, true).unwrap();
+        }
+    }
+
+    #[test]
+    fn proc_liveness_probe_rejects_non_positive_pids() {
+        assert!(!Path::new("/proc/0").exists() || !super::try_launcher_pid_is_alive(0));
+        assert!(!super::try_launcher_pid_is_alive(-1));
+    }
+
+    #[test]
+    fn activated_liveness_rejects_recorded_dead_pid_but_allows_absent_pid() {
+        let session = TrySession {
+            id: "try-liveness".to_string(),
+            package_path: "/tmp/demo.ccs".to_string(),
+            package_name: None,
+            package_version: None,
+            previous_generation_id: Some(1),
+            try_generation_id: Some(7),
+            launcher_pid: Some(9_999_999),
+            launcher_boot_id: Some("boot-a".to_string()),
+            status: TrySessionStatus::Active,
+            mode: TrySessionMode::Activated,
+            work_dir: "/tmp/try-liveness".to_string(),
+            last_error: None,
+            started_at: None,
+            updated_at: None,
+            completed_at: None,
+        };
+
+        assert!(!super::activated_try_session_is_live(
+            &session,
+            "boot-a",
+            Some(7)
+        ));
+
+        let no_pid = TrySession {
+            launcher_pid: None,
+            ..session
+        };
+        assert!(super::activated_try_session_is_live(
+            &no_pid,
+            "boot-a",
+            Some(7)
+        ));
     }
 }
