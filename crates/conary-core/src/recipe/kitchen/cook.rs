@@ -2487,6 +2487,10 @@ mod tests {
             ("make --fi=evil.mk", "--fi"),
             ("GNUMAKEFLAGS=--fi=evil.mk make", "GNUMAKEFLAGS"),
             ("make --mak=evil.mk", "--mak"),
+            ("make -I evil", "-I"),
+            ("MAKEFLAGS=-Ievil make", "MAKEFLAGS"),
+            ("GNUMAKEFLAGS=--include-dir=evil make", "GNUMAKEFLAGS"),
+            ("make --inc=evil", "--inc"),
             (
                 "command env SOURCE_DATE_EPOCH=999 make",
                 "SOURCE_DATE_EPOCH",
