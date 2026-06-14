@@ -118,11 +118,11 @@ impl ReproducibilityConfig {
             RUSTFLAGS => self
                 .rust_remaps()
                 .iter()
-                .all(|required| value.contains(required)),
+                .all(|required| has_exact_flag(value, required)),
             CFLAGS | CXXFLAGS => self
                 .file_prefix_remaps()
                 .iter()
-                .all(|required| value.contains(required)),
+                .all(|required| has_exact_flag(value, required)),
             _ => true,
         }
     }
@@ -155,7 +155,7 @@ impl ReproducibilityConfig {
             )));
         };
         for token in required {
-            if !value.contains(token) {
+            if !has_exact_flag(value, token) {
                 return Err(Error::ConfigError(format!(
                     "hermetic reproducibility requires {key} to include required remap flag {token}"
                 )));
@@ -190,6 +190,10 @@ fn effective_env_value<'a>(env: &'a [(String, String)], key: &str) -> Option<&'a
         .rev()
         .find(|(candidate, _)| candidate == key)
         .map(|(_, value)| value.as_str())
+}
+
+fn has_exact_flag(value: &str, required: &str) -> bool {
+    value.split_whitespace().any(|token| token == required)
 }
 
 #[cfg(test)]
@@ -295,6 +299,65 @@ mod tests {
 
         assert!(error.to_string().contains("RUSTFLAGS"));
         assert!(error.to_string().contains("remap-path-prefix"));
+    }
+
+    #[test]
+    fn hermetic_env_validation_rejects_prefix_extension_remaps() {
+        let config = ReproducibilityConfig::new(123, Path::new("/src"), Path::new("/build"));
+
+        let rust_error = config
+            .validate_final_env(&[
+                ("SOURCE_DATE_EPOCH".to_string(), "123".to_string()),
+                (
+                    "RUSTFLAGS".to_string(),
+                    "--remap-path-prefix=/src=/build/source-old --remap-path-prefix=/build=/build"
+                        .to_string(),
+                ),
+                (
+                    "CFLAGS".to_string(),
+                    "-ffile-prefix-map=/src=/build/source -ffile-prefix-map=/build=/build"
+                        .to_string(),
+                ),
+                (
+                    "CXXFLAGS".to_string(),
+                    "-ffile-prefix-map=/src=/build/source -ffile-prefix-map=/build=/build"
+                        .to_string(),
+                ),
+            ])
+            .unwrap_err();
+        assert!(rust_error.to_string().contains("RUSTFLAGS"));
+
+        let c_error = config
+            .validate_final_env(&[
+                ("SOURCE_DATE_EPOCH".to_string(), "123".to_string()),
+                (
+                    "RUSTFLAGS".to_string(),
+                    "--remap-path-prefix=/src=/build/source --remap-path-prefix=/build=/build"
+                        .to_string(),
+                ),
+                (
+                    "CFLAGS".to_string(),
+                    "-ffile-prefix-map=/src=/build/source-old -ffile-prefix-map=/build=/build"
+                        .to_string(),
+                ),
+                (
+                    "CXXFLAGS".to_string(),
+                    "-ffile-prefix-map=/src=/build/source -ffile-prefix-map=/build=/build"
+                        .to_string(),
+                ),
+            ])
+            .unwrap_err();
+        assert!(c_error.to_string().contains("CFLAGS"));
+    }
+
+    #[test]
+    fn command_local_assignment_rejects_prefix_extension_remap() {
+        let config = ReproducibilityConfig::new(123, Path::new("/src"), Path::new("/build"));
+
+        assert!(!config.command_local_assignment_allowed(
+            "RUSTFLAGS",
+            "--remap-path-prefix=/src=/build/source-old --remap-path-prefix=/build=/build",
+        ));
     }
 
     #[test]
