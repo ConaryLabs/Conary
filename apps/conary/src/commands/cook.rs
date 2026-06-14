@@ -17,6 +17,8 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use tracing::info;
 
+use super::hermetic_config::{ensure_no_build_dependencies_for_m2a, load_default_hermetic_builder};
+
 pub(crate) fn recipe_source_base_dir(recipe_path: &Path) -> PathBuf {
     recipe_path
         .parent()
@@ -267,10 +269,9 @@ async fn cmd_cook_with_output(
         }
     }
 
-    let kitchen = Kitchen::new(config.clone());
-
     // Fetch-only mode: just download sources and exit
     if fetch_only {
+        let kitchen = Kitchen::new(config.clone());
         if matches!(resolved.source_kind, Some(SourceTargetKind::Directory))
             && matches!(recipe.source, SourceSection::Local(_))
         {
@@ -304,6 +305,21 @@ async fn cmd_cook_with_output(
 
         return Ok(());
     }
+
+    let hermetic_builder = if hermetic_requested {
+        let builder = load_default_hermetic_builder()?;
+        ensure_no_build_dependencies_for_m2a(&recipe)?;
+        config.use_isolation = true;
+        config.pristine_mode = true;
+        config.sysroot = Some(builder.sysroot_path.clone());
+        config.auto_makedepends = false;
+        config.cleanup_makedepends = false;
+        Some(builder)
+    } else {
+        None
+    };
+
+    let kitchen = Kitchen::new(config.clone());
 
     // Create output directory if needed
     std::fs::create_dir_all(output_dir).with_context(|| {
@@ -348,8 +364,9 @@ async fn cmd_cook_with_output(
     writeln!(output, "Building ({} parallel jobs)...", config.jobs)?;
 
     // Create kitchen and cook
-    let result = if hermetic_requested {
-        let input = hermetic_build_input(&resolved, &recipe)?;
+    let result = if let Some(builder) = hermetic_builder {
+        let input =
+            hermetic_build_input(&resolved, &recipe)?.with_builder_environment(builder.identity);
         kitchen.cook_hermetic(&recipe, input, output_dir, detect_ci_mode())
     } else {
         kitchen.cook(&recipe, output_dir)
@@ -861,7 +878,7 @@ edition = "2021"
     }
 
     #[tokio::test]
-    async fn cook_hermetic_routes_to_planner_and_requires_builder_identity() {
+    async fn cook_hermetic_requires_hermetic_config_before_planning() {
         let temp = tempfile::tempdir().unwrap();
         let recipe_path = temp.path().join("recipe.toml");
         let output_dir = temp.path().join("out");
@@ -886,10 +903,7 @@ edition = "2021"
         .unwrap_err();
         let error = format!("{error:#}");
 
-        assert!(
-            error.contains("builder environment identity"),
-            "hermetic cook should reach M2a planning and require builder identity: {error}"
-        );
+        assert!(error.contains("hermetic config"), "{error}");
         assert!(
             !error.contains("Hermetic cook/publish is an M2 feature"),
             "hermetic cook should no longer use the old reserved-feature rejection: {error}"
@@ -901,7 +915,7 @@ edition = "2021"
     }
 
     #[tokio::test]
-    async fn cook_isolated_uses_hermetic_status_without_claiming_attestation() {
+    async fn cook_isolated_fails_closed_without_hermetic_config() {
         let temp = tempfile::tempdir().unwrap();
         let recipe_path = temp.path().join("recipe.toml");
         let output_dir = temp.path().join("out");
@@ -929,27 +943,18 @@ edition = "2021"
         let error = format!("{error:#}");
         let output = String::from_utf8(output).unwrap();
 
-        assert!(
-            error.contains("builder environment identity"),
-            "isolated cook should route through M2a hermetic planning: {error}"
-        );
-        assert!(output.contains("(hermetic)"), "{output}");
-        assert!(
-            output.contains("Sources prefetched before build"),
-            "{output}"
-        );
-        assert!(output.contains("Network disabled during build"), "{output}");
-        assert!(
-            output.contains("Build evidence recorded without M2b attestation"),
-            "{output}"
-        );
+        assert!(error.contains("hermetic config"), "{error}");
         assert!(
             !output.contains("attested"),
             "M2a cook output must not claim attestation before M2b: {output}"
         );
         assert!(
-            !output.contains("(isolated)"),
-            "--isolated should now report the hermetic build path: {output}"
+            !output.contains("Cooking with"),
+            "missing hermetic config should fail before cooking starts: {output}"
+        );
+        assert!(
+            !output_dir.join("local-1.0-1.ccs").exists(),
+            "hermetic config failure should not write a package"
         );
     }
 
