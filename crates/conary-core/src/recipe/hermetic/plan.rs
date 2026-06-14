@@ -16,13 +16,11 @@ use crate::recipe::hermetic::reproducibility::ReproducibilityConfig;
 use crate::recipe::hermetic::source_identity::{
     CanonicalLocalFile, CiMode, canonical_local_file_list, local_tree_identity,
 };
-use crate::recipe::kitchen::{KitchenConfig, SourceDownloadPolicy};
+use crate::recipe::kitchen::{KitchenConfig, SourceChecksumPolicy, SourceDownloadPolicy};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 const DEFAULT_GENERATOR: &str = "conary-recipe-inference";
-const TEST_SYSROOT_HASH: &str = "sha256:m2a-pristine-sysroot-test";
-const TEST_TOOLCHAIN_HASH: &str = "sha256:m2a-pristine-toolchain-test";
 
 #[derive(Debug, Clone)]
 pub struct HermeticBuildPlan {
@@ -55,9 +53,30 @@ impl HermeticBuildInput {
             recipe_source_base_dir: recipe_source_base_dir.into(),
             generated_recipe: None,
             inference_trace_hash: None,
-            builder_environment: pristine_builder_environment(),
+            builder_environment: unconfigured_pristine_builder_environment(),
             locked_repository_dependencies: Vec::new(),
         }
+    }
+
+    pub fn try_generated_recipe(
+        source_base: impl Into<PathBuf>,
+        recipe: Recipe,
+        inference_trace_hash: impl Into<String>,
+    ) -> Result<Self> {
+        let inference_trace_hash = inference_trace_hash.into();
+        let canonical_hash = canonical_recipe_hash(&recipe)?;
+        Ok(Self {
+            recipe_identity: RecipeIdentity::GeneratedRecipe {
+                generator: DEFAULT_GENERATOR.to_string(),
+                canonical_hash,
+                inference_trace_hash: inference_trace_hash.clone(),
+            },
+            recipe_source_base_dir: source_base.into(),
+            generated_recipe: Some(recipe),
+            inference_trace_hash: Some(inference_trace_hash),
+            builder_environment: unconfigured_pristine_builder_environment(),
+            locked_repository_dependencies: Vec::new(),
+        })
     }
 
     pub fn generated_recipe(
@@ -65,19 +84,8 @@ impl HermeticBuildInput {
         recipe: Recipe,
         inference_trace_hash: impl Into<String>,
     ) -> Self {
-        let inference_trace_hash = inference_trace_hash.into();
-        Self {
-            recipe_identity: RecipeIdentity::GeneratedRecipe {
-                generator: DEFAULT_GENERATOR.to_string(),
-                canonical_hash: canonical_recipe_hash(&recipe),
-                inference_trace_hash: inference_trace_hash.clone(),
-            },
-            recipe_source_base_dir: source_base.into(),
-            generated_recipe: Some(recipe),
-            inference_trace_hash: Some(inference_trace_hash),
-            builder_environment: pristine_builder_environment(),
-            locked_repository_dependencies: Vec::new(),
-        }
+        Self::try_generated_recipe(source_base, recipe, inference_trace_hash)
+            .expect("recipe serialization to canonical JSON should not fail")
     }
 
     pub fn with_builder_environment(
@@ -85,6 +93,24 @@ impl HermeticBuildInput {
         builder_environment: BuilderEnvironmentIdentity,
     ) -> Self {
         self.builder_environment = builder_environment;
+        self
+    }
+
+    pub fn with_pristine_builder_environment<S, T>(
+        mut self,
+        sysroot_hash: Option<S>,
+        toolchain_hash: Option<T>,
+    ) -> Self
+    where
+        S: Into<String>,
+        T: Into<String>,
+    {
+        self.builder_environment = BuilderEnvironmentIdentity {
+            kind: BuilderEnvironmentKind::Pristine,
+            sysroot_hash: sysroot_hash.map(Into::into),
+            toolchain_hash: toolchain_hash.map(Into::into),
+            diagnostics: Vec::new(),
+        };
         self
     }
 
@@ -198,6 +224,9 @@ impl HermeticBuildPlan {
         config.use_isolation = true;
         config.allow_network = false;
         config.pristine_mode = true;
+        config.auto_makedepends = false;
+        config.cleanup_makedepends = false;
+        config.checksum_policy = SourceChecksumPolicy::Supported;
         config.source_download_policy = SourceDownloadPolicy::OfflineCacheOnly;
         config.hermetic_evidence = Some(self.evidence.clone());
         config.hermetic_local_files = self.local_files.clone();
@@ -205,19 +234,19 @@ impl HermeticBuildPlan {
     }
 }
 
-fn pristine_builder_environment() -> BuilderEnvironmentIdentity {
+fn unconfigured_pristine_builder_environment() -> BuilderEnvironmentIdentity {
     BuilderEnvironmentIdentity {
         kind: BuilderEnvironmentKind::Pristine,
-        sysroot_hash: Some(TEST_SYSROOT_HASH.to_string()),
-        toolchain_hash: Some(TEST_TOOLCHAIN_HASH.to_string()),
-        diagnostics: Vec::new(),
+        sysroot_hash: None,
+        toolchain_hash: None,
+        diagnostics: vec!["builder environment identity not configured".to_string()],
     }
 }
 
-fn canonical_recipe_hash(recipe: &Recipe) -> String {
-    let bytes =
-        serde_json::to_vec(recipe).unwrap_or_else(|_| format!("{recipe:#?}").as_bytes().to_vec());
-    hash::sha256_prefixed(&bytes)
+fn canonical_recipe_hash(recipe: &Recipe) -> Result<String> {
+    let bytes = crate::json::canonical_json(recipe)
+        .map_err(|error| Error::ConfigError(format!("failed to canonicalize recipe: {error}")))?;
+    Ok(hash::sha256_prefixed(&bytes))
 }
 
 fn validate_builder_environment(builder: &BuilderEnvironmentIdentity) -> Result<()> {
@@ -228,14 +257,29 @@ fn validate_builder_environment(builder: &BuilderEnvironmentIdentity) -> Result<
         )));
     }
 
-    let has_sysroot = builder
-        .sysroot_hash
-        .as_deref()
-        .is_some_and(|hash| !hash.trim().is_empty());
-    let has_toolchain = builder
-        .toolchain_hash
-        .as_deref()
-        .is_some_and(|hash| !hash.trim().is_empty());
+    let mut invalid_fields = Vec::new();
+    let has_sysroot = match builder.sysroot_hash.as_deref() {
+        Some(hash) if is_sha256_content_identity(hash) => true,
+        Some(_) => {
+            invalid_fields.push("sysroot_hash");
+            false
+        }
+        None => false,
+    };
+    let has_toolchain = match builder.toolchain_hash.as_deref() {
+        Some(hash) if is_sha256_content_identity(hash) => true,
+        Some(_) => {
+            invalid_fields.push("toolchain_hash");
+            false
+        }
+        None => false,
+    };
+    if !invalid_fields.is_empty() {
+        return Err(Error::ConfigError(format!(
+            "builder environment identity fields must be sha256:<64 hex>: {}",
+            invalid_fields.join(", ")
+        )));
+    }
     if !has_sysroot && !has_toolchain {
         let diagnostic = if builder.diagnostics.is_empty() {
             "missing sysroot_hash or toolchain_hash".to_string()
@@ -243,11 +287,18 @@ fn validate_builder_environment(builder: &BuilderEnvironmentIdentity) -> Result<
             builder.diagnostics.join("; ")
         };
         return Err(Error::ConfigError(format!(
-            "pristine builder environment lacks content identity: {diagnostic}"
+            "builder environment identity missing sha256 content identity: {diagnostic}"
         )));
     }
 
     Ok(())
+}
+
+fn is_sha256_content_identity(value: &str) -> bool {
+    let Some(hex) = value.strip_prefix("sha256:") else {
+        return false;
+    };
+    hex.len() == 64 && hex.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 fn source_identity_for_recipe(
@@ -364,18 +415,79 @@ fn patch_identities(
                 });
             }
 
-            let relative_patch = Path::new(&patch_file);
-            let patch_path = if relative_patch.is_absolute() {
-                relative_patch.to_path_buf()
-            } else {
-                recipe_source_base_dir.join(relative_patch)
-            };
+            let patch_path = resolve_local_patch_path(recipe_source_base_dir, &patch_file)?;
             Ok(InputFileIdentity {
                 path: patch_path.to_string_lossy().to_string(),
                 hash: sha256_file(&patch_path)?,
             })
         })
         .collect()
+}
+
+fn resolve_local_patch_path(recipe_source_base_dir: &Path, patch_file: &str) -> Result<PathBuf> {
+    let relative_patch = clean_relative_local_patch_path(patch_file)?;
+    let canonical_recipe_dir = fs::canonicalize(recipe_source_base_dir).map_err(|error| {
+        Error::ConfigError(format!(
+            "recipe source base dir not found for local patch resolution: {} ({error})",
+            recipe_source_base_dir.display()
+        ))
+    })?;
+    let patch_path = canonical_recipe_dir.join(relative_patch);
+    let canonical_patch = fs::canonicalize(&patch_path).map_err(|error| {
+        Error::NotFound(format!(
+            "local patch file not found: {} ({error})",
+            patch_path.display()
+        ))
+    })?;
+
+    if !canonical_patch.starts_with(&canonical_recipe_dir) {
+        return Err(Error::ConfigError(format!(
+            "local patch path must stay within the recipe directory: {}",
+            patch_file
+        )));
+    }
+
+    Ok(canonical_patch)
+}
+
+fn clean_relative_local_patch_path(patch_file: &str) -> Result<PathBuf> {
+    let path = Path::new(patch_file);
+    if path.as_os_str().is_empty() {
+        return Err(Error::ConfigError(
+            "local patch path cannot be empty".to_string(),
+        ));
+    }
+    if path.is_absolute() {
+        return Err(Error::ConfigError(format!(
+            "local patch path must be relative to the recipe directory: {patch_file}"
+        )));
+    }
+
+    let mut clean = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Normal(part) => clean.push(part),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                return Err(Error::ConfigError(format!(
+                    "local patch path must stay within the recipe directory: {patch_file}"
+                )));
+            }
+            Component::RootDir | Component::Prefix(_) => {
+                return Err(Error::ConfigError(format!(
+                    "local patch path must be relative to the recipe directory: {patch_file}"
+                )));
+            }
+        }
+    }
+
+    if clean.as_os_str().is_empty() {
+        return Err(Error::ConfigError(
+            "local patch path cannot be empty".to_string(),
+        ));
+    }
+
+    Ok(clean)
 }
 
 fn sha256_file(path: &Path) -> Result<String> {
@@ -490,12 +602,17 @@ mod tests {
     use crate::recipe::hermetic::{
         BuilderEnvironmentKind, CiMode, HERMETIC_EVIDENCE_SCHEMA_V1, PolicyStatus, SourceIdentity,
     };
-    use crate::recipe::kitchen::{KitchenConfig, SourceDownloadPolicy};
+    use crate::recipe::kitchen::{KitchenConfig, SourceChecksumPolicy, SourceDownloadPolicy};
     use crate::recipe::{PatchInfo, PatchSection};
     use std::collections::HashMap;
     use std::fs;
     use std::path::{Path, PathBuf};
     use tempfile::TempDir;
+
+    const TEST_SYSROOT_IDENTITY: &str =
+        "sha256:1111111111111111111111111111111111111111111111111111111111111111";
+    const TEST_TOOLCHAIN_IDENTITY: &str =
+        "sha256:2222222222222222222222222222222222222222222222222222222222222222";
 
     struct RecipeFixture {
         dir: TempDir,
@@ -521,6 +638,10 @@ mod tests {
             fixture.path(),
             recipe.clone(),
             "sha256:inference-trace",
+        )
+        .with_pristine_builder_environment(
+            Some(TEST_SYSROOT_IDENTITY),
+            Some(TEST_TOOLCHAIN_IDENTITY),
         );
 
         let plan = HermeticBuildPlan::from_recipe(&recipe, input, CiMode::Off).unwrap();
@@ -543,15 +664,25 @@ mod tests {
             fixture.path(),
             recipe.clone(),
             "sha256:inference-trace",
+        )
+        .with_pristine_builder_environment(
+            Some(TEST_SYSROOT_IDENTITY),
+            Some(TEST_TOOLCHAIN_IDENTITY),
         );
         let plan = HermeticBuildPlan::from_recipe(&recipe, input, CiMode::Off).unwrap();
-        let mut config = KitchenConfig::default();
+        let mut config = KitchenConfig {
+            checksum_policy: SourceChecksumPolicy::BootstrapLegacy,
+            ..KitchenConfig::with_auto_makedepends(true)
+        };
 
         plan.apply_to_kitchen_config(&mut config);
 
         assert!(config.use_isolation);
         assert!(!config.allow_network);
         assert!(config.pristine_mode);
+        assert!(!config.auto_makedepends);
+        assert!(!config.cleanup_makedepends);
+        assert_eq!(config.checksum_policy, SourceChecksumPolicy::Supported);
         assert_eq!(
             config.source_download_policy,
             SourceDownloadPolicy::OfflineCacheOnly
@@ -569,6 +700,10 @@ mod tests {
             fixture.path(),
             recipe.clone(),
             "sha256:inference-trace",
+        )
+        .with_pristine_builder_environment(
+            Some(TEST_SYSROOT_IDENTITY),
+            Some(TEST_TOOLCHAIN_IDENTITY),
         );
 
         let error = HermeticBuildPlan::from_recipe(&recipe, input, CiMode::Off).unwrap_err();
@@ -586,6 +721,10 @@ mod tests {
             fixture.path(),
             fixture.recipe_path(),
             "sha256:recipe",
+        )
+        .with_pristine_builder_environment(
+            Some(TEST_SYSROOT_IDENTITY),
+            Some(TEST_TOOLCHAIN_IDENTITY),
         );
 
         let error = HermeticBuildPlan::from_recipe(&recipe, input, CiMode::Off).unwrap_err();
@@ -602,6 +741,10 @@ mod tests {
             fixture.path(),
             fixture.recipe_path(),
             "sha256:recipe",
+        )
+        .with_pristine_builder_environment(
+            Some(TEST_SYSROOT_IDENTITY),
+            Some(TEST_TOOLCHAIN_IDENTITY),
         );
 
         let plan = HermeticBuildPlan::from_recipe(&fixture.recipe, input, CiMode::Off).unwrap();
@@ -626,6 +769,124 @@ mod tests {
                 .iter()
                 .all(|file| file.relative_path != Path::new("README.md"))
         );
+    }
+
+    #[test]
+    fn hermetic_plan_blocks_default_builder_identity() {
+        let fixture = cargo_project_with_lock(".");
+        let recipe = fixture.recipe.clone();
+        let input = HermeticBuildInput::generated_recipe(
+            fixture.path(),
+            recipe.clone(),
+            "sha256:inference-trace",
+        );
+
+        let error = HermeticBuildPlan::from_recipe(&recipe, input, CiMode::Off).unwrap_err();
+
+        assert!(error.to_string().contains("builder environment identity"));
+        assert!(error.to_string().contains("sha256"));
+    }
+
+    #[test]
+    fn hermetic_plan_rejects_placeholder_builder_identity() {
+        let fixture = cargo_project_with_lock(".");
+        let recipe = fixture.recipe.clone();
+        let input = HermeticBuildInput::generated_recipe(
+            fixture.path(),
+            recipe.clone(),
+            "sha256:inference-trace",
+        )
+        .with_pristine_builder_environment(
+            Some("sha256:m2a-pristine-sysroot-test"),
+            Some(TEST_TOOLCHAIN_IDENTITY),
+        );
+
+        let error = HermeticBuildPlan::from_recipe(&recipe, input, CiMode::Off).unwrap_err();
+
+        assert!(error.to_string().contains("builder environment identity"));
+        assert!(error.to_string().contains("sha256"));
+    }
+
+    #[test]
+    fn hermetic_plan_rejects_parent_traversal_local_patch() {
+        let fixture = cargo_project_with_lock(".");
+        let mut recipe = fixture.recipe.clone();
+        recipe.patches = Some(PatchSection {
+            files: vec![PatchInfo {
+                file: "../outside.patch".to_string(),
+                checksum: None,
+                strip: 1,
+                condition: None,
+            }],
+        });
+        let input = HermeticBuildInput::explicit_recipe(
+            fixture.path(),
+            fixture.recipe_path(),
+            "sha256:recipe",
+        )
+        .with_pristine_builder_environment(
+            Some(TEST_SYSROOT_IDENTITY),
+            Some(TEST_TOOLCHAIN_IDENTITY),
+        );
+
+        let error = HermeticBuildPlan::from_recipe(&recipe, input, CiMode::Off).unwrap_err();
+
+        assert!(error.to_string().contains("local patch"));
+        assert!(error.to_string().contains("recipe directory"));
+    }
+
+    #[test]
+    fn hermetic_plan_rejects_absolute_local_patch() {
+        let fixture = cargo_project_with_lock(".");
+        let mut recipe = fixture.recipe.clone();
+        recipe.patches = Some(PatchSection {
+            files: vec![PatchInfo {
+                file: fixture
+                    .path()
+                    .join("local.patch")
+                    .to_string_lossy()
+                    .to_string(),
+                checksum: None,
+                strip: 1,
+                condition: None,
+            }],
+        });
+        let input = HermeticBuildInput::explicit_recipe(
+            fixture.path(),
+            fixture.recipe_path(),
+            "sha256:recipe",
+        )
+        .with_pristine_builder_environment(
+            Some(TEST_SYSROOT_IDENTITY),
+            Some(TEST_TOOLCHAIN_IDENTITY),
+        );
+
+        let error = HermeticBuildPlan::from_recipe(&recipe, input, CiMode::Off).unwrap_err();
+
+        assert!(error.to_string().contains("local patch"));
+        assert!(error.to_string().contains("relative"));
+    }
+
+    #[test]
+    fn generated_recipe_hash_is_stable_across_variables_insertion_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut first = recipe_with_local_source(".", Some("true"), Some("true"));
+        first.variables.insert("zebra".to_string(), "1".to_string());
+        first.variables.insert("apple".to_string(), "2".to_string());
+        let mut second = recipe_with_local_source(".", Some("true"), Some("true"));
+        second
+            .variables
+            .insert("apple".to_string(), "2".to_string());
+        second
+            .variables
+            .insert("zebra".to_string(), "1".to_string());
+
+        let first_input =
+            HermeticBuildInput::generated_recipe(dir.path(), first, "sha256:inference-trace");
+        let second_input =
+            HermeticBuildInput::generated_recipe(dir.path(), second, "sha256:inference-trace");
+
+        assert_eq!(first_input.recipe_identity, second_input.recipe_identity);
     }
 
     fn cargo_project_with_lock(source_path: &str) -> RecipeFixture {
