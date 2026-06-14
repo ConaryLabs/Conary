@@ -257,11 +257,21 @@ fn validate_env_option(phase: &str, tokens: &[String], index: usize) -> Result<O
     if token == "--debug" {
         return Ok(Some(index + 1));
     }
-    if token == "-C" || token == "-a" || token == "-S" {
+    if token == "-S" || token.starts_with("-S") {
+        return Err(Error::ConfigError(format!(
+            "hermetic reproducibility does not support env -S/--split-string in {phase} phase"
+        )));
+    }
+    if token == "--split-string" || token.starts_with("--split-string=") {
+        return Err(Error::ConfigError(format!(
+            "hermetic reproducibility does not support env --split-string in {phase} phase"
+        )));
+    }
+    if token == "-C" || token == "-a" {
         env_option_operand(phase, tokens, index, token)?;
         return Ok(Some(index + 2));
     }
-    for option in ["--chdir", "--argv0", "--split-string"] {
+    for option in ["--chdir", "--argv0"] {
         if token == option {
             env_option_operand(phase, tokens, index, token)?;
             return Ok(Some(index + 2));
@@ -1815,6 +1825,11 @@ mod tests {
                 "env --block-signal SOURCE_DATE_EPOCH=999 make",
                 "--block-signal",
             ),
+            ("env -S 'SOURCE_DATE_EPOCH=999 make'", "-S"),
+            (
+                "env --split-string='SOURCE_DATE_EPOCH=999 make'",
+                "split-string",
+            ),
             (
                 "export RUSTFLAGS=--remap-path-prefix=/src=/build/source-old; make",
                 "RUSTFLAGS",
@@ -1857,6 +1872,28 @@ mod tests {
         let error = validate_env_wrapper_mutations(&config, "make", &tokens).unwrap_err();
 
         assert!(error.to_string().contains("--block-signal"));
+    }
+
+    #[test]
+    fn test_env_wrapper_scanner_rejects_split_string_options() {
+        let config = ReproducibilityConfig::new(0, Path::new("/src"), Path::new("/build"));
+        for (tokens, expected) in [
+            (
+                vec!["-S".to_string(), "SOURCE_DATE_EPOCH=999 make".to_string()],
+                "-S",
+            ),
+            (
+                vec!["--split-string=SOURCE_DATE_EPOCH=999 make".to_string()],
+                "split-string",
+            ),
+        ] {
+            let error = validate_env_wrapper_mutations(&config, "make", &tokens).unwrap_err();
+
+            assert!(
+                error.to_string().contains(expected),
+                "expected {expected} rejection, got: {error}"
+            );
+        }
     }
 
     #[test]
