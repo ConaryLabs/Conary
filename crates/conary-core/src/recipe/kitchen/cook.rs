@@ -229,15 +229,15 @@ fn validate_leading_shell_assignments(
     mut index: usize,
 ) -> Result<usize> {
     while let Some(token) = tokens.get(index) {
-        if let Some(key) = shell_append_assignment(token) {
+        if let Some((key, _)) = shell_append_assignment(token) {
             validate_shell_append_assignment(phase, &key)?;
             index += 1;
             continue;
         }
-        let Some((key, value)) = shell_assignment(token) else {
+        let Some((key, value, is_array_target)) = shell_assignment(token) else {
             break;
         };
-        validate_shell_assignment(config, phase, &key, &value)?;
+        validate_shell_assignment(config, phase, &key, &value, is_array_target)?;
         index += 1;
     }
     Ok(index)
@@ -410,16 +410,16 @@ fn validate_export_env_mutations(
         if token.starts_with('-') {
             continue;
         }
-        if let Some(key) = shell_append_assignment(token) {
+        if let Some((key, _)) = shell_append_assignment(token) {
             validate_shell_append_assignment(phase, &key)?;
             continue;
         }
-        if let Some((key, value)) = shell_assignment(token) {
-            validate_shell_assignment(config, phase, &key, &value)?;
+        if let Some((key, value, is_array_target)) = shell_assignment(token) {
+            validate_shell_assignment(config, phase, &key, &value, is_array_target)?;
             continue;
         }
-        if is_controlled_reproducibility_key(token) {
-            return Err(command_local_env_error(phase, token));
+        if let Some(key) = controlled_reproducibility_target(token) {
+            return Err(command_local_env_error(phase, key));
         }
     }
     Ok(())
@@ -440,16 +440,16 @@ fn validate_declare_env_mutations(
         if token.starts_with('-') || token.starts_with('+') {
             continue;
         }
-        if let Some(key) = shell_append_assignment(token) {
+        if let Some((key, _)) = shell_append_assignment(token) {
             validate_shell_append_assignment(phase, &key)?;
             continue;
         }
-        if let Some((key, value)) = shell_assignment(token) {
-            validate_shell_assignment(config, phase, &key, &value)?;
+        if let Some((key, value, is_array_target)) = shell_assignment(token) {
+            validate_shell_assignment(config, phase, &key, &value, is_array_target)?;
             continue;
         }
-        if is_controlled_reproducibility_key(token) {
-            return Err(command_local_env_error(phase, token));
+        if let Some(key) = controlled_reproducibility_target(token) {
+            return Err(command_local_env_error(phase, key));
         }
     }
     Ok(())
@@ -470,8 +470,8 @@ fn validate_unset_env_mutations(phase: &str, tokens: &[String]) -> Result<()> {
         if token.starts_with('-') {
             continue;
         }
-        if is_controlled_reproducibility_key(token) {
-            return Err(command_local_env_error(phase, token));
+        if let Some(key) = controlled_reproducibility_target(token) {
+            return Err(command_local_env_error(phase, key));
         }
     }
     Ok(())
@@ -491,7 +491,7 @@ fn validate_read_env_mutations(phase: &str, tokens: &[String]) -> Result<()> {
             "-e" | "-r" | "-s" => index += 1,
             "-a" => {
                 let key = shell_wrapper_operand(phase, tokens, index, "read", token)?;
-                if is_controlled_reproducibility_key(key) {
+                if let Some(key) = controlled_reproducibility_target(key) {
                     return Err(command_local_env_error(phase, key));
                 }
                 index += 2;
@@ -514,8 +514,8 @@ fn validate_read_env_mutations(phase: &str, tokens: &[String]) -> Result<()> {
                 "hermetic reproducibility does not support read redirection in {phase} phase"
             )));
         }
-        if is_controlled_reproducibility_key(token) {
-            return Err(command_local_env_error(phase, token));
+        if let Some(key) = controlled_reproducibility_target(token) {
+            return Err(command_local_env_error(phase, key));
         }
     }
     Ok(())
@@ -558,7 +558,7 @@ fn validate_mapfile_env_mutations(phase: &str, builtin: &str, tokens: &[String])
             "hermetic reproducibility does not support {builtin} redirection in {phase} phase"
         )));
     }
-    if is_controlled_reproducibility_key(key) {
+    if let Some(key) = controlled_reproducibility_target(key) {
         return Err(command_local_env_error(phase, key));
     }
     Ok(())
@@ -572,14 +572,14 @@ fn validate_printf_env_mutations(phase: &str, tokens: &[String]) -> Result<()> {
         }
         if token == "-v" {
             let key = shell_wrapper_operand(phase, tokens, index, "printf", token)?;
-            if is_controlled_reproducibility_key(key) {
+            if let Some(key) = controlled_reproducibility_target(key) {
                 return Err(command_local_env_error(phase, key));
             }
             index += 2;
             continue;
         }
         if let Some(key) = token.strip_prefix("-v").filter(|key| !key.is_empty()) {
-            if is_controlled_reproducibility_key(key) {
+            if let Some(key) = controlled_reproducibility_target(key) {
                 return Err(command_local_env_error(phase, key));
             }
             index += 1;
@@ -606,7 +606,7 @@ fn validate_let_env_mutations(phase: &str, tokens: &[String]) -> Result<()> {
 
 fn validate_getopts_env_mutations(phase: &str, tokens: &[String]) -> Result<()> {
     if let Some(key) = tokens.get(1).map(String::as_str) {
-        if is_controlled_reproducibility_key(key) {
+        if let Some(key) = controlled_reproducibility_target(key) {
             return Err(command_local_env_error(phase, key));
         }
     }
@@ -625,15 +625,15 @@ fn validate_env_wrapper_mutations(
             continue;
         }
 
-        if let Some(key) = shell_append_assignment(token) {
+        if let Some((key, _)) = shell_append_assignment(token) {
             validate_shell_append_assignment(phase, &key)?;
             index += 1;
             continue;
         }
-        let Some((key, value)) = shell_assignment(token) else {
+        let Some((key, value, is_array_target)) = shell_assignment(token) else {
             break;
         };
-        validate_shell_assignment(config, phase, &key, &value)?;
+        validate_shell_assignment(config, phase, &key, &value, is_array_target)?;
         index += 1;
     }
 
@@ -767,9 +767,13 @@ fn validate_shell_assignment(
     phase: &str,
     key: &str,
     value: &str,
+    is_array_target: bool,
 ) -> Result<()> {
     if !is_controlled_reproducibility_key(key) {
         return Ok(());
+    }
+    if is_array_target {
+        return Err(command_local_env_error(phase, key));
     }
     if config.command_local_assignment_allowed(key, value) {
         return Ok(());
@@ -797,7 +801,15 @@ fn command_local_env_clear_error(phase: &str) -> Error {
 }
 
 fn is_controlled_reproducibility_key(key: &str) -> bool {
-    ReproducibilityConfig::controlled_env_keys().contains(&key)
+    controlled_reproducibility_target(key).is_some()
+}
+
+fn controlled_reproducibility_target(target: &str) -> Option<&'static str> {
+    let (base, _) = shell_variable_base(target)?;
+    ReproducibilityConfig::controlled_env_keys()
+        .iter()
+        .copied()
+        .find(|key| *key == base)
 }
 
 fn controlled_key_mentioned_in_expression(expression: &str) -> Option<&'static str> {
@@ -829,20 +841,27 @@ fn is_shell_identifier_char(ch: char) -> bool {
     ch == '_' || ch.is_ascii_alphanumeric()
 }
 
-fn shell_assignment(token: &str) -> Option<(String, String)> {
+fn shell_assignment(token: &str) -> Option<(String, String, bool)> {
     let (key, value) = token.split_once('=')?;
-    if key.is_empty() || key.starts_with('/') || !is_shell_env_name(key) {
-        return None;
-    }
-    Some((key.to_string(), value.to_string()))
+    let (key, is_array_target) = shell_variable_base(key)?;
+    Some((key.to_string(), value.to_string(), is_array_target))
 }
 
-fn shell_append_assignment(token: &str) -> Option<String> {
+fn shell_append_assignment(token: &str) -> Option<(String, bool)> {
     let (key, _) = token.split_once("+=")?;
-    if key.is_empty() || key.starts_with('/') || !is_shell_env_name(key) {
-        return None;
+    let (key, is_array_target) = shell_variable_base(key)?;
+    Some((key.to_string(), is_array_target))
+}
+
+fn shell_variable_base(target: &str) -> Option<(&str, bool)> {
+    if is_shell_env_name(target) {
+        return Some((target, false));
     }
-    Some(key.to_string())
+    let (base, subscript) = target.split_once('[')?;
+    if subscript.ends_with(']') && is_shell_env_name(base) {
+        return Some((base, true));
+    }
+    None
 }
 
 fn is_shell_env_name(name: &str) -> bool {
@@ -2341,6 +2360,8 @@ mod tests {
                 "SOURCE_DATE_EPOCH",
             ),
             ("SOURCE_DATE_EPOCH+=999 env", "SOURCE_DATE_EPOCH"),
+            ("SOURCE_DATE_EPOCH[0]=999 env", "SOURCE_DATE_EPOCH"),
+            ("env SOURCE_DATE_EPOCH[0]=999 make", "SOURCE_DATE_EPOCH"),
             ("export SOURCE_DATE_EPOCH+=999; make", "SOURCE_DATE_EPOCH"),
             ("declare SOURCE_DATE_EPOCH=999; make", "SOURCE_DATE_EPOCH"),
             ("declare SOURCE_DATE_EPOCH+=999; make", "SOURCE_DATE_EPOCH"),
@@ -2354,13 +2375,27 @@ mod tests {
             ("typeset -n ref=RUSTFLAGS; ref=bad; make", "nameref"),
             ("readonly SOURCE_DATE_EPOCH+=999; make", "SOURCE_DATE_EPOCH"),
             (
+                "declare SOURCE_DATE_EPOCH[0]=999; make",
+                "SOURCE_DATE_EPOCH",
+            ),
+            ("readonly RUSTFLAGS[0]+=bad; make", "RUSTFLAGS"),
+            (
                 "read SOURCE_DATE_EPOCH <<EOF\n999\nEOF\nmake",
+                "SOURCE_DATE_EPOCH",
+            ),
+            (
+                "read SOURCE_DATE_EPOCH[0] <<< 999; make",
                 "SOURCE_DATE_EPOCH",
             ),
             ("read < file SOURCE_DATE_EPOCH; make", "read redirection"),
             ("mapfile SOURCE_DATE_EPOCH; make", "SOURCE_DATE_EPOCH"),
             ("readarray CFLAGS; make", "CFLAGS"),
             ("printf -v SOURCE_DATE_EPOCH 999; make", "SOURCE_DATE_EPOCH"),
+            (
+                "printf -v SOURCE_DATE_EPOCH[0] 999; make",
+                "SOURCE_DATE_EPOCH",
+            ),
+            ("printf -v RUSTFLAGS[0] bad; make", "RUSTFLAGS"),
             ("let SOURCE_DATE_EPOCH=999; make", "SOURCE_DATE_EPOCH"),
             ("getopts ab SOURCE_DATE_EPOCH; make", "SOURCE_DATE_EPOCH"),
             ("eval 'SOURCE_DATE_EPOCH=999 make'", "eval"),
@@ -2540,10 +2575,12 @@ mod tests {
         let config = ReproducibilityConfig::new(0, Path::new("/src"), Path::new("/build"));
         let cases = [
             ("SOURCE_DATE_EPOCH+=999 env", "SOURCE_DATE_EPOCH"),
+            ("SOURCE_DATE_EPOCH[0]=999 env", "SOURCE_DATE_EPOCH"),
             ("export SOURCE_DATE_EPOCH+=999", "SOURCE_DATE_EPOCH"),
             ("declare SOURCE_DATE_EPOCH+=999", "SOURCE_DATE_EPOCH"),
             ("typeset CFLAGS+=bad", "CFLAGS"),
             ("readonly SOURCE_DATE_EPOCH+=999", "SOURCE_DATE_EPOCH"),
+            ("readonly SOURCE_DATE_EPOCH[0]+=999", "SOURCE_DATE_EPOCH"),
         ];
 
         for (segment, expected) in cases {
@@ -2574,12 +2611,19 @@ mod tests {
             ("declare -n ref=SOURCE_DATE_EPOCH; ref+=999", "nameref"),
             ("typeset CFLAGS=bad", "CFLAGS"),
             ("typeset -n ref=RUSTFLAGS", "nameref"),
+            ("declare SOURCE_DATE_EPOCH[0]=999", "SOURCE_DATE_EPOCH"),
+            ("typeset CFLAGS[0]=bad", "CFLAGS"),
             ("read -r SOURCE_DATE_EPOCH", "SOURCE_DATE_EPOCH"),
             ("read -a SOURCE_DATE_EPOCH", "SOURCE_DATE_EPOCH"),
+            ("read SOURCE_DATE_EPOCH[0] <<< 999", "SOURCE_DATE_EPOCH"),
             ("read < file SOURCE_DATE_EPOCH", "read redirection"),
             ("mapfile SOURCE_DATE_EPOCH", "SOURCE_DATE_EPOCH"),
+            ("mapfile SOURCE_DATE_EPOCH[0]", "SOURCE_DATE_EPOCH"),
             ("readarray CFLAGS", "CFLAGS"),
+            ("readarray CFLAGS[0]", "CFLAGS"),
             ("printf -v SOURCE_DATE_EPOCH 999", "SOURCE_DATE_EPOCH"),
+            ("printf -v SOURCE_DATE_EPOCH[0] 999", "SOURCE_DATE_EPOCH"),
+            ("printf -v RUSTFLAGS[0] bad", "RUSTFLAGS"),
             ("let SOURCE_DATE_EPOCH=999", "SOURCE_DATE_EPOCH"),
             ("let count=SOURCE_DATE_EPOCH+1", "SOURCE_DATE_EPOCH"),
             ("getopts ab SOURCE_DATE_EPOCH", "SOURCE_DATE_EPOCH"),
