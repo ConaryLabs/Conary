@@ -170,6 +170,7 @@ fn validate_shell_env_mutation_segment(
         let Some(command_token) = tokens.get(index).map(String::as_str) else {
             return Ok(());
         };
+        validate_no_shell_expansion(phase, command_token, "command")?;
 
         match command_basename(command_token) {
             "export" | "readonly" => {
@@ -421,6 +422,7 @@ fn validate_export_env_mutations(
     tokens: &[String],
 ) -> Result<()> {
     for token in tokens {
+        validate_no_shell_expansion(phase, token, "export")?;
         if token.starts_with('-') {
             continue;
         }
@@ -446,6 +448,7 @@ fn validate_declare_env_mutations(
     tokens: &[String],
 ) -> Result<()> {
     for token in tokens {
+        validate_no_shell_expansion(phase, token, builtin)?;
         if declare_option_enables_nameref(token) {
             return Err(Error::ConfigError(format!(
                 "hermetic reproducibility does not support {builtin} nameref option {token} in {phase} phase"
@@ -481,6 +484,7 @@ fn declare_option_enables_nameref(token: &str) -> bool {
 
 fn validate_unset_env_mutations(phase: &str, tokens: &[String]) -> Result<()> {
     for token in tokens {
+        validate_no_shell_expansion(phase, token, "unset")?;
         if token.starts_with('-') {
             continue;
         }
@@ -494,6 +498,7 @@ fn validate_unset_env_mutations(phase: &str, tokens: &[String]) -> Result<()> {
 fn validate_read_env_mutations(phase: &str, tokens: &[String]) -> Result<()> {
     let mut index = 0;
     while let Some(token) = tokens.get(index).map(String::as_str) {
+        validate_no_shell_expansion(phase, token, "read")?;
         if token == "--" {
             index += 1;
             break;
@@ -505,6 +510,7 @@ fn validate_read_env_mutations(phase: &str, tokens: &[String]) -> Result<()> {
             "-e" | "-r" | "-s" => index += 1,
             "-a" => {
                 let key = shell_wrapper_operand(phase, tokens, index, "read", token)?;
+                validate_no_shell_expansion(phase, key, "read")?;
                 if let Some(key) = controlled_reproducibility_target(key) {
                     return Err(command_local_env_error(phase, key));
                 }
@@ -523,6 +529,7 @@ fn validate_read_env_mutations(phase: &str, tokens: &[String]) -> Result<()> {
     }
 
     for token in &tokens[index..] {
+        validate_no_shell_expansion(phase, token, "read")?;
         if token.starts_with('<') {
             return Err(Error::ConfigError(format!(
                 "hermetic reproducibility does not support read redirection in {phase} phase"
@@ -538,6 +545,7 @@ fn validate_read_env_mutations(phase: &str, tokens: &[String]) -> Result<()> {
 fn validate_mapfile_env_mutations(phase: &str, builtin: &str, tokens: &[String]) -> Result<()> {
     let mut index = 0;
     while let Some(token) = tokens.get(index).map(String::as_str) {
+        validate_no_shell_expansion(phase, token, builtin)?;
         if token == "--" {
             index += 1;
             break;
@@ -567,6 +575,7 @@ fn validate_mapfile_env_mutations(phase: &str, builtin: &str, tokens: &[String])
     let Some(key) = tokens.get(index).map(String::as_str) else {
         return Ok(());
     };
+    validate_no_shell_expansion(phase, key, builtin)?;
     if key.starts_with('<') {
         return Err(Error::ConfigError(format!(
             "hermetic reproducibility does not support {builtin} redirection in {phase} phase"
@@ -581,11 +590,13 @@ fn validate_mapfile_env_mutations(phase: &str, builtin: &str, tokens: &[String])
 fn validate_printf_env_mutations(phase: &str, tokens: &[String]) -> Result<()> {
     let mut index = 0;
     while let Some(token) = tokens.get(index).map(String::as_str) {
+        validate_no_shell_expansion(phase, token, "printf")?;
         if token == "--" {
             return Ok(());
         }
         if token == "-v" {
             let key = shell_wrapper_operand(phase, tokens, index, "printf", token)?;
+            validate_no_shell_expansion(phase, key, "printf")?;
             if let Some(key) = controlled_reproducibility_target(key) {
                 return Err(command_local_env_error(phase, key));
             }
@@ -593,6 +604,7 @@ fn validate_printf_env_mutations(phase: &str, tokens: &[String]) -> Result<()> {
             continue;
         }
         if let Some(key) = token.strip_prefix("-v").filter(|key| !key.is_empty()) {
+            validate_no_shell_expansion(phase, key, "printf")?;
             if let Some(key) = controlled_reproducibility_target(key) {
                 return Err(command_local_env_error(phase, key));
             }
@@ -611,6 +623,7 @@ fn validate_printf_env_mutations(phase: &str, tokens: &[String]) -> Result<()> {
 
 fn validate_let_env_mutations(phase: &str, tokens: &[String]) -> Result<()> {
     for token in tokens {
+        validate_no_shell_expansion(phase, token, "let")?;
         if let Some(key) = controlled_key_mentioned_in_expression(token) {
             return Err(command_local_env_error(phase, key));
         }
@@ -620,6 +633,7 @@ fn validate_let_env_mutations(phase: &str, tokens: &[String]) -> Result<()> {
 
 fn validate_getopts_env_mutations(phase: &str, tokens: &[String]) -> Result<()> {
     if let Some(key) = tokens.get(1).map(String::as_str) {
+        validate_no_shell_expansion(phase, key, "getopts")?;
         if let Some(key) = controlled_reproducibility_target(key) {
             return Err(command_local_env_error(phase, key));
         }
@@ -665,6 +679,7 @@ fn validate_env_wrapper_mutations(
 ) -> Result<()> {
     let mut index = 0;
     while let Some(token) = tokens.get(index) {
+        validate_no_shell_expansion(phase, token, "env")?;
         if let Some(next_index) = validate_env_option(phase, tokens, index)? {
             index = next_index;
             continue;
@@ -811,6 +826,7 @@ fn env_option_operand<'a>(
 }
 
 fn validate_env_unset_key(phase: &str, key: &str) -> Result<()> {
+    validate_no_shell_expansion(phase, key, "env unset")?;
     if is_controlled_reproducibility_key(key) {
         return Err(command_local_env_error(phase, key));
     }
@@ -849,6 +865,7 @@ fn validate_shell_append_assignment(phase: &str, key: &str) -> Result<()> {
 
 fn validate_make_command_args(phase: &str, make: &str, args: &[String]) -> Result<()> {
     for token in args {
+        validate_no_shell_expansion(phase, token, make)?;
         if ReproducibilityConfig::is_make_eval_option(token) {
             return Err(Error::ConfigError(format!(
                 "hermetic reproducibility does not support {make} eval option {token} in {phase} phase"
@@ -862,6 +879,15 @@ fn validate_make_command_args(phase: &str, make: &str, args: &[String]) -> Resul
         if let Some(key) = ReproducibilityConfig::controlled_make_assignment_key(token) {
             return Err(command_local_env_error(phase, key));
         }
+    }
+    Ok(())
+}
+
+fn validate_no_shell_expansion(phase: &str, token: &str, context: &str) -> Result<()> {
+    if token.contains('$') {
+        return Err(Error::ConfigError(format!(
+            "hermetic reproducibility does not support shell expansion in {context} token {token} in {phase} phase"
+        )));
     }
     Ok(())
 }
@@ -2491,6 +2517,19 @@ mod tests {
             ("MAKEFLAGS=-Ievil make", "MAKEFLAGS"),
             ("GNUMAKEFLAGS=--include-dir=evil make", "GNUMAKEFLAGS"),
             ("make --inc=evil", "--inc"),
+            (
+                "name=SOURCE_DATE_EPOCH; export $name=999; make",
+                "shell expansion",
+            ),
+            ("export${IFS}SOURCE_DATE_EPOCH=999; make", "shell expansion"),
+            ("ARGS=SOURCE_DATE_EPOCH=999; make $ARGS", "shell expansion"),
+            ("OPT=--inc=evil; make $OPT", "shell expansion"),
+            (
+                "BAD=SOURCE_DATE_EPOCH=999; MAKEFLAGS=$BAD make",
+                "MAKEFLAGS",
+            ),
+            ("env -u $KEY make", "shell expansion"),
+            ("printf -v $name 999; make", "shell expansion"),
             (
                 "command env SOURCE_DATE_EPOCH=999 make",
                 "SOURCE_DATE_EPOCH",
