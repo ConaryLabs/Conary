@@ -223,31 +223,11 @@ fn validate_env_wrapper_mutations(
 ) -> Result<()> {
     let mut index = 0;
     while let Some(token) = tokens.get(index) {
-        if token == "--" {
-            break;
-        }
-        if token == "--ignore-environment" {
-            return Err(command_local_env_clear_error(phase));
-        }
-        if let Some(key) = token.strip_prefix("--unset=") {
-            validate_env_unset_key(phase, key)?;
-            index += 1;
-            continue;
-        }
-        if token == "--unset" || token == "-u" {
-            let Some(key) = tokens.get(index + 1) else {
-                return Err(Error::ConfigError(format!(
-                    "hermetic reproducibility rejects env {token} without a key in {phase} phase"
-                )));
-            };
-            validate_env_unset_key(phase, key)?;
-            index += 2;
-            continue;
-        }
-        if let Some(next_index) = validate_short_env_options(phase, tokens, index)? {
+        if let Some(next_index) = validate_env_option(phase, tokens, index)? {
             index = next_index;
             continue;
         }
+
         let Some((key, value)) = shell_assignment(token) else {
             break;
         };
@@ -257,13 +237,43 @@ fn validate_env_wrapper_mutations(
     Ok(())
 }
 
-fn validate_short_env_options(
-    phase: &str,
-    tokens: &[String],
-    index: usize,
-) -> Result<Option<usize>> {
+fn validate_env_option(phase: &str, tokens: &[String], index: usize) -> Result<Option<usize>> {
     let token = &tokens[index];
-    if !token.starts_with('-') || token.starts_with("--") || token == "-" {
+    if token == "--" {
+        return Ok(None);
+    }
+    if token == "-" || token == "--ignore-environment" {
+        return Err(command_local_env_clear_error(phase));
+    }
+    if let Some(key) = token.strip_prefix("--unset=") {
+        validate_env_unset_key(phase, key)?;
+        return Ok(Some(index + 1));
+    }
+    if token == "--unset" || token == "-u" {
+        let key = env_option_operand(phase, tokens, index, token)?;
+        validate_env_unset_key(phase, key)?;
+        return Ok(Some(index + 2));
+    }
+    if token == "--debug" {
+        return Ok(Some(index + 1));
+    }
+    if token == "-C" || token == "-a" || token == "-S" {
+        env_option_operand(phase, tokens, index, token)?;
+        return Ok(Some(index + 2));
+    }
+    for option in ["--chdir", "--argv0", "--split-string"] {
+        if token == option {
+            env_option_operand(phase, tokens, index, token)?;
+            return Ok(Some(index + 2));
+        }
+        if token
+            .strip_prefix(option)
+            .is_some_and(|rest| rest.starts_with('='))
+        {
+            return Ok(Some(index + 1));
+        }
+    }
+    if !token.starts_with('-') || token.starts_with("--") {
         return Ok(None);
     }
 
@@ -292,13 +302,28 @@ fn validate_short_env_options(
             }
             _ => {
                 if chars.peek().is_none() {
-                    return Ok(Some(index + 1));
+                    return Err(Error::ConfigError(format!(
+                        "hermetic reproducibility does not support env option -{option} in {phase} phase"
+                    )));
                 }
             }
         }
     }
 
-    Ok(Some(index + 1))
+    Ok(None)
+}
+
+fn env_option_operand<'a>(
+    phase: &str,
+    tokens: &'a [String],
+    index: usize,
+    option: &str,
+) -> Result<&'a str> {
+    tokens.get(index + 1).map(String::as_str).ok_or_else(|| {
+        Error::ConfigError(format!(
+            "hermetic reproducibility rejects env {option} without an operand in {phase} phase"
+        ))
+    })
 }
 
 fn validate_env_unset_key(phase: &str, key: &str) -> Result<()> {
@@ -1759,6 +1784,27 @@ mod tests {
             ("env --unset=RUSTFLAGS make", "RUSTFLAGS"),
             ("/usr/bin/env -u CFLAGS make", "CFLAGS"),
             ("env -iu SOURCE_DATE_EPOCH make", "environment"),
+            ("env - make", "environment"),
+            (
+                "env -C /tmp SOURCE_DATE_EPOCH=999 make",
+                "SOURCE_DATE_EPOCH",
+            ),
+            (
+                "env --chdir=/tmp SOURCE_DATE_EPOCH=999 make",
+                "SOURCE_DATE_EPOCH",
+            ),
+            (
+                "env -a custom SOURCE_DATE_EPOCH=999 make",
+                "SOURCE_DATE_EPOCH",
+            ),
+            (
+                "env --argv0=custom SOURCE_DATE_EPOCH=999 make",
+                "SOURCE_DATE_EPOCH",
+            ),
+            (
+                "env --debug SOURCE_DATE_EPOCH=999 make",
+                "SOURCE_DATE_EPOCH",
+            ),
             (
                 "export RUSTFLAGS=--remap-path-prefix=/src=/build/source-old; make",
                 "RUSTFLAGS",
