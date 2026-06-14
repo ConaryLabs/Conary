@@ -15,6 +15,7 @@ mod cook;
 pub mod local_source;
 pub mod makedepends;
 pub mod provenance_capture;
+mod reproducibility_env;
 
 pub use config::{
     CookResult, KitchenConfig, SourceChecksumPolicy, SourceDownloadPolicy, StageConfig,
