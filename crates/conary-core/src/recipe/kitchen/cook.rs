@@ -279,8 +279,9 @@ impl<'a> Cook<'a> {
         // Fetch patches -- all remote patches MUST have checksums
         if let Some(patches) = &self.recipe.patches {
             for patch in &patches.files {
-                if is_remote_url(&patch.file) {
-                    let filename = patch.file.split('/').next_back().unwrap_or("patch.diff");
+                let patch_file = self.recipe.substitute(&patch.file, "");
+                if is_remote_url(&patch_file) {
+                    let filename = patch_file.split('/').next_back().unwrap_or("patch.diff");
                     let local_path = self.build_dir.as_path().join("patches").join(filename);
                     fs::create_dir_all(local_path.parent().unwrap())?;
 
@@ -293,10 +294,10 @@ impl<'a> Cook<'a> {
                             patch.file
                         ))
                     })?;
-                    let path = self.kitchen.fetch_source(&patch.file, checksum)?;
+                    let path = self.kitchen.fetch_source(&patch_file, checksum)?;
                     fs::copy(&path, &local_path)?;
 
-                    self.log_line(&format!("Fetched patch: {}", patch.file));
+                    self.log_line(&format!("Fetched patch: {}", patch_file));
                 }
             }
         }
@@ -394,17 +395,15 @@ impl<'a> Cook<'a> {
         };
 
         for patch_info in patches {
-            let patch_path = if is_remote_url(&patch_info.file) {
-                let filename = patch_info
-                    .file
-                    .split('/')
-                    .next_back()
-                    .unwrap_or("patch.diff");
+            let patch_file = self.recipe.substitute(&patch_info.file, "");
+            let patch_path = if is_remote_url(&patch_file) {
+                let filename = patch_file.split('/').next_back().unwrap_or("patch.diff");
                 self.build_dir.as_path().join("patches").join(filename)
             } else {
                 resolve_local_patch_path(
                     self.kitchen.config.recipe_source_base_dir.as_deref(),
-                    &patch_info.file,
+                    &patch_file,
+                    self.kitchen.config.hermetic_evidence.is_some(),
                 )?
             };
 
@@ -418,13 +417,13 @@ impl<'a> Cook<'a> {
             // Read patch content for provenance hashing
             let patch_content = fs::read(&patch_path).unwrap_or_default();
 
-            info!("Applying patch: {}", patch_info.file);
+            info!("Applying patch: {}", patch_file);
             apply_patch(&self.source_dir, &patch_path, patch_info.strip)?;
-            self.log_line(&format!("Applied patch: {}", patch_info.file));
+            self.log_line(&format!("Applied patch: {}", patch_file));
 
             // Record patch for provenance
             self.provenance.record_patch(
-                &patch_info.file,
+                &patch_file,
                 &patch_content,
                 patch_info.strip,
                 None, // Author not typically in recipe
@@ -826,9 +825,16 @@ impl<'a> Cook<'a> {
 fn resolve_local_patch_path(
     recipe_source_base_dir: Option<&Path>,
     patch_file: &str,
+    require_recipe_source_base_dir: bool,
 ) -> Result<PathBuf> {
     let relative_patch = clean_relative_local_patch_path(patch_file)?;
     let Some(recipe_source_base_dir) = recipe_source_base_dir else {
+        if require_recipe_source_base_dir {
+            return Err(Error::ConfigError(
+                "hermetic local patch application requires recipe source base dir (KitchenConfig.recipe_source_base_dir)"
+                    .to_string(),
+            ));
+        }
         return Ok(relative_patch);
     };
 
@@ -903,6 +909,11 @@ mod tests {
         RemoteSourceSection, SourceSection,
     };
     use crate::recipe::hermetic::source_identity::{CiMode, canonical_local_file_list};
+    use crate::recipe::hermetic::{
+        BuildCommandRiskReport, BuildInputIdentity, BuilderEnvironmentIdentity,
+        BuilderEnvironmentKind, DependencyLock, EcosystemPolicyReport, HERMETIC_EVIDENCE_SCHEMA_V1,
+        HermeticBuildEvidence, RecipeIdentity, ReproducibilityRecord, SourceIdentity,
+    };
     use crate::recipe::kitchen::KitchenConfig;
     use std::collections::HashMap;
     use std::sync::{LazyLock, Mutex};
@@ -1223,6 +1234,73 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_patch_local_path_substitutes_recipe_variables() {
+        let dir = tempfile::tempdir().unwrap();
+        let recipe_dir = dir.path().join("recipe");
+        let patch_dir = recipe_dir.join("patches");
+        std::fs::create_dir_all(&patch_dir).unwrap();
+        std::fs::write(
+            patch_dir.join("1.0.0.patch"),
+            r#"--- file.txt
++++ file.txt
+@@ -1 +1 @@
+-old
++new
+"#,
+        )
+        .unwrap();
+
+        let kitchen = Kitchen::new(KitchenConfig {
+            recipe_source_base_dir: Some(recipe_dir),
+            use_isolation: false,
+            ..KitchenConfig::default()
+        });
+        let mut recipe = minimal_recipe();
+        recipe.patches = Some(PatchSection {
+            files: vec![PatchInfo {
+                file: "patches/%(version)s.patch".to_string(),
+                checksum: None,
+                strip: 0,
+                condition: None,
+            }],
+        });
+
+        let mut cook = Cook::new(&kitchen, &recipe).unwrap();
+        std::fs::write(cook.source_dir.join("file.txt"), "old\n").unwrap();
+
+        cook.patch().unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(cook.source_dir.join("file.txt")).unwrap(),
+            "new\n"
+        );
+    }
+
+    #[test]
+    fn test_hermetic_local_patch_requires_recipe_source_base_dir() {
+        let kitchen = Kitchen::new(KitchenConfig {
+            hermetic_evidence: Some(dummy_hermetic_evidence()),
+            use_isolation: false,
+            ..KitchenConfig::default()
+        });
+        let mut recipe = minimal_recipe();
+        recipe.patches = Some(PatchSection {
+            files: vec![PatchInfo {
+                file: "patches/fix.patch".to_string(),
+                checksum: None,
+                strip: 0,
+                condition: None,
+            }],
+        });
+        let mut cook = Cook::new(&kitchen, &recipe).unwrap();
+
+        let error = cook.patch().unwrap_err();
+
+        assert!(error.to_string().contains("hermetic"));
+        assert!(error.to_string().contains("recipe source base dir"));
+    }
+
     #[cfg(unix)]
     #[test]
     fn test_prep_isolated_local_path_source_rejects_nested_relative_symlink_escape() {
@@ -1331,5 +1409,43 @@ mod tests {
             translate_command_for_chroot(command, sysroot),
             "mkdir -p /var/tmp/dest && touch /var/tmp/dest/ok"
         );
+    }
+
+    fn dummy_hermetic_evidence() -> HermeticBuildEvidence {
+        HermeticBuildEvidence {
+            schema_version: HERMETIC_EVIDENCE_SCHEMA_V1,
+            build_input: BuildInputIdentity {
+                recipe: RecipeIdentity::ExplicitRecipe {
+                    path: "recipe.toml".to_string(),
+                    hash: "sha256:recipe".to_string(),
+                },
+                source: SourceIdentity::Archive {
+                    url: "https://example.invalid/test.tar.gz".to_string(),
+                    checksum: "sha256:source".to_string(),
+                },
+                additional_sources: Vec::new(),
+                patches: Vec::new(),
+                local_tree: None,
+                ecosystem_dependencies: Vec::new(),
+                builder_environment: BuilderEnvironmentIdentity {
+                    kind: BuilderEnvironmentKind::Pristine,
+                    sysroot_hash: Some(
+                        "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+                            .to_string(),
+                    ),
+                    toolchain_hash: None,
+                    diagnostics: Vec::new(),
+                },
+            },
+            dependency_lock: DependencyLock::default(),
+            ecosystem_policy: EcosystemPolicyReport::clean("unknown"),
+            command_risk: BuildCommandRiskReport::clean(),
+            reproducibility: ReproducibilityRecord {
+                source_date_epoch: None,
+                path_remap_count: 0,
+                env_keys: Vec::new(),
+            },
+            diagnostics: Vec::new(),
+        }
     }
 }

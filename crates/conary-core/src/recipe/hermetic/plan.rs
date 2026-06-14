@@ -27,6 +27,7 @@ pub struct HermeticBuildPlan {
     pub evidence: HermeticBuildEvidence,
     pub local_files: Option<Vec<CanonicalLocalFile>>,
     pub reproducibility: ReproducibilityConfig,
+    pub recipe_source_base_dir: PathBuf,
 }
 
 #[derive(Debug, Clone)]
@@ -131,6 +132,7 @@ impl HermeticBuildPlan {
     ) -> Result<Self> {
         validate_builder_environment(&input.builder_environment)?;
 
+        let recipe_source_base_dir = input.recipe_source_base_dir.clone();
         let mut diagnostics = input.builder_environment.diagnostics.clone();
         let (source, local_tree, local_files, source_root, source_diagnostics) =
             source_identity_for_recipe(recipe, &input.recipe_source_base_dir, ci_mode)?;
@@ -217,6 +219,7 @@ impl HermeticBuildPlan {
             evidence,
             local_files,
             reproducibility,
+            recipe_source_base_dir,
         })
     }
 
@@ -228,6 +231,7 @@ impl HermeticBuildPlan {
         config.cleanup_makedepends = false;
         config.checksum_policy = SourceChecksumPolicy::Supported;
         config.source_download_policy = SourceDownloadPolicy::OfflineCacheOnly;
+        config.recipe_source_base_dir = Some(self.recipe_source_base_dir.clone());
         config.hermetic_evidence = Some(self.evidence.clone());
         config.hermetic_local_files = self.local_files.clone();
         config.reproducibility = Some(self.reproducibility.clone());
@@ -690,6 +694,10 @@ mod tests {
         assert_eq!(config.hermetic_evidence, Some(plan.evidence.clone()));
         assert_eq!(config.hermetic_local_files, plan.local_files);
         assert_eq!(config.reproducibility, Some(plan.reproducibility));
+        assert_eq!(
+            config.recipe_source_base_dir,
+            Some(fixture.path().to_path_buf())
+        );
     }
 
     #[test]
@@ -865,6 +873,39 @@ mod tests {
 
         assert!(error.to_string().contains("local patch"));
         assert!(error.to_string().contains("relative"));
+    }
+
+    #[test]
+    fn hermetic_plan_records_substituted_local_patch_identity() {
+        let fixture = cargo_project_with_lock(".");
+        let patch_dir = fixture.path().join("patches");
+        fs::create_dir_all(&patch_dir).unwrap();
+        let patch_bytes = b"diff --git a/file.txt b/file.txt\n";
+        fs::write(patch_dir.join("0.1.0.patch"), patch_bytes).unwrap();
+        let mut recipe = fixture.recipe.clone();
+        recipe.patches = Some(PatchSection {
+            files: vec![PatchInfo {
+                file: "patches/%(version)s.patch".to_string(),
+                checksum: None,
+                strip: 1,
+                condition: None,
+            }],
+        });
+        let input = HermeticBuildInput::explicit_recipe(
+            fixture.path(),
+            fixture.recipe_path(),
+            "sha256:recipe",
+        )
+        .with_pristine_builder_environment(
+            Some(TEST_SYSROOT_IDENTITY),
+            Some(TEST_TOOLCHAIN_IDENTITY),
+        );
+
+        let plan = HermeticBuildPlan::from_recipe(&recipe, input, CiMode::Off).unwrap();
+        let patch = &plan.evidence.build_input.patches[0];
+
+        assert!(patch.path.ends_with("patches/0.1.0.patch"));
+        assert_eq!(patch.hash, crate::hash::sha256_prefixed(patch_bytes));
     }
 
     #[test]
