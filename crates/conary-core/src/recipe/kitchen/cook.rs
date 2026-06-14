@@ -118,6 +118,8 @@ fn validate_command_local_reproducibility_env(
     phase: &str,
     command: &str,
 ) -> Result<()> {
+    validate_shell_env_mutations(config, phase, command)?;
+
     for invocation in extract_invocations_from_shell_text(phase, command, Some(phase)) {
         for fact in invocation.environment {
             if !ReproducibilityConfig::controlled_env_keys().contains(&fact.name.as_str()) {
@@ -134,6 +136,218 @@ fn validate_command_local_reproducibility_env(
     }
 
     Ok(())
+}
+
+fn validate_shell_env_mutations(
+    config: &ReproducibilityConfig,
+    phase: &str,
+    command: &str,
+) -> Result<()> {
+    for line in command.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        for segment in split_shell_env_segments(line) {
+            validate_shell_env_mutation_segment(config, phase, &segment)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_shell_env_mutation_segment(
+    config: &ReproducibilityConfig,
+    phase: &str,
+    segment: &str,
+) -> Result<()> {
+    let tokens: Vec<String> = segment.split_whitespace().map(clean_shell_token).collect();
+    let mut index = 0;
+
+    while let Some(token) = tokens.get(index) {
+        let Some((key, value)) = shell_assignment(token) else {
+            break;
+        };
+        validate_shell_assignment(config, phase, &key, &value)?;
+        index += 1;
+    }
+
+    let Some(command_token) = tokens.get(index).map(String::as_str) else {
+        return Ok(());
+    };
+
+    match command_basename(command_token) {
+        "export" => validate_export_env_mutations(config, phase, &tokens[index + 1..]),
+        "unset" => validate_unset_env_mutations(phase, &tokens[index + 1..]),
+        "env" => validate_env_wrapper_mutations(config, phase, &tokens[index + 1..]),
+        _ => Ok(()),
+    }
+}
+
+fn validate_export_env_mutations(
+    config: &ReproducibilityConfig,
+    phase: &str,
+    tokens: &[String],
+) -> Result<()> {
+    for token in tokens {
+        if token.starts_with('-') {
+            continue;
+        }
+        if let Some((key, value)) = shell_assignment(token) {
+            validate_shell_assignment(config, phase, &key, &value)?;
+            continue;
+        }
+        if is_controlled_reproducibility_key(token) {
+            return Err(command_local_env_error(phase, token));
+        }
+    }
+    Ok(())
+}
+
+fn validate_unset_env_mutations(phase: &str, tokens: &[String]) -> Result<()> {
+    for token in tokens {
+        if token.starts_with('-') {
+            continue;
+        }
+        if is_controlled_reproducibility_key(token) {
+            return Err(command_local_env_error(phase, token));
+        }
+    }
+    Ok(())
+}
+
+fn validate_env_wrapper_mutations(
+    config: &ReproducibilityConfig,
+    phase: &str,
+    tokens: &[String],
+) -> Result<()> {
+    for token in tokens {
+        if token.starts_with('-') {
+            continue;
+        }
+        let Some((key, value)) = shell_assignment(token) else {
+            break;
+        };
+        validate_shell_assignment(config, phase, &key, &value)?;
+    }
+    Ok(())
+}
+
+fn validate_shell_assignment(
+    config: &ReproducibilityConfig,
+    phase: &str,
+    key: &str,
+    value: &str,
+) -> Result<()> {
+    if !is_controlled_reproducibility_key(key) {
+        return Ok(());
+    }
+    if config.command_local_assignment_allowed(key, value) {
+        return Ok(());
+    }
+    Err(command_local_env_error(phase, key))
+}
+
+fn command_local_env_error(phase: &str, key: &str) -> Error {
+    Error::ConfigError(format!(
+        "hermetic reproducibility rejects command-local {key} assignment in {phase} phase"
+    ))
+}
+
+fn is_controlled_reproducibility_key(key: &str) -> bool {
+    ReproducibilityConfig::controlled_env_keys().contains(&key)
+}
+
+fn shell_assignment(token: &str) -> Option<(String, String)> {
+    let (key, value) = token.split_once('=')?;
+    if key.is_empty() || key.starts_with('/') || !is_shell_env_name(key) {
+        return None;
+    }
+    Some((key.to_string(), value.to_string()))
+}
+
+fn is_shell_env_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !(first == '_' || first.is_ascii_alphabetic()) {
+        return false;
+    }
+    chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+}
+
+fn command_basename(command: &str) -> &str {
+    command.rsplit('/').next().unwrap_or(command)
+}
+
+fn clean_shell_token(token: &str) -> String {
+    token
+        .trim_matches(|ch: char| matches!(ch, '"' | '\''))
+        .to_string()
+}
+
+fn split_shell_env_segments(line: &str) -> Vec<String> {
+    let mut segments = Vec::new();
+    let mut current = String::new();
+    let mut chars = line.chars().peekable();
+    let mut quote = None;
+    let mut escaped = false;
+
+    while let Some(ch) = chars.next() {
+        if escaped {
+            current.push(ch);
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' {
+            current.push(ch);
+            escaped = true;
+            continue;
+        }
+        if let Some(quote_ch) = quote {
+            current.push(ch);
+            if ch == quote_ch {
+                quote = None;
+            }
+            continue;
+        }
+        if ch == '"' || ch == '\'' {
+            current.push(ch);
+            quote = Some(ch);
+            continue;
+        }
+
+        match ch {
+            '&' if chars.peek() == Some(&'&') => {
+                chars.next();
+                push_shell_env_segment(&mut segments, &mut current);
+            }
+            '|' => {
+                if chars.peek() == Some(&'|') {
+                    chars.next();
+                }
+                push_shell_env_segment(&mut segments, &mut current);
+            }
+            ';' | '(' | ')' | '`' => push_shell_env_segment(&mut segments, &mut current),
+            '$' if chars.peek() == Some(&'(') => {
+                chars.next();
+                push_shell_env_segment(&mut segments, &mut current);
+            }
+            _ => current.push(ch),
+        }
+    }
+
+    push_shell_env_segment(&mut segments, &mut current);
+    segments
+}
+
+fn push_shell_env_segment(segments: &mut Vec<String>, current: &mut String) {
+    let segment = current.trim();
+    if !segment.is_empty() {
+        segments.push(segment.to_string());
+    }
+    current.clear();
 }
 
 /// A single cook operation
@@ -510,12 +724,6 @@ impl<'a> Cook<'a> {
             env.push((key.clone(), value.clone()));
         }
 
-        let env = if let Some(config) = self.reproducibility_config_for_execution() {
-            config.merge_env(env)?
-        } else {
-            env
-        };
-
         // Run setup if specified
         if let Some(setup) = &build.setup {
             self.run_build_step("setup", setup, &workdir, &env)?;
@@ -541,6 +749,7 @@ impl<'a> Cook<'a> {
         if let Some(check) = &build.check {
             match self.run_build_step("check", check, &workdir, &env) {
                 Ok(_) => {}
+                Err(e) if self.hermetic_controls_active() => return Err(e),
                 Err(e) => {
                     self.warnings.push(format!("Tests failed: {}", e));
                 }
@@ -574,10 +783,15 @@ impl<'a> Cook<'a> {
         info!("Running {} phase", phase);
         debug!("Command: {}", command);
 
-        if let Some(config) = self.reproducibility_config_for_execution() {
-            config.validate_final_env(env)?;
+        let final_env;
+        let env = if let Some(config) = self.reproducibility_config_for_execution() {
+            final_env = config.merge_env(env.to_vec())?;
+            config.validate_final_env(&final_env)?;
             validate_command_local_reproducibility_env(&config, phase, command)?;
-        }
+            final_env.as_slice()
+        } else {
+            env
+        };
 
         if self.kitchen.config.use_isolation {
             self.run_build_step_isolated(phase, command, workdir, env)
@@ -775,11 +989,22 @@ impl<'a> Cook<'a> {
     }
 
     fn reproducibility_config_for_execution(&self) -> Option<ReproducibilityConfig> {
-        self.kitchen
-            .config
-            .reproducibility
-            .as_ref()
-            .map(|config| config.with_roots(&self.source_dir, self.build_dir.as_path()))
+        self.kitchen.config.reproducibility.as_ref().map(|config| {
+            if let Some(sysroot) = &self.kitchen.config.sysroot
+                && !self.kitchen.config.use_isolation
+            {
+                return config.with_roots(
+                    &translate_path_for_chroot(&self.source_dir, sysroot),
+                    &translate_path_for_chroot(self.build_dir.as_path(), sysroot),
+                );
+            }
+            config.with_roots(&self.source_dir, self.build_dir.as_path())
+        })
+    }
+
+    fn hermetic_controls_active(&self) -> bool {
+        self.kitchen.config.reproducibility.is_some()
+            || self.kitchen.config.hermetic_evidence.is_some()
     }
 
     /// Phase 4: Plate - package the result as CCS
@@ -1108,6 +1333,42 @@ mod tests {
     }
 
     #[test]
+    fn test_chroot_reproducibility_config_uses_compiler_visible_roots() {
+        let dir = tempfile::tempdir().unwrap();
+        let sysroot = dir.path().join("sysroot");
+        let dest = sysroot.join("dest");
+        let kitchen = Kitchen::new(KitchenConfig {
+            sysroot: Some(sysroot.clone()),
+            reproducibility: Some(ReproducibilityConfig::default()),
+            use_isolation: false,
+            ..KitchenConfig::default()
+        });
+        let recipe = minimal_recipe();
+        let cook = Cook::new_with_dest(&kitchen, &recipe, &dest).unwrap();
+
+        let config = cook.reproducibility_config_for_execution().unwrap();
+        let env = config.env_vars();
+        let rustflags = env
+            .iter()
+            .find(|(key, _)| key == "RUSTFLAGS")
+            .unwrap()
+            .1
+            .as_str();
+        let cflags = env
+            .iter()
+            .find(|(key, _)| key == "CFLAGS")
+            .unwrap()
+            .1
+            .as_str();
+        let sysroot_text = sysroot.to_string_lossy();
+
+        assert!(!rustflags.contains(sysroot_text.as_ref()));
+        assert!(!cflags.contains(sysroot_text.as_ref()));
+        assert!(rustflags.contains("--remap-path-prefix=/var/tmp/conary-derivation-build/"));
+        assert!(cflags.contains("-ffile-prefix-map=/var/tmp/conary-derivation-build/"));
+    }
+
+    #[test]
     fn test_prep_host_local_path_source_uses_workspace_as_source_root() {
         let dir = tempfile::tempdir().unwrap();
         let recipe_dir = dir.path().join("recipe");
@@ -1393,6 +1654,52 @@ mod tests {
         });
         let mut recipe = minimal_recipe();
         recipe.build.make = Some("SOURCE_DATE_EPOCH=999 true".to_string());
+        let mut cook = Cook::new(&kitchen, &recipe).unwrap();
+
+        let error = cook.simmer().unwrap_err();
+
+        assert!(error.to_string().contains("SOURCE_DATE_EPOCH"));
+        assert!(error.to_string().contains("command-local"));
+    }
+
+    #[test]
+    fn test_hermetic_command_validation_rejects_shell_env_mutation_forms() {
+        let config = ReproducibilityConfig::new(0, Path::new("/src"), Path::new("/build"));
+        let cases = [
+            ("SOURCE_DATE_EPOCH=999; make", "SOURCE_DATE_EPOCH"),
+            ("export SOURCE_DATE_EPOCH=999; make", "SOURCE_DATE_EPOCH"),
+            ("unset SOURCE_DATE_EPOCH; make", "SOURCE_DATE_EPOCH"),
+            (
+                "/usr/bin/env SOURCE_DATE_EPOCH=999 make",
+                "SOURCE_DATE_EPOCH",
+            ),
+            (
+                "export RUSTFLAGS=--remap-path-prefix=/src=/build/source-old; make",
+                "RUSTFLAGS",
+            ),
+        ];
+
+        for (command, key) in cases {
+            let error =
+                validate_command_local_reproducibility_env(&config, "make", command).unwrap_err();
+            assert!(
+                error.to_string().contains(key),
+                "expected {key} rejection for {command}, got: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_hermetic_check_phase_env_guard_fails_closed() {
+        let kitchen = Kitchen::new(KitchenConfig {
+            hermetic_evidence: Some(dummy_hermetic_evidence()),
+            reproducibility: Some(ReproducibilityConfig::default()),
+            pristine_mode: true,
+            use_isolation: false,
+            ..KitchenConfig::default()
+        });
+        let mut recipe = minimal_recipe();
+        recipe.build.check = Some("SOURCE_DATE_EPOCH=999 true".to_string());
         let mut cook = Cook::new(&kitchen, &recipe).unwrap();
 
         let error = cook.simmer().unwrap_err();
