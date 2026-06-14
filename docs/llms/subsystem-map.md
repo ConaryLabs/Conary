@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-06-14
-revision: 21
-summary: Route M2 publish hardening design
+revision: 22
+summary: Route M2a hermetic cook and project-form publish
 ---
 
 # Assistant Subsystem Map
@@ -25,15 +25,22 @@ summary: Route M2 publish hardening design
   `docs/specs/static-repo-format-v1.md`,
   `docs/superpowers/specs/2026-06-10-packaging-toolchain-design.md`,
   `docs/superpowers/specs/2026-06-13-m2-publish-hardening-remi-design.md`,
+  `docs/superpowers/specs/2026-06-14-m2a-builder-config-publish-divergence-design.md`,
+  `docs/superpowers/plans/2026-06-14-m2a-hermetic-publish-foundation-implementation-plan.md`,
   `docs/guides/first-package.md`,
   `crates/conary-core/src/recipe/inference/`,
+  `crates/conary-core/src/recipe/hermetic/`,
+  `crates/conary-core/src/recipe/kitchen/`,
   `crates/conary-core/src/db/models/try_session.rs`,
   `apps/conary/src/commands/new.rs`,
   `apps/conary/src/commands/publish.rs`,
   `apps/conary/src/commands/cook.rs`,
+  `apps/conary/src/commands/hermetic_config.rs`,
+  `apps/conary/src/commands/hermetic_state.rs`,
   `apps/conary/src/commands/try_session.rs`,
   `apps/conary/src/commands/repo_static.rs`,
   `apps/conary/tests/packaging_m1b.rs`,
+  `apps/conary/tests/packaging_m2a.rs`,
   `crates/conary-core/src/repository/static_repo/`,
   `crates/conary-core/src/trust/`, and
   `crates/conary-core/src/ccs/signing.rs`
@@ -147,6 +154,8 @@ summary: Route M2 publish hardening design
 - CCS package building, chunking, verification, conversion, install, and
   fixture proof:
   `crates/conary-core/src/ccs/builder.rs`,
+  `crates/conary-core/src/ccs/manifest.rs`,
+  `crates/conary-core/src/ccs/manifest_provenance.rs`,
   `crates/conary-core/src/ccs/binary_manifest.rs`,
   `crates/conary-core/src/ccs/chunking.rs`,
   `crates/conary-core/src/ccs/convert/`,

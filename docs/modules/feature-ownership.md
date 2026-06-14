@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-06-12
-revision: 9
-summary: Add M1b package authoring and try ownership
+last_updated: 2026-06-14
+revision: 10
+summary: Add M2a hermetic cook and project-form publish ownership
 ---
 
 # Feature Ownership And Interaction Gates
@@ -325,15 +325,22 @@ pinned by the repository.
 **Start here:** `docs/specs/static-repo-format-v1.md`;
 `docs/superpowers/specs/2026-06-10-packaging-toolchain-design.md`;
 `docs/superpowers/specs/2026-06-13-m2-publish-hardening-remi-design.md`;
+`docs/superpowers/specs/2026-06-14-m2a-builder-config-publish-divergence-design.md`;
+`docs/superpowers/plans/2026-06-14-m2a-hermetic-publish-foundation-implementation-plan.md`;
 `docs/guides/first-package.md`;
 `crates/conary-core/src/recipe/inference/`;
+`crates/conary-core/src/recipe/hermetic/`;
+`crates/conary-core/src/recipe/kitchen/`;
 `crates/conary-core/src/db/models/try_session.rs`;
 `apps/conary/src/commands/new.rs`;
 `apps/conary/src/commands/publish.rs`;
 `apps/conary/src/commands/cook.rs`;
+`apps/conary/src/commands/hermetic_config.rs`;
+`apps/conary/src/commands/hermetic_state.rs`;
 `apps/conary/src/commands/try_session.rs`;
 `apps/conary/src/commands/repo_static.rs`;
 `apps/conary/tests/packaging_m1b.rs`;
+`apps/conary/tests/packaging_m2a.rs`;
 `crates/conary-core/src/repository/static_repo/`;
 `crates/conary-core/src/trust/`;
 `crates/conary-core/src/ccs/signing.rs`.
@@ -346,9 +353,12 @@ orchestration, CCS signing/verification, TUF metadata verification, and
 docs-audit truth gates.
 
 **Focused proof:** `cargo test -p conary-core repository::static_repo`;
+`cargo test -p conary-core recipe::hermetic`;
+`cargo test -p conary-core recipe::kitchen`;
 `cargo test -p conary-core trust::client`;
 `cargo test -p conary-core trust::verify`;
 `cargo test -p conary --test static_repo_m1a`;
+`cargo test -p conary --test packaging_m2a`;
 `cargo test -p conary --test packaging_m1b`.
 
 **Interaction gate:** `cargo test -p conary-core`;
@@ -360,6 +370,7 @@ publish, trust establishment, sync, install, or package-signing boundaries.
 **Docs to update:** `docs/specs/static-repo-format-v1.md`;
 `docs/superpowers/specs/2026-06-10-packaging-toolchain-design.md`;
 `docs/superpowers/specs/2026-06-13-m2-publish-hardening-remi-design.md`;
+`docs/superpowers/specs/2026-06-14-m2a-builder-config-publish-divergence-design.md`;
 `docs/guides/first-package.md`;
 `docs/ARCHITECTURE.md`; `docs/llms/subsystem-map.md`;
 `docs/modules/feature-ownership.md`.
@@ -367,7 +378,11 @@ publish, trust establishment, sync, install, or package-signing boundaries.
 **Safety notes:** keep `conary new`, `conary try`, and `cook --explain`
 visibility aligned with the active rollout gate; try rollback/keep decisions
 operate on the selected database/runtime and must preserve the one-active-session
-invariant. Never parse static `index.json` or
+invariant. After M2a, `conary cook --isolated` and project-form
+`conary publish <target>` must use hermetic Kitchen execution before emitting
+`hardening_level = "hermetic"`; unsigned hermetic evidence is not a signed
+build-attestation envelope; `conary publish <pkg.ccs> <target>` must keep
+rejecting until M2b. Never parse static `index.json` or
 `keys/package-keys.json` before TUF target length/hash verification succeeds;
 do not allow `--allow-unsigned` to bypass static repository package signature
 checks; keep static repo GPG and TUF trust surfaces separate; retired package
