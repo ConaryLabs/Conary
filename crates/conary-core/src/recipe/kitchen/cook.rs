@@ -175,6 +175,18 @@ fn validate_shell_env_mutation_segment(
             "export" | "readonly" => {
                 return validate_export_env_mutations(config, phase, &tokens[index + 1..]);
             }
+            "declare" | "typeset" => {
+                return validate_export_env_mutations(config, phase, &tokens[index + 1..]);
+            }
+            "read" => return validate_read_env_mutations(phase, &tokens[index + 1..]),
+            "printf" => return validate_printf_env_mutations(phase, &tokens[index + 1..]),
+            "let" => return validate_let_env_mutations(phase, &tokens[index + 1..]),
+            "getopts" => return validate_getopts_env_mutations(phase, &tokens[index + 1..]),
+            "eval" | "source" | "." => {
+                return Err(Error::ConfigError(format!(
+                    "hermetic reproducibility does not support {command_token} in {phase} phase"
+                )));
+            }
             "unset" => return validate_unset_env_mutations(phase, &tokens[index + 1..]),
             "env" => {
                 return validate_env_wrapper_mutations(config, phase, &tokens[index + 1..]);
@@ -219,6 +231,7 @@ fn peel_shell_env_wrappers(phase: &str, tokens: &[String], mut index: usize) -> 
         match command_basename(command_token) {
             "command" => index = peel_command_wrapper(phase, tokens, index)?,
             "exec" => index = peel_exec_wrapper(phase, tokens, index)?,
+            "builtin" => index = peel_builtin_wrapper(phase, tokens, index)?,
             _ => break,
         }
     }
@@ -342,6 +355,17 @@ fn peel_exec_wrapper(phase: &str, tokens: &[String], index: usize) -> Result<usi
     Ok(next_index)
 }
 
+fn peel_builtin_wrapper(phase: &str, tokens: &[String], index: usize) -> Result<usize> {
+    let next_index = index + 1;
+    match tokens.get(next_index).map(String::as_str) {
+        Some("--") => Ok(next_index + 1),
+        Some(token) if token.starts_with('-') => Err(Error::ConfigError(format!(
+            "hermetic reproducibility does not support builtin option {token} in {phase} phase"
+        ))),
+        _ => Ok(next_index),
+    }
+}
+
 fn is_combined_exec_clear_option(token: &str) -> bool {
     token.starts_with('-') && !token.starts_with("--") && token[1..].chars().any(|ch| ch == 'c')
 }
@@ -387,6 +411,97 @@ fn validate_unset_env_mutations(phase: &str, tokens: &[String]) -> Result<()> {
         }
         if is_controlled_reproducibility_key(token) {
             return Err(command_local_env_error(phase, token));
+        }
+    }
+    Ok(())
+}
+
+fn validate_read_env_mutations(phase: &str, tokens: &[String]) -> Result<()> {
+    let mut index = 0;
+    while let Some(token) = tokens.get(index).map(String::as_str) {
+        if token == "--" {
+            index += 1;
+            break;
+        }
+        if !token.starts_with('-') {
+            break;
+        }
+        match token {
+            "-e" | "-r" | "-s" => index += 1,
+            "-a" => {
+                let key = shell_wrapper_operand(phase, tokens, index, "read", token)?;
+                if is_controlled_reproducibility_key(key) {
+                    return Err(command_local_env_error(phase, key));
+                }
+                index += 2;
+            }
+            "-d" | "-i" | "-n" | "-N" | "-p" | "-t" | "-u" => {
+                shell_wrapper_operand(phase, tokens, index, "read", token)?;
+                index += 2;
+            }
+            _ => {
+                return Err(Error::ConfigError(format!(
+                    "hermetic reproducibility does not support read option {token} in {phase} phase"
+                )));
+            }
+        }
+    }
+
+    for token in &tokens[index..] {
+        if token.starts_with('<') {
+            break;
+        }
+        if is_controlled_reproducibility_key(token) {
+            return Err(command_local_env_error(phase, token));
+        }
+    }
+    Ok(())
+}
+
+fn validate_printf_env_mutations(phase: &str, tokens: &[String]) -> Result<()> {
+    let mut index = 0;
+    while let Some(token) = tokens.get(index).map(String::as_str) {
+        if token == "--" {
+            return Ok(());
+        }
+        if token == "-v" {
+            let key = shell_wrapper_operand(phase, tokens, index, "printf", token)?;
+            if is_controlled_reproducibility_key(key) {
+                return Err(command_local_env_error(phase, key));
+            }
+            index += 2;
+            continue;
+        }
+        if let Some(key) = token.strip_prefix("-v").filter(|key| !key.is_empty()) {
+            if is_controlled_reproducibility_key(key) {
+                return Err(command_local_env_error(phase, key));
+            }
+            index += 1;
+            continue;
+        }
+        if token.starts_with('-') {
+            return Err(Error::ConfigError(format!(
+                "hermetic reproducibility does not support printf option {token} in {phase} phase"
+            )));
+        }
+        break;
+    }
+    Ok(())
+}
+
+fn validate_let_env_mutations(phase: &str, tokens: &[String]) -> Result<()> {
+    for token in tokens {
+        if let Some(key) = controlled_key_mentioned_in_expression(token) {
+            return Err(command_local_env_error(phase, key));
+        }
+    }
+    Ok(())
+}
+
+fn validate_getopts_env_mutations(phase: &str, tokens: &[String]) -> Result<()> {
+    if let Some(key) = tokens.get(1).map(String::as_str) {
+        if is_controlled_reproducibility_key(key) {
+            return Err(command_local_env_error(phase, key));
         }
     }
     Ok(())
@@ -565,6 +680,35 @@ fn command_local_env_clear_error(phase: &str) -> Error {
 
 fn is_controlled_reproducibility_key(key: &str) -> bool {
     ReproducibilityConfig::controlled_env_keys().contains(&key)
+}
+
+fn controlled_key_mentioned_in_expression(expression: &str) -> Option<&'static str> {
+    ReproducibilityConfig::controlled_env_keys()
+        .iter()
+        .copied()
+        .find(|key| shell_identifier_present(expression, key))
+}
+
+fn shell_identifier_present(expression: &str, name: &str) -> bool {
+    let mut start = None;
+    for (index, ch) in expression.char_indices() {
+        if is_shell_identifier_char(ch) {
+            start.get_or_insert(index);
+            continue;
+        }
+        if let Some(identifier_start) = start.take() {
+            if &expression[identifier_start..index] == name {
+                return true;
+            }
+        }
+    }
+    start
+        .map(|identifier_start| &expression[identifier_start..] == name)
+        .unwrap_or(false)
+}
+
+fn is_shell_identifier_char(ch: char) -> bool {
+    ch == '_' || ch.is_ascii_alphanumeric()
 }
 
 fn shell_assignment(token: &str) -> Option<(String, String)> {
@@ -2067,6 +2211,22 @@ mod tests {
                 "SOURCE_DATE_EPOCH",
             ),
             (
+                "builtin export SOURCE_DATE_EPOCH=999; make",
+                "SOURCE_DATE_EPOCH",
+            ),
+            ("declare SOURCE_DATE_EPOCH=999; make", "SOURCE_DATE_EPOCH"),
+            ("typeset CFLAGS=bad; make", "CFLAGS"),
+            (
+                "read SOURCE_DATE_EPOCH <<EOF\n999\nEOF\nmake",
+                "SOURCE_DATE_EPOCH",
+            ),
+            ("printf -v SOURCE_DATE_EPOCH 999; make", "SOURCE_DATE_EPOCH"),
+            ("let SOURCE_DATE_EPOCH=999; make", "SOURCE_DATE_EPOCH"),
+            ("getopts ab SOURCE_DATE_EPOCH; make", "SOURCE_DATE_EPOCH"),
+            ("eval 'SOURCE_DATE_EPOCH=999 make'", "eval"),
+            ("source ./env-file; make", "source"),
+            (". ./env-file; make", "."),
+            (
                 "export RUSTFLAGS=--remap-path-prefix=/src=/build/source-old; make",
                 "RUSTFLAGS",
             ),
@@ -2223,6 +2383,40 @@ mod tests {
                 "readonly RUSTFLAGS=--remap-path-prefix=/src=/build/source-old",
                 "RUSTFLAGS",
             ),
+        ];
+
+        for (segment, expected) in cases {
+            let error = validate_shell_env_mutation_segment(&config, "make", segment).unwrap_err();
+
+            assert!(
+                error.to_string().contains(expected),
+                "expected {expected} rejection for {segment}, got: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_shell_env_scanner_rejects_assignment_capable_builtins() {
+        let config = ReproducibilityConfig::new(0, Path::new("/src"), Path::new("/build"));
+        let cases = [
+            ("builtin export SOURCE_DATE_EPOCH=999", "SOURCE_DATE_EPOCH"),
+            (
+                "builtin printf -v SOURCE_DATE_EPOCH 999",
+                "SOURCE_DATE_EPOCH",
+            ),
+            ("builtin -x export SOURCE_DATE_EPOCH=999", "-x"),
+            ("declare SOURCE_DATE_EPOCH=999", "SOURCE_DATE_EPOCH"),
+            ("declare -x SOURCE_DATE_EPOCH", "SOURCE_DATE_EPOCH"),
+            ("typeset CFLAGS=bad", "CFLAGS"),
+            ("read -r SOURCE_DATE_EPOCH", "SOURCE_DATE_EPOCH"),
+            ("read -a SOURCE_DATE_EPOCH", "SOURCE_DATE_EPOCH"),
+            ("printf -v SOURCE_DATE_EPOCH 999", "SOURCE_DATE_EPOCH"),
+            ("let SOURCE_DATE_EPOCH=999", "SOURCE_DATE_EPOCH"),
+            ("let count=SOURCE_DATE_EPOCH+1", "SOURCE_DATE_EPOCH"),
+            ("getopts ab SOURCE_DATE_EPOCH", "SOURCE_DATE_EPOCH"),
+            ("eval 'SOURCE_DATE_EPOCH=999 make'", "eval"),
+            ("source ./env-file", "source"),
+            (". ./env-file", "."),
         ];
 
         for (segment, expected) in cases {
