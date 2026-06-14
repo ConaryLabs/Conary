@@ -181,12 +181,12 @@ fn validate_shell_env_mutation_segment(
             }
             _ => {}
         }
-        if is_shell_interpreter_command(command_basename(command_token)) {
-            return validate_shell_interpreter_invocation(
-                phase,
-                command_basename(command_token),
-                &tokens[index + 1..],
-            );
+        if validate_shell_like_invocation(
+            phase,
+            command_basename(command_token),
+            &tokens[index + 1..],
+        )? {
+            return Ok(());
         }
 
         if let Some(next_index) = peel_shell_control_word(phase, &tokens, index)? {
@@ -226,7 +226,27 @@ fn peel_shell_env_wrappers(phase: &str, tokens: &[String], mut index: usize) -> 
 }
 
 fn is_shell_interpreter_command(command: &str) -> bool {
-    matches!(command, "sh" | "bash" | "dash" | "zsh" | "ksh" | "mksh")
+    matches!(
+        command,
+        "sh" | "bash" | "dash" | "zsh" | "ksh" | "mksh" | "ash"
+    )
+}
+
+fn validate_shell_like_invocation(phase: &str, command: &str, args: &[String]) -> Result<bool> {
+    if is_shell_interpreter_command(command) {
+        validate_shell_interpreter_invocation(phase, command, args)?;
+        return Ok(true);
+    }
+    if command == "busybox" {
+        let Some(applet) = args.first().map(String::as_str).map(command_basename) else {
+            return Ok(false);
+        };
+        if is_shell_interpreter_command(applet) {
+            validate_shell_interpreter_invocation(phase, applet, &args[1..])?;
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn validate_shell_interpreter_invocation(phase: &str, shell: &str, args: &[String]) -> Result<()> {
@@ -398,8 +418,8 @@ fn validate_env_wrapper_mutations(
     if command == "env" {
         return validate_env_wrapper_mutations(config, phase, &tokens[index + 1..]);
     }
-    if is_shell_interpreter_command(command) {
-        return validate_shell_interpreter_invocation(phase, command, &tokens[index + 1..]);
+    if validate_shell_like_invocation(phase, command, &tokens[index + 1..])? {
+        return Ok(());
     }
 
     Ok(())
@@ -2032,7 +2052,11 @@ mod tests {
             ("sh -c 'SOURCE_DATE_EPOCH=999 make'", "-c"),
             ("/bin/sh -c 'env -u SOURCE_DATE_EPOCH make'", "-c"),
             ("bash -ec 'SOURCE_DATE_EPOCH=999 make'", "-ec"),
+            ("ash -c 'SOURCE_DATE_EPOCH=999 make'", "-c"),
+            ("busybox sh -c 'SOURCE_DATE_EPOCH=999 make'", "-c"),
+            ("busybox ash -c 'env -u SOURCE_DATE_EPOCH make'", "-c"),
             ("env sh -c 'SOURCE_DATE_EPOCH=999 make'", "-c"),
+            ("env busybox ash -c 'SOURCE_DATE_EPOCH=999 make'", "-c"),
             (
                 "/usr/bin/env /bin/sh -c 'env -u SOURCE_DATE_EPOCH make'",
                 "-c",
@@ -2118,6 +2142,9 @@ mod tests {
             ("zsh -ce 'SOURCE_DATE_EPOCH=999 make'", "-ce"),
             ("ksh -c 'SOURCE_DATE_EPOCH=999 make'", "-c"),
             ("mksh -c 'SOURCE_DATE_EPOCH=999 make'", "-c"),
+            ("ash -c 'SOURCE_DATE_EPOCH=999 make'", "-c"),
+            ("busybox sh -c 'SOURCE_DATE_EPOCH=999 make'", "-c"),
+            ("busybox ash -c 'env -u SOURCE_DATE_EPOCH make'", "-c"),
         ];
 
         for (segment, expected) in cases {
@@ -2128,6 +2155,21 @@ mod tests {
                 "expected {expected} rejection for {segment}, got: {error}"
             );
         }
+    }
+
+    #[test]
+    fn test_env_wrapper_scanner_rejects_busybox_shell_applets() {
+        let config = ReproducibilityConfig::new(0, Path::new("/src"), Path::new("/build"));
+        let tokens = vec![
+            "busybox".to_string(),
+            "ash".to_string(),
+            "-c".to_string(),
+            "SOURCE_DATE_EPOCH=999 make".to_string(),
+        ];
+
+        let error = validate_env_wrapper_mutations(&config, "make", &tokens).unwrap_err();
+
+        assert!(error.to_string().contains("-c"));
     }
 
     #[test]
