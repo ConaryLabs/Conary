@@ -327,18 +327,22 @@ fn make_assignment(token: &str) -> Option<(&str, &str)> {
 
 fn is_make_eval_option(token: &str) -> bool {
     let token = clean_make_token(token);
-    token == "--eval"
-        || token.starts_with("--eval=")
-        || short_make_option_bundle_contains(token, 'E')
+    long_make_option_matches(token, "eval", 2) || short_make_option_bundle_contains(token, 'E')
 }
 
 fn is_makefile_import_option(token: &str) -> bool {
     let token = clean_make_token(token);
     short_make_option_bundle_contains(token, 'f')
-        || token == "--file"
-        || token.starts_with("--file=")
-        || token == "--makefile"
-        || token.starts_with("--makefile=")
+        || long_make_option_matches(token, "file", 1)
+        || long_make_option_matches(token, "makefile", 3)
+}
+
+fn long_make_option_matches(token: &str, option: &str, min_prefix_len: usize) -> bool {
+    let Some(token) = token.strip_prefix("--") else {
+        return false;
+    };
+    let name = token.split_once('=').map_or(token, |(name, _)| name);
+    name.len() >= min_prefix_len && option.starts_with(name)
 }
 
 fn short_make_option_bundle_contains(token: &str, option: char) -> bool {
@@ -509,6 +513,9 @@ mod tests {
             ("GNUMAKEFLAGS", "-fevil.mk"),
             ("MAKEFLAGS", "-rfevil.mk"),
             ("MAKEFLAGS", "-rEexport SOURCE_DATE_EPOCH=999"),
+            ("MAKEFLAGS", "--ev=export CFLAGS=bad"),
+            ("GNUMAKEFLAGS", "--fi=evil.mk"),
+            ("MAKEFLAGS", "--mak=evil.mk"),
         ];
 
         for (key, value) in cases {
