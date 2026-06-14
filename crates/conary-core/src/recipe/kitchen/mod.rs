@@ -12,6 +12,7 @@
 pub(crate) mod archive;
 mod config;
 mod cook;
+pub mod local_source;
 pub mod makedepends;
 pub mod provenance_capture;
 

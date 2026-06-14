@@ -3,6 +3,7 @@
 //! Configuration types for the Kitchen build system
 
 use crate::recipe::format::BuildStage;
+use crate::recipe::hermetic::source_identity::CanonicalLocalFile;
 use crate::recipe::inference::SourceTargetProvenance;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -195,6 +196,8 @@ pub struct KitchenConfig {
     pub origin_class_override: Option<String>,
     /// Source-target provenance captured before recipe inference.
     pub source_provenance_override: Option<SourceTargetProvenance>,
+    /// Already-planned hermetic local source file list.
+    pub hermetic_local_files: Option<Vec<CanonicalLocalFile>>,
     /// Timeout for build operations
     pub timeout: Duration,
     /// Number of parallel jobs
@@ -251,6 +254,7 @@ impl Default for KitchenConfig {
             recipe_source_base_dir: None,
             origin_class_override: None,
             source_provenance_override: None,
+            hermetic_local_files: None,
             timeout: Duration::from_secs(3600), // 1 hour
             jobs,
             allow_network: false,

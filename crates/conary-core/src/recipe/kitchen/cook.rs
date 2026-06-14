@@ -15,6 +15,7 @@ use tracing::{debug, info};
 
 use super::Kitchen;
 use super::archive::{apply_patch, extract_archive};
+use super::local_source::{copy_dir_contents, materialize_local_source_from_file_list};
 use super::provenance_capture::ProvenanceCapture;
 
 const DANGEROUS_BUILD_ENV_VARS: &[&str] =
@@ -93,51 +94,6 @@ fn translate_command_for_chroot(command: &str, sysroot: &Path) -> String {
         return command.to_string();
     }
     command.replace(prefix, "")
-}
-
-fn copy_dir_contents(source_root: &Path, source: &Path, dest: &Path) -> Result<()> {
-    fs::create_dir_all(dest)?;
-
-    for entry in fs::read_dir(source)? {
-        let entry = entry?;
-        let source_path = entry.path();
-        let dest_path = dest.join(entry.file_name());
-        let file_type = entry.file_type()?;
-
-        if file_type.is_dir() {
-            copy_dir_contents(source_root, &source_path, &dest_path)?;
-        } else if file_type.is_file() {
-            fs::copy(&source_path, &dest_path)?;
-        } else if file_type.is_symlink() {
-            let target = fs::read_link(&source_path)?;
-            let resolved = source_path.canonicalize().map_err(|e| {
-                Error::ConfigError(format!(
-                    "Local source symlink target not found: {} -> {} ({e})",
-                    source_path.display(),
-                    target.display()
-                ))
-            })?;
-            if !resolved.starts_with(source_root) {
-                return Err(Error::ConfigError(format!(
-                    "Local source symlink must stay within the source directory: {} -> {}",
-                    source_path.display(),
-                    target.display()
-                )));
-            }
-            #[cfg(unix)]
-            std::os::unix::fs::symlink(target, &dest_path)?;
-            #[cfg(not(unix))]
-            {
-                if resolved.is_dir() {
-                    copy_dir_contents(source_root, &resolved, &dest_path)?;
-                } else {
-                    fs::copy(&resolved, &dest_path)?;
-                }
-            }
-        }
-    }
-
-    Ok(())
 }
 
 /// A single cook operation
@@ -283,7 +239,11 @@ impl<'a> Cook<'a> {
                     return Ok(());
                 }
 
-                copy_dir_contents(&resolved, &resolved, &self.source_dir)?;
+                if let Some(files) = self.kitchen.config.hermetic_local_files.as_deref() {
+                    materialize_local_source_from_file_list(&resolved, &self.source_dir, files)?;
+                } else {
+                    copy_dir_contents(&resolved, &resolved, &self.source_dir)?;
+                }
                 self.log_line(&format!("Prepared local source: {}", resolved.display()));
                 return Ok(());
             }
@@ -867,6 +827,7 @@ mod tests {
         BuildSection, LocalSourceSection, PackageSection, Recipe, RemoteSourceSection,
         SourceSection,
     };
+    use crate::recipe::hermetic::source_identity::{CiMode, canonical_local_file_list};
     use crate::recipe::kitchen::KitchenConfig;
     use std::collections::HashMap;
     use std::sync::{LazyLock, Mutex};
@@ -1082,6 +1043,39 @@ mod tests {
             std::fs::read_to_string(cook.source_dir.join("nested/marker.txt")).unwrap(),
             "isolated copy"
         );
+    }
+
+    #[test]
+    fn test_prep_isolated_local_path_source_uses_hermetic_file_list_when_present() {
+        let dir = tempfile::tempdir().unwrap();
+        let recipe_dir = dir.path().join("recipe");
+        let workspace = recipe_dir.join("src");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::write(workspace.join("included.txt"), "included\n").unwrap();
+        std::fs::write(workspace.join("excluded.txt"), "excluded\n").unwrap();
+        let mut hermetic_files = canonical_local_file_list(&workspace, CiMode::Off).unwrap();
+        hermetic_files.retain(|file| file.relative_path == PathBuf::from("included.txt"));
+
+        let kitchen = Kitchen::new(KitchenConfig {
+            recipe_source_base_dir: Some(recipe_dir),
+            use_isolation: true,
+            hermetic_local_files: Some(hermetic_files),
+            ..KitchenConfig::default()
+        });
+        let mut recipe = minimal_recipe();
+        recipe.source = SourceSection::Local(LocalSourceSection {
+            path: PathBuf::from("./src"),
+        });
+
+        let mut cook = Cook::new(&kitchen, &recipe).unwrap();
+        cook.prep().unwrap();
+        cook.unpack().unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(cook.source_dir.join("included.txt")).unwrap(),
+            "included\n"
+        );
+        assert!(!cook.source_dir.join("excluded.txt").exists());
     }
 
     #[test]
