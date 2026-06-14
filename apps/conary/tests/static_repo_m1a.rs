@@ -1,13 +1,20 @@
 // apps/conary/tests/static_repo_m1a.rs
 
+use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+use conary_core::ccs::builder::{
+    BuildResult, ComponentData, FileEntry, FileType, write_ccs_package,
+};
+use conary_core::ccs::manifest::CcsManifest;
 use conary_core::ccs::signing::SigningKeyPair;
 use conary_core::repository::StaticIndex;
+use conary_core::repository::static_repo::RepoLocation;
+use conary_core::repository::static_repo::publish::{StaticPublishOptions, publish_static_repo};
 use conary_core::trust::generate::{generate_snapshot, generate_targets, generate_timestamp};
 use conary_core::trust::metadata::{
     RootMetadata, Signed, SnapshotMetadata, TargetsMetadata, TimestampMetadata,
@@ -30,32 +37,34 @@ impl StaticRepoFixture {
     fn publish() -> Self {
         let work = tempfile::tempdir().unwrap();
         let repo_dir = work.path().join("repo");
-        let project_dir = work.path().join("project");
         let root = work.path().join("root");
         let db_path = work.path().join("conary.db");
         let key_dir = work.path().join("keys");
         let state_file = work.path().join("publish-state.toml");
+        let package_path = work.path().join("dist").join("test-hello.ccs");
 
         conary_core::db::init(&db_path).unwrap();
-        fs::create_dir_all(&project_dir).unwrap();
         fs::create_dir_all(&root).unwrap();
+        write_single_payload_ccs(&package_path);
 
-        let recipe_path = project_dir.join("recipe.toml");
-        write_test_project(&project_dir, &recipe_path);
-
-        let output = run_conary_owned(&[
-            "publish".into(),
-            path_arg(&repo_dir),
-            "--recipe".into(),
-            path_arg(&recipe_path),
-            "--key-dir".into(),
-            path_arg(&key_dir),
-            "--state-file".into(),
-            path_arg(&state_file),
-            "--yes".into(),
-        ]);
-        assert_success(&output);
-        let fingerprint = parse_root_fingerprint(&output);
+        let outcome = publish_static_repo(StaticPublishOptions {
+            repo_name: REPO_NAME.to_string(),
+            repo_description: None,
+            destination: RepoLocation::File {
+                root: repo_dir.clone(),
+            },
+            key_dir: key_dir.clone(),
+            state_file,
+            package_paths: vec![package_path],
+            refresh: false,
+            force_reinit: false,
+            accept_destination_state: false,
+            rotate_publish_key: false,
+            rotate_root_key: false,
+        })
+        .expect("publish static repo fixture");
+        assert_eq!(outcome.root_key_ids.len(), 1);
+        let fingerprint = outcome.root_key_ids[0].clone();
 
         Self {
             _work: work,
@@ -156,27 +165,6 @@ fn m1a_non_interactive_add_without_fingerprint_fails() {
     assert_failure_contains(&output, &["non-interactive", "--fingerprint"]);
 }
 
-fn write_test_project(project_dir: &Path, recipe_path: &Path) {
-    fs::write(project_dir.join("hello.txt"), "hello from m1a\n").unwrap();
-    fs::write(
-        recipe_path,
-        r#"[package]
-name = "test-hello"
-version = "1.0.0"
-description = "M1a static repo test package"
-summary = "M1a static repo test package"
-license = "MIT"
-
-[source]
-path = "."
-
-[build]
-install = "install -Dm644 hello.txt %(destdir)s/usr/share/test-hello/hello.txt"
-"#,
-    )
-    .unwrap();
-}
-
 fn run_conary_owned(args: &[String]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_conary"))
         .args(args)
@@ -210,22 +198,6 @@ fn assert_failure_contains(output: &Output, needles: &[&str]) {
             output_text(output)
         );
     }
-}
-
-fn parse_root_fingerprint(output: &Output) -> String {
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let line = stdout
-        .lines()
-        .find(|line| line.starts_with("Root fingerprint(s): "))
-        .unwrap_or_else(|| panic!("missing root fingerprint line\n{}", output_text(output)));
-    let fingerprints = line
-        .trim_start_matches("Root fingerprint(s): ")
-        .split(',')
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .collect::<Vec<_>>();
-    assert_eq!(fingerprints.len(), 1, "unexpected fingerprints: {line}");
-    fingerprints[0].to_string()
 }
 
 fn add_static_repo(repo_dir: &Path, db_path: &Path, fingerprint: &str) -> Output {
@@ -266,6 +238,40 @@ fn install_test_hello(db_path: &Path, root: &Path) -> Output {
         "never".into(),
         "--yes".into(),
     ])
+}
+
+fn write_single_payload_ccs(package_path: &Path) {
+    fs::create_dir_all(package_path.parent().expect("package parent")).unwrap();
+    let content = b"hello from m1a\n".to_vec();
+    let hash = conary_core::hash::sha256(&content);
+    let file = FileEntry {
+        path: "/usr/share/test-hello/hello.txt".to_string(),
+        hash: hash.clone(),
+        size: content.len() as u64,
+        mode: 0o100644,
+        component: "runtime".to_string(),
+        file_type: FileType::Regular,
+        target: None,
+        chunks: None,
+    };
+    let result = BuildResult {
+        manifest: CcsManifest::new_minimal(PACKAGE_NAME, "1.0.0"),
+        components: HashMap::from([(
+            "runtime".to_string(),
+            ComponentData {
+                name: "runtime".to_string(),
+                files: vec![file.clone()],
+                hash: "runtime".to_string(),
+                size: file.size,
+            },
+        )]),
+        files: vec![file],
+        blobs: HashMap::from([(hash, content)]),
+        total_size: b"hello from m1a\n".len() as u64,
+        chunked: false,
+        chunk_stats: None,
+    };
+    write_ccs_package(&result, package_path).unwrap();
 }
 
 fn replace_published_package_with_unsigned_package(fixture: &StaticRepoFixture) {
