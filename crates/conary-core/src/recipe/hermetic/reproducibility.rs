@@ -333,8 +333,10 @@ fn is_make_eval_option(token: &str) -> bool {
 fn is_makefile_import_option(token: &str) -> bool {
     let token = clean_make_token(token);
     short_make_option_bundle_contains(token, 'f')
+        || short_make_option_bundle_contains(token, 'I')
         || long_make_option_matches(token, "file", 1)
         || long_make_option_matches(token, "makefile", 3)
+        || long_make_option_matches(token, "include-dir", 3)
 }
 
 fn long_make_option_matches(token: &str, option: &str, min_prefix_len: usize) -> bool {
@@ -516,6 +518,9 @@ mod tests {
             ("MAKEFLAGS", "--ev=export CFLAGS=bad"),
             ("GNUMAKEFLAGS", "--fi=evil.mk"),
             ("MAKEFLAGS", "--mak=evil.mk"),
+            ("MAKEFLAGS", "-Ievil"),
+            ("GNUMAKEFLAGS", "--include-dir=evil"),
+            ("MAKEFLAGS", "--inc=evil"),
         ];
 
         for (key, value) in cases {
