@@ -1,8 +1,10 @@
 // conary-core/src/recipe/hermetic/mod.rs
 
+pub mod ecosystem;
 pub mod evidence;
 pub mod source_identity;
 
+pub use ecosystem::evaluate_ecosystem_policy;
 pub use evidence::{
     BuildCommandRiskEntry, BuildCommandRiskReport, BuildInputIdentity, BuilderEnvironmentIdentity,
     BuilderEnvironmentKind, COMMAND_RISK_CLASSIFIER_VERSION, DependencyLock,

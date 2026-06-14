@@ -413,7 +413,7 @@ fn build_section_for(
     match build_system {
         BuildSystem::Cargo => {
             let make = if source_root.join("Cargo.lock").is_file() {
-                "cargo build --release --locked"
+                "cargo build --release --locked --offline"
             } else {
                 "cargo build --release"
             };
@@ -823,14 +823,9 @@ license = "MIT"
             result.recipe.local_source().unwrap().path,
             std::path::PathBuf::from(".")
         );
-        assert!(
-            result
-                .recipe
-                .build
-                .make
-                .as_deref()
-                .unwrap()
-                .contains("cargo build --release")
+        assert_eq!(
+            result.recipe.build.make.as_deref(),
+            Some("cargo build --release")
         );
         assert!(
             result
@@ -862,7 +857,7 @@ version = "1.0.0"
 
         assert_eq!(
             result.recipe.build.make.as_deref(),
-            Some("cargo build --release --locked")
+            Some("cargo build --release --locked --offline")
         );
     }
 
