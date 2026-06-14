@@ -1,9 +1,11 @@
 // conary-core/src/recipe/hermetic/mod.rs
 
+pub mod command_risk;
 pub mod ecosystem;
 pub mod evidence;
 pub mod source_identity;
 
+pub use command_risk::{BuildCommandText, classify_build_commands, collect_recipe_command_text};
 pub use ecosystem::evaluate_ecosystem_policy;
 pub use evidence::{
     BuildCommandRiskEntry, BuildCommandRiskReport, BuildInputIdentity, BuilderEnvironmentIdentity,
