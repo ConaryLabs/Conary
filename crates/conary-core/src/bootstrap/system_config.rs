@@ -936,7 +936,7 @@ mod tests {
         assert!(root.join("etc/machine-id").exists());
         assert!(root.join("etc/fstab").exists());
         assert!(root.join("etc/nsswitch.conf").exists());
-        assert!(root.join("etc/resolv.conf").exists());
+        assert!(std::fs::symlink_metadata(root.join("etc/resolv.conf")).is_ok());
 
         // LFS Ch9 locale and readline
         assert!(root.join("etc/locale.conf").exists());
@@ -1181,22 +1181,30 @@ mod tests {
         configure_system(&root).unwrap();
 
         // Verify symlinks exist
-        assert!(root.join("etc/systemd/system/default.target").exists());
+        assert!(std::fs::symlink_metadata(root.join("etc/systemd/system/default.target")).is_ok());
         assert!(
-            root.join("etc/systemd/system/multi-user.target.wants/systemd-networkd.service")
-                .exists()
+            std::fs::symlink_metadata(
+                root.join("etc/systemd/system/multi-user.target.wants/systemd-networkd.service")
+            )
+            .is_ok()
         );
         assert!(
-            root.join("etc/systemd/system/multi-user.target.wants/systemd-resolved.service")
-                .exists()
+            std::fs::symlink_metadata(
+                root.join("etc/systemd/system/multi-user.target.wants/systemd-resolved.service")
+            )
+            .is_ok()
         );
         assert!(
-            root.join("etc/systemd/system/getty.target.wants/serial-getty@ttyS0.service")
-                .exists()
+            std::fs::symlink_metadata(
+                root.join("etc/systemd/system/getty.target.wants/serial-getty@ttyS0.service")
+            )
+            .is_ok()
         );
         assert!(
-            root.join("etc/systemd/system/sys-firmware-efi-efivars.mount")
-                .exists()
+            std::fs::symlink_metadata(
+                root.join("etc/systemd/system/sys-firmware-efi-efivars.mount")
+            )
+            .is_ok()
         );
 
         // Verify symlink targets

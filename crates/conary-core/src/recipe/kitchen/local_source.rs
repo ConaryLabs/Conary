@@ -283,7 +283,7 @@ mod tests {
         std::fs::write(source.join("included.txt"), "included\n").unwrap();
         std::fs::write(source.join("excluded.txt"), "excluded\n").unwrap();
         let mut files = canonical_local_file_list(&source, CiMode::Off).unwrap();
-        files.retain(|file| file.relative_path == PathBuf::from("included.txt"));
+        files.retain(|file| file.relative_path == Path::new("included.txt"));
 
         materialize_local_source_from_file_list(&source, &destination, &files).unwrap();
 

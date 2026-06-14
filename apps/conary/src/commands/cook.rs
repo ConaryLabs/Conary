@@ -268,11 +268,7 @@ async fn cmd_cook_with_output(
         config.jobs = j;
     }
     if !hermetic_requested {
-        for key in ["PATH", "HOME", "CARGO_HOME", "RUSTUP_HOME"] {
-            if let Ok(value) = std::env::var(key) {
-                config.extra_env.push((key.to_string(), value));
-            }
-        }
+        add_host_iteration_env(&mut config);
     }
 
     // Fetch-only mode: just download sources and exit
@@ -423,6 +419,18 @@ fn configure_host_record_for_hermetic(config: &mut KitchenConfig, recipe: &Recip
             )];
         }
     }
+}
+
+fn add_host_iteration_env(config: &mut KitchenConfig) {
+    for key in ["PATH", "HOME", "CARGO_HOME", "RUSTUP_HOME"] {
+        if let Ok(value) = std::env::var(key) {
+            config.extra_env.push((key.to_string(), value));
+        }
+    }
+
+    config
+        .extra_env
+        .push(("CARGO_TARGET_DIR".to_string(), "target".to_string()));
 }
 
 fn write_host_record_after_host_cook(
@@ -599,6 +607,22 @@ edition = "2021"
         assert_eq!(
             recipe_source_base_dir(Path::new("/work/recipes/pkg/recipe.toml")),
             PathBuf::from("/work/recipes/pkg")
+        );
+    }
+
+    #[test]
+    fn host_iteration_env_pins_cargo_target_dir_to_recipe_local_target() {
+        let mut config = KitchenConfig::default();
+
+        add_host_iteration_env(&mut config);
+
+        assert!(
+            config
+                .extra_env
+                .iter()
+                .any(|(key, value)| key == "CARGO_TARGET_DIR" && value == "target"),
+            "host iteration cook should override host Cargo target-dir config: {:?}",
+            config.extra_env
         );
     }
 

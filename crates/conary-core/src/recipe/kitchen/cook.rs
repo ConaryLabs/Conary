@@ -1255,7 +1255,7 @@ mod tests {
         std::fs::write(workspace.join("included.txt"), "included\n").unwrap();
         std::fs::write(workspace.join("excluded.txt"), "excluded\n").unwrap();
         let mut hermetic_files = canonical_local_file_list(&workspace, CiMode::Off).unwrap();
-        hermetic_files.retain(|file| file.relative_path == PathBuf::from("included.txt"));
+        hermetic_files.retain(|file| file.relative_path == Path::new("included.txt"));
 
         let kitchen = Kitchen::new(KitchenConfig {
             recipe_source_base_dir: Some(recipe_dir),

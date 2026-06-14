@@ -197,7 +197,7 @@ fn canonical_filesystem_file_list(root: &Path) -> Result<Vec<CanonicalLocalFile>
     let walker = WalkDir::new(root)
         .follow_links(false)
         .into_iter()
-        .filter_entry(|entry| should_visit_filesystem_entry(entry));
+        .filter_entry(should_visit_filesystem_entry);
 
     for entry in walker {
         let entry =

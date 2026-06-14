@@ -22,6 +22,14 @@ use std::path::{Component, Path, PathBuf};
 
 const DEFAULT_GENERATOR: &str = "conary-recipe-inference";
 
+type RecipeSourceIdentity = (
+    SourceIdentity,
+    Option<LocalTreeIdentity>,
+    Option<Vec<CanonicalLocalFile>>,
+    Option<PathBuf>,
+    Vec<String>,
+);
+
 #[derive(Debug, Clone)]
 pub struct HermeticBuildPlan {
     pub evidence: HermeticBuildEvidence,
@@ -310,13 +318,7 @@ fn source_identity_for_recipe(
     recipe: &Recipe,
     recipe_source_base_dir: &Path,
     ci_mode: CiMode,
-) -> Result<(
-    SourceIdentity,
-    Option<LocalTreeIdentity>,
-    Option<Vec<CanonicalLocalFile>>,
-    Option<PathBuf>,
-    Vec<String>,
-)> {
+) -> Result<RecipeSourceIdentity> {
     match &recipe.source {
         SourceSection::Local(source) => {
             let resolved = source
@@ -577,10 +579,10 @@ fn missing_lock_fields(lock: &LockedRepositoryDependency) -> Vec<&'static str> {
     if lock.release.trim().is_empty() {
         missing.push("release");
     }
-    if !lock
+    if lock
         .architecture
         .as_deref()
-        .is_some_and(|architecture| !architecture.trim().is_empty())
+        .is_none_or(|architecture| architecture.trim().is_empty())
     {
         missing.push("architecture");
     }

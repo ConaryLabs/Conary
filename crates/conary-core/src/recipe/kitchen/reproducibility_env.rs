@@ -899,10 +899,10 @@ fn shell_identifier_present(expression: &str, name: &str) -> bool {
             start.get_or_insert(index);
             continue;
         }
-        if let Some(identifier_start) = start.take() {
-            if &expression[identifier_start..index] == name {
-                return true;
-            }
+        if let Some(identifier_start) = start.take()
+            && &expression[identifier_start..index] == name
+        {
+            return true;
         }
     }
     start
