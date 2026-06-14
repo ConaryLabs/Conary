@@ -16,7 +16,10 @@ pub mod local_source;
 pub mod makedepends;
 pub mod provenance_capture;
 
-pub use config::{CookResult, KitchenConfig, SourceChecksumPolicy, StageConfig, StageRegistry};
+pub use config::{
+    CookResult, KitchenConfig, SourceChecksumPolicy, SourceDownloadPolicy, StageConfig,
+    StageRegistry,
+};
 pub use cook::Cook;
 pub use makedepends::{MakedependsResolver, MakedependsResult, NoopResolver};
 // Re-exported for external consumers (e.g., CLI tools that inspect provenance)
@@ -560,6 +563,12 @@ impl Kitchen {
             fs::remove_file(&cached_path)?;
         }
 
+        if self.config.source_download_policy == SourceDownloadPolicy::OfflineCacheOnly {
+            return Err(Error::ConfigError(format!(
+                "source cache miss for {url}; hermetic offline build requires prefetch before build"
+            )));
+        }
+
         // Download the source
         info!("Downloading: {}", url);
         let temp_path = self.config.source_cache.join(format!("{}.tmp", cache_key));
@@ -743,6 +752,29 @@ mod tests {
             .unwrap();
 
         assert_eq!(resolved, cached_path);
+    }
+
+    #[test]
+    fn offline_cache_only_refuses_missing_source() {
+        let cache = tempdir().unwrap();
+        let kitchen = Kitchen::new(KitchenConfig {
+            source_cache: cache.path().to_path_buf(),
+            source_download_policy: SourceDownloadPolicy::OfflineCacheOnly,
+            ..KitchenConfig::default()
+        });
+
+        let error = kitchen
+            .fetch_source("https://example.invalid/test.tar.gz", "sha256:missing")
+            .unwrap_err();
+
+        assert!(error.to_string().contains("source cache miss"));
+        assert!(
+            error
+                .to_string()
+                .contains("https://example.invalid/test.tar.gz")
+        );
+        assert!(error.to_string().contains("offline"));
+        assert!(error.to_string().contains("prefetch"));
     }
 
     #[test]

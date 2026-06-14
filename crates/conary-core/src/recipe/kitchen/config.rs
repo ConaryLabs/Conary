@@ -3,6 +3,8 @@
 //! Configuration types for the Kitchen build system
 
 use crate::recipe::format::BuildStage;
+use crate::recipe::hermetic::evidence::HermeticBuildEvidence;
+use crate::recipe::hermetic::reproducibility::ReproducibilityConfig;
 use crate::recipe::hermetic::source_identity::CanonicalLocalFile;
 use crate::recipe::inference::SourceTargetProvenance;
 use std::collections::HashMap;
@@ -18,6 +20,15 @@ pub enum SourceChecksumPolicy {
     /// Bootstrap early-phase behavior: verify supported algorithms but allow
     /// legacy/unsupported algorithms to pass through unchanged.
     BootstrapLegacy,
+}
+
+/// Source download policy for Kitchen fetches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceDownloadPolicy {
+    /// Allow cache misses to download sources into the source cache.
+    AllowDownloads,
+    /// Refuse cache misses so builds can only consume prefetched sources.
+    OfflineCacheOnly,
 }
 
 /// Configuration for a specific bootstrap stage
@@ -198,6 +209,10 @@ pub struct KitchenConfig {
     pub source_provenance_override: Option<SourceTargetProvenance>,
     /// Already-planned hermetic local source file list.
     pub hermetic_local_files: Option<Vec<CanonicalLocalFile>>,
+    /// Already-planned unsigned hermetic build evidence.
+    pub hermetic_evidence: Option<HermeticBuildEvidence>,
+    /// Reproducibility controls planned for the build.
+    pub reproducibility: Option<ReproducibilityConfig>,
     /// Timeout for build operations
     pub timeout: Duration,
     /// Number of parallel jobs
@@ -241,6 +256,8 @@ pub struct KitchenConfig {
     pub extra_env: Vec<(String, String)>,
     /// Source-checksum verification policy for fetches.
     pub checksum_policy: SourceChecksumPolicy,
+    /// Source-download behavior after a source cache miss.
+    pub source_download_policy: SourceDownloadPolicy,
 }
 
 impl Default for KitchenConfig {
@@ -255,6 +272,8 @@ impl Default for KitchenConfig {
             origin_class_override: None,
             source_provenance_override: None,
             hermetic_local_files: None,
+            hermetic_evidence: None,
+            reproducibility: None,
             timeout: Duration::from_secs(3600), // 1 hour
             jobs,
             allow_network: false,
@@ -268,6 +287,7 @@ impl Default for KitchenConfig {
             cleanup_makedepends: true, // Clean up by default when auto is enabled
             extra_env: Vec::new(),
             checksum_policy: SourceChecksumPolicy::Supported,
+            source_download_policy: SourceDownloadPolicy::AllowDownloads,
         }
     }
 }
@@ -339,6 +359,12 @@ mod tests {
         assert!(!config.keep_builddir);
         assert!(!config.auto_makedepends);
         assert!(config.cleanup_makedepends);
+        assert_eq!(
+            config.source_download_policy,
+            SourceDownloadPolicy::AllowDownloads
+        );
+        assert!(config.hermetic_evidence.is_none());
+        assert!(config.reproducibility.is_none());
         // Isolation should be ON by default for security
         assert!(config.use_isolation);
     }
