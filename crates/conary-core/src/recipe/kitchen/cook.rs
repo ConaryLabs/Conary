@@ -296,7 +296,6 @@ fn validate_shell_like_invocation(phase: &str, command: &str, args: &[String]) -
 }
 
 fn validate_shell_interpreter_invocation(phase: &str, shell: &str, args: &[String]) -> Result<()> {
-    let mut has_script_operand = false;
     let mut end_options = false;
 
     for arg in args {
@@ -319,15 +318,10 @@ fn validate_shell_interpreter_invocation(phase: &str, shell: &str, args: &[Strin
         if !end_options && arg.starts_with('-') {
             continue;
         }
-        has_script_operand = true;
-        break;
+        return Err(nested_shell_script_error(phase, shell, arg));
     }
 
-    if !has_script_operand {
-        return Err(nested_shell_stdin_error(phase, shell));
-    }
-
-    Ok(())
+    Err(nested_shell_stdin_error(phase, shell))
 }
 
 fn shell_option_invokes_command_string(arg: &str) -> bool {
@@ -347,7 +341,7 @@ fn peel_shell_control_word(phase: &str, tokens: &[String], index: usize) -> Resu
             Ok(Some(index + 1))
         }
         "time" => Ok(Some(peel_time_control_word(phase, tokens, index)?)),
-        "for" | "case" | "select" | "function" => Err(Error::ConfigError(format!(
+        "for" | "case" | "select" | "function" | "coproc" => Err(Error::ConfigError(format!(
             "hermetic reproducibility does not support shell control word {token} in {phase} phase"
         ))),
         _ => Ok(None),
@@ -977,6 +971,12 @@ fn shell_alias_expansion_error(phase: &str, surface: &str) -> Error {
 fn nested_shell_stdin_error(phase: &str, shell: &str) -> Error {
     Error::ConfigError(format!(
         "hermetic reproducibility rejects nested shell {shell} reading script from stdin in {phase} phase"
+    ))
+}
+
+fn nested_shell_script_error(phase: &str, shell: &str, script: &str) -> Error {
+    Error::ConfigError(format!(
+        "hermetic reproducibility rejects nested shell {shell} script operand {script} in {phase} phase"
     ))
 }
 
@@ -2688,6 +2688,8 @@ mod tests {
                 "if SOURCE_DATE_EPOCH=999 make; then :; fi",
                 "SOURCE_DATE_EPOCH",
             ),
+            ("coproc SOURCE_DATE_EPOCH=999 make -s; wait", "coproc"),
+            ("coproc make -s SOURCE_DATE_EPOCH=999; wait", "coproc"),
             ("sh -c 'SOURCE_DATE_EPOCH=999 make'", "-c"),
             ("/bin/sh -c 'env -u SOURCE_DATE_EPOCH make'", "-c"),
             ("bash -ec 'SOURCE_DATE_EPOCH=999 make'", "-ec"),
@@ -2705,6 +2707,13 @@ mod tests {
             ),
             ("sh < build.sh", "stdin"),
             ("bash -s < build.sh", "stdin"),
+            ("sh build.sh", "script operand"),
+            ("bash ./build.sh", "script operand"),
+            ("busybox sh build.sh", "script operand"),
+            (
+                "printf %s \"export SOURCE_DATE_EPOCH=999; make -s\" > build.sh; sh build.sh",
+                "script operand",
+            ),
             ("ash -c 'SOURCE_DATE_EPOCH=999 make'", "-c"),
             ("busybox sh -c 'SOURCE_DATE_EPOCH=999 make'", "-c"),
             ("busybox ash -c 'env -u SOURCE_DATE_EPOCH make'", "-c"),
