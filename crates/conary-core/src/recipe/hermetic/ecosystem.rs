@@ -1,12 +1,12 @@
 // conary-core/src/recipe/hermetic/ecosystem.rs
 
 use super::evidence::{EcosystemDependencyIdentity, EcosystemPolicyReport, PolicyStatus};
-use super::source_identity::{CiMode, local_tree_identity};
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::hash;
 use crate::recipe::BuildSystem;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
+use walkdir::WalkDir;
 
 pub fn evaluate_ecosystem_policy(
     build_system: BuildSystem,
@@ -318,12 +318,121 @@ fn file_identity(
 }
 
 fn replacement_identity(evidence_path: &str, path: &Path) -> Result<EcosystemDependencyIdentity> {
-    let identity = local_tree_identity(path, CiMode::Off)?;
     Ok(EcosystemDependencyIdentity {
         ecosystem: "cargo".to_string(),
         evidence_path: evidence_path.to_string(),
-        evidence_hash: identity.tree_hash,
+        evidence_hash: replacement_tree_hash(path)?,
     })
+}
+
+#[derive(Debug, Clone)]
+struct ReplacementTreeEntry {
+    relative_path: PathBuf,
+    hash: String,
+    kind: ReplacementTreeEntryKind,
+    mode: Option<u32>,
+    symlink_target: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ReplacementTreeEntryKind {
+    Regular,
+    Symlink,
+}
+
+fn replacement_tree_hash(root: &Path) -> Result<String> {
+    let mut entries = replacement_tree_entries(root)?;
+    entries.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+
+    let mut hasher = hash::Hasher::new(hash::HashAlgorithm::Sha256);
+    for entry in entries {
+        hasher.update(replacement_tree_entry_kind_label(entry.kind).as_bytes());
+        hasher.update(b"\0");
+        hasher.update(&path_bytes(&entry.relative_path));
+        hasher.update(b"\0");
+        hasher.update(entry.hash.as_bytes());
+        hasher.update(b"\0");
+        if let Some(mode) = entry.mode {
+            hasher.update(format!("{mode:o}").as_bytes());
+        }
+        hasher.update(b"\0");
+        if let Some(target) = &entry.symlink_target {
+            hasher.update(&path_bytes(target));
+        }
+        hasher.update(b"\n");
+    }
+
+    let hash = hasher.finalize();
+    Ok(format!("sha256:{}", hash.value))
+}
+
+fn replacement_tree_entries(root: &Path) -> Result<Vec<ReplacementTreeEntry>> {
+    let mut entries = Vec::new();
+
+    for entry in WalkDir::new(root).follow_links(false) {
+        let entry = entry
+            .map_err(|e| Error::IoError(format!("Failed to walk Cargo replacement tree: {e}")))?;
+        if entry.depth() == 0 {
+            continue;
+        }
+
+        let metadata = fs::symlink_metadata(entry.path())?;
+        let file_type = metadata.file_type();
+        let kind = if file_type.is_file() {
+            ReplacementTreeEntryKind::Regular
+        } else if file_type.is_symlink() {
+            ReplacementTreeEntryKind::Symlink
+        } else {
+            continue;
+        };
+        let relative_path = entry
+            .path()
+            .strip_prefix(root)
+            .map_err(|e| {
+                Error::ConfigError(format!(
+                    "Failed to relativize Cargo replacement tree entry: {e}"
+                ))
+            })?
+            .to_path_buf();
+        let (hash, symlink_target, mode) =
+            replacement_tree_entry_identity(entry.path(), kind, &metadata)?;
+
+        entries.push(ReplacementTreeEntry {
+            relative_path,
+            hash,
+            kind,
+            mode,
+            symlink_target,
+        });
+    }
+
+    Ok(entries)
+}
+
+fn replacement_tree_entry_identity(
+    path: &Path,
+    kind: ReplacementTreeEntryKind,
+    metadata: &fs::Metadata,
+) -> Result<(String, Option<PathBuf>, Option<u32>)> {
+    match kind {
+        ReplacementTreeEntryKind::Regular => {
+            let mut file = fs::File::open(path)?;
+            let hash = hash::sha256_reader_hex(&mut file)?;
+            Ok((format!("sha256:{hash}"), None, mode_bits(metadata)))
+        }
+        ReplacementTreeEntryKind::Symlink => {
+            let target = fs::read_link(path)?;
+            let hash = hash::sha256_prefixed(&path_bytes(&target));
+            Ok((hash, Some(target), None))
+        }
+    }
+}
+
+fn replacement_tree_entry_kind_label(kind: ReplacementTreeEntryKind) -> &'static str {
+    match kind {
+        ReplacementTreeEntryKind::Regular => "regular",
+        ReplacementTreeEntryKind::Symlink => "symlink",
+    }
 }
 
 fn normalized_path_display(path: &Path) -> String {
@@ -334,6 +443,28 @@ fn normalized_path_display(path: &Path) -> String {
         })
         .collect::<Vec<_>>()
         .join("/")
+}
+
+#[cfg(unix)]
+fn path_bytes(path: &Path) -> Vec<u8> {
+    use std::os::unix::ffi::OsStrExt;
+    path.as_os_str().as_bytes().to_vec()
+}
+
+#[cfg(not(unix))]
+fn path_bytes(path: &Path) -> Vec<u8> {
+    path.to_string_lossy().as_bytes().to_vec()
+}
+
+#[cfg(unix)]
+fn mode_bits(metadata: &fs::Metadata) -> Option<u32> {
+    use std::os::unix::fs::PermissionsExt;
+    Some(metadata.permissions().mode() & 0o7777)
+}
+
+#[cfg(not(unix))]
+fn mode_bits(_metadata: &fs::Metadata) -> Option<u32> {
+    None
 }
 
 fn ecosystem_name(build_system: BuildSystem) -> &'static str {
@@ -354,6 +485,7 @@ mod tests {
     use crate::recipe::hermetic::PolicyStatus;
     use std::fs;
     use std::path::Path;
+    use std::process::Command;
 
     fn write(path: &Path, contents: &str) {
         if let Some(parent) = path.parent() {
@@ -420,6 +552,23 @@ local-registry = "{path}"
             .iter()
             .find(|identity| identity.evidence_path == path)
             .map(|identity| identity.evidence_hash.clone())
+    }
+
+    fn git(root: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "git {:?} failed\nstdout:\n{}\nstderr:\n{}",
+            args,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     #[test]
@@ -556,6 +705,54 @@ local-registry = "{path}"
                 "expected sha256 hash for {evidence_path}, got {evidence_hash}"
             );
         }
+    }
+
+    #[test]
+    fn cargo_pinned_cache_identity_hashes_ignored_git_worktree_contents() {
+        let dir = tempfile::tempdir().unwrap();
+        git(dir.path(), &["init"]);
+        write(&dir.path().join(".gitignore"), ".cargo/local-registry/\n");
+        write(
+            &dir.path().join("Cargo.lock"),
+            cargo_lock_with_registry_dependency(),
+        );
+        write(
+            &dir.path().join(".cargo/config.toml"),
+            &cargo_local_registry_config(".cargo/local-registry"),
+        );
+        write(
+            &dir.path().join(".cargo/local-registry/index/serde"),
+            "serde 1.0.0\n",
+        );
+
+        let first = evaluate_ecosystem_policy(
+            BuildSystem::Cargo,
+            dir.path(),
+            "cargo build --release --locked",
+        )
+        .unwrap();
+        assert_eq!(first.status, PolicyStatus::Clean);
+        let first_hash = identity_hash_for(&first, ".cargo/local-registry")
+            .expect("expected pinned cache identity");
+
+        write(
+            &dir.path().join(".cargo/local-registry/index/serde"),
+            "serde 1.0.1\n",
+        );
+        let second = evaluate_ecosystem_policy(
+            BuildSystem::Cargo,
+            dir.path(),
+            "cargo build --release --locked",
+        )
+        .unwrap();
+        assert_eq!(second.status, PolicyStatus::Clean);
+        let second_hash = identity_hash_for(&second, ".cargo/local-registry")
+            .expect("expected pinned cache identity");
+
+        assert_ne!(
+            first_hash, second_hash,
+            "ignored cache content changes must change the recorded replacement identity"
+        );
     }
 
     #[test]
