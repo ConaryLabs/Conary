@@ -172,6 +172,7 @@ fn validate_shell_env_mutation_segment(
         index += 1;
     }
 
+    let index = peel_shell_env_wrappers(phase, &tokens, index)?;
     let Some(command_token) = tokens.get(index).map(String::as_str) else {
         return Ok(());
     };
@@ -182,6 +183,83 @@ fn validate_shell_env_mutation_segment(
         "env" => validate_env_wrapper_mutations(config, phase, &tokens[index + 1..]),
         _ => Ok(()),
     }
+}
+
+fn peel_shell_env_wrappers(phase: &str, tokens: &[String], mut index: usize) -> Result<usize> {
+    while let Some(command_token) = tokens.get(index).map(String::as_str) {
+        match command_basename(command_token) {
+            "command" => index = peel_command_wrapper(phase, tokens, index)?,
+            "exec" => index = peel_exec_wrapper(phase, tokens, index)?,
+            _ => break,
+        }
+    }
+    Ok(index)
+}
+
+fn peel_command_wrapper(phase: &str, tokens: &[String], index: usize) -> Result<usize> {
+    let mut next_index = index + 1;
+    while let Some(token) = tokens.get(next_index).map(String::as_str) {
+        if token == "--" {
+            return Ok(next_index + 1);
+        }
+        if token == "-p" {
+            next_index += 1;
+            continue;
+        }
+        if token.starts_with('-') {
+            return Err(Error::ConfigError(format!(
+                "hermetic reproducibility does not support command option {token} in {phase} phase"
+            )));
+        }
+        break;
+    }
+    Ok(next_index)
+}
+
+fn peel_exec_wrapper(phase: &str, tokens: &[String], index: usize) -> Result<usize> {
+    let mut next_index = index + 1;
+    while let Some(token) = tokens.get(next_index).map(String::as_str) {
+        if token == "--" {
+            return Ok(next_index + 1);
+        }
+        if token == "-c" || is_combined_exec_clear_option(token) {
+            return Err(command_local_env_clear_error(phase));
+        }
+        if token == "-a" {
+            shell_wrapper_operand(phase, tokens, next_index, "exec", token)?;
+            next_index += 2;
+            continue;
+        }
+        if token == "-l" {
+            next_index += 1;
+            continue;
+        }
+        if token.starts_with('-') {
+            return Err(Error::ConfigError(format!(
+                "hermetic reproducibility does not support exec option {token} in {phase} phase"
+            )));
+        }
+        break;
+    }
+    Ok(next_index)
+}
+
+fn is_combined_exec_clear_option(token: &str) -> bool {
+    token.starts_with('-') && !token.starts_with("--") && token[1..].chars().any(|ch| ch == 'c')
+}
+
+fn shell_wrapper_operand<'a>(
+    phase: &str,
+    tokens: &'a [String],
+    index: usize,
+    wrapper: &str,
+    option: &str,
+) -> Result<&'a str> {
+    tokens.get(index + 1).map(String::as_str).ok_or_else(|| {
+        Error::ConfigError(format!(
+            "hermetic reproducibility rejects {wrapper} {option} without an operand in {phase} phase"
+        ))
+    })
 }
 
 fn validate_export_env_mutations(
@@ -1831,6 +1909,21 @@ mod tests {
                 "split-string",
             ),
             (
+                "command env SOURCE_DATE_EPOCH=999 make",
+                "SOURCE_DATE_EPOCH",
+            ),
+            (
+                "command -p env SOURCE_DATE_EPOCH=999 make",
+                "SOURCE_DATE_EPOCH",
+            ),
+            ("exec env -u SOURCE_DATE_EPOCH make", "SOURCE_DATE_EPOCH"),
+            (
+                "command export SOURCE_DATE_EPOCH=999; make",
+                "SOURCE_DATE_EPOCH",
+            ),
+            ("command unset SOURCE_DATE_EPOCH; make", "SOURCE_DATE_EPOCH"),
+            ("exec -c make", "environment"),
+            (
                 "export RUSTFLAGS=--remap-path-prefix=/src=/build/source-old; make",
                 "RUSTFLAGS",
             ),
@@ -1842,6 +1935,34 @@ mod tests {
             assert!(
                 error.to_string().contains(key),
                 "expected {key} rejection for {command}, got: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_shell_env_scanner_peels_command_and_exec_wrappers() {
+        let config = ReproducibilityConfig::new(0, Path::new("/src"), Path::new("/build"));
+        let cases = [
+            (
+                "command env SOURCE_DATE_EPOCH=999 make",
+                "SOURCE_DATE_EPOCH",
+            ),
+            (
+                "command -p env SOURCE_DATE_EPOCH=999 make",
+                "SOURCE_DATE_EPOCH",
+            ),
+            ("exec env -u SOURCE_DATE_EPOCH make", "SOURCE_DATE_EPOCH"),
+            ("command export SOURCE_DATE_EPOCH=999", "SOURCE_DATE_EPOCH"),
+            ("command unset SOURCE_DATE_EPOCH", "SOURCE_DATE_EPOCH"),
+            ("exec -c make", "environment"),
+        ];
+
+        for (segment, expected) in cases {
+            let error = validate_shell_env_mutation_segment(&config, "make", segment).unwrap_err();
+
+            assert!(
+                error.to_string().contains(expected),
+                "expected {expected} rejection for {segment}, got: {error}"
             );
         }
     }
