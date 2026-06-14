@@ -1480,7 +1480,12 @@ if hermetic_requested && no_isolation {
 }
 ```
 
-For the hermetic path, construct `HermeticBuildInput` from the resolved recipe path or generated inference trace, `resolved.recipe_source_base_dir`, pristine builder environment identity, and locked build-dependency identities, then call:
+For the hermetic path, construct `HermeticBuildInput` from the resolved recipe
+path or generated inference trace, `resolved.recipe_source_base_dir`, and a
+pristine builder environment identity. Later review tightened the CLI behavior:
+until a command-owned dependency content-lock resolver lands, CLI hermetic cook
+must fail closed for recipes with build dependencies and pass an empty
+dependency lock only for recipes with no build dependencies. Then call:
 
 ```rust
 kitchen.cook_hermetic(
@@ -1527,9 +1532,44 @@ git commit -m "feat(packaging): route isolated cook through hermetic builds"
 ### Task 9: Wire Project-Form Hermetic Publish
 
 **Files:**
+- Create: `apps/conary/src/commands/hermetic_config.rs`
 - Modify: `apps/conary/src/commands/publish.rs`
+- Modify: `apps/conary/src/commands/cook.rs`
 - Test: `apps/conary/src/commands/publish.rs`
 - Test: `apps/conary/tests/packaging_m2a.rs`
+
+**Review-tightened constraints:** Follow
+`docs/superpowers/specs/2026-06-14-m2a-builder-config-publish-divergence-design.md`.
+M2a remainder does not add build dependency content-lock resolution. CLI
+hermetic cook and project-form publish must fail closed for recipes with build
+dependencies, must load an operator-supplied `sysroot_path`, must force
+`auto_makedepends = false`, and must treat `sysroot_hash`/`toolchain_hash` as
+operator-asserted rather than measured.
+
+- [ ] **Step 0: Add hermetic builder config loader**
+
+Create `apps/conary/src/commands/hermetic_config.rs`.
+
+The loader must:
+
+- Resolve config from `CONARY_HERMETIC_CONFIG`,
+  `$XDG_CONFIG_HOME/conary/hermetic.toml`, or
+  `$HOME/.config/conary/hermetic.toml`.
+- Also expose an explicit-path API for unit tests so in-process Rust 2024 tests
+  do not mutate process-global environment variables.
+- Parse `default_builder` and `[builders.<name>]` with `kind = "pristine"`,
+  required `sysroot_path`, optional `description`, and at least one strict
+  `sha256:<64 hex>` identity field.
+- Return the selected `BuilderEnvironmentIdentity` plus a validated
+  `sysroot_path` for `KitchenConfig::sysroot`.
+- On Unix, canonicalize checked paths; reject group/world-writable config files,
+  config parent directories, and sysroot directories; reject config files owned
+  by another non-root user.
+- Wrap load/parse errors with the path consulted.
+
+Add unit tests for path precedence, valid config, missing default builder,
+unknown default builder, invalid hashes, unsupported kind, missing/non-directory
+`sysroot_path`, Unix ownership/writability checks, and symlink canonicalization.
 
 - [ ] **Step 1: Update publish config tests**
 
@@ -1546,6 +1586,10 @@ fn publish_kitchen_config_uses_hermetic_defaults() {
     assert!(!config.allow_network);
     assert!(config.pristine_mode);
     assert_eq!(
+        config.source_download_policy,
+        SourceDownloadPolicy::AllowDownloads
+    );
+    assert_eq!(
         config.recipe_source_base_dir,
         Some(std::path::PathBuf::from("/work/pkg"))
     );
@@ -1557,18 +1601,30 @@ fn publish_kitchen_config_uses_hermetic_defaults() {
 In `cmd_publish`, replace `kitchen.cook(&recipe, output_dir.path())` with:
 
 ```rust
+let builder = load_default_hermetic_builder()?;
+ensure_no_build_dependencies_for_m2a(&recipe)?;
+
 let hermetic_input = HermeticBuildInput::explicit_recipe(
     recipe_source_base_dir(&recipe_path),
     recipe_path.clone(),
     hash_file(&recipe_path)?,
 )
-.with_pristine_builder_environment(detect_builder_environment_identity()?)
-.with_locked_repository_dependencies(resolve_locked_build_dependencies(&recipe)?);
+.with_builder_environment(builder.identity);
+
+let config = publish_kitchen_config(&recipe_path, output_dir.path(), builder.sysroot_path);
+let kitchen = Kitchen::new(config);
 
 let result = kitchen
     .cook_hermetic(&recipe, hermetic_input, output_dir.path(), conary_core::recipe::hermetic::detect_ci_mode())
     .with_context(|| format!("Failed to hermetically cook {}", recipe.package.name))?;
 ```
+
+The initial Kitchen config passed to `cook_hermetic()` must preserve
+`SourceDownloadPolicy::AllowDownloads` so the internal prefetch can populate the
+cache. The hermetic plan applies `OfflineCacheOnly` only to the build-phase
+clone. Project-form publish must pass `auto_makedepends = false` and
+`cleanup_makedepends = false`; build dependency names are refused in this
+remainder slice instead of resolved or installed.
 
 Keep `publish_static_repo()` unchanged for M2a so the static repo path still signs package signatures and writes TUF metadata exactly as M1a did.
 
@@ -1586,6 +1642,10 @@ Replace "sandboxed, network allowed" with:
 hermetic, pristine/no-host-mount build with network disabled
 ```
 
+Reword or suppress the existing static publisher preview warning so it does not
+contradict the M2a message. The user should see one coherent state: hermetic
+evidence was recorded, and M2b release attestation gates are not present yet.
+
 - [ ] **Step 4: Preserve artifact-form rejection**
 
 Keep `ARTIFACT_FORM_REJECTION` unchanged:
@@ -1602,6 +1662,27 @@ Add a unit test asserting artifact-form publish still returns this exact text.
 Create `apps/conary/tests/packaging_m2a.rs` with tests:
 
 ```rust
+#[test]
+fn cook_isolated_fails_without_hermetic_config() {
+    let fixture = CargoHermeticFixture::new();
+    let output = fixture.cook_isolated_without_config();
+    assert_failure_contains(&output, &["hermetic", "config"]);
+}
+
+#[test]
+fn cook_isolated_fails_when_build_dependencies_are_declared() {
+    let fixture = BuildDependencyFixture::new();
+    let output = fixture.cook_isolated();
+    assert_failure_contains(&output, &["build dependencies", "content locks"]);
+}
+
+#[test]
+fn publish_project_form_fails_without_hermetic_config() {
+    let fixture = CargoHermeticFixture::new();
+    let output = fixture.publish_project_form_without_config();
+    assert_failure_contains(&output, &["hermetic", "config"]);
+}
+
 #[test]
 fn publish_project_form_records_hermetic_evidence_without_build_attestation() {
     let fixture = CargoHermeticFixture::new();
@@ -1651,7 +1732,11 @@ fn publish_artifact_form_still_requires_m2b_attestation() {
 }
 ```
 
-Implement fixture helpers in the same test file, following the style in `apps/conary/tests/packaging_m1b.rs`.
+Implement fixture helpers in the same test file, following the style in
+`apps/conary/tests/packaging_m1b.rs`. Positive hermetic cook/publish tests must
+provide a minimal pristine sysroot fixture. If a CI-safe fixture cannot be
+provided in this slice, defer the positive CLI success tests and keep the
+fail-closed CLI tests plus core hermetic unit coverage.
 
 - [ ] **Step 6: Run tests**
 
@@ -1676,11 +1761,13 @@ git commit -m "feat(packaging): publish with hermetic build evidence"
 ### Task 10: Add Host-Vs-Hermetic Divergence Diagnostics
 
 **Files:**
+- Create: `crates/conary-core/src/recipe/hermetic/divergence.rs`
+- Create or modify: command-owned host record state helper under `apps/conary/src/commands/`
 - Modify: `crates/conary-core/src/recipe/hermetic/evidence.rs`
-- Modify: `crates/conary-core/src/recipe/hermetic/plan.rs`
 - Modify: `crates/conary-core/src/recipe/kitchen/config.rs`
-- Modify: `crates/conary-core/src/recipe/kitchen/mod.rs`
-- Test: `crates/conary-core/src/recipe/hermetic/plan.rs`
+- Modify: `crates/conary-core/src/recipe/kitchen/cook.rs`
+- Test: `crates/conary-core/src/recipe/hermetic/divergence.rs`
+- Test: `crates/conary-core/src/recipe/hermetic/evidence.rs`
 
 - [ ] **Step 1: Add divergence data structs**
 
@@ -1689,11 +1776,15 @@ Add:
 ```rust
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct HostBuildRecord {
-    pub input_identity_hash: String,
-    pub output_merkle_root: Option<String>,
     pub package_name: String,
     pub package_version: String,
     pub package_release: String,
+    pub architecture: Option<String>,
+    pub output_merkle_root: String,
+    pub diagnostic_input_key: Option<String>,
+    pub diagnostic_dna_hash: Option<String>,
+    pub package_path: Option<String>,
+    pub build_timestamp: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -1707,12 +1798,14 @@ pub struct DivergenceReport {
 #[serde(rename_all = "kebab-case")]
 pub enum DivergenceStatus {
     NoHostRecord,
-    Match,
-    DifferentOutput,
+    MatchesHost,
+    DiffersFromHost,
 }
 ```
 
-Add `divergence: DivergenceReport` to `HermeticBuildEvidence`.
+Add `divergence: DivergenceReport` to `HermeticBuildEvidence`. Use
+`#[serde(default)]` or deliberately bump the hermetic evidence schema version so
+older evidence remains readable by design.
 
 - [ ] **Step 2: Write comparison tests**
 
@@ -1729,34 +1822,73 @@ fn divergence_report_marks_missing_host_record() {
 #[test]
 fn divergence_report_marks_different_output() {
     let host = HostBuildRecord {
-        input_identity_hash: "sha256:input".to_string(),
-        output_merkle_root: Some("sha256:host".to_string()),
         package_name: "pkg".to_string(),
         package_version: "1.0".to_string(),
         package_release: "1".to_string(),
+        architecture: Some("x86_64".to_string()),
+        output_merkle_root: "sha256:host".to_string(),
+        diagnostic_input_key: Some("sha256:input".to_string()),
+        diagnostic_dna_hash: None,
+        package_path: None,
+        build_timestamp: None,
     };
     let report = compare_host_record(Some(&host), Some("sha256:hermetic"));
-    assert_eq!(report.status, DivergenceStatus::DifferentOutput);
+    assert_eq!(report.status, DivergenceStatus::DiffersFromHost);
     assert!(report.diagnostics.iter().any(|d| d.contains("differs")));
 }
 ```
 
-- [ ] **Step 3: Record but do not block on divergence in M2a**
+Add edge-case tests for matching `merkle_root`, differing `merkle_root`, absent
+hermetic `merkle_root`, and diagnostic-only `dna_hash`.
 
-Implement `compare_host_record()`. M2a records divergence diagnostics only; it must not fail a hermetic build solely because host and hermetic outputs differ. M2b or a later policy can turn divergence into a publish lint gate.
+- [ ] **Step 3: Add command-owned host record state helper**
 
-- [ ] **Step 4: Run tests**
+Host record storage remains local command state, not core state.
+
+The helper must:
+
+- Resolve from `CONARY_HERMETIC_STATE_DIR`, `$XDG_STATE_HOME/conary/hermetic`,
+  or `$HOME/.local/state/conary/hermetic`.
+- Expose an explicit-path API for unit tests so in-process tests do not mutate
+  process-global environment variables.
+- Write a host record only after successful non-hermetic `cmd_cook_with_output`
+  when `CookResult.provenance.merkle_root` exists.
+- Match records by package name, version, release, and architecture, choosing
+  the most recent matching host record.
+- Treat missing or unreadable records as diagnostics only.
+
+- [ ] **Step 4: Record but do not block on divergence in M2a**
+
+Implement `compare_host_record()` in `recipe/hermetic/divergence.rs`. Compare
+output `merkle_root` only; do not compare final `.ccs` hashes or `dna_hash`.
+`dna_hash` may be recorded for diagnostics but is not a divergence decision
+input.
+
+Pass the expected host record into the build-phase Kitchen config. During
+plating, after the hermetic output `merkle_root` is known but before the CCS
+package is written, call the divergence helper and update
+`HermeticBuildEvidence.divergence`.
+
+M2a records divergence diagnostics only; it must not fail a hermetic build
+solely because host and hermetic outputs differ. `DiffersFromHost` is expected
+for many compiled packages because host and hermetic environments differ, so CLI
+messaging should be concise and non-alarming. M2b or a later policy can turn
+divergence into a publish lint gate only after host-record integrity is
+hardened.
+
+- [ ] **Step 5: Run tests**
 
 Run:
 
 ```bash
-cargo test -p conary-core recipe::hermetic::plan
+cargo test -p conary-core recipe::hermetic::divergence
 cargo test -p conary-core recipe::hermetic::evidence
+cargo test -p conary-core recipe::kitchen
 ```
 
 Expected: divergence report tests pass.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add crates/conary-core/src/recipe/hermetic crates/conary-core/src/recipe/kitchen
