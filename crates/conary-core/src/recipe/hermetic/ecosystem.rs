@@ -5,10 +5,8 @@ use super::source_identity::{CiMode, local_tree_identity};
 use crate::error::Result;
 use crate::hash;
 use crate::recipe::BuildSystem;
-use std::ffi::OsStr;
 use std::fs;
-use std::path::Component;
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
 pub fn evaluate_ecosystem_policy(
     build_system: BuildSystem,
@@ -61,24 +59,21 @@ fn evaluate_cargo_policy(source_root: &Path, command_text: &str) -> Result<Ecosy
 
     let has_registry_dependencies = cargo_lock_has_registry_dependencies(&lock_contents);
     if has_registry_dependencies {
-        let vendor_path = source_root.join("vendor");
-        if vendor_path.is_dir() {
-            identities.push(vendor_identity(&vendor_path)?);
-        } else {
+        if let Some(replacement) = config.replacement.clone() {
+            identities.push(replacement.identity);
+        } else if !config.exists {
             diagnostics.push(
-                "Cargo.lock has registry dependencies; vendor/ is required for M2a hermetic policy"
+                "Cargo.lock has registry dependencies; .cargo/config.toml must replace crates-io with vendor/ or a pinned Cargo cache"
                     .to_string(),
             );
-        }
-
-        if !config.exists {
+        } else if !config.source_replacement_configured {
             diagnostics.push(
-                "Cargo.lock has registry dependencies; .cargo/config.toml must replace crates-io with vendor/"
+                ".cargo/config.toml must replace crates-io with vendor/ or a pinned Cargo cache"
                     .to_string(),
             );
         } else if !config.replaces_crates_io_with_vendor {
             diagnostics.push(
-                ".cargo/config.toml must replace crates-io with a source directory pinned to vendor/"
+                ".cargo/config.toml must replace crates-io with a valid in-tree source directory or local registry"
                     .to_string(),
             );
         }
@@ -126,8 +121,15 @@ struct CargoConfigEvidence {
     exists: bool,
     offline: bool,
     replaces_crates_io_with_vendor: bool,
+    source_replacement_configured: bool,
+    replacement: Option<CargoSourceReplacement>,
     identity: Option<EcosystemDependencyIdentity>,
     diagnostics: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct CargoSourceReplacement {
+    identity: EcosystemDependencyIdentity,
 }
 
 impl CargoConfigEvidence {
@@ -138,6 +140,8 @@ impl CargoConfigEvidence {
                 exists: false,
                 offline: false,
                 replaces_crates_io_with_vendor: false,
+                source_replacement_configured: false,
+                replacement: None,
                 identity: None,
                 diagnostics: Vec::new(),
             });
@@ -150,6 +154,8 @@ impl CargoConfigEvidence {
                 exists: true,
                 offline: false,
                 replaces_crates_io_with_vendor: false,
+                source_replacement_configured: false,
+                replacement: None,
                 identity: Some(identity),
                 diagnostics: vec![
                     ".cargo/config.toml must be valid TOML to provide Cargo offline policy evidence"
@@ -158,18 +164,32 @@ impl CargoConfigEvidence {
             });
         };
 
+        let source_replacement = cargo_config_source_replacement(source_root, &table)?;
         Ok(Self {
             exists: true,
             offline: cargo_config_offline(&table),
-            replaces_crates_io_with_vendor: cargo_config_replaces_crates_io_with_vendor(&table),
+            replaces_crates_io_with_vendor: source_replacement.replaces_crates_io_with_vendor,
+            source_replacement_configured: source_replacement.configured,
+            replacement: source_replacement.replacement,
             identity: Some(identity),
-            diagnostics: Vec::new(),
+            diagnostics: source_replacement.diagnostics,
         })
     }
 
     fn should_record_identity(&self) -> bool {
-        self.offline || self.replaces_crates_io_with_vendor || !self.diagnostics.is_empty()
+        self.offline
+            || self.source_replacement_configured
+            || self.replacement.is_some()
+            || !self.diagnostics.is_empty()
     }
+}
+
+#[derive(Debug, Clone, Default)]
+struct CargoSourceReplacementEvidence {
+    configured: bool,
+    replaces_crates_io_with_vendor: bool,
+    replacement: Option<CargoSourceReplacement>,
+    diagnostics: Vec<String>,
 }
 
 fn cargo_config_offline(table: &toml::Table) -> bool {
@@ -181,9 +201,12 @@ fn cargo_config_offline(table: &toml::Table) -> bool {
         .unwrap_or(false)
 }
 
-fn cargo_config_replaces_crates_io_with_vendor(table: &toml::Table) -> bool {
+fn cargo_config_source_replacement(
+    source_root: &Path,
+    table: &toml::Table,
+) -> Result<CargoSourceReplacementEvidence> {
     let Some(source) = table.get("source").and_then(toml::Value::as_table) else {
-        return false;
+        return Ok(CargoSourceReplacementEvidence::default());
     };
     let Some(replacement_name) = source
         .get("crates-io")
@@ -191,30 +214,80 @@ fn cargo_config_replaces_crates_io_with_vendor(table: &toml::Table) -> bool {
         .and_then(|crates_io| crates_io.get("replace-with"))
         .and_then(toml::Value::as_str)
     else {
-        return false;
+        return Ok(CargoSourceReplacementEvidence::default());
     };
-    let Some(directory) = source
-        .get(replacement_name)
-        .and_then(toml::Value::as_table)
-        .and_then(|replacement| replacement.get("directory"))
+
+    let mut evidence = CargoSourceReplacementEvidence {
+        configured: true,
+        ..CargoSourceReplacementEvidence::default()
+    };
+    let Some(replacement) = source.get(replacement_name).and_then(toml::Value::as_table) else {
+        evidence.diagnostics.push(format!(
+            ".cargo/config.toml source replacement {replacement_name:?} must define directory or local-registry"
+        ));
+        return Ok(evidence);
+    };
+
+    let Some(configured_path) = replacement
+        .get("directory")
+        .or_else(|| replacement.get("local-registry"))
         .and_then(toml::Value::as_str)
     else {
-        return false;
+        evidence.diagnostics.push(format!(
+            ".cargo/config.toml source replacement {replacement_name:?} must define directory or local-registry"
+        ));
+        return Ok(evidence);
     };
 
-    cargo_source_directory_is_vendor(directory)
+    let Ok(relative_path) = normalize_pinned_replacement_path(configured_path) else {
+        evidence.diagnostics.push(format!(
+            ".cargo/config.toml pinned cache/source replacement {configured_path:?} must be relative and must not contain parent traversal"
+        ));
+        return Ok(evidence);
+    };
+
+    let replacement_path = source_root.join(&relative_path);
+    if !replacement_path.is_dir() {
+        evidence.diagnostics.push(format!(
+            ".cargo/config.toml pinned cache/source replacement {} is missing or is not a directory",
+            normalized_path_display(&relative_path)
+        ));
+        return Ok(evidence);
+    }
+
+    let source_root = fs::canonicalize(source_root)?;
+    let replacement_path = fs::canonicalize(&replacement_path)?;
+    if !replacement_path.starts_with(&source_root) {
+        evidence.diagnostics.push(format!(
+            ".cargo/config.toml pinned cache/source replacement {} must stay inside source_root",
+            normalized_path_display(&relative_path)
+        ));
+        return Ok(evidence);
+    }
+
+    let evidence_path = normalized_path_display(&relative_path);
+    evidence.replaces_crates_io_with_vendor = evidence_path == "vendor";
+    evidence.replacement = Some(CargoSourceReplacement {
+        identity: replacement_identity(&evidence_path, &replacement_path)?,
+    });
+    Ok(evidence)
 }
 
-fn cargo_source_directory_is_vendor(directory: &str) -> bool {
-    let components = Path::new(directory)
-        .components()
-        .filter(|component| !matches!(component, Component::CurDir))
-        .collect::<Vec<_>>();
+fn normalize_pinned_replacement_path(configured_path: &str) -> std::result::Result<PathBuf, ()> {
+    let mut normalized = PathBuf::new();
+    for component in Path::new(configured_path).components() {
+        match component {
+            Component::CurDir => {}
+            Component::Normal(part) => normalized.push(part),
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => return Err(()),
+        }
+    }
 
-    matches!(
-        components.as_slice(),
-        [Component::Normal(component)] if *component == OsStr::new("vendor")
-    )
+    if normalized.as_os_str().is_empty() {
+        Err(())
+    } else {
+        Ok(normalized)
+    }
 }
 
 fn command_has_offline_flag(command_text: &str) -> bool {
@@ -244,13 +317,23 @@ fn file_identity(
     })
 }
 
-fn vendor_identity(path: &Path) -> Result<EcosystemDependencyIdentity> {
+fn replacement_identity(evidence_path: &str, path: &Path) -> Result<EcosystemDependencyIdentity> {
     let identity = local_tree_identity(path, CiMode::Off)?;
     Ok(EcosystemDependencyIdentity {
         ecosystem: "cargo".to_string(),
-        evidence_path: "vendor".to_string(),
+        evidence_path: evidence_path.to_string(),
         evidence_hash: identity.tree_hash,
     })
+}
+
+fn normalized_path_display(path: &Path) -> String {
+    path.components()
+        .filter_map(|component| match component {
+            Component::Normal(part) => Some(part.to_string_lossy()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 fn ecosystem_name(build_system: BuildSystem) -> &'static str {
@@ -311,6 +394,20 @@ replace-with = "vendored-sources"
 [source.vendored-sources]
 directory = "vendor"
 "#
+    }
+
+    fn cargo_local_registry_config(path: &str) -> String {
+        format!(
+            r#"[net]
+offline = true
+
+[source.crates-io]
+replace-with = "local-cache"
+
+[source.local-cache]
+local-registry = "{path}"
+"#
+        )
     }
 
     fn diagnostics(report: &EcosystemPolicyReport) -> String {
@@ -423,6 +520,78 @@ directory = "vendor"
             assert!(
                 evidence_hash.starts_with("sha256:"),
                 "expected sha256 hash for {evidence_path}, got {evidence_hash}"
+            );
+        }
+    }
+
+    #[test]
+    fn cargo_registry_dependency_with_pinned_cache_identity_is_recorded() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            &dir.path().join("Cargo.lock"),
+            cargo_lock_with_registry_dependency(),
+        );
+        write(
+            &dir.path().join(".cargo/local-registry/index/serde"),
+            "serde 1.0.0\n",
+        );
+        write(
+            &dir.path().join(".cargo/config.toml"),
+            &cargo_local_registry_config(".cargo/local-registry"),
+        );
+
+        let report = evaluate_ecosystem_policy(
+            BuildSystem::Cargo,
+            dir.path(),
+            "cargo build --release --locked",
+        )
+        .unwrap();
+
+        assert_eq!(report.status, PolicyStatus::Clean);
+        for evidence_path in ["Cargo.lock", ".cargo/config.toml", ".cargo/local-registry"] {
+            let evidence_hash =
+                identity_hash_for(&report, evidence_path).expect("expected ecosystem identity");
+            assert!(
+                evidence_hash.starts_with("sha256:"),
+                "expected sha256 hash for {evidence_path}, got {evidence_hash}"
+            );
+        }
+    }
+
+    #[test]
+    fn cargo_registry_dependency_blocks_invalid_pinned_replacement_paths() {
+        let cases = [
+            ("/tmp/conary-cache", "relative"),
+            ("../outside-cache", "parent"),
+        ];
+
+        for (replacement_path, expected_diagnostic) in cases {
+            let dir = tempfile::tempdir().unwrap();
+            write(
+                &dir.path().join("Cargo.lock"),
+                cargo_lock_with_registry_dependency(),
+            );
+            write(
+                &dir.path().join(".cargo/config.toml"),
+                &cargo_local_registry_config(replacement_path),
+            );
+
+            let report = evaluate_ecosystem_policy(
+                BuildSystem::Cargo,
+                dir.path(),
+                "cargo build --release --locked",
+            )
+            .unwrap();
+
+            assert_eq!(report.status, PolicyStatus::Blocked);
+            let diagnostics = diagnostics(&report);
+            assert!(
+                diagnostics.contains(replacement_path),
+                "expected replacement path in diagnostic, got {diagnostics:?}"
+            );
+            assert!(
+                diagnostics.contains(expected_diagnostic),
+                "expected {expected_diagnostic:?} diagnostic, got {diagnostics:?}"
             );
         }
     }
