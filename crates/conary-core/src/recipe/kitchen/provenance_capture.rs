@@ -573,6 +573,7 @@ mod tests {
                     "SOURCE_DATE_EPOCH".to_string(),
                 ],
             },
+            divergence: Default::default(),
             diagnostics: Vec::new(),
         }
     }

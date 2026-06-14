@@ -1,6 +1,7 @@
 // conary-core/src/recipe/hermetic/mod.rs
 
 pub mod command_risk;
+pub mod divergence;
 pub mod ecosystem;
 pub mod evidence;
 pub mod plan;
@@ -8,6 +9,7 @@ pub mod reproducibility;
 pub mod source_identity;
 
 pub use command_risk::{BuildCommandText, classify_build_commands, collect_recipe_command_text};
+pub use divergence::{DivergenceReport, DivergenceStatus, HostBuildRecord, compare_host_record};
 pub use ecosystem::evaluate_ecosystem_policy;
 pub use evidence::{
     BuildCommandRiskEntry, BuildCommandRiskReport, BuildInputIdentity, BuilderEnvironmentIdentity,

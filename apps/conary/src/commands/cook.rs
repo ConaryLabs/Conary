@@ -3,7 +3,9 @@
 //! Cook command - build packages from recipes
 
 use anyhow::{Context, Result};
-use conary_core::recipe::hermetic::{HermeticBuildInput, detect_ci_mode};
+use conary_core::ccs::manifest::ManifestProvenance;
+use conary_core::recipe::CookResult;
+use conary_core::recipe::hermetic::{DivergenceStatus, HermeticBuildInput, detect_ci_mode};
 use conary_core::recipe::inference::{
     CookTarget, ResolvedSourceTree, SourceTargetKind, SourceTargetProvenance,
     infer_recipe_from_path, resolve_cook_target,
@@ -18,6 +20,10 @@ use std::path::{Path, PathBuf};
 use tracing::info;
 
 use super::hermetic_config::{ensure_no_build_dependencies_for_m2a, load_default_hermetic_builder};
+use super::hermetic_state::{
+    host_build_record_from_cook_result, load_latest_host_build_record_for_recipe,
+    resolve_default_state_dir, write_host_build_record_to_dir,
+};
 
 pub(crate) fn recipe_source_base_dir(recipe_path: &Path) -> PathBuf {
     recipe_path
@@ -314,6 +320,7 @@ async fn cmd_cook_with_output(
         config.sysroot = Some(builder.sysroot_path.clone());
         config.auto_makedepends = false;
         config.cleanup_makedepends = false;
+        configure_host_record_for_hermetic(&mut config, &recipe);
         Some(builder)
     } else {
         None
@@ -387,6 +394,11 @@ async fn cmd_cook_with_output(
             writeln!(output, "  - {}", warning)?;
         }
     }
+    if hermetic_requested {
+        print_divergence_summary(output, result.provenance.as_ref())?;
+    } else {
+        write_host_record_after_host_cook(output, &recipe, &result)?;
+    }
 
     info!(
         "Successfully cooked {} to {}",
@@ -394,6 +406,68 @@ async fn cmd_cook_with_output(
         result.package_path.display()
     );
 
+    Ok(())
+}
+
+fn configure_host_record_for_hermetic(config: &mut KitchenConfig, recipe: &Recipe) {
+    let architecture = Some(std::env::consts::ARCH);
+    match resolve_default_state_dir() {
+        Ok(state_dir) => {
+            let lookup = load_latest_host_build_record_for_recipe(&state_dir, recipe, architecture);
+            config.expected_host_build_record = lookup.record;
+            config.host_build_record_diagnostics = lookup.diagnostics;
+        }
+        Err(error) => {
+            config.host_build_record_diagnostics = vec![format!(
+                "failed to resolve hermetic host record state directory: {error}"
+            )];
+        }
+    }
+}
+
+fn write_host_record_after_host_cook(
+    output: &mut impl Write,
+    recipe: &Recipe,
+    result: &CookResult,
+) -> Result<()> {
+    if skip_default_host_record_write_in_unit_tests() {
+        return Ok(());
+    }
+    let Some(record) = host_build_record_from_cook_result(recipe, result) else {
+        return Ok(());
+    };
+    match resolve_default_state_dir()
+        .and_then(|state_dir| write_host_build_record_to_dir(&state_dir, &record))
+    {
+        Ok(_) => {}
+        Err(error) => {
+            writeln!(
+                output,
+                "Warning: could not write hermetic host build record: {error}"
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn skip_default_host_record_write_in_unit_tests() -> bool {
+    cfg!(test) && std::env::var_os("CONARY_HERMETIC_STATE_DIR").is_none()
+}
+
+fn print_divergence_summary(
+    output: &mut impl Write,
+    provenance: Option<&ManifestProvenance>,
+) -> Result<()> {
+    let Some(evidence) = provenance.and_then(|provenance| provenance.hermetic_evidence.as_ref())
+    else {
+        return Ok(());
+    };
+    if evidence.divergence.status == DivergenceStatus::DiffersFromHost {
+        writeln!(
+            output,
+            "Warning: hermetic output differs from the latest host build record; this is diagnostic-only in M2a."
+        )?;
+    }
     Ok(())
 }
 

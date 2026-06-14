@@ -212,6 +212,7 @@ impl HermeticBuildPlan {
             ecosystem_policy,
             command_risk,
             reproducibility: reproducibility.record(),
+            divergence: Default::default(),
             diagnostics,
         };
 

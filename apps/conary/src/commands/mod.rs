@@ -25,6 +25,7 @@ mod federation;
 pub mod generation;
 pub mod groups;
 pub(crate) mod hermetic_config;
+pub(crate) mod hermetic_state;
 mod install;
 mod label;
 mod legacy_replay_policy;

@@ -7,7 +7,9 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use conary_core::recipe::hermetic::{HermeticBuildInput, detect_ci_mode};
+use conary_core::ccs::manifest::ManifestProvenance;
+use conary_core::recipe::Recipe;
+use conary_core::recipe::hermetic::{DivergenceStatus, HermeticBuildInput, detect_ci_mode};
 use conary_core::recipe::{
     Kitchen, KitchenConfig, SourceDownloadPolicy, parse_recipe_file, validate_recipe,
 };
@@ -18,6 +20,7 @@ use conary_core::repository::static_repo::publish::{
 
 use super::cook::{recipe_source_base_dir, resolve_recipe_path};
 use super::hermetic_config::{ensure_no_build_dependencies_for_m2a, load_default_hermetic_builder};
+use super::hermetic_state::{load_latest_host_build_record_for_recipe, resolve_default_state_dir};
 
 const ARTIFACT_FORM_REJECTION: &str = "artifact-form publish requires M2 attestation support; run project-form publish from a recipe project";
 
@@ -74,7 +77,8 @@ pub async fn cmd_publish(options: PublishOptions) -> Result<()> {
         sha256_prefixed_file(&recipe_path)?,
     )
     .with_builder_environment(builder_identity);
-    let config = publish_kitchen_config(&recipe_path, output_dir.path(), builder_sysroot);
+    let mut config = publish_kitchen_config(&recipe_path, output_dir.path(), builder_sysroot);
+    configure_host_record_for_publish(&mut config, &recipe);
     let kitchen = Kitchen::new(config);
 
     println!(
@@ -88,6 +92,7 @@ pub async fn cmd_publish(options: PublishOptions) -> Result<()> {
     let result = kitchen
         .cook_hermetic(&recipe, hermetic_input, output_dir.path(), detect_ci_mode())
         .with_context(|| format!("Failed to hermetically cook {}", recipe.package.name))?;
+    print_divergence_summary(result.provenance.as_ref());
 
     let outcome = publish_static_repo(StaticPublishOptions {
         repo_name: repo_name.clone(),
@@ -147,6 +152,34 @@ fn sha256_prefixed_file(path: &Path) -> Result<String> {
     let hash = conary_core::hash::sha256_reader_hex(&mut file)
         .with_context(|| format!("Failed to hash recipe: {}", path.display()))?;
     Ok(format!("sha256:{hash}"))
+}
+
+fn configure_host_record_for_publish(config: &mut KitchenConfig, recipe: &Recipe) {
+    let architecture = Some(std::env::consts::ARCH);
+    match resolve_default_state_dir() {
+        Ok(state_dir) => {
+            let lookup = load_latest_host_build_record_for_recipe(&state_dir, recipe, architecture);
+            config.expected_host_build_record = lookup.record;
+            config.host_build_record_diagnostics = lookup.diagnostics;
+        }
+        Err(error) => {
+            config.host_build_record_diagnostics = vec![format!(
+                "failed to resolve hermetic host record state directory: {error}"
+            )];
+        }
+    }
+}
+
+fn print_divergence_summary(provenance: Option<&ManifestProvenance>) {
+    let Some(evidence) = provenance.and_then(|provenance| provenance.hermetic_evidence.as_ref())
+    else {
+        return;
+    };
+    if evidence.divergence.status == DivergenceStatus::DiffersFromHost {
+        println!(
+            "Warning: hermetic output differs from the latest host build record; this is diagnostic-only in M2a."
+        );
+    }
 }
 
 fn ensure_m1a_publish_destination(destination: &RepoLocation) -> Result<()> {

@@ -3,6 +3,7 @@
 //! Configuration types for the Kitchen build system
 
 use crate::recipe::format::BuildStage;
+use crate::recipe::hermetic::HostBuildRecord;
 use crate::recipe::hermetic::evidence::HermeticBuildEvidence;
 use crate::recipe::hermetic::reproducibility::ReproducibilityConfig;
 use crate::recipe::hermetic::source_identity::CanonicalLocalFile;
@@ -213,6 +214,10 @@ pub struct KitchenConfig {
     pub hermetic_evidence: Option<HermeticBuildEvidence>,
     /// Reproducibility controls planned for the build.
     pub reproducibility: Option<ReproducibilityConfig>,
+    /// Latest comparable host build record, used only for M2a diagnostic evidence.
+    pub expected_host_build_record: Option<HostBuildRecord>,
+    /// Diagnostics encountered while loading local host build records.
+    pub host_build_record_diagnostics: Vec<String>,
     /// Timeout for build operations
     pub timeout: Duration,
     /// Number of parallel jobs
@@ -274,6 +279,8 @@ impl Default for KitchenConfig {
             hermetic_local_files: None,
             hermetic_evidence: None,
             reproducibility: None,
+            expected_host_build_record: None,
+            host_build_record_diagnostics: Vec::new(),
             timeout: Duration::from_secs(3600), // 1 hour
             jobs,
             allow_network: false,
