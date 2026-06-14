@@ -2482,6 +2482,11 @@ mod tests {
                 "MAKEFLAGS='-rEexport SOURCE_DATE_EPOCH=999' make",
                 "MAKEFLAGS",
             ),
+            ("make --ev=export SOURCE_DATE_EPOCH=999", "--ev"),
+            ("MAKEFLAGS='--ev=export CFLAGS=bad' make", "MAKEFLAGS"),
+            ("make --fi=evil.mk", "--fi"),
+            ("GNUMAKEFLAGS=--fi=evil.mk make", "GNUMAKEFLAGS"),
+            ("make --mak=evil.mk", "--mak"),
             (
                 "command env SOURCE_DATE_EPOCH=999 make",
                 "SOURCE_DATE_EPOCH",
