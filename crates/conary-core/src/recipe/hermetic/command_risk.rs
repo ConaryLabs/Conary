@@ -344,13 +344,18 @@ fn is_shell_word_boundary(ch: Option<char>) -> bool {
 
 fn contains_shell_command_separator(text: &str) -> bool {
     let mut chars = text.chars().peekable();
+    let mut previous = None;
     while let Some(ch) = chars.next() {
         match ch {
+            '&' if chars.peek() == Some(&'&') => return true,
+            '&' if previous.is_some_and(|ch| matches!(ch, '>' | '<'))
+                || chars.peek().is_some_and(|ch| matches!(ch, '>' | '<')) => {}
             '&' => return true,
             '|' | ';' | '(' | ')' | '`' | '\n' => return true,
             '$' if chars.peek() == Some(&'(') => return true,
             _ => {}
         }
+        previous = Some(ch);
     }
     false
 }
@@ -581,7 +586,7 @@ mod tests {
     fn raw_fallback_does_not_pair_multiword_signals_across_shell_segments() {
         let report = classify_build_commands(&[BuildCommandText::new(
             "make",
-            "go env && make install\ngit status & make clone\npython script.py && echo -c",
+            "go env && make install\ngit status & make clone\npython script.py && echo -c\ngo env&make install",
         )]);
 
         assert_eq!(report.status, PolicyStatus::Clean);
@@ -597,5 +602,35 @@ mod tests {
         assert_reason(&report, "package-manager-fetch");
         assert_reason(&report, "network-fetch");
         assert_reason(&report, "dynamic-language-exec");
+    }
+
+    #[test]
+    fn raw_fallback_keeps_redirections_inside_multiword_signals() {
+        let cases = [
+            ("go 2>&1 install example.org/tool", "package-manager-fetch"),
+            (
+                "bash -c 'git 2>&1 clone https://example.invalid/repo'",
+                "network-fetch",
+            ),
+            (
+                "bash -c '/usr/bin/python3 2>&1 -c \"print(1)\"'",
+                "dynamic-language-exec",
+            ),
+            ("bash -c 'base64 2>&1 --decode payload.txt'", "obfuscation"),
+            (
+                "bash -c 'systemctl 2>&1 enable payload.service'",
+                "persistence",
+            ),
+        ];
+
+        for (content, reason_code) in cases {
+            let report = classify_build_commands(&[BuildCommandText::new("make", content)]);
+            assert_eq!(
+                report.status,
+                PolicyStatus::Blocked,
+                "{content} should be blocked"
+            );
+            assert_reason(&report, reason_code);
+        }
     }
 }
