@@ -142,6 +142,7 @@ docs/superpowers/project-maintainability-dead-surface-inventory-2026-06-06.md	pl
 docs/superpowers/release-security-waivers-2026-05-06.md	planning	maintainer
 docs/superpowers/specs/2026-06-10-packaging-toolchain-design.md	planning	maintainer
 docs/superpowers/specs/2026-06-13-m2-publish-hardening-remi-design.md	planning	maintainer
+docs/superpowers/specs/2026-06-14-m2a-builder-config-publish-divergence-design.md	planning	maintainer
 docs/superpowers/specs/archive/2026-04-10-all-tracks-release-hardening-design.md	historical	historical
 docs/superpowers/specs/archive/2026-04-10-conaryd-forge-staging-deployment-design.md	historical	historical
 docs/superpowers/specs/archive/2026-04-16-bootstrap-self-hosting-vm-design.md	historical	historical
