@@ -7,7 +7,7 @@ use crate::ccs::manifest::{CcsManifest, ManifestProvenance, PackageDep};
 use crate::container::{BindMount, ContainerConfig, Sandbox};
 use crate::error::{Error, Result};
 use crate::recipe::format::{Recipe, SourceSection, is_remote_url};
-use crate::recipe::hermetic::ReproducibilityConfig;
+use crate::recipe::hermetic::{ReproducibilityConfig, compare_host_record};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
@@ -822,6 +822,7 @@ impl<'a> Cook<'a> {
 
         // Compute merkle root from all file hashes
         self.provenance.compute_merkle_root();
+        self.record_hermetic_divergence();
 
         // Convert provenance capture to manifest format
         let provenance = self.provenance.to_manifest_provenance();
@@ -854,6 +855,25 @@ impl<'a> Cook<'a> {
         );
 
         Ok((package_path, provenance))
+    }
+
+    fn record_hermetic_divergence(&mut self) {
+        let Some(evidence) = self.provenance.hermetic_evidence.as_mut() else {
+            return;
+        };
+
+        let mut report = compare_host_record(
+            self.kitchen.config.expected_host_build_record.as_ref(),
+            self.provenance.merkle_root.as_deref(),
+        );
+        report.diagnostics.extend(
+            self.kitchen
+                .config
+                .host_build_record_diagnostics
+                .iter()
+                .cloned(),
+        );
+        evidence.divergence = report;
     }
 
     fn log_line(&mut self, line: &str) {
@@ -1659,6 +1679,7 @@ mod tests {
                     "SOURCE_DATE_EPOCH".to_string(),
                 ],
             },
+            divergence: Default::default(),
             diagnostics: Vec::new(),
         }
     }

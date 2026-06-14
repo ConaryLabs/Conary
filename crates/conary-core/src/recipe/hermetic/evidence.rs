@@ -2,6 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::divergence::DivergenceReport;
+
 pub const HERMETIC_EVIDENCE_SCHEMA_V1: u32 = 1;
 pub const COMMAND_RISK_CLASSIFIER_VERSION: &str = "m2a-command-risk-v1";
 
@@ -13,6 +15,8 @@ pub struct HermeticBuildEvidence {
     pub ecosystem_policy: EcosystemPolicyReport,
     pub command_risk: BuildCommandRiskReport,
     pub reproducibility: ReproducibilityRecord,
+    #[serde(default)]
+    pub divergence: DivergenceReport,
     pub diagnostics: Vec<String>,
 }
 
@@ -227,6 +231,7 @@ mod tests {
                 path_remap_count: 1,
                 env_keys: vec!["SOURCE_DATE_EPOCH".to_string()],
             },
+            divergence: DivergenceReport::default(),
             diagnostics: vec![],
         };
 
@@ -236,6 +241,59 @@ mod tests {
         assert_eq!(json["build_input"]["source"]["kind"], "archive");
         assert_eq!(json["ecosystem_policy"]["status"], "clean");
         assert_eq!(json["command_risk"]["status"], "clean");
+        assert_eq!(json["divergence"]["status"], "no-host-record");
+    }
+
+    #[test]
+    fn hermetic_evidence_defaults_missing_divergence_for_older_evidence() {
+        let json = serde_json::json!({
+            "schema_version": HERMETIC_EVIDENCE_SCHEMA_V1,
+            "build_input": {
+                "recipe": {
+                    "kind": "explicit-recipe",
+                    "path": "recipe.toml",
+                    "hash": "sha256:recipe"
+                },
+                "source": {
+                    "kind": "archive",
+                    "url": "https://example.invalid/pkg.tar.gz",
+                    "checksum": "sha256:source"
+                },
+                "builder_environment": {
+                    "kind": "pristine",
+                    "sysroot_hash": "sha256:sysroot",
+                    "toolchain_hash": null,
+                    "diagnostics": []
+                }
+            },
+            "dependency_lock": {
+                "repository_dependencies": []
+            },
+            "ecosystem_policy": {
+                "ecosystem": "unknown",
+                "status": "clean",
+                "identities": [],
+                "diagnostics": []
+            },
+            "command_risk": {
+                "status": "clean",
+                "classifier_version": COMMAND_RISK_CLASSIFIER_VERSION,
+                "entries": []
+            },
+            "reproducibility": {
+                "source_date_epoch": null,
+                "path_remap_count": 0,
+                "env_keys": []
+            },
+            "diagnostics": []
+        });
+
+        let evidence: HermeticBuildEvidence = serde_json::from_value(json).unwrap();
+
+        assert_eq!(
+            evidence.divergence.status,
+            super::super::divergence::DivergenceStatus::NoHostRecord
+        );
     }
 
     #[test]

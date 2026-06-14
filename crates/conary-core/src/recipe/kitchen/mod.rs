@@ -683,7 +683,9 @@ mod tests {
         BuildSection, LocalSourceSection, PackageSection, RemoteSourceSection, SourceSection,
     };
     use crate::recipe::hermetic::evidence::LockedRepositoryDependency;
-    use crate::recipe::hermetic::{BuilderEnvironmentKind, CiMode, HermeticBuildInput};
+    use crate::recipe::hermetic::{
+        BuilderEnvironmentKind, CiMode, DivergenceStatus, HermeticBuildInput, HostBuildRecord,
+    };
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
     use std::process::Command;
@@ -806,6 +808,20 @@ mod tests {
             release: "1".to_string(),
             architecture: Some("x86_64".to_string()),
             content_identity: "sha256:dependency".to_string(),
+        }
+    }
+
+    fn host_build_record(output_merkle_root: &str) -> HostBuildRecord {
+        HostBuildRecord {
+            package_name: "hermetic-local".to_string(),
+            package_version: "1.0".to_string(),
+            package_release: "1".to_string(),
+            architecture: Some("x86_64".to_string()),
+            output_merkle_root: output_merkle_root.to_string(),
+            diagnostic_input_key: None,
+            diagnostic_dna_hash: None,
+            package_path: None,
+            build_timestamp: Some("2026-06-14T00:00:00Z".to_string()),
         }
     }
 
@@ -1107,6 +1123,58 @@ mod tests {
             evidence.build_input.builder_environment.kind,
             BuilderEnvironmentKind::Pristine
         );
+    }
+
+    #[test]
+    fn cook_hermetic_records_host_divergence_after_merkle_root_is_known() {
+        let dir = tempdir().unwrap();
+        let source_root = dir.path().join("source");
+        let output_dir = dir.path().join("out");
+        let sysroot = dir.path().join("sysroot");
+        fs::create_dir_all(source_root.join("src")).unwrap();
+        write_shell_sysroot(&sysroot);
+        fs::write(
+            source_root.join("Cargo.toml"),
+            "[package]\nname = \"hermetic-local\"\nversion = \"1.0.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        fs::write(source_root.join("Cargo.lock"), "version = 3\n").unwrap();
+        fs::write(source_root.join("src/main.rs"), "fn main() {}\n").unwrap();
+        fs::write(source_root.join("recipe.toml"), "recipe fixture\n").unwrap();
+        fs::create_dir_all(&output_dir).unwrap();
+
+        let kitchen = Kitchen::new(KitchenConfig {
+            source_cache: dir.path().join("cache"),
+            recipe_source_base_dir: Some(source_root.clone()),
+            sysroot: Some(sysroot),
+            expected_host_build_record: Some(host_build_record("sha256:host-output")),
+            use_isolation: false,
+            allow_network: true,
+            memory_limit: 64 * 1024 * 1024 * 1024,
+            ..KitchenConfig::default()
+        });
+        let recipe = make_local_cargo_recipe();
+        let input = HermeticBuildInput::explicit_recipe(
+            &source_root,
+            source_root.join("recipe.toml"),
+            hash::sha256_prefixed(b"recipe fixture\n"),
+        )
+        .with_pristine_builder_environment(
+            Some("sha256:1111111111111111111111111111111111111111111111111111111111111111"),
+            Some("sha256:2222222222222222222222222222222222222222222222222222222222222222"),
+        );
+
+        let result = kitchen
+            .cook_hermetic(&recipe, input, &output_dir, CiMode::Off)
+            .unwrap();
+
+        let provenance = result.provenance.unwrap();
+        let evidence = provenance.hermetic_evidence.unwrap();
+        assert_eq!(
+            evidence.divergence.status,
+            DivergenceStatus::DiffersFromHost
+        );
+        assert!(evidence.divergence.compared);
     }
 
     #[test]
