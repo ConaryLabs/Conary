@@ -164,6 +164,39 @@ fn validate_shell_env_mutation_segment(
     let tokens: Vec<String> = segment.split_whitespace().map(clean_shell_token).collect();
     let mut index = 0;
 
+    loop {
+        index = validate_leading_shell_assignments(config, phase, &tokens, index)?;
+        index = peel_shell_env_wrappers(phase, &tokens, index)?;
+        let Some(command_token) = tokens.get(index).map(String::as_str) else {
+            return Ok(());
+        };
+
+        match command_basename(command_token) {
+            "export" | "readonly" => {
+                return validate_export_env_mutations(config, phase, &tokens[index + 1..]);
+            }
+            "unset" => return validate_unset_env_mutations(phase, &tokens[index + 1..]),
+            "env" => {
+                return validate_env_wrapper_mutations(config, phase, &tokens[index + 1..]);
+            }
+            _ => {}
+        }
+
+        if let Some(next_index) = peel_shell_control_word(phase, &tokens, index)? {
+            index = next_index;
+            continue;
+        }
+
+        return Ok(());
+    }
+}
+
+fn validate_leading_shell_assignments(
+    config: &ReproducibilityConfig,
+    phase: &str,
+    tokens: &[String],
+    mut index: usize,
+) -> Result<usize> {
     while let Some(token) = tokens.get(index) {
         let Some((key, value)) = shell_assignment(token) else {
             break;
@@ -171,18 +204,7 @@ fn validate_shell_env_mutation_segment(
         validate_shell_assignment(config, phase, &key, &value)?;
         index += 1;
     }
-
-    let index = peel_shell_env_wrappers(phase, &tokens, index)?;
-    let Some(command_token) = tokens.get(index).map(String::as_str) else {
-        return Ok(());
-    };
-
-    match command_basename(command_token) {
-        "export" | "readonly" => validate_export_env_mutations(config, phase, &tokens[index + 1..]),
-        "unset" => validate_unset_env_mutations(phase, &tokens[index + 1..]),
-        "env" => validate_env_wrapper_mutations(config, phase, &tokens[index + 1..]),
-        _ => Ok(()),
-    }
+    Ok(index)
 }
 
 fn peel_shell_env_wrappers(phase: &str, tokens: &[String], mut index: usize) -> Result<usize> {
@@ -194,6 +216,33 @@ fn peel_shell_env_wrappers(phase: &str, tokens: &[String], mut index: usize) -> 
         }
     }
     Ok(index)
+}
+
+fn peel_shell_control_word(phase: &str, tokens: &[String], index: usize) -> Result<Option<usize>> {
+    let Some(token) = tokens.get(index).map(String::as_str) else {
+        return Ok(None);
+    };
+    match token {
+        "!" | "if" | "while" | "until" | "then" | "do" | "else" | "elif" | "{" => {
+            Ok(Some(index + 1))
+        }
+        "time" => Ok(Some(peel_time_control_word(phase, tokens, index)?)),
+        "for" | "case" | "select" => Err(Error::ConfigError(format!(
+            "hermetic reproducibility does not support shell control word {token} in {phase} phase"
+        ))),
+        _ => Ok(None),
+    }
+}
+
+fn peel_time_control_word(phase: &str, tokens: &[String], index: usize) -> Result<usize> {
+    let next_index = index + 1;
+    match tokens.get(next_index).map(String::as_str) {
+        Some("-p") => Ok(next_index + 1),
+        Some(token) if token.starts_with('-') => Err(Error::ConfigError(format!(
+            "hermetic reproducibility does not support time option {token} in {phase} phase"
+        ))),
+        _ => Ok(next_index),
+    }
 }
 
 fn peel_command_wrapper(phase: &str, tokens: &[String], index: usize) -> Result<usize> {
@@ -1933,6 +1982,12 @@ mod tests {
                 "readonly RUSTFLAGS=--remap-path-prefix=/src=/build/source-old; make",
                 "RUSTFLAGS",
             ),
+            ("time SOURCE_DATE_EPOCH=999 make", "SOURCE_DATE_EPOCH"),
+            ("! env SOURCE_DATE_EPOCH=999 make", "SOURCE_DATE_EPOCH"),
+            (
+                "if SOURCE_DATE_EPOCH=999 make; then :; fi",
+                "SOURCE_DATE_EPOCH",
+            ),
             (
                 "export RUSTFLAGS=--remap-path-prefix=/src=/build/source-old; make",
                 "RUSTFLAGS",
@@ -1945,6 +2000,43 @@ mod tests {
             assert!(
                 error.to_string().contains(key),
                 "expected {key} rejection for {command}, got: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_shell_env_scanner_rejects_control_word_hidden_env_mutations() {
+        let config = ReproducibilityConfig::new(0, Path::new("/src"), Path::new("/build"));
+        let cases = [
+            ("time SOURCE_DATE_EPOCH=999 make", "SOURCE_DATE_EPOCH"),
+            ("time -p SOURCE_DATE_EPOCH=999 make", "SOURCE_DATE_EPOCH"),
+            ("! env SOURCE_DATE_EPOCH=999 make", "SOURCE_DATE_EPOCH"),
+            ("if SOURCE_DATE_EPOCH=999 make", "SOURCE_DATE_EPOCH"),
+            ("while SOURCE_DATE_EPOCH=999 make", "SOURCE_DATE_EPOCH"),
+            ("until SOURCE_DATE_EPOCH=999 make", "SOURCE_DATE_EPOCH"),
+        ];
+
+        for (segment, expected) in cases {
+            let error = validate_shell_env_mutation_segment(&config, "make", segment).unwrap_err();
+
+            assert!(
+                error.to_string().contains(expected),
+                "expected {expected} rejection for {segment}, got: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_shell_env_scanner_fails_closed_on_unsupported_control_words() {
+        let config = ReproducibilityConfig::new(0, Path::new("/src"), Path::new("/build"));
+        let cases = [("time -v make", "-v"), ("for item in values", "for")];
+
+        for (segment, expected) in cases {
+            let error = validate_shell_env_mutation_segment(&config, "make", segment).unwrap_err();
+
+            assert!(
+                error.to_string().contains(expected),
+                "expected {expected} rejection for {segment}, got: {error}"
             );
         }
     }
