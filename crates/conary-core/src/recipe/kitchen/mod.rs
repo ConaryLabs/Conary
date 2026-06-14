@@ -12,10 +12,15 @@
 pub(crate) mod archive;
 mod config;
 mod cook;
+pub mod local_source;
 pub mod makedepends;
 pub mod provenance_capture;
+mod reproducibility_env;
 
-pub use config::{CookResult, KitchenConfig, SourceChecksumPolicy, StageConfig, StageRegistry};
+pub use config::{
+    CookResult, KitchenConfig, SourceChecksumPolicy, SourceDownloadPolicy, StageConfig,
+    StageRegistry,
+};
 pub use cook::Cook;
 pub use makedepends::{MakedependsResolver, MakedependsResult, NoopResolver};
 // Re-exported for external consumers (e.g., CLI tools that inspect provenance)
@@ -25,6 +30,7 @@ pub use provenance_capture::{CapturedDep, CapturedPatch, ProvenanceCapture};
 use crate::error::{Error, Result};
 use crate::recipe::cache::{BuildCache, ToolchainInfo};
 use crate::recipe::format::{LocalSourceSection, Recipe, SourceSection, is_remote_url};
+use crate::recipe::hermetic::{CiMode, HermeticBuildInput, HermeticBuildPlan};
 use archive::{download_file, verify_file_checksum};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -90,6 +96,13 @@ impl Kitchen {
     /// Set the makedepends resolver
     pub fn set_resolver(&mut self, resolver: Arc<dyn MakedependsResolver>) {
         self.resolver = Some(resolver);
+    }
+
+    fn with_config_preserving_resolver(&self, config: KitchenConfig) -> Self {
+        Self {
+            config,
+            resolver: self.resolver.clone(),
+        }
     }
 
     /// Resolve makedepends for a recipe
@@ -289,6 +302,31 @@ impl Kitchen {
         }
 
         build_result
+    }
+
+    /// Cook a recipe through the M2a hermetic path.
+    ///
+    /// Sources are prefetched with the caller's Kitchen first, then the build
+    /// runs through a cloned Kitchen whose config has hermetic evidence,
+    /// reproducibility controls, pristine isolation, and offline source policy.
+    pub fn cook_hermetic(
+        &self,
+        recipe: &Recipe,
+        input: HermeticBuildInput,
+        output_dir: &Path,
+        ci_mode: CiMode,
+    ) -> Result<CookResult> {
+        let mut prefetch_config = self.config.clone();
+        prefetch_config.recipe_source_base_dir = Some(input.recipe_source_base_dir.clone());
+        self.with_config_preserving_resolver(prefetch_config)
+            .fetch(recipe)?;
+        let plan = HermeticBuildPlan::from_recipe(recipe, input, ci_mode)?;
+        let mut build_config = self.config.clone();
+        plan.apply_to_kitchen_config(&mut build_config);
+        build_config.auto_makedepends = self.config.auto_makedepends;
+        build_config.cleanup_makedepends = self.config.cleanup_makedepends;
+        let kitchen = self.with_config_preserving_resolver(build_config);
+        kitchen.cook(recipe, output_dir)
     }
 
     /// Fetch sources for a recipe without building
@@ -559,6 +597,12 @@ impl Kitchen {
             fs::remove_file(&cached_path)?;
         }
 
+        if self.config.source_download_policy == SourceDownloadPolicy::OfflineCacheOnly {
+            return Err(Error::ConfigError(format!(
+                "source cache miss for {url}; hermetic offline build requires prefetch before build"
+            )));
+        }
+
         // Download the source
         info!("Downloading: {}", url);
         let temp_path = self.config.source_cache.join(format!("{}.tmp", cache_key));
@@ -638,7 +682,10 @@ mod tests {
     use crate::recipe::format::{
         BuildSection, LocalSourceSection, PackageSection, RemoteSourceSection, SourceSection,
     };
+    use crate::recipe::hermetic::evidence::LockedRepositoryDependency;
+    use crate::recipe::hermetic::{BuilderEnvironmentKind, CiMode, HermeticBuildInput};
     use std::fs;
+    use std::sync::{Arc, Mutex};
     use tempfile::tempdir;
 
     fn make_test_recipe(makedepends: &[&str]) -> Recipe {
@@ -678,6 +725,85 @@ mod tests {
             cross: None,
             components: None,
             variables: std::collections::HashMap::new(),
+        }
+    }
+
+    fn make_local_cargo_recipe() -> Recipe {
+        Recipe {
+            package: PackageSection {
+                name: "hermetic-local".to_string(),
+                version: "1.0".to_string(),
+                release: "1".to_string(),
+                summary: None,
+                description: None,
+                license: None,
+                homepage: None,
+            },
+            source: SourceSection::Local(LocalSourceSection {
+                path: PathBuf::from("."),
+            }),
+            build: BuildSection {
+                requires: Vec::new(),
+                makedepends: Vec::new(),
+                configure: None,
+                make: None,
+                setup: Some("true # cargo build --locked --offline".to_string()),
+                check: None,
+                install: Some("printf cooked > %(destdir)s/output.txt".to_string()),
+                post_install: None,
+                workdir: None,
+                environment: std::collections::HashMap::new(),
+                jobs: None,
+                script_file: None,
+                stage: None,
+            },
+            patches: None,
+            cross: None,
+            components: None,
+            variables: std::collections::HashMap::new(),
+        }
+    }
+
+    struct RecordingResolver {
+        check_calls: Mutex<Vec<Vec<String>>>,
+        install_calls: Mutex<Vec<Vec<String>>>,
+    }
+
+    impl RecordingResolver {
+        fn new() -> Self {
+            Self {
+                check_calls: Mutex::new(Vec::new()),
+                install_calls: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    impl MakedependsResolver for RecordingResolver {
+        fn check_missing(&self, deps: &[&str]) -> Result<Vec<String>> {
+            let deps = deps.iter().map(|dep| dep.to_string()).collect::<Vec<_>>();
+            self.check_calls.lock().unwrap().push(deps.clone());
+            Ok(deps)
+        }
+
+        fn install(&self, deps: &[String]) -> Result<Vec<String>> {
+            self.install_calls.lock().unwrap().push(deps.to_vec());
+            Ok(deps.to_vec())
+        }
+
+        fn cleanup(&self, _installed: &[String]) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    fn locked_repository_dependency(package: &str) -> LockedRepositoryDependency {
+        LockedRepositoryDependency {
+            repository_url: "https://repo.example.invalid".to_string(),
+            snapshot_version: "2026-06-14T00:00:00Z".to_string(),
+            package: package.to_string(),
+            version: "1.0".to_string(),
+            release: "1".to_string(),
+            architecture: Some("x86_64".to_string()),
+            content_identity: "sha256:dependency".to_string(),
         }
     }
 
@@ -742,6 +868,29 @@ mod tests {
             .unwrap();
 
         assert_eq!(resolved, cached_path);
+    }
+
+    #[test]
+    fn offline_cache_only_refuses_missing_source() {
+        let cache = tempdir().unwrap();
+        let kitchen = Kitchen::new(KitchenConfig {
+            source_cache: cache.path().to_path_buf(),
+            source_download_policy: SourceDownloadPolicy::OfflineCacheOnly,
+            ..KitchenConfig::default()
+        });
+
+        let error = kitchen
+            .fetch_source("https://example.invalid/test.tar.gz", "sha256:missing")
+            .unwrap_err();
+
+        assert!(error.to_string().contains("source cache miss"));
+        assert!(
+            error
+                .to_string()
+                .contains("https://example.invalid/test.tar.gz")
+        );
+        assert!(error.to_string().contains("offline"));
+        assert!(error.to_string().contains("prefetch"));
     }
 
     #[test]
@@ -853,6 +1002,161 @@ mod tests {
         assert!(
             !kitchen.sources_cached(&recipe),
             "local source files should not be reported as cached source directories"
+        );
+    }
+
+    #[test]
+    fn cook_hermetic_prefetches_then_builds_offline() {
+        let dir = tempdir().unwrap();
+        let source_root = dir.path().join("source");
+        let output_dir = dir.path().join("out");
+        let sysroot = dir.path().join("sysroot");
+        fs::create_dir_all(source_root.join("src")).unwrap();
+        fs::create_dir_all(&sysroot).unwrap();
+        fs::write(
+            source_root.join("Cargo.toml"),
+            "[package]\nname = \"hermetic-local\"\nversion = \"1.0.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        fs::write(source_root.join("Cargo.lock"), "version = 3\n").unwrap();
+        fs::write(source_root.join("src/main.rs"), "fn main() {}\n").unwrap();
+        fs::write(source_root.join("recipe.toml"), "recipe fixture\n").unwrap();
+        fs::create_dir_all(&output_dir).unwrap();
+
+        let kitchen = Kitchen::new(KitchenConfig {
+            source_cache: dir.path().join("cache"),
+            recipe_source_base_dir: Some(source_root.clone()),
+            sysroot: Some(sysroot),
+            use_isolation: false,
+            allow_network: true,
+            memory_limit: 64 * 1024 * 1024 * 1024,
+            ..KitchenConfig::default()
+        });
+        let recipe = make_local_cargo_recipe();
+        let input = HermeticBuildInput::explicit_recipe(
+            &source_root,
+            source_root.join("recipe.toml"),
+            hash::sha256_prefixed(b"recipe fixture\n"),
+        )
+        .with_pristine_builder_environment(
+            Some("sha256:1111111111111111111111111111111111111111111111111111111111111111"),
+            Some("sha256:2222222222222222222222222222222222222222222222222222222222222222"),
+        );
+
+        let result = kitchen
+            .cook_hermetic(&recipe, input, &output_dir, CiMode::Off)
+            .unwrap();
+
+        assert!(result.package_path.exists());
+        let provenance = result.provenance.unwrap();
+        assert_eq!(provenance.hardening_level.as_deref(), Some("hermetic"));
+        let evidence = provenance.hermetic_evidence.unwrap();
+        assert_eq!(
+            evidence.build_input.builder_environment.kind,
+            BuilderEnvironmentKind::Pristine
+        );
+    }
+
+    #[test]
+    fn cook_hermetic_preserves_makedepends_resolver_for_offline_build() {
+        let dir = tempdir().unwrap();
+        let source_root = dir.path().join("source");
+        let output_dir = dir.path().join("out");
+        let sysroot = dir.path().join("sysroot");
+        fs::create_dir_all(source_root.join("src")).unwrap();
+        fs::create_dir_all(&sysroot).unwrap();
+        fs::write(
+            source_root.join("Cargo.toml"),
+            "[package]\nname = \"hermetic-local\"\nversion = \"1.0.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        fs::write(source_root.join("Cargo.lock"), "version = 3\n").unwrap();
+        fs::write(source_root.join("src/main.rs"), "fn main() {}\n").unwrap();
+        fs::write(source_root.join("recipe.toml"), "recipe fixture\n").unwrap();
+        fs::create_dir_all(&output_dir).unwrap();
+
+        let resolver = Arc::new(RecordingResolver::new());
+        let kitchen = Kitchen::with_resolver(
+            KitchenConfig {
+                source_cache: dir.path().join("cache"),
+                recipe_source_base_dir: Some(source_root.clone()),
+                sysroot: Some(sysroot),
+                use_isolation: false,
+                allow_network: true,
+                auto_makedepends: true,
+                cleanup_makedepends: false,
+                memory_limit: 64 * 1024 * 1024 * 1024,
+                ..KitchenConfig::default()
+            },
+            resolver.clone(),
+        );
+        let mut recipe = make_local_cargo_recipe();
+        recipe.build.makedepends = vec!["build-tool".to_string()];
+        let input = HermeticBuildInput::explicit_recipe(
+            &source_root,
+            source_root.join("recipe.toml"),
+            hash::sha256_prefixed(b"recipe fixture\n"),
+        )
+        .with_pristine_builder_environment(
+            Some("sha256:1111111111111111111111111111111111111111111111111111111111111111"),
+            Some("sha256:2222222222222222222222222222222222222222222222222222222222222222"),
+        )
+        .with_locked_repository_dependencies(vec![locked_repository_dependency("build-tool")]);
+
+        kitchen
+            .cook_hermetic(&recipe, input, &output_dir, CiMode::Off)
+            .unwrap();
+
+        assert_eq!(
+            *resolver.check_calls.lock().unwrap(),
+            vec![vec!["build-tool".to_string()]]
+        );
+        assert_eq!(
+            *resolver.install_calls.lock().unwrap(),
+            vec![vec!["build-tool".to_string()]]
+        );
+    }
+
+    #[test]
+    fn cook_hermetic_prefetch_uses_input_source_base() {
+        let dir = tempdir().unwrap();
+        let source_root = dir.path().join("source");
+        let output_dir = dir.path().join("out");
+        fs::create_dir_all(source_root.join("src")).unwrap();
+        fs::write(
+            source_root.join("Cargo.toml"),
+            "[package]\nname = \"hermetic-local\"\nversion = \"1.0.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        fs::write(source_root.join("Cargo.lock"), "version = 3\n").unwrap();
+        fs::write(source_root.join("src/main.rs"), "fn main() {}\n").unwrap();
+        fs::write(source_root.join("recipe.toml"), "recipe fixture\n").unwrap();
+        fs::create_dir_all(&output_dir).unwrap();
+
+        let kitchen = Kitchen::new(KitchenConfig {
+            source_cache: dir.path().join("cache"),
+            recipe_source_base_dir: None,
+            ..KitchenConfig::default()
+        });
+        let recipe = make_local_cargo_recipe();
+        let input = HermeticBuildInput::explicit_recipe(
+            &source_root,
+            source_root.join("recipe.toml"),
+            hash::sha256_prefixed(b"recipe fixture\n"),
+        );
+
+        let error = kitchen
+            .cook_hermetic(&recipe, input, &output_dir, CiMode::Off)
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            error.contains("builder environment identity"),
+            "cook_hermetic should prefetch using input.recipe_source_base_dir and then reach planning: {error}"
+        );
+        assert!(
+            !error.contains("recipe_source_base_dir"),
+            "prefetch should not use the caller's missing KitchenConfig.recipe_source_base_dir: {error}"
         );
     }
 

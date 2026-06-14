@@ -48,6 +48,7 @@ pub mod audit;
 mod cache;
 mod format;
 mod graph;
+pub mod hermetic;
 pub mod inference;
 mod kitchen;
 pub mod parser;
@@ -64,7 +65,7 @@ pub use inference::{
 };
 pub use kitchen::{
     Cook, CookResult, Kitchen, KitchenConfig, MakedependsResolver, MakedependsResult, NoopResolver,
-    SourceChecksumPolicy, StageConfig, StageRegistry,
+    SourceChecksumPolicy, SourceDownloadPolicy, StageConfig, StageRegistry,
 };
 pub use parser::{parse_recipe, parse_recipe_file, validate_recipe};
 pub use pkgbuild::{convert_pkgbuild, pkgbuild_to_toml};

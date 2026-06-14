@@ -89,6 +89,21 @@ pub fn extract_native_entry_invocations(entry: &NativeScriptletEntry) -> Vec<Com
     })
 }
 
+pub fn extract_invocations_from_shell_text(
+    entry_id: &str,
+    content: &str,
+    phase: Option<&str>,
+) -> Vec<CommandInvocation> {
+    extract_invocations_from_text(InvocationText {
+        entry_id,
+        content,
+        source: CommandEvidenceSource::StaticSignal,
+        phase: phase.map(str::to_string),
+        lifecycle_paths: phase.map(str::to_string).into_iter().collect(),
+        interpreter: Some("/bin/sh".to_string()),
+    })
+}
+
 struct InvocationText<'a> {
     entry_id: &'a str,
     content: &'a str,
@@ -497,5 +512,25 @@ mod tests {
             ))
             .is_empty()
         );
+    }
+
+    #[test]
+    fn command_evidence_extracts_invocations_from_shell_text() {
+        let invocations = extract_invocations_from_shell_text(
+            "recipe:make",
+            "npm install atomic-lockfile && bun add js-digest",
+            Some("make"),
+        );
+
+        assert_eq!(invocations.len(), 2);
+        assert_eq!(invocations[0].entry_id, "recipe:make");
+        assert_eq!(invocations[0].source, CommandEvidenceSource::StaticSignal);
+        assert_eq!(invocations[0].phase.as_deref(), Some("make"));
+        assert_eq!(invocations[0].lifecycle_paths, vec!["make"]);
+        assert_eq!(invocations[0].interpreter.as_deref(), Some("/bin/sh"));
+        assert_eq!(invocations[0].command, "npm");
+        assert_eq!(invocations[0].argv, vec!["install", "atomic-lockfile"]);
+        assert_eq!(invocations[1].command, "bun");
+        assert_eq!(invocations[1].argv, vec!["add", "js-digest"]);
     }
 }
