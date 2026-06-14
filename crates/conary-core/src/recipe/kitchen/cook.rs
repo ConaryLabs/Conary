@@ -178,7 +178,7 @@ fn validate_shell_env_mutation_segment(
     };
 
     match command_basename(command_token) {
-        "export" => validate_export_env_mutations(config, phase, &tokens[index + 1..]),
+        "export" | "readonly" => validate_export_env_mutations(config, phase, &tokens[index + 1..]),
         "unset" => validate_unset_env_mutations(phase, &tokens[index + 1..]),
         "env" => validate_env_wrapper_mutations(config, phase, &tokens[index + 1..]),
         _ => Ok(()),
@@ -1923,6 +1923,16 @@ mod tests {
             ),
             ("command unset SOURCE_DATE_EPOCH; make", "SOURCE_DATE_EPOCH"),
             ("exec -c make", "environment"),
+            ("readonly SOURCE_DATE_EPOCH=999; make", "SOURCE_DATE_EPOCH"),
+            ("readonly SOURCE_DATE_EPOCH; make", "SOURCE_DATE_EPOCH"),
+            (
+                "command readonly SOURCE_DATE_EPOCH=999; make",
+                "SOURCE_DATE_EPOCH",
+            ),
+            (
+                "readonly RUSTFLAGS=--remap-path-prefix=/src=/build/source-old; make",
+                "RUSTFLAGS",
+            ),
             (
                 "export RUSTFLAGS=--remap-path-prefix=/src=/build/source-old; make",
                 "RUSTFLAGS",
@@ -1935,6 +1945,32 @@ mod tests {
             assert!(
                 error.to_string().contains(key),
                 "expected {key} rejection for {command}, got: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_shell_env_scanner_rejects_readonly_controlled_vars() {
+        let config = ReproducibilityConfig::new(0, Path::new("/src"), Path::new("/build"));
+        let cases = [
+            ("readonly SOURCE_DATE_EPOCH=999", "SOURCE_DATE_EPOCH"),
+            ("readonly SOURCE_DATE_EPOCH", "SOURCE_DATE_EPOCH"),
+            (
+                "command readonly SOURCE_DATE_EPOCH=999",
+                "SOURCE_DATE_EPOCH",
+            ),
+            (
+                "readonly RUSTFLAGS=--remap-path-prefix=/src=/build/source-old",
+                "RUSTFLAGS",
+            ),
+        ];
+
+        for (segment, expected) in cases {
+            let error = validate_shell_env_mutation_segment(&config, "make", segment).unwrap_err();
+
+            assert!(
+                error.to_string().contains(expected),
+                "expected {expected} rejection for {segment}, got: {error}"
             );
         }
     }
