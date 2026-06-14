@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-06-12
-revision: 23
-summary: Route M1b package authoring and try state
+last_updated: 2026-06-14
+revision: 24
+summary: Route M2a hermetic cook and publish evidence
 ---
 
 # Conary Architecture
@@ -155,7 +155,8 @@ crates/conary-core/      Core library crate
     |   +-- common.rs    Unified PackageMetadata
     +-- ccs/             Native package format
     |   +-- builder.rs   CCS package builder
-    |   +-- manifest.rs  CBOR manifest with Merkle tree
+    |   +-- manifest.rs  Root CCS TOML/CBOR manifest schema and validation
+    |   +-- manifest_provenance.rs Provenance DTOs embedded by the root manifest
     |   +-- signing.rs   Ed25519 signing
     |   +-- lockfile.rs  ccs.lock dependency pinning
     |   +-- convert/     Legacy-to-CCS conversion
@@ -174,7 +175,8 @@ crates/conary-core/      Core library crate
     |   +-- format.rs    Recipe format types and build-stage definitions
     |   +-- parser.rs    TOML recipe parser
     |   +-- inference/   Source-tree, archive, and git target recipe inference
-    |   +-- kitchen/     Build environment (cook, fetch, provenance)
+    |   +-- hermetic/    M2a unsigned hermetic evidence, policy, source identity, and diagnostics
+    |   +-- kitchen/     Build environment (cook, fetch, offline build, provenance)
     |   +-- build graph  Multi-recipe build ordering
     |   +-- cache.rs     Build artifact cache
     |   +-- pkgbuild.rs  Arch PKGBUILD converter
@@ -340,6 +342,22 @@ Client                        Remi Server
   |                               |   or redirect to R2 presigned URL
   |  (repeat for each chunk)      |
 ```
+
+## Data Flow: Hermetic Recipe Cook And Project Publish
+
+M2a makes `conary cook --isolated` the hermetic recipe build path. The command
+loads the local hermetic builder config, refuses recipes with build dependencies
+until dependency content locks exist, prefetches sources, and then runs Kitchen
+with network disabled, pristine/no-host-mount execution, reproducibility
+controls, source identity, command-risk reports, ecosystem policy, builder
+environment identity, and local host-vs-hermetic divergence diagnostics.
+
+Project-form `conary publish <target>` uses the same hermetic Kitchen path
+before adding the resulting CCS package to a static repository. M2a records
+unsigned hermetic evidence in CCS provenance, but it does not create signed
+build-attestation envelopes. Artifact-form
+`conary publish <pkg.ccs> <target>` still rejects until the M2b attestation and
+publish gates land.
 
 ## System Generations
 

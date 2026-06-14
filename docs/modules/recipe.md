@@ -1,13 +1,14 @@
 ---
-last_updated: 2026-04-22
-revision: 1
-summary: Recipe parsing, kitchen execution, build graph behavior, and provenance-aware source builds
+last_updated: 2026-06-14
+revision: 2
+summary: Recipe parsing, M2a hermetic cook, Kitchen execution, and provenance-aware source builds
 ---
 
 # Recipe Module (conary-core/src/recipe/)
 
-Source-based package building. Parses TOML recipe files, resolves build
-dependencies, executes builds in isolated environments, and caches artifacts.
+Source-based package building. Parses TOML recipe files, materializes local or
+remote sources, executes host/sandboxed/hermetic Kitchen builds, and caches
+artifacts.
 
 ## Data Flow: Recipe Cook
 
@@ -18,6 +19,8 @@ recipe.toml
      |
   Recipe { package, source, build, cross, patches, components }
      |
+  Optional HermeticBuildPlan -- source identity, policy, risk, reproducibility
+     |
   Kitchen::new(config, optional MakedependsResolver)
      |
   resolve_makedepends() -- install missing build deps
@@ -25,7 +28,7 @@ recipe.toml
   Cook::new(recipe, kitchen_config)
      |
   Phase pipeline:
-     1. Fetch   -- download archive + additional sources + patches
+     1. Fetch   -- download/prefetch archive + additional sources + patches
      2. Unpack  -- extract archive, detect source directory
      3. Patch   -- apply patches with strip levels
      4. Build   -- run configure/make/install in sandbox
@@ -52,6 +55,9 @@ recipe.toml
 | `Cook` | kitchen/cook.rs | Single recipe execution through fetch/build/package phases |
 | `StageConfig` | kitchen/config.rs | Per-stage sysroot, tools_dir, tool_prefix, target_triple |
 | `MakedependsResolver` (trait) | kitchen/makedepends.rs | Pluggable build dependency installer |
+| `HermeticBuildEvidence` | hermetic/evidence.rs | Unsigned M2a evidence embedded in CCS provenance |
+| `HermeticBuildPlan` | hermetic/plan.rs | Assembles source identity, ecosystem policy, command-risk, reproducibility, and Kitchen hermetic config |
+| `HostBuildRecord` | hermetic/divergence.rs | Local host-build comparison input for diagnostic-only M2a divergence reports |
 | `RecipeGraph` | graph.rs | Directed dependency graph with topological sort |
 | `BuildCache` | cache.rs | Artifact cache keyed by recipe + toolchain + dependency hashes |
 | `CacheEntry` | cache.rs | Cached package path, cache key, created timestamp, size |
@@ -88,11 +94,37 @@ Regex-based extraction from Arch Linux PKGBUILDs. Converts variables
 functions (build, package, prepare, check) to Recipe TOML. Warns on
 unsupported features (split packages, VCS sources, dynamic pkgver).
 
+## M2a Hermetic Cook
+
+After M2a, `conary cook --isolated` is the hermetic build path. The CLI loads
+`apps/conary/src/commands/hermetic_config.rs`, refuses build dependencies until
+content-identity locks exist, and asks `HermeticBuildPlan` to produce the
+unsigned evidence stored under
+`crates/conary-core/src/recipe/hermetic/`. Kitchen then prefetches sources
+while downloads are allowed and switches the build to
+`SourceDownloadPolicy::OfflineCacheOnly`, `allow_network = false`, and
+pristine/no-host-mount execution before it may emit
+`hardening_level = "hermetic"`.
+
+The `hermetic/` module owns evidence DTOs, source identity, ecosystem policy,
+command-risk reports, reproducibility controls, and host-vs-hermetic divergence
+diagnostics. Kitchen remains the execution owner: `cook_hermetic()` applies the
+plan, materializes local sources from the hashed canonical file list, injects
+reproducibility environment controls, runs the build, and records the final
+Merkle-root comparison after plating.
+
+Project-form `conary publish <target>` uses the same hermetic Kitchen path and
+then publishes the cooked CCS package to a static repository. It remains
+pre-M2b: the CCS manifest can carry unsigned M2a hermetic evidence, but there
+is no signed build-attestation envelope yet and artifact-form
+`conary publish <pkg.ccs> <target>` still rejects.
+
 ## Architecture Context
 
 Recipes produce CCS packages, feeding into the same CAS and transaction
-pipeline as any other installation. The Kitchen uses Linux namespace
-isolation (via the container module) for hermetic builds. Provenance
-data captured during cooking is embedded in the output CCS manifest.
+pipeline as any other installation. The Kitchen uses Linux namespace isolation
+through the container module for sandboxed builds and pristine sysroot-only
+mounts for M2a hermetic builds. Provenance data captured during cooking is
+embedded in the output CCS manifest.
 
 See also: [docs/ARCHITECTURE.md](/docs/ARCHITECTURE.md).
