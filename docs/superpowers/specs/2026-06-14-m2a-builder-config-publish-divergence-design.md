@@ -143,16 +143,24 @@ Rules:
   evidence.
 - On Unix, a group-writable or world-writable config file fails closed because
   the file is trust policy, even though it is not secret.
-- On Unix, the config file must be owned by the current effective user or root,
-  and every existing parent directory from the resolved config file up to the
-  config root must not be group- or world-writable.
+- On Unix, the config file must be owned by the current effective user or root.
 - The config loader must canonicalize the config path and apply ownership and
   writability checks to the real path so symlinked config files or parent
-  directories cannot bypass policy.
+  directories cannot bypass policy. The checked config trust chain is the
+  canonical file plus every canonical ancestor from the file's parent up to the
+  first group/world-writable sticky directory or the filesystem root, whichever
+  comes first. Every checked directory below a sticky boundary such as `/tmp`
+  must be owned by the current effective user or root and must not be group- or
+  world-writable.
 - On Unix, the resolved `sysroot_path` directory must be owned by the current
-  effective user or root and must not be group- or world-writable. This check is
-  not a substitute for sysroot measurement; it only prevents obviously mutable
-  local builder policy.
+  effective user or root and must not be group- or world-writable. The loader
+  must also canonicalize and check every canonical ancestor from
+  `sysroot_path` up to the first group/world-writable sticky directory or the
+  filesystem root, whichever comes first. A sticky ancestor such as `/tmp` is
+  acceptable only when every component below it is owned by the current
+  effective user or root and is not group- or world-writable. This check is not
+  a substitute for sysroot measurement; it only prevents obviously mutable local
+  builder policy.
 - Loading and parse errors must include the path consulted. Core builder
   validation errors may pass through, but the CLI wrapper adds the resolved
   config path as context.
@@ -263,7 +271,7 @@ Suggested output:
 
 ```text
 M2a static publish records hermetic build evidence, but release attestation gates arrive in M2b.
-Cooking <name> <version> for static publish (hermetic, pristine/no-host-mount, network disabled)...
+Cooking <name> <version> for static publish (hermetic, pristine/no-host-mount, network disabled during build)...
 ```
 
 `publish_kitchen_config()` should move to hermetic defaults:
@@ -326,11 +334,14 @@ succeeds and no record is written. The record should include:
 
 - package name, version, release, and architecture as the comparison key
 - an optional best-effort input key for diagnostics only
-- package name, version, and release
 - output content identity: manifest `merkle_root`
 - optional `dna_hash` for diagnostics only, not comparison
 - package path for diagnostics only
 - build timestamp
+
+Architecture should come from the built CCS manifest platform architecture when
+present, then `CookResult.provenance.host_arch` when present, and otherwise be
+recorded as absent. Recipes do not carry a package architecture field today.
 
 Local storage is command-owned state, not repository state. Use:
 
