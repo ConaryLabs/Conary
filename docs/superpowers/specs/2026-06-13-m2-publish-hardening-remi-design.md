@@ -66,9 +66,11 @@ once M2b lands.
 - Runtime scriptlet sandboxing defaults to `SandboxMode::Always`, while
   `--sandbox=auto` only enters the protected sandbox when `analyze_script()`
   returns `Medium` or higher. The current analyzer names remote shell pipes,
-  destructive filesystem operations, privilege edits, network backdoors, and
-  obfuscation patterns; it does not yet classify language package-manager fetch
-  commands such as npm or Bun as a medium-risk trigger.
+  destructive filesystem operations, privilege edits, network backdoors,
+  obfuscation patterns, package-manager fetches such as npm/Bun, and dynamic
+  language execution. The remaining M2 work is shared taxonomy and report
+  parity across runtime scriptlets, build commands, PKGBUILD bodies, and foreign
+  conversion evidence.
 - The PKGBUILD converter extracts `prepare`, `build`, `check`, and `package`
   bodies into recipe commands and warns on unsupported conversion features such
   as non-sha256 checksums, split packages, VCS packages, and dynamic `pkgver()`.
@@ -195,6 +197,32 @@ authorize new artifact-form publish. For Remi, accepted signer policy is
 enforced server-side from Remi's configured trusted publisher keys. The client
 may preflight it, but the server is the authority.
 
+Using the same active static publish/package key for static M2b v1 is a
+deliberate simplification, not a long-term assertion that build and repository
+release authority must always be identical. A later key-ceremony slice may add a
+separate trusted-builder key list. M2b v1 does not add that ceremony; it keeps the
+rule simple and auditable: the active static key is the only key that can attest
+and authorize a new static artifact publish.
+
+`AcceptedStaticSignerSet` is the precise static authority boundary. For an
+existing repo, it is derived from verified, target-pinned
+`keys/package-keys.json` active package-key entries after TUF metadata and
+package-key consistency checks pass. Retired package-key entries, local key-dir
+keys not authorized by verified destination metadata, stale active entries, and
+package keys inconsistent with the current verified publishing authority fail
+new publish authorization. For a brand-new repo, the explicit `--key-dir` active
+publish key becomes the initial accepted static signer set only as part of repo
+initialization.
+
+Static publish therefore needs a two-phase API for M2b: prepare a verified
+static publish context, then commit. The prepared context owns signer
+resolution, active-key verification, package-key policy, and the key material
+needed for project-form attestation signing. The commit phase owns immutable
+package placement, package signing, index/TUF writes, and concurrency ordering.
+This lets project-form publish sign the build attestation with the same active
+key the final package signature will use without pushing key-resolution logic
+back into the CLI.
+
 `BuildAttestationEnvelope` is distinct from both existing signature layers. M2b
 should embed it as a new structured field, e.g.
 `ManifestProvenance.build_attestation: Option<BuildAttestationEnvelope>`,
@@ -212,7 +240,7 @@ Ownership boundaries:
 | Static target signer authority, package-key policy, and brand-new repo explicit `--key-dir` behavior | `crates/conary-core/src/repository/static_repo/` plus `apps/conary/src/commands/publish.rs` orchestration |
 | Remi target signer authority and trusted build-attestation signer config/storage | `apps/remi/src/server/config.rs` and the M2d Remi push handler |
 | Publish lint composition and artifact eligibility reason codes | shared core gate/lint helpers, orchestrated from `apps/conary/src/commands/publish.rs`, consumed by static publish, and rechecked by Remi |
-| Command-risk evidence and classifications | existing `crates/conary-core/src/ccs/convert/command_evidence.rs` / blocked-class model or a small core module extracted from it; `container/analysis.rs` consumes that model for `--sandbox=auto` rather than growing a third scanner |
+| Command-risk evidence and classifications | `crates/conary-core/src/ccs/convert/command_evidence.rs` remains the canonical shell-command extractor; `crates/conary-core/src/recipe/hermetic/command_risk.rs` is the current build-time classifier seed; M2 must extract or share the rule vocabulary so publish lint and `container/analysis.rs` cannot drift into separate scanners |
 
 ### Publish Command
 
@@ -231,6 +259,15 @@ publisher ordering. Because `static_repo/publish.rs` is already above the
 large-file decomposition threshold, M2 should place static gate/admission logic
 in focused helper modules such as `static_repo::publish_gate` or a shared core
 publish-gate module, leaving the existing publisher as an ordering/layout owner.
+M2b should create the gate module before adding artifact eligibility logic to
+`publish.rs`, and the implementation plan should name the net line-count target
+for keeping that file from growing beyond its current large-file warning state.
+
+Likewise, `ccs::manifest.rs` and `recipe/kitchen/cook.rs` are near or over their
+maintainability warning thresholds. Attestation schema, embedding/extraction,
+and manifest mutation should live in `ccs::attestation` and
+`ccs::manifest_provenance`; Kitchen should remain build orchestration and call
+helpers rather than absorbing attestation logic.
 
 ### Remi Push
 
@@ -266,6 +303,15 @@ output identity, and publish lint all pass may Remi atomically commit the
 package, index, and TUF state. Failed verification leaves no installable
 artifact.
 
+M2d release push should use a distinct release staging path or split the current
+admin package upload route so release artifacts cannot reuse today's visibility
+path accidentally. A failed release upload must leave no converted-package row,
+no public package detail/index result, no public chunk-store object, and no TUF
+target. For object stores such as R2, the order is: upload to a private staging
+namespace, validate all gates, begin the database transaction, promote staged
+objects to public content storage, update package/index/TUF rows, then commit.
+If promotion fails, the transaction aborts and staged objects are cleaned up.
+
 ## Data Flow
 
 Project-form publish:
@@ -280,7 +326,9 @@ Project-form publish:
    scriptlets for publish-relevant risk signals.
 7. Record dependency locks and build/scriptlet policy reports.
 8. Start an offline Kitchen build with network unavailable, reproducibility
-   controls applied, and build paths mapped.
+   controls applied, build paths mapped, `allow_network = false`, and
+   `source_download_policy = OfflineCacheOnly` asserted at the build execution
+   boundary.
 9. Capture output identity.
 10. Compare against the last host build record when one exists.
 11. Sign a build attestation with the target publisher Ed25519 key. Static
@@ -357,10 +405,15 @@ publish-relevant risk signals:
   persistence hooks, eBPF/BPF probes, proc-hiding indicators, and debugger
   attachment attempts
 
-The shared classifier should reuse or extract from the existing conversion
-command-evidence and blocked-class machinery rather than creating an unrelated
-third scanner. Runtime scriptlet auto-sandboxing can then map the same
-classification vocabulary into `ScriptRisk`.
+The shared classifier should reuse the current M2a building blocks rather than
+creating an unrelated third scanner: `ccs::convert::command_evidence` already
+extracts shell invocations, `recipe::hermetic::command_risk` already reports
+build-command package-manager/network/dynamic-exec risks, and the conversion
+blocked-class model already owns review/block reason codes for legacy
+scriptlets. The remaining work is extracting a shared risk taxonomy/report DTO
+that hermetic build commands, PKGBUILD body reports, runtime `--sandbox=auto`,
+and foreign conversion scriptlets all consume. Runtime scriptlet auto-sandboxing
+can then map the same classification vocabulary into `ScriptRisk`.
 
 For hermetic project-form publish, a classified package-manager/network command
 is allowed only when the command is satisfied from a lock/vendor/prefetch input
@@ -421,6 +474,9 @@ provenance field tells the truth.
 Project-form publish is the release happy path. It performs the hermetic rebuild
 and signing automatically. After M2b, a successful project-form publish emits a
 hermetic artifact with a verified build-attestation envelope and publishes it.
+Project-form publish must use release-grade dirty-tree enforcement regardless of
+the caller's ambient `CI` environment; local dirty git worktrees are refused
+instead of becoming release artifacts with weaker local diagnostics.
 
 ### `conary publish <pkg.ccs> <target>`
 
@@ -473,6 +529,12 @@ signature policy, output identity, foreign conversion boundaries, and publish
 lint server-side, then atomically commits metadata, chunk/index visibility, and
 TUF timestamp state. Transport authentication is necessary but never sufficient
 for artifact authorization.
+
+M2d must also split the current local-static destination guard from Remi target
+routing. The existing M1a filesystem-only static publish refusal remains valid
+for local static repo writes, but authenticated Remi targets need a distinct path
+that allows HTTP(S) only after transport authentication and artifact
+authorization are both configured.
 
 ## Data Model
 
@@ -548,6 +610,13 @@ invocation or config over relying only on the network namespace. Other
 ecosystems may begin as fail-closed classifications with diagnostics if their
 offline strategy is not ready.
 
+When Go or npm move from fail-closed to accepted, the implementation plan must
+name concrete static checks. Examples: Go builds must use a recorded `vendor/`
+tree with `-mod=vendor` or an explicitly pinned local module cache/proxy, and
+npm builds must use a lockfile plus explicit offline/cache mode such as
+`npm ci --offline`. A command that merely has a lockfile nearby but can still
+resolve from the network is not sufficient publish evidence.
+
 ### `BuildOutputIdentity`
 
 Records what was produced:
@@ -568,10 +637,10 @@ after manifest/content identity is computed.
 
 The existing `dna_hash` is not a build output identity. It identifies a
 provenance chain that includes source/build/dependency data and, in the newer
-provenance module, signatures. M2b must not sign an attestation over a hash that
-would change when the attestation or signatures are embedded. If a stronger
-content-only identity is needed, add a new explicit content identity instead of
-reusing `dna_hash`.
+provenance module, signatures. M2b must add or compute a new explicit
+content-only identity for `BuildOutputIdentity`; it must not use `dna_hash` as a
+shortcut. The content identity must remain stable when package signatures or
+attestation envelopes are added, removed, or replaced.
 
 ### `BuildAttestationPayload`
 
@@ -620,6 +689,44 @@ identity. M2 does not introduce a separate machine key ceremony.
 The signature field is not part of the signed payload. The output identity is
 also computed over canonical package content excluding package signatures and
 attestation envelopes, so neither signature layer is self-referential.
+
+### Attestation-Carrying Manifest Projection
+
+M2b must define the exact canonical manifest projection that carries
+attestation-relevant provenance. Today package signatures verify the raw CBOR
+manifest bytes, while TOML provenance is protected through the binary
+manifest's TOML integrity hash. M2b has two acceptable implementation choices:
+
+- promote attestation-bearing provenance into a binary-manifest v2 projection
+  that is directly covered by the package signature; or
+- keep the attestation in `ManifestProvenance` and require artifact-form publish
+  to verify the CBOR package signature, the binary manifest's TOML integrity
+  hash, and the embedded build-attestation envelope before any lint or signer
+  authority decision.
+
+The implementation plan must pick one. Either way, tampering with
+`MANIFEST.toml` attestation/provenance while leaving CBOR and `MANIFEST.sig`
+unchanged must be detected before publish, and re-signing the package must not
+change `BuildOutputIdentity`.
+
+### `ForeignConversionBoundary`
+
+Foreign-converted artifacts need a concrete boundary DTO rather than prose-only
+evidence. M2c should add `ForeignConversionBoundary` under `ccs::attestation` or
+`ccs::convert` and include at least:
+
+- source package format, distro/release when known, architecture, checksum, and
+  package filename or source identity
+- converter name/version and conversion policy version
+- extracted legacy provenance digest
+- `LegacyScriptletBundle` evidence digest and sanitized summary digest
+- build-command and scriptlet risk report digests
+- conversion fidelity/publication status
+- output identity
+
+The build-attestation payload signs the boundary hash when
+`origin_class = "foreign-converted"`. Missing, malformed, or mismatched boundary
+data fails static artifact-form publish and Remi release push.
 
 ### `PublishLintReport`
 
@@ -708,6 +815,12 @@ Project-form publish performs hermetic rebuild plus signing automatically.
 Artifact-form publish refuses artifacts whose build-command or scriptlet risk
 reports are absent, unknown, or unclean.
 
+M2b must first choose the attestation-carrying manifest projection, add the
+static prepared-publish context, and extract publish-gate/lint helpers before
+placing eligibility logic in the existing static publisher. It must also force
+project-form publish through release-grade dirty-tree refusal rather than
+ambient CI detection.
+
 M2b must also define the explicit accepted-signer UX for artifact-form publish
 to a brand-new static repo as explicit `--key-dir` use. The active key in that
 directory is the accepted build-attestation signer and final package signer. M2b
@@ -722,6 +835,11 @@ they are publishable. A foreign-converted artifact must also carry a scriptlet
 and build-body risk report when the source package format can express those
 hooks or command bodies.
 
+M2c owns the `ForeignConversionBoundary` contract and the tests proving existing
+legacy provenance, scriptlet bundle evidence, conversion fidelity, and command
+risk reports flow into the attestation boundary rather than living only in
+Remi/database-local state.
+
 ### M2d: Remi Push
 
 Adds authenticated Remi upload for CCS artifacts that pass the static
@@ -731,6 +849,9 @@ parent design's bearer-token upload authentication. M2d must add Remi trusted
 build-attestation signer configuration or storage, define empty-list behavior as
 fail-closed, and prove uploads stage privately until all artifact gates pass.
 Remi rechecks the shared gate server-side; client preflight is UX only.
+M2d also splits Remi release push from the current admin-upload visibility path
+or hardens that route so release failures leave no package row, no public chunk,
+no package detail/index response, and no TUF target.
 
 ## Non-Goals
 
@@ -754,17 +875,27 @@ expectations are:
   hashed-file-list materialization, reproducibility controls, attestation
   payload/envelope signing and verification, accepted-signer policy, and publish
   lint.
+- Unit tests proving the chosen attestation-carrying manifest projection detects
+  tampered TOML attestation/provenance even when CBOR and `MANIFEST.sig` are
+  unchanged.
 - CLI tests proving project-form publish produces hermetic artifacts with
   verified build-attestation envelopes after M2b.
+- CLI tests proving project-form publish refuses dirty git worktrees regardless
+  of ambient `CI` environment.
 - CLI tests proving artifact-form publish rejects `host`, `sandboxed`,
   `hermetic` without attestation, missing-attestation, mismatched-attestation,
   unaccepted-signer, package-signature failure, absent/unknown provenance,
   stale/unknown policy version, recorded-draft, and unclean foreign-converted
   artifacts.
+- Static publish tests proving `AcceptedStaticSignerSet` is derived from
+  verified active package keys, rejects retired keys, rejects local key-dir
+  mismatches, rejects tampered package-key metadata, and keeps project-form
+  attestation and final package signature on the same active key through key
+  rotation.
 - Regression tests proving `--isolated` and any hidden `--hermetic`
   compatibility path never overclaim.
 - Regression tests proving attestation output identity excludes
-  signature/attestation bytes.
+  signature/attestation bytes and never uses `dna_hash` as the output identity.
 - Regression tests proving `hardening_level` remains `hermetic` for publishable
   artifacts and that attestation is represented by the separate envelope.
 - Regression tests proving ignored or untracked local files cannot affect a
@@ -785,11 +916,23 @@ expectations are:
   evidence exists but the tool still attempts a fetch, and any explicit network
   override is recorded and prevents `hermetic` claims or verified-attestation
   publishability.
+- Shared-risk tests proving runtime `--sandbox=auto`, hermetic build-command
+  reports, PKGBUILD body reports, and foreign conversion scriptlet reports agree
+  on npm/Bun/network/dynamic-exec reason codes.
+- Foreign-conversion tests proving missing or mismatched
+  `ForeignConversionBoundary` data fails static artifact-form publish and Remi
+  release push.
 - Remi tests proving upload gate parity with static publish, including
   accepted/unaccepted build-attestation signer, package-signature failure, and
   failed-upload staging cases where no artifact becomes installable.
+- Remi negative tests proving failed release push leaves no converted-package
+  row, no public chunk object, no package detail/index response, and no TUF
+  target.
 - Remi tests proving TUF timestamp refresh no longer returns the current 501
   stub after M2d starts publishing artifacts.
+- M2d CLI/routing tests proving the old local-static destination guard still
+  protects static repo writes while authenticated Remi HTTP(S) targets route
+  through the Remi transport/artifact authorization path.
 - `cargo run -p conary-test -- list` when integration manifests are touched.
 - Owning package tests: `cargo test -p conary-core`, `cargo test -p conary`, and
   `cargo test -p remi` for slices that touch their owned behavior.
