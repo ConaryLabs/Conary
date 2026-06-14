@@ -316,7 +316,10 @@ impl Kitchen {
         output_dir: &Path,
         ci_mode: CiMode,
     ) -> Result<CookResult> {
-        self.fetch(recipe)?;
+        let mut prefetch_config = self.config.clone();
+        prefetch_config.recipe_source_base_dir = Some(input.recipe_source_base_dir.clone());
+        self.with_config_preserving_resolver(prefetch_config)
+            .fetch(recipe)?;
         let plan = HermeticBuildPlan::from_recipe(recipe, input, ci_mode)?;
         let mut build_config = self.config.clone();
         plan.apply_to_kitchen_config(&mut build_config);
@@ -1111,6 +1114,49 @@ mod tests {
         assert_eq!(
             *resolver.install_calls.lock().unwrap(),
             vec![vec!["build-tool".to_string()]]
+        );
+    }
+
+    #[test]
+    fn cook_hermetic_prefetch_uses_input_source_base() {
+        let dir = tempdir().unwrap();
+        let source_root = dir.path().join("source");
+        let output_dir = dir.path().join("out");
+        fs::create_dir_all(source_root.join("src")).unwrap();
+        fs::write(
+            source_root.join("Cargo.toml"),
+            "[package]\nname = \"hermetic-local\"\nversion = \"1.0.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        fs::write(source_root.join("Cargo.lock"), "version = 3\n").unwrap();
+        fs::write(source_root.join("src/main.rs"), "fn main() {}\n").unwrap();
+        fs::write(source_root.join("recipe.toml"), "recipe fixture\n").unwrap();
+        fs::create_dir_all(&output_dir).unwrap();
+
+        let kitchen = Kitchen::new(KitchenConfig {
+            source_cache: dir.path().join("cache"),
+            recipe_source_base_dir: None,
+            ..KitchenConfig::default()
+        });
+        let recipe = make_local_cargo_recipe();
+        let input = HermeticBuildInput::explicit_recipe(
+            &source_root,
+            source_root.join("recipe.toml"),
+            hash::sha256_prefixed(b"recipe fixture\n"),
+        );
+
+        let error = kitchen
+            .cook_hermetic(&recipe, input, &output_dir, CiMode::Off)
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            error.contains("builder environment identity"),
+            "cook_hermetic should prefetch using input.recipe_source_base_dir and then reach planning: {error}"
+        );
+        assert!(
+            !error.contains("recipe_source_base_dir"),
+            "prefetch should not use the caller's missing KitchenConfig.recipe_source_base_dir: {error}"
         );
     }
 
