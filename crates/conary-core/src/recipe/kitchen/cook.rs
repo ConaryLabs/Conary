@@ -2454,6 +2454,7 @@ mod tests {
             ),
             ("make SOURCE_DATE_EPOCH=999", "SOURCE_DATE_EPOCH"),
             ("gmake RUSTFLAGS+=bad", "RUSTFLAGS"),
+            ("make MAKEFLAGS=SOURCE_DATE_EPOCH=999", "MAKEFLAGS"),
             ("MAKEFLAGS=SOURCE_DATE_EPOCH=999 make", "MAKEFLAGS"),
             ("MAKEFLAGS+=SOURCE_DATE_EPOCH=999 make", "MAKEFLAGS"),
             ("env GNUMAKEFLAGS=RUSTFLAGS=bad make", "GNUMAKEFLAGS"),

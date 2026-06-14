@@ -281,7 +281,10 @@ fn is_forbidden_shell_environment_key(key: &str) -> bool {
 }
 
 fn controlled_make_assignment_key(token: &str) -> Option<&str> {
-    let target = make_assignment_target(token)?;
+    let (target, value) = make_assignment(token)?;
+    if is_make_environment_key(target) && validate_make_environment_value(target, value).is_err() {
+        return Some(target);
+    }
     if is_forbidden_shell_environment_key(target)
         || CONTROLLED_ENV_KEYS
             .iter()
@@ -292,15 +295,15 @@ fn controlled_make_assignment_key(token: &str) -> Option<&str> {
     None
 }
 
-fn make_assignment_target(token: &str) -> Option<&str> {
+fn make_assignment(token: &str) -> Option<(&str, &str)> {
     let token = clean_make_token(token);
     for operator in ["::=", "+=", ":=", "?=", "!=", "="] {
-        let Some((target, _)) = token.split_once(operator) else {
+        let Some((target, value)) = token.split_once(operator) else {
             continue;
         };
         let target = target.trim();
         if !target.is_empty() {
-            return Some(target);
+            return Some((target, value));
         }
     }
     None
@@ -467,6 +470,7 @@ mod tests {
             ("MAKEFLAGS", "CXXFLAGS?=bad"),
             ("GNUMAKEFLAGS", "SOURCE_DATE_EPOCH!=date"),
             ("MAKEOVERRIDES", "RUSTFLAGS::=bad"),
+            ("MAKEFLAGS", "MAKEFLAGS=SOURCE_DATE_EPOCH=999"),
         ];
 
         for (key, value) in cases {
