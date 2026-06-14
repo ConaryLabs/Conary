@@ -8,7 +8,7 @@ use crate::container::{BindMount, ContainerConfig, Sandbox};
 use crate::error::{Error, Result};
 use crate::recipe::format::{Recipe, SourceSection, is_remote_url};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use tempfile::TempDir;
 use tracing::{debug, info};
@@ -402,7 +402,10 @@ impl<'a> Cook<'a> {
                     .unwrap_or("patch.diff");
                 self.build_dir.as_path().join("patches").join(filename)
             } else {
-                PathBuf::from(&patch_info.file)
+                resolve_local_patch_path(
+                    self.kitchen.config.recipe_source_base_dir.as_deref(),
+                    &patch_info.file,
+                )?
             };
 
             if !patch_path.exists() {
@@ -820,12 +823,84 @@ impl<'a> Cook<'a> {
     }
 }
 
+fn resolve_local_patch_path(
+    recipe_source_base_dir: Option<&Path>,
+    patch_file: &str,
+) -> Result<PathBuf> {
+    let relative_patch = clean_relative_local_patch_path(patch_file)?;
+    let Some(recipe_source_base_dir) = recipe_source_base_dir else {
+        return Ok(relative_patch);
+    };
+
+    let canonical_recipe_dir = fs::canonicalize(recipe_source_base_dir).map_err(|error| {
+        Error::ConfigError(format!(
+            "Recipe source base dir not found for local patch resolution: {} ({error})",
+            recipe_source_base_dir.display()
+        ))
+    })?;
+    let patch_path = canonical_recipe_dir.join(relative_patch);
+    let canonical_patch = fs::canonicalize(&patch_path).map_err(|error| {
+        Error::NotFound(format!(
+            "Patch file not found: {} ({error})",
+            patch_path.display()
+        ))
+    })?;
+
+    if !canonical_patch.starts_with(&canonical_recipe_dir) {
+        return Err(Error::ConfigError(format!(
+            "Local patch path must stay within the recipe directory: {patch_file}"
+        )));
+    }
+
+    Ok(canonical_patch)
+}
+
+fn clean_relative_local_patch_path(patch_file: &str) -> Result<PathBuf> {
+    let path = Path::new(patch_file);
+    if path.as_os_str().is_empty() {
+        return Err(Error::ConfigError(
+            "Local patch path cannot be empty".to_string(),
+        ));
+    }
+    if path.is_absolute() {
+        return Err(Error::ConfigError(format!(
+            "Local patch path must be relative to the recipe directory: {patch_file}"
+        )));
+    }
+
+    let mut clean = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Normal(part) => clean.push(part),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                return Err(Error::ConfigError(format!(
+                    "Local patch path must stay within the recipe directory: {patch_file}"
+                )));
+            }
+            Component::RootDir | Component::Prefix(_) => {
+                return Err(Error::ConfigError(format!(
+                    "Local patch path must be relative to the recipe directory: {patch_file}"
+                )));
+            }
+        }
+    }
+
+    if clean.as_os_str().is_empty() {
+        return Err(Error::ConfigError(
+            "Local patch path cannot be empty".to_string(),
+        ));
+    }
+
+    Ok(clean)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::recipe::format::{
-        BuildSection, LocalSourceSection, PackageSection, Recipe, RemoteSourceSection,
-        SourceSection,
+        BuildSection, LocalSourceSection, PackageSection, PatchInfo, PatchSection, Recipe,
+        RemoteSourceSection, SourceSection,
     };
     use crate::recipe::hermetic::source_identity::{CiMode, canonical_local_file_list};
     use crate::recipe::kitchen::KitchenConfig;
@@ -1102,6 +1177,49 @@ mod tests {
         assert!(
             cook.provenance.upstream_hash.is_none(),
             "local source provenance should leave upstream_hash unset until tree hashing exists"
+        );
+    }
+
+    #[test]
+    fn test_patch_local_path_resolves_relative_to_recipe_source_base_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let recipe_dir = dir.path().join("recipe");
+        let patch_dir = recipe_dir.join("patches");
+        std::fs::create_dir_all(&patch_dir).unwrap();
+        std::fs::write(
+            patch_dir.join("fix.patch"),
+            r#"--- file.txt
++++ file.txt
+@@ -1 +1 @@
+-old
++new
+"#,
+        )
+        .unwrap();
+
+        let kitchen = Kitchen::new(KitchenConfig {
+            recipe_source_base_dir: Some(recipe_dir),
+            use_isolation: false,
+            ..KitchenConfig::default()
+        });
+        let mut recipe = minimal_recipe();
+        recipe.patches = Some(PatchSection {
+            files: vec![PatchInfo {
+                file: "patches/fix.patch".to_string(),
+                checksum: None,
+                strip: 0,
+                condition: None,
+            }],
+        });
+
+        let mut cook = Cook::new(&kitchen, &recipe).unwrap();
+        std::fs::write(cook.source_dir.join("file.txt"), "old\n").unwrap();
+
+        cook.patch().unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(cook.source_dir.join("file.txt")).unwrap(),
+            "new\n"
         );
     }
 
