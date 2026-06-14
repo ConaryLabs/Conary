@@ -194,6 +194,7 @@ fn validate_shell_env_mutation_segment(
             "printf" => return validate_printf_env_mutations(phase, &tokens[index + 1..]),
             "let" => return validate_let_env_mutations(phase, &tokens[index + 1..]),
             "getopts" => return validate_getopts_env_mutations(phase, &tokens[index + 1..]),
+            "set" => return validate_set_env_mutations(phase, &tokens[index + 1..]),
             "eval" | "source" | "." => {
                 return Err(Error::ConfigError(format!(
                     "hermetic reproducibility does not support {command_token} in {phase} phase"
@@ -613,6 +614,37 @@ fn validate_getopts_env_mutations(phase: &str, tokens: &[String]) -> Result<()> 
     Ok(())
 }
 
+fn validate_set_env_mutations(phase: &str, tokens: &[String]) -> Result<()> {
+    let mut index = 0;
+    while let Some(token) = tokens.get(index).map(String::as_str) {
+        if token == "--" {
+            return Ok(());
+        }
+        if token == "-o" {
+            let option = shell_wrapper_operand(phase, tokens, index, "set", token)?;
+            if option == "keyword" {
+                return Err(shell_keyword_mode_error(phase, "set -o keyword"));
+            }
+            index += 2;
+            continue;
+        }
+        if token.starts_with('-') && !token.starts_with("--") {
+            if token[1..].chars().any(|option| option == 'k') {
+                return Err(shell_keyword_mode_error(phase, token));
+            }
+            index += 1;
+            continue;
+        }
+        if token.starts_with("--") {
+            return Err(Error::ConfigError(format!(
+                "hermetic reproducibility does not support set option {token} in {phase} phase"
+            )));
+        }
+        break;
+    }
+    Ok(())
+}
+
 fn validate_env_wrapper_mutations(
     config: &ReproducibilityConfig,
     phase: &str,
@@ -797,6 +829,12 @@ fn command_local_env_error(phase: &str, key: &str) -> Error {
 fn command_local_env_clear_error(phase: &str) -> Error {
     Error::ConfigError(format!(
         "hermetic reproducibility rejects command-local environment clearing in {phase} phase"
+    ))
+}
+
+fn shell_keyword_mode_error(phase: &str, option: &str) -> Error {
+    Error::ConfigError(format!(
+        "hermetic reproducibility rejects shell keyword-mode {option} in {phase} phase"
     ))
 }
 
@@ -2537,6 +2575,25 @@ mod tests {
             assert!(
                 error.to_string().contains(expected),
                 "expected {expected} rejection for {segment}, got: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_shell_env_scanner_rejects_keyword_mode_set() {
+        let config = ReproducibilityConfig::new(0, Path::new("/src"), Path::new("/build"));
+        let cases = [
+            ("set -k; make SOURCE_DATE_EPOCH=999", "-k"),
+            ("set -ak; make RUSTFLAGS=bad", "-ak"),
+            ("set -o keyword; make CFLAGS=bad", "keyword"),
+        ];
+
+        for (command, expected) in cases {
+            let error = validate_shell_env_mutations(&config, "make", command).unwrap_err();
+
+            assert!(
+                error.to_string().contains(expected),
+                "expected {expected} rejection for {command}, got: {error}"
             );
         }
     }
