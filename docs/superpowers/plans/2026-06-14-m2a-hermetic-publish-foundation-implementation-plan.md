@@ -22,6 +22,11 @@ Before Task 1 starts, this plan must be committed as a tracked, docs-audit-regis
 - `conary publish <pkg.ccs> <target>` still refuses with the artifact-form M2 attestation message.
 - No signed build-attestation envelope exists in M2a output.
 
+This locked plan expects the positive CLI cook/publish tests to use the
+copied-tool sysroot fixture described in Task 9. If that fixture cannot be made
+portable in CI, update this rollout gate before continuing implementation; do
+not keep ignored or aspirational success tests in the plan.
+
 ## Scope
 
 In scope:
@@ -46,7 +51,10 @@ Out of scope:
 - Remi push.
 - New static-repo trust model.
 - Malware scanning or benign-payload claims.
-- Full dependency resolver snapshot locking beyond the serializable M2a `DependencyLock` record populated from recipe/build metadata available in this slice.
+- Full dependency resolver snapshot locking. This slice may serialize empty
+  dependency locks for recipes with no build dependencies, but CLI hermetic cook
+  and project-form publish must fail closed when build dependencies are
+  declared until a reviewed content-identity resolver exists.
 
 ## Current Repo Facts
 
@@ -83,6 +91,8 @@ Create:
 - `crates/conary-core/src/recipe/hermetic/reproducibility.rs` - reproducibility env and path remapping helpers.
 - `crates/conary-core/src/recipe/hermetic/plan.rs` - `HermeticBuildPlan` assembly from recipe, `HermeticBuildInput`, Kitchen config, and command-risk reports.
 - `crates/conary-core/src/recipe/kitchen/local_source.rs` - canonical local-source materialization from hashed file lists.
+- `apps/conary/src/commands/hermetic_config.rs` - local builder config loader, path policy checks, and shared command helper for `cook --isolated` and project-form publish.
+- `apps/conary/src/commands/hermetic_state.rs` - local host-build record storage for divergence diagnostics.
 - `apps/conary/tests/packaging_m2a.rs` - CLI integration coverage for hermetic cook and publish behavior.
 
 Modify:
@@ -100,6 +110,7 @@ Modify:
 - `crates/conary-core/src/ccs/mod.rs` - add `manifest_provenance` module if Task 1 performs the split.
 - `apps/conary/src/commands/cook.rs` - route `--isolated` and hidden `--hermetic` through M2a hermetic planning.
 - `apps/conary/src/commands/publish.rs` - use project-form hermetic publish config and keep artifact-form rejection.
+- `apps/conary/src/commands/mod.rs` - register command-owned hermetic helper modules.
 - `apps/conary/src/cli/mod.rs` - update help tests only if public wording changes; keep `--hermetic` hidden.
 - `docs/ARCHITECTURE.md`, `docs/modules/recipe.md`, `docs/modules/ccs.md`, `docs/modules/feature-ownership.md`, `docs/llms/subsystem-map.md` - update after behavior lands.
 - `docs/superpowers/documentation-accuracy-audit-inventory.tsv`, `docs/superpowers/documentation-accuracy-audit-ledger.tsv` - register this plan and later implementation doc changes.
@@ -1398,15 +1409,53 @@ git commit -m "feat(packaging): record hermetic reproducibility controls"
 
 ---
 
-### Task 8: Wire Hermetic Cook
+### Task 8: Add Builder Config And Wire Hermetic Cook
 
 **Files:**
+- Create: `apps/conary/src/commands/hermetic_config.rs`
 - Modify: `crates/conary-core/src/recipe/kitchen/mod.rs`
 - Modify: `crates/conary-core/src/recipe/kitchen/config.rs`
 - Modify: `crates/conary-core/src/recipe/kitchen/cook.rs`
+- Modify: `apps/conary/src/commands/mod.rs`
 - Modify: `apps/conary/src/commands/cook.rs`
+- Test: `apps/conary/src/commands/hermetic_config.rs`
 - Test: `crates/conary-core/src/recipe/kitchen/mod.rs`
 - Test: `apps/conary/src/commands/cook.rs`
+
+**Ownership boundary:** `apps/conary/src/commands/cook.rs`,
+`crates/conary-core/src/recipe/kitchen/mod.rs`, and
+`crates/conary-core/src/recipe/kitchen/cook.rs` are already large command/build
+execution files. This task may add thin calls into new helpers, but builder
+config parsing and path policy live in `hermetic_config.rs`, while hermetic
+evidence policy stays in `recipe/hermetic/`.
+
+- [ ] **Step 0: Add hermetic builder config loader**
+
+Create `apps/conary/src/commands/hermetic_config.rs` and register it from
+`apps/conary/src/commands/mod.rs`.
+
+The loader must:
+
+- Resolve config from `CONARY_HERMETIC_CONFIG`,
+  `$XDG_CONFIG_HOME/conary/hermetic.toml`, or
+  `$HOME/.config/conary/hermetic.toml`.
+- Also expose an explicit-path API for unit tests so in-process Rust 2024 tests
+  do not mutate process-global environment variables.
+- Parse `default_builder` and `[builders.<name>]` with `kind = "pristine"`,
+  required `sysroot_path`, optional `description`, and at least one strict
+  `sha256:<64 hex>` identity field.
+- Return the selected `BuilderEnvironmentIdentity` plus a validated
+  `sysroot_path` for `KitchenConfig::sysroot`.
+- On Unix, canonicalize checked paths; reject group/world-writable config files,
+  checked config parent directories, sysroot directories, and unsafe sysroot
+  ancestors as defined by the M2a remainder design; reject config files owned
+  by another non-root user.
+- Wrap load/parse errors with the path consulted.
+
+Add unit tests for path precedence, valid config, missing default builder,
+unknown default builder, invalid hashes, unsupported kind, missing/non-directory
+`sysroot_path`, Unix ownership/writability checks, symlink canonicalization, and
+sticky tempdir ancestry behavior.
 
 - [ ] **Step 1: Add core hermetic cook test**
 
@@ -1480,14 +1529,38 @@ if hermetic_requested && no_isolation {
 }
 ```
 
-For the hermetic path, construct `HermeticBuildInput` from the resolved recipe
-path or generated inference trace, `resolved.recipe_source_base_dir`, and a
-pristine builder environment identity. Later review tightened the CLI behavior:
-until a command-owned dependency content-lock resolver lands, CLI hermetic cook
-must fail closed for recipes with build dependencies and pass an empty
-dependency lock only for recipes with no build dependencies. Then call:
+For the hermetic path, load the default builder before constructing
+`HermeticBuildInput`. Then refuse any recipe with build dependencies until a
+command-owned dependency content-lock resolver lands. For recipes with no build
+dependencies, construct `HermeticBuildInput` from the resolved recipe path or
+generated inference trace, `resolved.recipe_source_base_dir`, the configured
+pristine builder identity, and an empty dependency lock:
 
 ```rust
+let builder = load_default_hermetic_builder()?;
+ensure_no_build_dependencies_for_m2a(&recipe)?;
+
+let hermetic_input = hermetic_build_input(&resolved, &recipe)?
+    .with_builder_environment(builder.identity);
+
+let mut config = KitchenConfig {
+    source_cache: PathBuf::from(source_cache),
+    recipe_source_base_dir: Some(resolved.recipe_source_base_dir.clone()),
+    origin_class_override: resolved.origin_class_override.clone(),
+    source_provenance_override: resolved.source_provenance_override.clone(),
+    keep_builddir,
+    use_isolation: true,
+    pristine_mode: true,
+    ..Default::default()
+};
+config.sysroot = Some(builder.sysroot_path);
+config.auto_makedepends = false;
+config.cleanup_makedepends = false;
+if let Some(j) = jobs {
+    config.jobs = j;
+}
+let kitchen = Kitchen::new(config);
+
 kitchen.cook_hermetic(
     &recipe,
     hermetic_input,
@@ -1515,15 +1588,18 @@ Run:
 
 ```bash
 cargo test -p conary-core recipe::kitchen
+cargo test -p conary --lib commands::hermetic_config
 cargo test -p conary --lib commands::cook
 ```
 
-Expected: hermetic Kitchen tests pass, and command tests prove hidden `--hermetic` no longer rejects while artifact publish remains unchanged.
+Expected: hermetic Kitchen tests pass, config loader tests pass, and command
+tests prove hidden `--hermetic` no longer rejects but fails closed without
+builder config or with declared build dependencies.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add crates/conary-core/src/recipe/kitchen apps/conary/src/commands/cook.rs
+git add crates/conary-core/src/recipe/kitchen apps/conary/src/commands/cook.rs apps/conary/src/commands/hermetic_config.rs apps/conary/src/commands/mod.rs
 git commit -m "feat(packaging): route isolated cook through hermetic builds"
 ```
 
@@ -1532,9 +1608,9 @@ git commit -m "feat(packaging): route isolated cook through hermetic builds"
 ### Task 9: Wire Project-Form Hermetic Publish
 
 **Files:**
-- Create: `apps/conary/src/commands/hermetic_config.rs`
 - Modify: `apps/conary/src/commands/publish.rs`
 - Modify: `apps/conary/src/commands/cook.rs`
+- Modify: `apps/conary/src/commands/hermetic_config.rs`
 - Test: `apps/conary/src/commands/publish.rs`
 - Test: `apps/conary/tests/packaging_m2a.rs`
 
@@ -1546,31 +1622,6 @@ dependencies, must load an operator-supplied `sysroot_path`, must force
 `auto_makedepends = false`, and must treat `sysroot_hash`/`toolchain_hash` as
 operator-asserted rather than measured.
 
-- [ ] **Step 0: Add hermetic builder config loader**
-
-Create `apps/conary/src/commands/hermetic_config.rs`.
-
-The loader must:
-
-- Resolve config from `CONARY_HERMETIC_CONFIG`,
-  `$XDG_CONFIG_HOME/conary/hermetic.toml`, or
-  `$HOME/.config/conary/hermetic.toml`.
-- Also expose an explicit-path API for unit tests so in-process Rust 2024 tests
-  do not mutate process-global environment variables.
-- Parse `default_builder` and `[builders.<name>]` with `kind = "pristine"`,
-  required `sysroot_path`, optional `description`, and at least one strict
-  `sha256:<64 hex>` identity field.
-- Return the selected `BuilderEnvironmentIdentity` plus a validated
-  `sysroot_path` for `KitchenConfig::sysroot`.
-- On Unix, canonicalize checked paths; reject group/world-writable config files,
-  config parent directories, and sysroot directories; reject config files owned
-  by another non-root user.
-- Wrap load/parse errors with the path consulted.
-
-Add unit tests for path precedence, valid config, missing default builder,
-unknown default builder, invalid hashes, unsupported kind, missing/non-directory
-`sysroot_path`, Unix ownership/writability checks, and symlink canonicalization.
-
 - [ ] **Step 1: Update publish config tests**
 
 Replace the current `publish_kitchen_config_forces_isolation_and_allows_network` test with:
@@ -1580,11 +1631,13 @@ Replace the current `publish_kitchen_config_forces_isolation_and_allows_network`
 fn publish_kitchen_config_uses_hermetic_defaults() {
     let recipe_path = std::path::Path::new("/work/pkg/recipe.toml");
     let output_dir = std::path::Path::new("/tmp/conary-publish-out");
-    let config = publish_kitchen_config(recipe_path, output_dir);
+    let sysroot = std::path::PathBuf::from("/var/lib/conary/sysroots/test");
+    let config = publish_kitchen_config(recipe_path, output_dir, sysroot.clone());
 
     assert!(config.use_isolation);
     assert!(!config.allow_network);
     assert!(config.pristine_mode);
+    assert_eq!(config.sysroot, Some(sysroot));
     assert_eq!(
         config.source_download_policy,
         SourceDownloadPolicy::AllowDownloads
@@ -1639,7 +1692,7 @@ M2a static publish records hermetic build evidence, but release attestation gate
 Replace "sandboxed, network allowed" with:
 
 ```text
-hermetic, pristine/no-host-mount build with network disabled
+hermetic, pristine/no-host-mount build with network disabled during build
 ```
 
 Reword or suppress the existing static publisher preview warning so it does not
@@ -1733,10 +1786,24 @@ fn publish_artifact_form_still_requires_m2b_attestation() {
 ```
 
 Implement fixture helpers in the same test file, following the style in
-`apps/conary/tests/packaging_m1b.rs`. Positive hermetic cook/publish tests must
-provide a minimal pristine sysroot fixture. If a CI-safe fixture cannot be
-provided in this slice, defer the positive CLI success tests and keep the
-fail-closed CLI tests plus core hermetic unit coverage.
+`apps/conary/tests/packaging_m1b.rs`.
+
+Positive hermetic cook/publish tests must use a CI-safe copied-tool sysroot
+fixture:
+
+- Build a temp sysroot under the test work directory, not under a tracked path.
+- Copy the smallest host tool set needed by a trivial recipe into that sysroot
+  and copy required dynamic libraries discovered for those tools. Do not bind
+  mount host `/usr`, `/lib`, `/bin`, or `/sbin`.
+- Use a trivial local-source recipe whose install command only needs the copied
+  tools, for example shell plus `install`/`mkdir`/`cp`.
+- Write a temp `hermetic.toml` pointing at that sysroot with operator-asserted
+  `sha256:<64 hex>` hashes and pass it only through out-of-process
+  `CONARY_HERMETIC_CONFIG`.
+- If the copied-tool fixture cannot be made portable in CI, remove the positive
+  CLI success tests from this task and lower the final M2a acceptance gate in
+  this plan before implementation continues. Do not leave success tests
+  present but ignored.
 
 - [ ] **Step 6: Run tests**
 
@@ -1752,7 +1819,7 @@ Expected: publish unit tests and M2a CLI integration tests pass.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add apps/conary/src/commands/publish.rs apps/conary/tests/packaging_m2a.rs
+git add apps/conary/src/commands/publish.rs apps/conary/src/commands/cook.rs apps/conary/src/commands/hermetic_config.rs apps/conary/tests/packaging_m2a.rs
 git commit -m "feat(packaging): publish with hermetic build evidence"
 ```
 
@@ -1762,12 +1829,22 @@ git commit -m "feat(packaging): publish with hermetic build evidence"
 
 **Files:**
 - Create: `crates/conary-core/src/recipe/hermetic/divergence.rs`
-- Create or modify: command-owned host record state helper under `apps/conary/src/commands/`
+- Create: `apps/conary/src/commands/hermetic_state.rs`
 - Modify: `crates/conary-core/src/recipe/hermetic/evidence.rs`
 - Modify: `crates/conary-core/src/recipe/kitchen/config.rs`
 - Modify: `crates/conary-core/src/recipe/kitchen/cook.rs`
+- Modify: `apps/conary/src/commands/mod.rs`
+- Modify: `apps/conary/src/commands/cook.rs`
+- Modify: `apps/conary/src/commands/publish.rs`
 - Test: `crates/conary-core/src/recipe/hermetic/divergence.rs`
 - Test: `crates/conary-core/src/recipe/hermetic/evidence.rs`
+- Test: `apps/conary/src/commands/hermetic_state.rs`
+- Test: `apps/conary/src/commands/cook.rs`
+
+**Ownership boundary:** `crates/conary-core/src/recipe/hermetic/divergence.rs`
+owns pure comparison logic. `apps/conary/src/commands/hermetic_state.rs` owns
+local state file reads/writes. `cook.rs`, `publish.rs`, and
+`kitchen/cook.rs` should only pass records into or out of those helpers.
 
 - [ ] **Step 1: Add divergence data structs**
 
@@ -1839,7 +1916,9 @@ fn divergence_report_marks_different_output() {
 ```
 
 Add edge-case tests for matching `merkle_root`, differing `merkle_root`, absent
-hermetic `merkle_root`, and diagnostic-only `dna_hash`.
+hermetic `merkle_root`, diagnostic-only `dna_hash`, and the identity invariant
+that changing `divergence`, `hardening_level`, or `hermetic_evidence` does not
+change the output `merkle_root` used for comparison.
 
 - [ ] **Step 3: Add command-owned host record state helper**
 
@@ -1851,11 +1930,22 @@ The helper must:
   or `$HOME/.local/state/conary/hermetic`.
 - Expose an explicit-path API for unit tests so in-process tests do not mutate
   process-global environment variables.
+- Store one JSON record per successful host build under a command-owned
+  `host-build-records/` directory. The filename may include package
+  name/version/release/architecture plus a timestamp, but the comparison key is
+  the serialized record fields, not the filename.
 - Write a host record only after successful non-hermetic `cmd_cook_with_output`
   when `CookResult.provenance.merkle_root` exists.
+- Populate `architecture` from the built manifest platform architecture when it
+  exists; otherwise use `CookResult.provenance.host_arch`; otherwise store
+  `None`.
 - Match records by package name, version, release, and architecture, choosing
-  the most recent matching host record.
+  the most recent matching host record by parsed `build_timestamp` and falling
+  back to file modified time only when the timestamp is absent or malformed.
 - Treat missing or unreadable records as diagnostics only.
+- Include unit tests for write/read round trip, most-recent selection,
+  unreadable/malformed diagnostic behavior, architecture fallback, and explicit
+  path APIs.
 
 - [ ] **Step 4: Record but do not block on divergence in M2a**
 
@@ -1868,6 +1958,19 @@ Pass the expected host record into the build-phase Kitchen config. During
 plating, after the hermetic output `merkle_root` is known but before the CCS
 package is written, call the divergence helper and update
 `HermeticBuildEvidence.divergence`.
+
+Wire commands as follows:
+
+- After successful non-hermetic `cmd_cook_with_output`, call
+  `hermetic_state::write_host_build_record(...)` if provenance has
+  `merkle_root`.
+- Before hermetic `cook --isolated` and project-form publish call
+  `hermetic_state::load_latest_host_build_record(...)` using the recipe package
+  name/version/release plus the selected architecture if known.
+- Missing, unreadable, or malformed local state records add diagnostics and
+  produce `NoHostRecord`; they do not fail cook or publish.
+- Project-form publish still cannot use divergence to make artifact-form
+  packages publishable in M2a.
 
 M2a records divergence diagnostics only; it must not fail a hermetic build
 solely because host and hermetic outputs differ. `DiffersFromHost` is expected
@@ -1884,14 +1987,17 @@ Run:
 cargo test -p conary-core recipe::hermetic::divergence
 cargo test -p conary-core recipe::hermetic::evidence
 cargo test -p conary-core recipe::kitchen
+cargo test -p conary --lib commands::hermetic_state
+cargo test -p conary --lib commands::cook
 ```
 
-Expected: divergence report tests pass.
+Expected: divergence report tests, state helper tests, and cook command wiring
+tests pass.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add crates/conary-core/src/recipe/hermetic crates/conary-core/src/recipe/kitchen
+git add crates/conary-core/src/recipe/hermetic crates/conary-core/src/recipe/kitchen apps/conary/src/commands/hermetic_state.rs apps/conary/src/commands/cook.rs apps/conary/src/commands/publish.rs apps/conary/src/commands/mod.rs
 git commit -m "feat(packaging): record host hermetic divergence evidence"
 ```
 
