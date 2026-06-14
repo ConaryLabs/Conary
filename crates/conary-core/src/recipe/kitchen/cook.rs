@@ -296,21 +296,46 @@ fn validate_shell_like_invocation(phase: &str, command: &str, args: &[String]) -
 }
 
 fn validate_shell_interpreter_invocation(phase: &str, shell: &str, args: &[String]) -> Result<()> {
+    let mut has_script_operand = false;
+    let mut end_options = false;
+
     for arg in args {
-        if arg == "--" {
-            break;
+        validate_no_shell_expansion(phase, arg, shell)?;
+        if arg.starts_with('<') {
+            return Err(nested_shell_stdin_error(phase, shell));
         }
-        if shell_option_invokes_command_string(arg) {
+        if arg == "--" {
+            end_options = true;
+            continue;
+        }
+        if !end_options && shell_option_invokes_command_string(arg) {
             return Err(Error::ConfigError(format!(
                 "hermetic reproducibility rejects nested shell {shell} {arg} invocation in {phase} phase"
             )));
         }
+        if !end_options && shell_option_reads_stdin(arg) {
+            return Err(nested_shell_stdin_error(phase, shell));
+        }
+        if !end_options && arg.starts_with('-') {
+            continue;
+        }
+        has_script_operand = true;
+        break;
     }
+
+    if !has_script_operand {
+        return Err(nested_shell_stdin_error(phase, shell));
+    }
+
     Ok(())
 }
 
 fn shell_option_invokes_command_string(arg: &str) -> bool {
     arg.starts_with('-') && !arg.starts_with("--") && arg[1..].chars().any(|ch| ch == 'c')
+}
+
+fn shell_option_reads_stdin(arg: &str) -> bool {
+    arg.starts_with('-') && !arg.starts_with("--") && arg[1..].chars().any(|ch| ch == 's')
 }
 
 fn peel_shell_control_word(phase: &str, tokens: &[String], index: usize) -> Result<Option<usize>> {
@@ -946,6 +971,12 @@ fn shell_keyword_mode_error(phase: &str, option: &str) -> Error {
 fn shell_alias_expansion_error(phase: &str, surface: &str) -> Error {
     Error::ConfigError(format!(
         "hermetic reproducibility rejects shell alias expansion surface {surface} in {phase} phase"
+    ))
+}
+
+fn nested_shell_stdin_error(phase: &str, shell: &str) -> Error {
+    Error::ConfigError(format!(
+        "hermetic reproducibility rejects nested shell {shell} reading script from stdin in {phase} phase"
     ))
 }
 
@@ -2660,6 +2691,20 @@ mod tests {
             ("sh -c 'SOURCE_DATE_EPOCH=999 make'", "-c"),
             ("/bin/sh -c 'env -u SOURCE_DATE_EPOCH make'", "-c"),
             ("bash -ec 'SOURCE_DATE_EPOCH=999 make'", "-ec"),
+            (
+                "printf %s \"export SOURCE_DATE_EPOCH=999; make -s\" | sh",
+                "stdin",
+            ),
+            (
+                "echo \"export SOURCE_DATE_EPOCH=999; make -s\" | sh",
+                "stdin",
+            ),
+            (
+                "printf %s \"export SOURCE_DATE_EPOCH=999; make -s\" | bash",
+                "stdin",
+            ),
+            ("sh < build.sh", "stdin"),
+            ("bash -s < build.sh", "stdin"),
             ("ash -c 'SOURCE_DATE_EPOCH=999 make'", "-c"),
             ("busybox sh -c 'SOURCE_DATE_EPOCH=999 make'", "-c"),
             ("busybox ash -c 'env -u SOURCE_DATE_EPOCH make'", "-c"),
