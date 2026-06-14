@@ -148,6 +148,7 @@ fn validate_shell_env_mutations(
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
+        validate_no_command_substitution(phase, line)?;
         for segment in split_shell_env_segments(line) {
             validate_shell_env_mutation_segment(config, phase, &segment)?;
         }
@@ -887,6 +888,15 @@ fn validate_no_shell_expansion(phase: &str, token: &str, context: &str) -> Resul
     if token.contains('$') {
         return Err(Error::ConfigError(format!(
             "hermetic reproducibility does not support shell expansion in {context} token {token} in {phase} phase"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_no_command_substitution(phase: &str, line: &str) -> Result<()> {
+    if line.contains("$(") || line.contains('`') {
+        return Err(Error::ConfigError(format!(
+            "hermetic reproducibility does not support command substitution in {phase} phase"
         )));
     }
     Ok(())
@@ -2530,6 +2540,26 @@ mod tests {
             ),
             ("env -u $KEY make", "shell expansion"),
             ("printf -v $name 999; make", "shell expansion"),
+            (
+                "export $(printf SOURCE_DATE_EPOCH)=999; make",
+                "command substitution",
+            ),
+            (
+                "export `printf SOURCE_DATE_EPOCH`=999; make",
+                "command substitution",
+            ),
+            (
+                "make $(printf SOURCE_DATE_EPOCH=999)",
+                "command substitution",
+            ),
+            (
+                "MAKEFLAGS=$(printf SOURCE_DATE_EPOCH=999) make",
+                "command substitution",
+            ),
+            (
+                "make `printf -- --include-dir=evil`",
+                "command substitution",
+            ),
             (
                 "command env SOURCE_DATE_EPOCH=999 make",
                 "SOURCE_DATE_EPOCH",
