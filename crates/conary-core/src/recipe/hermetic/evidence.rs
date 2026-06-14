@@ -20,9 +20,13 @@ pub struct HermeticBuildEvidence {
 pub struct BuildInputIdentity {
     pub recipe: RecipeIdentity,
     pub source: SourceIdentity,
+    #[serde(default)]
     pub additional_sources: Vec<SourceArchiveIdentity>,
+    #[serde(default)]
     pub patches: Vec<InputFileIdentity>,
+    #[serde(default)]
     pub local_tree: Option<LocalTreeIdentity>,
+    #[serde(default)]
     pub ecosystem_dependencies: Vec<EcosystemDependencyIdentity>,
     pub builder_environment: BuilderEnvironmentIdentity,
 }
@@ -69,13 +73,13 @@ pub struct SourceArchiveIdentity {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct LocalTreeIdentity {
     pub tree_hash: String,
-    pub file_count: u64,
+    pub file_count: usize,
     pub mode: LocalTreeMode,
     pub dirty: bool,
     pub warnings: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum LocalTreeMode {
     GitTracked,
@@ -103,7 +107,7 @@ pub struct BuilderEnvironmentIdentity {
     pub diagnostics: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum BuilderEnvironmentKind {
     Pristine,
@@ -112,6 +116,7 @@ pub enum BuilderEnvironmentKind {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct DependencyLock {
+    #[serde(default)]
     pub repository_dependencies: Vec<LockedRepositoryDependency>,
 }
 
@@ -122,11 +127,11 @@ pub struct LockedRepositoryDependency {
     pub package: String,
     pub version: String,
     pub release: String,
-    pub architecture: String,
+    pub architecture: Option<String>,
     pub content_identity: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum PolicyStatus {
     Clean,
@@ -181,8 +186,8 @@ pub struct BuildCommandRiskEntry {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ReproducibilityRecord {
-    pub source_date_epoch: Option<u64>,
-    pub path_remap_count: u32,
+    pub source_date_epoch: Option<i64>,
+    pub path_remap_count: usize,
     pub env_keys: Vec<String>,
 }
 
@@ -231,5 +236,74 @@ mod tests {
         assert_eq!(json["build_input"]["source"]["kind"], "archive");
         assert_eq!(json["ecosystem_policy"]["status"], "clean");
         assert_eq!(json["command_risk"]["status"], "clean");
+    }
+
+    #[test]
+    fn build_input_identity_defaults_omitted_optional_inputs() {
+        let json = serde_json::json!({
+            "recipe": {
+                "kind": "explicit-recipe",
+                "path": "recipe.toml",
+                "hash": "sha256:recipe"
+            },
+            "source": {
+                "kind": "archive",
+                "url": "https://example.invalid/pkg.tar.gz",
+                "checksum": "sha256:source"
+            },
+            "builder_environment": {
+                "kind": "pristine",
+                "sysroot_hash": "sha256:sysroot",
+                "toolchain_hash": null,
+                "diagnostics": []
+            }
+        });
+
+        let input: BuildInputIdentity = serde_json::from_value(json).unwrap();
+
+        assert!(input.additional_sources.is_empty());
+        assert!(input.patches.is_empty());
+        assert_eq!(input.local_tree, None);
+        assert!(input.ecosystem_dependencies.is_empty());
+    }
+
+    #[test]
+    fn public_api_types_match_task2_contract() {
+        fn assert_copy<T: Copy>() {}
+
+        assert_copy::<LocalTreeMode>();
+        assert_copy::<BuilderEnvironmentKind>();
+        assert_copy::<PolicyStatus>();
+
+        let local_tree = LocalTreeIdentity {
+            tree_hash: "sha256:tree".to_string(),
+            file_count: 3usize,
+            mode: LocalTreeMode::GitTracked,
+            dirty: false,
+            warnings: vec![],
+        };
+        let file_count: usize = local_tree.file_count;
+        assert_eq!(file_count, 3);
+
+        let dependency = LockedRepositoryDependency {
+            repository_url: "https://repo.example.invalid".to_string(),
+            snapshot_version: "2026-06-14".to_string(),
+            package: "pkg".to_string(),
+            version: "1.0".to_string(),
+            release: "1".to_string(),
+            architecture: None,
+            content_identity: "sha256:pkg".to_string(),
+        };
+        assert_eq!(dependency.architecture, None);
+
+        let reproducibility = ReproducibilityRecord {
+            source_date_epoch: Some(-1),
+            path_remap_count: 2usize,
+            env_keys: vec![],
+        };
+        let source_date_epoch: Option<i64> = reproducibility.source_date_epoch;
+        let path_remap_count: usize = reproducibility.path_remap_count;
+        assert_eq!(source_date_epoch, Some(-1));
+        assert_eq!(path_remap_count, 2);
     }
 }
