@@ -44,10 +44,10 @@ fn evaluate_cargo_policy(source_root: &Path, command_text: &str) -> Result<Ecosy
     let locked = command_has_locked_flag(command_text);
 
     let mut identities = vec![lock_identity];
-    if config.should_record_identity() {
-        if let Some(identity) = config.identity.clone() {
-            identities.push(identity);
-        }
+    if config.should_record_identity()
+        && let Some(identity) = config.identity.clone()
+    {
+        identities.push(identity);
     }
 
     let mut diagnostics = Vec::new();

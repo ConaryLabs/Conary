@@ -243,7 +243,7 @@ fn is_debug_or_stealth_command(command: &str) -> bool {
 }
 
 fn argv_contains(argv: &[&str], needle: &str) -> bool {
-    argv.iter().any(|arg| *arg == needle)
+    argv.contains(&needle)
 }
 
 fn raw_package_manager_fetch(line: &str) -> bool {

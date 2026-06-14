@@ -312,11 +312,7 @@ fn controlled_make_assignment_key(token: &str) -> Option<&str> {
     if is_make_environment_key(target) && validate_make_environment_value(target, value).is_err() {
         return Some(target);
     }
-    if is_forbidden_shell_environment_key(target)
-        || CONTROLLED_ENV_KEYS
-            .iter()
-            .any(|controlled| *controlled == target)
-    {
+    if is_forbidden_shell_environment_key(target) || CONTROLLED_ENV_KEYS.contains(&target) {
         return Some(target);
     }
     None
