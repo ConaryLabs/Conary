@@ -885,12 +885,30 @@ fn validate_make_command_args(phase: &str, make: &str, args: &[String]) -> Resul
 }
 
 fn validate_no_shell_expansion(phase: &str, token: &str, context: &str) -> Result<()> {
-    if token.contains('$') {
+    if has_dynamic_shell_expansion(token) {
         return Err(Error::ConfigError(format!(
-            "hermetic reproducibility does not support shell expansion in {context} token {token} in {phase} phase"
+            "hermetic reproducibility does not support dynamic shell expansion in {context} token {token} in {phase} phase"
         )));
     }
     Ok(())
+}
+
+fn has_dynamic_shell_expansion(token: &str) -> bool {
+    let mut escaped = false;
+    for ch in token.chars() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' {
+            escaped = true;
+            continue;
+        }
+        if matches!(ch, '$' | '{' | '}' | '*' | '?' | '[') {
+            return true;
+        }
+    }
+    false
 }
 
 fn validate_no_command_substitution(phase: &str, line: &str) -> Result<()> {
@@ -2560,6 +2578,13 @@ mod tests {
                 "make `printf -- --include-dir=evil`",
                 "command substitution",
             ),
+            ("export SOURCE_DATE_EPOCH{,}=999; make", "shell expansion"),
+            ("make SOURCE_DATE_EPOCH{,}=999", "shell expansion"),
+            ("make --inc{,}=evil", "shell expansion"),
+            ("export *; make", "shell expansion"),
+            ("env SOURCE* make", "shell expansion"),
+            ("make all *", "shell expansion"),
+            ("make all --include*", "shell expansion"),
             (
                 "command env SOURCE_DATE_EPOCH=999 make",
                 "SOURCE_DATE_EPOCH",
@@ -2628,7 +2653,7 @@ mod tests {
             ("typeset -n ref=RUSTFLAGS; ref=bad; make", "nameref"),
             (
                 "f(){ local SOURCE_DATE_EPOCH=999; make; }; f",
-                "SOURCE_DATE_EPOCH",
+                "shell expansion",
             ),
             (
                 "function f { local -n ref=RUSTFLAGS; ref=bad; make; }; f",
@@ -2636,7 +2661,7 @@ mod tests {
             ),
             (
                 "f(){ local SOURCE_DATE_EPOCH[0]=999; make; }; f",
-                "SOURCE_DATE_EPOCH",
+                "shell expansion",
             ),
             ("readonly SOURCE_DATE_EPOCH+=999; make", "SOURCE_DATE_EPOCH"),
             (
