@@ -854,6 +854,11 @@ fn validate_make_command_args(phase: &str, make: &str, args: &[String]) -> Resul
                 "hermetic reproducibility does not support {make} eval option {token} in {phase} phase"
             )));
         }
+        if ReproducibilityConfig::is_makefile_import_option(token) {
+            return Err(Error::ConfigError(format!(
+                "hermetic reproducibility does not support {make} makefile import option {token} in {phase} phase"
+            )));
+        }
         if let Some(key) = ReproducibilityConfig::controlled_make_assignment_key(token) {
             return Err(command_local_env_error(phase, key));
         }
@@ -2380,25 +2385,30 @@ mod tests {
 
     #[test]
     fn test_simmer_rejects_make_override_env_in_hermetic_mode() {
-        let kitchen = Kitchen::new(KitchenConfig {
-            hermetic_evidence: Some(dummy_hermetic_evidence()),
-            reproducibility: Some(ReproducibilityConfig::default()),
-            pristine_mode: true,
-            use_isolation: false,
-            ..KitchenConfig::default()
-        });
-        let mut recipe = minimal_recipe();
-        recipe
-            .build
-            .environment
-            .insert("MAKEOVERRIDES".to_string(), "CFLAGS=bad".to_string());
-        recipe.build.make = Some("true".to_string());
-        let mut cook = Cook::new(&kitchen, &recipe).unwrap();
+        for (key, value, expected) in [
+            ("MAKEOVERRIDES", "CFLAGS=bad", "CFLAGS"),
+            ("MAKEFILES", "evil.mk", "MAKEFILES"),
+        ] {
+            let kitchen = Kitchen::new(KitchenConfig {
+                hermetic_evidence: Some(dummy_hermetic_evidence()),
+                reproducibility: Some(ReproducibilityConfig::default()),
+                pristine_mode: true,
+                use_isolation: false,
+                ..KitchenConfig::default()
+            });
+            let mut recipe = minimal_recipe();
+            recipe
+                .build
+                .environment
+                .insert(key.to_string(), value.to_string());
+            recipe.build.make = Some("true".to_string());
+            let mut cook = Cook::new(&kitchen, &recipe).unwrap();
 
-        let error = cook.simmer().unwrap_err();
+            let error = cook.simmer().unwrap_err();
 
-        assert!(error.to_string().contains("MAKEOVERRIDES"));
-        assert!(error.to_string().contains("CFLAGS"));
+            assert!(error.to_string().contains(key));
+            assert!(error.to_string().contains(expected));
+        }
     }
 
     #[test]
@@ -2459,6 +2469,11 @@ mod tests {
             ("MAKEFLAGS+=SOURCE_DATE_EPOCH=999 make", "MAKEFLAGS"),
             ("env GNUMAKEFLAGS=RUSTFLAGS=bad make", "GNUMAKEFLAGS"),
             ("make --eval 'export SOURCE_DATE_EPOCH=999'", "--eval"),
+            ("MAKEFILES=evil.mk make", "MAKEFILES"),
+            ("env MAKEFILES=evil.mk make", "MAKEFILES"),
+            ("make -f evil.mk", "-f"),
+            ("make --file=evil.mk", "--file"),
+            ("MAKEFLAGS=--file=evil.mk make", "MAKEFLAGS"),
             (
                 "command env SOURCE_DATE_EPOCH=999 make",
                 "SOURCE_DATE_EPOCH",

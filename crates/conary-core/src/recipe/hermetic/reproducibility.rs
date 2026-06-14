@@ -16,6 +16,7 @@ const BASH_FUNC_PREFIX: &str = "BASH_FUNC_";
 const MAKEFLAGS: &str = "MAKEFLAGS";
 const GNUMAKEFLAGS: &str = "GNUMAKEFLAGS";
 const MAKEOVERRIDES: &str = "MAKEOVERRIDES";
+const MAKEFILES: &str = "MAKEFILES";
 const PATH_REMAP_COUNT: usize = 2;
 const CONTROLLED_ENV_KEYS: &[&str] = &[
     SOURCE_DATE_EPOCH,
@@ -28,7 +29,7 @@ const CONTROLLED_ENV_KEYS: &[&str] = &[
     ENV,
 ];
 const SHELL_STARTUP_ENV_KEYS: &[&str] = &[SHELLOPTS, BASHOPTS, BASH_ENV, ENV];
-const MAKE_ENV_KEYS: &[&str] = &[MAKEFLAGS, GNUMAKEFLAGS, MAKEOVERRIDES];
+const MAKE_ENV_KEYS: &[&str] = &[MAKEFLAGS, GNUMAKEFLAGS, MAKEOVERRIDES, MAKEFILES];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReproducibilityConfig {
@@ -157,11 +158,15 @@ impl ReproducibilityConfig {
         is_make_eval_option(token)
     }
 
+    pub(crate) fn is_makefile_import_option(token: &str) -> bool {
+        is_makefile_import_option(token)
+    }
+
     pub(crate) fn command_local_assignment_allowed(&self, key: &str, value: &str) -> bool {
         match key {
             SOURCE_DATE_EPOCH => false,
             SHELLOPTS | BASHOPTS | BASH_ENV | ENV => false,
-            MAKEFLAGS | GNUMAKEFLAGS | MAKEOVERRIDES => {
+            MAKEFLAGS | GNUMAKEFLAGS | MAKEOVERRIDES | MAKEFILES => {
                 validate_make_environment_value(key, value).is_ok()
             }
             RUSTFLAGS => self
@@ -256,11 +261,22 @@ fn validate_make_environment_value(key: &str, value: &str) -> Result<()> {
     if !is_make_environment_key(key) {
         return Ok(());
     }
+    if key == MAKEFILES {
+        return Err(Error::ConfigError(
+            "hermetic reproducibility rejects MAKEFILES make startup import environment"
+                .to_string(),
+        ));
+    }
     for token in value.split_whitespace() {
         let token = clean_make_token(token);
         if is_make_eval_option(token) {
             return Err(Error::ConfigError(format!(
                 "hermetic reproducibility rejects {key} make eval option {token}"
+            )));
+        }
+        if is_makefile_import_option(token) {
+            return Err(Error::ConfigError(format!(
+                "hermetic reproducibility rejects {key} makefile import option {token}"
             )));
         }
         if let Some(controlled) = controlled_make_assignment_key(token) {
@@ -312,6 +328,16 @@ fn make_assignment(token: &str) -> Option<(&str, &str)> {
 fn is_make_eval_option(token: &str) -> bool {
     let token = clean_make_token(token);
     token == "-E" || token.starts_with("-E") || token == "--eval" || token.starts_with("--eval=")
+}
+
+fn is_makefile_import_option(token: &str) -> bool {
+    let token = clean_make_token(token);
+    token == "-f"
+        || token.starts_with("-f")
+        || token == "--file"
+        || token.starts_with("--file=")
+        || token == "--makefile"
+        || token.starts_with("--makefile=")
 }
 
 fn clean_make_token(token: &str) -> &str {
@@ -471,6 +497,9 @@ mod tests {
             ("GNUMAKEFLAGS", "SOURCE_DATE_EPOCH!=date"),
             ("MAKEOVERRIDES", "RUSTFLAGS::=bad"),
             ("MAKEFLAGS", "MAKEFLAGS=SOURCE_DATE_EPOCH=999"),
+            ("MAKEFILES", "evil.mk"),
+            ("MAKEFLAGS", "--file=evil.mk"),
+            ("GNUMAKEFLAGS", "-fevil.mk"),
         ];
 
         for (key, value) in cases {
