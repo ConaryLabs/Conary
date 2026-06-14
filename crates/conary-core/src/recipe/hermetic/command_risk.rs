@@ -73,13 +73,7 @@ pub fn classify_build_commands(commands: &[BuildCommandText]) -> BuildCommandRis
                 continue;
             }
             for signal in raw_line_signals(line) {
-                push_entry(
-                    &mut entries,
-                    &command_text.phase,
-                    signal.command,
-                    signal.reason_code,
-                    line,
-                );
+                push_raw_entry(&mut entries, &command_text.phase, signal, line);
             }
         }
     }
@@ -342,7 +336,10 @@ fn push_entry(
     evidence: &str,
 ) {
     if entries.iter().any(|entry| {
-        entry.phase == phase && entry.reason_code == reason_code && entry.evidence == evidence
+        entry.phase == phase
+            && entry.command == command
+            && entry.reason_code == reason_code
+            && entry.evidence == evidence
     }) {
         return;
     }
@@ -354,6 +351,23 @@ fn push_entry(
         severity: PolicyStatus::Blocked,
         evidence: evidence.to_string(),
     });
+}
+
+fn push_raw_entry(
+    entries: &mut Vec<BuildCommandRiskEntry>,
+    phase: &str,
+    signal: RiskSignal,
+    evidence: &str,
+) {
+    if entries.iter().any(|entry| {
+        entry.phase == phase
+            && entry.reason_code == signal.reason_code
+            && entry.evidence == evidence
+    }) {
+        return;
+    }
+
+    push_entry(entries, phase, signal.command, signal.reason_code, evidence);
 }
 
 #[cfg(test)]
@@ -515,5 +529,24 @@ mod tests {
                 "{content}"
             );
         }
+    }
+
+    #[test]
+    fn command_risk_preserves_multiple_commands_with_same_reason_and_line() {
+        let report = classify_build_commands(&[BuildCommandText::new(
+            "make",
+            "npm install foo && bun add bar",
+        )]);
+
+        let mut package_manager_commands: Vec<&str> = report
+            .entries
+            .iter()
+            .filter(|entry| entry.reason_code == "package-manager-fetch")
+            .map(|entry| entry.command.as_str())
+            .collect();
+        package_manager_commands.sort_unstable();
+
+        assert_eq!(report.status, PolicyStatus::Blocked);
+        assert_eq!(package_manager_commands, vec!["bun", "npm"]);
     }
 }

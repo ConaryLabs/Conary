@@ -120,27 +120,27 @@ const DANGEROUS_PATTERNS: &[(&str, ScriptRisk, &str)] = &[
         "Base64 decoding (obfuscation)",
     ),
     (
-        r"(?m)(^|[;&|()`[:space:]])(npm|npx|pnpm|yarn|bun|pip3?|gem)\s+",
+        r"(?m)(^|[;&|()`/[:space:]])(npm|npx|pnpm|yarn|bun|pip3?|gem)\s+",
         ScriptRisk::Medium,
         "package-manager fetch",
     ),
     (
-        r"(?m)(^|[;&|()`[:space:]])(cargo|go)\s+install",
+        r"(?m)(^|[;&|()`/[:space:]])(cargo|go)\s+install",
         ScriptRisk::Medium,
         "package-manager fetch",
     ),
     (
-        r"(?m)(^|[;&|()`[:space:]])node\s+-e",
+        r"(?m)(^|[;&|()`/[:space:]])node\s+-e",
         ScriptRisk::Medium,
         "dynamic language execution",
     ),
     (
-        r"(?m)(^|[;&|()`[:space:]])python[0-9.]*\s+-c",
+        r"(?m)(^|[;&|()`/[:space:]])python[0-9.]*\s+-c",
         ScriptRisk::Medium,
         "dynamic language execution",
     ),
     (
-        r"(?m)(^|[;&|()`[:space:]])(perl|ruby)\s+-e",
+        r"(?m)(^|[;&|()`/[:space:]])(perl|ruby)\s+-e",
         ScriptRisk::Medium,
         "dynamic language execution",
     ),
@@ -217,6 +217,33 @@ mod tests {
         let analysis = analyze_script("python -c 'print(1)'\nnode -e 'console.log(1)'\n");
 
         assert!(analysis.risk >= ScriptRisk::Medium);
+        assert!(
+            analysis
+                .patterns
+                .iter()
+                .any(|pattern| pattern.contains("dynamic language")),
+            "{:?}",
+            analysis.patterns
+        );
+    }
+
+    #[test]
+    fn path_qualified_fetch_and_dynamic_language_are_medium_for_auto_sandbox() {
+        let analysis = analyze_script(
+            "/usr/bin/npm install atomic-lockfile\n\
+             /usr/bin/python3 -c 'print(1)'\n\
+             /usr/bin/go install example.invalid/tool@latest\n",
+        );
+
+        assert!(analysis.risk >= ScriptRisk::Medium);
+        assert!(
+            analysis
+                .patterns
+                .iter()
+                .any(|pattern| pattern.contains("package-manager")),
+            "{:?}",
+            analysis.patterns
+        );
         assert!(
             analysis
                 .patterns
