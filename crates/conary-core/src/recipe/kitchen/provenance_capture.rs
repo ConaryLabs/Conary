@@ -335,6 +335,7 @@ impl ProvenanceCapture {
             } else {
                 "host".to_string()
             }),
+            hermetic_evidence: None,
 
             // Signature layer (empty - signatures added post-build)
             signatures: Vec::new(),

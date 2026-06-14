@@ -62,6 +62,10 @@ pub struct ManifestProvenance {
     #[serde(default)]
     pub hardening_level: Option<String>,
 
+    /// Unsigned M2a hermetic build evidence, when a hermetic path produced it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hermetic_evidence: Option<crate::recipe::hermetic::HermeticBuildEvidence>,
+
     // === Signature Layer ===
     /// Signatures on this package
     #[serde(default)]
