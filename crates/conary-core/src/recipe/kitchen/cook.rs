@@ -181,6 +181,13 @@ fn validate_shell_env_mutation_segment(
             }
             _ => {}
         }
+        if is_shell_interpreter_command(command_basename(command_token)) {
+            return validate_shell_interpreter_invocation(
+                phase,
+                command_basename(command_token),
+                &tokens[index + 1..],
+            );
+        }
 
         if let Some(next_index) = peel_shell_control_word(phase, &tokens, index)? {
             index = next_index;
@@ -216,6 +223,28 @@ fn peel_shell_env_wrappers(phase: &str, tokens: &[String], mut index: usize) -> 
         }
     }
     Ok(index)
+}
+
+fn is_shell_interpreter_command(command: &str) -> bool {
+    matches!(command, "sh" | "bash" | "dash" | "zsh" | "ksh" | "mksh")
+}
+
+fn validate_shell_interpreter_invocation(phase: &str, shell: &str, args: &[String]) -> Result<()> {
+    for arg in args {
+        if arg == "--" {
+            break;
+        }
+        if shell_option_invokes_command_string(arg) {
+            return Err(Error::ConfigError(format!(
+                "hermetic reproducibility rejects nested shell {shell} {arg} invocation in {phase} phase"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn shell_option_invokes_command_string(arg: &str) -> bool {
+    arg.starts_with('-') && !arg.starts_with("--") && arg[1..].chars().any(|ch| ch == 'c')
 }
 
 fn peel_shell_control_word(phase: &str, tokens: &[String], index: usize) -> Result<Option<usize>> {
@@ -1988,6 +2017,9 @@ mod tests {
                 "if SOURCE_DATE_EPOCH=999 make; then :; fi",
                 "SOURCE_DATE_EPOCH",
             ),
+            ("sh -c 'SOURCE_DATE_EPOCH=999 make'", "-c"),
+            ("/bin/sh -c 'env -u SOURCE_DATE_EPOCH make'", "-c"),
+            ("bash -ec 'SOURCE_DATE_EPOCH=999 make'", "-ec"),
             (
                 "export RUSTFLAGS=--remap-path-prefix=/src=/build/source-old; make",
                 "RUSTFLAGS",
@@ -2000,6 +2032,29 @@ mod tests {
             assert!(
                 error.to_string().contains(key),
                 "expected {key} rejection for {command}, got: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_shell_env_scanner_rejects_nested_shell_c_invocations() {
+        let config = ReproducibilityConfig::new(0, Path::new("/src"), Path::new("/build"));
+        let cases = [
+            ("sh -c 'SOURCE_DATE_EPOCH=999 make'", "-c"),
+            ("/bin/sh -c 'env -u SOURCE_DATE_EPOCH make'", "-c"),
+            ("bash -ec 'SOURCE_DATE_EPOCH=999 make'", "-ec"),
+            ("dash -e -c 'SOURCE_DATE_EPOCH=999 make'", "-c"),
+            ("zsh -ce 'SOURCE_DATE_EPOCH=999 make'", "-ce"),
+            ("ksh -c 'SOURCE_DATE_EPOCH=999 make'", "-c"),
+            ("mksh -c 'SOURCE_DATE_EPOCH=999 make'", "-c"),
+        ];
+
+        for (segment, expected) in cases {
+            let error = validate_shell_env_mutation_segment(&config, "make", segment).unwrap_err();
+
+            assert!(
+                error.to_string().contains(expected),
+                "expected {expected} rejection for {segment}, got: {error}"
             );
         }
     }
