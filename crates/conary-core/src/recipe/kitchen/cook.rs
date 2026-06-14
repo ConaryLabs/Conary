@@ -176,7 +176,12 @@ fn validate_shell_env_mutation_segment(
                 return validate_export_env_mutations(config, phase, &tokens[index + 1..]);
             }
             "declare" | "typeset" => {
-                return validate_export_env_mutations(config, phase, &tokens[index + 1..]);
+                return validate_declare_env_mutations(
+                    config,
+                    phase,
+                    command_basename(command_token),
+                    &tokens[index + 1..],
+                );
             }
             "read" => return validate_read_env_mutations(phase, &tokens[index + 1..]),
             "mapfile" | "readarray" => {
@@ -418,6 +423,46 @@ fn validate_export_env_mutations(
         }
     }
     Ok(())
+}
+
+fn validate_declare_env_mutations(
+    config: &ReproducibilityConfig,
+    phase: &str,
+    builtin: &str,
+    tokens: &[String],
+) -> Result<()> {
+    for token in tokens {
+        if declare_option_enables_nameref(token) {
+            return Err(Error::ConfigError(format!(
+                "hermetic reproducibility does not support {builtin} nameref option {token} in {phase} phase"
+            )));
+        }
+        if token.starts_with('-') || token.starts_with('+') {
+            continue;
+        }
+        if let Some(key) = shell_append_assignment(token) {
+            validate_shell_append_assignment(phase, &key)?;
+            continue;
+        }
+        if let Some((key, value)) = shell_assignment(token) {
+            validate_shell_assignment(config, phase, &key, &value)?;
+            continue;
+        }
+        if is_controlled_reproducibility_key(token) {
+            return Err(command_local_env_error(phase, token));
+        }
+    }
+    Ok(())
+}
+
+fn declare_option_enables_nameref(token: &str) -> bool {
+    if token == "--" || token.starts_with("--") {
+        return false;
+    }
+    let Some(options) = token.strip_prefix('-').or_else(|| token.strip_prefix('+')) else {
+        return false;
+    };
+    options.chars().any(|option| option == 'n')
 }
 
 fn validate_unset_env_mutations(phase: &str, tokens: &[String]) -> Result<()> {
@@ -2299,8 +2344,14 @@ mod tests {
             ("export SOURCE_DATE_EPOCH+=999; make", "SOURCE_DATE_EPOCH"),
             ("declare SOURCE_DATE_EPOCH=999; make", "SOURCE_DATE_EPOCH"),
             ("declare SOURCE_DATE_EPOCH+=999; make", "SOURCE_DATE_EPOCH"),
+            ("declare -n ref=SOURCE_DATE_EPOCH; ref=999; make", "nameref"),
+            (
+                "declare -n ref=SOURCE_DATE_EPOCH; ref+=999; make",
+                "nameref",
+            ),
             ("typeset CFLAGS=bad; make", "CFLAGS"),
             ("typeset CFLAGS+=bad; make", "CFLAGS"),
+            ("typeset -n ref=RUSTFLAGS; ref=bad; make", "nameref"),
             ("readonly SOURCE_DATE_EPOCH+=999; make", "SOURCE_DATE_EPOCH"),
             (
                 "read SOURCE_DATE_EPOCH <<EOF\n999\nEOF\nmake",
@@ -2517,7 +2568,12 @@ mod tests {
             ("builtin -x export SOURCE_DATE_EPOCH=999", "-x"),
             ("declare SOURCE_DATE_EPOCH=999", "SOURCE_DATE_EPOCH"),
             ("declare -x SOURCE_DATE_EPOCH", "SOURCE_DATE_EPOCH"),
+            ("declare -n ref=SOURCE_DATE_EPOCH", "nameref"),
+            ("declare -gn ref=SOURCE_DATE_EPOCH", "nameref"),
+            ("declare +n ref=SOURCE_DATE_EPOCH", "nameref"),
+            ("declare -n ref=SOURCE_DATE_EPOCH; ref+=999", "nameref"),
             ("typeset CFLAGS=bad", "CFLAGS"),
+            ("typeset -n ref=RUSTFLAGS", "nameref"),
             ("read -r SOURCE_DATE_EPOCH", "SOURCE_DATE_EPOCH"),
             ("read -a SOURCE_DATE_EPOCH", "SOURCE_DATE_EPOCH"),
             ("read < file SOURCE_DATE_EPOCH", "read redirection"),
