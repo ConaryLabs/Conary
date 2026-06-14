@@ -7,15 +7,18 @@ use crate::ccs::manifest::{CcsManifest, ManifestProvenance, PackageDep};
 use crate::container::{BindMount, ContainerConfig, Sandbox};
 use crate::error::{Error, Result};
 use crate::recipe::format::{Recipe, SourceSection, is_remote_url};
+use crate::recipe::hermetic::ReproducibilityConfig;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use tempfile::TempDir;
 use tracing::{debug, info};
 
 use super::Kitchen;
 use super::archive::{apply_patch, extract_archive};
+use super::local_source::{copy_dir_contents, materialize_local_source_from_file_list};
 use super::provenance_capture::ProvenanceCapture;
+use super::reproducibility_env::validate_command_local_reproducibility_env;
 
 const DANGEROUS_BUILD_ENV_VARS: &[&str] =
     &["LD_PRELOAD", "LD_LIBRARY_PATH", "LD_AUDIT", "LD_BIND_NOT"];
@@ -24,22 +27,20 @@ fn is_dangerous_build_env_var(key: &str) -> bool {
     DANGEROUS_BUILD_ENV_VARS.contains(&key)
 }
 
-fn filtered_build_env<'a>(
-    env: &'a [(&'a str, String)],
-) -> impl Iterator<Item = (&'a str, &'a str)> {
+fn filtered_build_env(env: &[(String, String)]) -> impl Iterator<Item = (&str, &str)> {
     env.iter()
         .filter(|(key, _)| !is_dangerous_build_env_var(key))
-        .map(|(key, value)| (*key, value.as_str()))
+        .map(|(key, value)| (key.as_str(), value.as_str()))
 }
 
-fn apply_direct_build_env(cmd: &mut Command, env: &[(&str, String)]) {
+fn apply_direct_build_env(cmd: &mut Command, env: &[(String, String)]) {
     cmd.env_clear()
         .env("HOME", "/root")
         .env("TERM", "xterm")
         .env("LC_ALL", "C")
         .env("SHELL", "/bin/sh");
 
-    if !env.iter().any(|(key, _)| *key == "PATH") {
+    if !env.iter().any(|(key, _)| key == "PATH") {
         cmd.env("PATH", "/usr/bin:/usr/sbin:/bin:/sbin:/tools/bin");
     }
 
@@ -48,7 +49,7 @@ fn apply_direct_build_env(cmd: &mut Command, env: &[(&str, String)]) {
     }
 }
 
-fn chroot_env_args(env: &[(&str, String)], jobs: u32) -> Vec<String> {
+fn chroot_env_args(env: &[(String, String)], jobs: u32) -> Vec<String> {
     let mut env_args = vec!["env".to_string(), "-i".to_string()];
     for (key, value) in filtered_build_env(env) {
         env_args.push(format!("{key}={value}"));
@@ -68,10 +69,7 @@ fn translate_path_for_chroot(path: &Path, sysroot: &Path) -> PathBuf {
     }
 }
 
-fn translate_env_for_chroot<'a>(
-    env: &'a [(&'a str, String)],
-    sysroot: &Path,
-) -> Vec<(&'a str, String)> {
+fn translate_env_for_chroot(env: &[(String, String)], sysroot: &Path) -> Vec<(String, String)> {
     env.iter()
         .map(|(key, value)| {
             let translated = if Path::new(value).is_absolute() {
@@ -81,7 +79,7 @@ fn translate_env_for_chroot<'a>(
             } else {
                 value.clone()
             };
-            (*key, translated)
+            (key.clone(), translated)
         })
         .collect()
 }
@@ -95,46 +93,21 @@ fn translate_command_for_chroot(command: &str, sysroot: &Path) -> String {
     command.replace(prefix, "")
 }
 
-fn copy_dir_contents(source_root: &Path, source: &Path, dest: &Path) -> Result<()> {
-    fs::create_dir_all(dest)?;
+fn configure_provenance_from_kitchen(
+    kitchen: &Kitchen,
+    provenance: &mut ProvenanceCapture,
+) -> Result<()> {
+    provenance.origin_class = kitchen.config.origin_class_override.clone();
+    provenance.source_provenance = kitchen.config.source_provenance_override.clone();
 
-    for entry in fs::read_dir(source)? {
-        let entry = entry?;
-        let source_path = entry.path();
-        let dest_path = dest.join(entry.file_name());
-        let file_type = entry.file_type()?;
-
-        if file_type.is_dir() {
-            copy_dir_contents(source_root, &source_path, &dest_path)?;
-        } else if file_type.is_file() {
-            fs::copy(&source_path, &dest_path)?;
-        } else if file_type.is_symlink() {
-            let target = fs::read_link(&source_path)?;
-            let resolved = source_path.canonicalize().map_err(|e| {
-                Error::ConfigError(format!(
-                    "Local source symlink target not found: {} -> {} ({e})",
-                    source_path.display(),
-                    target.display()
-                ))
-            })?;
-            if !resolved.starts_with(source_root) {
-                return Err(Error::ConfigError(format!(
-                    "Local source symlink must stay within the source directory: {} -> {}",
-                    source_path.display(),
-                    target.display()
-                )));
-            }
-            #[cfg(unix)]
-            std::os::unix::fs::symlink(target, &dest_path)?;
-            #[cfg(not(unix))]
-            {
-                if resolved.is_dir() {
-                    copy_dir_contents(source_root, &resolved, &dest_path)?;
-                } else {
-                    fs::copy(&resolved, &dest_path)?;
-                }
-            }
+    if let Some(evidence) = &kitchen.config.hermetic_evidence {
+        if !kitchen.config.pristine_mode {
+            return Err(Error::ConfigError(
+                "hermetic evidence requires pristine mode before build execution".to_string(),
+            ));
         }
+        provenance.hermetic_evidence = Some(evidence.clone());
+        provenance.hardening_level_override = Some("hermetic".to_string());
     }
 
     Ok(())
@@ -173,8 +146,7 @@ impl<'a> Cook<'a> {
         fs::create_dir_all(&dest_dir)?;
 
         let mut provenance = ProvenanceCapture::new();
-        provenance.origin_class = kitchen.config.origin_class_override.clone();
-        provenance.source_provenance = kitchen.config.source_provenance_override.clone();
+        configure_provenance_from_kitchen(kitchen, &mut provenance)?;
 
         // Record build dependencies from recipe
         for dep in &recipe.build.makedepends {
@@ -225,8 +197,7 @@ impl<'a> Cook<'a> {
         fs::create_dir_all(dest_dir)?;
 
         let mut provenance = ProvenanceCapture::new();
-        provenance.origin_class = kitchen.config.origin_class_override.clone();
-        provenance.source_provenance = kitchen.config.source_provenance_override.clone();
+        configure_provenance_from_kitchen(kitchen, &mut provenance)?;
         for dep in &recipe.build.makedepends {
             provenance.add_build_dep(dep, "unknown", None);
         }
@@ -283,7 +254,11 @@ impl<'a> Cook<'a> {
                     return Ok(());
                 }
 
-                copy_dir_contents(&resolved, &resolved, &self.source_dir)?;
+                if let Some(files) = self.kitchen.config.hermetic_local_files.as_deref() {
+                    materialize_local_source_from_file_list(&resolved, &self.source_dir, files)?;
+                } else {
+                    copy_dir_contents(&resolved, &resolved, &self.source_dir)?;
+                }
                 self.log_line(&format!("Prepared local source: {}", resolved.display()));
                 return Ok(());
             }
@@ -319,8 +294,9 @@ impl<'a> Cook<'a> {
         // Fetch patches -- all remote patches MUST have checksums
         if let Some(patches) = &self.recipe.patches {
             for patch in &patches.files {
-                if is_remote_url(&patch.file) {
-                    let filename = patch.file.split('/').next_back().unwrap_or("patch.diff");
+                let patch_file = self.recipe.substitute(&patch.file, "");
+                if is_remote_url(&patch_file) {
+                    let filename = patch_file.split('/').next_back().unwrap_or("patch.diff");
                     let local_path = self.build_dir.as_path().join("patches").join(filename);
                     fs::create_dir_all(local_path.parent().unwrap())?;
 
@@ -333,10 +309,10 @@ impl<'a> Cook<'a> {
                             patch.file
                         ))
                     })?;
-                    let path = self.kitchen.fetch_source(&patch.file, checksum)?;
+                    let path = self.kitchen.fetch_source(&patch_file, checksum)?;
                     fs::copy(&path, &local_path)?;
 
-                    self.log_line(&format!("Fetched patch: {}", patch.file));
+                    self.log_line(&format!("Fetched patch: {}", patch_file));
                 }
             }
         }
@@ -434,15 +410,16 @@ impl<'a> Cook<'a> {
         };
 
         for patch_info in patches {
-            let patch_path = if is_remote_url(&patch_info.file) {
-                let filename = patch_info
-                    .file
-                    .split('/')
-                    .next_back()
-                    .unwrap_or("patch.diff");
+            let patch_file = self.recipe.substitute(&patch_info.file, "");
+            let patch_path = if is_remote_url(&patch_file) {
+                let filename = patch_file.split('/').next_back().unwrap_or("patch.diff");
                 self.build_dir.as_path().join("patches").join(filename)
             } else {
-                PathBuf::from(&patch_info.file)
+                resolve_local_patch_path(
+                    self.kitchen.config.recipe_source_base_dir.as_deref(),
+                    &patch_file,
+                    self.kitchen.config.hermetic_evidence.is_some(),
+                )?
             };
 
             if !patch_path.exists() {
@@ -455,13 +432,13 @@ impl<'a> Cook<'a> {
             // Read patch content for provenance hashing
             let patch_content = fs::read(&patch_path).unwrap_or_default();
 
-            info!("Applying patch: {}", patch_info.file);
+            info!("Applying patch: {}", patch_file);
             apply_patch(&self.source_dir, &patch_path, patch_info.strip)?;
-            self.log_line(&format!("Applied patch: {}", patch_info.file));
+            self.log_line(&format!("Applied patch: {}", patch_file));
 
             // Record patch for provenance
             self.provenance.record_patch(
-                &patch_info.file,
+                &patch_file,
                 &patch_content,
                 patch_info.strip,
                 None, // Author not typically in recipe
@@ -489,10 +466,13 @@ impl<'a> Cook<'a> {
         };
 
         // Set up environment
-        let mut env: Vec<(&str, String)> = vec![
-            ("DESTDIR", self.dest_dir.to_string_lossy().to_string()),
+        let mut env: Vec<(String, String)> = vec![
             (
-                "MAKEFLAGS",
+                "DESTDIR".to_string(),
+                self.dest_dir.to_string_lossy().to_string(),
+            ),
+            (
+                "MAKEFLAGS".to_string(),
                 format!("-j{}", build.jobs.unwrap_or(self.kitchen.config.jobs)),
             ),
         ];
@@ -500,11 +480,11 @@ impl<'a> Cook<'a> {
         // Inject caller-supplied env vars (e.g. LFS, LFS_TGT, PATH for bootstrap
         // builds) without touching the process-wide environment.
         for (key, value) in &self.kitchen.config.extra_env {
-            env.push((key, value.clone()));
+            env.push((key.clone(), value.clone()));
         }
 
         for (key, value) in &build.environment {
-            env.push((key, value.clone()));
+            env.push((key.clone(), value.clone()));
         }
 
         // Run setup if specified
@@ -532,6 +512,7 @@ impl<'a> Cook<'a> {
         if let Some(check) = &build.check {
             match self.run_build_step("check", check, &workdir, &env) {
                 Ok(_) => {}
+                Err(e) if self.hermetic_controls_active() => return Err(e),
                 Err(e) => {
                     self.warnings.push(format!("Tests failed: {}", e));
                 }
@@ -560,10 +541,20 @@ impl<'a> Cook<'a> {
         phase: &str,
         command: &str,
         workdir: &Path,
-        env: &[(&str, String)],
+        env: &[(String, String)],
     ) -> Result<()> {
         info!("Running {} phase", phase);
         debug!("Command: {}", command);
+
+        let final_env;
+        let env = if let Some(config) = self.reproducibility_config_for_execution() {
+            final_env = config.merge_env(env.to_vec())?;
+            config.validate_final_env(&final_env)?;
+            validate_command_local_reproducibility_env(&config, phase, command)?;
+            final_env.as_slice()
+        } else {
+            env
+        };
 
         if self.kitchen.config.use_isolation {
             self.run_build_step_isolated(phase, command, workdir, env)
@@ -578,7 +569,7 @@ impl<'a> Cook<'a> {
         phase: &str,
         command: &str,
         workdir: &Path,
-        env: &[(&str, String)],
+        env: &[(String, String)],
     ) -> Result<()> {
         // Configure container based on pristine mode
         let mut container_config = if self.kitchen.config.pristine_mode {
@@ -666,7 +657,8 @@ impl<'a> Cook<'a> {
         let mut sandbox = Sandbox::new(container_config);
 
         // Convert env to the format expected by Sandbox
-        let env_refs: Vec<(&str, &str)> = env.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        let env_refs: Vec<(&str, &str)> =
+            env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
 
         // Shell-escape the workdir to prevent injection from paths with
         // spaces or special characters. Single-quote the path, escaping
@@ -698,7 +690,7 @@ impl<'a> Cook<'a> {
         phase: &str,
         command: &str,
         workdir: &Path,
-        env: &[(&str, String)],
+        env: &[(String, String)],
     ) -> Result<()> {
         // When a sysroot is configured (bootstrap builds), run inside the
         // sysroot as a chroot. This matches LFS's build model: all packages
@@ -757,6 +749,25 @@ impl<'a> Cook<'a> {
         }
 
         Ok(())
+    }
+
+    fn reproducibility_config_for_execution(&self) -> Option<ReproducibilityConfig> {
+        self.kitchen.config.reproducibility.as_ref().map(|config| {
+            if let Some(sysroot) = &self.kitchen.config.sysroot
+                && !self.kitchen.config.use_isolation
+            {
+                return config.with_roots(
+                    &translate_path_for_chroot(&self.source_dir, sysroot),
+                    &translate_path_for_chroot(self.build_dir.as_path(), sysroot),
+                );
+            }
+            config.with_roots(&self.source_dir, self.build_dir.as_path())
+        })
+    }
+
+    fn hermetic_controls_active(&self) -> bool {
+        self.kitchen.config.reproducibility.is_some()
+            || self.kitchen.config.hermetic_evidence.is_some()
     }
 
     /// Phase 4: Plate - package the result as CCS
@@ -860,12 +871,98 @@ impl<'a> Cook<'a> {
     }
 }
 
+fn resolve_local_patch_path(
+    recipe_source_base_dir: Option<&Path>,
+    patch_file: &str,
+    require_recipe_source_base_dir: bool,
+) -> Result<PathBuf> {
+    let relative_patch = clean_relative_local_patch_path(patch_file)?;
+    let Some(recipe_source_base_dir) = recipe_source_base_dir else {
+        if require_recipe_source_base_dir {
+            return Err(Error::ConfigError(
+                "hermetic local patch application requires recipe source base dir (KitchenConfig.recipe_source_base_dir)"
+                    .to_string(),
+            ));
+        }
+        return Ok(relative_patch);
+    };
+
+    let canonical_recipe_dir = fs::canonicalize(recipe_source_base_dir).map_err(|error| {
+        Error::ConfigError(format!(
+            "Recipe source base dir not found for local patch resolution: {} ({error})",
+            recipe_source_base_dir.display()
+        ))
+    })?;
+    let patch_path = canonical_recipe_dir.join(relative_patch);
+    let canonical_patch = fs::canonicalize(&patch_path).map_err(|error| {
+        Error::NotFound(format!(
+            "Patch file not found: {} ({error})",
+            patch_path.display()
+        ))
+    })?;
+
+    if !canonical_patch.starts_with(&canonical_recipe_dir) {
+        return Err(Error::ConfigError(format!(
+            "Local patch path must stay within the recipe directory: {patch_file}"
+        )));
+    }
+
+    Ok(canonical_patch)
+}
+
+fn clean_relative_local_patch_path(patch_file: &str) -> Result<PathBuf> {
+    let path = Path::new(patch_file);
+    if path.as_os_str().is_empty() {
+        return Err(Error::ConfigError(
+            "Local patch path cannot be empty".to_string(),
+        ));
+    }
+    if path.is_absolute() {
+        return Err(Error::ConfigError(format!(
+            "Local patch path must be relative to the recipe directory: {patch_file}"
+        )));
+    }
+
+    let mut clean = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Normal(part) => clean.push(part),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                return Err(Error::ConfigError(format!(
+                    "Local patch path must stay within the recipe directory: {patch_file}"
+                )));
+            }
+            Component::RootDir | Component::Prefix(_) => {
+                return Err(Error::ConfigError(format!(
+                    "Local patch path must be relative to the recipe directory: {patch_file}"
+                )));
+            }
+        }
+    }
+
+    if clean.as_os_str().is_empty() {
+        return Err(Error::ConfigError(
+            "Local patch path cannot be empty".to_string(),
+        ));
+    }
+
+    Ok(clean)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::recipe::format::{
-        BuildSection, LocalSourceSection, PackageSection, Recipe, RemoteSourceSection,
-        SourceSection,
+        BuildSection, LocalSourceSection, PackageSection, PatchInfo, PatchSection, Recipe,
+        RemoteSourceSection, SourceSection,
+    };
+    use crate::recipe::hermetic::source_identity::{CiMode, canonical_local_file_list};
+    use crate::recipe::hermetic::{
+        BuildCommandRiskReport, BuildInputIdentity, BuilderEnvironmentIdentity,
+        BuilderEnvironmentKind, DependencyLock, EcosystemPolicyReport, HERMETIC_EVIDENCE_SCHEMA_V1,
+        HermeticBuildEvidence, RecipeIdentity, ReproducibilityConfig, ReproducibilityRecord,
+        SourceIdentity,
     };
     use crate::recipe::kitchen::KitchenConfig;
     use std::collections::HashMap;
@@ -951,8 +1048,8 @@ mod tests {
         apply_direct_build_env(
             &mut cmd,
             &[
-                ("LD_PRELOAD", "/tmp/malicious.so".to_string()),
-                ("SAFE_FLAG", "1".to_string()),
+                ("LD_PRELOAD".to_string(), "/tmp/malicious.so".to_string()),
+                ("SAFE_FLAG".to_string(), "1".to_string()),
             ],
         );
 
@@ -974,8 +1071,8 @@ mod tests {
     fn test_chroot_env_args_filter_dangerous_loader_variables() {
         let args = chroot_env_args(
             &[
-                ("LD_LIBRARY_PATH", "/tmp/evil".to_string()),
-                ("CUSTOM", "value".to_string()),
+                ("LD_LIBRARY_PATH".to_string(), "/tmp/evil".to_string()),
+                ("CUSTOM".to_string(), "value".to_string()),
             ],
             8,
         );
@@ -996,6 +1093,42 @@ mod tests {
             translate_path_for_chroot(Path::new("/outside/build"), sysroot),
             PathBuf::from("/outside/build")
         );
+    }
+
+    #[test]
+    fn test_chroot_reproducibility_config_uses_compiler_visible_roots() {
+        let dir = tempfile::tempdir().unwrap();
+        let sysroot = dir.path().join("sysroot");
+        let dest = sysroot.join("dest");
+        let kitchen = Kitchen::new(KitchenConfig {
+            sysroot: Some(sysroot.clone()),
+            reproducibility: Some(ReproducibilityConfig::default()),
+            use_isolation: false,
+            ..KitchenConfig::default()
+        });
+        let recipe = minimal_recipe();
+        let cook = Cook::new_with_dest(&kitchen, &recipe, &dest).unwrap();
+
+        let config = cook.reproducibility_config_for_execution().unwrap();
+        let env = config.env_vars();
+        let rustflags = env
+            .iter()
+            .find(|(key, _)| key == "RUSTFLAGS")
+            .unwrap()
+            .1
+            .as_str();
+        let cflags = env
+            .iter()
+            .find(|(key, _)| key == "CFLAGS")
+            .unwrap()
+            .1
+            .as_str();
+        let sysroot_text = sysroot.to_string_lossy();
+
+        assert!(!rustflags.contains(sysroot_text.as_ref()));
+        assert!(!cflags.contains(sysroot_text.as_ref()));
+        assert!(rustflags.contains("--remap-path-prefix=/var/tmp/conary-derivation-build/"));
+        assert!(cflags.contains("-ffile-prefix-map=/var/tmp/conary-derivation-build/"));
     }
 
     #[test]
@@ -1085,6 +1218,39 @@ mod tests {
     }
 
     #[test]
+    fn test_prep_isolated_local_path_source_uses_hermetic_file_list_when_present() {
+        let dir = tempfile::tempdir().unwrap();
+        let recipe_dir = dir.path().join("recipe");
+        let workspace = recipe_dir.join("src");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::write(workspace.join("included.txt"), "included\n").unwrap();
+        std::fs::write(workspace.join("excluded.txt"), "excluded\n").unwrap();
+        let mut hermetic_files = canonical_local_file_list(&workspace, CiMode::Off).unwrap();
+        hermetic_files.retain(|file| file.relative_path == PathBuf::from("included.txt"));
+
+        let kitchen = Kitchen::new(KitchenConfig {
+            recipe_source_base_dir: Some(recipe_dir),
+            use_isolation: true,
+            hermetic_local_files: Some(hermetic_files),
+            ..KitchenConfig::default()
+        });
+        let mut recipe = minimal_recipe();
+        recipe.source = SourceSection::Local(LocalSourceSection {
+            path: PathBuf::from("./src"),
+        });
+
+        let mut cook = Cook::new(&kitchen, &recipe).unwrap();
+        cook.prep().unwrap();
+        cook.unpack().unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(cook.source_dir.join("included.txt")).unwrap(),
+            "included\n"
+        );
+        assert!(!cook.source_dir.join("excluded.txt").exists());
+    }
+
+    #[test]
     fn test_prep_local_path_source_records_local_provenance_marker() {
         let dir = tempfile::tempdir().unwrap();
         let recipe_dir = dir.path().join("recipe");
@@ -1109,6 +1275,230 @@ mod tests {
             cook.provenance.upstream_hash.is_none(),
             "local source provenance should leave upstream_hash unset until tree hashing exists"
         );
+    }
+
+    #[test]
+    fn test_patch_local_path_resolves_relative_to_recipe_source_base_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let recipe_dir = dir.path().join("recipe");
+        let patch_dir = recipe_dir.join("patches");
+        std::fs::create_dir_all(&patch_dir).unwrap();
+        std::fs::write(
+            patch_dir.join("fix.patch"),
+            r#"--- file.txt
++++ file.txt
+@@ -1 +1 @@
+-old
++new
+"#,
+        )
+        .unwrap();
+
+        let kitchen = Kitchen::new(KitchenConfig {
+            recipe_source_base_dir: Some(recipe_dir),
+            use_isolation: false,
+            ..KitchenConfig::default()
+        });
+        let mut recipe = minimal_recipe();
+        recipe.patches = Some(PatchSection {
+            files: vec![PatchInfo {
+                file: "patches/fix.patch".to_string(),
+                checksum: None,
+                strip: 0,
+                condition: None,
+            }],
+        });
+
+        let mut cook = Cook::new(&kitchen, &recipe).unwrap();
+        std::fs::write(cook.source_dir.join("file.txt"), "old\n").unwrap();
+
+        cook.patch().unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(cook.source_dir.join("file.txt")).unwrap(),
+            "new\n"
+        );
+    }
+
+    #[test]
+    fn test_patch_local_path_substitutes_recipe_variables() {
+        let dir = tempfile::tempdir().unwrap();
+        let recipe_dir = dir.path().join("recipe");
+        let patch_dir = recipe_dir.join("patches");
+        std::fs::create_dir_all(&patch_dir).unwrap();
+        std::fs::write(
+            patch_dir.join("1.0.0.patch"),
+            r#"--- file.txt
++++ file.txt
+@@ -1 +1 @@
+-old
++new
+"#,
+        )
+        .unwrap();
+
+        let kitchen = Kitchen::new(KitchenConfig {
+            recipe_source_base_dir: Some(recipe_dir),
+            use_isolation: false,
+            ..KitchenConfig::default()
+        });
+        let mut recipe = minimal_recipe();
+        recipe.patches = Some(PatchSection {
+            files: vec![PatchInfo {
+                file: "patches/%(version)s.patch".to_string(),
+                checksum: None,
+                strip: 0,
+                condition: None,
+            }],
+        });
+
+        let mut cook = Cook::new(&kitchen, &recipe).unwrap();
+        std::fs::write(cook.source_dir.join("file.txt"), "old\n").unwrap();
+
+        cook.patch().unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(cook.source_dir.join("file.txt")).unwrap(),
+            "new\n"
+        );
+    }
+
+    #[test]
+    fn test_hermetic_local_patch_requires_recipe_source_base_dir() {
+        let kitchen = Kitchen::new(KitchenConfig {
+            hermetic_evidence: Some(dummy_hermetic_evidence()),
+            pristine_mode: true,
+            use_isolation: false,
+            ..KitchenConfig::default()
+        });
+        let mut recipe = minimal_recipe();
+        recipe.patches = Some(PatchSection {
+            files: vec![PatchInfo {
+                file: "patches/fix.patch".to_string(),
+                checksum: None,
+                strip: 0,
+                condition: None,
+            }],
+        });
+        let mut cook = Cook::new(&kitchen, &recipe).unwrap();
+
+        let error = cook.patch().unwrap_err();
+
+        assert!(error.to_string().contains("hermetic"));
+        assert!(error.to_string().contains("recipe source base dir"));
+    }
+
+    #[test]
+    fn test_cook_new_rejects_hermetic_evidence_without_pristine_mode() {
+        let kitchen = Kitchen::new(KitchenConfig {
+            hermetic_evidence: Some(dummy_hermetic_evidence()),
+            pristine_mode: false,
+            ..KitchenConfig::default()
+        });
+        let recipe = minimal_recipe();
+
+        let error = match Cook::new(&kitchen, &recipe) {
+            Ok(_) => panic!("expected hermetic evidence without pristine mode to be rejected"),
+            Err(error) => error,
+        };
+
+        assert!(error.to_string().contains("hermetic evidence"));
+        assert!(error.to_string().contains("pristine mode"));
+    }
+
+    #[test]
+    fn test_simmer_rejects_command_local_source_date_epoch_override_in_hermetic_mode() {
+        let kitchen = Kitchen::new(KitchenConfig {
+            hermetic_evidence: Some(dummy_hermetic_evidence()),
+            reproducibility: Some(ReproducibilityConfig::default()),
+            pristine_mode: true,
+            use_isolation: false,
+            ..KitchenConfig::default()
+        });
+        let mut recipe = minimal_recipe();
+        recipe.build.make = Some("SOURCE_DATE_EPOCH=999 true".to_string());
+        let mut cook = Cook::new(&kitchen, &recipe).unwrap();
+
+        let error = cook.simmer().unwrap_err();
+
+        assert!(error.to_string().contains("SOURCE_DATE_EPOCH"));
+        assert!(error.to_string().contains("command-local"));
+    }
+
+    #[test]
+    fn test_simmer_rejects_shell_startup_env_in_hermetic_mode() {
+        let cases = [("SHELLOPTS", "keyword"), ("BASHOPTS", "expand_aliases")];
+
+        for (key, value) in cases {
+            let kitchen = Kitchen::new(KitchenConfig {
+                hermetic_evidence: Some(dummy_hermetic_evidence()),
+                reproducibility: Some(ReproducibilityConfig::default()),
+                pristine_mode: true,
+                use_isolation: false,
+                ..KitchenConfig::default()
+            });
+            let mut recipe = minimal_recipe();
+            recipe
+                .build
+                .environment
+                .insert(key.to_string(), value.to_string());
+            recipe.build.make = Some("make SOURCE_DATE_EPOCH=999".to_string());
+            let mut cook = Cook::new(&kitchen, &recipe).unwrap();
+
+            let error = cook.simmer().unwrap_err();
+
+            assert!(
+                error.to_string().contains(key),
+                "expected {key} rejection, got: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_simmer_rejects_make_override_env_in_hermetic_mode() {
+        for (key, value, expected) in [
+            ("MAKEOVERRIDES", "CFLAGS=bad", "CFLAGS"),
+            ("MAKEFILES", "evil.mk", "MAKEFILES"),
+        ] {
+            let kitchen = Kitchen::new(KitchenConfig {
+                hermetic_evidence: Some(dummy_hermetic_evidence()),
+                reproducibility: Some(ReproducibilityConfig::default()),
+                pristine_mode: true,
+                use_isolation: false,
+                ..KitchenConfig::default()
+            });
+            let mut recipe = minimal_recipe();
+            recipe
+                .build
+                .environment
+                .insert(key.to_string(), value.to_string());
+            recipe.build.make = Some("true".to_string());
+            let mut cook = Cook::new(&kitchen, &recipe).unwrap();
+
+            let error = cook.simmer().unwrap_err();
+
+            assert!(error.to_string().contains(key));
+            assert!(error.to_string().contains(expected));
+        }
+    }
+
+    #[test]
+    fn test_hermetic_check_phase_env_guard_fails_closed() {
+        let kitchen = Kitchen::new(KitchenConfig {
+            hermetic_evidence: Some(dummy_hermetic_evidence()),
+            reproducibility: Some(ReproducibilityConfig::default()),
+            pristine_mode: true,
+            use_isolation: false,
+            ..KitchenConfig::default()
+        });
+        let mut recipe = minimal_recipe();
+        recipe.build.check = Some("SOURCE_DATE_EPOCH=999 true".to_string());
+        let mut cook = Cook::new(&kitchen, &recipe).unwrap();
+
+        let error = cook.simmer().unwrap_err();
+
+        assert!(error.to_string().contains("SOURCE_DATE_EPOCH"));
+        assert!(error.to_string().contains("command-local"));
     }
 
     #[cfg(unix)]
@@ -1219,5 +1609,48 @@ mod tests {
             translate_command_for_chroot(command, sysroot),
             "mkdir -p /var/tmp/dest && touch /var/tmp/dest/ok"
         );
+    }
+
+    fn dummy_hermetic_evidence() -> HermeticBuildEvidence {
+        HermeticBuildEvidence {
+            schema_version: HERMETIC_EVIDENCE_SCHEMA_V1,
+            build_input: BuildInputIdentity {
+                recipe: RecipeIdentity::ExplicitRecipe {
+                    path: "recipe.toml".to_string(),
+                    hash: "sha256:recipe".to_string(),
+                },
+                source: SourceIdentity::Archive {
+                    url: "https://example.invalid/test.tar.gz".to_string(),
+                    checksum: "sha256:source".to_string(),
+                },
+                additional_sources: Vec::new(),
+                patches: Vec::new(),
+                local_tree: None,
+                ecosystem_dependencies: Vec::new(),
+                builder_environment: BuilderEnvironmentIdentity {
+                    kind: BuilderEnvironmentKind::Pristine,
+                    sysroot_hash: Some(
+                        "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+                            .to_string(),
+                    ),
+                    toolchain_hash: None,
+                    diagnostics: Vec::new(),
+                },
+            },
+            dependency_lock: DependencyLock::default(),
+            ecosystem_policy: EcosystemPolicyReport::clean("unknown"),
+            command_risk: BuildCommandRiskReport::clean(),
+            reproducibility: ReproducibilityRecord {
+                source_date_epoch: Some(0),
+                path_remap_count: 2,
+                env_keys: vec![
+                    "CFLAGS".to_string(),
+                    "CXXFLAGS".to_string(),
+                    "RUSTFLAGS".to_string(),
+                    "SOURCE_DATE_EPOCH".to_string(),
+                ],
+            },
+            diagnostics: Vec::new(),
+        }
     }
 }

@@ -3,6 +3,7 @@
 //! Cook command - build packages from recipes
 
 use anyhow::{Context, Result};
+use conary_core::recipe::hermetic::{HermeticBuildInput, detect_ci_mode};
 use conary_core::recipe::inference::{
     CookTarget, ResolvedSourceTree, SourceTargetKind, SourceTargetProvenance,
     infer_recipe_from_path, resolve_cook_target,
@@ -11,6 +12,7 @@ use conary_core::recipe::{
     InferenceOptions, InferenceTrace, Kitchen, KitchenConfig, Recipe, SourceSection,
     parse_recipe_file, validate_recipe,
 };
+use std::fs::File;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use tracing::info;
@@ -99,6 +101,37 @@ fn write_inference_trace(output: &mut impl Write, trace: &InferenceTrace) -> Res
     Ok(())
 }
 
+fn sha256_prefixed_file(path: &Path) -> Result<String> {
+    let mut file = File::open(path)
+        .with_context(|| format!("Failed to open recipe for hashing: {}", path.display()))?;
+    let hash = conary_core::hash::sha256_reader_hex(&mut file)
+        .with_context(|| format!("Failed to hash recipe: {}", path.display()))?;
+    Ok(format!("sha256:{hash}"))
+}
+
+fn hermetic_build_input(
+    resolved: &ResolvedCookInput,
+    recipe: &Recipe,
+) -> Result<HermeticBuildInput> {
+    if let Some(recipe_path) = &resolved.recipe_path {
+        return Ok(HermeticBuildInput::explicit_recipe(
+            &resolved.recipe_source_base_dir,
+            recipe_path,
+            sha256_prefixed_file(recipe_path)?,
+        ));
+    }
+
+    let trace = resolved.inference_trace.as_ref().with_context(
+        || "Hermetic cook requires an explicit recipe or an inference trace for generated recipes",
+    )?;
+    let inference_trace_hash = conary_core::hash::sha256_prefixed(trace.render_human().as_bytes());
+    Ok(HermeticBuildInput::generated_recipe(
+        &resolved.recipe_source_base_dir,
+        recipe.clone(),
+        inference_trace_hash,
+    ))
+}
+
 /// Cook a package from a recipe
 ///
 /// # Arguments
@@ -111,9 +144,9 @@ fn write_inference_trace(output: &mut impl Write, trace: &InferenceTrace) -> Res
 /// * `validate_only` - Only validate the recipe, don't cook
 /// * `fetch_only` - Only fetch sources, don't build
 /// * `explain` - Print inference trace for inferred source trees
-/// * `isolated` - Use the sandboxed isolation path
+/// * `isolated` - Use the hermetic sandboxed isolation path
 /// * `no_isolation` - Hidden compatibility no-op for the M1a host default
-/// * `hermetic` - Hidden compatibility flag rejected until M2
+/// * `hermetic` - Hidden compatibility flag for the M2a hermetic build path
 #[allow(clippy::too_many_arguments)]
 pub async fn cmd_cook(
     target: Option<&str>,
@@ -164,19 +197,14 @@ async fn cmd_cook_with_output(
     hermetic: bool,
     output: &mut impl Write,
 ) -> Result<()> {
-    if hermetic {
-        anyhow::bail!(
-            "Hermetic cook/publish is an M2 feature; M1b supports host or --isolated builds only"
-        );
-    }
-
-    if isolated && no_isolation {
-        anyhow::bail!("--isolated conflicts with --no-isolation");
+    let hermetic_requested = hermetic || isolated;
+    if hermetic_requested && no_isolation {
+        anyhow::bail!("--no-isolation conflicts with --isolated/--hermetic");
     }
 
     let resolved = resolve_cook_input(target, recipe)?;
     let output_dir = Path::new(output_dir);
-    let recipe = resolved.recipe;
+    let recipe = resolved.recipe.clone();
 
     if let Some(recipe_path) = &resolved.recipe_path {
         writeln!(output, "Reading recipe: {}", recipe_path.display())?;
@@ -215,15 +243,15 @@ async fn cmd_cook_with_output(
         return Ok(());
     }
 
-    // Configure the kitchen. M1a defaults to host builds; --isolated opts into
-    // the sandboxed path. --no-isolation is retained as a hidden no-op alias.
+    // Configure the kitchen. Host builds remain the compatibility default;
+    // --isolated and --hermetic route through the M2a hermetic planner.
     let mut config = KitchenConfig {
         source_cache: PathBuf::from(source_cache),
         recipe_source_base_dir: Some(resolved.recipe_source_base_dir.clone()),
         origin_class_override: resolved.origin_class_override.clone(),
         source_provenance_override: resolved.source_provenance_override.clone(),
         keep_builddir,
-        use_isolation: isolated,
+        use_isolation: false,
         pristine_mode: false,
         ..Default::default()
     };
@@ -231,7 +259,7 @@ async fn cmd_cook_with_output(
     if let Some(j) = jobs {
         config.jobs = j;
     }
-    if !isolated {
+    if !hermetic_requested {
         for key in ["PATH", "HOME", "CARGO_HOME", "RUSTUP_HOME"] {
             if let Ok(value) = std::env::var(key) {
                 config.extra_env.push((key.to_string(), value));
@@ -286,13 +314,18 @@ async fn cmd_cook_with_output(
     })?;
 
     // Print mode information
-    if isolated {
+    if hermetic_requested {
         writeln!(
             output,
-            "Cooking with {} parallel jobs (isolated)...",
+            "Cooking with {} parallel jobs (hermetic)...",
             config.jobs
         )?;
-        writeln!(output, "  - Network isolated during build")?;
+        writeln!(output, "  - Sources prefetched before build")?;
+        writeln!(output, "  - Network disabled during build")?;
+        writeln!(
+            output,
+            "  - Build evidence recorded without M2b attestation"
+        )?;
     } else {
         writeln!(
             output,
@@ -315,9 +348,13 @@ async fn cmd_cook_with_output(
     writeln!(output, "Building ({} parallel jobs)...", config.jobs)?;
 
     // Create kitchen and cook
-    let result = kitchen
-        .cook(&recipe, output_dir)
-        .with_context(|| format!("Failed to cook {}", recipe.package.name))?;
+    let result = if hermetic_requested {
+        let input = hermetic_build_input(&resolved, &recipe)?;
+        kitchen.cook_hermetic(&recipe, input, output_dir, detect_ci_mode())
+    } else {
+        kitchen.cook(&recipe, output_dir)
+    }
+    .with_context(|| format!("Failed to cook {}", recipe.package.name))?;
 
     writeln!(output, "Installing to staging...")?;
 
@@ -390,6 +427,7 @@ install = "mkdir -p %(destdir)s/usr/share/local && printf cooked > %(destdir)s/u
 
     fn write_cargo_source_tree(root: &Path, package_name: &str) {
         std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::create_dir_all(root.join(".cargo")).unwrap();
         std::fs::write(
             root.join("Cargo.toml"),
             format!(
@@ -399,6 +437,11 @@ version = "0.1.0"
 edition = "2021"
 "#
             ),
+        )
+        .unwrap();
+        std::fs::write(
+            root.join(".cargo/config.toml"),
+            "[build]\ntarget-dir = \"target\"\n",
         )
         .unwrap();
         std::fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
@@ -818,7 +861,7 @@ edition = "2021"
     }
 
     #[tokio::test]
-    async fn cook_hermetic_fails_before_build_execution_without_writing_package() {
+    async fn cook_hermetic_routes_to_planner_and_requires_builder_identity() {
         let temp = tempfile::tempdir().unwrap();
         let recipe_path = temp.path().join("recipe.toml");
         let output_dir = temp.path().join("out");
@@ -841,18 +884,72 @@ edition = "2021"
         )
         .await
         .unwrap_err();
+        let error = format!("{error:#}");
 
         assert!(
-            error.to_string().contains("M2"),
-            "hermetic error should name M2: {error:#}"
+            error.contains("builder environment identity"),
+            "hermetic cook should reach M2a planning and require builder identity: {error}"
         );
         assert!(
-            !error.to_string().contains("M1a"),
-            "hermetic error should not use stale M1a wording after M1b graduation: {error:#}"
+            !error.contains("Hermetic cook/publish is an M2 feature"),
+            "hermetic cook should no longer use the old reserved-feature rejection: {error}"
         );
         assert!(
-            !output_dir.exists(),
-            "hermetic rejection should happen before output/package creation"
+            !output_dir.join("local-1.0-1.ccs").exists(),
+            "hermetic planning failure should not write a package"
+        );
+    }
+
+    #[tokio::test]
+    async fn cook_isolated_uses_hermetic_status_without_claiming_attestation() {
+        let temp = tempfile::tempdir().unwrap();
+        let recipe_path = temp.path().join("recipe.toml");
+        let output_dir = temp.path().join("out");
+        let source_cache = temp.path().join("sources");
+        write_local_recipe(&recipe_path);
+
+        let mut output = Vec::new();
+        let error = cmd_cook_with_output(
+            Some(recipe_path.to_str().unwrap()),
+            None,
+            output_dir.to_str().unwrap(),
+            source_cache.to_str().unwrap(),
+            None,
+            false,
+            false,
+            false,
+            false,
+            true,
+            false,
+            false,
+            &mut output,
+        )
+        .await
+        .unwrap_err();
+        let error = format!("{error:#}");
+        let output = String::from_utf8(output).unwrap();
+
+        assert!(
+            error.contains("builder environment identity"),
+            "isolated cook should route through M2a hermetic planning: {error}"
+        );
+        assert!(output.contains("(hermetic)"), "{output}");
+        assert!(
+            output.contains("Sources prefetched before build"),
+            "{output}"
+        );
+        assert!(output.contains("Network disabled during build"), "{output}");
+        assert!(
+            output.contains("Build evidence recorded without M2b attestation"),
+            "{output}"
+        );
+        assert!(
+            !output.contains("attested"),
+            "M2a cook output must not claim attestation before M2b: {output}"
+        );
+        assert!(
+            !output.contains("(isolated)"),
+            "--isolated should now report the hermetic build path: {output}"
         );
     }
 
