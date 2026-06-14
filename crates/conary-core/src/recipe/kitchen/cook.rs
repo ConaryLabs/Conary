@@ -894,17 +894,8 @@ fn validate_no_shell_expansion(phase: &str, token: &str, context: &str) -> Resul
 }
 
 fn has_dynamic_shell_expansion(token: &str) -> bool {
-    let mut escaped = false;
     for ch in token.chars() {
-        if escaped {
-            escaped = false;
-            continue;
-        }
-        if ch == '\\' {
-            escaped = true;
-            continue;
-        }
-        if matches!(ch, '$' | '{' | '}' | '*' | '?' | '[') {
+        if matches!(ch, '$' | '{' | '}' | '*' | '?' | '[' | '\\' | '"' | '\'') {
             return true;
         }
     }
@@ -2585,6 +2576,14 @@ mod tests {
             ("env SOURCE* make", "shell expansion"),
             ("make all *", "shell expansion"),
             ("make all --include*", "shell expansion"),
+            ("export SOURCE_DATE_EPOCH\\=999; make", "shell expansion"),
+            ("e\\xport SOURCE_DATE_EPOCH=777; make", "shell expansion"),
+            ("ex\"\"port SOURCE_DATE_EPOCH=333; make", "shell expansion"),
+            ("make SOURCE_DATE_EPOCH\\=999", "shell expansion"),
+            ("ma\\ke SOURCE_DATE_EPOCH=888", "shell expansion"),
+            ("ma\"\"ke SOURCE_DATE_EPOCH=777", "shell expansion"),
+            ("env SOURCE_DATE_EPOCH\\=999 make", "shell expansion"),
+            ("MAKEFLAGS=SOURCE_DATE_EPOCH\\=999 make", "MAKEFLAGS"),
             (
                 "command env SOURCE_DATE_EPOCH=999 make",
                 "SOURCE_DATE_EPOCH",

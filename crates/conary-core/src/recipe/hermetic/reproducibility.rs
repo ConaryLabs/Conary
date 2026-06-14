@@ -267,9 +267,9 @@ fn validate_make_environment_value(key: &str, value: &str) -> Result<()> {
                 .to_string(),
         ));
     }
-    if value.contains('$') {
+    if has_make_environment_dynamic_syntax(value) {
         return Err(Error::ConfigError(format!(
-            "hermetic reproducibility rejects {key} make environment value with shell expansion"
+            "hermetic reproducibility rejects {key} make environment value with shell quoting or expansion"
         )));
     }
     for token in value.split_whitespace() {
@@ -299,6 +299,12 @@ fn is_make_environment_key(key: &str) -> bool {
 
 fn is_forbidden_shell_environment_key(key: &str) -> bool {
     SHELL_STARTUP_ENV_KEYS.contains(&key) || key.starts_with(BASH_FUNC_PREFIX)
+}
+
+fn has_make_environment_dynamic_syntax(value: &str) -> bool {
+    value
+        .chars()
+        .any(|ch| matches!(ch, '$' | '\\' | '"' | '\''))
 }
 
 fn controlled_make_assignment_key(token: &str) -> Option<&str> {
@@ -527,6 +533,7 @@ mod tests {
             ("GNUMAKEFLAGS", "--include-dir=evil"),
             ("MAKEFLAGS", "--inc=evil"),
             ("MAKEFLAGS", "$BAD"),
+            ("MAKEFLAGS", "SOURCE_DATE_EPOCH\\=999"),
         ];
 
         for (key, value) in cases {
