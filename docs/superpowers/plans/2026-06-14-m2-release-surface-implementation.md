@@ -31,6 +31,7 @@ Create these files:
 - `crates/conary-core/src/ccs/attestation.rs`: attestation DTOs, canonical serialization, signing, verification, output identity, foreign conversion boundary DTO, and report hashing helpers.
 - `crates/conary-core/src/repository/static_repo/publish_gate.rs`: static artifact eligibility, `AcceptedStaticSignerSet`, publish lint reason codes, and static publish gate result types.
 - `crates/conary-core/src/repository/static_repo/publish_context.rs`: prepared static publish context, active publish key resolution, active-key policy, brand-new repo explicit `--key-dir` behavior, and project-form attestation signing entrypoints.
+- `crates/conary-core/src/repository/static_repo/package_staging.rs`: static package staging, re-signing, relative paths, package index entries, and pending package write cleanup.
 - `crates/conary-core/src/security/mod.rs`: shared security/risk namespace.
 - `crates/conary-core/src/security/command_risk.rs`: shared command-risk taxonomy, reason codes, report DTO, script risk mapping, and adapters for recipe/PKGBUILD/foreign inputs.
 - `apps/conary/src/commands/remi_publish.rs`: Remi publish client transport, bearer-token extraction, target routing, and client preflight plumbing.
@@ -43,17 +44,20 @@ Modify these files:
 - `crates/conary-core/src/ccs/builder/package_writer.rs`: preserve TOML integrity over attestation-bearing `MANIFEST.toml`.
 - `crates/conary-core/src/ccs/verify.rs`: expose a helper or result field proving TOML integrity is valid.
 - `crates/conary-core/src/recipe/hermetic/evidence.rs`: use shared command-risk DTO or preserve compatibility through `From` conversions.
+- `crates/conary-core/src/recipe/hermetic/ecosystem.rs`: keep Cargo accepted-offline policy, add Go/npm accepted-offline checks, and make Python an explicit fail-closed deferral.
 - `crates/conary-core/src/recipe/hermetic/command_risk.rs`: delegate classification to `security::command_risk`.
+- `crates/conary-core/src/recipe/kitchen/cook.rs`: assert hermetic build execution reaches the build phase with network disabled and `OfflineCacheOnly`.
 - `crates/conary-core/src/container/analysis.rs`: map shared command-risk reason codes into `ScriptRisk`.
 - `crates/conary-core/src/recipe/pkgbuild.rs`: produce PKGBUILD body risk reports.
 - `crates/conary-core/src/ccs/convert/converter.rs`: attach foreign conversion boundary and scriptlet risk evidence to converted artifacts.
 - `crates/conary-core/src/ccs/convert/scriptlet_bundle/digest.rs`: reuse scriptlet bundle digest evidence in the boundary.
 - `crates/conary-core/src/repository/static_repo/mod.rs`: export new gate/context modules.
 - `crates/conary-core/src/repository/static_repo/publish.rs`: use prepared context and gate modules; keep this file as layout/metadata commit owner.
+- `crates/conary-core/src/repository/static_repo/package_staging.rs`: move package staging, target-local signing, package-relative paths, and pending package write cleanup out of `publish.rs`.
 - `apps/conary/src/cli/mod.rs`: unhide artifact-form publish help and parse Remi/static target forms.
 - `apps/conary/src/commands/publish.rs`: split project-form and artifact-form flows, force release dirty-tree refusal, route Remi targets.
 - `apps/conary/src/commands/cook.rs`: route `.rpm`, `.deb`, and `.pkg.tar.zst` inputs through foreign conversion file-output.
-- `apps/remi/src/server/config.rs`: add trusted release signer configuration.
+- `apps/remi/src/server/config.rs`: add trusted release signer configuration and distribution TUF private-key directory configuration.
 - `apps/remi/src/server/routes/admin.rs`: add distinct release upload route.
 - `apps/remi/src/server/handlers/admin/packages.rs`: keep legacy/admin review upload behavior separate from release publication.
 - `apps/remi/src/server/handlers/tuf.rs`: implement timestamp refresh used by release push.
@@ -64,7 +68,7 @@ Modify these files:
 
 Maintainability budget:
 
-- `crates/conary-core/src/repository/static_repo/publish.rs` starts at 2659 lines. Net line growth after the M2 implementation must be `<= 40` lines; if it grows more, move orchestration into `publish_gate.rs` or `publish_context.rs` before review.
+- `crates/conary-core/src/repository/static_repo/publish.rs` starts at 2659 lines. By the end of M2b it must be `<= 2500` lines. Move `PendingPackageWrites`, `PendingPackageWrite`, `stage_packages`, `write_pending_package`, `sign_package_bytes`, `package_relative_path`, and `package_entry_from_package` into `package_staging.rs`; move publish-key loading and pending-key promotion helpers into `publish_context.rs`. Do not accept a positive net line-count change in `publish.rs`.
 - `crates/conary-core/src/ccs/manifest.rs` starts at 1500 lines. Do not add attestation logic there beyond field-compatible serialization use through existing manifest/provenance paths.
 - `crates/conary-core/src/recipe/kitchen/cook.rs` starts at 1686 lines. Keep Kitchen as orchestration; attestation creation belongs in `ccs::attestation` and publish command/context helpers.
 - `apps/remi/src/server/handlers/admin/packages.rs` starts at 1198 lines. Release push logic belongs in `apps/remi/src/server/release_publish.rs`; route handlers should call into it.
@@ -73,7 +77,7 @@ Maintainability budget:
 
 - M2b checkpoint: signed build attestations, static prepared context, project-form attestation, artifact-form static publish gates.
 - M2c checkpoint: foreign package file-output ingestion and conversion boundary attestations.
-- M2d checkpoint: Remi release push, trusted signer config, private staging, TUF timestamp refresh.
+- M2d checkpoint: Remi trusted signer config, distribution TUF signing-key config, TUF timestamp refresh, private release staging, and Remi release push. Implement timestamp refresh before release upload calls it.
 - Final checkpoint: due-diligence review loop, focused regression runs, workspace gates, and cleanup.
 
 ## Task 1: Attestation Core Types And Canonical Serialization
@@ -514,6 +518,28 @@ pub toml_integrity_valid: bool,
 
 Set it from the existing `toml_integrity_valid` local and ensure callers that construct `VerificationResult` in tests initialize the field.
 
+Add a helper in `crates/conary-core/src/ccs/verify.rs` so publish gates can report TOML provenance tampering directly:
+
+```rust
+pub fn verify_toml_integrity(
+    toml_raw: &[u8],
+    bin_manifest: &crate::ccs::binary_manifest::BinaryManifest,
+) -> Result<()> {
+    let Some(expected_hash) = bin_manifest.toml_integrity_hash.as_ref() else {
+        return Ok(());
+    };
+    let actual_hash = crate::hash::sha256(toml_raw);
+    if actual_hash != *expected_hash {
+        bail!(
+            "TOML manifest integrity check failed: expected {expected_hash}, got {actual_hash}"
+        );
+    }
+    Ok(())
+}
+```
+
+Use this helper from `verify_package` instead of duplicating hash comparison logic.
+
 - [ ] **Step 5: Add test helpers without widening production API**
 
 In `crates/conary-core/src/ccs/builder.rs`, add a crate-visible test-support module:
@@ -594,7 +620,12 @@ The helper implementation must preserve `MANIFEST` and `MANIFEST.sig` exactly an
 
 - [ ] **Step 6: Run package writer and verify tests**
 
-Run: `cargo test -p conary-core ccs::verify ccs::builder::package_writer -- --nocapture`
+Run:
+
+```bash
+cargo test -p conary-core ccs::verify -- --nocapture
+cargo test -p conary-core ccs::builder::package_writer -- --nocapture
+```
 
 Expected: PASS.
 
@@ -867,14 +898,43 @@ use serde::{Deserialize, Serialize};
 use crate::ccs::convert::command_evidence::extract_invocations_from_shell_text;
 
 pub const COMMAND_RISK_CLASSIFIER_VERSION: &str = "m2-command-risk-v1";
-pub const PACKAGE_MANAGER_FETCH: &str = "package-manager-fetch";
-pub const NETWORK_FETCH: &str = "network-fetch";
-pub const DYNAMIC_LANGUAGE_EXEC: &str = "dynamic-language-exec";
-pub const CREDENTIAL_PATH: &str = "credential-path";
-pub const OBFUSCATION: &str = "obfuscation";
-pub const PERSISTENCE: &str = "persistence";
-pub const BPF_OR_EBPF: &str = "bpf-or-ebpf";
-pub const PROC_STEALTH_OR_DEBUG: &str = "proc-stealth-or-debug";
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum CommandRiskReasonCode {
+    PackageManagerFetch,
+    NetworkFetch,
+    DynamicLanguageExec,
+    CredentialPath,
+    Obfuscation,
+    Persistence,
+    BpfOrEbpf,
+    ProcStealthOrDebug,
+}
+
+impl CommandRiskReasonCode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::PackageManagerFetch => "package-manager-fetch",
+            Self::NetworkFetch => "network-fetch",
+            Self::DynamicLanguageExec => "dynamic-language-exec",
+            Self::CredentialPath => "credential-path",
+            Self::Obfuscation => "obfuscation",
+            Self::Persistence => "persistence",
+            Self::BpfOrEbpf => "bpf-or-ebpf",
+            Self::ProcStealthOrDebug => "proc-stealth-or-debug",
+        }
+    }
+}
+
+pub const PACKAGE_MANAGER_FETCH: &str = CommandRiskReasonCode::PackageManagerFetch.as_str();
+pub const NETWORK_FETCH: &str = CommandRiskReasonCode::NetworkFetch.as_str();
+pub const DYNAMIC_LANGUAGE_EXEC: &str = CommandRiskReasonCode::DynamicLanguageExec.as_str();
+pub const CREDENTIAL_PATH: &str = CommandRiskReasonCode::CredentialPath.as_str();
+pub const OBFUSCATION: &str = CommandRiskReasonCode::Obfuscation.as_str();
+pub const PERSISTENCE: &str = CommandRiskReasonCode::Persistence.as_str();
+pub const BPF_OR_EBPF: &str = CommandRiskReasonCode::BpfOrEbpf.as_str();
+pub const PROC_STEALTH_OR_DEBUG: &str = CommandRiskReasonCode::ProcStealthOrDebug.as_str();
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -1136,7 +1196,12 @@ pub fn classify_pkgbuild_function_bodies_for_risk(
 
 - [ ] **Step 7: Run shared risk tests**
 
-Run: `cargo test -p conary-core command_risk package_manager_fetches_are_medium_for_auto_sandbox extract_pkgbuild_function_bodies_for_risk_returns_prepare_body -- --nocapture`
+Run:
+
+```bash
+cargo test -p conary-core package_manager_fetches_are_medium_for_auto_sandbox -- --nocapture
+cargo test -p conary-core extract_pkgbuild_function_bodies_for_risk_returns_prepare_body -- --nocapture
+```
 
 Expected: PASS.
 
@@ -1145,6 +1210,205 @@ Expected: PASS.
 ```bash
 git add crates/conary-core/src/lib.rs crates/conary-core/src/security crates/conary-core/src/recipe/hermetic/command_risk.rs crates/conary-core/src/container/analysis.rs crates/conary-core/src/recipe/pkgbuild.rs
 git commit -m "security: share command risk taxonomy"
+```
+
+## Task 4b: Ecosystem Offline Policy Gate
+
+**Files:**
+- Modify: `crates/conary-core/src/recipe/hermetic/ecosystem.rs`
+- Test: `crates/conary-core/src/recipe/hermetic/ecosystem.rs`
+
+- [ ] **Step 1: Write failing ecosystem policy tests**
+
+Add tests in `crates/conary-core/src/recipe/hermetic/ecosystem.rs`:
+
+```rust
+#[test]
+fn go_policy_accepts_go_sum_with_vendor_mode() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(temp.path().join("go.sum"), "example.invalid/mod v1.0.0 h1:test\n").unwrap();
+    std::fs::create_dir_all(temp.path().join("vendor")).unwrap();
+
+    let report = evaluate_ecosystem_policy(
+        BuildSystem::Go,
+        temp.path(),
+        "go build -mod=vendor ./...",
+    )
+    .unwrap();
+
+    assert_eq!(report.status, PolicyStatus::Clean);
+    assert!(report.identities.iter().any(|identity| identity.evidence_path == "go.sum"));
+    assert!(report.identities.iter().any(|identity| identity.evidence_path == "vendor"));
+}
+
+#[test]
+fn npm_policy_accepts_lockfile_with_offline_cache() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(temp.path().join("package-lock.json"), "{}").unwrap();
+    std::fs::create_dir_all(temp.path().join(".npm-cache")).unwrap();
+
+    let report = evaluate_ecosystem_policy(
+        BuildSystem::Npm,
+        temp.path(),
+        "npm ci --offline --cache .npm-cache",
+    )
+    .unwrap();
+
+    assert_eq!(report.status, PolicyStatus::Clean);
+    assert!(report.identities.iter().any(|identity| identity.evidence_path == "package-lock.json"));
+    assert!(report.identities.iter().any(|identity| identity.evidence_path == ".npm-cache"));
+}
+
+#[test]
+fn python_policy_remains_fail_closed_until_wheelhouse_policy_lands() {
+    let temp = tempfile::tempdir().unwrap();
+
+    let report = evaluate_ecosystem_policy(
+        BuildSystem::Python,
+        temp.path(),
+        "python -m pip install -r requirements.txt",
+    )
+    .unwrap();
+
+    assert_eq!(report.status, PolicyStatus::Blocked);
+    assert!(report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.contains("Python hermetic publish support requires a lockfile and wheelhouse policy")
+    }));
+}
+```
+
+- [ ] **Step 2: Run ecosystem policy tests and confirm failures**
+
+Run:
+
+```bash
+cargo test -p conary-core go_policy_accepts_go_sum_with_vendor_mode -- --nocapture
+cargo test -p conary-core npm_policy_accepts_lockfile_with_offline_cache -- --nocapture
+cargo test -p conary-core python_policy_remains_fail_closed -- --nocapture
+```
+
+Expected: FAIL because Go and npm still return unsupported reports and Python does not use the release-surface diagnostic.
+
+- [ ] **Step 3: Add Go, npm, and Python policy functions**
+
+In `evaluate_ecosystem_policy`, replace the unsupported Go/npm/Python branches:
+
+```rust
+BuildSystem::Npm => evaluate_npm_policy(source_root, command_text),
+BuildSystem::Python => Ok(blocked_report(
+    "python",
+    Vec::new(),
+    vec![
+        "Python hermetic publish support requires a lockfile and wheelhouse policy; M2 release publish fails closed for Python until that policy lands"
+            .to_string(),
+    ],
+)),
+BuildSystem::Go => evaluate_go_policy(source_root, command_text),
+```
+
+Add:
+
+```rust
+fn evaluate_go_policy(source_root: &Path, command_text: &str) -> Result<EcosystemPolicyReport> {
+    let mut identities = Vec::new();
+    let mut diagnostics = Vec::new();
+    let go_sum = source_root.join("go.sum");
+    if go_sum.is_file() {
+        identities.push(file_identity("go", "go.sum", &go_sum)?);
+    } else {
+        diagnostics.push("go.sum is required for hermetic Go builds".to_string());
+    }
+    let vendor = source_root.join("vendor");
+    if vendor.is_dir() {
+        identities.push(directory_identity("go", "vendor", &vendor)?);
+    } else {
+        diagnostics.push("vendor/ is required for accepted M2 Go hermetic publish".to_string());
+    }
+    if !command_text.contains("-mod=vendor") && !command_text.contains("GOFLAGS=-mod=vendor") {
+        diagnostics.push("Go builds must use -mod=vendor or GOFLAGS=-mod=vendor".to_string());
+    }
+    if diagnostics.is_empty() {
+        Ok(EcosystemPolicyReport {
+            ecosystem: "go".to_string(),
+            status: PolicyStatus::Clean,
+            identities,
+            diagnostics,
+        })
+    } else {
+        Ok(blocked_report("go", identities, diagnostics))
+    }
+}
+
+fn evaluate_npm_policy(source_root: &Path, command_text: &str) -> Result<EcosystemPolicyReport> {
+    let mut identities = Vec::new();
+    let mut diagnostics = Vec::new();
+    let lockfile = ["package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "yarn.lock"]
+        .into_iter()
+        .find_map(|name| {
+            let path = source_root.join(name);
+            path.is_file().then_some((name, path))
+        });
+    if let Some((name, path)) = lockfile {
+        identities.push(file_identity("npm", name, &path)?);
+    } else {
+        diagnostics.push("npm hermetic publish requires package-lock.json, npm-shrinkwrap.json, pnpm-lock.yaml, or yarn.lock".to_string());
+    }
+    let node_modules = source_root.join("node_modules");
+    let npm_cache = source_root.join(".npm-cache");
+    if node_modules.is_dir() {
+        identities.push(directory_identity("npm", "node_modules", &node_modules)?);
+    } else if npm_cache.is_dir() && command_text.contains("--cache .npm-cache") {
+        identities.push(directory_identity("npm", ".npm-cache", &npm_cache)?);
+    } else {
+        diagnostics.push("npm hermetic publish requires node_modules/ or .npm-cache recorded in BuildInputIdentity".to_string());
+    }
+    if !command_text.contains("--offline") {
+        diagnostics.push("npm hermetic publish requires explicit --offline command evidence".to_string());
+    }
+    if diagnostics.is_empty() {
+        Ok(EcosystemPolicyReport {
+            ecosystem: "npm".to_string(),
+            status: PolicyStatus::Clean,
+            identities,
+            diagnostics,
+        })
+    } else {
+        Ok(blocked_report("npm", identities, diagnostics))
+    }
+}
+
+fn directory_identity(
+    ecosystem: &str,
+    evidence_path: &str,
+    path: &Path,
+) -> Result<EcosystemDependencyIdentity> {
+    Ok(EcosystemDependencyIdentity {
+        ecosystem: ecosystem.to_string(),
+        evidence_path: evidence_path.to_string(),
+        evidence_hash: directory_tree_hash(path)?,
+    })
+}
+```
+
+Rename the existing `replacement_tree_hash` helper to `directory_tree_hash`, keep its `hash::Hasher::new(hash::HashAlgorithm::Sha256)` and `hasher.finalize().value` pattern, and update the helper error strings from `Cargo replacement tree` to `directory identity tree`. Then have both `replacement_identity` and the new `directory_identity` call `directory_tree_hash`.
+
+- [ ] **Step 4: Run ecosystem policy tests**
+
+Run:
+
+```bash
+cargo test -p conary-core go_policy_accepts_go_sum_with_vendor_mode -- --nocapture
+cargo test -p conary-core npm_policy_accepts_lockfile_with_offline_cache -- --nocapture
+cargo test -p conary-core python_policy_remains_fail_closed -- --nocapture
+```
+
+Expected: PASS.
+
+- [ ] **Step 5: Commit Task 4b**
+
+```bash
+git add crates/conary-core/src/recipe/hermetic/ecosystem.rs
+git commit -m "security(hermetic): gate ecosystem offline policy"
 ```
 
 ## Task 5: Static Publish Gate And Accepted Signers
@@ -1423,8 +1687,10 @@ git commit -m "security(static): add artifact publish gate"
 
 **Files:**
 - Create: `crates/conary-core/src/repository/static_repo/publish_context.rs`
+- Create: `crates/conary-core/src/repository/static_repo/package_staging.rs`
 - Modify: `crates/conary-core/src/repository/static_repo/mod.rs`
 - Modify: `crates/conary-core/src/repository/static_repo/publish.rs`
+- Modify: `docs/llms/subsystem-map.md`
 - Test: `crates/conary-core/src/repository/static_repo/publish_context.rs`
 
 - [ ] **Step 1: Write failing context tests**
@@ -1512,6 +1778,7 @@ Expected: FAIL because `publish_context` does not exist.
 In `crates/conary-core/src/repository/static_repo/mod.rs`, add:
 
 ```rust
+pub mod package_staging;
 pub mod publish_context;
 ```
 
@@ -1610,7 +1877,37 @@ fn load_verified_package_keys_for_destination(destination: &RepoLocation) -> Res
 
 Before committing this task, replace `load_verified_package_keys_for_destination` with a call into the same verified static metadata loading path that `publish.rs` uses for `keys/package-keys.json`. The raw file read in the snippet is acceptable only for the first failing unit test; the committed code must verify destination metadata before deriving `AcceptedStaticSignerSet`.
 
-- [ ] **Step 6: Split `publish.rs` into prepare and commit phases**
+- [ ] **Step 6: Extract package staging out of `publish.rs`**
+
+Move these existing items from `crates/conary-core/src/repository/static_repo/publish.rs` into `crates/conary-core/src/repository/static_repo/package_staging.rs`:
+
+```rust
+PendingPackageWrites
+PendingPackageWrite
+stage_packages
+write_pending_package
+sign_package_bytes
+package_relative_path
+package_entry_from_package
+```
+
+Export the staging entrypoint:
+
+```rust
+pub(crate) fn stage_packages(
+    repo_root: &Path,
+    package_paths: &[PathBuf],
+    publish_key: &SigningKeyPair,
+) -> Result<PendingPackageWrites>
+```
+
+Keep `Drop for PendingPackageWrites` in `package_staging.rs` so failed staging still removes pending files. Update `publish.rs` to import:
+
+```rust
+use crate::repository::static_repo::package_staging::stage_packages;
+```
+
+- [ ] **Step 7: Split `publish.rs` into prepare and commit phases**
 
 Keep `publish_static_repo(options)` as the public entrypoint. Internally, add a helper that accepts `PreparedStaticPublishContext`:
 
@@ -1626,7 +1923,28 @@ fn commit_static_publish(
 
 `publish_static_repo_inner` should prepare context once, then call `commit_static_publish`.
 
-- [ ] **Step 7: Keep `publish.rs` line budget honest**
+- [ ] **Step 8: Move publish-key helpers to context ownership**
+
+Move these existing items from `publish.rs` into `publish_context.rs`:
+
+```rust
+PendingKeyRecovery
+PendingKeyPromotions
+PendingKeyPromotion
+recover_pending_key_promotions
+role_contains_key
+publish_roles_contain_key
+load_pending_key_pair
+ensure_pending_key_pair
+promote_pending_key
+ensure_key_pair
+save_key_pair
+build_package_keys_file
+```
+
+`publish.rs` should call context functions instead of owning publish-key recovery or active package-key construction directly. This preserves `publish.rs` as the layout/metadata commit owner and moves signer authority into `publish_context.rs`.
+
+- [ ] **Step 9: Keep `publish.rs` line budget honest**
 
 Run:
 
@@ -1634,18 +1952,28 @@ Run:
 wc -l crates/conary-core/src/repository/static_repo/publish.rs
 ```
 
-Expected: line count is `<= 2699`.
+Expected: line count is `<= 2500`.
 
-- [ ] **Step 8: Run static publish tests**
+- [ ] **Step 10: Update assistant routing docs**
+
+In `docs/llms/subsystem-map.md`, add the new static publish split:
+
+```md
+- Static publish signer authority: `crates/conary-core/src/repository/static_repo/publish_context.rs`
+- Static publish package staging: `crates/conary-core/src/repository/static_repo/package_staging.rs`
+- Static publish metadata commit/order: `crates/conary-core/src/repository/static_repo/publish.rs`
+```
+
+- [ ] **Step 11: Run static publish tests**
 
 Run: `cargo test -p conary-core static_repo::publish -- --nocapture`
 
 Expected: PASS.
 
-- [ ] **Step 9: Commit Task 6**
+- [ ] **Step 12: Commit Task 6**
 
 ```bash
-git add crates/conary-core/src/repository/static_repo/mod.rs crates/conary-core/src/repository/static_repo/publish.rs crates/conary-core/src/repository/static_repo/publish_context.rs
+git add crates/conary-core/src/repository/static_repo/mod.rs crates/conary-core/src/repository/static_repo/publish.rs crates/conary-core/src/repository/static_repo/publish_context.rs crates/conary-core/src/repository/static_repo/package_staging.rs docs/llms/subsystem-map.md
 git commit -m "security(static): prepare publish authority context"
 ```
 
@@ -1655,6 +1983,7 @@ git commit -m "security(static): prepare publish authority context"
 - Modify: `apps/conary/src/commands/publish.rs`
 - Modify: `crates/conary-core/src/repository/static_repo/publish_context.rs`
 - Modify: `crates/conary-core/src/ccs/builder/package_writer.rs`
+- Modify: `crates/conary-core/src/recipe/kitchen/cook.rs`
 - Test: `apps/conary/tests/packaging_m2a.rs`
 - Test: `apps/conary/src/commands/publish.rs`
 
@@ -1672,7 +2001,7 @@ async fn project_form_publish_uses_release_dirty_tree_refusal() {
 }
 
 #[test]
-fn publish_kitchen_config_uses_offline_cache_only_for_release() {
+fn publish_prefetch_config_allows_downloads_before_hermetic_build() {
     let recipe_path = std::path::Path::new("/work/pkg/recipe.toml");
     let output_dir = std::path::Path::new("/tmp/conary-publish-out");
     let sysroot = std::path::PathBuf::from("/tmp/sysroot");
@@ -1681,16 +2010,21 @@ fn publish_kitchen_config_uses_offline_cache_only_for_release() {
     assert!(!config.allow_network);
     assert_eq!(
         config.source_download_policy,
-        conary_core::recipe::SourceDownloadPolicy::OfflineCacheOnly
+        conary_core::recipe::SourceDownloadPolicy::AllowDownloads
     );
 }
 ```
 
 - [ ] **Step 2: Run publish tests and confirm failures**
 
-Run: `cargo test -p conary publish_kitchen_config_uses_offline_cache_only_for_release project_form_publish_uses_release_dirty_tree_refusal -- --nocapture`
+Run:
 
-Expected: FAIL because project-form publish still uses `AllowDownloads` and ambient `detect_ci_mode()`.
+```bash
+cargo test -p conary publish_prefetch_config_allows_downloads_before_hermetic_build -- --nocapture
+cargo test -p conary project_form_publish_uses_release_dirty_tree_refusal -- --nocapture
+```
+
+Expected: FAIL because project-form publish still uses ambient `detect_ci_mode()`.
 
 - [ ] **Step 3: Add release CI mode helper**
 
@@ -1714,29 +2048,28 @@ to:
 .cook_hermetic(&recipe, hermetic_input, output_dir.path(), release_publish_ci_mode())
 ```
 
-- [ ] **Step 4: Assert offline build policy at publish boundary**
+- [ ] **Step 4: Assert offline build policy at the hermetic build execution boundary**
 
-In `publish_kitchen_config`, change:
+Keep `publish_kitchen_config` on `SourceDownloadPolicy::AllowDownloads` so the `cook_hermetic` prefetch phase can populate the source cache. Do not set `OfflineCacheOnly` on the initial Kitchen config.
 
-```rust
-source_download_policy: SourceDownloadPolicy::OfflineCacheOnly,
-```
-
-Add a local guard before Kitchen construction:
+In `crates/conary-core/src/recipe/kitchen/cook.rs`, add:
 
 ```rust
-fn assert_release_offline_build_config(config: &KitchenConfig) -> Result<()> {
+fn assert_hermetic_build_execution_boundary(config: &KitchenConfig) -> Result<()> {
+    if config.hermetic_evidence.is_none() {
+        return Ok(());
+    }
     if config.allow_network {
-        bail!("release publish requires allow_network=false at the build boundary");
+        bail!("hermetic build execution requires allow_network=false");
     }
     if config.source_download_policy != SourceDownloadPolicy::OfflineCacheOnly {
-        bail!("release publish requires source_download_policy=OfflineCacheOnly at the build boundary");
+        bail!("hermetic build execution requires source_download_policy=OfflineCacheOnly");
     }
     Ok(())
 }
 ```
 
-Call it immediately before `Kitchen::new(config)`.
+Call it in the build execution path before commands run, after `HermeticBuildPlan::apply_to_kitchen_config` has applied the build-phase config. Add a unit test in `cook.rs` that builds a `KitchenConfig` with `hermetic_evidence = Some(...)`, `allow_network = true`, and `source_download_policy = AllowDownloads`, then asserts the guard rejects both violations. Add a passing case with `allow_network = false` and `OfflineCacheOnly`.
 
 - [ ] **Step 5: Build and embed project-form attestation**
 
@@ -1751,16 +2084,158 @@ let attested_package_path = attach_project_form_attestation(
 )?;
 ```
 
-`attach_project_form_attestation` must:
+Add this helper to `crates/conary-core/src/repository/static_repo/publish_context.rs`; keep `apps/conary/src/commands/publish.rs` as a thin caller:
 
-- parse the unsigned/hermetic package
-- compute `BuildOutputIdentity`
-- build `BuildAttestationPayload`
-- sign it with `prepared.active_publish_key`
-- set `manifest.provenance.build_attestation`
-- rewrite the CCS package with `write_signed_ccs_package`
-- re-run `verify_package`
-- re-run `verify_static_artifact_publish_eligibility`
+```rust
+pub struct ProjectFormAttestationInput<'a> {
+    pub package_path: &'a Path,
+    pub provenance: &'a ManifestProvenance,
+    pub context: &'a PreparedStaticPublishContext,
+    pub conary_version: &'a str,
+}
+
+pub fn attach_project_form_attestation(
+    input: ProjectFormAttestationInput<'_>,
+) -> Result<PathBuf> {
+    let archive = crate::ccs::archive_reader::read_ccs_archive(
+        std::fs::File::open(input.package_path)
+            .with_context(|| format!("open {}", input.package_path.display()))?,
+    )?;
+    if archive.signature_raw.is_some() {
+        bail!("project-form publish expected an unsigned cook output before attestation signing");
+    }
+    let package = crate::ccs::CcsPackage::parse(
+        input
+            .package_path
+            .to_str()
+            .with_context(|| format!("package path is not valid UTF-8: {}", input.package_path.display()))?,
+    )
+    .map_err(anyhow::Error::from)?;
+    let output_identity = crate::ccs::attestation::compute_build_output_identity(&package)?;
+    let payload = build_project_form_attestation_payload(
+        input.provenance,
+        output_identity,
+        input.context.publish_policy_digest.as_str(),
+        input.conary_version,
+    )?;
+    preflight_project_form_attestation_payload(&payload)?;
+    let envelope = crate::ccs::attestation::sign_build_attestation(
+        payload,
+        &input.context.active_publish_key,
+    )?;
+    let signed_temp = tempfile::Builder::new()
+        .prefix("conary-attested-")
+        .suffix(".ccs")
+        .tempfile_in(
+            input
+                .package_path
+                .parent()
+                .with_context(|| format!("resolve parent for {}", input.package_path.display()))?,
+        )?;
+    let build_result = build_result_from_package_with_attestation(&package, envelope)?;
+    crate::ccs::builder::write_signed_ccs_package(
+        &build_result,
+        signed_temp.path(),
+        &input.context.active_publish_key,
+    )?;
+    let trusted_key = input.context.active_publish_key.public_key_base64();
+    let verification = crate::ccs::verify::verify_package(
+        signed_temp.path(),
+        &crate::ccs::verify::TrustPolicy::strict(vec![trusted_key]),
+    )?;
+    if !verification.valid || !verification.toml_integrity_valid {
+        bail!("attested project-form package failed final CCS verification");
+    }
+    let final_package = crate::ccs::CcsPackage::parse(signed_temp.path().to_str().unwrap())
+        .map_err(anyhow::Error::from)?;
+    let report = crate::repository::static_repo::publish_gate::verify_static_artifact_publish_eligibility(
+        &final_package,
+        &input.context.accepted_signers,
+        &input.context.publish_policy_digest,
+    )?;
+    if !report.is_passed() {
+        bail!("{}", crate::repository::static_repo::publish_gate::format_publish_gate_failures(&report));
+    }
+    let persisted = signed_temp
+        .keep()
+        .map_err(|error| anyhow::anyhow!("persist attested package: {}", error.error))?
+        .1;
+    Ok(persisted)
+}
+
+fn build_project_form_attestation_payload(
+    provenance: &ManifestProvenance,
+    output_identity: crate::ccs::attestation::BuildOutputIdentity,
+    publish_policy_digest: &str,
+    conary_version: &str,
+) -> Result<crate::ccs::attestation::BuildAttestationPayload> {
+    let evidence = provenance
+        .hermetic_evidence
+        .as_ref()
+        .context("project-form publish requires hermetic evidence")?;
+    Ok(crate::ccs::attestation::BuildAttestationPayload {
+        schema_version: crate::ccs::attestation::BUILD_ATTESTATION_SCHEMA_V1,
+        origin_class: output_identity.origin_class.clone(),
+        hardening_level: output_identity.hardening_level.clone(),
+        build_input: evidence.build_input.clone(),
+        dependency_lock: evidence.dependency_lock.clone(),
+        hermetic_evidence_hash: crate::ccs::attestation::canonical_json_hash(evidence)?,
+        output_identity,
+        build_command_risk_report_hash: crate::ccs::attestation::canonical_json_hash(
+            &evidence.command_risk,
+        )?,
+        scriptlet_risk_report_hash: None,
+        conversion_boundary_hash: None,
+        publish_policy_digest: publish_policy_digest.to_string(),
+        command_risk_classifier_version: evidence.command_risk.classifier_version.clone(),
+        sandbox_profile: "kitchen-pristine-network-none".to_string(),
+        seccomp_profile: Some("scriptlet-v1".to_string()),
+        builder_identity: "conary-hermetic-kitchen".to_string(),
+        conary_version: conary_version.to_string(),
+        issued_at: chrono::Utc::now().to_rfc3339(),
+    })
+}
+
+fn preflight_project_form_attestation_payload(
+    payload: &crate::ccs::attestation::BuildAttestationPayload,
+) -> Result<()> {
+    if payload.hardening_level != "hermetic" {
+        bail!("project-form publish can only sign hermetic build attestations");
+    }
+    if payload.origin_class == "recorded-draft" {
+        bail!("project-form publish cannot sign recorded-draft artifacts");
+    }
+    if payload.publish_policy_digest != "m2-static-publish-policy-v1" {
+        bail!("project-form publish attestation uses an unknown policy digest");
+    }
+    if payload.output_identity.canonical_content_identity.trim().is_empty() {
+        bail!("project-form publish attestation is missing output content identity");
+    }
+    Ok(())
+}
+
+fn build_result_from_package_with_attestation(
+    package: &crate::ccs::CcsPackage,
+    envelope: crate::ccs::attestation::BuildAttestationEnvelope,
+) -> Result<crate::ccs::BuildResult> {
+    let mut manifest = package.manifest().clone();
+    manifest.provenance.build_attestation = Some(envelope);
+    Ok(crate::ccs::BuildResult {
+        manifest,
+        components: package.components().clone(),
+        files: package.file_entries().to_vec(),
+        blobs: package.extract_all_content().map_err(anyhow::Error::from)?,
+        total_size: package.file_entries().iter().map(|entry| entry.size).sum(),
+        chunked: package
+            .file_entries()
+            .iter()
+            .any(|entry| entry.chunks.is_some()),
+        chunk_stats: None,
+    })
+}
+```
+
+The cook-for-publish contract is: `cook_hermetic` produces an unsigned CCS package for project-form publish; attestation attach signs exactly once with the active target publish key. If the helper sees an existing `MANIFEST.sig`, it must fail instead of layering a second package signature. `preflight_project_form_attestation_payload` checks hardening, origin class, policy digest, output identity completeness, and command/scriptlet report cleanliness before the publish key signs anything. If any final verification step fails, the temp file is dropped and no signed artifact path is returned.
 
 Use `attested_package_path` in `StaticPublishOptions.package_paths`.
 
@@ -1936,17 +2411,61 @@ Add an internal gate call in `stage_packages` or the new commit layer so a CLI b
 
 - [ ] **Step 7: Run static artifact-form tests**
 
-Run: `cargo test -p conary artifact_form_publish_ publish_artifact_form -- --nocapture`
+Run:
+
+```bash
+cargo test -p conary artifact_form_publish_ -- --nocapture
+cargo test -p conary publish_artifact_form -- --nocapture
+```
 
 Expected: PASS.
 
-- [ ] **Step 8: Run core static publish tests**
+- [ ] **Step 8: Run M2b static gate regression tests**
 
-Run: `cargo test -p conary-core static_repo::publish static_repo::publish_gate -- --nocapture`
+Add and run table-driven tests covering:
+
+```rust
+[
+    ("host", None, "artifact is not hermetic"),
+    ("sandboxed", None, "artifact is not hermetic"),
+    ("hermetic", None, "artifact is missing a build attestation"),
+    ("hermetic", Some("bad-signature"), "build attestation signature mismatch"),
+    ("hermetic", Some("unaccepted-signer"), "build attestation signer is not accepted"),
+    ("hermetic", Some("stale-policy"), "build attestation policy digest is not accepted"),
+    ("hermetic", Some("recorded-draft"), "recorded-draft artifacts are not publishable"),
+]
+```
+
+Add accepted static signer rotation tests proving:
+
+- active key authorizes attestation and final package signature
+- retired key verifies history but cannot authorize new artifact publish
+- local key-dir mismatch with verified destination metadata fails
+- tampered `keys/package-keys.json` fails before signer acceptance
+- rotated active key works after verified metadata update
+
+Run:
+
+```bash
+cargo test -p conary-core static_repo::publish -- --nocapture
+cargo test -p conary-core static_repo::publish_gate -- --nocapture
+cargo test -p conary-core m2_publish_gates -- --nocapture
+```
 
 Expected: PASS.
 
-- [ ] **Step 9: Commit Task 8**
+- [ ] **Step 9: Run core static publish tests**
+
+Run:
+
+```bash
+cargo test -p conary-core static_repo::publish -- --nocapture
+cargo test -p conary-core static_repo::publish_gate -- --nocapture
+```
+
+Expected: PASS.
+
+- [ ] **Step 10: Commit Task 8**
 
 ```bash
 git add apps/conary/src/cli/mod.rs apps/conary/src/commands/publish.rs apps/conary/tests/packaging_m2a.rs crates/conary-core/src/repository/static_repo/publish.rs crates/conary-core/src/repository/static_repo/publish_gate.rs
@@ -1996,7 +2515,12 @@ fn foreign_converted_publish_requires_boundary_hash() {
 
 - [ ] **Step 2: Run tests and confirm boundary gate failure**
 
-Run: `cargo test -p conary-core foreign_boundary foreign_converted_publish_requires_boundary_hash -- --nocapture`
+Run:
+
+```bash
+cargo test -p conary-core foreign_boundary -- --nocapture
+cargo test -p conary-core foreign_converted_publish_requires_boundary_hash -- --nocapture
+```
 
 Expected: FAIL because the boundary is not attached or checked.
 
@@ -2064,17 +2588,58 @@ let scriptlet_report_hash = crate::ccs::attestation::canonical_json_hash(&script
 
 - [ ] **Step 7: Run foreign conversion tests**
 
-Run: `cargo test -p conary-core ccs::convert foreign_boundary -- --nocapture`
+Run:
+
+```bash
+cargo test -p conary-core ccs::convert -- --nocapture
+cargo test -p conary-core foreign_boundary -- --nocapture
+cargo test -p conary-core golden_fixtures -- --nocapture
+cargo test -p conary-core support_matrix -- --nocapture
+```
 
 Expected: PASS.
 
 - [ ] **Step 8: Run cook command tests**
 
-Run: `cargo test -p conary cook_foreign_package foreign_package_format -- --nocapture`
+Run:
+
+```bash
+cargo test -p conary cook_foreign_package -- --nocapture
+cargo test -p conary foreign_package_format -- --nocapture
+```
 
 Expected: PASS.
 
-- [ ] **Step 9: Commit Task 9**
+- [ ] **Step 9: Run M2c AUR-style risk regression fixtures**
+
+Use inert fixture commands:
+
+```sh
+npm install synthetic-atomic-lockfile
+bun add synthetic-js-digest
+python -c 'print("synthetic")'
+bpftool prog show
+```
+
+Expected:
+
+- runtime `--sandbox=auto` classifies Medium or higher
+- hermetic build command report has shared reason codes
+- PKGBUILD body report has shared reason codes
+- foreign conversion scriptlet report has shared reason codes
+- missing lock/vendor/prefetch evidence blocks publish
+
+Run:
+
+```bash
+cargo test -p conary-core command_risk -- --nocapture
+cargo test -p conary-core pkgbuild -- --nocapture
+cargo test -p conary-core foreign_boundary -- --nocapture
+```
+
+Expected: PASS.
+
+- [ ] **Step 10: Commit Task 9**
 
 ```bash
 git add crates/conary-core/src/ccs/attestation.rs crates/conary-core/src/ccs/manifest_provenance.rs crates/conary-core/src/ccs/convert apps/conary/src/commands/cook.rs
@@ -2095,17 +2660,22 @@ Add tests:
 ```rust
 #[test]
 fn release_publish_trusted_signers_parse_from_config() {
-    let config = RemiConfig::parse_str(
+    let config: RemiConfig = toml::from_str(
         r#"
         [release_publish]
+        repository_keys_dir = "/var/lib/remi/keys"
         trusted_build_attestation_signers = [
-          { key_id = "publisher", public_key = "-----BEGIN PUBLIC KEY-----\nabc\n-----END PUBLIC KEY-----" }
+          { key_id = "publisher", public_key = "cHVibGlzaGVyLXB1YmxpYy1rZXk=" }
         ]
         "#
     )
     .unwrap();
 
     assert_eq!(config.release_publish.trusted_build_attestation_signers[0].key_id, "publisher");
+    assert_eq!(
+        config.release_publish.repository_keys_dir.as_deref(),
+        Some(std::path::Path::new("/var/lib/remi/keys"))
+    );
 }
 
 #[test]
@@ -2118,7 +2688,12 @@ fn release_publish_empty_trusted_signers_fail_closed() {
 
 - [ ] **Step 2: Run config tests and confirm missing field failure**
 
-Run: `cargo test -p remi release_publish_trusted_signers_parse_from_config release_publish_empty_trusted_signers_fail_closed -- --nocapture`
+Run:
+
+```bash
+cargo test -p remi release_publish_trusted_signers_parse_from_config -- --nocapture
+cargo test -p remi release_publish_empty_trusted_signers_fail_closed -- --nocapture
+```
 
 Expected: FAIL because `[release_publish]` is not parsed.
 
@@ -2138,6 +2713,9 @@ Add:
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct ReleasePublishSection {
     #[serde(default)]
+    pub repository_keys_dir: Option<PathBuf>,
+
+    #[serde(default)]
     pub trusted_build_attestation_signers: Vec<TrustedBuildAttestationSigner>,
 }
 
@@ -2149,6 +2727,16 @@ pub struct TrustedBuildAttestationSigner {
 ```
 
 Wire the section into `ServerConfig` or `ServerState` so request handlers can read it.
+
+The repository key directory stores Remi-owned TUF private keys by distro:
+
+```text
+<repository_keys_dir>/<distro>/targets.private
+<repository_keys_dir>/<distro>/snapshot.private
+<repository_keys_dir>/<distro>/timestamp.private
+```
+
+Release upload and timestamp refresh must fail closed when `repository_keys_dir` is absent or a required role key is missing. These private keys sign Remi repository metadata only; they do not authorize build attestations.
 
 - [ ] **Step 4: Run Remi config tests**
 
@@ -2162,6 +2750,10 @@ Expected: PASS.
 git add apps/remi/src/server/config.rs apps/remi/src/server/mod.rs
 git commit -m "security(remi): configure trusted release signers"
 ```
+
+## M2d Execution Order Note
+
+Complete Task 12 Step 5 and Task 12 Step 6 before implementing Task 11 Step 5. Remi release upload calls `refresh_release_tuf_metadata`, and that helper must have a working timestamp refresh implementation plus configured TUF role keys before upload staging can pass end-to-end tests.
 
 ## Task 11: Remi Release Upload Staging And Gate Parity
 
@@ -2265,15 +2857,42 @@ async fn release_upload_inner(
     }
     let mut transaction = begin_release_transaction(&state, &distro, &auth).await?;
     let promoted = promote_staged_release_objects(&state, &staged, &package).await?;
-    write_release_metadata(&mut transaction, &distro, &package, &promoted).await?;
-    refresh_release_tuf_metadata(&mut transaction, &distro, &package).await?;
-    transaction.commit().await?;
+    let commit_result: anyhow::Result<()> = async {
+        write_release_metadata(&mut transaction, &distro, &package, &promoted).await?;
+        refresh_release_tuf_metadata(&mut transaction, &distro, &package).await?;
+        transaction.commit().await?;
+        Ok(())
+    }
+    .await;
+    if let Err(error) = commit_result {
+        promoted.cleanup_public_objects(&state).await;
+        staged.cleanup().await;
+        return Err(error);
+    }
     staged.cleanup().await;
     Ok(ReleaseUploadResponse::created(package.manifest().package.name.clone()))
 }
 ```
 
 The helpers named in this skeleton must preserve the order shown here. If authentication fails, return `401` or `403`. If artifact authorization fails before promotion, remove the staging file and return `422`. If promotion fails after the DB transaction starts, roll back and remove staged public objects before returning `500`.
+If public object promotion succeeds but metadata writing, TUF refresh, or transaction commit fails, call `promoted.cleanup_public_objects(&state).await` before returning the error. Add a regression test that injects a commit failure after public promotion and proves no public chunk object remains.
+
+`refresh_release_tuf_metadata` must resolve TUF signing keys from `release_publish.repository_keys_dir` using the distro path:
+
+```rust
+fn load_release_tuf_key(
+    keys_dir: &Path,
+    distro: &str,
+    role: &str,
+) -> anyhow::Result<crate::ccs::signing::SigningKeyPair> {
+    let path = keys_dir.join(distro).join(format!("{role}.private"));
+    crate::ccs::signing::SigningKeyPair::load_from_file(&path)
+        .map_err(anyhow::Error::from)
+        .with_context(|| format!("load Remi {role} TUF signing key {}", path.display()))
+}
+```
+
+Use `targets.private` when adding the new package target, `snapshot.private` when regenerating snapshot metadata, and `timestamp.private` when refreshing timestamp metadata. Do not use trusted build-attestation signer keys for TUF metadata signing.
 
 - [ ] **Step 6: Use shared publish gate**
 
@@ -2324,7 +2943,20 @@ Remi converts `ReleasePublishSection.trusted_build_attestation_signers` into `Tr
 
 - [ ] **Step 7: Run release upload tests**
 
-Run: `cargo test -p remi release_upload_ -- --nocapture`
+Run:
+
+```bash
+cargo test -p remi release_upload_ -- --nocapture
+cargo test -p remi remi_release_parity -- --nocapture
+```
+
+The Remi parity tests must prove release upload failures leave:
+
+- no converted-package row
+- no public chunk object
+- no package detail response
+- no package index entry
+- no TUF target
 
 Expected: PASS.
 
@@ -2366,20 +2998,34 @@ async fn static_local_guard_still_rejects_http_static_path() {
 }
 
 #[tokio::test]
-async fn remi_tuf_refresh_timestamp_no_longer_returns_501() {
-    let response = call_refresh_timestamp_for_tests().await;
+async fn remi_tuf_refresh_timestamp_returns_signed_monotonic_metadata() {
+    let first = call_refresh_timestamp_for_tests().await;
+    assert_eq!(first.status(), StatusCode::OK);
+    let first_json = response_json_for_tests(first).await;
 
-    assert_ne!(response.status(), StatusCode::NOT_IMPLEMENTED);
+    assert_eq!(first_json["role"], "timestamp");
+    assert!(first_json["version"].as_u64().unwrap() > 0);
+
+    let second = call_refresh_timestamp_for_tests().await;
+    assert_eq!(second.status(), StatusCode::OK);
+    let second_json = response_json_for_tests(second).await;
+
+    assert!(second_json["version"].as_u64().unwrap() > first_json["version"].as_u64().unwrap());
 }
 ```
 
 - [ ] **Step 2: Run tests and confirm current failures**
 
-Run: `cargo test -p conary http_publish_target_routes_to_remi_release_path static_local_guard_still_rejects_http_static_path -- --nocapture`
+Run:
+
+```bash
+cargo test -p conary http_publish_target_routes_to_remi_release_path -- --nocapture
+cargo test -p conary static_local_guard_still_rejects_http_static_path -- --nocapture
+```
 
 Expected: FAIL for missing route classifier.
 
-Run: `cargo test -p remi remi_tuf_refresh_timestamp_no_longer_returns_501 -- --nocapture`
+Run: `cargo test -p remi remi_tuf_refresh_timestamp_returns_signed_monotonic_metadata -- --nocapture`
 
 Expected: FAIL because timestamp refresh currently returns `501`.
 
@@ -2450,7 +3096,7 @@ Artifact-form publish should call `publish_to_remi` for `RemiRelease` after clie
 
 - [ ] **Step 5: Implement timestamp refresh**
 
-In `apps/remi/src/server/handlers/tuf.rs`, replace the `501` stub with a call that regenerates timestamp metadata from current snapshot metadata and writes it atomically. Return `200` with timestamp version on success.
+In `apps/remi/src/server/handlers/tuf.rs`, replace the `501` stub with a call that regenerates timestamp metadata from current snapshot metadata, signs it with `<repository_keys_dir>/<distro>/timestamp.private`, and writes it atomically. Return `200` with timestamp version on success. If `repository_keys_dir` is absent or `timestamp.private` is missing, return a fail-closed `500` admin error and do not write timestamp metadata.
 
 Response shape:
 
@@ -2464,7 +3110,12 @@ Response shape:
 
 - [ ] **Step 6: Run routing and timestamp tests**
 
-Run: `cargo test -p conary remi_release static_local_guard -- --nocapture`
+Run:
+
+```bash
+cargo test -p conary remi_release -- --nocapture
+cargo test -p conary static_local_guard -- --nocapture
+```
 
 Expected: PASS.
 
@@ -2479,7 +3130,7 @@ git add apps/conary/src/commands/remi_publish.rs apps/conary/src/commands/mod.rs
 git commit -m "feat(remi): publish attested artifacts to release endpoint"
 ```
 
-## Task 13: End-To-End Regression Matrix
+## Task 13: Final Integration Sweep
 
 **Files:**
 - Modify: `apps/conary/tests/packaging_m2a.rs`
@@ -2487,62 +3138,11 @@ git commit -m "feat(remi): publish attested artifacts to release endpoint"
 - Modify: `apps/remi/src/server/release_publish.rs` tests
 - Modify: `docs/llms/subsystem-map.md`
 
-- [ ] **Step 1: Add static publish rejection matrix**
+- [ ] **Step 1: Confirm checkpoint regression suites are present**
 
-Add table-driven tests covering:
+Confirm the M2b static gate tests, M2c AUR-style risk fixtures, and M2d Remi parity negative tests were added in Tasks 8, 9, and 11. This step is a coverage audit, not a place to add brand-new first coverage.
 
-```rust
-[
-    ("host", None, "artifact is not hermetic"),
-    ("sandboxed", None, "artifact is not hermetic"),
-    ("hermetic", None, "artifact is missing a build attestation"),
-    ("hermetic", Some("bad-signature"), "build attestation signature mismatch"),
-    ("hermetic", Some("unaccepted-signer"), "build attestation signer is not accepted"),
-    ("hermetic", Some("stale-policy"), "build attestation policy digest is not accepted"),
-    ("hermetic", Some("recorded-draft"), "recorded-draft artifacts are not publishable"),
-]
-```
-
-- [ ] **Step 2: Add accepted static signer rotation tests**
-
-Prove:
-
-- active key authorizes attestation and final package signature
-- retired key verifies history but cannot authorize new artifact publish
-- local key-dir mismatch with verified destination metadata fails
-- tampered `keys/package-keys.json` fails before signer acceptance
-- rotated active key works after verified metadata update
-
-- [ ] **Step 3: Add AUR-style synthetic fixtures**
-
-Use inert fixture commands:
-
-```sh
-npm install synthetic-atomic-lockfile
-bun add synthetic-js-digest
-python -c 'print("synthetic")'
-bpftool prog show
-```
-
-Expected:
-
-- runtime `--sandbox=auto` classifies Medium or higher
-- hermetic build command report has shared reason codes
-- PKGBUILD body report has shared reason codes
-- foreign conversion scriptlet report has shared reason codes
-- missing lock/vendor/prefetch evidence blocks publish
-
-- [ ] **Step 4: Add Remi parity negative tests**
-
-Prove release upload failures leave:
-
-- no converted-package row
-- no public chunk object
-- no package detail response
-- no package index entry
-- no TUF target
-
-- [ ] **Step 5: Run focused regression suites**
+- [ ] **Step 2: Run focused regression suites**
 
 Run:
 
@@ -2554,7 +3154,7 @@ cargo test -p remi
 
 Expected: PASS.
 
-- [ ] **Step 6: Run integration inventory when manifests change**
+- [ ] **Step 3: Run integration inventory when manifests change**
 
 Run:
 
@@ -2564,7 +3164,7 @@ cargo run -p conary-test -- list
 
 Expected: exits 0 and lists suites without manifest parse failures.
 
-- [ ] **Step 7: Commit Task 13**
+- [ ] **Step 4: Commit Task 13**
 
 ```bash
 git add apps/conary/tests crates/conary-core/tests apps/remi/src/server docs/llms docs/modules
@@ -2677,5 +3277,5 @@ M2 is complete when all of these are true:
 - Remi release upload failures leave no package row, public chunk, package detail/index result, or TUF target.
 - Remi timestamp refresh no longer returns `501`.
 - Shared command-risk reason codes cover runtime auto sandboxing, hermetic build commands, PKGBUILD bodies, and foreign conversion scriptlets.
-- `crates/conary-core/src/repository/static_repo/publish.rs` line count is `<= 2699`.
+- `crates/conary-core/src/repository/static_repo/publish.rs` line count is `<= 2500`.
 - Focused tests, docs checks, formatting, clippy, and final review gates pass.
