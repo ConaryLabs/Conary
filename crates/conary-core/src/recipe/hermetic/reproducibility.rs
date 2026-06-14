@@ -12,6 +12,7 @@ const SHELLOPTS: &str = "SHELLOPTS";
 const BASHOPTS: &str = "BASHOPTS";
 const BASH_ENV: &str = "BASH_ENV";
 const ENV: &str = "ENV";
+const BASH_FUNC_PREFIX: &str = "BASH_FUNC_";
 const PATH_REMAP_COUNT: usize = 2;
 const CONTROLLED_ENV_KEYS: &[&str] = &[
     SOURCE_DATE_EPOCH,
@@ -130,6 +131,10 @@ impl ReproducibilityConfig {
         CONTROLLED_ENV_KEYS
     }
 
+    pub(crate) fn is_forbidden_shell_environment_key(key: &str) -> bool {
+        is_forbidden_shell_environment_key(key)
+    }
+
     pub(crate) fn command_local_assignment_allowed(&self, key: &str, value: &str) -> bool {
         match key {
             SOURCE_DATE_EPOCH => false,
@@ -206,13 +211,17 @@ impl ReproducibilityConfig {
 
 fn validate_no_shell_startup_env(env: &[(String, String)]) -> Result<()> {
     for (key, _) in env {
-        if SHELL_STARTUP_ENV_KEYS.contains(&key.as_str()) {
+        if is_forbidden_shell_environment_key(key) {
             return Err(Error::ConfigError(format!(
-                "hermetic reproducibility rejects shell startup environment variable {key}; recipe or extra environment cannot set it"
+                "hermetic reproducibility rejects shell startup/import environment variable {key}; recipe or extra environment cannot set it"
             )));
         }
     }
     Ok(())
+}
+
+fn is_forbidden_shell_environment_key(key: &str) -> bool {
+    SHELL_STARTUP_ENV_KEYS.contains(&key) || key.starts_with(BASH_FUNC_PREFIX)
 }
 
 fn effective_env_value<'a>(env: &'a [(String, String)], key: &str) -> Option<&'a str> {
@@ -314,6 +323,7 @@ mod tests {
             ("BASHOPTS", "expand_aliases"),
             ("BASH_ENV", "/tmp/env.sh"),
             ("ENV", "/tmp/env.sh"),
+            ("BASH_FUNC_true%%", "() { SOURCE_DATE_EPOCH=999 true; }"),
         ];
 
         for (key, value) in cases {
@@ -331,7 +341,11 @@ mod tests {
     #[test]
     fn hermetic_env_validation_rejects_shell_startup_environment_controls() {
         let config = ReproducibilityConfig::new(123, Path::new("/src"), Path::new("/build"));
-        let cases = [("SHELLOPTS", "keyword"), ("BASHOPTS", "expand_aliases")];
+        let cases = [
+            ("SHELLOPTS", "keyword"),
+            ("BASHOPTS", "expand_aliases"),
+            ("BASH_FUNC_true%%", "() { SOURCE_DATE_EPOCH=999 true; }"),
+        ];
 
         for (key, value) in cases {
             let mut env = config.env_vars();
