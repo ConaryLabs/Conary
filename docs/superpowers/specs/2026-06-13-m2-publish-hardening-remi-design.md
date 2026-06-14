@@ -1,7 +1,7 @@
 # M2 Publish Hardening And Remi Push Design
 
 **Date:** 2026-06-13
-**Status:** Review-tightened design, pre-implementation
+**Status:** Full release-surface design; M2a landed; M2b/M2c/M2d pre-plan
 **Parent design:** `docs/superpowers/specs/2026-06-10-packaging-toolchain-design.md`
 
 ## Purpose
@@ -9,9 +9,9 @@
 M2 turns the M1 packaging loop from a preview publishing path into a release
 evidence path. M1a proved recipe-driven static publishing with honest
 `sandboxed` provenance. M1b proved inference, `conary new`, `conary cook`, and
-`conary try`. M2 now defines the trust contract for hermetic publish, signed
-build attestations, artifact-form publish, foreign package ingestion, and Remi
-push.
+`conary try`. M2a has now landed the hermetic publish foundation. The remaining
+M2 release surface defines the trust contract for signed build attestations,
+artifact-form publish, foreign package ingestion, and Remi push.
 
 The core invariant is:
 
@@ -23,29 +23,28 @@ signed build attestation. A `hermetic` artifact is useful evidence, but it is
 not enough for artifact-form publish until the attestation, signer authority,
 package signature, output identity, and lint gates all pass. The happy path
 remains project-form publish: `conary publish <target>` performs the hermetic
-rebuild, signs the attestation, verifies the result, and publishes in one flow.
+rebuild, signs the attestation, verifies the result, and publishes in one flow
+once M2b lands.
 
 ## Current Repo Facts
 
 - `conary publish <pkg.ccs> <target>` is currently rejected in
   `apps/conary/src/commands/publish.rs` with an M2 attestation message.
-- `conary cook --hermetic` is currently rejected in
-  `apps/conary/src/commands/cook.rs`; M1b supports host or `--isolated` builds.
-- Project-form publish currently forces Kitchen isolation but keeps network
-  access enabled, so it correctly produces `hardening_level = "sandboxed"`, not
-  `hermetic`, and does not embed a build attestation.
-- `publish_kitchen_config` in `apps/conary/src/commands/publish.rs` currently
-  hardcodes `allow_network = true`. M2a must plumb hermetic network policy
-  through project-form publish so network is disabled after prefetch before any
-  build claims `hardening_level = "hermetic"`.
+- `conary cook --isolated` and the hidden compatibility `--hermetic` path now
+  route through the M2a hermetic planner when local hermetic builder
+  configuration is present.
+- Project-form static publish now uses the hermetic Kitchen path with pristine
+  sysroot-only build isolation, network disabled during the build, and unsigned
+  M2a hermetic evidence. It still does not embed a signed build attestation.
+- `apps/conary/src/commands/publish.rs` prints that M2a static publish records
+  hermetic build evidence but release attestation gates arrive in M2b.
 - `crates/conary-core/src/ccs/manifest.rs` already carries the orthogonal
   provenance fields `origin_class` and `hardening_level`, but the
-  `hardening_level` field comment still describes the M1a-only values. M2 must
-  update the recognized value documentation when `hermetic` becomes a real
-  emitted state and add a separate build-attestation field; `attested` is a
-  derived publish state, not a `hardening_level` value.
-- Source inference warns that npm, Python, and Go may still resolve over the
-  network in M1b; offline/reproducible handling is explicitly M2 work.
+  release surface still needs a separate build-attestation field; `attested` is
+  a derived publish state, not a `hardening_level` value.
+- M2a intentionally refuses unresolved build dependencies until dependency
+  content locks exist. Ecosystem-specific lock/vendor/offline policy remains
+  publish-gate work for the remaining M2 surface.
 - Remi's TUF timestamp refresh is still a prerequisite for M2 Remi push; the
   parent packaging design calls out the current 501 stub in
   `apps/remi/src/server/handlers/tuf.rs`.
@@ -53,6 +52,11 @@ rebuild, signs the attestation, verifies the result, and publishes in one flow.
   project-form path signs with its own local key directory; M2b must add signer
   allowlist verification against the target publication context rather than
   trusting any self-signed artifact.
+- `crates/conary-core/src/repository/static_repo/publish.rs` is already a large
+  file that owns static repo layout, key rotation, package signing, TUF metadata,
+  index writes, and concurrency checks. M2 gate logic should be extracted into
+  small shared helpers rather than adding major eligibility policy directly to
+  that module.
 - Foreign package conversion is not greenfield. Existing ownership lives under
   `crates/conary-core/src/ccs/convert/`, `crates/conary-core/src/ccs/legacy/`,
   `apps/conary/src/commands/install/conversion.rs`, and
@@ -119,7 +123,15 @@ internally, but it must not unlock artifact-form publish.
 
 ## Architecture
 
-M2 should add focused core concepts and keep command modules thin.
+M2 remains one release-surface design, executed as gated slices:
+
+- M2b: signed build attestations and static artifact-form publish gates.
+- M2c: foreign-package ingestion into attested CCS artifacts.
+- M2d: Remi push with server-side gate parity.
+
+The implementation plan may launch these under one `/goal`, but each slice must
+retain its own reviewable boundary. M2 should add focused core concepts and keep
+command modules thin.
 
 ### Hermetic Build Foundation
 
@@ -173,11 +185,15 @@ layer:
 
 For static repositories, accepted signer policy comes from the destination
 repo's active publisher/package keys after verified metadata is loaded, or from
-the local key directory during project-form repo initialization. Artifact-form
-publish to a brand-new static repo must require an explicit accepted-signer
-decision rather than trusting any self-signed artifact. For Remi, accepted signer
-policy is enforced server-side from Remi's configured trusted publisher keys.
-The client may preflight it, but the server is the authority.
+the explicit local key directory during project-form or brand-new artifact-form
+repo initialization. Artifact-form publish to a brand-new static repo is allowed
+only with an explicit `--key-dir` whose active publish key verifies both the
+package signature and the build attestation. There is no one-off
+`--accept-artifact-signer` or equivalent bypass in M2. Retired static keys remain
+historical verification material for already-published packages, but they cannot
+authorize new artifact-form publish. For Remi, accepted signer policy is
+enforced server-side from Remi's configured trusted publisher keys. The client
+may preflight it, but the server is the authority.
 
 `BuildAttestationEnvelope` is distinct from both existing signature layers. M2b
 should embed it as a new structured field, e.g.
@@ -193,9 +209,9 @@ Ownership boundaries:
 | Responsibility | Owner |
 |----------------|-------|
 | Attestation schema, canonicalization, embedding, extraction, integrity verification, signer identity extraction | `crates/conary-core/src/ccs/attestation.rs` |
-| Static target signer authority, package-key policy, and brand-new repo accepted-signer UX | `crates/conary-core/src/repository/static_repo/` plus `apps/conary/src/commands/publish.rs` orchestration |
+| Static target signer authority, package-key policy, and brand-new repo explicit `--key-dir` behavior | `crates/conary-core/src/repository/static_repo/` plus `apps/conary/src/commands/publish.rs` orchestration |
 | Remi target signer authority and trusted build-attestation signer config/storage | `apps/remi/src/server/config.rs` and the M2d Remi push handler |
-| Publish lint composition | shared core lint helpers, orchestrated from `apps/conary/src/commands/publish.rs` and rechecked by Remi |
+| Publish lint composition and artifact eligibility reason codes | shared core gate/lint helpers, orchestrated from `apps/conary/src/commands/publish.rs`, consumed by static publish, and rechecked by Remi |
 | Command-risk evidence and classifications | existing `crates/conary-core/src/ccs/convert/command_evidence.rs` / blocked-class model or a small core module extracted from it; `container/analysis.rs` consumes that model for `--sandbox=auto` rather than growing a third scanner |
 
 ### Publish Command
@@ -211,7 +227,10 @@ orchestrator:
 Static repository publication stays under
 `crates/conary-core/src/repository/static_repo/`. That layer receives already
 gated artifacts and keeps owning file layout, TUF metadata, index updates, and
-publisher ordering.
+publisher ordering. Because `static_repo/publish.rs` is already above the
+large-file decomposition threshold, M2 should place static gate/admission logic
+in focused helper modules such as `static_repo::publish_gate` or a shared core
+publish-gate module, leaving the existing publisher as an ordering/layout owner.
 
 ### Remi Push
 
@@ -264,7 +283,9 @@ Project-form publish:
    controls applied, and build paths mapped.
 9. Capture output identity.
 10. Compare against the last host build record when one exists.
-11. Sign a build attestation with the publisher Ed25519 key.
+11. Sign a build attestation with the target publisher Ed25519 key. Static
+    project-form publish uses the active static publish/package key from the
+    destination key directory in M2b v1.
 12. Sign the target-local CCS package signature and verify it against the target
     package policy.
 13. Embed and re-verify the attestation.
@@ -284,7 +305,7 @@ Artifact-form publish:
    signature is not the final publication authorization.
 5. Verify that the attestation signer is accepted for the target publication
    context.
-6. Run publish lint.
+6. Run publish lint using the shared reason-code vocabulary.
 7. Attach or replace the target-local package signature in the CCS signature
    layer without rewriting canonical package content, manifest data covered by
    output identity, or the build-attestation payload.
@@ -292,6 +313,13 @@ Artifact-form publish:
    policy and recheck that output identity stayed unchanged.
 9. Recheck the final staged artifact bytes before metadata or index visibility.
 10. Publish to a static repo or Remi target without rebuilding.
+
+Static artifact-form publish to a brand-new repo is allowed only when the caller
+supplies an explicit `--key-dir`; the active publish key from that directory is
+the accepted attestation signer and final package signer. An existing static
+repo loads accepted active package keys from verified destination metadata and
+local key-dir reconciliation. Retired package keys may verify historical
+artifacts but do not authorize new artifact-form publish.
 
 ## AUR-Style Supply-Chain Threat Model
 
@@ -374,19 +402,19 @@ than contacting real package registries or incident artifacts.
 ### `conary cook --isolated <target>`
 
 `--isolated` continues to mean "use the strongest available isolation for this
-milestone." After M2a, the command may emit `hardening_level = "hermetic"` only
-when all inputs are pinned and the build runs offline. If a target cannot be
-made hermetic, the command refuses with actionable diagnostics rather than
-falling back silently or overclaiming.
+milestone." In M2a and later, the command may emit
+`hardening_level = "hermetic"` only when all inputs are pinned and the build runs
+offline. If a target cannot be made hermetic, the command refuses with
+actionable diagnostics rather than falling back silently or overclaiming.
 
 Plain `conary cook --isolated` may produce hermetic artifacts after M2a, but it
 does not sign them and therefore does not make them artifact-form publishable.
 Project-form publish remains the path that combines hermetic rebuild,
 attestation signing, and publication.
 
-The hidden compatibility `--hermetic` surface should either route to the M2
-hermetic behavior after the CLI contract is reviewed or remain hidden/rejected.
-The public contract stays `--isolated`; the provenance field tells the truth.
+The hidden compatibility `--hermetic` surface routes to the same M2a hermetic
+behavior for compatibility. The public contract stays `--isolated`; the
+provenance field tells the truth.
 
 ### `conary publish <target>`
 
@@ -439,7 +467,12 @@ and scriptlet bundle logic.
 
 M2d adds authenticated Remi upload for the same CCS artifact static
 artifact-form publish accepts. If an artifact would fail static publish gates,
-Remi push refuses too.
+Remi push refuses too. Remi stages the upload outside public/package-index
+visibility, rechecks attestation integrity, configured signer authority, package
+signature policy, output identity, foreign conversion boundaries, and publish
+lint server-side, then atomically commits metadata, chunk/index visibility, and
+TUF timestamp state. Transport authentication is necessary but never sufficient
+for artifact authorization.
 
 ## Data Model
 
@@ -461,16 +494,15 @@ Records what was built:
 Local source hashing follows the parent design: inside a git repository, hash
 exactly tracked files; ignored files, `.git/`, `dist/`, `target/`, and generated
 outputs are excluded. Outside git, hash all files minus a documented default
-ignore set and warn that identity is weaker. CI refuses dirty local trees; M2a
-must define the CI-mode detection mechanism, such as an explicit flag or
-environment contract.
+ignore set and warn that identity is weaker. CI refuses dirty local trees; the
+remaining M2 release surface must preserve the M2a CI-mode detection contract
+and keep dirty-tree behavior fail-closed for publish.
 
 Hermetic local-source materialization must use the same canonical file list that
-was hashed. The current Kitchen local-source path copies the resolved source
-directory recursively; that is acceptable for M1 iteration, but M2a must not let
-ignored or untracked files influence a build while being absent from
-`BuildInputIdentity`. The child plan must either materialize from the hashed file
-list or refuse when excluded files could affect the build.
+was hashed. M2a must not let ignored or untracked files influence a build while
+being absent from `BuildInputIdentity`. The remaining release-surface plan must
+either preserve M2a's hashed-file-list materialization guarantee or refuse when
+excluded files could affect the build.
 
 ### `DependencyLock`
 
@@ -487,39 +519,46 @@ latest view is not a hermetic dependency lock. If an immutable content identity
 is unavailable for any build dependency, the artifact cannot claim `hermetic` and
 publish lint must fail.
 
-M2a must also define a language-ecosystem dependency policy. At minimum, each
-supported inferred ecosystem needs one of these outcomes:
+The remaining M2 release surface must extend M2a's fail-closed dependency
+posture into a language-ecosystem dependency policy. At minimum, each supported
+inferred ecosystem needs one of these outcomes:
 
 - accepted offline mode with a lock/vendor input recorded in
   `BuildInputIdentity`
 - clear refusal with a diagnostic naming the missing lock/vendor input
-- explicit deferral from hermetic support for that ecosystem in the M2a plan
+- explicit deferral from hermetic publish support for that ecosystem
 
-Cargo, Go, npm, and Python are the first ecosystems to classify because M1b
-already warns that they may resolve dependencies over the network.
+Cargo, Go, npm, and Python are the first ecosystems to classify because Conary's
+source inference already warns that they may resolve dependencies over the
+network.
 
-Provisional M2a defaults:
+Provisional remaining-M2 defaults:
 
-| Ecosystem | M2a hermetic default |
+| Ecosystem | Hermetic publish default |
 |-----------|----------------------|
 | Cargo | Accept only with `Cargo.lock` plus a vendored or cached crate source set that is part of `BuildInputIdentity`; otherwise refuse. |
 | Go | Accept only with `go.sum` plus `vendor/` or a pinned module cache recorded in `BuildInputIdentity`; otherwise refuse. |
 | npm | Accept only with a lockfile (`package-lock.json` or equivalent) plus vendored `node_modules` or a pinned npm cache recorded in `BuildInputIdentity`; otherwise refuse. |
 | Python | Defer hermetic support unless the M2a plan chooses a lockfile/wheelhouse strategy; refuse publish-hermetic for ambiguous pip/network resolution. |
 
-M2a should implement the Cargo path first because Rust workspace packaging is
-the closest dogfood path for Conary itself. The child plan should prefer
-explicit offline invocation or config over relying only on the network namespace.
-Other ecosystems may begin as fail-closed classifications with diagnostics if
-their offline strategy is not ready.
+The remaining implementation plan should implement the Cargo path first if it
+extends ecosystem support, because Rust workspace packaging is the closest
+dogfood path for Conary itself. The plan should prefer explicit offline
+invocation or config over relying only on the network namespace. Other
+ecosystems may begin as fail-closed classifications with diagnostics if their
+offline strategy is not ready.
 
 ### `BuildOutputIdentity`
 
 Records what was produced:
 
-- canonical CCS content identity
 - file-manifest Merkle root
 - package name, version, release, and architecture
+- origin class
+- hardening level
+- hermetic evidence hash
+- canonical CCS content identity, excluding package signatures and the
+  attestation envelope
 
 The attestation signs both input identity and output identity. Output identity is
 computed over canonical package content excluding signature and attestation
@@ -543,10 +582,12 @@ Versioned signed payload schema:
 - hardening level
 - build input identity
 - dependency lock
+- hermetic evidence hash
 - build output identity
-- build-command risk report
-- scriptlet risk report when install hooks or converted legacy metadata are
+- build-command risk report hash
+- scriptlet risk report hash when install hooks or converted legacy metadata are
   present
+- conversion-boundary hash when `origin_class = "foreign-converted"`
 - publish policy/ruleset digest
 - command-risk classifier version
 - sandbox and seccomp profile identity
@@ -590,7 +631,9 @@ It must identify the exact failed gate:
 - package signature mismatch or untrusted package signer
 - output identity mismatch
 - unaccepted signer key
+- retired signer key used for new publish authorization
 - absent or unknown provenance class
+- non-hermetic hardening level
 - network access attempted during hermetic build
 - unpinned source
 - dirty local tree in CI
@@ -606,6 +649,8 @@ It must identify the exact failed gate:
   anti-debugging indicators that require review or refusal
 - absent, unknown, or unclean build-command/scriptlet risk report
 - foreign conversion missing boundary metadata
+- foreign conversion boundary metadata hash mismatch
+- Remi transport authenticated but artifact authorization failed
 - recorded-draft artifact
 - non-reversible or disallowed install hooks
 
@@ -626,6 +671,10 @@ paths that have partial M2 support. Examples:
 - "scriptlet invokes bun in auto sandbox mode; protected sandbox required"
 - "build attestation was made under an unknown publish policy version"
 - "package signature does not verify against the target package trust policy"
+- "artifact was signed by a retired package key; rebuild or re-sign with the
+  active publish key before publishing"
+- "Remi upload authenticated, but artifact authorization failed: unaccepted
+  build-attestation signer"
 - "cargo build requires network access; vendor dependencies or provide a
   lock-compatible offline source before publish"
 - "local tree is dirty; commit changes or rerun outside CI with dirty-tree
@@ -637,17 +686,16 @@ paths that have partial M2 support. Examples:
 
 ### M2a: Hermetic Publish Foundation
 
-Implements source prefetch, source identity, local tree hashing, offline Kitchen
-execution, Conary dependency lock capture, language-ecosystem dependency policy,
-hashed-file-list local-source materialization, build-command/scriptlet risk
-classification, reproducibility controls, divergence diagnostics, and
-`hardening_level = "hermetic"`.
+Landed before this full release-surface lock-in. It implements source prefetch,
+source identity, local tree hashing, offline Kitchen execution, initial
+fail-closed dependency policy, hashed-file-list local-source materialization,
+build-command/scriptlet risk classification, reproducibility controls,
+divergence diagnostics, and `hardening_level = "hermetic"`.
 
-M2a does not enable artifact-form publish. Success means the project-form
-publish pipeline can internally produce hermetic evidence without overclaiming
-attestation. Before M2b, release publishability does not graduate; project-form
-publish either remains preview-labeled or emits local hermetic artifacts for the
-next slice to sign and gate.
+M2a does not enable artifact-form publish. The project-form publish pipeline can
+produce hermetic evidence without overclaiming attestation. Before M2b, release
+publishability does not graduate; project-form publish records M2a evidence but
+does not emit a verified build-attestation envelope.
 
 ### M2b: Attestation And Publish Gates
 
@@ -661,8 +709,9 @@ Artifact-form publish refuses artifacts whose build-command or scriptlet risk
 reports are absent, unknown, or unclean.
 
 M2b must also define the explicit accepted-signer UX for artifact-form publish
-to a brand-new static repo, such as a policy file or
-`--accept-build-signer <key-id>` flow, and how that decision is persisted.
+to a brand-new static repo as explicit `--key-dir` use. The active key in that
+directory is the accepted build-attestation signer and final package signer. M2b
+does not add a one-off accepted-signer flag.
 
 ### M2c: Foreign Package Ingestion
 
@@ -681,6 +730,7 @@ Remi push uses the same artifact gate as static artifact-form publish, plus the
 parent design's bearer-token upload authentication. M2d must add Remi trusted
 build-attestation signer configuration or storage, define empty-list behavior as
 fail-closed, and prove uploads stage privately until all artifact gates pass.
+Remi rechecks the shared gate server-side; client preflight is UX only.
 
 ## Non-Goals
 
@@ -738,6 +788,8 @@ expectations are:
 - Remi tests proving upload gate parity with static publish, including
   accepted/unaccepted build-attestation signer, package-signature failure, and
   failed-upload staging cases where no artifact becomes installable.
+- Remi tests proving TUF timestamp refresh no longer returns the current 501
+  stub after M2d starts publishing artifacts.
 - `cargo run -p conary-test -- list` when integration manifests are touched.
 - Owning package tests: `cargo test -p conary-core`, `cargo test -p conary`, and
   `cargo test -p remi` for slices that touch their owned behavior.
@@ -747,9 +799,26 @@ expectations are:
   `scripts/check-doc-audit-ledger.sh docs/superpowers/documentation-accuracy-audit-ledger.tsv --require-complete`
   and `scripts/check-doc-truth.sh`.
 
+## Review And Due Diligence Gate
+
+Before launching the remaining release surface as a `/goal`, run and archive the
+review loop against this spec and the eventual implementation plan:
+
+- Local agentic review for repository-context sanity and hidden prerequisites.
+- `scripts/agentic-plan-review.sh <spec-or-plan>` for DeepSeek Reasonix and
+  Gemini/Antigravity review when those CLIs are available.
+- Optional Claude Opus review as a generated review artifact only. The repo no
+  longer tracks active Claude-specific guidance or `.claude/` harness files.
+
+Review artifacts belong under `docs/superpowers/reviews/` or an archive
+subdirectory. Review-derived fixes must be patched into the spec or plan before
+the `/goal` starts.
+
 ## Readiness Gate
 
 M2 is ready for implementation planning when this umbrella design has completed
-review and review-derived fixes are committed. The next child plan should be M2a
-only. M2b, M2c, and M2d plans should be written after the preceding slice has
-landed or at a reviewed checkpoint, not opportunistically folded into M2a.
+review and review-derived fixes are committed. The next implementation plan
+should cover the remaining full M2 release surface: M2b, M2c, and M2d. It may be
+launched as one `/goal`, but the plan must preserve internal checkpoints for
+static attestation gates, foreign ingestion, and Remi push so each gate can be
+verified before the next one expands the trust surface.
