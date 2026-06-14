@@ -685,6 +685,8 @@ mod tests {
     use crate::recipe::hermetic::evidence::LockedRepositoryDependency;
     use crate::recipe::hermetic::{BuilderEnvironmentKind, CiMode, HermeticBuildInput};
     use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::Command;
     use std::sync::{Arc, Mutex};
     use tempfile::tempdir;
 
@@ -805,6 +807,56 @@ mod tests {
             architecture: Some("x86_64".to_string()),
             content_identity: "sha256:dependency".to_string(),
         }
+    }
+
+    fn write_shell_sysroot(sysroot: &Path) {
+        copy_tool_with_runtime_deps(Path::new("/bin/sh"), sysroot, Path::new("bin/sh"));
+    }
+
+    fn copy_tool_with_runtime_deps(tool: &Path, sysroot: &Path, target_relative: &Path) {
+        copy_host_file_into_sysroot(tool, sysroot, target_relative);
+        for dependency in ldd_paths(tool) {
+            copy_host_file_into_sysroot(
+                &dependency,
+                sysroot,
+                dependency.strip_prefix("/").unwrap(),
+            );
+        }
+    }
+
+    fn copy_host_file_into_sysroot(source: &Path, sysroot: &Path, target_relative: &Path) {
+        let destination = sysroot.join(target_relative);
+        fs::create_dir_all(destination.parent().expect("sysroot file parent")).unwrap();
+        fs::copy(source, &destination)
+            .unwrap_or_else(|error| panic!("copy {source:?} to {destination:?}: {error}"));
+        let mut permissions = fs::metadata(&destination).unwrap().permissions();
+        permissions.set_mode(fs::metadata(source).unwrap().permissions().mode() | 0o555);
+        fs::set_permissions(&destination, permissions).unwrap();
+    }
+
+    fn ldd_paths(binary: &Path) -> Vec<PathBuf> {
+        let output = Command::new("ldd")
+            .arg(binary)
+            .output()
+            .unwrap_or_else(|error| panic!("run ldd {binary:?}: {error}"));
+        if !output.status.success() {
+            return Vec::new();
+        }
+
+        let text = String::from_utf8_lossy(&output.stdout);
+        let mut paths = Vec::new();
+        for line in text.lines() {
+            for token in line.split_whitespace() {
+                let token = token.trim_end_matches(':');
+                if token.starts_with('/') {
+                    let path = PathBuf::from(token);
+                    if path.exists() && !paths.contains(&path) {
+                        paths.push(path);
+                    }
+                }
+            }
+        }
+        paths
     }
 
     #[test]
@@ -1012,7 +1064,7 @@ mod tests {
         let output_dir = dir.path().join("out");
         let sysroot = dir.path().join("sysroot");
         fs::create_dir_all(source_root.join("src")).unwrap();
-        fs::create_dir_all(&sysroot).unwrap();
+        write_shell_sysroot(&sysroot);
         fs::write(
             source_root.join("Cargo.toml"),
             "[package]\nname = \"hermetic-local\"\nversion = \"1.0.0\"\nedition = \"2021\"\n",
@@ -1064,7 +1116,7 @@ mod tests {
         let output_dir = dir.path().join("out");
         let sysroot = dir.path().join("sysroot");
         fs::create_dir_all(source_root.join("src")).unwrap();
-        fs::create_dir_all(&sysroot).unwrap();
+        write_shell_sysroot(&sysroot);
         fs::write(
             source_root.join("Cargo.toml"),
             "[package]\nname = \"hermetic-local\"\nversion = \"1.0.0\"\nedition = \"2021\"\n",

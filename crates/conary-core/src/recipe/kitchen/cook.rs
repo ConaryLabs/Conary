@@ -576,12 +576,21 @@ impl<'a> Cook<'a> {
             // Pristine mode: no host system mounts
             // This is critical for bootstrap builds to avoid toolchain contamination
             let config = if let Some(sysroot) = &self.kitchen.config.sysroot {
-                ContainerConfig::pristine_for_bootstrap(
-                    sysroot,
-                    &self.source_dir,
-                    self.build_dir.as_path(),
-                    &self.dest_dir,
-                )
+                if self.kitchen.config.hermetic_evidence.is_some() {
+                    ContainerConfig::hermetic_for_sysroot(
+                        sysroot,
+                        &self.source_dir,
+                        self.build_dir.as_path(),
+                        &self.dest_dir,
+                    )
+                } else {
+                    ContainerConfig::pristine_for_bootstrap(
+                        sysroot,
+                        &self.source_dir,
+                        self.build_dir.as_path(),
+                        &self.dest_dir,
+                    )
+                }
             } else {
                 ContainerConfig::pristine()
             };

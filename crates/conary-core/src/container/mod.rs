@@ -299,18 +299,7 @@ impl ContainerConfig {
             }
         }
 
-        // /tmp is needed for configure scripts and intermediate files, but a
-        // pristine bootstrap container must not share the host /tmp.
-        let private_tmp =
-            Arc::new(TempDir::new().expect("failed to create private bootstrap tmpdir"));
-        let mut perms = fs::metadata(private_tmp.path())
-            .expect("failed to stat private bootstrap tmpdir")
-            .permissions();
-        perms.set_mode(0o1777);
-        fs::set_permissions(private_tmp.path(), perms)
-            .expect("failed to chmod private bootstrap tmpdir");
-        config.add_bind_mount(BindMount::writable(private_tmp.path(), "/tmp"));
-        config.owned_temp_dirs.push(private_tmp);
+        add_private_tmp_mount(&mut config);
 
         // Mount the toolchain sysroot (read-only)
         config.add_bind_mount(BindMount::readonly(sysroot, sysroot));
@@ -330,6 +319,48 @@ impl ContainerConfig {
         config.add_bind_mount(BindMount::writable(dest_dir, dest_dir));
 
         // Set working directory to build directory
+        config.workdir = build_dir.to_path_buf();
+
+        config
+    }
+
+    /// Create a hermetic build config backed only by a configured sysroot.
+    ///
+    /// Unlike `pristine_for_bootstrap`, this does not bind host system tool
+    /// directories. Standard tool paths inside the sandbox are backed by the
+    /// operator-supplied sysroot so M2a hermetic evidence can honestly claim
+    /// no host system mounts.
+    pub fn hermetic_for_sysroot(
+        sysroot: &Path,
+        source_dir: &Path,
+        build_dir: &Path,
+        dest_dir: &Path,
+    ) -> Self {
+        let mut config = Self::pristine();
+
+        add_private_tmp_mount(&mut config);
+
+        config.add_bind_mount(BindMount::readonly(sysroot, sysroot));
+        if sysroot != Path::new("/tools") {
+            config.add_bind_mount(BindMount::readonly(sysroot, "/tools"));
+        }
+
+        for (source, target) in [
+            ("bin", "/bin"),
+            ("sbin", "/sbin"),
+            ("usr/bin", "/usr/bin"),
+            ("usr/sbin", "/usr/sbin"),
+            ("lib", "/lib"),
+            ("lib64", "/lib64"),
+            ("usr/lib", "/usr/lib"),
+            ("usr/lib64", "/usr/lib64"),
+        ] {
+            config.add_bind_mount(BindMount::readonly(sysroot.join(source), target));
+        }
+
+        config.add_bind_mount(BindMount::readonly(source_dir, source_dir));
+        config.add_bind_mount(BindMount::writable(build_dir, build_dir));
+        config.add_bind_mount(BindMount::writable(dest_dir, dest_dir));
         config.workdir = build_dir.to_path_buf();
 
         config
@@ -454,6 +485,17 @@ fn default_bind_mounts() -> Vec<BindMount> {
         BindMount::readonly("/etc/group", "/etc/group"),
         BindMount::readonly("/etc/hosts", "/etc/hosts"),
     ]
+}
+
+fn add_private_tmp_mount(config: &mut ContainerConfig) {
+    let private_tmp = Arc::new(TempDir::new().expect("failed to create private sandbox tmpdir"));
+    let mut perms = fs::metadata(private_tmp.path())
+        .expect("failed to stat private sandbox tmpdir")
+        .permissions();
+    perms.set_mode(0o1777);
+    fs::set_permissions(private_tmp.path(), perms).expect("failed to chmod private sandbox tmpdir");
+    config.add_bind_mount(BindMount::writable(private_tmp.path(), "/tmp"));
+    config.owned_temp_dirs.push(private_tmp);
 }
 
 /// Write script content to a file and set it executable (mode 0o700).
@@ -1599,6 +1641,64 @@ mod tests {
             .expect("bootstrap config should mount a private /tmp");
         assert_ne!(tmp_mount.source, PathBuf::from("/tmp"));
         assert_eq!(config.owned_temp_dirs.len(), 1);
+    }
+
+    #[test]
+    fn test_hermetic_for_sysroot_uses_only_configured_sysroot_for_system_paths() {
+        let config = ContainerConfig::hermetic_for_sysroot(
+            Path::new("/work/sysroot"),
+            Path::new("/work/src/pkg"),
+            Path::new("/work/build/pkg"),
+            Path::new("/work/dest"),
+        );
+
+        assert!(config.is_pristine());
+        assert_eq!(config.workdir, PathBuf::from("/work/build/pkg"));
+
+        let mount_pairs: Vec<_> = config
+            .bind_mounts
+            .iter()
+            .map(|mount| {
+                (
+                    mount.source.to_string_lossy().to_string(),
+                    mount.target.to_string_lossy().to_string(),
+                )
+            })
+            .collect();
+
+        for host_path in [
+            "/usr",
+            "/usr/bin",
+            "/usr/lib",
+            "/usr/lib64",
+            "/lib",
+            "/lib64",
+            "/bin",
+            "/sbin",
+        ] {
+            assert!(
+                !mount_pairs
+                    .iter()
+                    .any(|(source, target)| source == host_path && target == host_path),
+                "hermetic config must not bind host {host_path}"
+            );
+        }
+
+        assert!(
+            mount_pairs.contains(&("/work/sysroot/usr/bin".to_string(), "/usr/bin".to_string()))
+        );
+        assert!(mount_pairs.contains(&("/work/sysroot/bin".to_string(), "/bin".to_string())));
+        assert!(mount_pairs.contains(&("/work/sysroot/lib64".to_string(), "/lib64".to_string())));
+        assert!(
+            mount_pairs.contains(&("/work/sysroot/usr/lib".to_string(), "/usr/lib".to_string()))
+        );
+
+        let tmp_mount = config
+            .bind_mounts
+            .iter()
+            .find(|mount| mount.target == Path::new("/tmp"))
+            .expect("hermetic config should mount a private /tmp");
+        assert_ne!(tmp_mount.source, PathBuf::from("/tmp"));
     }
 
     #[test]
