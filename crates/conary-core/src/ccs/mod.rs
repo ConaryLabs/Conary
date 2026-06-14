@@ -23,6 +23,7 @@ pub mod legacy_replay;
 pub mod legacy_scriptlets;
 pub mod lockfile;
 pub mod manifest;
+pub mod manifest_provenance;
 pub mod package;
 pub mod policy;
 pub mod signing;
