@@ -2311,6 +2311,35 @@ mod tests {
     }
 
     #[test]
+    fn test_simmer_rejects_shell_startup_env_in_hermetic_mode() {
+        let cases = [("SHELLOPTS", "keyword"), ("BASHOPTS", "expand_aliases")];
+
+        for (key, value) in cases {
+            let kitchen = Kitchen::new(KitchenConfig {
+                hermetic_evidence: Some(dummy_hermetic_evidence()),
+                reproducibility: Some(ReproducibilityConfig::default()),
+                pristine_mode: true,
+                use_isolation: false,
+                ..KitchenConfig::default()
+            });
+            let mut recipe = minimal_recipe();
+            recipe
+                .build
+                .environment
+                .insert(key.to_string(), value.to_string());
+            recipe.build.make = Some("make SOURCE_DATE_EPOCH=999".to_string());
+            let mut cook = Cook::new(&kitchen, &recipe).unwrap();
+
+            let error = cook.simmer().unwrap_err();
+
+            assert!(
+                error.to_string().contains(key),
+                "expected {key} rejection, got: {error}"
+            );
+        }
+    }
+
+    #[test]
     fn test_hermetic_command_validation_rejects_shell_env_mutation_forms() {
         let config = ReproducibilityConfig::new(0, Path::new("/src"), Path::new("/build"));
         let cases = [
