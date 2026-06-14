@@ -410,11 +410,13 @@ fn shell_wrapper_operand<'a>(
     wrapper: &str,
     option: &str,
 ) -> Result<&'a str> {
-    tokens.get(index + 1).map(String::as_str).ok_or_else(|| {
+    let operand = tokens.get(index + 1).map(String::as_str).ok_or_else(|| {
         Error::ConfigError(format!(
             "hermetic reproducibility rejects {wrapper} {option} without an operand in {phase} phase"
         ))
-    })
+    })?;
+    validate_no_shell_expansion(phase, operand, &format!("{wrapper} {option} operand"))?;
+    Ok(operand)
 }
 
 fn validate_export_env_mutations(
@@ -761,10 +763,11 @@ fn validate_env_option(phase: &str, tokens: &[String], index: usize) -> Result<O
             env_option_operand(phase, tokens, index, token)?;
             return Ok(Some(index + 2));
         }
-        if token
+        if let Some(operand) = token
             .strip_prefix(option)
-            .is_some_and(|rest| rest.starts_with('='))
+            .and_then(|rest| rest.strip_prefix('='))
         {
+            validate_no_shell_expansion(phase, operand, token)?;
             return Ok(Some(index + 1));
         }
     }
@@ -819,11 +822,13 @@ fn env_option_operand<'a>(
     index: usize,
     option: &str,
 ) -> Result<&'a str> {
-    tokens.get(index + 1).map(String::as_str).ok_or_else(|| {
+    let operand = tokens.get(index + 1).map(String::as_str).ok_or_else(|| {
         Error::ConfigError(format!(
             "hermetic reproducibility rejects env {option} without an operand in {phase} phase"
         ))
-    })
+    })?;
+    validate_no_shell_expansion(phase, operand, &format!("env {option} operand"))?;
+    Ok(operand)
 }
 
 fn validate_env_unset_key(phase: &str, key: &str) -> Result<()> {
@@ -2584,6 +2589,30 @@ mod tests {
             ("ma\"\"ke SOURCE_DATE_EPOCH=777", "shell expansion"),
             ("env SOURCE_DATE_EPOCH\\=999 make", "shell expansion"),
             ("MAKEFLAGS=SOURCE_DATE_EPOCH\\=999 make", "MAKEFLAGS"),
+            (
+                "ARGS=x,SOURCE_DATE_EPOCH=999; IFS=,; env -a $ARGS make -s",
+                "shell expansion",
+            ),
+            (
+                "ARGS=x,SOURCE_DATE_EPOCH=999; IFS=,; env --argv0 $ARGS make -s",
+                "shell expansion",
+            ),
+            (
+                "ARGS=dir,SOURCE_DATE_EPOCH=999; IFS=,; env -C $ARGS make -s",
+                "shell expansion",
+            ),
+            (
+                "ARGS=x,env,SOURCE_DATE_EPOCH=999; IFS=,; exec -a $ARGS make -s",
+                "shell expansion",
+            ),
+            (
+                "ARGS=x,SOURCE_DATE_EPOCH=999; IFS=,; env --argv0=$ARGS make -s",
+                "shell expansion",
+            ),
+            (
+                "ARGS=dir,SOURCE_DATE_EPOCH=999; IFS=,; env --chdir=$ARGS make -s",
+                "shell expansion",
+            ),
             (
                 "command env SOURCE_DATE_EPOCH=999 make",
                 "SOURCE_DATE_EPOCH",
