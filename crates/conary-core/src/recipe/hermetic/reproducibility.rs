@@ -8,7 +8,22 @@ const SOURCE_DATE_EPOCH: &str = "SOURCE_DATE_EPOCH";
 const RUSTFLAGS: &str = "RUSTFLAGS";
 const CFLAGS: &str = "CFLAGS";
 const CXXFLAGS: &str = "CXXFLAGS";
+const SHELLOPTS: &str = "SHELLOPTS";
+const BASHOPTS: &str = "BASHOPTS";
+const BASH_ENV: &str = "BASH_ENV";
+const ENV: &str = "ENV";
 const PATH_REMAP_COUNT: usize = 2;
+const CONTROLLED_ENV_KEYS: &[&str] = &[
+    SOURCE_DATE_EPOCH,
+    RUSTFLAGS,
+    CFLAGS,
+    CXXFLAGS,
+    SHELLOPTS,
+    BASHOPTS,
+    BASH_ENV,
+    ENV,
+];
+const SHELL_STARTUP_ENV_KEYS: &[&str] = &[SHELLOPTS, BASHOPTS, BASH_ENV, ENV];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReproducibilityConfig {
@@ -57,6 +72,7 @@ impl ReproducibilityConfig {
     }
 
     pub fn merge_env(&self, recipe_env: Vec<(String, String)>) -> Result<Vec<(String, String)>> {
+        validate_no_shell_startup_env(&recipe_env)?;
         if recipe_env.iter().any(|(key, _)| key == SOURCE_DATE_EPOCH) {
             return Err(Error::ConfigError(
                 "hermetic reproducibility controls SOURCE_DATE_EPOCH; recipe or extra environment cannot override it"
@@ -76,6 +92,8 @@ impl ReproducibilityConfig {
     }
 
     pub fn validate_final_env(&self, env: &[(String, String)]) -> Result<()> {
+        validate_no_shell_startup_env(env)?;
+
         let expected_epoch = self.source_date_epoch.to_string();
         match effective_env_value(env, SOURCE_DATE_EPOCH) {
             Some(value) if value == expected_epoch => {}
@@ -109,12 +127,13 @@ impl ReproducibilityConfig {
     }
 
     pub(crate) fn controlled_env_keys() -> &'static [&'static str] {
-        &[SOURCE_DATE_EPOCH, RUSTFLAGS, CFLAGS, CXXFLAGS]
+        CONTROLLED_ENV_KEYS
     }
 
     pub(crate) fn command_local_assignment_allowed(&self, key: &str, value: &str) -> bool {
         match key {
             SOURCE_DATE_EPOCH => false,
+            SHELLOPTS | BASHOPTS | BASH_ENV | ENV => false,
             RUSTFLAGS => self
                 .rust_remaps()
                 .iter()
@@ -183,6 +202,17 @@ impl ReproducibilityConfig {
             format!("-ffile-prefix-map={}=/build", self.build_root.display()),
         ]
     }
+}
+
+fn validate_no_shell_startup_env(env: &[(String, String)]) -> Result<()> {
+    for (key, _) in env {
+        if SHELL_STARTUP_ENV_KEYS.contains(&key.as_str()) {
+            return Err(Error::ConfigError(format!(
+                "hermetic reproducibility rejects shell startup environment variable {key}; recipe or extra environment cannot set it"
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn effective_env_value<'a>(env: &'a [(String, String)], key: &str) -> Option<&'a str> {
@@ -274,6 +304,46 @@ mod tests {
             .unwrap_err();
 
         assert!(error.to_string().contains("SOURCE_DATE_EPOCH"));
+    }
+
+    #[test]
+    fn merge_env_rejects_shell_startup_environment_controls() {
+        let config = ReproducibilityConfig::new(123, Path::new("/src"), Path::new("/build"));
+        let cases = [
+            ("SHELLOPTS", "keyword"),
+            ("BASHOPTS", "expand_aliases"),
+            ("BASH_ENV", "/tmp/env.sh"),
+            ("ENV", "/tmp/env.sh"),
+        ];
+
+        for (key, value) in cases {
+            let error = config
+                .merge_env(vec![(key.to_string(), value.to_string())])
+                .unwrap_err();
+
+            assert!(
+                error.to_string().contains(key),
+                "expected {key} rejection, got: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn hermetic_env_validation_rejects_shell_startup_environment_controls() {
+        let config = ReproducibilityConfig::new(123, Path::new("/src"), Path::new("/build"));
+        let cases = [("SHELLOPTS", "keyword"), ("BASHOPTS", "expand_aliases")];
+
+        for (key, value) in cases {
+            let mut env = config.env_vars();
+            env.push((key.to_string(), value.to_string()));
+
+            let error = config.validate_final_env(&env).unwrap_err();
+
+            assert!(
+                error.to_string().contains(key),
+                "expected {key} rejection, got: {error}"
+            );
+        }
     }
 
     #[test]
