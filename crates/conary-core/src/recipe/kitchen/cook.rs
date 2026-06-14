@@ -179,6 +179,13 @@ fn validate_shell_env_mutation_segment(
                 return validate_export_env_mutations(config, phase, &tokens[index + 1..]);
             }
             "read" => return validate_read_env_mutations(phase, &tokens[index + 1..]),
+            "mapfile" | "readarray" => {
+                return validate_mapfile_env_mutations(
+                    phase,
+                    command_basename(command_token),
+                    &tokens[index + 1..],
+                );
+            }
             "printf" => return validate_printf_env_mutations(phase, &tokens[index + 1..]),
             "let" => return validate_let_env_mutations(phase, &tokens[index + 1..]),
             "getopts" => return validate_getopts_env_mutations(phase, &tokens[index + 1..]),
@@ -217,6 +224,11 @@ fn validate_leading_shell_assignments(
     mut index: usize,
 ) -> Result<usize> {
     while let Some(token) = tokens.get(index) {
+        if let Some(key) = shell_append_assignment(token) {
+            validate_shell_append_assignment(phase, &key)?;
+            index += 1;
+            continue;
+        }
         let Some((key, value)) = shell_assignment(token) else {
             break;
         };
@@ -393,6 +405,10 @@ fn validate_export_env_mutations(
         if token.starts_with('-') {
             continue;
         }
+        if let Some(key) = shell_append_assignment(token) {
+            validate_shell_append_assignment(phase, &key)?;
+            continue;
+        }
         if let Some((key, value)) = shell_assignment(token) {
             validate_shell_assignment(config, phase, &key, &value)?;
             continue;
@@ -449,11 +465,56 @@ fn validate_read_env_mutations(phase: &str, tokens: &[String]) -> Result<()> {
 
     for token in &tokens[index..] {
         if token.starts_with('<') {
-            break;
+            return Err(Error::ConfigError(format!(
+                "hermetic reproducibility does not support read redirection in {phase} phase"
+            )));
         }
         if is_controlled_reproducibility_key(token) {
             return Err(command_local_env_error(phase, token));
         }
+    }
+    Ok(())
+}
+
+fn validate_mapfile_env_mutations(phase: &str, builtin: &str, tokens: &[String]) -> Result<()> {
+    let mut index = 0;
+    while let Some(token) = tokens.get(index).map(String::as_str) {
+        if token == "--" {
+            index += 1;
+            break;
+        }
+        if token.starts_with('<') {
+            return Err(Error::ConfigError(format!(
+                "hermetic reproducibility does not support {builtin} redirection in {phase} phase"
+            )));
+        }
+        if !token.starts_with('-') {
+            break;
+        }
+        match token {
+            "-t" => index += 1,
+            "-C" | "-c" | "-d" | "-n" | "-O" | "-s" | "-u" => {
+                shell_wrapper_operand(phase, tokens, index, builtin, token)?;
+                index += 2;
+            }
+            _ => {
+                return Err(Error::ConfigError(format!(
+                    "hermetic reproducibility does not support {builtin} option {token} in {phase} phase"
+                )));
+            }
+        }
+    }
+
+    let Some(key) = tokens.get(index).map(String::as_str) else {
+        return Ok(());
+    };
+    if key.starts_with('<') {
+        return Err(Error::ConfigError(format!(
+            "hermetic reproducibility does not support {builtin} redirection in {phase} phase"
+        )));
+    }
+    if is_controlled_reproducibility_key(key) {
+        return Err(command_local_env_error(phase, key));
     }
     Ok(())
 }
@@ -519,6 +580,11 @@ fn validate_env_wrapper_mutations(
             continue;
         }
 
+        if let Some(key) = shell_append_assignment(token) {
+            validate_shell_append_assignment(phase, &key)?;
+            index += 1;
+            continue;
+        }
         let Some((key, value)) = shell_assignment(token) else {
             break;
         };
@@ -666,6 +732,13 @@ fn validate_shell_assignment(
     Err(command_local_env_error(phase, key))
 }
 
+fn validate_shell_append_assignment(phase: &str, key: &str) -> Result<()> {
+    if is_controlled_reproducibility_key(key) {
+        return Err(command_local_env_error(phase, key));
+    }
+    Ok(())
+}
+
 fn command_local_env_error(phase: &str, key: &str) -> Error {
     Error::ConfigError(format!(
         "hermetic reproducibility rejects command-local {key} assignment in {phase} phase"
@@ -717,6 +790,14 @@ fn shell_assignment(token: &str) -> Option<(String, String)> {
         return None;
     }
     Some((key.to_string(), value.to_string()))
+}
+
+fn shell_append_assignment(token: &str) -> Option<String> {
+    let (key, _) = token.split_once("+=")?;
+    if key.is_empty() || key.starts_with('/') || !is_shell_env_name(key) {
+        return None;
+    }
+    Some(key.to_string())
 }
 
 fn is_shell_env_name(name: &str) -> bool {
@@ -2214,12 +2295,20 @@ mod tests {
                 "builtin export SOURCE_DATE_EPOCH=999; make",
                 "SOURCE_DATE_EPOCH",
             ),
+            ("SOURCE_DATE_EPOCH+=999 env", "SOURCE_DATE_EPOCH"),
+            ("export SOURCE_DATE_EPOCH+=999; make", "SOURCE_DATE_EPOCH"),
             ("declare SOURCE_DATE_EPOCH=999; make", "SOURCE_DATE_EPOCH"),
+            ("declare SOURCE_DATE_EPOCH+=999; make", "SOURCE_DATE_EPOCH"),
             ("typeset CFLAGS=bad; make", "CFLAGS"),
+            ("typeset CFLAGS+=bad; make", "CFLAGS"),
+            ("readonly SOURCE_DATE_EPOCH+=999; make", "SOURCE_DATE_EPOCH"),
             (
                 "read SOURCE_DATE_EPOCH <<EOF\n999\nEOF\nmake",
                 "SOURCE_DATE_EPOCH",
             ),
+            ("read < file SOURCE_DATE_EPOCH; make", "read redirection"),
+            ("mapfile SOURCE_DATE_EPOCH; make", "SOURCE_DATE_EPOCH"),
+            ("readarray CFLAGS; make", "CFLAGS"),
             ("printf -v SOURCE_DATE_EPOCH 999; make", "SOURCE_DATE_EPOCH"),
             ("let SOURCE_DATE_EPOCH=999; make", "SOURCE_DATE_EPOCH"),
             ("getopts ab SOURCE_DATE_EPOCH; make", "SOURCE_DATE_EPOCH"),
@@ -2396,6 +2485,27 @@ mod tests {
     }
 
     #[test]
+    fn test_shell_env_scanner_rejects_append_assignments() {
+        let config = ReproducibilityConfig::new(0, Path::new("/src"), Path::new("/build"));
+        let cases = [
+            ("SOURCE_DATE_EPOCH+=999 env", "SOURCE_DATE_EPOCH"),
+            ("export SOURCE_DATE_EPOCH+=999", "SOURCE_DATE_EPOCH"),
+            ("declare SOURCE_DATE_EPOCH+=999", "SOURCE_DATE_EPOCH"),
+            ("typeset CFLAGS+=bad", "CFLAGS"),
+            ("readonly SOURCE_DATE_EPOCH+=999", "SOURCE_DATE_EPOCH"),
+        ];
+
+        for (segment, expected) in cases {
+            let error = validate_shell_env_mutation_segment(&config, "make", segment).unwrap_err();
+
+            assert!(
+                error.to_string().contains(expected),
+                "expected {expected} rejection for {segment}, got: {error}"
+            );
+        }
+    }
+
+    #[test]
     fn test_shell_env_scanner_rejects_assignment_capable_builtins() {
         let config = ReproducibilityConfig::new(0, Path::new("/src"), Path::new("/build"));
         let cases = [
@@ -2410,6 +2520,9 @@ mod tests {
             ("typeset CFLAGS=bad", "CFLAGS"),
             ("read -r SOURCE_DATE_EPOCH", "SOURCE_DATE_EPOCH"),
             ("read -a SOURCE_DATE_EPOCH", "SOURCE_DATE_EPOCH"),
+            ("read < file SOURCE_DATE_EPOCH", "read redirection"),
+            ("mapfile SOURCE_DATE_EPOCH", "SOURCE_DATE_EPOCH"),
+            ("readarray CFLAGS", "CFLAGS"),
             ("printf -v SOURCE_DATE_EPOCH 999", "SOURCE_DATE_EPOCH"),
             ("let SOURCE_DATE_EPOCH=999", "SOURCE_DATE_EPOCH"),
             ("let count=SOURCE_DATE_EPOCH+1", "SOURCE_DATE_EPOCH"),
