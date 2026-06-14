@@ -175,7 +175,7 @@ fn validate_shell_env_mutation_segment(
             "export" | "readonly" => {
                 return validate_export_env_mutations(config, phase, &tokens[index + 1..]);
             }
-            "declare" | "typeset" => {
+            "declare" | "typeset" | "local" => {
                 return validate_declare_env_mutations(
                     config,
                     phase,
@@ -306,7 +306,7 @@ fn peel_shell_control_word(phase: &str, tokens: &[String], index: usize) -> Resu
             Ok(Some(index + 1))
         }
         "time" => Ok(Some(peel_time_control_word(phase, tokens, index)?)),
-        "for" | "case" | "select" => Err(Error::ConfigError(format!(
+        "for" | "case" | "select" | "function" => Err(Error::ConfigError(format!(
             "hermetic reproducibility does not support shell control word {token} in {phase} phase"
         ))),
         _ => Ok(None),
@@ -2373,6 +2373,18 @@ mod tests {
             ("typeset CFLAGS=bad; make", "CFLAGS"),
             ("typeset CFLAGS+=bad; make", "CFLAGS"),
             ("typeset -n ref=RUSTFLAGS; ref=bad; make", "nameref"),
+            (
+                "f(){ local SOURCE_DATE_EPOCH=999; make; }; f",
+                "SOURCE_DATE_EPOCH",
+            ),
+            (
+                "function f { local -n ref=RUSTFLAGS; ref=bad; make; }; f",
+                "function",
+            ),
+            (
+                "f(){ local SOURCE_DATE_EPOCH[0]=999; make; }; f",
+                "SOURCE_DATE_EPOCH",
+            ),
             ("readonly SOURCE_DATE_EPOCH+=999; make", "SOURCE_DATE_EPOCH"),
             (
                 "declare SOURCE_DATE_EPOCH[0]=999; make",
@@ -2611,6 +2623,10 @@ mod tests {
             ("declare -n ref=SOURCE_DATE_EPOCH; ref+=999", "nameref"),
             ("typeset CFLAGS=bad", "CFLAGS"),
             ("typeset -n ref=RUSTFLAGS", "nameref"),
+            ("local SOURCE_DATE_EPOCH=999", "SOURCE_DATE_EPOCH"),
+            ("local -n ref=RUSTFLAGS", "nameref"),
+            ("local SOURCE_DATE_EPOCH[0]=999", "SOURCE_DATE_EPOCH"),
+            ("function f { local SOURCE_DATE_EPOCH=999", "function"),
             ("declare SOURCE_DATE_EPOCH[0]=999", "SOURCE_DATE_EPOCH"),
             ("typeset CFLAGS[0]=bad", "CFLAGS"),
             ("read -r SOURCE_DATE_EPOCH", "SOURCE_DATE_EPOCH"),
