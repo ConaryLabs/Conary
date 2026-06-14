@@ -390,6 +390,18 @@ fn validate_env_wrapper_mutations(
         validate_shell_assignment(config, phase, &key, &value)?;
         index += 1;
     }
+
+    let Some(command_token) = tokens.get(index).map(String::as_str) else {
+        return Ok(());
+    };
+    let command = command_basename(command_token);
+    if command == "env" {
+        return validate_env_wrapper_mutations(config, phase, &tokens[index + 1..]);
+    }
+    if is_shell_interpreter_command(command) {
+        return validate_shell_interpreter_invocation(phase, command, &tokens[index + 1..]);
+    }
+
     Ok(())
 }
 
@@ -2020,6 +2032,16 @@ mod tests {
             ("sh -c 'SOURCE_DATE_EPOCH=999 make'", "-c"),
             ("/bin/sh -c 'env -u SOURCE_DATE_EPOCH make'", "-c"),
             ("bash -ec 'SOURCE_DATE_EPOCH=999 make'", "-ec"),
+            ("env sh -c 'SOURCE_DATE_EPOCH=999 make'", "-c"),
+            (
+                "/usr/bin/env /bin/sh -c 'env -u SOURCE_DATE_EPOCH make'",
+                "-c",
+            ),
+            ("env env SOURCE_DATE_EPOCH=999 make", "SOURCE_DATE_EPOCH"),
+            (
+                "/usr/bin/env /usr/bin/env -u SOURCE_DATE_EPOCH make",
+                "SOURCE_DATE_EPOCH",
+            ),
             (
                 "export RUSTFLAGS=--remap-path-prefix=/src=/build/source-old; make",
                 "RUSTFLAGS",
@@ -2032,6 +2054,55 @@ mod tests {
             assert!(
                 error.to_string().contains(key),
                 "expected {key} rejection for {command}, got: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_env_wrapper_scanner_validates_nested_env_command() {
+        let config = ReproducibilityConfig::new(0, Path::new("/src"), Path::new("/build"));
+        let cases = [
+            (
+                vec![
+                    "sh".to_string(),
+                    "-c".to_string(),
+                    "SOURCE_DATE_EPOCH=999 make".to_string(),
+                ],
+                "-c",
+            ),
+            (
+                vec![
+                    "/bin/sh".to_string(),
+                    "-c".to_string(),
+                    "env -u SOURCE_DATE_EPOCH make".to_string(),
+                ],
+                "-c",
+            ),
+            (
+                vec![
+                    "env".to_string(),
+                    "SOURCE_DATE_EPOCH=999".to_string(),
+                    "make".to_string(),
+                ],
+                "SOURCE_DATE_EPOCH",
+            ),
+            (
+                vec![
+                    "/usr/bin/env".to_string(),
+                    "-u".to_string(),
+                    "SOURCE_DATE_EPOCH".to_string(),
+                    "make".to_string(),
+                ],
+                "SOURCE_DATE_EPOCH",
+            ),
+        ];
+
+        for (tokens, expected) in cases {
+            let error = validate_env_wrapper_mutations(&config, "make", &tokens).unwrap_err();
+
+            assert!(
+                error.to_string().contains(expected),
+                "expected {expected} rejection, got: {error}"
             );
         }
     }
