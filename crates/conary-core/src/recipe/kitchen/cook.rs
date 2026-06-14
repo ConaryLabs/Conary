@@ -3,10 +3,12 @@
 //! Cook: the actual build execution for a single recipe
 
 use crate::ccs::builder::{CcsBuilder, write_ccs_package};
+use crate::ccs::convert::command_evidence::extract_invocations_from_shell_text;
 use crate::ccs::manifest::{CcsManifest, ManifestProvenance, PackageDep};
 use crate::container::{BindMount, ContainerConfig, Sandbox};
 use crate::error::{Error, Result};
 use crate::recipe::format::{Recipe, SourceSection, is_remote_url};
+use crate::recipe::hermetic::ReproducibilityConfig;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
@@ -25,22 +27,20 @@ fn is_dangerous_build_env_var(key: &str) -> bool {
     DANGEROUS_BUILD_ENV_VARS.contains(&key)
 }
 
-fn filtered_build_env<'a>(
-    env: &'a [(&'a str, String)],
-) -> impl Iterator<Item = (&'a str, &'a str)> {
+fn filtered_build_env(env: &[(String, String)]) -> impl Iterator<Item = (&str, &str)> {
     env.iter()
         .filter(|(key, _)| !is_dangerous_build_env_var(key))
-        .map(|(key, value)| (*key, value.as_str()))
+        .map(|(key, value)| (key.as_str(), value.as_str()))
 }
 
-fn apply_direct_build_env(cmd: &mut Command, env: &[(&str, String)]) {
+fn apply_direct_build_env(cmd: &mut Command, env: &[(String, String)]) {
     cmd.env_clear()
         .env("HOME", "/root")
         .env("TERM", "xterm")
         .env("LC_ALL", "C")
         .env("SHELL", "/bin/sh");
 
-    if !env.iter().any(|(key, _)| *key == "PATH") {
+    if !env.iter().any(|(key, _)| key == "PATH") {
         cmd.env("PATH", "/usr/bin:/usr/sbin:/bin:/sbin:/tools/bin");
     }
 
@@ -49,7 +49,7 @@ fn apply_direct_build_env(cmd: &mut Command, env: &[(&str, String)]) {
     }
 }
 
-fn chroot_env_args(env: &[(&str, String)], jobs: u32) -> Vec<String> {
+fn chroot_env_args(env: &[(String, String)], jobs: u32) -> Vec<String> {
     let mut env_args = vec!["env".to_string(), "-i".to_string()];
     for (key, value) in filtered_build_env(env) {
         env_args.push(format!("{key}={value}"));
@@ -69,10 +69,7 @@ fn translate_path_for_chroot(path: &Path, sysroot: &Path) -> PathBuf {
     }
 }
 
-fn translate_env_for_chroot<'a>(
-    env: &'a [(&'a str, String)],
-    sysroot: &Path,
-) -> Vec<(&'a str, String)> {
+fn translate_env_for_chroot(env: &[(String, String)], sysroot: &Path) -> Vec<(String, String)> {
     env.iter()
         .map(|(key, value)| {
             let translated = if Path::new(value).is_absolute() {
@@ -82,7 +79,7 @@ fn translate_env_for_chroot<'a>(
             } else {
                 value.clone()
             };
-            (*key, translated)
+            (key.clone(), translated)
         })
         .collect()
 }
@@ -94,6 +91,49 @@ fn translate_command_for_chroot(command: &str, sysroot: &Path) -> String {
         return command.to_string();
     }
     command.replace(prefix, "")
+}
+
+fn configure_provenance_from_kitchen(
+    kitchen: &Kitchen,
+    provenance: &mut ProvenanceCapture,
+) -> Result<()> {
+    provenance.origin_class = kitchen.config.origin_class_override.clone();
+    provenance.source_provenance = kitchen.config.source_provenance_override.clone();
+
+    if let Some(evidence) = &kitchen.config.hermetic_evidence {
+        if !kitchen.config.pristine_mode {
+            return Err(Error::ConfigError(
+                "hermetic evidence requires pristine mode before build execution".to_string(),
+            ));
+        }
+        provenance.hermetic_evidence = Some(evidence.clone());
+        provenance.hardening_level_override = Some("hermetic".to_string());
+    }
+
+    Ok(())
+}
+
+fn validate_command_local_reproducibility_env(
+    config: &ReproducibilityConfig,
+    phase: &str,
+    command: &str,
+) -> Result<()> {
+    for invocation in extract_invocations_from_shell_text(phase, command, Some(phase)) {
+        for fact in invocation.environment {
+            if !ReproducibilityConfig::controlled_env_keys().contains(&fact.name.as_str()) {
+                continue;
+            }
+            let value = fact.value.as_deref().unwrap_or_default();
+            if !config.command_local_assignment_allowed(&fact.name, value) {
+                return Err(Error::ConfigError(format!(
+                    "hermetic reproducibility rejects command-local {} assignment in {} phase",
+                    fact.name, phase
+                )));
+            }
+        }
+    }
+
+    Ok(())
 }
 
 /// A single cook operation
@@ -129,8 +169,7 @@ impl<'a> Cook<'a> {
         fs::create_dir_all(&dest_dir)?;
 
         let mut provenance = ProvenanceCapture::new();
-        provenance.origin_class = kitchen.config.origin_class_override.clone();
-        provenance.source_provenance = kitchen.config.source_provenance_override.clone();
+        configure_provenance_from_kitchen(kitchen, &mut provenance)?;
 
         // Record build dependencies from recipe
         for dep in &recipe.build.makedepends {
@@ -181,8 +220,7 @@ impl<'a> Cook<'a> {
         fs::create_dir_all(dest_dir)?;
 
         let mut provenance = ProvenanceCapture::new();
-        provenance.origin_class = kitchen.config.origin_class_override.clone();
-        provenance.source_provenance = kitchen.config.source_provenance_override.clone();
+        configure_provenance_from_kitchen(kitchen, &mut provenance)?;
         for dep in &recipe.build.makedepends {
             provenance.add_build_dep(dep, "unknown", None);
         }
@@ -451,10 +489,13 @@ impl<'a> Cook<'a> {
         };
 
         // Set up environment
-        let mut env: Vec<(&str, String)> = vec![
-            ("DESTDIR", self.dest_dir.to_string_lossy().to_string()),
+        let mut env: Vec<(String, String)> = vec![
             (
-                "MAKEFLAGS",
+                "DESTDIR".to_string(),
+                self.dest_dir.to_string_lossy().to_string(),
+            ),
+            (
+                "MAKEFLAGS".to_string(),
                 format!("-j{}", build.jobs.unwrap_or(self.kitchen.config.jobs)),
             ),
         ];
@@ -462,12 +503,18 @@ impl<'a> Cook<'a> {
         // Inject caller-supplied env vars (e.g. LFS, LFS_TGT, PATH for bootstrap
         // builds) without touching the process-wide environment.
         for (key, value) in &self.kitchen.config.extra_env {
-            env.push((key, value.clone()));
+            env.push((key.clone(), value.clone()));
         }
 
         for (key, value) in &build.environment {
-            env.push((key, value.clone()));
+            env.push((key.clone(), value.clone()));
         }
+
+        let env = if let Some(config) = self.reproducibility_config_for_execution() {
+            config.merge_env(env)?
+        } else {
+            env
+        };
 
         // Run setup if specified
         if let Some(setup) = &build.setup {
@@ -522,10 +569,15 @@ impl<'a> Cook<'a> {
         phase: &str,
         command: &str,
         workdir: &Path,
-        env: &[(&str, String)],
+        env: &[(String, String)],
     ) -> Result<()> {
         info!("Running {} phase", phase);
         debug!("Command: {}", command);
+
+        if let Some(config) = self.reproducibility_config_for_execution() {
+            config.validate_final_env(env)?;
+            validate_command_local_reproducibility_env(&config, phase, command)?;
+        }
 
         if self.kitchen.config.use_isolation {
             self.run_build_step_isolated(phase, command, workdir, env)
@@ -540,7 +592,7 @@ impl<'a> Cook<'a> {
         phase: &str,
         command: &str,
         workdir: &Path,
-        env: &[(&str, String)],
+        env: &[(String, String)],
     ) -> Result<()> {
         // Configure container based on pristine mode
         let mut container_config = if self.kitchen.config.pristine_mode {
@@ -628,7 +680,8 @@ impl<'a> Cook<'a> {
         let mut sandbox = Sandbox::new(container_config);
 
         // Convert env to the format expected by Sandbox
-        let env_refs: Vec<(&str, &str)> = env.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        let env_refs: Vec<(&str, &str)> =
+            env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
 
         // Shell-escape the workdir to prevent injection from paths with
         // spaces or special characters. Single-quote the path, escaping
@@ -660,7 +713,7 @@ impl<'a> Cook<'a> {
         phase: &str,
         command: &str,
         workdir: &Path,
-        env: &[(&str, String)],
+        env: &[(String, String)],
     ) -> Result<()> {
         // When a sysroot is configured (bootstrap builds), run inside the
         // sysroot as a chroot. This matches LFS's build model: all packages
@@ -719,6 +772,14 @@ impl<'a> Cook<'a> {
         }
 
         Ok(())
+    }
+
+    fn reproducibility_config_for_execution(&self) -> Option<ReproducibilityConfig> {
+        self.kitchen
+            .config
+            .reproducibility
+            .as_ref()
+            .map(|config| config.with_roots(&self.source_dir, self.build_dir.as_path()))
     }
 
     /// Phase 4: Plate - package the result as CCS
@@ -912,7 +973,8 @@ mod tests {
     use crate::recipe::hermetic::{
         BuildCommandRiskReport, BuildInputIdentity, BuilderEnvironmentIdentity,
         BuilderEnvironmentKind, DependencyLock, EcosystemPolicyReport, HERMETIC_EVIDENCE_SCHEMA_V1,
-        HermeticBuildEvidence, RecipeIdentity, ReproducibilityRecord, SourceIdentity,
+        HermeticBuildEvidence, RecipeIdentity, ReproducibilityConfig, ReproducibilityRecord,
+        SourceIdentity,
     };
     use crate::recipe::kitchen::KitchenConfig;
     use std::collections::HashMap;
@@ -998,8 +1060,8 @@ mod tests {
         apply_direct_build_env(
             &mut cmd,
             &[
-                ("LD_PRELOAD", "/tmp/malicious.so".to_string()),
-                ("SAFE_FLAG", "1".to_string()),
+                ("LD_PRELOAD".to_string(), "/tmp/malicious.so".to_string()),
+                ("SAFE_FLAG".to_string(), "1".to_string()),
             ],
         );
 
@@ -1021,8 +1083,8 @@ mod tests {
     fn test_chroot_env_args_filter_dangerous_loader_variables() {
         let args = chroot_env_args(
             &[
-                ("LD_LIBRARY_PATH", "/tmp/evil".to_string()),
-                ("CUSTOM", "value".to_string()),
+                ("LD_LIBRARY_PATH".to_string(), "/tmp/evil".to_string()),
+                ("CUSTOM".to_string(), "value".to_string()),
             ],
             8,
         );
@@ -1281,6 +1343,7 @@ mod tests {
     fn test_hermetic_local_patch_requires_recipe_source_base_dir() {
         let kitchen = Kitchen::new(KitchenConfig {
             hermetic_evidence: Some(dummy_hermetic_evidence()),
+            pristine_mode: true,
             use_isolation: false,
             ..KitchenConfig::default()
         });
@@ -1299,6 +1362,43 @@ mod tests {
 
         assert!(error.to_string().contains("hermetic"));
         assert!(error.to_string().contains("recipe source base dir"));
+    }
+
+    #[test]
+    fn test_cook_new_rejects_hermetic_evidence_without_pristine_mode() {
+        let kitchen = Kitchen::new(KitchenConfig {
+            hermetic_evidence: Some(dummy_hermetic_evidence()),
+            pristine_mode: false,
+            ..KitchenConfig::default()
+        });
+        let recipe = minimal_recipe();
+
+        let error = match Cook::new(&kitchen, &recipe) {
+            Ok(_) => panic!("expected hermetic evidence without pristine mode to be rejected"),
+            Err(error) => error,
+        };
+
+        assert!(error.to_string().contains("hermetic evidence"));
+        assert!(error.to_string().contains("pristine mode"));
+    }
+
+    #[test]
+    fn test_simmer_rejects_command_local_source_date_epoch_override_in_hermetic_mode() {
+        let kitchen = Kitchen::new(KitchenConfig {
+            hermetic_evidence: Some(dummy_hermetic_evidence()),
+            reproducibility: Some(ReproducibilityConfig::default()),
+            pristine_mode: true,
+            use_isolation: false,
+            ..KitchenConfig::default()
+        });
+        let mut recipe = minimal_recipe();
+        recipe.build.make = Some("SOURCE_DATE_EPOCH=999 true".to_string());
+        let mut cook = Cook::new(&kitchen, &recipe).unwrap();
+
+        let error = cook.simmer().unwrap_err();
+
+        assert!(error.to_string().contains("SOURCE_DATE_EPOCH"));
+        assert!(error.to_string().contains("command-local"));
     }
 
     #[cfg(unix)]
@@ -1441,9 +1541,14 @@ mod tests {
             ecosystem_policy: EcosystemPolicyReport::clean("unknown"),
             command_risk: BuildCommandRiskReport::clean(),
             reproducibility: ReproducibilityRecord {
-                source_date_epoch: None,
-                path_remap_count: 0,
-                env_keys: Vec::new(),
+                source_date_epoch: Some(0),
+                path_remap_count: 2,
+                env_keys: vec![
+                    "CFLAGS".to_string(),
+                    "CXXFLAGS".to_string(),
+                    "RUSTFLAGS".to_string(),
+                    "SOURCE_DATE_EPOCH".to_string(),
+                ],
             },
             diagnostics: Vec::new(),
         }
