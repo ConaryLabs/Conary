@@ -327,17 +327,24 @@ fn make_assignment(token: &str) -> Option<(&str, &str)> {
 
 fn is_make_eval_option(token: &str) -> bool {
     let token = clean_make_token(token);
-    token == "-E" || token.starts_with("-E") || token == "--eval" || token.starts_with("--eval=")
+    token == "--eval"
+        || token.starts_with("--eval=")
+        || short_make_option_bundle_contains(token, 'E')
 }
 
 fn is_makefile_import_option(token: &str) -> bool {
     let token = clean_make_token(token);
-    token == "-f"
-        || token.starts_with("-f")
+    short_make_option_bundle_contains(token, 'f')
         || token == "--file"
         || token.starts_with("--file=")
         || token == "--makefile"
         || token.starts_with("--makefile=")
+}
+
+fn short_make_option_bundle_contains(token: &str, option: char) -> bool {
+    token.starts_with('-')
+        && !token.starts_with("--")
+        && token[1..].chars().any(|candidate| candidate == option)
 }
 
 fn clean_make_token(token: &str) -> &str {
@@ -500,6 +507,8 @@ mod tests {
             ("MAKEFILES", "evil.mk"),
             ("MAKEFLAGS", "--file=evil.mk"),
             ("GNUMAKEFLAGS", "-fevil.mk"),
+            ("MAKEFLAGS", "-rfevil.mk"),
+            ("MAKEFLAGS", "-rEexport SOURCE_DATE_EPOCH=999"),
         ];
 
         for (key, value) in cases {

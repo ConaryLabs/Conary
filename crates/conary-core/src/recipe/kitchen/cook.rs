@@ -2474,6 +2474,14 @@ mod tests {
             ("make -f evil.mk", "-f"),
             ("make --file=evil.mk", "--file"),
             ("MAKEFLAGS=--file=evil.mk make", "MAKEFLAGS"),
+            ("make -rfevil.mk", "-rfevil.mk"),
+            ("MAKEFLAGS=-rfevil.mk make", "MAKEFLAGS"),
+            ("GNUMAKEFLAGS=-rfevil.mk make", "GNUMAKEFLAGS"),
+            ("make -rEexport SOURCE_DATE_EPOCH=999", "-rEexport"),
+            (
+                "MAKEFLAGS='-rEexport SOURCE_DATE_EPOCH=999' make",
+                "MAKEFLAGS",
+            ),
             (
                 "command env SOURCE_DATE_EPOCH=999 make",
                 "SOURCE_DATE_EPOCH",
