@@ -195,6 +195,12 @@ fn validate_shell_env_mutation_segment(
             "let" => return validate_let_env_mutations(phase, &tokens[index + 1..]),
             "getopts" => return validate_getopts_env_mutations(phase, &tokens[index + 1..]),
             "set" => return validate_set_env_mutations(phase, &tokens[index + 1..]),
+            "alias" | "unalias" | "shopt" => {
+                return Err(shell_alias_expansion_error(
+                    phase,
+                    command_basename(command_token),
+                ));
+            }
             "eval" | "source" | "." => {
                 return Err(Error::ConfigError(format!(
                     "hermetic reproducibility does not support {command_token} in {phase} phase"
@@ -835,6 +841,12 @@ fn command_local_env_clear_error(phase: &str) -> Error {
 fn shell_keyword_mode_error(phase: &str, option: &str) -> Error {
     Error::ConfigError(format!(
         "hermetic reproducibility rejects shell keyword-mode {option} in {phase} phase"
+    ))
+}
+
+fn shell_alias_expansion_error(phase: &str, surface: &str) -> Error {
+    Error::ConfigError(format!(
+        "hermetic reproducibility rejects shell alias expansion surface {surface} in {phase} phase"
     ))
 }
 
@@ -2586,6 +2598,32 @@ mod tests {
             ("set -k; make SOURCE_DATE_EPOCH=999", "-k"),
             ("set -ak; make RUSTFLAGS=bad", "-ak"),
             ("set -o keyword; make CFLAGS=bad", "keyword"),
+        ];
+
+        for (command, expected) in cases {
+            let error = validate_shell_env_mutations(&config, "make", command).unwrap_err();
+
+            assert!(
+                error.to_string().contains(expected),
+                "expected {expected} rejection for {command}, got: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_shell_env_scanner_rejects_alias_expansion_surfaces() {
+        let config = ReproducibilityConfig::new(0, Path::new("/src"), Path::new("/build"));
+        let cases = [
+            (
+                "shopt -s expand_aliases\nalias m='SOURCE_DATE_EPOCH=999 make'\nm",
+                "shopt",
+            ),
+            (
+                "shopt -s expand_aliases\nalias m='export SOURCE_DATE_EPOCH=999'\nm\nmake",
+                "shopt",
+            ),
+            ("alias m='SOURCE_DATE_EPOCH=999 make'", "alias"),
+            ("unalias m", "unalias"),
         ];
 
         for (command, expected) in cases {
