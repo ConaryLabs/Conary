@@ -663,6 +663,12 @@ fn validate_env_wrapper_mutations(
             continue;
         }
 
+        if let Some((key, _)) = token.split_once('=') {
+            if ReproducibilityConfig::is_forbidden_shell_environment_key(key) {
+                return Err(command_local_env_error(phase, key));
+            }
+        }
+
         if let Some((key, _)) = shell_append_assignment(token) {
             validate_shell_append_assignment(phase, &key)?;
             index += 1;
@@ -2385,6 +2391,10 @@ mod tests {
             (
                 "env --split-string='SOURCE_DATE_EPOCH=999 make'",
                 "split-string",
+            ),
+            (
+                "env 'BASH_FUNC_make%%=() { SOURCE_DATE_EPOCH=999 make; }' ./build.sh",
+                "BASH_FUNC_make%%",
             ),
             (
                 "command env SOURCE_DATE_EPOCH=999 make",
