@@ -240,7 +240,7 @@ fn validate_env_wrapper_mutations(
 fn validate_env_option(phase: &str, tokens: &[String], index: usize) -> Result<Option<usize>> {
     let token = &tokens[index];
     if token == "--" {
-        return Ok(None);
+        return Ok(Some(index + 1));
     }
     if token == "-" || token == "--ignore-environment" {
         return Err(command_local_env_clear_error(phase));
@@ -273,8 +273,13 @@ fn validate_env_option(phase: &str, tokens: &[String], index: usize) -> Result<O
             return Ok(Some(index + 1));
         }
     }
-    if !token.starts_with('-') || token.starts_with("--") {
+    if !token.starts_with('-') {
         return Ok(None);
+    }
+    if token.starts_with("--") {
+        return Err(Error::ConfigError(format!(
+            "hermetic reproducibility does not support env option {token} in {phase} phase"
+        )));
     }
 
     let mut chars = token[1..].char_indices().peekable();
@@ -1805,6 +1810,11 @@ mod tests {
                 "env --debug SOURCE_DATE_EPOCH=999 make",
                 "SOURCE_DATE_EPOCH",
             ),
+            ("env -- SOURCE_DATE_EPOCH=999 make", "SOURCE_DATE_EPOCH"),
+            (
+                "env --block-signal SOURCE_DATE_EPOCH=999 make",
+                "--block-signal",
+            ),
             (
                 "export RUSTFLAGS=--remap-path-prefix=/src=/build/source-old; make",
                 "RUSTFLAGS",
@@ -1819,6 +1829,34 @@ mod tests {
                 "expected {key} rejection for {command}, got: {error}"
             );
         }
+    }
+
+    #[test]
+    fn test_env_wrapper_scanner_keeps_scanning_after_option_delimiter() {
+        let config = ReproducibilityConfig::new(0, Path::new("/src"), Path::new("/build"));
+        let tokens = vec![
+            "--".to_string(),
+            "SOURCE_DATE_EPOCH=999".to_string(),
+            "make".to_string(),
+        ];
+
+        let error = validate_env_wrapper_mutations(&config, "make", &tokens).unwrap_err();
+
+        assert!(error.to_string().contains("SOURCE_DATE_EPOCH"));
+    }
+
+    #[test]
+    fn test_env_wrapper_scanner_rejects_unsupported_long_options() {
+        let config = ReproducibilityConfig::new(0, Path::new("/src"), Path::new("/build"));
+        let tokens = vec![
+            "--block-signal".to_string(),
+            "SOURCE_DATE_EPOCH=999".to_string(),
+            "make".to_string(),
+        ];
+
+        let error = validate_env_wrapper_mutations(&config, "make", &tokens).unwrap_err();
+
+        assert!(error.to_string().contains("--block-signal"));
     }
 
     #[test]
