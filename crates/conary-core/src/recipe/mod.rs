@@ -48,6 +48,7 @@ pub mod audit;
 mod cache;
 mod format;
 mod graph;
+pub mod hermetic;
 pub mod inference;
 mod kitchen;
 pub mod parser;

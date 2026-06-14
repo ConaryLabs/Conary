@@ -1068,6 +1068,7 @@ files = ["/etc/myapp/config.toml"]
         let provenance = ManifestProvenance {
             origin_class: Some("native-built".to_string()),
             hardening_level: Some("sandboxed".to_string()),
+            hermetic_evidence: None,
             ..Default::default()
         };
         let toml = toml::to_string(&provenance).unwrap();
