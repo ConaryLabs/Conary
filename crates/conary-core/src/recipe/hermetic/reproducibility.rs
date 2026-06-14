@@ -267,6 +267,11 @@ fn validate_make_environment_value(key: &str, value: &str) -> Result<()> {
                 .to_string(),
         ));
     }
+    if value.contains('$') {
+        return Err(Error::ConfigError(format!(
+            "hermetic reproducibility rejects {key} make environment value with shell expansion"
+        )));
+    }
     for token in value.split_whitespace() {
         let token = clean_make_token(token);
         if is_make_eval_option(token) {
@@ -521,6 +526,7 @@ mod tests {
             ("MAKEFLAGS", "-Ievil"),
             ("GNUMAKEFLAGS", "--include-dir=evil"),
             ("MAKEFLAGS", "--inc=evil"),
+            ("MAKEFLAGS", "$BAD"),
         ];
 
         for (key, value) in cases {
