@@ -913,6 +913,11 @@ fn validate_no_command_substitution(phase: &str, line: &str) -> Result<()> {
             "hermetic reproducibility does not support command substitution in {phase} phase"
         )));
     }
+    if line.contains("<(") || line.contains(">(") {
+        return Err(Error::ConfigError(format!(
+            "hermetic reproducibility does not support process substitution in {phase} phase"
+        )));
+    }
     Ok(())
 }
 
@@ -2573,6 +2578,14 @@ mod tests {
             (
                 "make `printf -- --include-dir=evil`",
                 "command substitution",
+            ),
+            (
+                "sh <(printf %s \"export SOURCE_DATE_EPOCH=999; make -s\")",
+                "process substitution",
+            ),
+            (
+                "bash <(printf %s \"export SOURCE_DATE_EPOCH=999; make -s\")",
+                "process substitution",
             ),
             ("export SOURCE_DATE_EPOCH{,}=999; make", "shell expansion"),
             ("make SOURCE_DATE_EPOCH{,}=999", "shell expansion"),
