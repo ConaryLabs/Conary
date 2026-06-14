@@ -210,6 +210,13 @@ fn validate_shell_env_mutation_segment(
             "env" => {
                 return validate_env_wrapper_mutations(config, phase, &tokens[index + 1..]);
             }
+            "make" | "gmake" => {
+                return validate_make_command_args(
+                    phase,
+                    command_basename(command_token),
+                    &tokens[index + 1..],
+                );
+            }
             _ => {}
         }
         if validate_shell_like_invocation(
@@ -667,6 +674,7 @@ fn validate_env_wrapper_mutations(
             if ReproducibilityConfig::is_forbidden_shell_environment_key(key) {
                 return Err(command_local_env_error(phase, key));
             }
+            ReproducibilityConfig::validate_make_environment_value(key, &token[key.len() + 1..])?;
         }
 
         if let Some((key, _)) = shell_append_assignment(token) {
@@ -687,6 +695,9 @@ fn validate_env_wrapper_mutations(
     let command = command_basename(command_token);
     if command == "env" {
         return validate_env_wrapper_mutations(config, phase, &tokens[index + 1..]);
+    }
+    if is_make_command(command) {
+        return validate_make_command_args(phase, command, &tokens[index + 1..]);
     }
     if validate_shell_like_invocation(phase, command, &tokens[index + 1..])? {
         return Ok(());
@@ -813,6 +824,7 @@ fn validate_shell_assignment(
     value: &str,
     is_array_target: bool,
 ) -> Result<()> {
+    ReproducibilityConfig::validate_make_environment_value(key, value)?;
     if !is_controlled_reproducibility_key(key) {
         return Ok(());
     }
@@ -826,10 +838,31 @@ fn validate_shell_assignment(
 }
 
 fn validate_shell_append_assignment(phase: &str, key: &str) -> Result<()> {
+    if ReproducibilityConfig::is_make_environment_key(key) {
+        return Err(command_local_env_error(phase, key));
+    }
     if is_controlled_reproducibility_key(key) {
         return Err(command_local_env_error(phase, key));
     }
     Ok(())
+}
+
+fn validate_make_command_args(phase: &str, make: &str, args: &[String]) -> Result<()> {
+    for token in args {
+        if ReproducibilityConfig::is_make_eval_option(token) {
+            return Err(Error::ConfigError(format!(
+                "hermetic reproducibility does not support {make} eval option {token} in {phase} phase"
+            )));
+        }
+        if let Some(key) = ReproducibilityConfig::controlled_make_assignment_key(token) {
+            return Err(command_local_env_error(phase, key));
+        }
+    }
+    Ok(())
+}
+
+fn is_make_command(command: &str) -> bool {
+    matches!(command, "make" | "gmake")
 }
 
 fn command_local_env_error(phase: &str, key: &str) -> Error {
@@ -2346,6 +2379,29 @@ mod tests {
     }
 
     #[test]
+    fn test_simmer_rejects_make_override_env_in_hermetic_mode() {
+        let kitchen = Kitchen::new(KitchenConfig {
+            hermetic_evidence: Some(dummy_hermetic_evidence()),
+            reproducibility: Some(ReproducibilityConfig::default()),
+            pristine_mode: true,
+            use_isolation: false,
+            ..KitchenConfig::default()
+        });
+        let mut recipe = minimal_recipe();
+        recipe
+            .build
+            .environment
+            .insert("MAKEOVERRIDES".to_string(), "CFLAGS=bad".to_string());
+        recipe.build.make = Some("true".to_string());
+        let mut cook = Cook::new(&kitchen, &recipe).unwrap();
+
+        let error = cook.simmer().unwrap_err();
+
+        assert!(error.to_string().contains("MAKEOVERRIDES"));
+        assert!(error.to_string().contains("CFLAGS"));
+    }
+
+    #[test]
     fn test_hermetic_command_validation_rejects_shell_env_mutation_forms() {
         let config = ReproducibilityConfig::new(0, Path::new("/src"), Path::new("/build"));
         let cases = [
@@ -2396,6 +2452,12 @@ mod tests {
                 "env 'BASH_FUNC_make%%=() { SOURCE_DATE_EPOCH=999 make; }' ./build.sh",
                 "BASH_FUNC_make%%",
             ),
+            ("make SOURCE_DATE_EPOCH=999", "SOURCE_DATE_EPOCH"),
+            ("gmake RUSTFLAGS+=bad", "RUSTFLAGS"),
+            ("MAKEFLAGS=SOURCE_DATE_EPOCH=999 make", "MAKEFLAGS"),
+            ("MAKEFLAGS+=SOURCE_DATE_EPOCH=999 make", "MAKEFLAGS"),
+            ("env GNUMAKEFLAGS=RUSTFLAGS=bad make", "GNUMAKEFLAGS"),
+            ("make --eval 'export SOURCE_DATE_EPOCH=999'", "--eval"),
             (
                 "command env SOURCE_DATE_EPOCH=999 make",
                 "SOURCE_DATE_EPOCH",

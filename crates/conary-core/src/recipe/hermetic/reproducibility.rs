@@ -13,6 +13,9 @@ const BASHOPTS: &str = "BASHOPTS";
 const BASH_ENV: &str = "BASH_ENV";
 const ENV: &str = "ENV";
 const BASH_FUNC_PREFIX: &str = "BASH_FUNC_";
+const MAKEFLAGS: &str = "MAKEFLAGS";
+const GNUMAKEFLAGS: &str = "GNUMAKEFLAGS";
+const MAKEOVERRIDES: &str = "MAKEOVERRIDES";
 const PATH_REMAP_COUNT: usize = 2;
 const CONTROLLED_ENV_KEYS: &[&str] = &[
     SOURCE_DATE_EPOCH,
@@ -25,6 +28,7 @@ const CONTROLLED_ENV_KEYS: &[&str] = &[
     ENV,
 ];
 const SHELL_STARTUP_ENV_KEYS: &[&str] = &[SHELLOPTS, BASHOPTS, BASH_ENV, ENV];
+const MAKE_ENV_KEYS: &[&str] = &[MAKEFLAGS, GNUMAKEFLAGS, MAKEOVERRIDES];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReproducibilityConfig {
@@ -74,6 +78,7 @@ impl ReproducibilityConfig {
 
     pub fn merge_env(&self, recipe_env: Vec<(String, String)>) -> Result<Vec<(String, String)>> {
         validate_no_shell_startup_env(&recipe_env)?;
+        validate_make_environment_values(&recipe_env)?;
         if recipe_env.iter().any(|(key, _)| key == SOURCE_DATE_EPOCH) {
             return Err(Error::ConfigError(
                 "hermetic reproducibility controls SOURCE_DATE_EPOCH; recipe or extra environment cannot override it"
@@ -94,6 +99,7 @@ impl ReproducibilityConfig {
 
     pub fn validate_final_env(&self, env: &[(String, String)]) -> Result<()> {
         validate_no_shell_startup_env(env)?;
+        validate_make_environment_values(env)?;
 
         let expected_epoch = self.source_date_epoch.to_string();
         match effective_env_value(env, SOURCE_DATE_EPOCH) {
@@ -135,10 +141,29 @@ impl ReproducibilityConfig {
         is_forbidden_shell_environment_key(key)
     }
 
+    pub(crate) fn validate_make_environment_value(key: &str, value: &str) -> Result<()> {
+        validate_make_environment_value(key, value)
+    }
+
+    pub(crate) fn is_make_environment_key(key: &str) -> bool {
+        is_make_environment_key(key)
+    }
+
+    pub(crate) fn controlled_make_assignment_key(token: &str) -> Option<&str> {
+        controlled_make_assignment_key(token)
+    }
+
+    pub(crate) fn is_make_eval_option(token: &str) -> bool {
+        is_make_eval_option(token)
+    }
+
     pub(crate) fn command_local_assignment_allowed(&self, key: &str, value: &str) -> bool {
         match key {
             SOURCE_DATE_EPOCH => false,
             SHELLOPTS | BASHOPTS | BASH_ENV | ENV => false,
+            MAKEFLAGS | GNUMAKEFLAGS | MAKEOVERRIDES => {
+                validate_make_environment_value(key, value).is_ok()
+            }
             RUSTFLAGS => self
                 .rust_remaps()
                 .iter()
@@ -220,8 +245,74 @@ fn validate_no_shell_startup_env(env: &[(String, String)]) -> Result<()> {
     Ok(())
 }
 
+fn validate_make_environment_values(env: &[(String, String)]) -> Result<()> {
+    for (key, value) in env {
+        validate_make_environment_value(key, value)?;
+    }
+    Ok(())
+}
+
+fn validate_make_environment_value(key: &str, value: &str) -> Result<()> {
+    if !is_make_environment_key(key) {
+        return Ok(());
+    }
+    for token in value.split_whitespace() {
+        let token = clean_make_token(token);
+        if is_make_eval_option(token) {
+            return Err(Error::ConfigError(format!(
+                "hermetic reproducibility rejects {key} make eval option {token}"
+            )));
+        }
+        if let Some(controlled) = controlled_make_assignment_key(token) {
+            return Err(Error::ConfigError(format!(
+                "hermetic reproducibility rejects {key} assignment to controlled make variable {controlled}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn is_make_environment_key(key: &str) -> bool {
+    MAKE_ENV_KEYS.contains(&key)
+}
+
 fn is_forbidden_shell_environment_key(key: &str) -> bool {
     SHELL_STARTUP_ENV_KEYS.contains(&key) || key.starts_with(BASH_FUNC_PREFIX)
+}
+
+fn controlled_make_assignment_key(token: &str) -> Option<&str> {
+    let target = make_assignment_target(token)?;
+    if is_forbidden_shell_environment_key(target)
+        || CONTROLLED_ENV_KEYS
+            .iter()
+            .any(|controlled| *controlled == target)
+    {
+        return Some(target);
+    }
+    None
+}
+
+fn make_assignment_target(token: &str) -> Option<&str> {
+    let token = clean_make_token(token);
+    for operator in ["::=", "+=", ":=", "?=", "!=", "="] {
+        let Some((target, _)) = token.split_once(operator) else {
+            continue;
+        };
+        let target = target.trim();
+        if !target.is_empty() {
+            return Some(target);
+        }
+    }
+    None
+}
+
+fn is_make_eval_option(token: &str) -> bool {
+    let token = clean_make_token(token);
+    token == "-E" || token.starts_with("-E") || token == "--eval" || token.starts_with("--eval=")
+}
+
+fn clean_make_token(token: &str) -> &str {
+    token.trim_matches(|ch| matches!(ch, '"' | '\''))
 }
 
 fn effective_env_value<'a>(env: &'a [(String, String)], key: &str) -> Option<&'a str> {
@@ -356,6 +447,43 @@ mod tests {
             assert!(
                 error.to_string().contains(key),
                 "expected {key} rejection, got: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn make_environment_controls_allow_jobs_and_reject_controlled_assignments() {
+        let config = ReproducibilityConfig::new(123, Path::new("/src"), Path::new("/build"));
+
+        let safe_env = config
+            .merge_env(vec![("MAKEFLAGS".to_string(), "-j8".to_string())])
+            .unwrap();
+        config.validate_final_env(&safe_env).unwrap();
+
+        let cases = [
+            ("MAKEFLAGS", "SOURCE_DATE_EPOCH=999"),
+            ("GNUMAKEFLAGS", "RUSTFLAGS+=bad"),
+            ("MAKEOVERRIDES", "CFLAGS:=bad"),
+            ("MAKEFLAGS", "CXXFLAGS?=bad"),
+            ("GNUMAKEFLAGS", "SOURCE_DATE_EPOCH!=date"),
+            ("MAKEOVERRIDES", "RUSTFLAGS::=bad"),
+        ];
+
+        for (key, value) in cases {
+            let merge_error = config
+                .merge_env(vec![(key.to_string(), value.to_string())])
+                .unwrap_err();
+            assert!(
+                merge_error.to_string().contains(key),
+                "expected {key} merge rejection, got: {merge_error}"
+            );
+
+            let mut env = config.env_vars();
+            env.push((key.to_string(), value.to_string()));
+            let validation_error = config.validate_final_env(&env).unwrap_err();
+            assert!(
+                validation_error.to_string().contains(key),
+                "expected {key} validation rejection, got: {validation_error}"
             );
         }
     }
