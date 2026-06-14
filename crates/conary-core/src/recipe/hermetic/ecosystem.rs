@@ -41,6 +41,7 @@ fn evaluate_cargo_policy(source_root: &Path, command_text: &str) -> Result<Ecosy
     let lock_identity = file_identity("cargo", "Cargo.lock", &lock_path)?;
     let config = CargoConfigEvidence::read(source_root)?;
     let offline = command_has_offline_flag(command_text) || config.offline;
+    let locked = command_has_locked_flag(command_text);
 
     let mut identities = vec![lock_identity];
     if config.should_record_identity() {
@@ -56,8 +57,25 @@ fn evaluate_cargo_policy(source_root: &Path, command_text: &str) -> Result<Ecosy
                 .to_string(),
         );
     }
+    if !locked {
+        diagnostics.push(
+            "Cargo builds must use --locked so Cargo.lock cannot be mutated during hermetic builds"
+                .to_string(),
+        );
+    }
 
-    let has_registry_dependencies = cargo_lock_has_registry_dependencies(&lock_contents);
+    let lock_sources = cargo_lock_source_values(&lock_contents);
+    let has_registry_dependencies = lock_sources
+        .iter()
+        .any(|source| source.starts_with("registry+"));
+    for source in lock_sources
+        .iter()
+        .filter(|source| !source.starts_with("registry+"))
+    {
+        diagnostics.push(format!(
+            "unsupported Cargo.lock source {source:?}; M2a only accepts registry+ sources with pinned replacement evidence"
+        ));
+    }
     if has_registry_dependencies {
         if let Some(replacement) = config.replacement.clone() {
             identities.push(replacement.identity);
@@ -267,9 +285,14 @@ fn cargo_config_source_replacement(
 
     let evidence_path = normalized_path_display(&relative_path);
     evidence.replaces_crates_io_with_vendor = evidence_path == "vendor";
-    evidence.replacement = Some(CargoSourceReplacement {
-        identity: replacement_identity(&evidence_path, &replacement_path)?,
-    });
+    match replacement_identity(&evidence_path, &replacement_path) {
+        Ok(identity) => {
+            evidence.replacement = Some(CargoSourceReplacement { identity });
+        }
+        Err(error) => {
+            evidence.diagnostics.push(error.to_string());
+        }
+    }
     Ok(evidence)
 }
 
@@ -291,16 +314,33 @@ fn normalize_pinned_replacement_path(configured_path: &str) -> std::result::Resu
 }
 
 fn command_has_offline_flag(command_text: &str) -> bool {
-    command_text
-        .split_whitespace()
-        .any(|argument| argument == "--offline")
+    command_has_flag(command_text, "--offline")
 }
 
-fn cargo_lock_has_registry_dependencies(content: &str) -> bool {
-    content
-        .lines()
-        .map(str::trim)
-        .any(|line| line.starts_with("source = \"registry+"))
+fn command_has_locked_flag(command_text: &str) -> bool {
+    command_has_flag(command_text, "--locked")
+}
+
+fn command_has_flag(command_text: &str, flag: &str) -> bool {
+    command_text
+        .split_whitespace()
+        .any(|argument| argument == flag)
+}
+
+fn cargo_lock_source_values(content: &str) -> Vec<String> {
+    let Ok(table) = content.parse::<toml::Table>() else {
+        return Vec::new();
+    };
+    let Some(packages) = table.get("package").and_then(toml::Value::as_array) else {
+        return Vec::new();
+    };
+
+    packages
+        .iter()
+        .filter_map(toml::Value::as_table)
+        .filter_map(|package| package.get("source").and_then(toml::Value::as_str))
+        .map(str::to_string)
+        .collect()
 }
 
 fn file_identity(
@@ -395,7 +435,7 @@ fn replacement_tree_entries(root: &Path) -> Result<Vec<ReplacementTreeEntry>> {
             })?
             .to_path_buf();
         let (hash, symlink_target, mode) =
-            replacement_tree_entry_identity(entry.path(), kind, &metadata)?;
+            replacement_tree_entry_identity(root, entry.path(), kind, &metadata)?;
 
         entries.push(ReplacementTreeEntry {
             relative_path,
@@ -410,6 +450,7 @@ fn replacement_tree_entries(root: &Path) -> Result<Vec<ReplacementTreeEntry>> {
 }
 
 fn replacement_tree_entry_identity(
+    root: &Path,
     path: &Path,
     kind: ReplacementTreeEntryKind,
     metadata: &fs::Metadata,
@@ -422,10 +463,39 @@ fn replacement_tree_entry_identity(
         }
         ReplacementTreeEntryKind::Symlink => {
             let target = fs::read_link(path)?;
+            validate_replacement_tree_symlink_target(root, path, &target)?;
             let hash = hash::sha256_prefixed(&path_bytes(&target));
             Ok((hash, Some(target), None))
         }
     }
+}
+
+fn validate_replacement_tree_symlink_target(
+    root: &Path,
+    link_path: &Path,
+    target: &Path,
+) -> Result<()> {
+    let resolved_target = if target.is_absolute() {
+        target.to_path_buf()
+    } else {
+        link_path.parent().unwrap_or(root).join(target)
+    };
+    let canonical_target = fs::canonicalize(&resolved_target).map_err(|e| {
+        Error::ConfigError(format!(
+            "Cargo replacement tree symlink {} target {} could not be resolved and must stay inside replacement tree: {e}",
+            link_path.display(),
+            target.display()
+        ))
+    })?;
+
+    if !canonical_target.starts_with(root) {
+        return Err(Error::ConfigError(format!(
+            "Cargo replacement tree symlink {} escapes replacement tree; symlink targets must stay inside replacement tree",
+            link_path.display()
+        )));
+    }
+
+    Ok(())
 }
 
 fn replacement_tree_entry_kind_label(kind: ReplacementTreeEntryKind) -> &'static str {
@@ -513,6 +583,17 @@ name = "serde"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0000000000000000000000000000000000000000000000000000000000000000"
+"#
+    }
+
+    fn cargo_lock_with_git_dependency() -> &'static str {
+        r#"# This file is automatically @generated by Cargo.
+version = 3
+
+[[package]]
+name = "git-dep"
+version = "0.1.0"
+source = "git+https://example.invalid/repo"
 "#
     }
 
@@ -610,6 +691,56 @@ local-registry = "{path}"
             "expected sha256 evidence hash, got {lock_hash}"
         );
         assert_eq!(report.identities.len(), 1);
+    }
+
+    #[test]
+    fn cargo_lock_without_locked_flag_is_blocked() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            &dir.path().join("Cargo.lock"),
+            cargo_lock_without_registry_dependencies(),
+        );
+
+        let report = evaluate_ecosystem_policy(
+            BuildSystem::Cargo,
+            dir.path(),
+            "cargo build --release --offline",
+        )
+        .unwrap();
+
+        assert_eq!(report.status, PolicyStatus::Blocked);
+        assert!(
+            diagnostics(&report).contains("--locked"),
+            "expected --locked diagnostic, got {:?}",
+            report.diagnostics
+        );
+    }
+
+    #[test]
+    fn cargo_git_lock_source_is_blocked_even_when_offline() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            &dir.path().join("Cargo.lock"),
+            cargo_lock_with_git_dependency(),
+        );
+
+        let report = evaluate_ecosystem_policy(
+            BuildSystem::Cargo,
+            dir.path(),
+            "cargo build --release --locked --offline",
+        )
+        .unwrap();
+
+        assert_eq!(report.status, PolicyStatus::Blocked);
+        let diagnostics = diagnostics(&report);
+        assert!(
+            diagnostics.contains("git+https://example.invalid/repo"),
+            "expected git source value in diagnostic, got {diagnostics:?}"
+        );
+        assert!(
+            diagnostics.contains("unsupported"),
+            "expected unsupported source diagnostic, got {diagnostics:?}"
+        );
     }
 
     #[test]
@@ -752,6 +883,47 @@ local-registry = "{path}"
         assert_ne!(
             first_hash, second_hash,
             "ignored cache content changes must change the recorded replacement identity"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cargo_pinned_cache_with_symlink_escape_is_blocked() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            &dir.path().join("Cargo.lock"),
+            cargo_lock_with_registry_dependency(),
+        );
+        write(
+            &dir.path().join(".cargo/config.toml"),
+            &cargo_local_registry_config(".cargo/local-registry"),
+        );
+        write(&dir.path().join("outside-cache.txt"), "outside\n");
+        fs::create_dir_all(dir.path().join(".cargo/local-registry")).unwrap();
+        symlink(
+            "../../outside-cache.txt",
+            dir.path().join(".cargo/local-registry/escape"),
+        )
+        .unwrap();
+
+        let report = evaluate_ecosystem_policy(
+            BuildSystem::Cargo,
+            dir.path(),
+            "cargo build --release --locked",
+        )
+        .unwrap();
+
+        assert_eq!(report.status, PolicyStatus::Blocked);
+        let diagnostics = diagnostics(&report);
+        assert!(
+            diagnostics.contains("symlink"),
+            "expected symlink diagnostic, got {diagnostics:?}"
+        );
+        assert!(
+            diagnostics.contains("replacement tree"),
+            "expected replacement tree diagnostic, got {diagnostics:?}"
         );
     }
 
