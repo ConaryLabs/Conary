@@ -346,7 +346,7 @@ fn contains_shell_command_separator(text: &str) -> bool {
     let mut chars = text.chars().peekable();
     while let Some(ch) = chars.next() {
         match ch {
-            '&' if chars.peek() == Some(&'&') => return true,
+            '&' => return true,
             '|' | ';' | '(' | ')' | '`' | '\n' => return true,
             '$' if chars.peek() == Some(&'(') => return true,
             _ => {}
@@ -581,7 +581,7 @@ mod tests {
     fn raw_fallback_does_not_pair_multiword_signals_across_shell_segments() {
         let report = classify_build_commands(&[BuildCommandText::new(
             "make",
-            "go env && make install\ngit status && make clone\npython script.py && echo -c",
+            "go env && make install\ngit status & make clone\npython script.py && echo -c",
         )]);
 
         assert_eq!(report.status, PolicyStatus::Clean);
