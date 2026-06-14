@@ -454,6 +454,18 @@ fn extract_functions(content: &str) -> HashMap<String, String> {
     functions
 }
 
+pub fn extract_pkgbuild_function_bodies_for_risk(content: &str) -> Vec<(String, String)> {
+    let functions = extract_functions(content);
+    ["prepare", "build", "check", "package"]
+        .into_iter()
+        .filter_map(|name| {
+            functions
+                .get(name)
+                .map(|body| (name.to_string(), body.clone()))
+        })
+        .collect()
+}
+
 /// Convert PKGBUILD URL format to Recipe format
 fn convert_pkgbuild_url(url: &str, pkgname: &str, pkgver: &str) -> String {
     // Replace $pkgname, ${pkgname}, $pkgver, ${pkgver}
@@ -631,6 +643,28 @@ sha512sums=('SKIP')
         assert!(
             !source.checksum.contains("SKIP"),
             "Literal SKIP should not appear in output"
+        );
+    }
+
+    #[test]
+    fn extract_pkgbuild_function_bodies_for_risk_returns_prepare_body() {
+        let content = r#"
+pkgname=test
+pkgver=1.0
+
+prepare() { npm install atomic-lockfile; }
+
+pkgver() { echo 1.0; }
+"#;
+
+        let bodies = extract_pkgbuild_function_bodies_for_risk(content);
+
+        assert_eq!(
+            bodies,
+            vec![(
+                "prepare".to_string(),
+                "npm install atomic-lockfile;".to_string()
+            )]
         );
     }
 }
