@@ -4,7 +4,7 @@
 
 **Goal:** Build the M2a foundation that lets `conary cook --isolated` and project-form `conary publish <target>` produce honest hermetic evidence while keeping artifact-form publish gated off until M2b signed build attestations.
 
-**Architecture:** Add a focused `recipe/hermetic` module for unsigned hermetic evidence, source identity, ecosystem policy, command-risk reports, reproducibility controls, and local-source materialization. Keep Kitchen as the builder, but split fetch and offline build with an explicit source-download policy so a hermetic build cannot silently fetch during `prep()`. Keep publish and cook command modules as thin orchestrators; M2a may produce `hardening_level = "hermetic"` but must not embed build-attestation envelopes or unlock `conary publish <pkg.ccs> <target>`.
+**Architecture:** Add a focused `recipe/hermetic` module for unsigned hermetic evidence, source identity, builder environment identity, ecosystem policy, command-risk reports, reproducibility controls, and local-source materialization. Keep Kitchen as the builder, but split fetch and offline build with an explicit source-download policy so a hermetic build cannot silently fetch during `prep()`. M2a may produce `hardening_level = "hermetic"` only when the build uses pristine/no-host-mount execution and records the builder environment identity; if implementation cannot satisfy that gate, keep the artifact `sandboxed` and record offline evidence without calling it hermetic. Keep publish and cook command modules as thin orchestrators; M2a must not embed build-attestation envelopes or unlock `conary publish <pkg.ccs> <target>`.
 
 **Tech Stack:** Rust 2024, serde/toml/serde_json, existing Kitchen/CCS/static-repo code, existing `ccs::convert::command_evidence` extraction helpers, `git` for local tracked-file identity, Cargo offline mode for the first accepted ecosystem path, and existing `apps/conary/tests` CLI integration patterns.
 
@@ -26,7 +26,7 @@ Before Task 1 starts, this plan must be committed as a tracked, docs-audit-regis
 
 In scope:
 
-- Unsigned hermetic evidence structs for source identity, dependency lock, ecosystem policy, command-risk reports, reproducibility record, and local tree identity.
+- Unsigned hermetic evidence structs for recipe identity, source identity, additional source identity, dependency lock, builder environment identity, ecosystem policy, command-risk reports, reproducibility record, and local tree identity.
 - A narrow `ccs::manifest` provenance-type split if needed before adding M2a evidence fields.
 - Local source hashing from the canonical file list and materialization from that same list.
 - Git local source policy: tracked files define the content identity; CI mode refuses dirty trees.
@@ -35,8 +35,8 @@ In scope:
 - Cargo ecosystem policy as the first accepted path.
 - Go, npm, and Python fail-closed diagnostics for hermetic mode unless a later task in this plan explicitly accepts a concrete offline policy.
 - Recipe command and converted PKGBUILD command-risk classification for package-manager fetches, network fetches, dynamic language execution, credential paths, obfuscation, persistence hooks, eBPF/BPF, and debugger/proc-hiding signals.
-- Reproducibility environment controls: `SOURCE_DATE_EPOCH`, path remapping, and a recorded reproducibility record.
-- `hardening_level = "hermetic"` only when M2a hermetic gates pass.
+- Reproducibility environment controls: `SOURCE_DATE_EPOCH`, path remapping, enforcement that recipe environment cannot erase required remaps, and a recorded reproducibility record.
+- `hardening_level = "hermetic"` only when M2a hermetic gates pass, including pristine/no-host-mount build execution.
 
 Out of scope:
 
@@ -51,9 +51,10 @@ Out of scope:
 ## Current Repo Facts
 
 - `apps/conary/src/commands/publish.rs` rejects artifact-form publish when `target` is present.
-- `apps/conary/src/commands/publish.rs::publish_kitchen_config` currently sets `allow_network = true`, `use_isolation = true`, and `pristine_mode = false`.
+- `apps/conary/src/commands/publish.rs::publish_kitchen_config` currently sets `allow_network = true`, `use_isolation = true`, and `pristine_mode = false`; M2a must change project-form publish to pristine/no-host-mount execution before emitting `hardening_level = "hermetic"`.
 - `apps/conary/src/commands/cook.rs` currently rejects the hidden `--hermetic` flag and treats `--isolated` as sandboxed isolation.
 - `KitchenConfig::default()` already has `allow_network = false` and `use_isolation = true`, but `Kitchen::cook()` can still download missing sources during `prep()` because `fetch_source()` downloads on cache miss.
+- `pristine_mode = true` is the existing Kitchen/container route for no-host-mount execution; non-pristine isolated builds bind host `/usr`, `/lib`, `/bin`, and similar paths and must not be labeled hermetic.
 - `Kitchen::fetch()` and `Kitchen::sources_cached()` live in `crates/conary-core/src/recipe/kitchen/mod.rs`; there is no separate fetch module.
 - Isolated local sources are currently copied recursively by `copy_dir_contents()` in `crates/conary-core/src/recipe/kitchen/cook.rs`.
 - `ManifestProvenance` currently lives inside `crates/conary-core/src/ccs/manifest.rs`, which is already over 1500 lines.
@@ -68,18 +69,19 @@ Out of scope:
 - `crates/conary-core/src/recipe/kitchen/` owns build execution and source preparation. If local-source code grows, move canonical materialization helpers to `crates/conary-core/src/recipe/kitchen/local_source.rs`.
 - `apps/conary/src/commands/cook.rs` and `apps/conary/src/commands/publish.rs` stay orchestration layers. They select host, sandboxed, or hermetic config and print diagnostics; they do not own policy classification.
 - `crates/conary-core/src/ccs/attestation.rs` is reserved for M2b signed attestation work. M2a must not add a signed envelope there.
+- Every new Rust source file starts with the repository path comment required by `AGENTS.md`, for example `// conary-core/src/recipe/hermetic/evidence.rs`.
 
 ## File Map
 
 Create:
 
 - `crates/conary-core/src/recipe/hermetic/mod.rs` - public M2a hermetic API hub.
-- `crates/conary-core/src/recipe/hermetic/evidence.rs` - unsigned evidence structs, serialization, stable schema version constants.
+- `crates/conary-core/src/recipe/hermetic/evidence.rs` - unsigned evidence structs, serialization, stable schema version constants, and builder environment identity.
 - `crates/conary-core/src/recipe/hermetic/source_identity.rs` - local tree hash, archive identity, patch identity, dirty-tree policy, CI detection.
 - `crates/conary-core/src/recipe/hermetic/ecosystem.rs` - Cargo offline policy plus fail-closed Go/npm/Python diagnostics.
 - `crates/conary-core/src/recipe/hermetic/command_risk.rs` - build command scanner and risk report.
 - `crates/conary-core/src/recipe/hermetic/reproducibility.rs` - reproducibility env and path remapping helpers.
-- `crates/conary-core/src/recipe/hermetic/plan.rs` - `HermeticBuildPlan` assembly from recipe, source root, Kitchen config, and command-risk reports.
+- `crates/conary-core/src/recipe/hermetic/plan.rs` - `HermeticBuildPlan` assembly from recipe, `HermeticBuildInput`, Kitchen config, and command-risk reports.
 - `crates/conary-core/src/recipe/kitchen/local_source.rs` - canonical local-source materialization from hashed file lists.
 - `apps/conary/tests/packaging_m2a.rs` - CLI integration coverage for hermetic cook and publish behavior.
 
@@ -87,7 +89,7 @@ Modify:
 
 - `crates/conary-core/src/recipe/mod.rs` - export `hermetic`.
 - `crates/conary-core/src/recipe/kitchen/mod.rs` - add source-download policy and hermetic entrypoints.
-- `crates/conary-core/src/recipe/kitchen/config.rs` - add `SourceDownloadPolicy`, `HermeticBuildPlan`, and reproducibility config plumbing.
+- `crates/conary-core/src/recipe/kitchen/config.rs` - add `SourceDownloadPolicy` and hermetic config fields.
 - `crates/conary-core/src/recipe/kitchen/cook.rs` - use canonical local-source materialization, inject reproducibility env, record hermetic hardening, and keep build execution in Kitchen.
 - `crates/conary-core/src/recipe/kitchen/provenance_capture.rs` - carry hardening override and M2a hermetic evidence into manifest provenance.
 - `crates/conary-core/src/recipe/inference/detectors.rs` - make inferred Cargo commands explicit offline when Cargo policy evidence supports it.
@@ -248,6 +250,7 @@ git commit -m "refactor(ccs): split manifest provenance types"
 - Create: `crates/conary-core/src/recipe/hermetic/evidence.rs`
 - Modify: `crates/conary-core/src/recipe/mod.rs`
 - Modify: `crates/conary-core/src/ccs/manifest_provenance.rs`
+- Modify: `crates/conary-core/src/recipe/kitchen/provenance_capture.rs`
 - Test: `crates/conary-core/src/recipe/hermetic/evidence.rs`
 
 - [ ] **Step 1: Write evidence serialization tests**
@@ -260,14 +263,24 @@ fn hermetic_evidence_serializes_stable_schema_version() {
     let evidence = HermeticBuildEvidence {
         schema_version: HERMETIC_EVIDENCE_SCHEMA_V1,
         build_input: BuildInputIdentity {
-            recipe_hash: Some("sha256:recipe".to_string()),
+            recipe: RecipeIdentity::ExplicitRecipe {
+                path: "recipe.toml".to_string(),
+                hash: "sha256:recipe".to_string(),
+            },
             source: SourceIdentity::Archive {
                 url: "https://example.invalid/pkg.tar.gz".to_string(),
                 checksum: "sha256:source".to_string(),
             },
+            additional_sources: Vec::new(),
             patches: Vec::new(),
             local_tree: None,
             ecosystem_dependencies: Vec::new(),
+            builder_environment: BuilderEnvironmentIdentity {
+                kind: BuilderEnvironmentKind::Pristine,
+                sysroot_hash: Some("sha256:sysroot".to_string()),
+                toolchain_hash: None,
+                diagnostics: Vec::new(),
+            },
         },
         dependency_lock: DependencyLock::default(),
         ecosystem_policy: EcosystemPolicyReport::clean("cargo"),
@@ -309,15 +322,24 @@ pub struct HermeticBuildEvidence {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct BuildInputIdentity {
-    #[serde(default)]
-    pub recipe_hash: Option<String>,
+    pub recipe: RecipeIdentity,
     pub source: SourceIdentity,
+    #[serde(default)]
+    pub additional_sources: Vec<SourceArchiveIdentity>,
     #[serde(default)]
     pub patches: Vec<InputFileIdentity>,
     #[serde(default)]
     pub local_tree: Option<LocalTreeIdentity>,
     #[serde(default)]
     pub ecosystem_dependencies: Vec<EcosystemDependencyIdentity>,
+    pub builder_environment: BuilderEnvironmentIdentity,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum RecipeIdentity {
+    ExplicitRecipe { path: String, hash: String },
+    GeneratedRecipe { generator: String, canonical_hash: String, inference_trace_hash: String },
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -326,6 +348,14 @@ pub enum SourceIdentity {
     Archive { url: String, checksum: String },
     Git { original: String, commit: String },
     LocalTree { root_display: String, tree_hash: String },
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct SourceArchiveIdentity {
+    pub url: String,
+    pub checksum: String,
+    pub extracted: bool,
+    pub target: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -357,6 +387,21 @@ pub struct EcosystemDependencyIdentity {
     pub evidence_hash: String,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct BuilderEnvironmentIdentity {
+    pub kind: BuilderEnvironmentKind,
+    pub sysroot_hash: Option<String>,
+    pub toolchain_hash: Option<String>,
+    pub diagnostics: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum BuilderEnvironmentKind {
+    Pristine,
+    HostMounted,
+}
+
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct DependencyLock {
     #[serde(default)]
@@ -377,6 +422,51 @@ pub struct LockedRepositoryDependency {
 
 Also add `PolicyStatus`, `EcosystemPolicyReport`, `BuildCommandRiskReport`, `BuildCommandRiskEntry`, and `ReproducibilityRecord` in the same file. Use `status: PolicyStatus` with serialized values `clean`, `review`, and `blocked`.
 
+Define the report DTOs completely in Task 2 so later tasks compile against a stable API:
+
+```rust
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum PolicyStatus {
+    Clean,
+    Review,
+    Blocked,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct EcosystemPolicyReport {
+    pub ecosystem: String,
+    pub status: PolicyStatus,
+    pub identities: Vec<EcosystemDependencyIdentity>,
+    pub diagnostics: Vec<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct BuildCommandRiskReport {
+    pub status: PolicyStatus,
+    pub classifier_version: String,
+    pub entries: Vec<BuildCommandRiskEntry>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct BuildCommandRiskEntry {
+    pub phase: String,
+    pub command: String,
+    pub reason_code: String,
+    pub severity: PolicyStatus,
+    pub evidence: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct ReproducibilityRecord {
+    pub source_date_epoch: Option<i64>,
+    pub path_remap_count: usize,
+    pub env_keys: Vec<String>,
+}
+```
+
+Add `EcosystemPolicyReport::clean(ecosystem: impl Into<String>)` and `BuildCommandRiskReport::clean()` constructors, because later tasks use those helpers in tests.
+
 - [ ] **Step 3: Attach evidence to manifest provenance**
 
 Add this field to `ManifestProvenance` in `manifest_provenance.rs`:
@@ -386,7 +476,7 @@ Add this field to `ManifestProvenance` in `manifest_provenance.rs`:
 pub hermetic_evidence: Option<crate::recipe::hermetic::HermeticBuildEvidence>,
 ```
 
-Update every `ManifestProvenance { ... }` literal to include:
+Update every `ManifestProvenance { ... }` literal, including `ProvenanceCapture::to_manifest_provenance()`, to include:
 
 ```rust
 hermetic_evidence: None,
@@ -406,9 +496,10 @@ In `recipe/hermetic/mod.rs`, export:
 pub mod evidence;
 
 pub use evidence::{
-    BuildCommandRiskEntry, BuildCommandRiskReport, BuildInputIdentity, DependencyLock,
-    EcosystemDependencyIdentity, EcosystemPolicyReport, HermeticBuildEvidence, InputFileIdentity,
-    LocalTreeIdentity, LocalTreeMode, PolicyStatus, ReproducibilityRecord, SourceIdentity,
+    BuildCommandRiskEntry, BuildCommandRiskReport, BuildInputIdentity, BuilderEnvironmentIdentity,
+    BuilderEnvironmentKind, DependencyLock, EcosystemDependencyIdentity, EcosystemPolicyReport,
+    HermeticBuildEvidence, InputFileIdentity, LocalTreeIdentity, LocalTreeMode, PolicyStatus,
+    RecipeIdentity, ReproducibilityRecord, SourceArchiveIdentity, SourceIdentity,
     COMMAND_RISK_CLASSIFIER_VERSION, HERMETIC_EVIDENCE_SCHEMA_V1,
 };
 ```
@@ -418,7 +509,9 @@ pub use evidence::{
 Run:
 
 ```bash
-cargo test -p conary-core recipe::hermetic::evidence ccs::manifest
+cargo test -p conary-core recipe::hermetic::evidence
+cargo test -p conary-core ccs::manifest
+cargo test -p conary-core recipe::kitchen::provenance_capture
 ```
 
 Expected: evidence tests pass and existing manifest serialization tests still pass.
@@ -426,7 +519,7 @@ Expected: evidence tests pass and existing manifest serialization tests still pa
 - [ ] **Step 6: Commit**
 
 ```bash
-git add crates/conary-core/src/recipe crates/conary-core/src/ccs/manifest_provenance.rs crates/conary-core/src/ccs/manifest.rs
+git add crates/conary-core/src/recipe crates/conary-core/src/ccs/manifest_provenance.rs crates/conary-core/src/ccs/manifest.rs crates/conary-core/src/recipe/kitchen/provenance_capture.rs
 git commit -m "feat(packaging): add unsigned hermetic evidence model"
 ```
 
@@ -510,6 +603,15 @@ pub enum CiMode {
 pub struct CanonicalLocalFile {
     pub relative_path: std::path::PathBuf,
     pub hash: String,
+    pub kind: CanonicalLocalFileKind,
+    pub mode: Option<u32>,
+    pub symlink_target: Option<std::path::PathBuf>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CanonicalLocalFileKind {
+    Regular,
+    Symlink,
 }
 
 pub fn detect_ci_mode() -> CiMode {
@@ -526,7 +628,21 @@ pub fn local_tree_identity(root: &Path, ci_mode: CiMode) -> Result<LocalTreeIden
 
 For git repositories, use `git -C <root> ls-files -z` for the hashed file list and `git -C <root> status --porcelain=v1 --untracked-files=normal` for dirty/untracked diagnostics. In CI mode, any non-empty status output is an error. Outside CI mode, tracked modified files are hashed from the working tree and untracked files produce a warning.
 
-For non-git directories, walk recursively, skip `.git`, `dist`, `target`, `.conary`, and hidden editor swap files, hash file contents, sort by relative path, and record a warning that filesystem-walk identity is weaker than git-tracked identity.
+For non-git directories, walk recursively, skip this documented default ignore set, hash file contents, sort by relative path, and record a warning that filesystem-walk identity is weaker than git-tracked identity:
+
+```text
+.git
+.conary
+dist
+target
+node_modules
+__pycache__
+.venv
+build
+out
+```
+
+Do not ignore `vendor/` by default, because M2a Cargo vendor identity may deliberately need that tree. Add tests proving each default ignored entry is excluded and `vendor/` is included when present.
 
 - [ ] **Step 3: Implement canonical materialization**
 
@@ -540,18 +656,50 @@ pub fn materialize_local_source_from_file_list(
 ) -> Result<()> {
     std::fs::create_dir_all(destination)?;
     for file in files {
+        validate_relative_materialization_path(&file.relative_path)?;
         let source = source_root.join(&file.relative_path);
         let dest = destination.join(&file.relative_path);
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        std::fs::copy(&source, &dest)?;
+        verify_file_identity_before_materialization(source_root, &source, file)?;
+        match file.kind {
+            CanonicalLocalFileKind::Regular => {
+                std::fs::copy(&source, &dest)?;
+            }
+            CanonicalLocalFileKind::Symlink => {
+                let target = std::fs::read_link(&source)?;
+                validate_symlink_target_stays_inside_root(source_root, &source, &target)?;
+                std::os::unix::fs::symlink(target, &dest)?;
+            }
+        }
     }
     Ok(())
 }
 ```
 
-Preserve the existing symlink escape rejection. If a symlink resolves outside `source_root`, return the existing "Local source symlink must stay within the source directory" style error.
+The materializer must:
+
+- Reject absolute paths and any relative path containing `..`.
+- Recompute and compare `CanonicalLocalFile.hash` immediately before materialization so source bytes cannot drift after planning.
+- Preserve safe symlinks instead of following them as regular files.
+- Reject symlinks whose resolved target escapes `source_root` using the existing "Local source symlink must stay within the source directory" style error.
+
+Add tests:
+
+```rust
+#[test]
+fn materialization_refuses_hash_mismatch_after_planning() { /* mutate a tracked file after listing */ }
+
+#[test]
+fn materialization_rejects_parent_or_absolute_paths() { /* build a malicious CanonicalLocalFile */ }
+
+#[test]
+fn materialization_rejects_symlink_escape() { /* tracked symlink points outside root */ }
+
+#[test]
+fn materialization_preserves_safe_symlink() { /* tracked symlink points inside root */ }
+```
 
 - [ ] **Step 4: Wire Kitchen isolated local sources through canonical materialization**
 
@@ -571,7 +719,9 @@ In `Cook::prep()`, when the recipe has `SourceSection::Local` and `use_isolation
 Run:
 
 ```bash
-cargo test -p conary-core recipe::hermetic::source_identity recipe::kitchen::local_source recipe::kitchen::cook
+cargo test -p conary-core recipe::hermetic::source_identity
+cargo test -p conary-core recipe::kitchen::local_source
+cargo test -p conary-core recipe::kitchen::cook
 ```
 
 Expected: new source identity/materialization tests pass and existing local-source Kitchen tests still pass.
@@ -622,6 +772,33 @@ fn cargo_lock_with_no_registry_dependencies_is_clean_when_offline_flag_present()
 }
 
 #[test]
+fn cargo_registry_dependency_without_vendor_identity_is_blocked() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("Cargo.lock"), "source = \"registry+https://github.com/rust-lang/crates.io-index\"\n").unwrap();
+
+    let report = evaluate_ecosystem_policy(BuildSystem::Cargo, root.path(), "cargo build --release --locked --offline").unwrap();
+
+    assert_eq!(report.status, PolicyStatus::Blocked);
+    assert!(report.diagnostics.iter().any(|d| d.contains("vendor")));
+}
+
+#[test]
+fn cargo_registry_dependency_with_vendor_identity_is_recorded() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(root.path().join("vendor/dep")).unwrap();
+    std::fs::write(root.path().join("Cargo.lock"), "source = \"registry+https://github.com/rust-lang/crates.io-index\"\n").unwrap();
+    std::fs::write(root.path().join("vendor/dep/lib.rs"), "pub fn dep() {}\n").unwrap();
+    std::fs::create_dir_all(root.path().join(".cargo")).unwrap();
+    std::fs::write(root.path().join(".cargo/config.toml"), "[net]\noffline = true\n[source.crates-io]\nreplace-with = \"vendored-sources\"\n[source.vendored-sources]\ndirectory = \"vendor\"\n").unwrap();
+
+    let report = evaluate_ecosystem_policy(BuildSystem::Cargo, root.path(), "cargo build --release --locked").unwrap();
+
+    assert_eq!(report.status, PolicyStatus::Clean);
+    assert!(report.identities.iter().any(|identity| identity.evidence_path == "vendor"));
+    assert!(report.identities.iter().any(|identity| identity.evidence_path == ".cargo/config.toml"));
+}
+
+#[test]
 fn cargo_lock_without_offline_flag_is_blocked() {
     let root = tempfile::tempdir().unwrap();
     std::fs::write(root.path().join("Cargo.lock"), "version = 4\n").unwrap();
@@ -660,7 +837,7 @@ Cargo rules:
 - Require `Cargo.lock`.
 - Require explicit `--offline` in the command text or `.cargo/config.toml` containing offline mode.
 - Accept no external registry dependencies when `Cargo.lock` lacks `source = "registry+`.
-- Accept registry dependencies only when `vendor/` exists and is recorded as an `EcosystemDependencyIdentity`.
+- Accept registry dependencies only when `vendor/` or a pinned Cargo cache exists, `.cargo/config.toml` pins offline/source replacement to that content, and the vendor/cache tree plus `.cargo/config.toml` are recorded as `EcosystemDependencyIdentity` entries.
 - Block all other Cargo cases with a diagnostic naming the missing evidence.
 
 Go, npm, and Python rules:
@@ -689,7 +866,8 @@ Update detector tests that currently expect `cargo build --release --locked`.
 Run:
 
 ```bash
-cargo test -p conary-core recipe::hermetic::ecosystem recipe::inference::detectors
+cargo test -p conary-core recipe::hermetic::ecosystem
+cargo test -p conary-core recipe::inference::detectors
 ```
 
 Expected: Cargo policy tests pass, and inference tests reflect the new offline command for locked Cargo projects.
@@ -776,6 +954,31 @@ fn clean_commands_are_clean() {
 
     assert_eq!(report.status, PolicyStatus::Clean);
     assert!(report.entries.is_empty());
+}
+```
+
+Add a table-driven test that covers every listed risk family, including wrapped/evasion shapes:
+
+```rust
+#[test]
+fn command_risk_detects_wrappers_and_every_block_family() {
+    let cases = [
+        ("env -i npm install atomic-lockfile", "package-manager-fetch"),
+        ("/usr/bin/curl https://example.invalid/payload", "network-fetch"),
+        ("bash -c 'curl https://example.invalid/payload'", "network-fetch"),
+        ("echo $(wget https://example.invalid/payload)", "network-fetch"),
+        ("python -c 'print(1)'", "dynamic-language-exec"),
+        ("cat /etc/shadow", "credential-path"),
+        ("base64 --decode payload.txt", "obfuscation"),
+        ("systemctl --user enable payload.service", "persistence"),
+        ("cat /proc/self/environ", "proc-stealth-or-debug"),
+    ];
+
+    for (command, reason) in cases {
+        let report = classify_build_commands(&[BuildCommandText::new("build", command)]);
+        assert_eq!(report.status, PolicyStatus::Blocked, "{command}");
+        assert!(report.entries.iter().any(|entry| entry.reason_code == reason), "{command}");
+    }
 }
 ```
 
@@ -867,6 +1070,7 @@ git commit -m "security(packaging): classify hermetic build command risks"
 
 **Files:**
 - Create: `crates/conary-core/src/recipe/hermetic/plan.rs`
+- Create: `crates/conary-core/src/recipe/hermetic/reproducibility.rs`
 - Modify: `crates/conary-core/src/recipe/hermetic/mod.rs`
 - Modify: `crates/conary-core/src/recipe/kitchen/config.rs`
 - Modify: `crates/conary-core/src/recipe/kitchen/mod.rs`
@@ -935,12 +1139,18 @@ Add:
 fn hermetic_plan_for_local_cargo_project_is_clean() {
     let fixture = cargo_project_with_lock();
     let recipe = inferred_cargo_recipe(fixture.path());
+    let input = HermeticBuildInput::generated_recipe(
+        fixture.path(),
+        recipe.clone(),
+        "sha256:inference-trace",
+    );
 
-    let plan = HermeticBuildPlan::from_recipe(&recipe, fixture.path(), CiMode::Off).unwrap();
+    let plan = HermeticBuildPlan::from_recipe(&recipe, input, CiMode::Off).unwrap();
 
     assert_eq!(plan.evidence.schema_version, HERMETIC_EVIDENCE_SCHEMA_V1);
     assert_eq!(plan.evidence.ecosystem_policy.status, PolicyStatus::Clean);
     assert_eq!(plan.evidence.command_risk.status, PolicyStatus::Clean);
+    assert_eq!(plan.evidence.build_input.builder_environment.kind, BuilderEnvironmentKind::Pristine);
     assert!(plan.local_files.is_some());
 }
 
@@ -948,11 +1158,38 @@ fn hermetic_plan_for_local_cargo_project_is_clean() {
 fn hermetic_plan_blocks_npm_fetch_command() {
     let fixture = npm_project();
     let recipe = inferred_npm_recipe(fixture.path());
+    let input = HermeticBuildInput::generated_recipe(
+        fixture.path(),
+        recipe.clone(),
+        "sha256:inference-trace",
+    );
 
-    let error = HermeticBuildPlan::from_recipe(&recipe, fixture.path(), CiMode::Off).unwrap_err();
+    let error = HermeticBuildPlan::from_recipe(&recipe, input, CiMode::Off).unwrap_err();
 
     assert!(error.to_string().contains("npm"));
     assert!(error.to_string().contains("M2a hermetic support"));
+}
+
+#[test]
+fn hermetic_plan_blocks_unlocked_build_dependencies() {
+    let fixture = cargo_project_with_lock();
+    let recipe = recipe_with_makedepends(["openssl-devel"]);
+    let input = HermeticBuildInput::explicit_recipe(fixture.path(), fixture.recipe_path(), "sha256:recipe");
+
+    let error = HermeticBuildPlan::from_recipe(&recipe, input, CiMode::Off).unwrap_err();
+
+    assert!(error.to_string().contains("build dependency"));
+    assert!(error.to_string().contains("content identity"));
+}
+
+#[test]
+fn hermetic_plan_resolves_source_path_relative_to_recipe_base() {
+    let fixture = recipe_with_local_source_path("src");
+    let input = HermeticBuildInput::explicit_recipe(fixture.project_dir(), fixture.recipe_path(), "sha256:recipe");
+
+    let plan = HermeticBuildPlan::from_recipe(&fixture.recipe, input, CiMode::Off).unwrap();
+
+    assert!(plan.local_files.as_ref().unwrap().iter().all(|file| file.relative_path.starts_with("src")));
 }
 ```
 
@@ -968,12 +1205,23 @@ pub struct HermeticBuildPlan {
     pub reproducibility: ReproducibilityConfig,
 }
 
+#[derive(Debug, Clone)]
+pub struct HermeticBuildInput {
+    pub recipe_identity: RecipeIdentity,
+    pub recipe_source_base_dir: PathBuf,
+    pub generated_recipe: Option<Recipe>,
+    pub inference_trace_hash: Option<String>,
+    pub builder_environment: BuilderEnvironmentIdentity,
+    pub locked_repository_dependencies: Vec<LockedRepositoryDependency>,
+}
+
 impl HermeticBuildPlan {
-    pub fn from_recipe(recipe: &Recipe, source_root: &Path, ci_mode: CiMode) -> Result<Self>;
+    pub fn from_recipe(recipe: &Recipe, input: HermeticBuildInput, ci_mode: CiMode) -> Result<Self>;
 
     pub fn apply_to_kitchen_config(&self, config: &mut KitchenConfig) {
         config.use_isolation = true;
         config.allow_network = false;
+        config.pristine_mode = true;
         config.source_download_policy = SourceDownloadPolicy::OfflineCacheOnly;
         config.hermetic_evidence = Some(self.evidence.clone());
         config.hermetic_local_files = self.local_files.clone();
@@ -984,18 +1232,25 @@ impl HermeticBuildPlan {
 
 `from_recipe()` must:
 
-- Build source identity for local or remote sources.
+- Refuse to produce `hardening_level = "hermetic"` unless `input.builder_environment.kind == BuilderEnvironmentKind::Pristine` and the builder sysroot/toolchain identity is present or explicitly recorded as unavailable with a blocking diagnostic.
+- Build required `RecipeIdentity`: explicit recipe file hash for recipe-backed builds, or canonical generated recipe hash plus inference trace hash for inferred builds. Block hermetic evidence if the recipe identity cannot be produced.
+- Resolve `SourceSection::Local` relative to `input.recipe_source_base_dir`, not the process working directory, so `[source] path = "src"` hashes and materializes only that local source root.
+- Build primary source identity for local or remote sources.
+- Record `additional_sources: Vec<SourceArchiveIdentity>` for every staged additional source, including substituted URL, checksum, extract flag, and target. Block when an additional source lacks checksum/content identity.
 - Collect recipe commands and command-risk report.
 - Evaluate ecosystem policy for inferred Cargo, Go, npm, and Python when build-system evidence is known. For explicit recipes, infer from markers under the source root when possible and otherwise use command-risk report only.
+- If `recipe.all_build_deps()` is non-empty, require `input.locked_repository_dependencies` to contain immutable repository URL, snapshot version, package version/release, architecture, and content identity for each build dependency; otherwise block hermetic planning.
 - Block when any report status is `Blocked`.
 - Return clean evidence for local Cargo projects with lock/no-registry or vendor evidence and `--offline`.
+- Construct the initial `ReproducibilityConfig` before returning the plan. Task 7 extends that module with env injection and validation.
 
 - [ ] **Step 5: Run tests**
 
 Run:
 
 ```bash
-cargo test -p conary-core recipe::hermetic::plan recipe::kitchen
+cargo test -p conary-core recipe::hermetic::plan
+cargo test -p conary-core recipe::kitchen
 ```
 
 Expected: hermetic plan and source-download policy tests pass.
@@ -1012,7 +1267,7 @@ git commit -m "feat(packaging): assemble hermetic build plans"
 ### Task 7: Add Reproducibility Controls
 
 **Files:**
-- Create: `crates/conary-core/src/recipe/hermetic/reproducibility.rs`
+- Modify: `crates/conary-core/src/recipe/hermetic/reproducibility.rs`
 - Modify: `crates/conary-core/src/recipe/hermetic/mod.rs`
 - Modify: `crates/conary-core/src/recipe/kitchen/config.rs`
 - Modify: `crates/conary-core/src/recipe/kitchen/cook.rs`
@@ -1037,9 +1292,36 @@ fn reproducibility_env_sets_source_date_epoch_and_path_maps() {
     assert!(env.iter().any(|(k, v)| k == "RUSTFLAGS" && v.contains("--remap-path-prefix")));
     assert!(env.iter().any(|(k, v)| k == "CFLAGS" && v.contains("-ffile-prefix-map")));
 }
+
+#[test]
+fn final_env_preserves_recipe_flags_and_appends_required_remaps() {
+    let source = Path::new("/tmp/conary/source");
+    let build = Path::new("/tmp/conary/build");
+    let config = ReproducibilityConfig::new(123, source, build);
+
+    let final_env = config.merge_env(
+        vec![("RUSTFLAGS".to_string(), "-C target-cpu=native".to_string())]
+    ).unwrap();
+
+    let rustflags = final_env.iter().find(|(k, _)| k == "RUSTFLAGS").unwrap().1.as_str();
+    assert!(rustflags.contains("-C target-cpu=native"));
+    assert!(rustflags.contains("--remap-path-prefix"));
+}
+
+#[test]
+fn hermetic_env_validation_rejects_missing_required_remap() {
+    let config = ReproducibilityConfig::new(123, Path::new("/src"), Path::new("/build"));
+
+    let error = config
+        .validate_final_env(&[("RUSTFLAGS".to_string(), "-C opt-level=2".to_string())])
+        .unwrap_err();
+
+    assert!(error.to_string().contains("RUSTFLAGS"));
+    assert!(error.to_string().contains("remap-path-prefix"));
+}
 ```
 
-- [ ] **Step 2: Implement reproducibility config**
+- [ ] **Step 2: Extend reproducibility config**
 
 Use:
 
@@ -1054,6 +1336,8 @@ pub struct ReproducibilityConfig {
 impl ReproducibilityConfig {
     pub fn new(source_date_epoch: i64, source_root: &Path, build_root: &Path) -> Self;
     pub fn env_vars(&self) -> Vec<(String, String)>;
+    pub fn merge_env(&self, recipe_env: Vec<(String, String)>) -> Result<Vec<(String, String)>>;
+    pub fn validate_final_env(&self, env: &[(String, String)]) -> Result<()>;
     pub fn record(&self) -> ReproducibilityRecord;
 }
 ```
@@ -1065,11 +1349,11 @@ impl ReproducibilityConfig {
 - `CFLAGS=-ffile-prefix-map=<source_root>=/build/source -ffile-prefix-map=<build_root>=/build`
 - `CXXFLAGS` with the same `-ffile-prefix-map` values
 
-When recipe-provided environment values already contain `RUSTFLAGS`, `CFLAGS`, or `CXXFLAGS`, append M2a flags instead of replacing user values.
+When recipe-provided environment values already contain `RUSTFLAGS`, `CFLAGS`, or `CXXFLAGS`, preserve the recipe-provided flags and append M2a remap flags after them. `SOURCE_DATE_EPOCH` is controlled by the hermetic plan in hermetic mode; recipe attempts to override it must fail with a diagnostic.
 
 - [ ] **Step 3: Inject env in Kitchen**
 
-In `Cook::simmer()`, after `extra_env` and before recipe-level environment entries, append `config.reproducibility.env_vars()`. Recipe-level values still take precedence for explicit user choices; the hermetic plan must block later if those choices remove required path mapping.
+In `Cook::simmer()`, compute the final environment for hermetic builds with `config.reproducibility.merge_env(recipe_env)` after collecting `extra_env`, recipe-level environment entries, and command-local env prefixes. Then call `validate_final_env()` immediately before command execution. A recipe may add flags, but it cannot erase `SOURCE_DATE_EPOCH` or required path remapping.
 
 - [ ] **Step 4: Record reproducibility in provenance**
 
@@ -1091,12 +1375,16 @@ hardening_level: Some(
 hermetic_evidence: self.hermetic_evidence.clone(),
 ```
 
+Update both `Cook::new` and `Cook::new_with_dest` to copy `KitchenConfig.hermetic_evidence` into `ProvenanceCapture` and set `hardening_level_override = Some("hermetic".to_string())` only when hermetic evidence is present and `KitchenConfig.pristine_mode` is true. If hermetic evidence is present without pristine mode, return a configuration error before build execution.
+
 - [ ] **Step 5: Run tests**
 
 Run:
 
 ```bash
-cargo test -p conary-core recipe::hermetic::reproducibility recipe::kitchen::cook recipe::kitchen::provenance_capture
+cargo test -p conary-core recipe::hermetic::reproducibility
+cargo test -p conary-core recipe::kitchen::cook
+cargo test -p conary-core recipe::kitchen::provenance_capture
 ```
 
 Expected: reproducibility env and provenance tests pass.
@@ -1135,12 +1423,19 @@ fn cook_hermetic_prefetches_then_builds_offline() {
         ..KitchenConfig::default()
     };
     let kitchen = Kitchen::new(prefetch_config);
+    let input = HermeticBuildInput::explicit_recipe(
+        fixture.project_dir.clone(),
+        fixture.recipe_path.clone(),
+        "sha256:recipe",
+    )
+    .with_pristine_builder_environment(fixture.builder_environment_identity());
 
-    let result = kitchen.cook_hermetic(&fixture.recipe, &fixture.source_dir, &output_dir, CiMode::Off).unwrap();
+    let result = kitchen.cook_hermetic(&fixture.recipe, input, &output_dir, CiMode::Off).unwrap();
     let provenance = result.provenance.expect("hermetic provenance");
 
     assert_eq!(provenance.hardening_level.as_deref(), Some("hermetic"));
     assert!(provenance.hermetic_evidence.is_some());
+    assert!(provenance.hermetic_evidence.as_ref().unwrap().build_input.builder_environment.kind == BuilderEnvironmentKind::Pristine);
 }
 ```
 
@@ -1152,20 +1447,20 @@ Add:
 pub fn cook_hermetic(
     &self,
     recipe: &Recipe,
-    source_root: &Path,
+    input: HermeticBuildInput,
     output_dir: &Path,
     ci_mode: CiMode,
 ) -> Result<CookResult> {
     self.fetch(recipe)?;
-    let plan = HermeticBuildPlan::from_recipe(recipe, source_root, ci_mode)?;
+    let plan = HermeticBuildPlan::from_recipe(recipe, input, ci_mode)?;
     let mut build_config = self.config.clone();
     plan.apply_to_kitchen_config(&mut build_config);
-    let kitchen = Kitchen::new(build_config);
+    let kitchen = self.with_config_preserving_resolver(build_config);
     kitchen.cook(recipe, output_dir)
 }
 ```
 
-If `self.resolver` is present, preserve it by constructing the build Kitchen with the same resolver.
+Implement `Kitchen::with_config_preserving_resolver(build_config)` or an equivalent constructor so `cook_hermetic()` carries `self.resolver` into the offline build Kitchen. Add a test with `makedepends` and a fake resolver proving the resolver is still invoked after hermetic planning.
 
 - [ ] **Step 3: Wire `cmd_cook`**
 
@@ -1185,7 +1480,16 @@ if hermetic_requested && no_isolation {
 }
 ```
 
-For the hermetic path, call `kitchen.cook_hermetic(&recipe, &resolved.recipe_source_base_dir, output_dir, conary_core::recipe::hermetic::detect_ci_mode())`.
+For the hermetic path, construct `HermeticBuildInput` from the resolved recipe path or generated inference trace, `resolved.recipe_source_base_dir`, pristine builder environment identity, and locked build-dependency identities, then call:
+
+```rust
+kitchen.cook_hermetic(
+    &recipe,
+    hermetic_input,
+    output_dir,
+    conary_core::recipe::hermetic::detect_ci_mode(),
+)
+```
 
 - [ ] **Step 4: Update output text**
 
@@ -1240,7 +1544,7 @@ fn publish_kitchen_config_uses_hermetic_defaults() {
 
     assert!(config.use_isolation);
     assert!(!config.allow_network);
-    assert!(!config.pristine_mode);
+    assert!(config.pristine_mode);
     assert_eq!(
         config.recipe_source_base_dir,
         Some(std::path::PathBuf::from("/work/pkg"))
@@ -1253,9 +1557,16 @@ fn publish_kitchen_config_uses_hermetic_defaults() {
 In `cmd_publish`, replace `kitchen.cook(&recipe, output_dir.path())` with:
 
 ```rust
-let source_root = recipe_source_base_dir(&recipe_path);
+let hermetic_input = HermeticBuildInput::explicit_recipe(
+    recipe_source_base_dir(&recipe_path),
+    recipe_path.clone(),
+    hash_file(&recipe_path)?,
+)
+.with_pristine_builder_environment(detect_builder_environment_identity()?)
+.with_locked_repository_dependencies(resolve_locked_build_dependencies(&recipe)?);
+
 let result = kitchen
-    .cook_hermetic(&recipe, &source_root, output_dir.path(), conary_core::recipe::hermetic::detect_ci_mode())
+    .cook_hermetic(&recipe, hermetic_input, output_dir.path(), conary_core::recipe::hermetic::detect_ci_mode())
     .with_context(|| format!("Failed to hermetically cook {}", recipe.package.name))?;
 ```
 
@@ -1272,7 +1583,7 @@ M2a static publish records hermetic build evidence, but release attestation gate
 Replace "sandboxed, network allowed" with:
 
 ```text
-hermetic, network disabled during build
+hermetic, pristine/no-host-mount build with network disabled
 ```
 
 - [ ] **Step 4: Preserve artifact-form rejection**
@@ -1291,6 +1602,25 @@ Add a unit test asserting artifact-form publish still returns this exact text.
 Create `apps/conary/tests/packaging_m2a.rs` with tests:
 
 ```rust
+#[test]
+fn publish_project_form_records_hermetic_evidence_without_build_attestation() {
+    let fixture = CargoHermeticFixture::new();
+    let output = fixture.publish_project_form();
+    assert_success(&output);
+    assert_stdout_contains(&output, "M2a static publish records hermetic build evidence");
+
+    let manifest = fixture.read_published_package_manifest();
+    let provenance = manifest.provenance.expect("provenance");
+    assert_eq!(provenance.hardening_level.as_deref(), Some("hermetic"));
+    assert!(provenance.hermetic_evidence.is_some());
+    assert!(!provenance.signatures.is_empty());
+
+    let manifest_text = fixture.read_published_manifest_text();
+    assert!(!manifest_text.contains("build_attestation"));
+    assert!(!manifest_text.contains("BuildAttestationEnvelope"));
+    assert!(!manifest_text.contains("attested"));
+}
+
 #[test]
 fn cook_isolated_records_hermetic_evidence() {
     let fixture = CargoHermeticFixture::new();
@@ -1314,7 +1644,9 @@ fn cook_isolated_blocks_npm_fetch_before_build() {
 #[test]
 fn publish_artifact_form_still_requires_m2b_attestation() {
     let fixture = CargoHermeticFixture::new();
-    let output = fixture.publish_artifact_form();
+    let package = fixture.cook_isolated_package_path();
+    assert!(package.is_file());
+    let output = fixture.publish_artifact_form_with_package(&package);
     assert_failure_contains(&output, &["artifact-form publish requires M2 attestation support"]);
 }
 ```
@@ -1418,7 +1750,8 @@ Implement `compare_host_record()`. M2a records divergence diagnostics only; it m
 Run:
 
 ```bash
-cargo test -p conary-core recipe::hermetic::plan recipe::hermetic::evidence
+cargo test -p conary-core recipe::hermetic::plan
+cargo test -p conary-core recipe::hermetic::evidence
 ```
 
 Expected: divergence report tests pass.
@@ -1472,6 +1805,8 @@ Add or refresh ledger rows for the docs changed in this task, including this pla
 - `status`: `verified`
 - `disposition`: `corrected`
 
+Before editing public command help, docs claims, or route-facing guidance, grep `docs/superpowers/feature-coherency-ledger.tsv` for the touched paths. If implementation updates feature-coherency rows or wave scopes, run the relevant `scripts/check-coherency-wave-scopes.sh` command in addition to the ledger check below.
+
 - [ ] **Step 3: Run focused package tests**
 
 Run:
@@ -1480,10 +1815,13 @@ Run:
 cargo test -p conary-core recipe::hermetic
 cargo test -p conary-core recipe::kitchen
 cargo test -p conary-core container::analysis
-cargo test -p conary --lib commands::cook commands::publish
+cargo test -p conary --lib commands::cook
+cargo test -p conary --lib commands::publish
 cargo test -p conary --test packaging_m2a
 cargo test -p conary --test packaging_m1b
 cargo test -p conary --test static_repo_m1a
+cargo test -p conary-core
+cargo test -p conary
 ```
 
 Expected: all targeted tests pass.
@@ -1496,6 +1834,11 @@ Run:
 cargo fmt --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo run -p conary-test -- list
+cargo test -p conary --lib cli::tests
+cargo run -p conary -- --help
+cargo run -p conary -- cook --help
+cargo run -p conary -- publish --help
+scripts/check-coherency-ledger.sh docs/superpowers/feature-coherency-ledger.tsv
 scripts/check-doc-audit-ledger.sh docs/superpowers/documentation-accuracy-audit-ledger.tsv --require-complete
 scripts/check-doc-truth.sh
 bash scripts/docs-audit-inventory.sh | diff -u docs/superpowers/documentation-accuracy-audit-inventory.tsv -
@@ -1517,9 +1860,13 @@ git commit -m "docs(packaging): document M2a hermetic publish foundation"
 
 - [ ] M2a does not create or embed signed build-attestation envelopes.
 - [ ] M2a does not unlock artifact-form publish.
-- [ ] Every path that emits `hardening_level = "hermetic"` also has source identity, command-risk report, ecosystem policy report, reproducibility record, and offline Kitchen execution.
+- [ ] Every path that emits `hardening_level = "hermetic"` uses pristine/no-host-mount Kitchen execution and records builder environment identity.
+- [ ] Every path that emits `hardening_level = "hermetic"` also has recipe identity, primary and additional source identity, command-risk report, ecosystem policy report, dependency-lock evidence or fail-closed refusal, reproducibility record, and offline Kitchen execution.
 - [ ] `source_download_policy = OfflineCacheOnly` blocks cache misses in hermetic build `prep()`.
-- [ ] Local source materialization uses the same file list that was hashed.
+- [ ] Local source materialization uses the same file list that was hashed, re-verifies each hash immediately before copy, rejects path escapes, and preserves safe symlinks.
 - [ ] Cargo is the only accepted ecosystem path in M2a unless the implementing agent adds a fully tested policy for another ecosystem inside this plan.
+- [ ] Cargo registry dependencies are accepted only with recorded vendor/cache and `.cargo/config.toml` source-replacement identity.
 - [ ] Package-manager fetch and dynamic language execution are at least medium-risk for runtime auto-sandboxing.
+- [ ] Project-form publish is proven end-to-end to write hermetic evidence without signed build-attestation envelopes.
+- [ ] Artifact-form publish refusal is proven against an actual M2a-produced `.ccs`, not only a nonexistent path.
 - [ ] Docs and docs-audit rows are updated with the landed ownership paths.
