@@ -221,14 +221,89 @@ fn validate_env_wrapper_mutations(
     phase: &str,
     tokens: &[String],
 ) -> Result<()> {
-    for token in tokens {
-        if token.starts_with('-') {
+    let mut index = 0;
+    while let Some(token) = tokens.get(index) {
+        if token == "--" {
+            break;
+        }
+        if token == "--ignore-environment" {
+            return Err(command_local_env_clear_error(phase));
+        }
+        if let Some(key) = token.strip_prefix("--unset=") {
+            validate_env_unset_key(phase, key)?;
+            index += 1;
+            continue;
+        }
+        if token == "--unset" || token == "-u" {
+            let Some(key) = tokens.get(index + 1) else {
+                return Err(Error::ConfigError(format!(
+                    "hermetic reproducibility rejects env {token} without a key in {phase} phase"
+                )));
+            };
+            validate_env_unset_key(phase, key)?;
+            index += 2;
+            continue;
+        }
+        if let Some(next_index) = validate_short_env_options(phase, tokens, index)? {
+            index = next_index;
             continue;
         }
         let Some((key, value)) = shell_assignment(token) else {
             break;
         };
         validate_shell_assignment(config, phase, &key, &value)?;
+        index += 1;
+    }
+    Ok(())
+}
+
+fn validate_short_env_options(
+    phase: &str,
+    tokens: &[String],
+    index: usize,
+) -> Result<Option<usize>> {
+    let token = &tokens[index];
+    if !token.starts_with('-') || token.starts_with("--") || token == "-" {
+        return Ok(None);
+    }
+
+    let mut chars = token[1..].char_indices().peekable();
+    while let Some((offset, option)) = chars.next() {
+        match option {
+            'i' => return Err(command_local_env_clear_error(phase)),
+            'u' => {
+                let key_start = offset + option.len_utf8() + 1;
+                let key = if key_start < token.len() {
+                    &token[key_start..]
+                } else {
+                    tokens.get(index + 1).map(String::as_str).ok_or_else(|| {
+                        Error::ConfigError(format!(
+                            "hermetic reproducibility rejects env -u without a key in {phase} phase"
+                        ))
+                    })?
+                };
+                validate_env_unset_key(phase, key)?;
+                let next_index = if key_start < token.len() {
+                    index + 1
+                } else {
+                    index + 2
+                };
+                return Ok(Some(next_index));
+            }
+            _ => {
+                if chars.peek().is_none() {
+                    return Ok(Some(index + 1));
+                }
+            }
+        }
+    }
+
+    Ok(Some(index + 1))
+}
+
+fn validate_env_unset_key(phase: &str, key: &str) -> Result<()> {
+    if is_controlled_reproducibility_key(key) {
+        return Err(command_local_env_error(phase, key));
     }
     Ok(())
 }
@@ -251,6 +326,12 @@ fn validate_shell_assignment(
 fn command_local_env_error(phase: &str, key: &str) -> Error {
     Error::ConfigError(format!(
         "hermetic reproducibility rejects command-local {key} assignment in {phase} phase"
+    ))
+}
+
+fn command_local_env_clear_error(phase: &str) -> Error {
+    Error::ConfigError(format!(
+        "hermetic reproducibility rejects command-local environment clearing in {phase} phase"
     ))
 }
 
@@ -1673,6 +1754,11 @@ mod tests {
                 "/usr/bin/env SOURCE_DATE_EPOCH=999 make",
                 "SOURCE_DATE_EPOCH",
             ),
+            ("env -i make", "environment"),
+            ("env -u SOURCE_DATE_EPOCH make", "SOURCE_DATE_EPOCH"),
+            ("env --unset=RUSTFLAGS make", "RUSTFLAGS"),
+            ("/usr/bin/env -u CFLAGS make", "CFLAGS"),
+            ("env -iu SOURCE_DATE_EPOCH make", "environment"),
             (
                 "export RUSTFLAGS=--remap-path-prefix=/src=/build/source-old; make",
                 "RUSTFLAGS",
