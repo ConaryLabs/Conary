@@ -302,10 +302,24 @@ fn raw_proc_stealth_or_debug(line: &str) -> bool {
 }
 
 fn contains_shell_words(line: &str, first: &str, second: &str) -> bool {
-    let Some(first_index) = find_shell_word(line, first) else {
-        return false;
-    };
-    find_shell_word(&line[first_index + first.len()..], second).is_some()
+    let mut first_search_start = 0;
+    while let Some(relative_first_index) = find_shell_word(&line[first_search_start..], first) {
+        let first_index = first_search_start + relative_first_index;
+        let second_search_start = first_index + first.len();
+        let Some(relative_second_index) = find_shell_word(&line[second_search_start..], second)
+        else {
+            return false;
+        };
+        let second_index = second_search_start + relative_second_index;
+
+        if !contains_shell_command_separator(&line[second_search_start..second_index]) {
+            return true;
+        }
+
+        first_search_start = second_search_start;
+    }
+
+    false
 }
 
 fn contains_shell_word(line: &str, word: &str) -> bool {
@@ -326,6 +340,19 @@ fn find_shell_word(line: &str, word: &str) -> Option<usize> {
 
 fn is_shell_word_boundary(ch: Option<char>) -> bool {
     ch.is_none_or(|ch| !(ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-')))
+}
+
+fn contains_shell_command_separator(text: &str) -> bool {
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '&' if chars.peek() == Some(&'&') => return true,
+            '|' | ';' | '(' | ')' | '`' | '\n' => return true,
+            '$' if chars.peek() == Some(&'(') => return true,
+            _ => {}
+        }
+    }
+    false
 }
 
 fn push_entry(
@@ -548,5 +575,27 @@ mod tests {
 
         assert_eq!(report.status, PolicyStatus::Blocked);
         assert_eq!(package_manager_commands, vec!["bun", "npm"]);
+    }
+
+    #[test]
+    fn raw_fallback_does_not_pair_multiword_signals_across_shell_segments() {
+        let report = classify_build_commands(&[BuildCommandText::new(
+            "make",
+            "go env && make install\ngit status && make clone\npython script.py && echo -c",
+        )]);
+
+        assert_eq!(report.status, PolicyStatus::Clean);
+        assert!(report.entries.is_empty());
+
+        let report = classify_build_commands(&[
+            BuildCommandText::new("make", "go install example.org/tool"),
+            BuildCommandText::new("setup", "git clone https://example.invalid/repo"),
+            BuildCommandText::new("check", "/usr/bin/python3 -c 'print(1)'"),
+        ]);
+
+        assert_eq!(report.status, PolicyStatus::Blocked);
+        assert_reason(&report, "package-manager-fetch");
+        assert_reason(&report, "network-fetch");
+        assert_reason(&report, "dynamic-language-exec");
     }
 }
