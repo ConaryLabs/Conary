@@ -3,16 +3,21 @@
 //! Publish command - build a recipe project and publish it to a static repo.
 
 use std::env;
+use std::fs::File;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use conary_core::recipe::{Kitchen, KitchenConfig, parse_recipe_file, validate_recipe};
+use conary_core::recipe::hermetic::{HermeticBuildInput, detect_ci_mode};
+use conary_core::recipe::{
+    Kitchen, KitchenConfig, SourceDownloadPolicy, parse_recipe_file, validate_recipe,
+};
 use conary_core::repository::static_repo::RepoLocation;
 use conary_core::repository::static_repo::publish::{
     StaticPublishOptions, prepare_static_key_dir, publish_static_repo,
 };
 
 use super::cook::{recipe_source_base_dir, resolve_recipe_path};
+use super::hermetic_config::{ensure_no_build_dependencies_for_m2a, load_default_hermetic_builder};
 
 const ARTIFACT_FORM_REJECTION: &str = "artifact-form publish requires M2 attestation support; run project-form publish from a recipe project";
 
@@ -57,19 +62,32 @@ pub async fn cmd_publish(options: PublishOptions) -> Result<()> {
         println!("Warning: {}", warning);
     }
 
+    let builder = load_default_hermetic_builder()?;
+    ensure_no_build_dependencies_for_m2a(&recipe)?;
+
     let output_dir = tempfile::tempdir().context("create temporary publish output directory")?;
-    let config = publish_kitchen_config(&recipe_path, output_dir.path());
+    let builder_identity = builder.identity;
+    let builder_sysroot = builder.sysroot_path;
+    let hermetic_input = HermeticBuildInput::explicit_recipe(
+        recipe_source_base_dir(&recipe_path),
+        recipe_path.clone(),
+        sha256_prefixed_file(&recipe_path)?,
+    )
+    .with_builder_environment(builder_identity);
+    let config = publish_kitchen_config(&recipe_path, output_dir.path(), builder_sysroot);
     let kitchen = Kitchen::new(config);
 
-    println!("M1a static repos are preview repos, not reproducible release evidence.");
     println!(
-        "Cooking {} {} for static publish (sandboxed, network allowed)...",
+        "M2a static publish records hermetic build evidence, but release attestation gates arrive in M2b."
+    );
+    println!(
+        "Cooking {} {} for static publish (hermetic, pristine/no-host-mount, network disabled during build)...",
         recipe.package.name, recipe.package.version
     );
 
     let result = kitchen
-        .cook(&recipe, output_dir.path())
-        .with_context(|| format!("Failed to cook {}", recipe.package.name))?;
+        .cook_hermetic(&recipe, hermetic_input, output_dir.path(), detect_ci_mode())
+        .with_context(|| format!("Failed to hermetically cook {}", recipe.package.name))?;
 
     let outcome = publish_static_repo(StaticPublishOptions {
         repo_name: repo_name.clone(),
@@ -104,15 +122,31 @@ pub async fn cmd_publish(options: PublishOptions) -> Result<()> {
     Ok(())
 }
 
-fn publish_kitchen_config(recipe_path: &Path, output_dir: &Path) -> KitchenConfig {
+fn publish_kitchen_config(
+    recipe_path: &Path,
+    output_dir: &Path,
+    sysroot: PathBuf,
+) -> KitchenConfig {
     KitchenConfig {
         source_cache: output_dir.join("sources"),
         recipe_source_base_dir: Some(recipe_source_base_dir(recipe_path)),
-        allow_network: true,
+        allow_network: false,
         use_isolation: true,
-        pristine_mode: false,
+        pristine_mode: true,
+        sysroot: Some(sysroot),
+        auto_makedepends: false,
+        cleanup_makedepends: false,
+        source_download_policy: SourceDownloadPolicy::AllowDownloads,
         ..Default::default()
     }
+}
+
+fn sha256_prefixed_file(path: &Path) -> Result<String> {
+    let mut file = File::open(path)
+        .with_context(|| format!("Failed to open recipe for hashing: {}", path.display()))?;
+    let hash = conary_core::hash::sha256_reader_hex(&mut file)
+        .with_context(|| format!("Failed to hash recipe: {}", path.display()))?;
+    Ok(format!("sha256:{hash}"))
 }
 
 fn ensure_m1a_publish_destination(destination: &RepoLocation) -> Result<()> {
@@ -188,17 +222,70 @@ mod tests {
     }
 
     #[test]
-    fn publish_kitchen_config_forces_isolation_and_allows_network() {
+    fn publish_kitchen_config_uses_hermetic_defaults() {
         let recipe_path = std::path::Path::new("/work/pkg/recipe.toml");
         let output_dir = std::path::Path::new("/tmp/conary-publish-out");
-        let config = publish_kitchen_config(recipe_path, output_dir);
+        let sysroot = std::path::PathBuf::from("/var/lib/conary/sysroots/test");
+        let config = publish_kitchen_config(recipe_path, output_dir, sysroot.clone());
 
         assert!(config.use_isolation);
-        assert!(config.allow_network);
-        assert!(!config.pristine_mode);
+        assert!(!config.allow_network);
+        assert!(config.pristine_mode);
+        assert_eq!(config.sysroot, Some(sysroot));
+        assert_eq!(
+            config.source_download_policy,
+            conary_core::recipe::SourceDownloadPolicy::AllowDownloads
+        );
         assert_eq!(
             config.recipe_source_base_dir,
             Some(std::path::PathBuf::from("/work/pkg"))
+        );
+    }
+
+    #[tokio::test]
+    async fn project_form_publish_fails_without_hermetic_config() {
+        let temp = tempfile::tempdir().unwrap();
+        let recipe_path = temp.path().join("recipe.toml");
+        let repo_dir = temp.path().join("repo");
+        let key_dir = temp.path().join("keys");
+        let state_file = temp.path().join("publish-state.toml");
+        std::fs::write(
+            &recipe_path,
+            r#"
+[package]
+name = "publish-local"
+version = "1.0"
+
+[source]
+path = "."
+
+[build]
+install = "mkdir -p %(destdir)s/usr/share/publish-local && printf hi > %(destdir)s/usr/share/publish-local/hello.txt"
+"#,
+        )
+        .unwrap();
+
+        let error = cmd_publish(PublishOptions {
+            what: repo_dir.display().to_string(),
+            target: None,
+            recipe: Some(recipe_path.display().to_string()),
+            key_dir: Some(key_dir.display().to_string()),
+            state_file: Some(state_file.display().to_string()),
+            refresh: false,
+            force_reinit: false,
+            accept_destination_state: false,
+            rotate_publish_key: false,
+            rotate_root_key: false,
+            yes: true,
+        })
+        .await
+        .unwrap_err();
+        let error = format!("{error:#}");
+
+        assert!(error.contains("hermetic config"), "{error}");
+        assert!(
+            !repo_dir.exists(),
+            "publish should fail before writing the static repo"
         );
     }
 
