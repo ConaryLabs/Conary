@@ -201,7 +201,7 @@ fn validate_shell_env_mutation_segment(
                     command_basename(command_token),
                 ));
             }
-            "eval" | "source" | "." => {
+            "eval" | "source" | "." | "trap" => {
                 return Err(Error::ConfigError(format!(
                     "hermetic reproducibility does not support {command_token} in {phase} phase"
                 )));
@@ -2632,6 +2632,24 @@ mod tests {
             assert!(
                 error.to_string().contains(expected),
                 "expected {expected} rejection for {command}, got: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_shell_env_scanner_rejects_trap_env_bypasses() {
+        let config = ReproducibilityConfig::new(0, Path::new("/src"), Path::new("/build"));
+        let cases = [
+            "trap 'export SOURCE_DATE_EPOCH=999' DEBUG; make",
+            "trap 'SOURCE_DATE_EPOCH=999' DEBUG; make",
+        ];
+
+        for command in cases {
+            let error = validate_shell_env_mutations(&config, "make", command).unwrap_err();
+
+            assert!(
+                error.to_string().contains("trap"),
+                "expected trap rejection for {command}, got: {error}"
             );
         }
     }
