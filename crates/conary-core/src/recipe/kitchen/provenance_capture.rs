@@ -8,6 +8,7 @@
 
 use crate::ccs::manifest::{ManifestProvenance, ProvenanceDep, ProvenancePatch};
 use crate::hash;
+use crate::recipe::hermetic::HermeticBuildEvidence;
 use crate::recipe::inference::{SourceTargetKind, SourceTargetProvenance};
 use chrono::{DateTime, Utc};
 use std::collections::BTreeMap;
@@ -54,6 +55,10 @@ pub struct ProvenanceCapture {
     pub origin_class: Option<String>,
     /// Source target provenance captured before inferred recipe cooking.
     pub source_provenance: Option<SourceTargetProvenance>,
+    /// Unsigned M2a hermetic build evidence to embed in CCS provenance.
+    pub hermetic_evidence: Option<HermeticBuildEvidence>,
+    /// Explicit hardening level when a higher-level build mode has stronger evidence.
+    pub hardening_level_override: Option<String>,
 }
 
 /// A patch captured during the build
@@ -330,12 +335,14 @@ impl ProvenanceCapture {
                     .clone()
                     .unwrap_or_else(|| "native-built".to_string()),
             ),
-            hardening_level: Some(if self.isolated {
-                "sandboxed".to_string()
-            } else {
-                "host".to_string()
-            }),
-            hermetic_evidence: None,
+            hardening_level: Some(self.hardening_level_override.clone().unwrap_or_else(|| {
+                if self.isolated {
+                    "sandboxed".to_string()
+                } else {
+                    "host".to_string()
+                }
+            })),
+            hermetic_evidence: self.hermetic_evidence.clone(),
 
             // Signature layer (empty - signatures added post-build)
             signatures: Vec::new(),
@@ -352,6 +359,11 @@ impl ProvenanceCapture {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::recipe::hermetic::{
+        BuildCommandRiskReport, BuildInputIdentity, BuilderEnvironmentIdentity,
+        BuilderEnvironmentKind, DependencyLock, EcosystemPolicyReport, HERMETIC_EVIDENCE_SCHEMA_V1,
+        HermeticBuildEvidence, RecipeIdentity, ReproducibilityRecord, SourceIdentity,
+    };
     use std::io::Write;
     use tempfile::NamedTempFile;
 
@@ -487,6 +499,20 @@ mod tests {
     }
 
     #[test]
+    fn test_to_manifest_provenance_uses_hardening_override_and_hermetic_evidence() {
+        let evidence = dummy_hermetic_evidence();
+        let mut capture = ProvenanceCapture::new();
+        capture.record_isolation(true);
+        capture.hermetic_evidence = Some(evidence.clone());
+        capture.hardening_level_override = Some("hermetic".to_string());
+
+        let provenance = capture.to_manifest_provenance();
+
+        assert_eq!(provenance.hardening_level.as_deref(), Some("hermetic"));
+        assert_eq!(provenance.hermetic_evidence, Some(evidence));
+    }
+
+    #[test]
     fn test_with_recipe_hash() {
         let mut file = NamedTempFile::new().unwrap();
         writeln!(file, "[package]\nname = \"test\"\nversion = \"1.0\"").unwrap();
@@ -509,5 +535,45 @@ mod tests {
 
         // DNA hash should be the same regardless of insertion order
         assert_eq!(capture1.compute_dna_hash(), capture2.compute_dna_hash());
+    }
+
+    fn dummy_hermetic_evidence() -> HermeticBuildEvidence {
+        HermeticBuildEvidence {
+            schema_version: HERMETIC_EVIDENCE_SCHEMA_V1,
+            build_input: BuildInputIdentity {
+                recipe: RecipeIdentity::ExplicitRecipe {
+                    path: "recipe.toml".to_string(),
+                    hash: "sha256:recipe".to_string(),
+                },
+                source: SourceIdentity::Archive {
+                    url: "https://example.invalid/test.tar.gz".to_string(),
+                    checksum: "sha256:source".to_string(),
+                },
+                additional_sources: Vec::new(),
+                patches: Vec::new(),
+                local_tree: None,
+                ecosystem_dependencies: Vec::new(),
+                builder_environment: BuilderEnvironmentIdentity {
+                    kind: BuilderEnvironmentKind::Pristine,
+                    sysroot_hash: Some("sha256:sysroot".to_string()),
+                    toolchain_hash: None,
+                    diagnostics: Vec::new(),
+                },
+            },
+            dependency_lock: DependencyLock::default(),
+            ecosystem_policy: EcosystemPolicyReport::clean("unknown"),
+            command_risk: BuildCommandRiskReport::clean(),
+            reproducibility: ReproducibilityRecord {
+                source_date_epoch: Some(0),
+                path_remap_count: 2,
+                env_keys: vec![
+                    "CFLAGS".to_string(),
+                    "CXXFLAGS".to_string(),
+                    "RUSTFLAGS".to_string(),
+                    "SOURCE_DATE_EPOCH".to_string(),
+                ],
+            },
+            diagnostics: Vec::new(),
+        }
     }
 }
