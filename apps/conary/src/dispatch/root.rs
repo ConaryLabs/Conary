@@ -888,6 +888,7 @@ pub(super) async fn dispatch_command(
             isolated,
             no_isolation,
             hermetic,
+            json,
         }) => {
             commands::cmd_cook(
                 target.as_deref(),
@@ -902,6 +903,7 @@ pub(super) async fn dispatch_command(
                 isolated,
                 no_isolation,
                 hermetic,
+                json,
             )
             .await
         }
@@ -957,6 +959,7 @@ pub(super) async fn dispatch_command(
             rotate_publish_key,
             rotate_root_key,
             yes,
+            json,
         }) => {
             commands::cmd_publish(commands::PublishOptions {
                 what,
@@ -970,6 +973,7 @@ pub(super) async fn dispatch_command(
                 rotate_publish_key,
                 rotate_root_key,
                 yes,
+                json,
             })
             .await
         }
