@@ -59,6 +59,12 @@ pub enum EvidenceKind {
     Check,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct EvidenceRedaction {
+    pub field: String,
+    pub reason: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct EvidenceItem {
     pub kind: EvidenceKind,
@@ -75,6 +81,8 @@ pub struct EvidenceItem {
     pub exit_code: Option<i32>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub metadata: BTreeMap<String, serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub redactions: Vec<EvidenceRedaction>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -234,5 +242,29 @@ mod tests {
         let value = serde_json::to_value(confirmation).unwrap();
         assert_eq!(value["level"], "destructive");
         assert_eq!(value["plan_id"], "plan-remi-audit-purge-1");
+    }
+
+    #[test]
+    fn evidence_item_serializes_redaction_metadata() {
+        let mut item = EvidenceItem {
+            kind: EvidenceKind::Command,
+            summary: "redacted command".to_string(),
+            uri: None,
+            path: None,
+            id: None,
+            command: Some(vec!["curl".to_string(), "Bearer [REDACTED]".to_string()]),
+            exit_code: None,
+            metadata: BTreeMap::new(),
+            redactions: vec![EvidenceRedaction {
+                field: "command[1]".to_string(),
+                reason: "bearer-token".to_string(),
+            }],
+        };
+        item.metadata
+            .insert("source".to_string(), serde_json::json!("packaging"));
+
+        let value = serde_json::to_value(&item).unwrap();
+        assert_eq!(value["redactions"][0]["field"], "command[1]");
+        assert_eq!(value["redactions"][0]["reason"], "bearer-token");
     }
 }
