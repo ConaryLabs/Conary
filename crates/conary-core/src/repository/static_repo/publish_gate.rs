@@ -8,7 +8,8 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::ccs::attestation::{
-    BuildAttestationEnvelope, canonical_json_hash, compute_build_output_identity,
+    BuildAttestationEnvelope, BuildOutputIdentity, canonical_json_hash,
+    compute_build_output_identity,
 };
 use crate::ccs::manifest_provenance::ManifestProvenance;
 use crate::ccs::package::CcsPackage;
@@ -16,6 +17,9 @@ use crate::ccs::verify::{TrustPolicy, VerificationResult, verify_package};
 use crate::packages::traits::PackageFormat;
 use crate::recipe::hermetic::PolicyStatus;
 use crate::repository::static_repo::{PackageKeyStatus, PackageKeysFile};
+use crate::security::command_risk::{
+    COMMAND_RISK_CLASSIFIER_VERSION, CommandRiskReport, CommandRiskStatus,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AcceptedStaticSignerSet {
@@ -291,7 +295,7 @@ fn verify_static_attestation(
         ));
     }
     verify_command_risk_evidence(provenance, envelope, &mut failures)?;
-    verify_foreign_boundary_evidence(envelope, &mut failures);
+    verify_foreign_boundary_evidence(provenance, envelope, &actual_identity, &mut failures)?;
     if failures.is_empty() {
         Ok(PublishLintReport::passed())
     } else {
@@ -338,17 +342,118 @@ fn verify_command_risk_evidence(
 }
 
 fn verify_foreign_boundary_evidence(
+    provenance: &ManifestProvenance,
     envelope: &BuildAttestationEnvelope,
+    actual_identity: &BuildOutputIdentity,
     failures: &mut Vec<PublishGateFailure>,
-) {
-    if envelope.payload.origin_class == "foreign-converted"
-        && envelope.payload.conversion_boundary_hash.is_none()
-    {
+) -> Result<()> {
+    let is_foreign = envelope.payload.origin_class == "foreign-converted"
+        || envelope.payload.output_identity.origin_class == "foreign-converted"
+        || provenance.origin_class.as_deref() == Some("foreign-converted");
+    if !is_foreign {
+        return Ok(());
+    }
+
+    let expected_boundary_hash = envelope.payload.conversion_boundary_hash.as_ref();
+    if expected_boundary_hash.is_none() {
         failures.push(failure(
             PublishGateFailureCode::ForeignConversionMissingBoundary,
             "foreign-converted artifact is missing a conversion boundary hash",
         ));
     }
+    let Some(boundary) = provenance.foreign_conversion_boundary.as_ref() else {
+        failures.push(failure(
+            PublishGateFailureCode::ForeignConversionMissingBoundary,
+            "foreign-converted artifact is missing conversion boundary metadata",
+        ));
+        return Ok(());
+    };
+    if let Some(expected_boundary_hash) = expected_boundary_hash {
+        let actual_boundary_hash = canonical_json_hash(boundary)?;
+        if &actual_boundary_hash != expected_boundary_hash {
+            failures.push(failure(
+                PublishGateFailureCode::ForeignConversionBoundaryHashMismatch,
+                "foreign conversion boundary hash mismatch",
+            ));
+        }
+    }
+    if &boundary.output_identity != actual_identity {
+        failures.push(failure(
+            PublishGateFailureCode::ForeignConversionBoundaryHashMismatch,
+            "foreign conversion boundary output identity does not match artifact",
+        ));
+    }
+    verify_foreign_boundary_risk_report(
+        "foreign conversion build-body",
+        boundary.build_risk_report.as_ref(),
+        boundary.build_risk_report_hash.as_deref(),
+        true,
+        failures,
+    )?;
+    verify_foreign_boundary_risk_report(
+        "foreign conversion scriptlet",
+        boundary.scriptlet_risk_report.as_ref(),
+        boundary.scriptlet_risk_report_hash.as_deref(),
+        false,
+        failures,
+    )?;
+    Ok(())
+}
+
+fn verify_foreign_boundary_risk_report(
+    label: &str,
+    report: Option<&CommandRiskReport>,
+    expected_hash: Option<&str>,
+    required: bool,
+    failures: &mut Vec<PublishGateFailure>,
+) -> Result<()> {
+    match (report, expected_hash) {
+        (None, None) if !required => return Ok(()),
+        (None, None) => {
+            failures.push(failure(
+                PublishGateFailureCode::UncleanCommandRiskReport,
+                &format!("{label} risk report is missing"),
+            ));
+            return Ok(());
+        }
+        (None, Some(_)) => {
+            failures.push(failure(
+                PublishGateFailureCode::UncleanCommandRiskReport,
+                &format!("{label} risk report hash is present without embedded report"),
+            ));
+            return Ok(());
+        }
+        (Some(_), None) => {
+            failures.push(failure(
+                PublishGateFailureCode::UncleanCommandRiskReport,
+                &format!("{label} risk report is present without hash"),
+            ));
+            return Ok(());
+        }
+        (Some(report), Some(expected_hash)) => {
+            if report.classifier_version != COMMAND_RISK_CLASSIFIER_VERSION {
+                failures.push(failure(
+                    PublishGateFailureCode::StaleOrUnknownPolicy,
+                    &format!("{label} command-risk classifier version is not accepted"),
+                ));
+            }
+            let actual_hash = canonical_json_hash(report)?;
+            if actual_hash != expected_hash {
+                failures.push(failure(
+                    PublishGateFailureCode::UncleanCommandRiskReport,
+                    &format!("{label} risk report hash mismatch"),
+                ));
+            }
+            if report.status != CommandRiskStatus::Clean {
+                failures.push(failure(
+                    PublishGateFailureCode::UncleanCommandRiskReport,
+                    &format!("{label} risk report is not clean"),
+                ));
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn failure(code: PublishGateFailureCode, message: &str) -> PublishGateFailure {
@@ -362,7 +467,8 @@ fn failure(code: PublishGateFailureCode, message: &str) -> PublishGateFailure {
 mod tests {
     use super::*;
     use crate::ccs::attestation::{
-        BUILD_ATTESTATION_SCHEMA_V1, BuildAttestationPayload, canonical_json_hash,
+        BUILD_ATTESTATION_SCHEMA_V1, BuildAttestationPayload,
+        FOREIGN_CONVERSION_BOUNDARY_SCHEMA_V1, ForeignConversionBoundary, canonical_json_hash,
         compute_build_output_identity, sign_build_attestation,
     };
     use crate::ccs::builder::{BuildResult, write_ccs_package, write_signed_ccs_package};
@@ -370,6 +476,9 @@ mod tests {
     use crate::recipe::hermetic::PolicyStatus;
     use crate::repository::static_repo::publish_context::STATIC_PUBLISH_POLICY_DIGEST_V1;
     use crate::repository::static_repo::{PackageKeyEntry, PackageKeyStatus, PackageKeysFile};
+    use crate::security::command_risk::{
+        COMMAND_RISK_CLASSIFIER_VERSION, CommandRiskEntry, PACKAGE_MANAGER_FETCH,
+    };
     use tempfile::TempDir;
 
     fn package_key(id: &str, public_key: &str, status: PackageKeyStatus) -> PackageKeyEntry {
@@ -547,6 +656,113 @@ mod tests {
         }
     }
 
+    #[test]
+    fn foreign_converted_publish_requires_manifest_boundary() {
+        let signer = SigningKeyPair::generate().with_key_id("publish");
+        let (_temp, package_path) =
+            foreign_attested_artifact_for_tests(&signer, false, |_| {}, |_| {});
+
+        let report = verify_static_artifact_publish_eligibility(
+            &package_path,
+            &accepted_signers_for_key(&signer),
+            STATIC_PUBLISH_POLICY_DIGEST_V1,
+        )
+        .unwrap();
+
+        assert!(report.failures.iter().any(|failure| {
+            failure.code == PublishGateFailureCode::ForeignConversionMissingBoundary
+        }));
+    }
+
+    #[test]
+    fn foreign_converted_publish_rejects_boundary_hash_mismatch() {
+        let signer = SigningKeyPair::generate().with_key_id("publish");
+        let (_temp, package_path) = foreign_attested_artifact_for_tests(
+            &signer,
+            true,
+            |boundary| {
+                boundary.source_checksum = "sha256:mutated-after-signing".to_string();
+            },
+            |_| {},
+        );
+
+        let report = verify_static_artifact_publish_eligibility(
+            &package_path,
+            &accepted_signers_for_key(&signer),
+            STATIC_PUBLISH_POLICY_DIGEST_V1,
+        )
+        .unwrap();
+
+        assert!(report.failures.iter().any(|failure| {
+            failure.code == PublishGateFailureCode::ForeignConversionBoundaryHashMismatch
+        }));
+    }
+
+    #[test]
+    fn foreign_converted_publish_rejects_boundary_output_identity_mismatch() {
+        let signer = SigningKeyPair::generate().with_key_id("publish");
+        let (_temp, package_path) = foreign_attested_artifact_for_tests(
+            &signer,
+            true,
+            |boundary| {
+                boundary.output_identity.package_name = "other".to_string();
+            },
+            |payload| {
+                payload.conversion_boundary_hash = None;
+            },
+        );
+
+        let report = verify_static_artifact_publish_eligibility(
+            &package_path,
+            &accepted_signers_for_key(&signer),
+            STATIC_PUBLISH_POLICY_DIGEST_V1,
+        )
+        .unwrap();
+
+        assert!(
+            report
+                .failures
+                .iter()
+                .any(|failure| { failure.message.contains("boundary output identity") })
+        );
+    }
+
+    #[test]
+    fn foreign_converted_publish_rejects_unclean_boundary_scriptlet_report() {
+        let signer = SigningKeyPair::generate().with_key_id("publish");
+        let (_temp, package_path) = foreign_attested_artifact_with_signed_boundary_for_tests(
+            &signer,
+            |boundary| {
+                let report = crate::security::command_risk::CommandRiskReport {
+                    status: CommandRiskStatus::Blocked,
+                    classifier_version: COMMAND_RISK_CLASSIFIER_VERSION.to_string(),
+                    entries: vec![CommandRiskEntry {
+                        source: "foreign-scriptlet:post-install".to_string(),
+                        command: "package-manager".to_string(),
+                        reason_code: PACKAGE_MANAGER_FETCH.to_string(),
+                        severity: CommandRiskStatus::Blocked,
+                        evidence: "npm install synthetic-atomic-lockfile".to_string(),
+                    }],
+                };
+                boundary.scriptlet_risk_report_hash = Some(canonical_json_hash(&report).unwrap());
+                boundary.scriptlet_risk_report = Some(report);
+            },
+            |_| {},
+        );
+
+        let report = verify_static_artifact_publish_eligibility(
+            &package_path,
+            &accepted_signers_for_key(&signer),
+            STATIC_PUBLISH_POLICY_DIGEST_V1,
+        )
+        .unwrap();
+
+        assert!(report.failures.iter().any(|failure| {
+            failure.code == PublishGateFailureCode::UncleanCommandRiskReport
+                && failure.message.contains("scriptlet")
+        }));
+    }
+
     fn accepted_signers_for_key(key: &SigningKeyPair) -> AcceptedStaticSignerSet {
         AcceptedStaticSignerSet::from_initial_key(
             key.key_id().unwrap_or("publish"),
@@ -600,14 +816,15 @@ mod tests {
             .unwrap()
             .hermetic_evidence
             .as_ref()
-            .unwrap();
+            .unwrap()
+            .clone();
         let mut payload = BuildAttestationPayload {
             schema_version: BUILD_ATTESTATION_SCHEMA_V1,
             origin_class: output_identity.origin_class.clone(),
             hardening_level: output_identity.hardening_level.clone(),
             build_input: evidence.build_input.clone(),
             dependency_lock: evidence.dependency_lock.clone(),
-            hermetic_evidence_hash: canonical_json_hash(evidence).unwrap(),
+            hermetic_evidence_hash: canonical_json_hash(&evidence).unwrap(),
             output_identity,
             build_command_risk_report_hash: canonical_json_hash(&evidence.command_risk).unwrap(),
             scriptlet_risk_report_hash: None,
@@ -628,6 +845,159 @@ mod tests {
             .unwrap()
             .build_attestation = Some(sign_build_attestation(payload, attestation_key).unwrap());
         write_signed_ccs_package(&result, &package_path, package_key).unwrap();
+        (temp, package_path)
+    }
+
+    fn foreign_attested_artifact_for_tests(
+        signer: &SigningKeyPair,
+        include_manifest_boundary: bool,
+        mutate_boundary_after_hash: impl FnOnce(&mut ForeignConversionBoundary),
+        mutate_payload: impl FnOnce(&mut BuildAttestationPayload),
+    ) -> (TempDir, std::path::PathBuf) {
+        let temp = tempfile::tempdir().unwrap();
+        let identity_path = temp.path().join("foreign-identity.ccs");
+        let package_path = temp.path().join("foreign.ccs");
+        let mut result =
+            crate::ccs::builder::test_support::minimal_build_result("foreign", "1.0.0");
+        result.manifest.provenance.as_mut().unwrap().origin_class =
+            Some("foreign-converted".to_string());
+        write_ccs_package(&result, &identity_path).unwrap();
+        let identity_package =
+            crate::ccs::CcsPackage::parse(identity_path.to_str().unwrap()).unwrap();
+        let output_identity = compute_build_output_identity(&identity_package).unwrap();
+        let evidence = result
+            .manifest
+            .provenance
+            .as_ref()
+            .unwrap()
+            .hermetic_evidence
+            .as_ref()
+            .unwrap()
+            .clone();
+        let build_risk_report = crate::security::command_risk::CommandRiskReport::clean();
+        let mut boundary = ForeignConversionBoundary {
+            schema_version: FOREIGN_CONVERSION_BOUNDARY_SCHEMA_V1,
+            source_format: "rpm".to_string(),
+            source_checksum: "sha256:source".to_string(),
+            output_identity: output_identity.clone(),
+            build_risk_report_hash: Some(canonical_json_hash(&build_risk_report).unwrap()),
+            build_risk_report: Some(build_risk_report),
+            scriptlet_risk_report_hash: None,
+            scriptlet_risk_report: None,
+            diagnostics: Vec::new(),
+        };
+        let signed_boundary_hash = canonical_json_hash(&boundary).unwrap();
+        mutate_boundary_after_hash(&mut boundary);
+        if include_manifest_boundary {
+            result
+                .manifest
+                .provenance
+                .as_mut()
+                .unwrap()
+                .foreign_conversion_boundary = Some(boundary);
+        }
+        let mut payload = BuildAttestationPayload {
+            schema_version: BUILD_ATTESTATION_SCHEMA_V1,
+            origin_class: output_identity.origin_class.clone(),
+            hardening_level: output_identity.hardening_level.clone(),
+            build_input: evidence.build_input.clone(),
+            dependency_lock: evidence.dependency_lock.clone(),
+            hermetic_evidence_hash: canonical_json_hash(&evidence).unwrap(),
+            output_identity,
+            build_command_risk_report_hash: canonical_json_hash(&evidence.command_risk).unwrap(),
+            scriptlet_risk_report_hash: None,
+            conversion_boundary_hash: Some(signed_boundary_hash),
+            publish_policy_digest: STATIC_PUBLISH_POLICY_DIGEST_V1.to_string(),
+            command_risk_classifier_version: evidence.command_risk.classifier_version.clone(),
+            sandbox_profile: "foreign-conversion-no-exec".to_string(),
+            seccomp_profile: None,
+            builder_identity: "conary-foreign-converter".to_string(),
+            conary_version: "test".to_string(),
+            issued_at: "2026-06-14T00:00:00Z".to_string(),
+        };
+        mutate_payload(&mut payload);
+        result
+            .manifest
+            .provenance
+            .as_mut()
+            .unwrap()
+            .build_attestation = Some(sign_build_attestation(payload, signer).unwrap());
+        write_signed_ccs_package(&result, &package_path, signer).unwrap();
+        (temp, package_path)
+    }
+
+    fn foreign_attested_artifact_with_signed_boundary_for_tests(
+        signer: &SigningKeyPair,
+        mutate_boundary_before_hash: impl FnOnce(&mut ForeignConversionBoundary),
+        mutate_payload: impl FnOnce(&mut BuildAttestationPayload),
+    ) -> (TempDir, std::path::PathBuf) {
+        let temp = tempfile::tempdir().unwrap();
+        let identity_path = temp.path().join("foreign-identity.ccs");
+        let package_path = temp.path().join("foreign.ccs");
+        let mut result =
+            crate::ccs::builder::test_support::minimal_build_result("foreign", "1.0.0");
+        result.manifest.provenance.as_mut().unwrap().origin_class =
+            Some("foreign-converted".to_string());
+        write_ccs_package(&result, &identity_path).unwrap();
+        let identity_package =
+            crate::ccs::CcsPackage::parse(identity_path.to_str().unwrap()).unwrap();
+        let output_identity = compute_build_output_identity(&identity_package).unwrap();
+        let evidence = result
+            .manifest
+            .provenance
+            .as_ref()
+            .unwrap()
+            .hermetic_evidence
+            .as_ref()
+            .unwrap()
+            .clone();
+        let build_risk_report = crate::security::command_risk::CommandRiskReport::clean();
+        let mut boundary = ForeignConversionBoundary {
+            schema_version: FOREIGN_CONVERSION_BOUNDARY_SCHEMA_V1,
+            source_format: "rpm".to_string(),
+            source_checksum: "sha256:source".to_string(),
+            output_identity: output_identity.clone(),
+            build_risk_report_hash: Some(canonical_json_hash(&build_risk_report).unwrap()),
+            build_risk_report: Some(build_risk_report),
+            scriptlet_risk_report_hash: None,
+            scriptlet_risk_report: None,
+            diagnostics: Vec::new(),
+        };
+        mutate_boundary_before_hash(&mut boundary);
+        let signed_boundary_hash = canonical_json_hash(&boundary).unwrap();
+        result
+            .manifest
+            .provenance
+            .as_mut()
+            .unwrap()
+            .foreign_conversion_boundary = Some(boundary);
+        let mut payload = BuildAttestationPayload {
+            schema_version: BUILD_ATTESTATION_SCHEMA_V1,
+            origin_class: output_identity.origin_class.clone(),
+            hardening_level: output_identity.hardening_level.clone(),
+            build_input: evidence.build_input.clone(),
+            dependency_lock: evidence.dependency_lock.clone(),
+            hermetic_evidence_hash: canonical_json_hash(&evidence).unwrap(),
+            output_identity,
+            build_command_risk_report_hash: canonical_json_hash(&evidence.command_risk).unwrap(),
+            scriptlet_risk_report_hash: None,
+            conversion_boundary_hash: Some(signed_boundary_hash),
+            publish_policy_digest: STATIC_PUBLISH_POLICY_DIGEST_V1.to_string(),
+            command_risk_classifier_version: evidence.command_risk.classifier_version.clone(),
+            sandbox_profile: "foreign-conversion-no-exec".to_string(),
+            seccomp_profile: None,
+            builder_identity: "conary-foreign-converter".to_string(),
+            conary_version: "test".to_string(),
+            issued_at: "2026-06-14T00:00:00Z".to_string(),
+        };
+        mutate_payload(&mut payload);
+        result
+            .manifest
+            .provenance
+            .as_mut()
+            .unwrap()
+            .build_attestation = Some(sign_build_attestation(payload, signer).unwrap());
+        write_signed_ccs_package(&result, &package_path, signer).unwrap();
         (temp, package_path)
     }
 }

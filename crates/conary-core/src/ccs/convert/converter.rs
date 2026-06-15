@@ -8,6 +8,10 @@ use crate::capability::inference::{
     InferenceOptions, InferredCapabilities, PackageFile as InferencePackageFile,
     PackageMetadataRef, infer_capabilities,
 };
+use crate::ccs::attestation::{
+    FOREIGN_CONVERSION_BOUNDARY_SCHEMA_V1, ForeignConversionBoundary, canonical_json_hash,
+    compute_build_output_identity,
+};
 use crate::ccs::builder::{BuildResult, CcsBuilder, write_ccs_package};
 use crate::ccs::convert::adapters::{AdapterInput, AdapterRegistry};
 use crate::ccs::convert::analyzer::ScriptletAnalyzer;
@@ -35,7 +39,16 @@ use crate::packages::native_abi::{
     ArchNativeScriptletMetadata, DebControlMember, NativeLifecyclePath, NativeScriptletEntry,
     NativeScriptletMetadata, NativeScriptletSupport, RpmScriptletSlot,
 };
-use crate::packages::traits::{DependencyType, ExtractedFile, ScriptletPhase};
+use crate::packages::traits::{DependencyType, ExtractedFile, PackageFormat, ScriptletPhase};
+use crate::recipe::hermetic::{
+    BuildCommandRiskEntry, BuildCommandRiskReport, BuildInputIdentity, BuilderEnvironmentIdentity,
+    BuilderEnvironmentKind, DependencyLock, DivergenceReport, EcosystemPolicyReport,
+    HERMETIC_EVIDENCE_SCHEMA_V1, HermeticBuildEvidence, PolicyStatus, RecipeIdentity,
+    ReproducibilityRecord, SourceIdentity,
+};
+use crate::security::command_risk::{
+    COMMAND_RISK_CLASSIFIER_VERSION, CommandRiskReport, CommandRiskStatus, classify_shell_text,
+};
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
@@ -316,6 +329,14 @@ impl LegacyConverter {
         manifest.capabilities = inferred_capabilities
             .as_ref()
             .map(InferredCapabilities::to_declaration);
+        let build_risk_report = classify_foreign_build_body_risk(format, files);
+        let scriptlet_risk_report = classify_foreign_scriptlet_risk(metadata);
+        let conversion_evidence =
+            foreign_conversion_evidence(format, checksum, metadata, &build_risk_report);
+        let provenance = manifest.provenance.get_or_insert_with(Default::default);
+        provenance.origin_class = Some("foreign-converted".to_string());
+        provenance.hardening_level = Some("hermetic".to_string());
+        provenance.hermetic_evidence = Some(conversion_evidence);
 
         let scriptlet_bundle = build_legacy_scriptlet_bundle(ScriptletBundleInput {
             source_metadata: metadata,
@@ -362,7 +383,7 @@ impl LegacyConverter {
             builder = builder.with_chunking();
         }
 
-        let build_result = builder
+        let mut build_result = builder
             .build()
             .map_err(|e| ConversionError::BuildError(format!("CCS build failed: {}", e)))?;
 
@@ -378,6 +399,61 @@ impl LegacyConverter {
 
         write_ccs_package(&build_result, &package_path)
             .map_err(|e| ConversionError::BuildError(format!("Failed to write package: {}", e)))?;
+
+        let parsed_package =
+            crate::ccs::CcsPackage::parse(package_path.to_str().ok_or_else(|| {
+                ConversionError::BuildError(format!(
+                    "Converted package path is not valid UTF-8: {}",
+                    package_path.display()
+                ))
+            })?)
+            .map_err(|e| {
+                ConversionError::BuildError(format!(
+                    "Failed to parse converted package for boundary identity: {}",
+                    e
+                ))
+            })?;
+        let output_identity = compute_build_output_identity(&parsed_package).map_err(|e| {
+            ConversionError::BuildError(format!(
+                "Failed to compute foreign conversion output identity: {}",
+                e
+            ))
+        })?;
+        let provenance = build_result
+            .manifest
+            .provenance
+            .as_mut()
+            .expect("conversion provenance was initialized before build");
+        let build_risk_report_hash = canonical_json_hash(&build_risk_report).map_err(|e| {
+            ConversionError::BuildError(format!(
+                "Failed to hash conversion command-risk report: {}",
+                e
+            ))
+        })?;
+        let scriptlet_risk_report_hash =
+            canonical_json_hash(&scriptlet_risk_report).map_err(|e| {
+                ConversionError::BuildError(format!(
+                    "Failed to hash foreign scriptlet risk report: {}",
+                    e
+                ))
+            })?;
+        provenance.foreign_conversion_boundary = Some(ForeignConversionBoundary {
+            schema_version: FOREIGN_CONVERSION_BOUNDARY_SCHEMA_V1,
+            source_format: format.to_string(),
+            source_checksum: checksum.to_string(),
+            output_identity,
+            build_risk_report_hash: Some(build_risk_report_hash),
+            build_risk_report: Some(build_risk_report),
+            scriptlet_risk_report_hash: Some(scriptlet_risk_report_hash),
+            scriptlet_risk_report: Some(scriptlet_risk_report),
+            diagnostics: Vec::new(),
+        });
+        write_ccs_package(&build_result, &package_path).map_err(|e| {
+            ConversionError::BuildError(format!(
+                "Failed to rewrite package with conversion boundary: {}",
+                e
+            ))
+        })?;
 
         // Step 8: Extract legacy provenance information
         let legacy_provenance = if metadata.package_path.exists() {
@@ -585,6 +661,150 @@ pub enum ConversionError {
     FidelityTooLow(String),
 }
 
+fn foreign_conversion_evidence(
+    format: &str,
+    checksum: &str,
+    metadata: &PackageMetadata,
+    build_risk_report: &CommandRiskReport,
+) -> HermeticBuildEvidence {
+    HermeticBuildEvidence {
+        schema_version: HERMETIC_EVIDENCE_SCHEMA_V1,
+        build_input: BuildInputIdentity {
+            recipe: RecipeIdentity::GeneratedRecipe {
+                generator: "conary-foreign-converter".to_string(),
+                canonical_hash: crate::hash::sha256_prefixed(
+                    format!(
+                        "{}:{}:{}:{}",
+                        format, metadata.name, metadata.version, checksum
+                    )
+                    .as_bytes(),
+                ),
+                inference_trace_hash: crate::hash::sha256_prefixed(
+                    format!("foreign-conversion:{format}").as_bytes(),
+                ),
+            },
+            source: SourceIdentity::Archive {
+                url: metadata.package_path.display().to_string(),
+                checksum: checksum.to_string(),
+            },
+            additional_sources: Vec::new(),
+            patches: Vec::new(),
+            local_tree: None,
+            ecosystem_dependencies: Vec::new(),
+            builder_environment: BuilderEnvironmentIdentity {
+                kind: BuilderEnvironmentKind::Pristine,
+                sysroot_hash: None,
+                toolchain_hash: None,
+                diagnostics: vec![
+                    "foreign package converted without host script execution".to_string(),
+                ],
+            },
+        },
+        dependency_lock: DependencyLock::default(),
+        ecosystem_policy: EcosystemPolicyReport::clean("foreign-conversion"),
+        command_risk: build_command_risk_report_from_shared(build_risk_report),
+        reproducibility: ReproducibilityRecord {
+            source_date_epoch: None,
+            path_remap_count: 0,
+            env_keys: Vec::new(),
+        },
+        divergence: DivergenceReport::default(),
+        diagnostics: Vec::new(),
+    }
+}
+
+fn classify_foreign_build_body_risk(format: &str, files: &[ExtractedFile]) -> CommandRiskReport {
+    merge_command_risk_reports(files.iter().filter_map(|file| {
+        let path = file.path.trim_start_matches('/');
+        if path != "PKGBUILD" && !path.ends_with("/PKGBUILD") {
+            return None;
+        }
+        let content = std::str::from_utf8(&file.content).ok()?;
+        Some(classify_shell_text(
+            &format!("foreign-build-body:{format}:{}", file.path),
+            content,
+        ))
+    }))
+}
+
+fn classify_foreign_scriptlet_risk(metadata: &PackageMetadata) -> CommandRiskReport {
+    let flattened = metadata.scriptlets.iter().map(|scriptlet| {
+        classify_shell_text(
+            &format!("foreign-scriptlet:{}:{}", metadata.name, scriptlet.phase),
+            &scriptlet.content,
+        )
+    });
+    let native = metadata.native_scriptlet_abi.iter().filter_map(|entry| {
+        let text = entry.body.text.as_ref()?;
+        Some(classify_shell_text(
+            &format!("foreign-native-scriptlet:{}:{}", metadata.name, entry.id),
+            text,
+        ))
+    });
+
+    merge_command_risk_reports(flattened.chain(native))
+}
+
+fn merge_command_risk_reports(
+    reports: impl IntoIterator<Item = CommandRiskReport>,
+) -> CommandRiskReport {
+    let mut status = CommandRiskStatus::Clean;
+    let mut entries = Vec::new();
+
+    for report in reports {
+        status = max_command_risk_status(status, report.status);
+        entries.extend(report.entries);
+    }
+
+    if status == CommandRiskStatus::Clean && entries.is_empty() {
+        CommandRiskReport::clean()
+    } else {
+        CommandRiskReport {
+            status,
+            classifier_version: COMMAND_RISK_CLASSIFIER_VERSION.to_string(),
+            entries,
+        }
+    }
+}
+
+fn max_command_risk_status(left: CommandRiskStatus, right: CommandRiskStatus) -> CommandRiskStatus {
+    match (left, right) {
+        (CommandRiskStatus::Blocked, _) | (_, CommandRiskStatus::Blocked) => {
+            CommandRiskStatus::Blocked
+        }
+        (CommandRiskStatus::Review, _) | (_, CommandRiskStatus::Review) => {
+            CommandRiskStatus::Review
+        }
+        (CommandRiskStatus::Clean, CommandRiskStatus::Clean) => CommandRiskStatus::Clean,
+    }
+}
+
+fn build_command_risk_report_from_shared(report: &CommandRiskReport) -> BuildCommandRiskReport {
+    BuildCommandRiskReport {
+        status: policy_status_from_command_risk(report.status),
+        classifier_version: report.classifier_version.clone(),
+        entries: report
+            .entries
+            .iter()
+            .map(|entry| BuildCommandRiskEntry {
+                phase: entry.source.clone(),
+                command: entry.command.clone(),
+                reason_code: entry.reason_code.clone(),
+                severity: policy_status_from_command_risk(entry.severity),
+                evidence: entry.evidence.clone(),
+            })
+            .collect(),
+    }
+}
+
+fn policy_status_from_command_risk(status: CommandRiskStatus) -> PolicyStatus {
+    match status {
+        CommandRiskStatus::Clean => PolicyStatus::Clean,
+        CommandRiskStatus::Review => PolicyStatus::Review,
+        CommandRiskStatus::Blocked => PolicyStatus::Blocked,
+    }
+}
+
 fn derive_provides(files: &[ExtractedFile]) -> Provides {
     let file_paths: Vec<String> = files.iter().map(|f| f.path.clone()).collect();
     let detected = LanguageDepDetector::detect_all_provides(&file_paths);
@@ -780,7 +1000,9 @@ mod tests {
     use super::*;
     use crate::ccs::legacy_scriptlets::EffectReplacement;
     use crate::packages::native_abi::*;
-    use crate::packages::traits::{Dependency, PackageFile, Scriptlet, ScriptletPhase};
+    use crate::packages::traits::{
+        Dependency, PackageFile, PackageFormat, Scriptlet, ScriptletPhase,
+    };
 
     #[test]
     fn scriptlet_bundle_types_are_publicly_exported() {
@@ -1016,6 +1238,120 @@ mod tests {
             bundle.evidence_digest.as_deref()
         );
         bundle.validate().unwrap();
+    }
+
+    #[test]
+    fn conversion_result_attaches_foreign_boundary_provenance() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let metadata = make_test_metadata();
+        let converter = passive_test_converter(temp_dir.path());
+
+        let result = converter
+            .convert(
+                &metadata,
+                &make_test_files(),
+                "rpm",
+                "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            )
+            .unwrap();
+
+        let provenance = result
+            .build_result
+            .manifest
+            .provenance
+            .as_ref()
+            .expect("conversion provenance");
+        assert_eq!(
+            provenance.origin_class.as_deref(),
+            Some("foreign-converted")
+        );
+        assert_eq!(provenance.hardening_level.as_deref(), Some("hermetic"));
+        let boundary = provenance
+            .foreign_conversion_boundary
+            .as_ref()
+            .expect("foreign conversion boundary");
+        assert_eq!(boundary.source_format, "rpm");
+        assert_eq!(
+            boundary.source_checksum,
+            "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        );
+        let build_risk_report = boundary
+            .build_risk_report
+            .as_ref()
+            .expect("build risk report");
+        assert_eq!(
+            build_risk_report.status,
+            crate::security::command_risk::CommandRiskStatus::Clean
+        );
+        assert_eq!(
+            boundary.build_risk_report_hash.as_deref(),
+            Some(canonical_json_hash(build_risk_report).unwrap().as_str())
+        );
+        let scriptlet_risk_report = boundary
+            .scriptlet_risk_report
+            .as_ref()
+            .expect("scriptlet risk report");
+        assert_eq!(
+            boundary.scriptlet_risk_report_hash.as_deref(),
+            Some(canonical_json_hash(scriptlet_risk_report).unwrap().as_str())
+        );
+
+        let package =
+            crate::ccs::CcsPackage::parse(result.package_path.as_ref().unwrap().to_str().unwrap())
+                .unwrap();
+        assert!(
+            package
+                .manifest()
+                .provenance
+                .as_ref()
+                .and_then(|provenance| provenance.foreign_conversion_boundary.as_ref())
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn conversion_boundary_records_foreign_scriptlet_command_risk() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut metadata = make_test_metadata();
+        metadata.scriptlets = vec![Scriptlet {
+            phase: ScriptletPhase::PostInstall,
+            interpreter: "/bin/sh".to_string(),
+            content: "npm install synthetic-atomic-lockfile\n".to_string(),
+            flags: None,
+        }];
+        let converter = passive_test_converter(temp_dir.path());
+
+        let result = converter
+            .convert(
+                &metadata,
+                &make_test_files(),
+                "arch",
+                "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            )
+            .unwrap();
+
+        let boundary = result
+            .build_result
+            .manifest
+            .provenance
+            .as_ref()
+            .and_then(|provenance| provenance.foreign_conversion_boundary.as_ref())
+            .expect("foreign conversion boundary");
+        let report = boundary
+            .scriptlet_risk_report
+            .as_ref()
+            .expect("scriptlet risk report");
+        assert_eq!(
+            report.status,
+            crate::security::command_risk::CommandRiskStatus::Blocked
+        );
+        assert!(report.entries.iter().any(|entry| {
+            entry.reason_code == crate::security::command_risk::PACKAGE_MANAGER_FETCH
+        }));
+        assert_eq!(
+            boundary.scriptlet_risk_report_hash.as_deref(),
+            Some(canonical_json_hash(report).unwrap().as_str())
+        );
     }
 
     #[test]

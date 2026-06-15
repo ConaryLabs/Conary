@@ -344,6 +344,7 @@ impl ProvenanceCapture {
             })),
             hermetic_evidence: self.hermetic_evidence.clone(),
             build_attestation: None,
+            foreign_conversion_boundary: None,
 
             // Signature layer (empty - signatures added post-build)
             signatures: Vec::new(),

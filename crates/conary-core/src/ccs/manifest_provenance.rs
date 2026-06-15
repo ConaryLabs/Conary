@@ -70,6 +70,10 @@ pub struct ManifestProvenance {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build_attestation: Option<crate::ccs::attestation::BuildAttestationEnvelope>,
 
+    /// Foreign package conversion boundary attested for release publish.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub foreign_conversion_boundary: Option<crate::ccs::attestation::ForeignConversionBoundary>,
+
     // === Signature Layer ===
     /// Signatures on this package
     #[serde(default)]
