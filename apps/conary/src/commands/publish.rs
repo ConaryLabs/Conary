@@ -4,10 +4,15 @@
 
 use std::env;
 use std::fs::File;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use conary_core::ccs::manifest::ManifestProvenance;
+use conary_core::diagnostics::{
+    DiagnosticEvidence, PackagingArtifact, PackagingCommandOutput, PackagingDiagnostic,
+    PackagingDiagnosticCode, PackagingPhase,
+};
 use conary_core::recipe::Recipe;
 use conary_core::recipe::hermetic::{CiMode, DivergenceStatus, HermeticBuildInput};
 use conary_core::recipe::{
@@ -22,7 +27,7 @@ use conary_core::repository::static_repo::publish_context::{
     prepare_artifact_form_static_context, prepare_project_form_static_context,
 };
 use conary_core::repository::static_repo::publish_gate::{
-    format_publish_gate_failures, verify_static_artifact_publish_eligibility,
+    PublishLintReport, format_publish_gate_failures, verify_static_artifact_publish_eligibility,
 };
 
 use super::cook::{recipe_source_base_dir, resolve_recipe_path};
@@ -46,14 +51,98 @@ pub struct PublishOptions {
 }
 
 pub async fn cmd_publish(options: PublishOptions) -> Result<()> {
+    let mut stdout = std::io::stdout();
+    cmd_publish_with_output(options, &mut stdout).await
+}
+
+pub(crate) async fn cmd_publish_with_output(
+    options: PublishOptions,
+    writer: &mut impl Write,
+) -> Result<()> {
     if let Some(target) = options.target.clone() {
-        publish_artifact_form(options, &target).await
+        publish_artifact_form(options, &target, writer).await
     } else {
-        publish_project_form(options).await
+        publish_project_form(options, writer).await
     }
 }
 
-async fn publish_project_form(options: PublishOptions) -> Result<()> {
+fn publish_operation_id() -> String {
+    super::operation_records::new_operation_id("publish")
+}
+
+fn publish_failure_output(
+    operation_id: &str,
+    code: PackagingDiagnosticCode,
+    message: impl Into<String>,
+) -> PackagingCommandOutput {
+    PackagingCommandOutput::failed(
+        operation_id.to_string(),
+        "conary publish",
+        vec![PackagingDiagnostic::error(
+            PackagingPhase::Publish,
+            code,
+            message,
+        )],
+    )
+}
+
+fn publish_success_output(
+    operation_id: &str,
+    summary: impl Into<String>,
+) -> PackagingCommandOutput {
+    let mut output = PackagingCommandOutput::succeeded(operation_id.to_string(), "conary publish");
+    output.summary = Some(summary.into());
+    output
+}
+
+fn publish_gate_failure_output(
+    operation_id: &str,
+    report: &PublishLintReport,
+) -> PackagingCommandOutput {
+    let mut diagnostic = PackagingDiagnostic::error(
+        PackagingPhase::Publish,
+        PackagingDiagnosticCode::PublishGateFailed,
+        "Static artifact publish gate failed",
+    );
+    let report_value = serde_json::to_value(report)
+        .unwrap_or_else(|error| serde_json::json!({ "serialization_error": error.to_string() }));
+    diagnostic.evidence.push(
+        DiagnosticEvidence::log("publish-gate", "Static artifact publish gate failed")
+            .with_metadata("publish_lint_report", report_value),
+    );
+    PackagingCommandOutput::failed(operation_id, "conary publish", vec![diagnostic])
+}
+
+async fn publish_project_form(options: PublishOptions, writer: &mut impl Write) -> Result<()> {
+    let operation_id = publish_operation_id();
+    match run_project_form_publish(&options, &operation_id, writer).await {
+        Ok(report) => {
+            if options.json {
+                super::diagnostics::write_packaging_output(&report, true, writer)?;
+            }
+            super::diagnostics::write_packaging_record_if_possible(&report);
+            Ok(())
+        }
+        Err(error) => {
+            let output = publish_failure_output(
+                &operation_id,
+                PackagingDiagnosticCode::ProjectPublishPreflightFailed,
+                error.to_string(),
+            );
+            if options.json {
+                super::diagnostics::write_packaging_output(&output, true, writer)?;
+            }
+            super::diagnostics::write_packaging_record_if_possible(&output);
+            Err(error)
+        }
+    }
+}
+
+async fn run_project_form_publish(
+    options: &PublishOptions,
+    operation_id: &str,
+    writer: &mut impl Write,
+) -> Result<PackagingCommandOutput> {
     let destination = RepoLocation::parse(&options.what)
         .with_context(|| format!("parse static repo destination {}", options.what))?;
     ensure_static_local_publish_destination(&destination)?;
@@ -68,12 +157,16 @@ async fn publish_project_form(options: PublishOptions) -> Result<()> {
     // Parsed for future interactive confirmation; M1a publish is non-interactive.
     let _ = options.yes;
 
-    println!("Reading recipe: {}", recipe_path.display());
+    if !options.json {
+        writeln!(writer, "Reading recipe: {}", recipe_path.display())?;
+    }
     let recipe = parse_recipe_file(&recipe_path)
         .with_context(|| format!("Failed to parse recipe: {}", recipe_path.display()))?;
     let warnings = validate_recipe(&recipe).with_context(|| "Recipe validation failed")?;
-    for warning in &warnings {
-        println!("Warning: {}", warning);
+    if !options.json {
+        for warning in &warnings {
+            writeln!(writer, "Warning: {}", warning)?;
+        }
     }
 
     let builder = load_default_hermetic_builder()?;
@@ -92,10 +185,13 @@ async fn publish_project_form(options: PublishOptions) -> Result<()> {
     configure_host_record_for_publish(&mut config, &recipe);
     let kitchen = Kitchen::new(config);
 
-    println!(
-        "Cooking and attesting {} {} for static release publish...",
-        recipe.package.name, recipe.package.version
-    );
+    if !options.json {
+        writeln!(
+            writer,
+            "Cooking and attesting {} {} for static release publish...",
+            recipe.package.name, recipe.package.version
+        )?;
+    }
 
     let result = kitchen
         .cook_hermetic(
@@ -105,7 +201,9 @@ async fn publish_project_form(options: PublishOptions) -> Result<()> {
             release_publish_ci_mode(),
         )
         .with_context(|| format!("Failed to hermetically cook {}", recipe.package.name))?;
-    print_divergence_summary(result.provenance.as_ref());
+    if !options.json {
+        print_divergence_summary(writer, result.provenance.as_ref())?;
+    }
     let prepared =
         prepare_project_form_static_context(&destination, &key_dir, options.force_reinit)
             .with_context(|| format!("prepare static publish context for {}", repo_name))?;
@@ -125,7 +223,7 @@ async fn publish_project_form(options: PublishOptions) -> Result<()> {
         destination,
         key_dir,
         state_file,
-        package_paths: vec![attested_package_path],
+        package_paths: vec![attested_package_path.clone()],
         refresh: options.refresh,
         force_reinit: options.force_reinit,
         accept_destination_state: options.accept_destination_state,
@@ -135,32 +233,68 @@ async fn publish_project_form(options: PublishOptions) -> Result<()> {
     })
     .with_context(|| format!("publish static repo {}", repo_name))?;
 
-    println!("Published static repo: {repo_name}");
-    println!("Root fingerprint(s): {}", outcome.root_key_ids.join(", "));
-    println!("Publish key ID: {}", outcome.publish_key_id);
-    println!(
-        "Versions: root={} targets={} snapshot={} timestamp={}",
-        outcome.root_version,
-        outcome.targets_version,
-        outcome.snapshot_version,
-        outcome.timestamp_version
-    );
-    println!("Packages: {}", outcome.package_count);
-    if !outcome.preview_warning.is_empty() {
-        println!("{}", outcome.preview_warning);
+    if !options.json {
+        writeln!(writer, "Published static repo: {repo_name}")?;
+        writeln!(
+            writer,
+            "Root fingerprint(s): {}",
+            outcome.root_key_ids.join(", ")
+        )?;
+        writeln!(writer, "Publish key ID: {}", outcome.publish_key_id)?;
+        writeln!(
+            writer,
+            "Versions: root={} targets={} snapshot={} timestamp={}",
+            outcome.root_version,
+            outcome.targets_version,
+            outcome.snapshot_version,
+            outcome.timestamp_version
+        )?;
+        writeln!(writer, "Packages: {}", outcome.package_count)?;
+        if !outcome.preview_warning.is_empty() {
+            writeln!(writer, "{}", outcome.preview_warning)?;
+        }
     }
 
-    Ok(())
+    let mut output =
+        publish_success_output(operation_id, format!("Published static repo: {repo_name}"));
+    output.artifacts.push(PackagingArtifact {
+        path: attested_package_path.display().to_string(),
+        kind: Some("ccs".to_string()),
+    });
+    Ok(output)
 }
 
-async fn publish_artifact_form(options: PublishOptions, target: &str) -> Result<()> {
+async fn publish_artifact_form(
+    options: PublishOptions,
+    target: &str,
+    writer: &mut impl Write,
+) -> Result<()> {
+    let operation_id = publish_operation_id();
     match classify_publish_target(target)? {
-        PublishTargetRoute::StaticLocal => publish_static_artifact_form(options, target).await,
+        PublishTargetRoute::StaticLocal => {
+            publish_static_artifact_form(options, target, writer, operation_id).await
+        }
+        PublishTargetRoute::RemiRelease if options.json => {
+            let message = "Remi publish JSON output is not supported in M3a";
+            let output = publish_failure_output(
+                &operation_id,
+                PackagingDiagnosticCode::PublishJsonUnsupported,
+                message,
+            );
+            super::diagnostics::write_packaging_output(&output, true, writer)?;
+            super::diagnostics::write_packaging_record_if_possible(&output);
+            bail!("{message}")
+        }
         PublishTargetRoute::RemiRelease => publish_remi_artifact_form(options, target).await,
     }
 }
 
-async fn publish_static_artifact_form(options: PublishOptions, target: &str) -> Result<()> {
+async fn publish_static_artifact_form(
+    options: PublishOptions,
+    target: &str,
+    writer: &mut impl Write,
+    operation_id: String,
+) -> Result<()> {
     let artifact_path = PathBuf::from(&options.what);
     let destination =
         RepoLocation::parse(target).with_context(|| format!("parse publish target {target}"))?;
@@ -176,6 +310,11 @@ async fn publish_static_artifact_form(options: PublishOptions, target: &str) -> 
         &prepared.publish_policy_digest,
     )?;
     if !report.is_passed() {
+        if options.json {
+            let output = publish_gate_failure_output(&operation_id, &report);
+            super::diagnostics::write_packaging_output(&output, true, writer)?;
+            super::diagnostics::write_packaging_record_if_possible(&output);
+        }
         bail!("{}", format_publish_gate_failures(&report));
     }
     let state_file = options
@@ -189,7 +328,7 @@ async fn publish_static_artifact_form(options: PublishOptions, target: &str) -> 
         destination,
         key_dir,
         state_file,
-        package_paths: vec![artifact_path],
+        package_paths: vec![artifact_path.clone()],
         refresh: options.refresh,
         force_reinit: options.force_reinit,
         accept_destination_state: options.accept_destination_state,
@@ -199,8 +338,21 @@ async fn publish_static_artifact_form(options: PublishOptions, target: &str) -> 
     })
     .with_context(|| format!("publish attested artifact to static repo {repo_name}"))?;
 
-    println!("Published attested artifact to static repo: {repo_name}");
-    println!("Publish key ID: {}", outcome.publish_key_id);
+    let mut output = publish_success_output(&operation_id, "Published static artifact to repo");
+    output.artifacts.push(PackagingArtifact {
+        path: artifact_path.display().to_string(),
+        kind: Some("ccs".to_string()),
+    });
+    if options.json {
+        super::diagnostics::write_packaging_output(&output, true, writer)?;
+    } else {
+        writeln!(
+            writer,
+            "Published attested artifact to static repo: {repo_name}"
+        )?;
+        writeln!(writer, "Publish key ID: {}", outcome.publish_key_id)?;
+    }
+    super::diagnostics::write_packaging_record_if_possible(&output);
 
     Ok(())
 }
@@ -266,16 +418,21 @@ fn configure_host_record_for_publish(config: &mut KitchenConfig, recipe: &Recipe
     }
 }
 
-fn print_divergence_summary(provenance: Option<&ManifestProvenance>) {
+fn print_divergence_summary(
+    writer: &mut impl Write,
+    provenance: Option<&ManifestProvenance>,
+) -> Result<()> {
     let Some(evidence) = provenance.and_then(|provenance| provenance.hermetic_evidence.as_ref())
     else {
-        return;
+        return Ok(());
     };
     if evidence.divergence.status == DivergenceStatus::DiffersFromHost {
-        println!(
+        writeln!(
+            writer,
             "Warning: hermetic output differs from the latest host build record; this is diagnostic-only in M2a."
-        );
+        )?;
     }
+    Ok(())
 }
 
 fn ensure_static_local_publish_destination(destination: &RepoLocation) -> Result<()> {
@@ -371,6 +528,122 @@ mod tests {
             error.contains("artifact is missing a build attestation"),
             "{error}"
         );
+    }
+
+    #[tokio::test]
+    async fn artifact_form_publish_json_reports_static_gate_failure() {
+        let fixture = ArtifactPublishFixture::without_attestation();
+        let mut options = fixture.options();
+        options.json = true;
+
+        let mut output = Vec::new();
+        let error = cmd_publish_with_output(options, &mut output)
+            .await
+            .unwrap_err();
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("artifact is missing a build attestation"),
+            "{message}"
+        );
+        let value: serde_json::Value = serde_json::from_slice(&output).expect("valid publish json");
+        assert_eq!(value["status"], "failed");
+        assert_eq!(value["diagnostics"][0]["code"], "publish-gate-failed");
+        assert_eq!(
+            value["diagnostics"][0]["evidence"][0]["metadata"]["publish_lint_report"]["failures"]
+                [0]["code"],
+            "missing-attestation"
+        );
+    }
+
+    #[tokio::test]
+    async fn project_form_publish_json_preflight_is_structured() {
+        let temp = tempfile::tempdir().unwrap();
+        let recipe_path = temp.path().join("recipe.toml");
+        let repo_dir = temp.path().join("repo");
+        let key_dir = temp.path().join("keys");
+        let state_file = temp.path().join("publish-state.toml");
+        std::fs::write(
+            &recipe_path,
+            r#"
+[package]
+name = "publish-json"
+version = "1.0"
+
+[source]
+path = "."
+
+[build]
+install = "mkdir -p %(destdir)s/usr/share/publish-json"
+"#,
+        )
+        .unwrap();
+
+        let mut output = Vec::new();
+        let error = cmd_publish_with_output(
+            PublishOptions {
+                what: repo_dir.display().to_string(),
+                target: None,
+                recipe: Some(recipe_path.display().to_string()),
+                key_dir: Some(key_dir.display().to_string()),
+                state_file: Some(state_file.display().to_string()),
+                refresh: false,
+                force_reinit: false,
+                accept_destination_state: false,
+                rotate_publish_key: false,
+                rotate_root_key: false,
+                yes: true,
+                json: true,
+            },
+            &mut output,
+        )
+        .await
+        .unwrap_err();
+
+        let message = format!("{error:#}");
+        assert!(message.contains("hermetic config"), "{message}");
+        let rendered = String::from_utf8(output).unwrap();
+        assert!(!rendered.contains("Reading recipe:"));
+        let value: serde_json::Value =
+            serde_json::from_str(&rendered).expect("valid preflight json");
+        assert_eq!(value["status"], "failed");
+        assert_eq!(
+            value["diagnostics"][0]["code"],
+            "project-publish-preflight-failed"
+        );
+    }
+
+    #[tokio::test]
+    async fn remi_publish_json_is_structured_unsupported() {
+        let temp = tempfile::tempdir().unwrap();
+        let artifact = temp.path().join("artifact.ccs");
+        std::fs::write(&artifact, b"not read for unsupported route").unwrap();
+
+        let mut output = Vec::new();
+        let error = cmd_publish_with_output(
+            PublishOptions {
+                what: artifact.display().to_string(),
+                target: Some("https://remi.example.invalid/v1/admin/releases/test".to_string()),
+                recipe: None,
+                key_dir: None,
+                state_file: None,
+                refresh: false,
+                force_reinit: false,
+                accept_destination_state: false,
+                rotate_publish_key: false,
+                rotate_root_key: false,
+                yes: true,
+                json: true,
+            },
+            &mut output,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(format!("{error:#}").contains("Remi publish JSON output is not supported in M3a"));
+        let value: serde_json::Value =
+            serde_json::from_slice(&output).expect("valid remi unsupported json");
+        assert_eq!(value["status"], "failed");
+        assert_eq!(value["diagnostics"][0]["code"], "publish-json-unsupported");
     }
 
     #[test]
