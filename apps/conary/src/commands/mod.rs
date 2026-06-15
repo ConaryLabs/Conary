@@ -45,6 +45,7 @@ mod query;
 mod recipe_audit;
 mod redirect;
 pub mod registry;
+mod remi_publish;
 mod remove;
 mod replatform_rendering;
 mod repo;

@@ -28,6 +28,7 @@ use conary_core::repository::static_repo::publish_gate::{
 use super::cook::{recipe_source_base_dir, resolve_recipe_path};
 use super::hermetic_config::{ensure_no_build_dependencies_for_m2a, load_default_hermetic_builder};
 use super::hermetic_state::{load_latest_host_build_record_for_recipe, resolve_default_state_dir};
+use super::remi_publish::{RemiPublishOptions, publish_to_remi, resolve_remi_publish_bearer_token};
 
 pub struct PublishOptions {
     pub what: String,
@@ -152,6 +153,13 @@ async fn publish_project_form(options: PublishOptions) -> Result<()> {
 }
 
 async fn publish_artifact_form(options: PublishOptions, target: &str) -> Result<()> {
+    match classify_publish_target(target)? {
+        PublishTargetRoute::StaticLocal => publish_static_artifact_form(options, target).await,
+        PublishTargetRoute::RemiRelease => publish_remi_artifact_form(options, target).await,
+    }
+}
+
+async fn publish_static_artifact_form(options: PublishOptions, target: &str) -> Result<()> {
     let artifact_path = PathBuf::from(&options.what);
     let destination =
         RepoLocation::parse(target).with_context(|| format!("parse publish target {target}"))?;
@@ -193,6 +201,20 @@ async fn publish_artifact_form(options: PublishOptions, target: &str) -> Result<
     println!("Published attested artifact to static repo: {repo_name}");
     println!("Publish key ID: {}", outcome.publish_key_id);
 
+    Ok(())
+}
+
+async fn publish_remi_artifact_form(options: PublishOptions, target: &str) -> Result<()> {
+    let artifact_path = PathBuf::from(&options.what);
+    let bearer_token = resolve_remi_publish_bearer_token()?;
+    publish_to_remi(RemiPublishOptions {
+        artifact_path: &artifact_path,
+        target_url: target,
+        bearer_token: &bearer_token,
+    })
+    .await?;
+
+    println!("Published attested artifact to Remi release endpoint: {target}");
     Ok(())
 }
 
@@ -263,6 +285,29 @@ fn ensure_static_local_publish_destination(destination: &RepoLocation) -> Result
     }
 
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PublishTargetRoute {
+    StaticLocal,
+    RemiRelease,
+}
+
+fn classify_publish_target(target: &str) -> Result<PublishTargetRoute> {
+    if target.starts_with("http://") || target.starts_with("https://") {
+        if target.contains("/v1/admin/releases/") {
+            return Ok(PublishTargetRoute::RemiRelease);
+        }
+        bail!(
+            "HTTP(S) publish targets must use the Remi release endpoint /v1/admin/releases/{{distro}}"
+        );
+    }
+    Ok(PublishTargetRoute::StaticLocal)
+}
+
+#[cfg(test)]
+fn classify_publish_target_for_tests(target: &str) -> Result<PublishTargetRoute> {
+    classify_publish_target(target)
 }
 
 fn derive_repo_name(destination: &str) -> Result<String> {
@@ -448,6 +493,38 @@ install = "mkdir -p %(destdir)s/usr/share/publish-local && printf hi > %(destdir
             "static publisher supports local filesystem destinations; Remi HTTP(S) targets use the Remi release path"
         );
         assert!(!key_dir.exists());
+    }
+
+    #[test]
+    fn http_publish_target_routes_to_remi_release_path() {
+        let route = classify_publish_target_for_tests(
+            "https://remi.example.invalid/v1/admin/releases/test",
+        )
+        .unwrap();
+
+        assert_eq!(route, PublishTargetRoute::RemiRelease);
+    }
+
+    #[test]
+    fn remi_release_publish_target_routes_to_release_endpoint() {
+        let route = classify_publish_target_for_tests(
+            "https://remi.example.invalid/v1/admin/releases/test",
+        )
+        .unwrap();
+
+        assert_eq!(route, PublishTargetRoute::RemiRelease);
+    }
+
+    #[test]
+    fn static_local_guard_still_rejects_http_static_path() {
+        let destination = RepoLocation::parse("https://repo.example.invalid/static").unwrap();
+        let error = ensure_static_local_publish_destination(&destination).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("Remi HTTP(S) targets use the Remi release path")
+        );
     }
 
     #[test]

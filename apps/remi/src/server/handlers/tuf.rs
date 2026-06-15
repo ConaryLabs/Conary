@@ -724,6 +724,18 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn remi_tuf_refresh_timestamp_route_is_distro_scoped() {
+        let fixture = TimestampRefreshFixture::new("test-distro", true);
+        let first = call_refresh_timestamp_for_tests(&fixture, "test-distro").await;
+        assert_eq!(first.status(), StatusCode::OK);
+        let first_json = response_json_for_tests(first).await;
+
+        assert_eq!(first_json["role"], "timestamp");
+        assert_eq!(first_json["distro"], "test-distro");
+        assert!(first_json["version"].as_u64().unwrap() > 0);
+    }
+
+    #[tokio::test]
     async fn remi_tuf_refresh_timestamp_fails_closed_without_role_key() {
         let fixture = TimestampRefreshFixture::new("test-distro", false);
         let response = call_refresh_timestamp_for_tests(&fixture, "test-distro").await;
