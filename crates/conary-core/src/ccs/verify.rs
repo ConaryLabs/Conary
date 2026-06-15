@@ -8,7 +8,7 @@ use crate::ccs::archive_reader::read_ccs_archive;
 use crate::ccs::binary_manifest::MerkleTree;
 use crate::ccs::builder::FileEntry;
 use crate::hash;
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use ed25519_dalek::{Signature, VerifyingKey};
 use serde::{Deserialize, Serialize};
@@ -142,6 +142,8 @@ pub struct VerificationResult {
     pub signature_status: SignatureStatus,
     /// Content verification status
     pub content_status: ContentStatus,
+    /// Whether the embedded TOML manifest matches the CBOR manifest integrity hash
+    pub toml_integrity_valid: bool,
     /// Any warnings (non-fatal issues)
     pub warnings: Vec<String>,
 }
@@ -239,14 +241,11 @@ pub fn verify_package(path: &Path, policy: &TrustPolicy) -> Result<VerificationR
     // Verify TOML integrity hash when the binary manifest contains one
     let mut toml_integrity_valid = true;
     if let Some(ref bin_manifest) = contents.binary_manifest
-        && let Some(ref expected_hash) = bin_manifest.toml_integrity_hash
+        && bin_manifest.toml_integrity_hash.is_some()
     {
         if let Some(ref toml_raw) = contents.toml_raw {
-            let actual_hash = hash::sha256(toml_raw);
-            if actual_hash != *expected_hash {
-                warnings.push(format!(
-                    "TOML manifest integrity check failed: expected {expected_hash}, got {actual_hash}"
-                ));
+            if let Err(err) = verify_toml_integrity(toml_raw, bin_manifest) {
+                warnings.push(err.to_string());
                 toml_integrity_valid = false;
             }
         } else {
@@ -276,8 +275,24 @@ pub fn verify_package(path: &Path, policy: &TrustPolicy) -> Result<VerificationR
         package_version: manifest.package.version.clone(),
         signature_status,
         content_status,
+        toml_integrity_valid,
         warnings,
     })
+}
+
+/// Verify that `MANIFEST.toml` matches the CBOR manifest integrity hash.
+pub fn verify_toml_integrity(
+    toml_raw: &[u8],
+    bin_manifest: &crate::ccs::binary_manifest::BinaryManifest,
+) -> Result<()> {
+    let Some(expected_hash) = bin_manifest.toml_integrity_hash.as_ref() else {
+        return Ok(());
+    };
+    let actual_hash = hash::sha256(toml_raw);
+    if actual_hash != *expected_hash {
+        bail!("TOML manifest integrity check failed: expected {expected_hash}, got {actual_hash}");
+    }
+    Ok(())
 }
 
 /// Verify the package signature
@@ -768,6 +783,45 @@ mod tests {
             matches!(status, SignatureStatus::Untrusted { .. }),
             "Expected Untrusted when key is not in trusted_keys, got {:?}",
             status
+        );
+    }
+
+    #[test]
+    fn verify_package_rejects_tampered_attestation_toml() {
+        let temp = tempfile::tempdir().unwrap();
+        let key = crate::ccs::signing::SigningKeyPair::generate().with_key_id("test-publisher");
+        let package_path = temp.path().join("signed.ccs");
+        let tampered_path = temp.path().join("tampered.ccs");
+
+        let mut result = crate::ccs::builder::test_support::minimal_build_result("attested", "1.0");
+        result
+            .manifest
+            .provenance
+            .get_or_insert_with(Default::default)
+            .build_attestation =
+            Some(crate::ccs::attestation::test_support::sample_envelope_for_tests(&key));
+        crate::ccs::builder::write_signed_ccs_package(&result, &package_path, &key).unwrap();
+        crate::ccs::builder::test_support::rewrite_manifest_toml_for_tests(
+            &package_path,
+            &tampered_path,
+            |toml| toml.replace("m2-policy-v1", "m2-policy-mutated"),
+        )
+        .unwrap();
+
+        let verification = verify_package(
+            &tampered_path,
+            &TrustPolicy::strict(vec![key.public_key_base64()]),
+        )
+        .unwrap();
+
+        assert!(!verification.toml_integrity_valid);
+        assert!(
+            verification
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("TOML manifest integrity check failed")),
+            "{:?}",
+            verification.warnings
         );
     }
 }

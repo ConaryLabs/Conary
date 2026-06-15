@@ -66,6 +66,10 @@ pub struct ManifestProvenance {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hermetic_evidence: Option<crate::recipe::hermetic::HermeticBuildEvidence>,
 
+    /// Signed M2 build attestation used by artifact-form publish gates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build_attestation: Option<crate::ccs::attestation::BuildAttestationEnvelope>,
+
     // === Signature Layer ===
     /// Signatures on this package
     #[serde(default)]
