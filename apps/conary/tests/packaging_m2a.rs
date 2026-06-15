@@ -73,23 +73,31 @@ fn publish_project_form_fails_without_hermetic_config() {
 }
 
 #[test]
-fn publish_project_form_records_hermetic_evidence_without_build_attestation() {
+fn publish_project_form_records_hermetic_evidence_with_build_attestation() {
     let fixture = RecipeFixture::new(false);
     let config_path = fixture.write_hermetic_config();
 
     let output = fixture.publish_project_form(&config_path);
 
     assert_success(&output);
-    assert_stdout_contains(
-        &output,
-        "M2a static publish records hermetic build evidence",
-    );
+    assert_stdout_contains(&output, "Cooking and attesting");
 
     let package_path = fixture.published_package_path();
     let manifest = read_package_manifest(&package_path);
     let provenance = manifest.provenance.expect("provenance");
     assert_eq!(provenance.hardening_level.as_deref(), Some("hermetic"));
     assert!(provenance.hermetic_evidence.is_some());
+    let attestation = provenance
+        .build_attestation
+        .as_ref()
+        .expect("build attestation");
+    assert_eq!(attestation.payload.hardening_level, "hermetic");
+    assert_eq!(attestation.payload.origin_class, "native-built");
+    assert_eq!(
+        attestation.payload.publish_policy_digest,
+        "m2-static-publish-policy-v1"
+    );
+    assert_eq!(attestation.signer_key_id, "publish");
 
     let archive = read_package_archive(&package_path);
     assert!(
@@ -98,8 +106,7 @@ fn publish_project_form_records_hermetic_evidence_without_build_attestation() {
     );
 
     let manifest_text = read_package_manifest_text(&package_path);
-    assert!(!manifest_text.contains("build_attestation"));
-    assert!(!manifest_text.contains("BuildAttestationEnvelope"));
+    assert!(manifest_text.contains("build_attestation"));
     assert!(!manifest_text.contains("attested"));
 }
 

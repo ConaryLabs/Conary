@@ -123,6 +123,19 @@ impl PublishLintReport {
     }
 }
 
+pub fn format_publish_gate_failures(report: &PublishLintReport) -> String {
+    if report.failures.is_empty() {
+        return "static artifact publish gate failed".to_string();
+    }
+    let failures = report
+        .failures
+        .iter()
+        .map(|failure| format!("{:?}: {}", failure.code, failure.message))
+        .collect::<Vec<_>>()
+        .join("; ");
+    format!("static artifact publish gate failed: {failures}")
+}
+
 pub fn verify_static_artifact_publish_eligibility(
     artifact_path: &Path,
     accepted_signers: &AcceptedStaticSignerSet,

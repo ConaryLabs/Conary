@@ -9,13 +9,17 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use conary_core::ccs::manifest::ManifestProvenance;
 use conary_core::recipe::Recipe;
-use conary_core::recipe::hermetic::{DivergenceStatus, HermeticBuildInput, detect_ci_mode};
+use conary_core::recipe::hermetic::{CiMode, DivergenceStatus, HermeticBuildInput};
 use conary_core::recipe::{
     Kitchen, KitchenConfig, SourceDownloadPolicy, parse_recipe_file, validate_recipe,
 };
 use conary_core::repository::static_repo::RepoLocation;
 use conary_core::repository::static_repo::publish::{
     StaticPublishOptions, prepare_static_key_dir, publish_static_repo,
+};
+use conary_core::repository::static_repo::publish_context::{
+    ProjectFormAttestationInput, attach_project_form_attestation,
+    prepare_project_form_static_context,
 };
 
 use super::cook::{recipe_source_base_dir, resolve_recipe_path};
@@ -82,17 +86,31 @@ pub async fn cmd_publish(options: PublishOptions) -> Result<()> {
     let kitchen = Kitchen::new(config);
 
     println!(
-        "M2a static publish records hermetic build evidence, but release attestation gates arrive in M2b."
-    );
-    println!(
-        "Cooking {} {} for static publish (hermetic, pristine/no-host-mount, network disabled during build)...",
+        "Cooking and attesting {} {} for static release publish...",
         recipe.package.name, recipe.package.version
     );
 
     let result = kitchen
-        .cook_hermetic(&recipe, hermetic_input, output_dir.path(), detect_ci_mode())
+        .cook_hermetic(
+            &recipe,
+            hermetic_input,
+            output_dir.path(),
+            release_publish_ci_mode(),
+        )
         .with_context(|| format!("Failed to hermetically cook {}", recipe.package.name))?;
     print_divergence_summary(result.provenance.as_ref());
+    let prepared =
+        prepare_project_form_static_context(&destination, &key_dir, options.force_reinit)
+            .with_context(|| format!("prepare static publish context for {}", repo_name))?;
+    let attested_package_path = attach_project_form_attestation(ProjectFormAttestationInput {
+        package_path: &result.package_path,
+        provenance: result
+            .provenance
+            .as_ref()
+            .context("project-form publish requires hermetic provenance")?,
+        context: &prepared,
+        conary_version: env!("CARGO_PKG_VERSION"),
+    })?;
 
     let outcome = publish_static_repo(StaticPublishOptions {
         repo_name: repo_name.clone(),
@@ -100,7 +118,7 @@ pub async fn cmd_publish(options: PublishOptions) -> Result<()> {
         destination,
         key_dir,
         state_file,
-        package_paths: vec![result.package_path.clone()],
+        package_paths: vec![attested_package_path],
         refresh: options.refresh,
         force_reinit: options.force_reinit,
         accept_destination_state: options.accept_destination_state,
@@ -144,6 +162,10 @@ fn publish_kitchen_config(
         source_download_policy: SourceDownloadPolicy::AllowDownloads,
         ..Default::default()
     }
+}
+
+fn release_publish_ci_mode() -> CiMode {
+    CiMode::On
 }
 
 fn sha256_prefixed_file(path: &Path) -> Result<String> {
@@ -232,6 +254,12 @@ fn config_base_dir() -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
+    use std::process::Command;
+    use std::sync::Mutex;
+
+    const TEST_HASH: &str =
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
     #[tokio::test]
     async fn artifact_form_publish_is_rejected_in_m1a() {
@@ -272,6 +300,34 @@ mod tests {
         assert_eq!(
             config.recipe_source_base_dir,
             Some(std::path::PathBuf::from("/work/pkg"))
+        );
+    }
+
+    #[tokio::test]
+    async fn project_form_publish_uses_release_dirty_tree_refusal() {
+        let fixture = DirtyGitPublishFixture::new();
+        let _env_lock = ENV_LOCK.lock().unwrap();
+        let _config_guard = EnvVarGuard::set("CONARY_HERMETIC_CONFIG", &fixture.config_path);
+        let _conary_ci_guard = EnvVarGuard::set("CONARY_HERMETIC_CI", "0");
+        let _ci_guard = EnvVarGuard::remove("CI");
+
+        let error = cmd_publish(fixture.options()).await.unwrap_err();
+        let error = format!("{error:#}");
+
+        assert!(error.contains("dirty local tree"), "{error}");
+    }
+
+    #[test]
+    fn publish_prefetch_config_allows_downloads_before_hermetic_build() {
+        let recipe_path = std::path::Path::new("/work/pkg/recipe.toml");
+        let output_dir = std::path::Path::new("/tmp/conary-publish-out");
+        let sysroot = std::path::PathBuf::from("/tmp/sysroot");
+        let config = publish_kitchen_config(recipe_path, output_dir, sysroot);
+
+        assert!(!config.allow_network);
+        assert_eq!(
+            config.source_download_policy,
+            conary_core::recipe::SourceDownloadPolicy::AllowDownloads
         );
     }
 
@@ -357,4 +413,143 @@ install = "mkdir -p %(destdir)s/usr/share/publish-local && printf hi > %(destdir
             "acme"
         );
     }
+
+    struct DirtyGitPublishFixture {
+        _temp: tempfile::TempDir,
+        recipe_path: PathBuf,
+        repo_dir: PathBuf,
+        key_dir: PathBuf,
+        state_file: PathBuf,
+        config_path: PathBuf,
+    }
+
+    impl DirtyGitPublishFixture {
+        fn new() -> Self {
+            let temp = tempfile::tempdir().unwrap();
+            let project_dir = temp.path().join("project");
+            let recipe_path = project_dir.join("recipe.toml");
+            let sysroot = temp.path().join("sysroot");
+            let config_path = temp.path().join("hermetic.toml");
+            std::fs::create_dir_all(&project_dir).unwrap();
+            std::fs::create_dir_all(&sysroot).unwrap();
+            std::fs::write(project_dir.join("source.txt"), "clean\n").unwrap();
+            std::fs::write(
+                &recipe_path,
+                r#"
+[package]
+name = "dirty-release"
+version = "1.0"
+
+[source]
+path = "."
+
+[build]
+install = "mkdir -p %(destdir)s/usr/share/dirty-release && printf hi > %(destdir)s/usr/share/dirty-release/payload"
+"#,
+            )
+            .unwrap();
+            run_git(&project_dir, &["init"]);
+            run_git(
+                &project_dir,
+                &["config", "user.email", "test@example.invalid"],
+            );
+            run_git(&project_dir, &["config", "user.name", "Conary Test"]);
+            run_git(&project_dir, &["add", "."]);
+            run_git(&project_dir, &["commit", "-m", "initial"]);
+            std::fs::write(project_dir.join("source.txt"), "dirty\n").unwrap();
+            std::fs::write(
+                &config_path,
+                format!(
+                    r#"
+default_builder = "test"
+
+[builders.test]
+kind = "pristine"
+sysroot_path = "{}"
+sysroot_hash = "{TEST_HASH}"
+"#,
+                    sysroot.display()
+                ),
+            )
+            .unwrap();
+
+            Self {
+                repo_dir: temp.path().join("repo"),
+                key_dir: temp.path().join("keys"),
+                state_file: temp.path().join("publish-state.toml"),
+                _temp: temp,
+                recipe_path,
+                config_path,
+            }
+        }
+
+        fn options(&self) -> PublishOptions {
+            PublishOptions {
+                what: self.repo_dir.display().to_string(),
+                target: None,
+                recipe: Some(self.recipe_path.display().to_string()),
+                key_dir: Some(self.key_dir.display().to_string()),
+                state_file: Some(self.state_file.display().to_string()),
+                refresh: false,
+                force_reinit: false,
+                accept_destination_state: false,
+                rotate_publish_key: false,
+                rotate_root_key: false,
+                yes: true,
+            }
+        }
+    }
+
+    fn run_git(root: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .output()
+            .expect("run git");
+        assert!(
+            output.status.success(),
+            "git {:?} failed: {}{}",
+            args,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+            let previous = std::env::var_os(key);
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self { key, previous }
+        }
+
+        fn remove(key: &'static str) -> Self {
+            let previous = std::env::var_os(key);
+            unsafe {
+                std::env::remove_var(key);
+            }
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            unsafe {
+                if let Some(previous) = &self.previous {
+                    std::env::set_var(self.key, previous);
+                } else {
+                    std::env::remove_var(self.key);
+                }
+            }
+        }
+    }
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 }

@@ -7,8 +7,11 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
+use crate::ccs::manifest_provenance::ManifestProvenance;
 use crate::ccs::signing::SigningKeyPair;
 use crate::hash;
+use crate::packages::traits::PackageFormat;
+use crate::recipe::hermetic::PolicyStatus;
 use crate::repository::static_repo::publish_gate::AcceptedStaticSignerSet;
 use crate::repository::static_repo::{
     PackageKeyEntry, PackageKeyStatus, PackageKeysFile, RepoLocation, validate_repo_relative_path,
@@ -126,6 +129,192 @@ impl StaticPublishPrepareOptions {
             publish_policy_digest: STATIC_PUBLISH_POLICY_DIGEST_V1.to_string(),
         })
     }
+}
+
+pub fn prepare_project_form_static_context(
+    destination: &RepoLocation,
+    key_dir: &Path,
+    force_reinit: bool,
+) -> Result<PreparedStaticPublishContext> {
+    StaticPublishPrepareOptions {
+        destination: destination.clone(),
+        key_dir: Some(key_dir.to_path_buf()),
+        publish_form: StaticPublishForm::Project,
+        force_reinit,
+    }
+    .prepare()
+}
+
+pub struct ProjectFormAttestationInput<'a> {
+    pub package_path: &'a Path,
+    pub provenance: &'a ManifestProvenance,
+    pub context: &'a PreparedStaticPublishContext,
+    pub conary_version: &'a str,
+}
+
+pub fn attach_project_form_attestation(input: ProjectFormAttestationInput<'_>) -> Result<PathBuf> {
+    let archive = crate::ccs::archive_reader::read_ccs_archive(
+        fs::File::open(input.package_path)
+            .with_context(|| format!("open {}", input.package_path.display()))?,
+    )?;
+    if archive.signature_raw.is_some() {
+        bail!("project-form publish expected an unsigned cook output before attestation signing");
+    }
+    let package =
+        crate::ccs::CcsPackage::parse(input.package_path.to_str().with_context(|| {
+            format!(
+                "package path is not valid UTF-8: {}",
+                input.package_path.display()
+            )
+        })?)
+        .map_err(anyhow::Error::from)?;
+    let output_identity = crate::ccs::attestation::compute_build_output_identity(&package)?;
+    let payload = build_project_form_attestation_payload(
+        input.provenance,
+        output_identity,
+        input.context.publish_policy_digest.as_str(),
+        input.conary_version,
+    )?;
+    preflight_project_form_attestation_payload(&payload, input.provenance)?;
+    let envelope = crate::ccs::attestation::sign_build_attestation(
+        payload,
+        &input.context.active_publish_key,
+    )?;
+    let signed_temp =
+        tempfile::Builder::new()
+            .prefix("conary-attested-")
+            .suffix(".ccs")
+            .tempfile_in(input.package_path.parent().with_context(|| {
+                format!("resolve parent for {}", input.package_path.display())
+            })?)?;
+    let build_result = build_result_from_package_with_attestation(&package, envelope)?;
+    crate::ccs::builder::write_signed_ccs_package(
+        &build_result,
+        signed_temp.path(),
+        &input.context.active_publish_key,
+    )?;
+    let trusted_key = input.context.active_publish_key.public_key_base64();
+    let verification = crate::ccs::verify::verify_package(
+        signed_temp.path(),
+        &crate::ccs::verify::TrustPolicy::strict(vec![trusted_key]),
+    )?;
+    if !verification.valid || !verification.toml_integrity_valid {
+        bail!("attested project-form package failed final CCS verification");
+    }
+    let report =
+        crate::repository::static_repo::publish_gate::verify_static_artifact_publish_eligibility(
+            signed_temp.path(),
+            &input.context.accepted_signers,
+            &input.context.publish_policy_digest,
+        )?;
+    if !report.is_passed() {
+        bail!(
+            "{}",
+            crate::repository::static_repo::publish_gate::format_publish_gate_failures(&report)
+        );
+    }
+    let persisted = signed_temp
+        .keep()
+        .map_err(|error| anyhow::anyhow!("persist attested package: {}", error.error))?
+        .1;
+    Ok(persisted)
+}
+
+fn build_project_form_attestation_payload(
+    provenance: &ManifestProvenance,
+    output_identity: crate::ccs::attestation::BuildOutputIdentity,
+    publish_policy_digest: &str,
+    conary_version: &str,
+) -> Result<crate::ccs::attestation::BuildAttestationPayload> {
+    let evidence = provenance
+        .hermetic_evidence
+        .as_ref()
+        .context("project-form publish requires hermetic evidence")?;
+    Ok(crate::ccs::attestation::BuildAttestationPayload {
+        schema_version: crate::ccs::attestation::BUILD_ATTESTATION_SCHEMA_V1,
+        origin_class: output_identity.origin_class.clone(),
+        hardening_level: output_identity.hardening_level.clone(),
+        build_input: evidence.build_input.clone(),
+        dependency_lock: evidence.dependency_lock.clone(),
+        hermetic_evidence_hash: crate::ccs::attestation::canonical_json_hash(evidence)?,
+        output_identity,
+        build_command_risk_report_hash: crate::ccs::attestation::canonical_json_hash(
+            &evidence.command_risk,
+        )?,
+        scriptlet_risk_report_hash: None,
+        conversion_boundary_hash: None,
+        publish_policy_digest: publish_policy_digest.to_string(),
+        command_risk_classifier_version: evidence.command_risk.classifier_version.clone(),
+        sandbox_profile: "kitchen-pristine-network-none".to_string(),
+        seccomp_profile: Some("scriptlet-v1".to_string()),
+        builder_identity: "conary-hermetic-kitchen".to_string(),
+        conary_version: conary_version.to_string(),
+        issued_at: chrono::Utc::now().to_rfc3339(),
+    })
+}
+
+fn preflight_project_form_attestation_payload(
+    payload: &crate::ccs::attestation::BuildAttestationPayload,
+    provenance: &ManifestProvenance,
+) -> Result<()> {
+    if payload.hardening_level != "hermetic" {
+        bail!("project-form publish can only sign hermetic build attestations");
+    }
+    if payload.origin_class == "recorded-draft" {
+        bail!("project-form publish cannot sign recorded-draft artifacts");
+    }
+    if payload.publish_policy_digest != STATIC_PUBLISH_POLICY_DIGEST_V1 {
+        bail!("project-form publish attestation uses an unknown policy digest");
+    }
+    if payload
+        .output_identity
+        .canonical_content_identity
+        .trim()
+        .is_empty()
+    {
+        bail!("project-form publish attestation is missing output content identity");
+    }
+    let evidence = provenance
+        .hermetic_evidence
+        .as_ref()
+        .context("project-form publish requires hermetic evidence before attestation signing")?;
+    let command_risk_hash = crate::ccs::attestation::canonical_json_hash(&evidence.command_risk)?;
+    if payload.build_command_risk_report_hash != command_risk_hash {
+        bail!("project-form publish command-risk report hash does not match hermetic evidence");
+    }
+    if payload.command_risk_classifier_version != evidence.command_risk.classifier_version {
+        bail!("project-form publish command-risk classifier version mismatch");
+    }
+    if evidence.command_risk.status != PolicyStatus::Clean {
+        bail!("project-form publish refuses unclean hermetic command-risk reports");
+    }
+    if evidence.ecosystem_policy.status != PolicyStatus::Clean {
+        bail!("project-form publish refuses unclean ecosystem offline policy reports");
+    }
+    Ok(())
+}
+
+fn build_result_from_package_with_attestation(
+    package: &crate::ccs::CcsPackage,
+    envelope: crate::ccs::attestation::BuildAttestationEnvelope,
+) -> Result<crate::ccs::BuildResult> {
+    let mut manifest = package.manifest().clone();
+    manifest
+        .provenance
+        .get_or_insert_with(Default::default)
+        .build_attestation = Some(envelope);
+    Ok(crate::ccs::BuildResult {
+        manifest,
+        components: package.components().clone(),
+        files: package.file_entries().to_vec(),
+        blobs: package.extract_all_content().map_err(anyhow::Error::from)?,
+        total_size: package.file_entries().iter().map(|entry| entry.size).sum(),
+        chunked: package
+            .file_entries()
+            .iter()
+            .any(|entry| entry.chunks.is_some()),
+        chunk_stats: None,
+    })
 }
 
 pub(crate) fn ensure_static_local_publish_destination(destination: &RepoLocation) -> Result<()> {
