@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-06-15
-revision: 23
-summary: Route M2 release publish ownership
+revision: 24
+summary: Route M3 packaging differentiator design ownership
 ---
 
 # Assistant Subsystem Map
@@ -24,6 +24,7 @@ summary: Route M2 release publish ownership
 - Packaging, source inference, try sessions, and static repository publishing:
   `docs/specs/static-repo-format-v1.md`,
   `docs/superpowers/specs/2026-06-10-packaging-toolchain-design.md`,
+  `docs/superpowers/specs/2026-06-15-m3-packaging-differentiators-design.md`,
   `docs/superpowers/specs/2026-06-13-m2-publish-hardening-remi-design.md`,
   `docs/superpowers/specs/2026-06-14-m2a-builder-config-publish-divergence-design.md`,
   `docs/superpowers/plans/2026-06-14-m2a-hermetic-publish-foundation-implementation-plan.md`,
