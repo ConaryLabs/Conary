@@ -78,11 +78,7 @@ pub fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     write_file_atomic(path, &bytes)
 }
 
-pub fn write_json_atomic_with_mode<T: Serialize>(
-    path: &Path,
-    value: &T,
-    mode: u32,
-) -> Result<()> {
+pub fn write_json_atomic_with_mode<T: Serialize>(path: &Path, value: &T, mode: u32) -> Result<()> {
     let bytes = serde_json::to_vec_pretty(value)
         .map_err(|error| Error::InternalError(format!("failed to serialize JSON: {error}")))?;
     write_file_atomic_with_mode(path, &bytes, mode)

@@ -337,7 +337,10 @@ mod tests {
             PackagingDiagnosticCode::RecipeValidationFailed,
             "Recipe validation failed",
         )
-        .with_evidence(DiagnosticEvidence::log("validation", "missing [package] section"));
+        .with_evidence(DiagnosticEvidence::log(
+            "validation",
+            "missing [package] section",
+        ));
 
         let output = PackagingCommandOutput::failed("op-1", "conary cook", vec![diagnostic]);
 

@@ -5,12 +5,12 @@
 use std::io::Write;
 
 use anyhow::Result;
+use conary_core::diagnostics::redaction::{
+    redact_command, redact_json_value, redact_log, redact_text,
+};
 use conary_core::diagnostics::{
     DiagnosticEvidence, PackagingArtifact, PackagingCommandOutput, PackagingDiagnostic,
     PackagingSeverity,
-};
-use conary_core::diagnostics::redaction::{
-    redact_command, redact_json_value, redact_log, redact_text,
 };
 
 pub(crate) fn render_packaging_json(output: &PackagingCommandOutput) -> Result<String> {
@@ -58,6 +58,10 @@ pub(crate) fn write_packaging_output(
 }
 
 pub(crate) fn write_packaging_record_if_possible(output: &PackagingCommandOutput) {
+    if cfg!(test) && std::env::var_os("CONARY_PACKAGING_OPERATIONS_DIR").is_none() {
+        return;
+    }
+
     let dir = match super::operation_records::default_packaging_operations_dir() {
         Ok(dir) => dir,
         Err(error) => {
@@ -66,9 +70,11 @@ pub(crate) fn write_packaging_record_if_possible(output: &PackagingCommandOutput
         }
     };
     let output = redacted_packaging_output(output);
-    if let Err(error) =
-        super::operation_records::write_packaging_record_unchecked(&dir, &output.operation_id, &output)
-    {
+    if let Err(error) = super::operation_records::write_packaging_record_unchecked(
+        &dir,
+        &output.operation_id,
+        &output,
+    ) {
         tracing::warn!(%error, "failed to write packaging operation record");
     }
 }
@@ -258,8 +264,7 @@ mod tests {
                 serde_json::json!("https://user:pass@example.invalid/pkg.ccs"),
             ),
         );
-        let output =
-            PackagingCommandOutput::failed("cook-redact", "conary cook", vec![diagnostic]);
+        let output = PackagingCommandOutput::failed("cook-redact", "conary cook", vec![diagnostic]);
 
         write_packaging_record_if_possible(&output);
 
