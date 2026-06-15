@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-06-15
-revision: 11
-summary: Route M2 release publish and Remi release upload ownership
+revision: 12
+summary: Route M3 packaging differentiator design ownership
 ---
 
 # Feature Ownership And Interaction Gates
@@ -324,6 +324,7 @@ pinned by the repository.
 
 **Start here:** `docs/specs/static-repo-format-v1.md`;
 `docs/superpowers/specs/2026-06-10-packaging-toolchain-design.md`;
+`docs/superpowers/specs/2026-06-15-m3-packaging-differentiators-design.md`;
 `docs/superpowers/specs/2026-06-13-m2-publish-hardening-remi-design.md`;
 `docs/superpowers/specs/2026-06-14-m2a-builder-config-publish-divergence-design.md`;
 `docs/superpowers/plans/2026-06-14-m2a-hermetic-publish-foundation-implementation-plan.md`;
@@ -370,6 +371,7 @@ publish, trust establishment, sync, install, or package-signing boundaries.
 
 **Docs to update:** `docs/specs/static-repo-format-v1.md`;
 `docs/superpowers/specs/2026-06-10-packaging-toolchain-design.md`;
+`docs/superpowers/specs/2026-06-15-m3-packaging-differentiators-design.md`;
 `docs/superpowers/specs/2026-06-13-m2-publish-hardening-remi-design.md`;
 `docs/superpowers/specs/2026-06-14-m2a-builder-config-publish-divergence-design.md`;
 `docs/guides/first-package.md`;
