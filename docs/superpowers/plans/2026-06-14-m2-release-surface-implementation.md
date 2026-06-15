@@ -70,7 +70,9 @@ Maintainability budget:
 
 - `crates/conary-core/src/repository/static_repo/publish.rs` starts at 2659 lines. By the end of M2b it must be `<= 2500` lines. Move `PendingPackageWrites`, `PendingPackageWrite`, `stage_packages`, `write_pending_package`, `sign_package_bytes`, `package_relative_path`, and `package_entry_from_package` into `package_staging.rs`; move publish-key loading and pending-key promotion helpers into `publish_context.rs`. Do not accept a positive net line-count change in `publish.rs`.
 - `crates/conary-core/src/ccs/manifest.rs` starts at 1500 lines. Do not add attestation logic there beyond field-compatible serialization use through existing manifest/provenance paths.
+- `crates/conary-core/src/recipe/hermetic/ecosystem.rs` starts at 1015 lines. Task 4b preserves ecosystem policy ownership there, but any helper growth must generalize existing directory identity code instead of adding a second tree-hash implementation.
 - `crates/conary-core/src/recipe/kitchen/cook.rs` starts at 1686 lines. Keep Kitchen as orchestration; attestation creation belongs in `ccs::attestation` and publish command/context helpers.
+- `apps/remi/src/server/config.rs` starts at 1124 lines. Task 10 preserves config parsing and `RemiConfig` to `ServerConfig` mapping ownership there; release upload behavior stays out of config.
 - `apps/remi/src/server/handlers/admin/packages.rs` starts at 1198 lines. Release push logic belongs in `apps/remi/src/server/release_publish.rs`; route handlers should call into it.
 
 ## Checkpoint Order
@@ -468,7 +470,11 @@ fn verify_package_rejects_tampered_attestation_toml() {
     let tampered_path = temp.path().join("tampered.ccs");
 
     let mut result = crate::ccs::builder::test_support::minimal_build_result("attested", "1.0");
-    result.manifest.provenance.build_attestation =
+    result
+        .manifest
+        .provenance
+        .get_or_insert_with(Default::default)
+        .build_attestation =
         Some(crate::ccs::attestation::test_support::sample_envelope_for_tests(&key));
     crate::ccs::builder::write_signed_ccs_package(&result, &package_path, &key).unwrap();
     crate::ccs::builder::test_support::rewrite_manifest_toml_for_tests(
@@ -478,7 +484,9 @@ fn verify_package_rejects_tampered_attestation_toml() {
     )
     .unwrap();
 
-    let verification = verify_package(&tampered_path, &TrustPolicy::TrustAll).unwrap();
+    let verification =
+        verify_package(&tampered_path, &TrustPolicy::strict(vec![key.public_key_base64()]))
+            .unwrap();
 
     assert!(!verification.toml_integrity_valid);
     assert!(
@@ -558,10 +566,11 @@ pub(crate) fn minimal_build_result(name: &str, version: &str) -> BuildResult {
     use std::collections::HashMap;
 
     let mut manifest = crate::ccs::manifest::CcsManifest::new_minimal(name, version);
-    manifest.provenance.origin_class = Some("native-built".to_string());
-    manifest.provenance.hardening_level = Some("hermetic".to_string());
-    manifest.provenance.merkle_root = Some("sha256:empty".to_string());
-    manifest.provenance.hermetic_evidence =
+    let provenance = manifest.provenance.get_or_insert_with(Default::default);
+    provenance.origin_class = Some("native-built".to_string());
+    provenance.hardening_level = Some("hermetic".to_string());
+    provenance.merkle_root = Some("sha256:empty".to_string());
+    provenance.hermetic_evidence =
         Some(crate::ccs::attestation::test_support::sample_hermetic_evidence_for_tests());
 
     BuildResult {
@@ -683,7 +692,11 @@ fn package_with_attestation_and_signature_for_tests(
 ) -> (tempfile::TempDir, crate::ccs::package::CcsPackage) {
     let key = crate::ccs::signing::SigningKeyPair::generate().with_key_id("identity-test");
     let (temp, mut package) = signed_package_for_identity_tests(&key, "m2-policy-v1");
-    package.manifest_mut_for_tests().provenance.dna_hash = Some(dna_hash.to_string());
+    package
+        .manifest_mut_for_tests()
+        .provenance
+        .get_or_insert_with(Default::default)
+        .dna_hash = Some(dna_hash.to_string());
     (temp, package)
 }
 
@@ -696,7 +709,11 @@ fn signed_package_for_identity_tests(
     let mut result = crate::ccs::builder::test_support::minimal_build_result("identity", "1.0");
     let mut payload = crate::ccs::attestation::test_support::sample_payload_for_tests();
     payload.publish_policy_digest = policy_digest.to_string();
-    result.manifest.provenance.build_attestation =
+    result
+        .manifest
+        .provenance
+        .get_or_insert_with(Default::default)
+        .build_attestation =
         Some(crate::ccs::attestation::sign_build_attestation(payload, key).unwrap());
     crate::ccs::builder::write_signed_ccs_package(&result, &package_path, key).unwrap();
     let package = crate::ccs::package::CcsPackage::parse(package_path.to_str().unwrap()).unwrap();
@@ -726,7 +743,10 @@ In `crates/conary-core/src/ccs/attestation.rs`, add:
 ```rust
 pub fn compute_build_output_identity(package: &crate::ccs::package::CcsPackage) -> Result<BuildOutputIdentity> {
     let manifest = package.manifest();
-    let provenance = &manifest.provenance;
+    let provenance = manifest
+        .provenance
+        .as_ref()
+        .context("build output identity requires manifest provenance")?;
     let hardening_level = provenance
         .hardening_level
         .clone()
@@ -751,8 +771,12 @@ pub fn compute_build_output_identity(package: &crate::ccs::package::CcsPackage) 
         file_merkle_root,
         package_name: manifest.package.name.clone(),
         package_version: manifest.package.version.clone(),
-        package_release: manifest.package.release.clone().unwrap_or_else(|| "1".to_string()),
-        architecture: manifest.package.architecture.clone(),
+        package_release: "1".to_string(),
+        architecture: manifest
+            .package
+            .platform
+            .as_ref()
+            .and_then(|platform| platform.arch.clone()),
         origin_class,
         hardening_level,
         hermetic_evidence_hash,
@@ -764,9 +788,11 @@ pub fn compute_content_identity_excluding_signatures(
     package: &crate::ccs::package::CcsPackage,
 ) -> Result<String> {
     let mut manifest = package.manifest().clone();
-    manifest.provenance.build_attestation = None;
-    manifest.provenance.signatures.clear();
-    manifest.provenance.dna_hash = None;
+    if let Some(provenance) = manifest.provenance.as_mut() {
+        provenance.build_attestation = None;
+        provenance.signatures.clear();
+        provenance.dna_hash = None;
+    }
     let manifest_bytes = serde_json::to_vec(&manifest).context("serialize content identity manifest projection")?;
     let components_bytes = serde_json::to_vec(package.components()).context("serialize content identity components")?;
     let files_bytes = serde_json::to_vec(package.file_entries()).context("serialize content identity files")?;
@@ -1464,6 +1490,20 @@ mod tests {
 
         assert!(err.to_string().contains("no active package keys"));
     }
+
+    #[test]
+    fn duplicate_active_signers_fail_closed() {
+        let keys = PackageKeysFile {
+            schema: 1,
+            keys: vec![
+                package_key("dup", "pub-one", PackageKeyStatus::Active),
+                package_key("dup", "pub-two", PackageKeyStatus::Active),
+            ],
+        };
+        let err = AcceptedStaticSignerSet::from_verified_package_keys(&keys).unwrap_err();
+
+        assert!(err.to_string().contains("duplicate active package key id"));
+    }
 }
 ```
 
@@ -1489,13 +1529,16 @@ Create `crates/conary-core/src/repository/static_repo/publish_gate.rs`:
 // conary-core/src/repository/static_repo/publish_gate.rs
 //! Static artifact-form publish eligibility and signer authority checks.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::ccs::attestation::{BuildAttestationEnvelope, compute_build_output_identity};
+use crate::ccs::manifest_provenance::ManifestProvenance;
 use crate::ccs::package::CcsPackage;
+use crate::ccs::verify::{TrustPolicy, VerificationResult, verify_package};
 use crate::repository::static_repo::{PackageKeyStatus, PackageKeysFile};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1505,17 +1548,22 @@ pub struct AcceptedStaticSignerSet {
 
 impl AcceptedStaticSignerSet {
     pub fn from_verified_package_keys(keys: &PackageKeysFile) -> Result<Self> {
-        let active_keys = keys
+        let mut active_keys = BTreeMap::new();
+        let mut public_keys = BTreeSet::new();
+        for key in keys
             .keys
             .iter()
             .filter(|key| matches!(key.status, PackageKeyStatus::Active))
-            .map(|key| {
-                (
-                    key.key_id.clone().unwrap_or_else(|| key.public_key.clone()),
-                    key.public_key.clone(),
-                )
-            })
-            .collect::<BTreeMap<_, _>>();
+        {
+            let key_id = key.key_id.clone().unwrap_or_else(|| key.public_key.clone());
+            if active_keys.contains_key(&key_id) {
+                bail!("duplicate active package key id {key_id}");
+            }
+            if !public_keys.insert(key.public_key.clone()) {
+                bail!("duplicate active package public key");
+            }
+            active_keys.insert(key_id, key.public_key.clone());
+        }
         if active_keys.is_empty() {
             bail!("no active package keys can authorize new artifact publish");
         }
@@ -1534,6 +1582,10 @@ impl AcceptedStaticSignerSet {
 
     pub fn public_key_for(&self, key_id: &str) -> Option<&str> {
         self.active_keys.get(key_id).map(String::as_str)
+    }
+
+    pub fn trusted_public_keys(&self) -> Vec<String> {
+        self.active_keys.values().cloned().collect()
     }
 }
 
@@ -1562,6 +1614,7 @@ pub enum PublishGateFailureCode {
     MissingAttestation,
     BuildAttestationSignatureMismatch,
     PackageSignatureMismatch,
+    TomlIntegrityMismatch,
     OutputIdentityMismatch,
     UnacceptedSignerKey,
     RetiredSignerKey,
@@ -1595,28 +1648,84 @@ impl PublishLintReport {
 }
 
 pub fn verify_static_artifact_publish_eligibility(
-    package: &CcsPackage,
+    artifact_path: &Path,
     accepted_signers: &AcceptedStaticSignerSet,
     accepted_policy_digest: &str,
 ) -> Result<PublishLintReport> {
-    let provenance = &package.manifest().provenance;
+    let verification = verify_package(
+        artifact_path,
+        &TrustPolicy::strict(accepted_signers.trusted_public_keys()),
+    )?;
+    let package = CcsPackage::parse(
+        artifact_path
+            .to_str()
+            .context("artifact path must be valid UTF-8 for CCS parsing")?,
+    )
+    .map_err(anyhow::Error::from)?;
+    verify_verified_static_artifact_publish_eligibility(
+        &package,
+        &verification,
+        accepted_signers,
+        accepted_policy_digest,
+    )
+}
+
+fn verify_verified_static_artifact_publish_eligibility(
+    package: &CcsPackage,
+    verification: &VerificationResult,
+    accepted_signers: &AcceptedStaticSignerSet,
+    accepted_policy_digest: &str,
+) -> Result<PublishLintReport> {
+    let mut failures = Vec::new();
+    if !verification.valid {
+        failures.push(failure(
+            PublishGateFailureCode::PackageSignatureMismatch,
+            "artifact package signature is missing, invalid, or untrusted",
+        ));
+    }
+    if !verification.toml_integrity_valid {
+        failures.push(failure(
+            PublishGateFailureCode::TomlIntegrityMismatch,
+            "artifact TOML manifest integrity hash does not match binary manifest",
+        ));
+    }
+    let Some(provenance) = package.manifest().provenance.as_ref() else {
+        failures.push(failure(
+            PublishGateFailureCode::MissingAttestation,
+            "artifact is missing provenance and build attestation",
+        ));
+        return Ok(PublishLintReport::failed(failures));
+    };
     let Some(envelope) = provenance.build_attestation.as_ref() else {
-        return Ok(PublishLintReport::failed(vec![failure(
+        failures.push(failure(
             PublishGateFailureCode::MissingAttestation,
             "artifact is missing a build attestation",
-        )]));
+        ));
+        return Ok(PublishLintReport::failed(failures));
     };
-    verify_static_attestation(package, envelope, accepted_signers, accepted_policy_digest)
+    let mut attestation_report =
+        verify_static_attestation(package, provenance, envelope, accepted_signers, accepted_policy_digest)?;
+    failures.append(&mut attestation_report.failures);
+    if failures.is_empty() {
+        Ok(PublishLintReport::passed())
+    } else {
+        Ok(PublishLintReport::failed(failures))
+    }
 }
 
 fn verify_static_attestation(
     package: &CcsPackage,
+    provenance: &ManifestProvenance,
     envelope: &BuildAttestationEnvelope,
     accepted_signers: &AcceptedStaticSignerSet,
     accepted_policy_digest: &str,
 ) -> Result<PublishLintReport> {
     let mut failures = Vec::new();
-    if envelope.payload.hardening_level != "hermetic" {
+    let actual_identity = compute_build_output_identity(package).context("compute artifact output identity")?;
+    if actual_identity.hardening_level != "hermetic"
+        || envelope.payload.hardening_level != "hermetic"
+        || envelope.payload.output_identity.hardening_level != "hermetic"
+    {
         failures.push(failure(
             PublishGateFailureCode::NonHermeticHardeningLevel,
             "artifact is not hermetic",
@@ -1648,13 +1757,19 @@ fn verify_static_attestation(
             "build attestation signature mismatch",
         ));
     }
-    let actual_identity = compute_build_output_identity(package).context("compute artifact output identity")?;
-    if actual_identity != envelope.payload.output_identity {
+    if actual_identity != envelope.payload.output_identity
+        || actual_identity.origin_class != envelope.payload.origin_class
+        || actual_identity.hardening_level != envelope.payload.hardening_level
+        || provenance.origin_class.as_deref() != Some(envelope.payload.origin_class.as_str())
+        || provenance.hardening_level.as_deref() != Some(envelope.payload.hardening_level.as_str())
+    {
         failures.push(failure(
             PublishGateFailureCode::OutputIdentityMismatch,
-            "build attestation output identity does not match artifact",
+            "build attestation identity fields do not match artifact provenance",
         ));
     }
+    verify_command_risk_evidence(provenance, envelope, &mut failures)?;
+    verify_foreign_boundary_evidence(provenance, envelope, &actual_identity, &mut failures)?;
     if failures.is_empty() {
         Ok(PublishLintReport::passed())
     } else {
@@ -1669,6 +1784,10 @@ fn failure(code: PublishGateFailureCode, message: &str) -> PublishGateFailure {
     }
 }
 ```
+
+`verify_command_risk_evidence` must compare `canonical_json_hash(&evidence.command_risk)` with `payload.build_command_risk_report_hash`, require `payload.command_risk_classifier_version == COMMAND_RISK_CLASSIFIER_VERSION`, and reject any build, scriptlet, or foreign-boundary report with `PolicyStatus::Review` or `PolicyStatus::Blocked` unless a later explicit policy field discharges it. `verify_foreign_boundary_evidence` must require `provenance.foreign_conversion_boundary` for `origin_class == "foreign-converted"`, compare its canonical hash to `payload.conversion_boundary_hash`, require its output identity to match `actual_identity`, and reject unclean boundary risk/publication status.
+
+The public publish gate entrypoint is path-based. Static publish, artifact-form CLI publish, and Remi release upload must call `verify_static_artifact_publish_eligibility(&artifact_path, ...)` before any target-local re-signing or public-object promotion. Package-only helpers are allowed only as private test helpers that also receive a `VerificationResult`.
 
 - [ ] **Step 5: Run publish gate tests**
 
@@ -1818,6 +1937,20 @@ pub struct PreparedStaticPublishContext {
     pub active_publish_key_id: String,
     pub accepted_signers: AcceptedStaticSignerSet,
     pub publish_policy_digest: String,
+}
+
+pub struct ArtifactGateContext {
+    pub accepted_signers: AcceptedStaticSignerSet,
+    pub publish_policy_digest: String,
+}
+
+impl PreparedStaticPublishContext {
+    pub fn artifact_gate_context(&self) -> ArtifactGateContext {
+        ArtifactGateContext {
+            accepted_signers: self.accepted_signers.clone(),
+            publish_policy_digest: self.publish_policy_digest.clone(),
+        }
+    }
 }
 
 impl StaticPublishPrepareOptions {
@@ -2118,7 +2251,7 @@ pub fn attach_project_form_attestation(
         input.context.publish_policy_digest.as_str(),
         input.conary_version,
     )?;
-    preflight_project_form_attestation_payload(&payload)?;
+    preflight_project_form_attestation_payload(&payload, input.provenance)?;
     let envelope = crate::ccs::attestation::sign_build_attestation(
         payload,
         &input.context.active_publish_key,
@@ -2146,10 +2279,8 @@ pub fn attach_project_form_attestation(
     if !verification.valid || !verification.toml_integrity_valid {
         bail!("attested project-form package failed final CCS verification");
     }
-    let final_package = crate::ccs::CcsPackage::parse(signed_temp.path().to_str().unwrap())
-        .map_err(anyhow::Error::from)?;
     let report = crate::repository::static_repo::publish_gate::verify_static_artifact_publish_eligibility(
-        &final_package,
+        signed_temp.path(),
         &input.context.accepted_signers,
         &input.context.publish_policy_digest,
     )?;
@@ -2198,6 +2329,7 @@ fn build_project_form_attestation_payload(
 
 fn preflight_project_form_attestation_payload(
     payload: &crate::ccs::attestation::BuildAttestationPayload,
+    provenance: &ManifestProvenance,
 ) -> Result<()> {
     if payload.hardening_level != "hermetic" {
         bail!("project-form publish can only sign hermetic build attestations");
@@ -2211,6 +2343,23 @@ fn preflight_project_form_attestation_payload(
     if payload.output_identity.canonical_content_identity.trim().is_empty() {
         bail!("project-form publish attestation is missing output content identity");
     }
+    let evidence = provenance
+        .hermetic_evidence
+        .as_ref()
+        .context("project-form publish requires hermetic evidence before attestation signing")?;
+    let command_risk_hash = crate::ccs::attestation::canonical_json_hash(&evidence.command_risk)?;
+    if payload.build_command_risk_report_hash != command_risk_hash {
+        bail!("project-form publish command-risk report hash does not match hermetic evidence");
+    }
+    if payload.command_risk_classifier_version != evidence.command_risk.classifier_version {
+        bail!("project-form publish command-risk classifier version mismatch");
+    }
+    if evidence.command_risk.status != crate::recipe::hermetic::PolicyStatus::Clean {
+        bail!("project-form publish refuses unclean hermetic command-risk reports");
+    }
+    if evidence.ecosystem_policy.status != crate::recipe::hermetic::PolicyStatus::Clean {
+        bail!("project-form publish refuses unclean ecosystem offline policy reports");
+    }
     Ok(())
 }
 
@@ -2219,7 +2368,10 @@ fn build_result_from_package_with_attestation(
     envelope: crate::ccs::attestation::BuildAttestationEnvelope,
 ) -> Result<crate::ccs::BuildResult> {
     let mut manifest = package.manifest().clone();
-    manifest.provenance.build_attestation = Some(envelope);
+    manifest
+        .provenance
+        .get_or_insert_with(Default::default)
+        .build_attestation = Some(envelope);
     Ok(crate::ccs::BuildResult {
         manifest,
         components: package.components().clone(),
@@ -2299,6 +2451,20 @@ async fn artifact_form_publish_rejects_unaccepted_signer() {
 }
 
 #[tokio::test]
+async fn artifact_form_publish_rejects_untrusted_package_signature_before_resigning() {
+    let error = publish_artifact_fixture_with_untrusted_package_signature_for_tests().await.unwrap_err();
+
+    assert!(error.to_string().contains("artifact package signature is missing, invalid, or untrusted"));
+}
+
+#[tokio::test]
+async fn artifact_form_publish_rejects_toml_tampering_before_resigning() {
+    let error = publish_artifact_fixture_with_tampered_manifest_toml_for_tests().await.unwrap_err();
+
+    assert!(error.to_string().contains("artifact TOML manifest integrity hash does not match binary manifest"));
+}
+
+#[tokio::test]
 async fn artifact_form_publish_rejects_recorded_draft() {
     let error = publish_recorded_draft_artifact_for_tests().await.unwrap_err();
 
@@ -2356,14 +2522,8 @@ async fn publish_artifact_form(options: PublishOptions, target: &str) -> Result<
     let repo_name = derive_repo_name(target)?;
     let key_dir = resolve_key_dir(options.key_dir.as_deref(), &repo_name)?;
     let prepared = prepare_artifact_form_static_context(&destination, &key_dir, options.force_reinit)?;
-    let package = conary_core::ccs::CcsPackage::parse(
-        artifact_path
-            .to_str()
-            .with_context(|| format!("package path is not valid UTF-8: {}", artifact_path.display()))?,
-    )
-    .map_err(anyhow::Error::from)?;
     let report = conary_core::repository::static_repo::publish_gate::verify_static_artifact_publish_eligibility(
-        &package,
+        &artifact_path,
         &prepared.accepted_signers,
         &prepared.publish_policy_digest,
     )?;
@@ -2387,6 +2547,7 @@ async fn publish_artifact_form(options: PublishOptions, target: &str) -> Result<
         accept_destination_state: options.accept_destination_state,
         rotate_publish_key: options.rotate_publish_key,
         rotate_root_key: options.rotate_root_key,
+        artifact_gate_context: Some(prepared.artifact_gate_context()),
     })?;
     println!("Published attested artifact to static repo: {repo_name}");
     println!("Publish key ID: {}", outcome.publish_key_id);
@@ -2407,7 +2568,13 @@ fn ensure_static_local_publish_destination(destination: &RepoLocation) -> Result
 
 - [ ] **Step 6: Enforce gate inside static publish too**
 
-Add an internal gate call in `stage_packages` or the new commit layer so a CLI bypass cannot publish an ungated artifact. Use the prepared context from Task 6. The static publisher should reject before `write_pending_package`.
+Add an internal gate call in the commit layer before package staging so a CLI bypass cannot publish an ungated artifact. Extend `StaticPublishOptions` with:
+
+```rust
+pub artifact_gate_context: Option<ArtifactGateContext>,
+```
+
+where `ArtifactGateContext` contains `AcceptedStaticSignerSet` and `publish_policy_digest`. Artifact-form callers must set it from `PreparedStaticPublishContext`; project-form callers may leave it `None` because Task 7 already attaches and verifies the attestation before handing the temporary package to static publish. When `artifact_gate_context` is `Some`, `publish_static_repo_inner` must run `verify_static_artifact_publish_eligibility(&path, ...)` for every package path and reject before `stage_packages` or `write_pending_package`.
 
 - [ ] **Step 7: Run static artifact-form tests**
 
@@ -2429,9 +2596,14 @@ Add and run table-driven tests covering:
     ("host", None, "artifact is not hermetic"),
     ("sandboxed", None, "artifact is not hermetic"),
     ("hermetic", None, "artifact is missing a build attestation"),
+    ("hermetic", Some("unsigned-package"), "artifact package signature is missing, invalid, or untrusted"),
+    ("hermetic", Some("toml-tampered"), "artifact TOML manifest integrity hash does not match binary manifest"),
     ("hermetic", Some("bad-signature"), "build attestation signature mismatch"),
     ("hermetic", Some("unaccepted-signer"), "build attestation signer is not accepted"),
     ("hermetic", Some("stale-policy"), "build attestation policy digest is not accepted"),
+    ("hermetic", Some("payload-hermetic-output-host"), "build attestation identity fields do not match artifact provenance"),
+    ("hermetic", Some("unclean-command-risk"), "unclean command-risk report"),
+    ("foreign-converted", Some("boundary-hash-mismatch"), "foreign conversion boundary hash mismatch"),
     ("hermetic", Some("recorded-draft"), "recorded-draft artifacts are not publishable"),
 ]
 ```
@@ -2499,9 +2671,9 @@ fn foreign_boundary_hash_changes_when_source_checksum_changes() {
 
 #[test]
 fn foreign_converted_publish_requires_boundary_hash() {
-    let package = foreign_converted_package_without_boundary_for_tests();
+    let artifact_path = foreign_converted_package_without_boundary_for_tests();
     let report = verify_static_artifact_publish_eligibility(
-        &package,
+        &artifact_path,
         &accepted_signers_for_tests(),
         "m2-static-publish-policy-v1",
     )
@@ -2537,14 +2709,21 @@ if envelope.payload.origin_class == "foreign-converted" && envelope.payload.conv
 }
 ```
 
+Also add tests for:
+
+- `foreign_converted_publish_requires_manifest_boundary`: signed payload has `conversion_boundary_hash`, but manifest provenance lacks `foreign_conversion_boundary`.
+- `foreign_converted_publish_rejects_boundary_hash_mismatch`: manifest boundary exists, but its canonical hash differs from the signed payload hash.
+- `foreign_converted_publish_rejects_boundary_output_identity_mismatch`: boundary output identity differs from the package's computed output identity.
+
 - [ ] **Step 4: Attach boundary during conversion**
 
 In `crates/conary-core/src/ccs/convert/converter.rs`, populate:
 
 ```rust
-manifest.provenance.origin_class = Some("foreign-converted".to_string());
-manifest.provenance.hardening_level = Some("hermetic".to_string());
-manifest.provenance.foreign_conversion_boundary = Some(boundary);
+let provenance = manifest.provenance.get_or_insert_with(Default::default);
+provenance.origin_class = Some("foreign-converted".to_string());
+provenance.hardening_level = Some("hermetic".to_string());
+provenance.foreign_conversion_boundary = Some(boundary);
 ```
 
 Add this field to `ManifestProvenance` next to `build_attestation`:
@@ -2585,6 +2764,8 @@ Use:
 let build_report_hash = crate::ccs::attestation::canonical_json_hash(&build_report)?;
 let scriptlet_report_hash = crate::ccs::attestation::canonical_json_hash(&scriptlet_report)?;
 ```
+
+Publish gates must reject foreign conversion boundaries whose build-body or scriptlet risk reports are `Review` or `Blocked`, whose classifier version differs from `COMMAND_RISK_CLASSIFIER_VERSION`, or whose report hash does not match the embedded report. These checks run in both static artifact publish and Remi release upload through the shared gate.
 
 - [ ] **Step 7: Run foreign conversion tests**
 
@@ -2628,6 +2809,7 @@ Expected:
 - PKGBUILD body report has shared reason codes
 - foreign conversion scriptlet report has shared reason codes
 - missing lock/vendor/prefetch evidence blocks publish
+- publish rejects the fixture artifacts until the command-risk, ecosystem, and boundary reports are clean and hash-matched
 
 Run:
 
@@ -2710,7 +2892,7 @@ pub release_publish: ReleasePublishSection,
 Add:
 
 ```rust
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
 pub struct ReleasePublishSection {
     #[serde(default)]
     pub repository_keys_dir: Option<PathBuf>,
@@ -2719,14 +2901,26 @@ pub struct ReleasePublishSection {
     pub trusted_build_attestation_signers: Vec<TrustedBuildAttestationSigner>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct TrustedBuildAttestationSigner {
     pub key_id: String,
     pub public_key: String,
 }
 ```
 
-Wire the section into `ServerConfig` or `ServerState` so request handlers can read it.
+Add to `apps/remi/src/server/mod.rs` `ServerConfig`:
+
+```rust
+pub release_publish: ReleasePublishSection,
+```
+
+Import `ReleasePublishSection` from `apps/remi/src/server/config.rs`, and set it in `RemiConfig::to_server_config()`:
+
+```rust
+release_publish: self.release_publish.clone(),
+```
+
+Request handlers must read release-publish settings from `state.read().await.config.release_publish`; do not add a second copy to `ServerState`.
 
 The repository key directory stores Remi-owned TUF private keys by distro:
 
@@ -2751,9 +2945,98 @@ git add apps/remi/src/server/config.rs apps/remi/src/server/mod.rs
 git commit -m "security(remi): configure trusted release signers"
 ```
 
-## M2d Execution Order Note
+## Task 10b: Remi Timestamp Refresh Foundation
 
-Complete Task 12 Step 5 and Task 12 Step 6 before implementing Task 11 Step 5. Remi release upload calls `refresh_release_tuf_metadata`, and that helper must have a working timestamp refresh implementation plus configured TUF role keys before upload staging can pass end-to-end tests.
+**Files:**
+- Modify: `apps/remi/src/server/handlers/tuf.rs`
+- Modify: `apps/remi/src/server/routes/admin.rs`
+- Test: `apps/remi/src/server/handlers/tuf.rs`
+
+- [ ] **Step 1: Write failing distro-scoped timestamp refresh tests**
+
+Add tests:
+
+```rust
+#[tokio::test]
+async fn remi_tuf_refresh_timestamp_returns_signed_monotonic_metadata() {
+    let first = call_refresh_timestamp_for_tests("test-distro").await;
+    assert_eq!(first.status(), StatusCode::OK);
+    let first_json = response_json_for_tests(first).await;
+
+    assert_eq!(first_json["role"], "timestamp");
+    assert_eq!(first_json["distro"], "test-distro");
+    assert!(first_json["version"].as_u64().unwrap() > 0);
+
+    let second = call_refresh_timestamp_for_tests("test-distro").await;
+    assert_eq!(second.status(), StatusCode::OK);
+    let second_json = response_json_for_tests(second).await;
+
+    assert!(second_json["version"].as_u64().unwrap() > first_json["version"].as_u64().unwrap());
+}
+
+#[tokio::test]
+async fn remi_tuf_refresh_timestamp_fails_closed_without_role_key() {
+    let response = call_refresh_timestamp_without_timestamp_key_for_tests("test-distro").await;
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+```
+
+- [ ] **Step 2: Run timestamp tests and confirm current failure**
+
+Run: `cargo test -p remi remi_tuf_refresh_timestamp -- --nocapture`
+
+Expected: FAIL because timestamp refresh currently returns `501` and is not distro-scoped.
+
+- [ ] **Step 3: Make the admin timestamp route distro-scoped**
+
+Replace the global route with:
+
+```rust
+.route(
+    "/v1/admin/tuf/{distro}/refresh-timestamp",
+    post(tuf::refresh_timestamp),
+)
+```
+
+The handler must reject requests without a distro; do not infer a default distro for release publication.
+
+- [ ] **Step 4: Implement timestamp refresh helper**
+
+In `apps/remi/src/server/handlers/tuf.rs`, replace the `501` stub with a call that regenerates timestamp metadata from current snapshot metadata, signs it with `<repository_keys_dir>/<distro>/timestamp.private`, and writes it atomically. Return `200` with timestamp version on success. If `repository_keys_dir` is absent or `timestamp.private` is missing, return a fail-closed `500` admin error and do not write timestamp metadata.
+
+Expose an internal helper used by release upload:
+
+```rust
+pub async fn refresh_timestamp_for_distro(
+    state: &Arc<RwLock<ServerState>>,
+    distro: &str,
+) -> anyhow::Result<TimestampRefreshResult>
+```
+
+Response shape:
+
+```json
+{
+  "status": "ok",
+  "role": "timestamp",
+  "distro": "test-distro",
+  "version": 1
+}
+```
+
+- [ ] **Step 5: Run timestamp tests**
+
+Run: `cargo test -p remi remi_tuf_refresh_timestamp -- --nocapture`
+
+Expected: PASS.
+
+- [ ] **Step 6: Commit Task 10b**
+
+```bash
+git add apps/remi/src/server/handlers/tuf.rs apps/remi/src/server/routes/admin.rs
+git commit -m "security(remi): refresh distro timestamp metadata"
+```
 
 ## Task 11: Remi Release Upload Staging And Gate Parity
 
@@ -2850,7 +3133,7 @@ async fn release_upload_inner(
     let staged = stage_release_body(&state, request).await?;
     let package = parse_staged_ccs(&staged.path)?;
     let accepted = accepted_release_signers(&state).await?;
-    let lint = verify_remi_release_artifact(&package, &accepted)?;
+    let lint = verify_remi_release_artifact(&staged.path, &accepted)?;
     if !lint.is_passed() {
         staged.cleanup().await;
         anyhow::bail!("{}", format_publish_gate_failures(&lint));
@@ -2893,6 +3176,7 @@ fn load_release_tuf_key(
 ```
 
 Use `targets.private` when adding the new package target, `snapshot.private` when regenerating snapshot metadata, and `timestamp.private` when refreshing timestamp metadata. Do not use trusted build-attestation signer keys for TUF metadata signing.
+`refresh_release_tuf_metadata` must call the Task 10b timestamp helper after regenerating targets and snapshot metadata; do not reintroduce a separate timestamp-signing path in release upload.
 
 - [ ] **Step 6: Use shared publish gate**
 
@@ -2912,7 +3196,7 @@ let trusted: Vec<TrustedArtifactSigner> = state
     })
     .collect();
 let accepted = AcceptedStaticSignerSet::from_trusted_artifact_signers(&trusted)?;
-let report = verify_static_artifact_publish_eligibility(&package, &accepted, "m2-static-publish-policy-v1")?;
+let report = verify_static_artifact_publish_eligibility(&staged.path, &accepted, "m2-static-publish-policy-v1")?;
 ```
 
 Add this Remi-neutral DTO to `publish_gate.rs` so `conary-core` does not depend on Remi crates:
@@ -2929,12 +3213,18 @@ impl AcceptedStaticSignerSet {
         if signers.is_empty() {
             bail!("no trusted release signers configured");
         }
-        Ok(Self {
-            active_keys: signers
-                .iter()
-                .map(|signer| (signer.key_id.clone(), signer.public_key.clone()))
-                .collect(),
-        })
+        let mut active_keys = BTreeMap::new();
+        let mut public_keys = BTreeSet::new();
+        for signer in signers {
+            if active_keys.contains_key(&signer.key_id) {
+                bail!("duplicate trusted release signer id {}", signer.key_id);
+            }
+            if !public_keys.insert(signer.public_key.clone()) {
+                bail!("duplicate trusted release signer public key");
+            }
+            active_keys.insert(signer.key_id.clone(), signer.public_key.clone());
+        }
+        Ok(Self { active_keys })
     }
 }
 ```
@@ -2967,13 +3257,12 @@ git add apps/remi/src/server/release_publish.rs apps/remi/src/server/routes/admi
 git commit -m "security(remi): gate release uploads before visibility"
 ```
 
-## Task 12: Remi Timestamp Refresh And CLI Remi Target Routing
+## Task 12: CLI Remi Target Routing And Timestamp Regression
 
 **Files:**
 - Create: `apps/conary/src/commands/remi_publish.rs`
 - Modify: `apps/conary/src/commands/mod.rs`
 - Modify: `apps/conary/src/commands/publish.rs`
-- Modify: `apps/remi/src/server/handlers/tuf.rs`
 - Test: `apps/conary/src/commands/publish.rs`
 - Test: `apps/remi/src/server/handlers/tuf.rs`
 
@@ -2998,19 +3287,14 @@ async fn static_local_guard_still_rejects_http_static_path() {
 }
 
 #[tokio::test]
-async fn remi_tuf_refresh_timestamp_returns_signed_monotonic_metadata() {
-    let first = call_refresh_timestamp_for_tests().await;
+async fn remi_tuf_refresh_timestamp_route_is_distro_scoped() {
+    let first = call_refresh_timestamp_for_tests("test-distro").await;
     assert_eq!(first.status(), StatusCode::OK);
     let first_json = response_json_for_tests(first).await;
 
     assert_eq!(first_json["role"], "timestamp");
+    assert_eq!(first_json["distro"], "test-distro");
     assert!(first_json["version"].as_u64().unwrap() > 0);
-
-    let second = call_refresh_timestamp_for_tests().await;
-    assert_eq!(second.status(), StatusCode::OK);
-    let second_json = response_json_for_tests(second).await;
-
-    assert!(second_json["version"].as_u64().unwrap() > first_json["version"].as_u64().unwrap());
 }
 ```
 
@@ -3025,9 +3309,9 @@ cargo test -p conary static_local_guard_still_rejects_http_static_path -- --noca
 
 Expected: FAIL for missing route classifier.
 
-Run: `cargo test -p remi remi_tuf_refresh_timestamp_returns_signed_monotonic_metadata -- --nocapture`
+Run: `cargo test -p remi remi_tuf_refresh_timestamp_route_is_distro_scoped -- --nocapture`
 
-Expected: FAIL because timestamp refresh currently returns `501`.
+Expected: PASS because Task 10b implemented the timestamp foundation; this is a routing regression check.
 
 - [ ] **Step 3: Add Remi publish client**
 
@@ -3094,21 +3378,7 @@ fn classify_publish_target(target: &str) -> Result<PublishTargetRoute> {
 
 Artifact-form publish should call `publish_to_remi` for `RemiRelease` after client-side artifact preflight. The Remi server remains the trust boundary.
 
-- [ ] **Step 5: Implement timestamp refresh**
-
-In `apps/remi/src/server/handlers/tuf.rs`, replace the `501` stub with a call that regenerates timestamp metadata from current snapshot metadata, signs it with `<repository_keys_dir>/<distro>/timestamp.private`, and writes it atomically. Return `200` with timestamp version on success. If `repository_keys_dir` is absent or `timestamp.private` is missing, return a fail-closed `500` admin error and do not write timestamp metadata.
-
-Response shape:
-
-```json
-{
-  "status": "ok",
-  "role": "timestamp",
-  "version": 1
-}
-```
-
-- [ ] **Step 6: Run routing and timestamp tests**
+- [ ] **Step 5: Run routing and timestamp regression tests**
 
 Run:
 
@@ -3123,7 +3393,7 @@ Run: `cargo test -p remi tuf:: -- --nocapture`
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit Task 12**
+- [ ] **Step 6: Commit Task 12**
 
 ```bash
 git add apps/conary/src/commands/remi_publish.rs apps/conary/src/commands/mod.rs apps/conary/src/commands/publish.rs apps/remi/src/server/handlers/tuf.rs
@@ -3194,6 +3464,8 @@ Update the routing docs with:
 Run:
 
 ```bash
+rg -n "publish|release|tuf|openapi|subsystem-map|remi" docs/superpowers/feature-coherency-ledger.tsv
+scripts/check-coherency-ledger.sh docs/superpowers/feature-coherency-ledger.tsv
 scripts/check-doc-audit-ledger.sh docs/superpowers/documentation-accuracy-audit-ledger.tsv --require-complete
 scripts/check-doc-truth.sh
 ```
@@ -3216,7 +3488,10 @@ Expected: PASS.
 Run a local review of the implementation diff against this plan and the design spec. The review must check:
 
 - attestation gate cannot be bypassed by calling core static publish directly
+- package signature and TOML integrity are verified before static or Remi re-signing/promotion
 - output identity excludes signatures and attestation and does not use `dna_hash`
+- attestation top-level identity fields, payload output identity, and actual artifact provenance agree
+- command-risk, scriptlet-risk, ecosystem, and foreign-boundary report hashes are enforced, not only recorded
 - Remi release failures leave no public state
 - runtime/build/PKGBUILD/foreign risk reports share reason codes
 - `publish.rs` stayed within the line-count budget
