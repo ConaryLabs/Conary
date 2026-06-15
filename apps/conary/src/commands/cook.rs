@@ -158,6 +158,7 @@ fn hermetic_build_input(
 /// * `isolated` - Use the hermetic sandboxed isolation path
 /// * `no_isolation` - Hidden compatibility no-op for the M1a host default
 /// * `hermetic` - Hidden compatibility flag for the M2a hermetic build path
+/// * `json` - Emit structured packaging JSON output
 #[allow(clippy::too_many_arguments)]
 pub async fn cmd_cook(
     target: Option<&str>,
@@ -172,6 +173,7 @@ pub async fn cmd_cook(
     isolated: bool,
     no_isolation: bool,
     hermetic: bool,
+    json: bool,
 ) -> Result<()> {
     let mut output = io::stdout();
     cmd_cook_with_output(
@@ -187,6 +189,7 @@ pub async fn cmd_cook(
         isolated,
         no_isolation,
         hermetic,
+        json,
         &mut output,
     )
     .await
@@ -206,8 +209,10 @@ async fn cmd_cook_with_output(
     isolated: bool,
     no_isolation: bool,
     hermetic: bool,
+    json: bool,
     output: &mut impl Write,
 ) -> Result<()> {
+    let _ = json;
     let hermetic_requested = hermetic || isolated;
     if hermetic_requested && no_isolation {
         anyhow::bail!("--no-isolation conflicts with --isolated/--hermetic");
@@ -732,6 +737,7 @@ edition = "2021"
             false,
             false,
             false,
+            false,
             &mut output,
         )
         .await
@@ -839,6 +845,7 @@ edition = "2021"
             false,
             false,
             false,
+            false,
         )
         .await
         .unwrap();
@@ -862,6 +869,7 @@ edition = "2021"
             output_dir.to_str().unwrap(),
             source_cache.to_str().unwrap(),
             None,
+            false,
             false,
             false,
             false,
@@ -908,6 +916,7 @@ edition = "2021"
             false,
             false,
             false,
+            false,
         )
         .await
         .unwrap();
@@ -940,6 +949,7 @@ edition = "2021"
             output_dir.to_str().unwrap(),
             source_cache.to_str().unwrap(),
             None,
+            false,
             false,
             false,
             false,
@@ -982,6 +992,7 @@ edition = "2021"
             false,
             false,
             false,
+            false,
             &mut output,
         )
         .await
@@ -1012,6 +1023,7 @@ edition = "2021"
             None,
             false,
             true,
+            false,
             false,
             false,
             false,
@@ -1054,6 +1066,7 @@ edition = "2021"
             false,
             false,
             false,
+            false,
             &mut output,
         )
         .await
@@ -1086,6 +1099,7 @@ edition = "2021"
             false,
             false,
             true,
+            false,
             false,
             false,
             false,
@@ -1127,6 +1141,7 @@ edition = "2021"
             false,
             false,
             true,
+            false,
         )
         .await
         .unwrap_err();
@@ -1163,6 +1178,7 @@ edition = "2021"
             false,
             false,
             true,
+            false,
             false,
             false,
             &mut output,
@@ -1215,6 +1231,7 @@ edition = "2021"
             false,
             false,
             false,
+            false,
         )
         .await
         .unwrap();
@@ -1230,6 +1247,7 @@ edition = "2021"
             false,
             false,
             true,
+            false,
             false,
         )
         .await
@@ -1264,6 +1282,7 @@ edition = "2021"
             false,
             true,
             true,
+            false,
             false,
         )
         .await

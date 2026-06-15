@@ -42,6 +42,7 @@ pub struct PublishOptions {
     pub rotate_publish_key: bool,
     pub rotate_root_key: bool,
     pub yes: bool,
+    pub json: bool,
 }
 
 pub async fn cmd_publish(options: PublishOptions) -> Result<()> {
@@ -456,6 +457,7 @@ install = "mkdir -p %(destdir)s/usr/share/publish-local && printf hi > %(destdir
             rotate_publish_key: false,
             rotate_root_key: false,
             yes: true,
+            json: false,
         })
         .await
         .unwrap_err();
@@ -484,6 +486,7 @@ install = "mkdir -p %(destdir)s/usr/share/publish-local && printf hi > %(destdir
             rotate_publish_key: false,
             rotate_root_key: false,
             yes: false,
+            json: false,
         })
         .await
         .unwrap_err();
@@ -618,6 +621,7 @@ sysroot_hash = "{TEST_HASH}"
                 rotate_publish_key: false,
                 rotate_root_key: false,
                 yes: true,
+                json: false,
             }
         }
     }
@@ -687,6 +691,7 @@ hardening_level = "hermetic"
                 rotate_publish_key: false,
                 rotate_root_key: false,
                 yes: true,
+                json: false,
             }
         }
     }

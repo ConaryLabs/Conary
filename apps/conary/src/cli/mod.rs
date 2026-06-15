@@ -505,6 +505,10 @@ pub enum Commands {
         #[arg(long)]
         #[arg(hide = true)]
         hermetic: bool,
+
+        /// Emit structured M3a JSON output
+        #[arg(long)]
+        json: bool,
     },
 
     /// Create or infer a package recipe
@@ -593,6 +597,10 @@ pub enum Commands {
         /// Assume yes to all prompts
         #[arg(short = 'y', long)]
         yes: bool,
+
+        /// Emit structured M3a JSON output
+        #[arg(long)]
+        json: bool,
     },
 
     /// Convert an Arch Linux PKGBUILD to a Conary recipe
@@ -921,6 +929,26 @@ mod tests {
             Some(Commands::Cook { explain, .. }) => assert!(explain),
             other => panic!("unexpected command: {other:?}"),
         }
+    }
+
+    #[test]
+    fn cook_and_publish_accept_json_flag_but_try_does_not() {
+        let cook = Cli::try_parse_from(["conary", "cook", ".", "--json"]).unwrap();
+        match cook.command {
+            Some(Commands::Cook { json, .. }) => assert!(json),
+            other => panic!("unexpected command: {other:?}"),
+        }
+
+        let publish =
+            Cli::try_parse_from(["conary", "publish", "dist/pkg.ccs", "./repo", "--json"])
+                .unwrap();
+        match publish.command {
+            Some(Commands::Publish { json, .. }) => assert!(json),
+            other => panic!("unexpected command: {other:?}"),
+        }
+
+        let try_json = Cli::try_parse_from(["conary", "try", "pkg.ccs", "--json"]);
+        assert!(try_json.is_err(), "try --json is not part of M3a");
     }
 
     #[test]
