@@ -185,6 +185,7 @@ pub fn smoke_with_runner(
         ),
         exit_code: Some(output.exit_code),
         metadata: Default::default(),
+        redactions: Vec::new(),
     });
 
     conary_agent_contract::VerifyResult::new(envelope).with_data(serde_json::json!({
@@ -661,6 +662,7 @@ fn push_check(
         command: Some(command.into_iter().map(ToString::to_string).collect()),
         exit_code: None,
         metadata: Default::default(),
+        redactions: Vec::new(),
     });
 }
 
