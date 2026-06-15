@@ -6,6 +6,7 @@
 //! enabling them to be installed using the same infrastructure as RPM/DEB/Arch.
 
 use crate::ccs::archive_reader::read_ccs_archive;
+use crate::ccs::binary_manifest::BinaryManifest;
 use crate::ccs::builder::{ComponentData, FileEntry, FileType as CcsFileType};
 use crate::ccs::manifest::{CcsManifest, Redirects};
 use crate::ccs::policy::BuildPolicyConfig;
@@ -29,6 +30,8 @@ pub struct CcsPackage {
     package_path: PathBuf,
     /// Parsed manifest
     manifest: CcsManifest,
+    /// Parsed CBOR manifest, when the package carries the binary format
+    binary_manifest: Option<BinaryManifest>,
     /// File entries from FILES.json
     files: Vec<FileEntry>,
     /// Component data
@@ -269,6 +272,16 @@ impl CcsPackage {
         &self.manifest
     }
 
+    /// Get the parsed binary manifest, when present
+    pub fn binary_manifest(&self) -> Option<&BinaryManifest> {
+        self.binary_manifest.as_ref()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn manifest_mut_for_tests(&mut self) -> &mut CcsManifest {
+        &mut self.manifest
+    }
+
     /// Get the file entries
     pub fn file_entries(&self) -> &[FileEntry] {
         &self.files
@@ -405,6 +418,7 @@ impl PackageFormat for CcsPackage {
         Ok(Self {
             package_path,
             manifest: contents.manifest,
+            binary_manifest: contents.binary_manifest,
             files,
             components: contents.components,
             package_files,
