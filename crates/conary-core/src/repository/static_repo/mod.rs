@@ -4,6 +4,7 @@ pub mod format;
 pub mod location;
 pub mod paths;
 pub mod publish;
+pub mod publish_gate;
 pub(crate) mod sync;
 
 pub use format::{
