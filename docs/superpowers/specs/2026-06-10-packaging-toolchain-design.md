@@ -57,8 +57,10 @@ suite is green:
   provenance classes and publish lint gates, foreign-package ingestion
   (.rpm/.deb/.pkg.tar.zst), Remi upload endpoint (which requires finishing Remi's TUF
   timestamp refresh — currently a 501 stub in `apps/remi/src/server/handlers/tuf.rs`).
-- **M3 — differentiators.** Watch mode, agent-native diagnostics / MCP surface,
-  record mode (prototype spike first; see Record mode).
+- **M3 — differentiators.** M3a has landed the shared structured
+  diagnostics/events contract, redaction, `cook --json`, `publish --json`, and
+  file-backed packaging operation records. Later M3 slices cover the MCP surface,
+  watch mode, and record mode (prototype spike first; see Record mode).
 
 Universal ingestion is split: directory/recipe in M1a, tarball/git in M1b, foreign
 packages in M2 alongside the provenance-class gates they require.
@@ -373,16 +375,22 @@ these before the feature is committed.
 
 ### Agent-native diagnostics
 
-Every build failure is a structured value:
+M3a starts the agent-native diagnostics path with a shared packaging diagnostic,
+event, redaction, JSON, and operation-record contract used by `conary cook` and
+`conary publish`. Later M3 slices extend the same contract to MCP tools, watch
+mode, and richer build-runner event streams.
+
+Every build failure should be representable as a structured value:
 
 ```
 Diagnostic { phase, code, message, evidence, suggestions: [{description, patch}] }
 ```
 
 Rendered for humans as: what happened, why probably, and the exact next command or
-recipe edit to try. Emitted as JSON under `--json`. Exposed through `conary-mcp` as
-packaging tools (`cook`, `diagnose`, `try`, `publish`) so an agent can drive the
-entire package-fix-rebuild loop.
+recipe edit to try. Emitted as JSON under `--json` for the landed M3a cook and
+publish paths. The MCP packaging tools (`cook`, `diagnose`, `try`, `publish`) use
+the same contract in a later slice so an agent can drive the entire
+package-fix-rebuild loop.
 
 Diagnostics come in three honest tiers, because arbitrary build systems fail in
 arbitrary ways:

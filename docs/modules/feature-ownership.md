@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-06-15
-revision: 12
-summary: Route M3 packaging differentiator design ownership
+revision: 13
+summary: Route M3a packaging diagnostics ownership
 ---
 
 # Feature Ownership And Interaction Gates
@@ -332,10 +332,13 @@ pinned by the repository.
 `crates/conary-core/src/recipe/inference/`;
 `crates/conary-core/src/recipe/hermetic/`;
 `crates/conary-core/src/recipe/kitchen/`;
+`crates/conary-core/src/diagnostics/`;
 `crates/conary-core/src/db/models/try_session.rs`;
 `apps/conary/src/commands/new.rs`;
 `apps/conary/src/commands/publish.rs`;
 `apps/conary/src/commands/cook.rs`;
+`apps/conary/src/commands/diagnostics.rs`;
+`apps/conary/src/commands/operation_records.rs`;
 `apps/conary/src/commands/hermetic_config.rs`;
 `apps/conary/src/commands/hermetic_state.rs`;
 `apps/conary/src/commands/try_session.rs`;
@@ -361,6 +364,8 @@ docs-audit truth gates.
 `cargo test -p conary-core trust::verify`;
 `cargo test -p conary --test static_repo_m1a`;
 `cargo test -p conary --test packaging_m2a`;
+`cargo test -p conary --test packaging_m3a`;
+`cargo test -p conary commands::diagnostics::tests`;
 `cargo test -p conary --test packaging_m1b`.
 
 **Interaction gate:** `cargo test -p conary-core`;
@@ -393,6 +398,13 @@ do not allow `--allow-unsigned` to bypass static repository package signature
 checks; keep static repo GPG and TUF trust surfaces separate; retired package
 keys are audit/history only unless a later compatibility task explicitly
 changes that policy.
+
+### M3a Packaging Diagnostics
+
+Start with `crates/conary-core/src/diagnostics/` for the shared diagnostic,
+event, redaction, and JSON schema contract. CLI rendering and operation-record
+glue live in `apps/conary/src/commands/diagnostics.rs`; command-specific report
+construction stays in `cook.rs` and `publish.rs`.
 
 ## Remi Publication, Serving, Admin, And Fixture Artifacts
 
