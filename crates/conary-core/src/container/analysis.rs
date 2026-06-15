@@ -170,6 +170,19 @@ pub fn analyze_script(content: &str) -> ScriptAnalysis {
         }
     }
 
+    let shared_report =
+        crate::security::command_risk::classify_shell_text("runtime-scriptlet", content);
+    if shared_report.requires_runtime_sandbox() && max_risk < ScriptRisk::Medium {
+        max_risk = ScriptRisk::Medium;
+    }
+    for entry in shared_report.entries {
+        patterns.push(format!(
+            "{} ({})",
+            entry.reason_code,
+            ScriptRisk::Medium.as_str()
+        ));
+    }
+
     match max_risk {
         ScriptRisk::Safe => {
             recommendations.push("Script appears safe for execution".to_string());
