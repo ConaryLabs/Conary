@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-06-14
-revision: 14
-summary: Route CCS manifest provenance split and M2a hermetic evidence
+last_updated: 2026-06-15
+revision: 15
+summary: Route CCS manifest provenance and M2 release attestations
 ---
 
 # CCS Module (conary-core/src/ccs/)
@@ -38,7 +38,8 @@ CcsBuilder::new(manifest, source_dir)
 | Type | File | Purpose |
 |------|------|---------|
 | `CcsManifest` | manifest.rs | Root ccs.toml structure (package, provides, requires, hooks, policy, etc.) |
-| `ManifestProvenance` | manifest_provenance.rs | Provenance DTOs embedded by the root manifest, including unsigned M2a hermetic evidence |
+| `ManifestProvenance` | manifest_provenance.rs | Provenance DTOs embedded by the root manifest, including hermetic evidence, build attestations, and foreign conversion boundaries |
+| `BuildAttestationEnvelope` | attestation.rs | Signed M2 release-publish attestation payload and verification helpers |
 | `CcsBuilder` | builder.rs | Builds a CCS package from manifest + source directory |
 | `BuildResult` | builder.rs | Output: manifest, components, files, blobs, total_size |
 | `CcsPackage` | package.rs | Parsed .ccs file ready for installation via PackageFormat trait |
@@ -55,10 +56,12 @@ CcsBuilder::new(manifest, source_dir)
 **manifest.rs and manifest_provenance.rs** -- `ccs::manifest` remains the root
 manifest schema and validation owner. The provenance DTOs live in
 `ccs::manifest_provenance` and are re-exported from `ccs::manifest` so existing
-imports keep working. M2a hermetic cook and project-form publish can embed
-unsigned hermetic evidence in manifest provenance; signed build-attestation
-envelopes are still future M2b work and artifact-form
-`conary publish <pkg.ccs> <target>` remains gated off.
+imports keep working. M2 release publish stores hermetic evidence, signed
+build-attestation envelopes, and foreign conversion boundaries in manifest
+provenance. Artifact-form `conary publish <pkg.ccs> <target>` is allowed only
+after `repository::static_repo::publish_gate` verifies package signatures, TOML
+integrity, attestation authority, output identity, command-risk evidence, and
+foreign-boundary hashes.
 
 **hooks/** -- Declarative hook executors. Pre-install order: groups, users,
 directories. Post-install order: systemd, tmpfiles, sysctl, alternatives.

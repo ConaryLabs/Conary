@@ -6,6 +6,17 @@ Ubuntu 26.04, and Arch. It converts upstream RPM, DEB, and Arch packages into
 CCS artifacts, stores converted content in the local content-addressed store,
 and can write chunks through to R2 when configured.
 
+## Release Uploads
+
+Remi release push is distinct from conversion publication. The release upload
+surface lives in `apps/remi/src/server/release_publish.rs` and is reached via
+`POST /v1/admin/releases/{distro}` with bearer-token admin auth. Uploads are
+first staged privately, then checked with the shared static publish gate against
+`release_publish.trusted_build_attestation_signers`. Public package metadata,
+CAS chunk visibility, and TUF targets are committed only after that gate passes;
+failed authorization, metadata, or TUF commits must leave no public package row,
+chunk object, or TUF target.
+
 ## Passive Scriptlet Metadata
 
 Goal 4 conversions embed a passive `legacy_scriptlets` bundle in the generated

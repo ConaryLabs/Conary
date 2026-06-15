@@ -289,7 +289,7 @@ pub(crate) fn refresh_timestamp_for_distro_in_conn(
         .optional()?
         .with_context(|| format!("TUF repository not found for distro {distro}"))?;
 
-    let Some((snapshot_version, snapshot_json)) = query_snapshot_for_timestamp(&conn, repo_id)?
+    let Some((snapshot_version, snapshot_json)) = query_snapshot_for_timestamp(conn, repo_id)?
     else {
         bail!("snapshot metadata is missing for distro {distro}");
     };

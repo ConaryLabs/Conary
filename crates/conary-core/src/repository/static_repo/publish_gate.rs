@@ -575,10 +575,12 @@ mod tests {
 
     #[test]
     fn artifact_gate_reports_release_policy_failures() {
-        let cases: Vec<(
-            &str,
+        type ArtifactGateCase = (
+            &'static str,
             Box<dyn FnOnce() -> (TempDir, std::path::PathBuf, String)>,
-        )> = vec![
+        );
+
+        let cases: Vec<ArtifactGateCase> = vec![
             (
                 "artifact is missing a build attestation",
                 Box::new(|| {

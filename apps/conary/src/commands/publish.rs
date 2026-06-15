@@ -354,7 +354,7 @@ mod tests {
     use super::*;
     use std::ffi::OsString;
     use std::process::Command;
-    use std::sync::Mutex;
+    use tokio::sync::Mutex;
 
     const TEST_HASH: &str =
         "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -396,7 +396,7 @@ mod tests {
     #[tokio::test]
     async fn project_form_publish_uses_release_dirty_tree_refusal() {
         let fixture = DirtyGitPublishFixture::new();
-        let _env_lock = ENV_LOCK.lock().unwrap();
+        let _env_lock = ENV_LOCK.lock().await;
         let _config_guard = EnvVarGuard::set("CONARY_HERMETIC_CONFIG", &fixture.config_path);
         let _conary_ci_guard = EnvVarGuard::set("CONARY_HERMETIC_CI", "0");
         let _ci_guard = EnvVarGuard::remove("CI");
@@ -742,5 +742,5 @@ hardening_level = "hermetic"
         }
     }
 
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    static ENV_LOCK: Mutex<()> = Mutex::const_new(());
 }

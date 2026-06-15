@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-06-14
-revision: 10
-summary: Add M2a hermetic cook and project-form publish ownership
+last_updated: 2026-06-15
+revision: 11
+summary: Route M2 release publish and Remi release upload ownership
 ---
 
 # Feature Ownership And Interaction Gates
@@ -341,6 +341,7 @@ pinned by the repository.
 `apps/conary/src/commands/repo_static.rs`;
 `apps/conary/tests/packaging_m1b.rs`;
 `apps/conary/tests/packaging_m2a.rs`;
+`crates/conary-core/src/ccs/attestation.rs`;
 `crates/conary-core/src/repository/static_repo/`;
 `crates/conary-core/src/trust/`;
 `crates/conary-core/src/ccs/signing.rs`.
@@ -380,9 +381,11 @@ visibility aligned with the active rollout gate; try rollback/keep decisions
 operate on the selected database/runtime and must preserve the one-active-session
 invariant. After M2a, `conary cook --isolated` and project-form
 `conary publish <target>` must use hermetic Kitchen execution before emitting
-`hardening_level = "hermetic"`; unsigned hermetic evidence is not a signed
-build-attestation envelope; `conary publish <pkg.ccs> <target>` must keep
-rejecting until M2b. Never parse static `index.json` or
+`hardening_level = "hermetic"` and a signed build-attestation envelope.
+Artifact-form `conary publish <pkg.ccs> <target>` must pass
+`publish_gate.rs` checks for package signatures, TOML integrity, attestation
+authority, output identity, command-risk evidence, and foreign-boundary hashes
+before static publication or Remi release upload. Never parse static `index.json` or
 `keys/package-keys.json` before TUF target length/hash verification succeeds;
 do not allow `--allow-unsigned` to bypass static repository package signature
 checks; keep static repo GPG and TUF trust surfaces separate; retired package
@@ -391,10 +394,11 @@ changes that policy.
 
 ## Remi Publication, Serving, Admin, And Fixture Artifacts
 
-**Capability:** ingest, convert, publish, index, search, and serve CCS artifacts
-and static test fixtures through Remi.
+**Capability:** ingest, convert, publish, index, search, and serve CCS artifacts,
+release uploads, and static test fixtures through Remi.
 
-**Start here:** `apps/remi/src/server/publication.rs`;
+**Start here:** `apps/remi/src/server/release_publish.rs`;
+`apps/remi/src/server/publication.rs`;
 `apps/remi/src/server/conversion.rs`;
 `apps/remi/src/server/conversion/types.rs`;
 `apps/remi/src/server/conversion/workflow.rs`;
@@ -412,7 +416,9 @@ and static test fixtures through Remi.
 **Neighbor systems:** CCS conversion metadata, repository client behavior,
 federation peer state, admin audit logs, artifact path handling.
 
-**Focused proof:** `cargo test -p remi publication`;
+**Focused proof:** `cargo test -p remi release_upload_`;
+`cargo test -p remi remi_release_parity`;
+`cargo test -p remi publication`;
 `cargo test -p remi test_upload_fixture`;
 `cargo test -p remi test_public_fixture_get_and_head`.
 
@@ -424,7 +430,10 @@ serving behavior depends on conversion output.
 `docs/llms/subsystem-map.md`; operator docs when deployment behavior changes.
 
 **Safety notes:** do not expose non-public scriptlet rows, private review paths,
-or unverified native package signatures through public listings.
+or unverified native package signatures through public listings. Remi release
+uploads must stage privately, enforce trusted build-attestation signer policy,
+and publish package rows, chunks, and TUF targets only after the shared gate
+passes.
 
 ## conaryd Package Jobs And Daemon Routes
 

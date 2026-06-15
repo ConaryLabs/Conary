@@ -133,7 +133,7 @@ fn evaluate_go_policy(source_root: &Path, command_text: &str) -> Result<Ecosyste
     } else {
         diagnostics.push("vendor/ is required for accepted M2 Go hermetic publish".to_string());
     }
-    if !command_text.contains("-mod=vendor") && !command_text.contains("GOFLAGS=-mod=vendor") {
+    if !go_command_uses_vendor_mode(command_text) {
         diagnostics.push("Go builds must use -mod=vendor or GOFLAGS=-mod=vendor".to_string());
     }
     if diagnostics.is_empty() {
@@ -405,6 +405,27 @@ fn command_has_flag(command_text: &str, flag: &str) -> bool {
     command_text
         .split_whitespace()
         .any(|argument| argument == flag)
+}
+
+fn go_command_uses_vendor_mode(command_text: &str) -> bool {
+    let mut previous_was_mod = false;
+    for raw_token in command_text.split_whitespace() {
+        let token = raw_token.trim_matches(|c| c == '"' || c == '\'');
+        if previous_was_mod && token == "vendor" {
+            return true;
+        }
+        previous_was_mod = token == "-mod";
+        if token == "-mod=vendor" {
+            return true;
+        }
+        if let Some(value) = token.strip_prefix("GOFLAGS=") {
+            let value = value.trim_matches(|c| c == '"' || c == '\'');
+            if value == "-mod=vendor" {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 fn cargo_lock_source_values(content: &str) -> Vec<String> {
@@ -1107,6 +1128,44 @@ local-registry = "{path}"
                 .iter()
                 .any(|identity| identity.evidence_path == "vendor")
         );
+    }
+
+    #[test]
+    fn go_policy_accepts_space_separated_vendor_mode() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            temp.path().join("go.sum"),
+            "example.invalid/mod v1.0.0 h1:test\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(temp.path().join("vendor")).unwrap();
+
+        let report =
+            evaluate_ecosystem_policy(BuildSystem::Go, temp.path(), "go build -mod vendor ./...")
+                .unwrap();
+
+        assert_eq!(report.status, PolicyStatus::Clean);
+    }
+
+    #[test]
+    fn go_policy_rejects_vendor_mode_substring_bypass() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            temp.path().join("go.sum"),
+            "example.invalid/mod v1.0.0 h1:test\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(temp.path().join("vendor")).unwrap();
+
+        let report = evaluate_ecosystem_policy(
+            BuildSystem::Go,
+            temp.path(),
+            "go build -mod=vendor-bypass ./...",
+        )
+        .unwrap();
+
+        assert_eq!(report.status, PolicyStatus::Blocked);
+        assert!(diagnostics(&report).contains("Go builds must use -mod=vendor"));
     }
 
     #[test]

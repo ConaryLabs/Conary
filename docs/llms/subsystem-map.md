@@ -41,6 +41,7 @@ summary: Route M2 release publish ownership
   `apps/conary/src/commands/repo_static.rs`,
   `apps/conary/tests/packaging_m1b.rs`,
   `apps/conary/tests/packaging_m2a.rs`,
+  `crates/conary-core/src/ccs/attestation.rs`,
   `crates/conary-core/src/repository/static_repo/publish.rs`,
   `crates/conary-core/src/repository/static_repo/publish_context.rs`,
   `crates/conary-core/src/repository/static_repo/package_staging.rs`,
@@ -194,6 +195,7 @@ summary: Route M2 release publish ownership
   `apps/conaryd/src/daemon/routes/transactions.rs`
 - Remi admin, conversion, publication, artifact fixture, and MCP flows:
   `apps/remi/src/server/admin_service.rs`,
+  `apps/remi/src/server/release_publish.rs`,
   `apps/remi/src/server/conversion.rs`,
   `apps/remi/src/server/conversion/workflow.rs`,
   `apps/remi/src/server/conversion/persistence.rs`,
