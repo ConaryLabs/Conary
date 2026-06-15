@@ -15,9 +15,16 @@ pub fn evaluate_ecosystem_policy(
 ) -> Result<EcosystemPolicyReport> {
     match build_system {
         BuildSystem::Cargo => evaluate_cargo_policy(source_root, command_text),
-        BuildSystem::Npm => Ok(unsupported_ecosystem_report("npm")),
-        BuildSystem::Python => Ok(unsupported_ecosystem_report("python")),
-        BuildSystem::Go => Ok(unsupported_ecosystem_report("go")),
+        BuildSystem::Npm => evaluate_npm_policy(source_root, command_text),
+        BuildSystem::Python => Ok(blocked_report(
+            "python",
+            Vec::new(),
+            vec![
+                "Python hermetic publish support requires a lockfile and wheelhouse policy; M2 release publish fails closed for Python until that policy lands"
+                    .to_string(),
+            ],
+        )),
+        BuildSystem::Go => evaluate_go_policy(source_root, command_text),
         // M2a only evaluates language package managers with lockfile/network
         // resolution evidence. Native build-system risk remains owned by the
         // command-risk and Kitchen policy layers.
@@ -111,6 +118,89 @@ fn evaluate_cargo_policy(source_root: &Path, command_text: &str) -> Result<Ecosy
     }
 }
 
+fn evaluate_go_policy(source_root: &Path, command_text: &str) -> Result<EcosystemPolicyReport> {
+    let mut identities = Vec::new();
+    let mut diagnostics = Vec::new();
+    let go_sum = source_root.join("go.sum");
+    if go_sum.is_file() {
+        identities.push(file_identity("go", "go.sum", &go_sum)?);
+    } else {
+        diagnostics.push("go.sum is required for hermetic Go builds".to_string());
+    }
+    let vendor = source_root.join("vendor");
+    if vendor.is_dir() {
+        identities.push(directory_identity("go", "vendor", &vendor)?);
+    } else {
+        diagnostics.push("vendor/ is required for accepted M2 Go hermetic publish".to_string());
+    }
+    if !command_text.contains("-mod=vendor") && !command_text.contains("GOFLAGS=-mod=vendor") {
+        diagnostics.push("Go builds must use -mod=vendor or GOFLAGS=-mod=vendor".to_string());
+    }
+    if diagnostics.is_empty() {
+        Ok(EcosystemPolicyReport {
+            ecosystem: "go".to_string(),
+            status: PolicyStatus::Clean,
+            identities,
+            diagnostics,
+        })
+    } else {
+        Ok(blocked_report("go", identities, diagnostics))
+    }
+}
+
+fn evaluate_npm_policy(source_root: &Path, command_text: &str) -> Result<EcosystemPolicyReport> {
+    let mut identities = Vec::new();
+    let mut diagnostics = Vec::new();
+    let lockfile = [
+        "package-lock.json",
+        "npm-shrinkwrap.json",
+        "pnpm-lock.yaml",
+        "yarn.lock",
+    ]
+    .into_iter()
+    .find_map(|name| {
+        let path = source_root.join(name);
+        path.is_file().then_some((name, path))
+    });
+    if let Some((name, path)) = lockfile {
+        identities.push(file_identity("npm", name, &path)?);
+    } else {
+        diagnostics.push(
+            "npm hermetic publish requires package-lock.json, npm-shrinkwrap.json, pnpm-lock.yaml, or yarn.lock"
+                .to_string(),
+        );
+    }
+    let node_modules = source_root.join("node_modules");
+    let npm_cache = source_root.join(".npm-cache");
+    if node_modules.is_dir() {
+        identities.push(directory_identity("npm", "node_modules", &node_modules)?);
+    } else if npm_cache.is_dir()
+        && (command_text.contains("--cache .npm-cache")
+            || command_text.contains("--cache=.npm-cache"))
+    {
+        identities.push(directory_identity("npm", ".npm-cache", &npm_cache)?);
+    } else {
+        diagnostics.push(
+            "npm hermetic publish requires node_modules/ or .npm-cache recorded in BuildInputIdentity"
+                .to_string(),
+        );
+    }
+    if !command_text.contains("--offline") {
+        diagnostics
+            .push("npm hermetic publish requires explicit --offline command evidence".to_string());
+    }
+    if diagnostics.is_empty() {
+        Ok(EcosystemPolicyReport {
+            ecosystem: "npm".to_string(),
+            status: PolicyStatus::Clean,
+            identities,
+            diagnostics,
+        })
+    } else {
+        Ok(blocked_report("npm", identities, diagnostics))
+    }
+}
+
 fn blocked_report(
     ecosystem: impl Into<String>,
     identities: Vec<EcosystemDependencyIdentity>,
@@ -122,16 +212,6 @@ fn blocked_report(
         identities,
         diagnostics,
     }
-}
-
-fn unsupported_ecosystem_report(ecosystem: &str) -> EcosystemPolicyReport {
-    blocked_report(
-        ecosystem,
-        Vec::new(),
-        vec![format!(
-            "{ecosystem} ecosystem: M2a has no accepted hermetic policy for it yet"
-        )],
-    )
 }
 
 #[derive(Debug, Clone)]
@@ -361,32 +441,44 @@ fn replacement_identity(evidence_path: &str, path: &Path) -> Result<EcosystemDep
     Ok(EcosystemDependencyIdentity {
         ecosystem: "cargo".to_string(),
         evidence_path: evidence_path.to_string(),
-        evidence_hash: replacement_tree_hash(path)?,
+        evidence_hash: directory_tree_hash(path)?,
+    })
+}
+
+fn directory_identity(
+    ecosystem: &str,
+    evidence_path: &str,
+    path: &Path,
+) -> Result<EcosystemDependencyIdentity> {
+    Ok(EcosystemDependencyIdentity {
+        ecosystem: ecosystem.to_string(),
+        evidence_path: evidence_path.to_string(),
+        evidence_hash: directory_tree_hash(path)?,
     })
 }
 
 #[derive(Debug, Clone)]
-struct ReplacementTreeEntry {
+struct DirectoryTreeEntry {
     relative_path: PathBuf,
     hash: String,
-    kind: ReplacementTreeEntryKind,
+    kind: DirectoryTreeEntryKind,
     mode: Option<u32>,
     symlink_target: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy)]
-enum ReplacementTreeEntryKind {
+enum DirectoryTreeEntryKind {
     Regular,
     Symlink,
 }
 
-fn replacement_tree_hash(root: &Path) -> Result<String> {
-    let mut entries = replacement_tree_entries(root)?;
+fn directory_tree_hash(root: &Path) -> Result<String> {
+    let mut entries = directory_tree_entries(root)?;
     entries.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
 
     let mut hasher = hash::Hasher::new(hash::HashAlgorithm::Sha256);
     for entry in entries {
-        hasher.update(replacement_tree_entry_kind_label(entry.kind).as_bytes());
+        hasher.update(directory_tree_entry_kind_label(entry.kind).as_bytes());
         hasher.update(b"\0");
         hasher.update(&path_bytes(&entry.relative_path));
         hasher.update(b"\0");
@@ -406,12 +498,12 @@ fn replacement_tree_hash(root: &Path) -> Result<String> {
     Ok(format!("sha256:{}", hash.value))
 }
 
-fn replacement_tree_entries(root: &Path) -> Result<Vec<ReplacementTreeEntry>> {
+fn directory_tree_entries(root: &Path) -> Result<Vec<DirectoryTreeEntry>> {
     let mut entries = Vec::new();
 
     for entry in WalkDir::new(root).follow_links(false) {
         let entry = entry
-            .map_err(|e| Error::IoError(format!("Failed to walk Cargo replacement tree: {e}")))?;
+            .map_err(|e| Error::IoError(format!("Failed to walk directory identity tree: {e}")))?;
         if entry.depth() == 0 {
             continue;
         }
@@ -419,9 +511,9 @@ fn replacement_tree_entries(root: &Path) -> Result<Vec<ReplacementTreeEntry>> {
         let metadata = fs::symlink_metadata(entry.path())?;
         let file_type = metadata.file_type();
         let kind = if file_type.is_file() {
-            ReplacementTreeEntryKind::Regular
+            DirectoryTreeEntryKind::Regular
         } else if file_type.is_symlink() {
-            ReplacementTreeEntryKind::Symlink
+            DirectoryTreeEntryKind::Symlink
         } else {
             continue;
         };
@@ -430,14 +522,14 @@ fn replacement_tree_entries(root: &Path) -> Result<Vec<ReplacementTreeEntry>> {
             .strip_prefix(root)
             .map_err(|e| {
                 Error::ConfigError(format!(
-                    "Failed to relativize Cargo replacement tree entry: {e}"
+                    "Failed to relativize directory identity tree entry: {e}"
                 ))
             })?
             .to_path_buf();
         let (hash, symlink_target, mode) =
-            replacement_tree_entry_identity(root, entry.path(), kind, &metadata)?;
+            directory_tree_entry_identity(root, entry.path(), kind, &metadata)?;
 
-        entries.push(ReplacementTreeEntry {
+        entries.push(DirectoryTreeEntry {
             relative_path,
             hash,
             kind,
@@ -449,28 +541,28 @@ fn replacement_tree_entries(root: &Path) -> Result<Vec<ReplacementTreeEntry>> {
     Ok(entries)
 }
 
-fn replacement_tree_entry_identity(
+fn directory_tree_entry_identity(
     root: &Path,
     path: &Path,
-    kind: ReplacementTreeEntryKind,
+    kind: DirectoryTreeEntryKind,
     metadata: &fs::Metadata,
 ) -> Result<(String, Option<PathBuf>, Option<u32>)> {
     match kind {
-        ReplacementTreeEntryKind::Regular => {
+        DirectoryTreeEntryKind::Regular => {
             let mut file = fs::File::open(path)?;
             let hash = hash::sha256_reader_hex(&mut file)?;
             Ok((format!("sha256:{hash}"), None, mode_bits(metadata)))
         }
-        ReplacementTreeEntryKind::Symlink => {
+        DirectoryTreeEntryKind::Symlink => {
             let target = fs::read_link(path)?;
-            validate_replacement_tree_symlink_target(root, path, &target)?;
+            validate_directory_tree_symlink_target(root, path, &target)?;
             let hash = hash::sha256_prefixed(&path_bytes(&target));
             Ok((hash, Some(target), None))
         }
     }
 }
 
-fn validate_replacement_tree_symlink_target(
+fn validate_directory_tree_symlink_target(
     root: &Path,
     link_path: &Path,
     target: &Path,
@@ -482,7 +574,7 @@ fn validate_replacement_tree_symlink_target(
     };
     let canonical_target = fs::canonicalize(&resolved_target).map_err(|e| {
         Error::ConfigError(format!(
-            "Cargo replacement tree symlink {} target {} could not be resolved and must stay inside replacement tree: {e}",
+            "directory identity tree symlink {} target {} could not be resolved and must stay inside directory identity tree: {e}",
             link_path.display(),
             target.display()
         ))
@@ -490,7 +582,7 @@ fn validate_replacement_tree_symlink_target(
 
     if !canonical_target.starts_with(root) {
         return Err(Error::ConfigError(format!(
-            "Cargo replacement tree symlink {} escapes replacement tree; symlink targets must stay inside replacement tree",
+            "directory identity tree symlink {} escapes directory identity tree; symlink targets must stay inside directory identity tree",
             link_path.display()
         )));
     }
@@ -498,10 +590,10 @@ fn validate_replacement_tree_symlink_target(
     Ok(())
 }
 
-fn replacement_tree_entry_kind_label(kind: ReplacementTreeEntryKind) -> &'static str {
+fn directory_tree_entry_kind_label(kind: DirectoryTreeEntryKind) -> &'static str {
     match kind {
-        ReplacementTreeEntryKind::Regular => "regular",
-        ReplacementTreeEntryKind::Symlink => "symlink",
+        DirectoryTreeEntryKind::Regular => "regular",
+        DirectoryTreeEntryKind::Symlink => "symlink",
     }
 }
 
@@ -922,8 +1014,8 @@ local-registry = "{path}"
             "expected symlink diagnostic, got {diagnostics:?}"
         );
         assert!(
-            diagnostics.contains("replacement tree"),
-            "expected replacement tree diagnostic, got {diagnostics:?}"
+            diagnostics.contains("directory identity tree"),
+            "expected directory identity tree diagnostic, got {diagnostics:?}"
         );
     }
 
@@ -989,27 +1081,95 @@ local-registry = "{path}"
     }
 
     #[test]
-    fn npm_python_and_go_are_fail_closed_until_policy_is_explicit() {
+    fn go_policy_accepts_go_sum_with_vendor_mode() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            temp.path().join("go.sum"),
+            "example.invalid/mod v1.0.0 h1:test\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(temp.path().join("vendor")).unwrap();
+
+        let report =
+            evaluate_ecosystem_policy(BuildSystem::Go, temp.path(), "go build -mod=vendor ./...")
+                .unwrap();
+
+        assert_eq!(report.status, PolicyStatus::Clean);
+        assert!(
+            report
+                .identities
+                .iter()
+                .any(|identity| identity.evidence_path == "go.sum")
+        );
+        assert!(
+            report
+                .identities
+                .iter()
+                .any(|identity| identity.evidence_path == "vendor")
+        );
+    }
+
+    #[test]
+    fn npm_policy_accepts_lockfile_with_offline_cache() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("package-lock.json"), "{}").unwrap();
+        std::fs::create_dir_all(temp.path().join(".npm-cache")).unwrap();
+
+        let report = evaluate_ecosystem_policy(
+            BuildSystem::Npm,
+            temp.path(),
+            "npm ci --offline --cache .npm-cache",
+        )
+        .unwrap();
+
+        assert_eq!(report.status, PolicyStatus::Clean);
+        assert!(
+            report
+                .identities
+                .iter()
+                .any(|identity| identity.evidence_path == "package-lock.json")
+        );
+        assert!(
+            report
+                .identities
+                .iter()
+                .any(|identity| identity.evidence_path == ".npm-cache")
+        );
+    }
+
+    #[test]
+    fn python_policy_remains_fail_closed_until_wheelhouse_policy_lands() {
+        let temp = tempfile::tempdir().unwrap();
+
+        let report = evaluate_ecosystem_policy(
+            BuildSystem::Python,
+            temp.path(),
+            "python -m pip install -r requirements.txt",
+        )
+        .unwrap();
+
+        assert_eq!(report.status, PolicyStatus::Blocked);
+        assert!(report.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains(
+                "Python hermetic publish support requires a lockfile and wheelhouse policy",
+            )
+        }));
+    }
+
+    #[test]
+    fn native_build_systems_are_clean_without_ecosystem_policy() {
         let dir = tempfile::tempdir().unwrap();
 
         for (build_system, ecosystem) in [
-            (BuildSystem::Npm, "npm"),
-            (BuildSystem::Python, "python"),
-            (BuildSystem::Go, "go"),
+            (BuildSystem::CMake, "cmake"),
+            (BuildSystem::Meson, "meson"),
+            (BuildSystem::Autotools, "autotools"),
         ] {
             let report = evaluate_ecosystem_policy(build_system, dir.path(), "").unwrap();
 
             assert_eq!(report.ecosystem, ecosystem);
-            assert_eq!(report.status, PolicyStatus::Blocked);
-            let diagnostics = diagnostics(&report);
-            assert!(
-                diagnostics.contains(ecosystem),
-                "expected ecosystem name in diagnostic, got {diagnostics:?}"
-            );
-            assert!(
-                diagnostics.contains("M2a has no accepted hermetic policy"),
-                "expected M2a policy diagnostic, got {diagnostics:?}"
-            );
+            assert_eq!(report.status, PolicyStatus::Clean);
+            assert!(report.diagnostics.is_empty());
         }
     }
 }
