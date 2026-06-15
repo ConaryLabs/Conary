@@ -136,23 +136,33 @@ fn cook_isolated_blocks_npm_fetch_before_build() {
 }
 
 #[test]
-fn publish_artifact_form_still_requires_m2b_attestation() {
+fn publish_artifact_form_accepts_attested_project_artifact() {
     let fixture = RecipeFixture::new(false);
     let config_path = fixture.write_hermetic_config();
-    let cook_output = fixture.cook_isolated(&config_path);
-    assert_success(&cook_output);
-    assert!(fixture.package_path().is_file());
+    let project_output = fixture.publish_project_form(&config_path);
+    assert_success(&project_output);
 
+    let artifact_path = fixture.published_package_path();
     let output = Command::new(env!("CARGO_BIN_EXE_conary"))
         .arg("publish")
-        .arg(fixture.package_path())
-        .arg(fixture.repo_dir())
+        .arg(&artifact_path)
+        .arg(fixture.artifact_repo_dir())
+        .arg("--key-dir")
+        .arg(fixture.key_dir())
+        .arg("--state-file")
+        .arg(fixture.artifact_state_file())
         .output()
         .expect("run conary publish artifact form");
 
-    assert_failure_contains(
-        &output,
-        &["artifact-form publish requires M2 attestation support"],
+    assert_success(&output);
+    assert_stdout_contains(&output, "Published attested artifact");
+    let republished = fixture.published_artifact_package_path();
+    let manifest = read_package_manifest(&republished);
+    assert!(
+        manifest
+            .provenance
+            .and_then(|provenance| provenance.build_attestation)
+            .is_some()
     );
 }
 
@@ -272,6 +282,10 @@ sysroot_hash = "{HASH}"
         self.work.path().join("repo")
     }
 
+    fn artifact_repo_dir(&self) -> PathBuf {
+        self.work.path().join("artifact-repo")
+    }
+
     fn key_dir(&self) -> PathBuf {
         self.work.path().join("keys")
     }
@@ -280,8 +294,20 @@ sysroot_hash = "{HASH}"
         self.work.path().join("publish-state.toml")
     }
 
+    fn artifact_state_file(&self) -> PathBuf {
+        self.work.path().join("artifact-publish-state.toml")
+    }
+
     fn published_package_path(&self) -> PathBuf {
-        let package_dir = self.repo_dir().join("packages").join("m2a-fixture");
+        self.published_package_path_in(&self.repo_dir())
+    }
+
+    fn published_artifact_package_path(&self) -> PathBuf {
+        self.published_package_path_in(&self.artifact_repo_dir())
+    }
+
+    fn published_package_path_in(&self, repo_dir: &Path) -> PathBuf {
+        let package_dir = repo_dir.join("packages").join("m2a-fixture");
         fs::read_dir(&package_dir)
             .unwrap_or_else(|error| panic!("read published package dir {package_dir:?}: {error}"))
             .map(|entry| entry.unwrap().path())

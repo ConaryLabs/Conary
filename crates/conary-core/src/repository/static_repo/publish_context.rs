@@ -145,6 +145,20 @@ pub fn prepare_project_form_static_context(
     .prepare()
 }
 
+pub fn prepare_artifact_form_static_context(
+    destination: &RepoLocation,
+    key_dir: &Path,
+    force_reinit: bool,
+) -> Result<PreparedStaticPublishContext> {
+    StaticPublishPrepareOptions {
+        destination: destination.clone(),
+        key_dir: Some(key_dir.to_path_buf()),
+        publish_form: StaticPublishForm::Artifact,
+        force_reinit,
+    }
+    .prepare()
+}
+
 pub struct ProjectFormAttestationInput<'a> {
     pub package_path: &'a Path,
     pub provenance: &'a ManifestProvenance,
@@ -1021,6 +1035,7 @@ mod tests {
             accept_destination_state: false,
             rotate_publish_key: false,
             rotate_root_key: false,
+            artifact_gate_context: None,
         })?;
         StaticPublishPrepareOptions {
             destination: RepoLocation::File { root: repo_root },

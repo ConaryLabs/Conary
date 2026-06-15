@@ -1586,16 +1586,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn artifact_form_publish_reaches_m2_rejection_without_preflight_db() {
+    async fn artifact_form_publish_reaches_artifact_reader_without_preflight_db() {
         let cli = Cli::try_parse_from(["conary", "publish", "dist/pkg.ccs", "./repo"]).unwrap();
 
         let err = crate::dispatch::dispatch(cli)
             .await
-            .expect_err("artifact-form publish should stop at the M2 gate");
+            .expect_err("artifact-form publish should reach artifact handling");
 
-        assert_eq!(
-            err.to_string(),
-            "artifact-form publish requires M2 attestation support; run project-form publish from a recipe project"
+        assert!(
+            err.to_string()
+                .contains("Failed to open package: dist/pkg.ccs")
         );
     }
 

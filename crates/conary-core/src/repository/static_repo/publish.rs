@@ -15,10 +15,13 @@ use crate::repository::static_repo::package_staging::{
     PendingPackageWrites, collect_package_entries, stage_packages,
 };
 use crate::repository::static_repo::publish_context::{
-    DestinationState, PendingKeyPromotions, PendingKeyRecovery, PreparedStaticPublishContext,
-    StaticPublishForm, StaticPublishPrepareOptions, build_package_keys_file,
-    create_private_dir_all, ensure_key_pair, read_destination_state, read_optional,
-    recover_pending_key_promotions, verify_destination_matches_operator_keys,
+    ArtifactGateContext, DestinationState, PendingKeyPromotions, PendingKeyRecovery,
+    PreparedStaticPublishContext, StaticPublishForm, StaticPublishPrepareOptions,
+    build_package_keys_file, create_private_dir_all, ensure_key_pair, read_destination_state,
+    read_optional, recover_pending_key_promotions, verify_destination_matches_operator_keys,
+};
+use crate::repository::static_repo::publish_gate::{
+    format_publish_gate_failures, verify_static_artifact_publish_eligibility,
 };
 use crate::repository::static_repo::{
     PackageKeysFile, RepoIdentity, RepoIdentityRepo, RepoIdentityTrust, RepoLocation, StaticIndex,
@@ -50,6 +53,7 @@ pub struct StaticPublishOptions {
     pub accept_destination_state: bool,
     pub rotate_publish_key: bool,
     pub rotate_root_key: bool,
+    pub artifact_gate_context: Option<ArtifactGateContext>,
 }
 
 #[derive(Debug)]
@@ -102,10 +106,15 @@ fn publish_static_repo_inner(
     options: StaticPublishOptions,
     forced_refresh: ForcedRefresh,
 ) -> Result<StaticPublishOutcome> {
+    let publish_form = if options.artifact_gate_context.is_some() {
+        StaticPublishForm::Artifact
+    } else {
+        StaticPublishForm::Project
+    };
     let context = StaticPublishPrepareOptions {
         destination: options.destination.clone(),
         key_dir: Some(options.key_dir.clone()),
-        publish_form: StaticPublishForm::Project,
+        publish_form,
         force_reinit: options.force_reinit,
     }
     .prepare()?;
@@ -212,6 +221,19 @@ fn commit_static_publish(
         .as_deref()
         .and_then(|bytes| std::str::from_utf8(bytes).ok())
         .and_then(|text| PackageKeysFile::parse(text).ok());
+
+    if let Some(gate_context) = options.artifact_gate_context.as_ref() {
+        for package_path in &options.package_paths {
+            let report = verify_static_artifact_publish_eligibility(
+                package_path,
+                &gate_context.accepted_signers,
+                &gate_context.publish_policy_digest,
+            )?;
+            if !report.is_passed() {
+                bail!("{}", format_publish_gate_failures(&report));
+            }
+        }
+    }
 
     let mut pending_package_writes =
         stage_packages(repo_root, &options.package_paths, &publish_key)?;
@@ -954,7 +976,10 @@ mod tests {
     use crate::ccs::verify::{SignatureStatus, TrustPolicy, verify_package};
     use crate::packages::traits::PackageFormat;
     use crate::repository::static_repo::package_staging::stage_packages;
-    use crate::repository::static_repo::publish_context::save_key_pair;
+    use crate::repository::static_repo::publish_context::{
+        ArtifactGateContext, STATIC_PUBLISH_POLICY_DIGEST_V1, save_key_pair,
+    };
+    use crate::repository::static_repo::publish_gate::AcceptedStaticSignerSet;
     use crate::repository::static_repo::{
         PackageKeyEntry, PackageKeyStatus, PackageKeysFile, RepoIdentity, RepoLocation, StaticIndex,
     };
@@ -1684,6 +1709,29 @@ mod tests {
     }
 
     #[test]
+    fn artifact_gate_context_rejects_before_package_staging() {
+        let fixture = PublishFixture::new();
+        let package = fixture.build_package("widget", "1.0.0", "x86_64", b"hello\n");
+        let mut options = fixture.options(vec![package]);
+        options.artifact_gate_context = Some(ArtifactGateContext {
+            accepted_signers: AcceptedStaticSignerSet::from_initial_key(
+                "publish",
+                "not-a-real-public-key",
+            ),
+            publish_policy_digest: STATIC_PUBLISH_POLICY_DIGEST_V1.to_string(),
+        });
+
+        let error = publish_static_repo(options).unwrap_err();
+        let error = error.to_string();
+
+        assert!(
+            error.contains("artifact package signature is missing, invalid, or untrusted"),
+            "{error}"
+        );
+        assert!(!fixture.repo_path("index.json").exists());
+    }
+
+    #[test]
     fn atomic_temp_paths_are_unique_next_to_destination() {
         let temp_dir = tempfile::tempdir().unwrap();
         let destination = temp_dir.path().join("metadata/timestamp.json");
@@ -1737,6 +1785,7 @@ mod tests {
                 accept_destination_state: false,
                 rotate_publish_key: false,
                 rotate_root_key: false,
+                artifact_gate_context: None,
             }
         }
 

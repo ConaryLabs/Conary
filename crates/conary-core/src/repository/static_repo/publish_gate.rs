@@ -141,10 +141,7 @@ pub fn verify_static_artifact_publish_eligibility(
     accepted_signers: &AcceptedStaticSignerSet,
     accepted_policy_digest: &str,
 ) -> Result<PublishLintReport> {
-    let verification = verify_package(
-        artifact_path,
-        &TrustPolicy::strict(accepted_signers.trusted_public_keys()),
-    )?;
+    let verification = verify_package_for_static_gate(artifact_path, accepted_signers)?;
     let package = CcsPackage::parse(
         artifact_path
             .to_str()
@@ -157,6 +154,37 @@ pub fn verify_static_artifact_publish_eligibility(
         accepted_signers,
         accepted_policy_digest,
     )
+}
+
+fn verify_package_for_static_gate(
+    artifact_path: &Path,
+    accepted_signers: &AcceptedStaticSignerSet,
+) -> Result<VerificationResult> {
+    match verify_package(
+        artifact_path,
+        &TrustPolicy::strict(accepted_signers.trusted_public_keys()),
+    ) {
+        Ok(verification) => Ok(verification),
+        Err(strict_error) => {
+            let mut verification = verify_package(
+                artifact_path,
+                &TrustPolicy {
+                    trusted_keys: accepted_signers.trusted_public_keys(),
+                    allow_unsigned: true,
+                    require_timestamp: false,
+                    max_signature_age: 0,
+                },
+            )
+            .with_context(|| {
+                format!("strict package signature verification failed: {strict_error}")
+            })?;
+            verification.valid = false;
+            verification.warnings.push(format!(
+                "strict package signature verification failed: {strict_error}"
+            ));
+            Ok(verification)
+        }
+    }
 }
 
 fn verify_verified_static_artifact_publish_eligibility(
@@ -333,7 +361,16 @@ fn failure(code: PublishGateFailureCode, message: &str) -> PublishGateFailure {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ccs::attestation::{
+        BUILD_ATTESTATION_SCHEMA_V1, BuildAttestationPayload, canonical_json_hash,
+        compute_build_output_identity, sign_build_attestation,
+    };
+    use crate::ccs::builder::{BuildResult, write_ccs_package, write_signed_ccs_package};
+    use crate::ccs::signing::SigningKeyPair;
+    use crate::recipe::hermetic::PolicyStatus;
+    use crate::repository::static_repo::publish_context::STATIC_PUBLISH_POLICY_DIGEST_V1;
     use crate::repository::static_repo::{PackageKeyEntry, PackageKeyStatus, PackageKeysFile};
+    use tempfile::TempDir;
 
     fn package_key(id: &str, public_key: &str, status: PackageKeyStatus) -> PackageKeyEntry {
         PackageKeyEntry {
@@ -387,5 +424,210 @@ mod tests {
         let err = AcceptedStaticSignerSet::from_verified_package_keys(&keys).unwrap_err();
 
         assert!(err.to_string().contains("duplicate active package key id"));
+    }
+
+    #[test]
+    fn artifact_gate_accepts_attested_hermetic_package() {
+        let signer = SigningKeyPair::generate().with_key_id("publish");
+        let (_temp, package_path) = attested_artifact_for_tests(&signer, &signer, |_| {}, |_| {});
+        let report = verify_static_artifact_publish_eligibility(
+            &package_path,
+            &accepted_signers_for_key(&signer),
+            STATIC_PUBLISH_POLICY_DIGEST_V1,
+        )
+        .unwrap();
+
+        assert!(report.is_passed(), "{report:?}");
+    }
+
+    #[test]
+    fn artifact_gate_reports_release_policy_failures() {
+        let cases: Vec<(
+            &str,
+            Box<dyn FnOnce() -> (TempDir, std::path::PathBuf, String)>,
+        )> = vec![
+            (
+                "artifact is missing a build attestation",
+                Box::new(|| {
+                    let signer = SigningKeyPair::generate().with_key_id("publish");
+                    let (temp, package_path) = artifact_without_attestation_for_tests(&signer);
+                    let text = failure_text_for_artifact(
+                        &package_path,
+                        &accepted_signers_for_key(&signer),
+                    );
+                    (temp, package_path, text)
+                }),
+            ),
+            (
+                "build attestation signer is not accepted",
+                Box::new(|| {
+                    let signer = SigningKeyPair::generate().with_key_id("publish");
+                    let other = SigningKeyPair::generate().with_key_id("other");
+                    let (temp, package_path) =
+                        attested_artifact_for_tests(&signer, &signer, |_| {}, |_| {});
+                    let text =
+                        failure_text_for_artifact(&package_path, &accepted_signers_for_key(&other));
+                    (temp, package_path, text)
+                }),
+            ),
+            (
+                "build attestation policy digest is not accepted",
+                Box::new(|| {
+                    let signer = SigningKeyPair::generate().with_key_id("publish");
+                    let (temp, package_path) = attested_artifact_for_tests(
+                        &signer,
+                        &signer,
+                        |_| {},
+                        |payload| {
+                            payload.publish_policy_digest = "m1-preview-policy".to_string();
+                        },
+                    );
+                    let text = failure_text_for_artifact(
+                        &package_path,
+                        &accepted_signers_for_key(&signer),
+                    );
+                    (temp, package_path, text)
+                }),
+            ),
+            (
+                "recorded-draft artifacts are not publishable",
+                Box::new(|| {
+                    let signer = SigningKeyPair::generate().with_key_id("publish");
+                    let (temp, package_path) = attested_artifact_for_tests(
+                        &signer,
+                        &signer,
+                        |_| {},
+                        |payload| {
+                            payload.origin_class = "recorded-draft".to_string();
+                        },
+                    );
+                    let text = failure_text_for_artifact(
+                        &package_path,
+                        &accepted_signers_for_key(&signer),
+                    );
+                    (temp, package_path, text)
+                }),
+            ),
+            (
+                "build command-risk report is not clean",
+                Box::new(|| {
+                    let signer = SigningKeyPair::generate().with_key_id("publish");
+                    let (temp, package_path) = attested_artifact_for_tests(
+                        &signer,
+                        &signer,
+                        |result| {
+                            result
+                                .manifest
+                                .provenance
+                                .as_mut()
+                                .unwrap()
+                                .hermetic_evidence
+                                .as_mut()
+                                .unwrap()
+                                .command_risk
+                                .status = PolicyStatus::Blocked;
+                        },
+                        |_| {},
+                    );
+                    let text = failure_text_for_artifact(
+                        &package_path,
+                        &accepted_signers_for_key(&signer),
+                    );
+                    (temp, package_path, text)
+                }),
+            ),
+        ];
+
+        for (expected, build_case) in cases {
+            let (_temp, _package_path, text) = build_case();
+            assert!(
+                text.contains(expected),
+                "expected {expected:?} in gate failure text:\n{text}"
+            );
+        }
+    }
+
+    fn accepted_signers_for_key(key: &SigningKeyPair) -> AcceptedStaticSignerSet {
+        AcceptedStaticSignerSet::from_initial_key(
+            key.key_id().unwrap_or("publish"),
+            key.public_key_base64(),
+        )
+    }
+
+    fn failure_text_for_artifact(
+        package_path: &std::path::Path,
+        accepted_signers: &AcceptedStaticSignerSet,
+    ) -> String {
+        let report = verify_static_artifact_publish_eligibility(
+            package_path,
+            accepted_signers,
+            STATIC_PUBLISH_POLICY_DIGEST_V1,
+        )
+        .unwrap();
+        assert!(!report.is_passed(), "{report:?}");
+        format_publish_gate_failures(&report)
+    }
+
+    fn artifact_without_attestation_for_tests(
+        signer: &SigningKeyPair,
+    ) -> (TempDir, std::path::PathBuf) {
+        let temp = tempfile::tempdir().unwrap();
+        let package_path = temp.path().join("missing-attestation.ccs");
+        let result = crate::ccs::builder::test_support::minimal_build_result("widget", "1.0.0");
+        write_signed_ccs_package(&result, &package_path, signer).unwrap();
+        (temp, package_path)
+    }
+
+    fn attested_artifact_for_tests(
+        attestation_key: &SigningKeyPair,
+        package_key: &SigningKeyPair,
+        mutate_result: impl FnOnce(&mut BuildResult),
+        mutate_payload: impl FnOnce(&mut BuildAttestationPayload),
+    ) -> (TempDir, std::path::PathBuf) {
+        let temp = tempfile::tempdir().unwrap();
+        let identity_path = temp.path().join("identity.ccs");
+        let package_path = temp.path().join("artifact.ccs");
+        let mut result = crate::ccs::builder::test_support::minimal_build_result("widget", "1.0.0");
+        mutate_result(&mut result);
+        write_ccs_package(&result, &identity_path).unwrap();
+        let identity_package =
+            crate::ccs::CcsPackage::parse(identity_path.to_str().unwrap()).unwrap();
+        let output_identity = compute_build_output_identity(&identity_package).unwrap();
+        let evidence = result
+            .manifest
+            .provenance
+            .as_ref()
+            .unwrap()
+            .hermetic_evidence
+            .as_ref()
+            .unwrap();
+        let mut payload = BuildAttestationPayload {
+            schema_version: BUILD_ATTESTATION_SCHEMA_V1,
+            origin_class: output_identity.origin_class.clone(),
+            hardening_level: output_identity.hardening_level.clone(),
+            build_input: evidence.build_input.clone(),
+            dependency_lock: evidence.dependency_lock.clone(),
+            hermetic_evidence_hash: canonical_json_hash(evidence).unwrap(),
+            output_identity,
+            build_command_risk_report_hash: canonical_json_hash(&evidence.command_risk).unwrap(),
+            scriptlet_risk_report_hash: None,
+            conversion_boundary_hash: None,
+            publish_policy_digest: STATIC_PUBLISH_POLICY_DIGEST_V1.to_string(),
+            command_risk_classifier_version: evidence.command_risk.classifier_version.clone(),
+            sandbox_profile: "kitchen-pristine-network-none".to_string(),
+            seccomp_profile: Some("scriptlet-v1".to_string()),
+            builder_identity: "conary-test-builder".to_string(),
+            conary_version: "test".to_string(),
+            issued_at: "2026-06-14T00:00:00Z".to_string(),
+        };
+        mutate_payload(&mut payload);
+        result
+            .manifest
+            .provenance
+            .as_mut()
+            .unwrap()
+            .build_attestation = Some(sign_build_attestation(payload, attestation_key).unwrap());
+        write_signed_ccs_package(&result, &package_path, package_key).unwrap();
+        (temp, package_path)
     }
 }
