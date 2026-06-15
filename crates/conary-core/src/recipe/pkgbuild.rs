@@ -466,6 +466,27 @@ pub fn extract_pkgbuild_function_bodies_for_risk(content: &str) -> Vec<(String, 
         .collect()
 }
 
+pub fn classify_pkgbuild_function_bodies_for_risk(
+    content: &str,
+) -> crate::security::command_risk::CommandRiskReport {
+    let mut entries = Vec::new();
+    for (phase, body) in extract_pkgbuild_function_bodies_for_risk(content) {
+        let report =
+            crate::security::command_risk::classify_shell_text(&format!("pkgbuild:{phase}"), &body);
+        entries.extend(report.entries);
+    }
+    if entries.is_empty() {
+        crate::security::command_risk::CommandRiskReport::clean()
+    } else {
+        crate::security::command_risk::CommandRiskReport {
+            status: crate::security::command_risk::CommandRiskStatus::Blocked,
+            classifier_version: crate::security::command_risk::COMMAND_RISK_CLASSIFIER_VERSION
+                .to_string(),
+            entries,
+        }
+    }
+}
+
 /// Convert PKGBUILD URL format to Recipe format
 fn convert_pkgbuild_url(url: &str, pkgname: &str, pkgver: &str) -> String {
     // Replace $pkgname, ${pkgname}, $pkgver, ${pkgver}
@@ -666,5 +687,26 @@ pkgver() { echo 1.0; }
                 "npm install atomic-lockfile;".to_string()
             )]
         );
+    }
+
+    #[test]
+    fn classify_pkgbuild_function_bodies_for_risk_reports_prepare_fetch() {
+        let content = r#"
+pkgname=test
+pkgver=1.0
+
+prepare() { npm install atomic-lockfile; }
+"#;
+
+        let report = classify_pkgbuild_function_bodies_for_risk(content);
+
+        assert_eq!(
+            report.status,
+            crate::security::command_risk::CommandRiskStatus::Blocked
+        );
+        assert!(report.entries.iter().any(|entry| {
+            entry.source == "pkgbuild:prepare"
+                && entry.reason_code == crate::security::command_risk::PACKAGE_MANAGER_FETCH
+        }));
     }
 }

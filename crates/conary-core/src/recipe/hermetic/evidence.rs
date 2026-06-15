@@ -5,7 +5,8 @@ use serde::{Deserialize, Serialize};
 use super::divergence::DivergenceReport;
 
 pub const HERMETIC_EVIDENCE_SCHEMA_V1: u32 = 1;
-pub const COMMAND_RISK_CLASSIFIER_VERSION: &str = "m2a-command-risk-v1";
+pub const COMMAND_RISK_CLASSIFIER_VERSION: &str =
+    crate::security::command_risk::COMMAND_RISK_CLASSIFIER_VERSION;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HermeticBuildEvidence {
