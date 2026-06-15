@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-06-14
-revision: 22
-summary: Route M2a hermetic cook and project-form publish
+last_updated: 2026-06-15
+revision: 23
+summary: Route M2 release publish ownership
 ---
 
 # Assistant Subsystem Map
@@ -41,6 +41,10 @@ summary: Route M2a hermetic cook and project-form publish
   `apps/conary/src/commands/repo_static.rs`,
   `apps/conary/tests/packaging_m1b.rs`,
   `apps/conary/tests/packaging_m2a.rs`,
+  `crates/conary-core/src/repository/static_repo/publish.rs`,
+  `crates/conary-core/src/repository/static_repo/publish_context.rs`,
+  `crates/conary-core/src/repository/static_repo/package_staging.rs`,
+  `crates/conary-core/src/repository/static_repo/publish_gate.rs`,
   `crates/conary-core/src/repository/static_repo/`,
   `crates/conary-core/src/trust/`, and
   `crates/conary-core/src/ccs/signing.rs`
