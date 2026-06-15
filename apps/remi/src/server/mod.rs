@@ -139,6 +139,10 @@ pub struct ServerConfig {
     // === Web frontend ===
     /// Path to SvelteKit static build directory (None = disabled)
     pub web_root: Option<PathBuf>,
+
+    // === Release publication ===
+    /// Trusted release signer and repository signing-key configuration.
+    pub release_publish: crate::server::config::ReleasePublishSection,
 }
 
 impl Default for ServerConfig {

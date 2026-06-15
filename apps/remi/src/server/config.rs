@@ -6,6 +6,7 @@
 //! - [storage] - Root directory, eviction thresholds
 //! - [upstream.*] - Upstream repository configuration
 //! - [conversion] - CCS conversion settings
+//! - [release_publish] - Trusted release signer and repository signing settings
 //! - [federation] - Federation peer settings
 //! - [security] - Rate limiting, banning, CORS
 
@@ -37,6 +38,10 @@ pub struct RemiConfig {
     /// Conversion settings
     #[serde(default)]
     pub conversion: ConversionSection,
+
+    /// Release artifact publication settings
+    #[serde(default)]
+    pub release_publish: ReleasePublishSection,
 
     /// Federation settings
     #[serde(default)]
@@ -264,6 +269,24 @@ fn default_chunk_max() -> usize {
 
 fn default_max_conversions() -> usize {
     DEFAULT_MAX_CONVERSIONS
+}
+
+/// Release artifact publication settings.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+pub struct ReleasePublishSection {
+    /// Directory containing Remi-owned TUF private keys by distro.
+    #[serde(default)]
+    pub repository_keys_dir: Option<PathBuf>,
+
+    /// Trusted build-attestation signing keys allowed for release upload.
+    #[serde(default)]
+    pub trusted_build_attestation_signers: Vec<TrustedBuildAttestationSigner>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct TrustedBuildAttestationSigner {
+    pub key_id: String,
+    pub public_key: String,
 }
 
 /// Federation configuration
@@ -780,6 +803,7 @@ impl RemiConfig {
             ban_threshold: self.security.ban_threshold,
             ban_duration_secs: self.ban_duration_secs()?,
             web_root: self.web_root().map(Path::to_path_buf),
+            release_publish: self.release_publish.clone(),
         })
     }
 
@@ -1028,6 +1052,41 @@ mod tests {
         let from_server = ServerConfig::default();
 
         assert_eq!(from_server, from_remi);
+    }
+
+    #[test]
+    fn release_publish_trusted_signers_parse_from_config() {
+        let config: RemiConfig = toml::from_str(
+            r#"
+            [release_publish]
+            repository_keys_dir = "/var/lib/remi/keys"
+            trusted_build_attestation_signers = [
+              { key_id = "publisher", public_key = "cHVibGlzaGVyLXB1YmxpYy1rZXk=" }
+            ]
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            config.release_publish.trusted_build_attestation_signers[0].key_id,
+            "publisher"
+        );
+        assert_eq!(
+            config.release_publish.repository_keys_dir.as_deref(),
+            Some(std::path::Path::new("/var/lib/remi/keys"))
+        );
+    }
+
+    #[test]
+    fn release_publish_empty_trusted_signers_fail_closed() {
+        let config = RemiConfig::default();
+
+        assert!(
+            config
+                .release_publish
+                .trusted_build_attestation_signers
+                .is_empty()
+        );
     }
 
     #[test]
