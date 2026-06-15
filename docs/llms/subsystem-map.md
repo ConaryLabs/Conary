@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-06-15
-revision: 24
-summary: Route M3 packaging differentiator design ownership
+revision: 25
+summary: Route M3a packaging diagnostics ownership
 ---
 
 # Assistant Subsystem Map
@@ -32,16 +32,20 @@ summary: Route M3 packaging differentiator design ownership
   `crates/conary-core/src/recipe/inference/`,
   `crates/conary-core/src/recipe/hermetic/`,
   `crates/conary-core/src/recipe/kitchen/`,
+  `crates/conary-core/src/diagnostics/`,
   `crates/conary-core/src/db/models/try_session.rs`,
   `apps/conary/src/commands/new.rs`,
   `apps/conary/src/commands/publish.rs`,
   `apps/conary/src/commands/cook.rs`,
+  `apps/conary/src/commands/diagnostics.rs`,
+  `apps/conary/src/commands/operation_records.rs`,
   `apps/conary/src/commands/hermetic_config.rs`,
   `apps/conary/src/commands/hermetic_state.rs`,
   `apps/conary/src/commands/try_session.rs`,
   `apps/conary/src/commands/repo_static.rs`,
   `apps/conary/tests/packaging_m1b.rs`,
   `apps/conary/tests/packaging_m2a.rs`,
+  `apps/conary/tests/packaging_m3a.rs`,
   `crates/conary-core/src/ccs/attestation.rs`,
   `crates/conary-core/src/repository/static_repo/publish.rs`,
   `crates/conary-core/src/repository/static_repo/publish_context.rs`,
