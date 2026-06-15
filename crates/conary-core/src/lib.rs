@@ -21,6 +21,7 @@ pub mod critical_packages;
 pub mod db;
 pub mod delta;
 pub mod dependencies;
+pub mod diagnostics;
 pub mod derivation;
 pub mod derived;
 mod error;
