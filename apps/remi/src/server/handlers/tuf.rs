@@ -10,14 +10,21 @@
 //! - {version}.root.json (versioned roots for key rotation)
 
 use crate::server::ServerState;
+use anyhow::{Context, Result, bail};
 use axum::{
     Json,
     extract::{Path, State},
     http::StatusCode,
     response::{IntoResponse, Response},
 };
+use conary_core::ccs::signing::SigningKeyPair;
+use conary_core::trust::{
+    MetaFile, Signed, TUF_SPEC_VERSION, TimestampMetadata, sign_tuf_metadata,
+};
 use rusqlite::OptionalExtension;
 use rusqlite::params;
+use std::collections::BTreeMap;
+use std::path::Path as StdPath;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::warn;
@@ -114,19 +121,56 @@ pub async fn get_versioned_root(
     }
 }
 
-/// POST /v1/admin/tuf/refresh-timestamp (admin endpoint)
-///
-/// Intended to regenerate timestamp metadata for all TUF-enabled repositories.
-/// Currently not implemented -- returns 501.
-pub async fn refresh_timestamp(State(_state): State<Arc<RwLock<ServerState>>>) -> Response {
-    (
-        StatusCode::NOT_IMPLEMENTED,
-        Json(serde_json::json!({
-            "error": "TUF timestamp refresh is not yet implemented",
-            "code": "NOT_IMPLEMENTED",
-        })),
-    )
-        .into_response()
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+pub struct TimestampRefreshResult {
+    pub status: String,
+    pub role: String,
+    pub distro: String,
+    pub version: u64,
+}
+
+/// POST /v1/admin/tuf/{distro}/refresh-timestamp (admin endpoint)
+pub async fn refresh_timestamp(
+    State(state): State<Arc<RwLock<ServerState>>>,
+    Path(distro): Path<String>,
+) -> Response {
+    match refresh_timestamp_for_distro(&state, &distro).await {
+        Ok(result) => (StatusCode::OK, Json(result)).into_response(),
+        Err(error) => {
+            warn!("Failed to refresh TUF timestamp for {distro}: {error:#}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": error.to_string(),
+                    "code": "TIMESTAMP_REFRESH_FAILED",
+                })),
+            )
+                .into_response()
+        }
+    }
+}
+
+pub async fn refresh_timestamp_for_distro(
+    state: &Arc<RwLock<ServerState>>,
+    distro: &str,
+) -> Result<TimestampRefreshResult> {
+    let (db_path, keys_dir) = {
+        let guard = state.read().await;
+        let keys_dir = guard
+            .config
+            .release_publish
+            .repository_keys_dir
+            .clone()
+            .context("release_publish.repository_keys_dir is not configured")?;
+        (guard.config.db_path.clone(), keys_dir)
+    };
+    let distro = distro.to_string();
+
+    tokio::task::spawn_blocking(move || {
+        refresh_timestamp_for_distro_blocking(&db_path, &keys_dir, &distro)
+    })
+    .await
+    .context("refresh timestamp blocking task failed")?
 }
 
 /// Helper: Get TUF metadata by role from the database
@@ -206,6 +250,111 @@ fn query_tuf_role_metadata(
              WHERE r.name = ?1 AND tm.role = ?2",
             params![distro, role],
             |row| row.get(0),
+        )
+        .optional()?)
+}
+
+pub(crate) fn load_release_tuf_key(
+    keys_dir: &StdPath,
+    distro: &str,
+    role: &str,
+) -> Result<SigningKeyPair> {
+    let path = keys_dir.join(distro).join(format!("{role}.private"));
+    SigningKeyPair::load_from_file(&path)
+        .map_err(anyhow::Error::from)
+        .with_context(|| format!("load Remi {role} TUF signing key {}", path.display()))
+}
+
+fn refresh_timestamp_for_distro_blocking(
+    db_path: &StdPath,
+    keys_dir: &StdPath,
+    distro: &str,
+) -> Result<TimestampRefreshResult> {
+    let timestamp_key = load_release_tuf_key(keys_dir, distro, "timestamp")?;
+    let conn = open_handler_db(db_path)?;
+    let repo_id: i64 = conn
+        .query_row(
+            "SELECT id FROM repositories WHERE name = ?1 AND tuf_enabled = 1",
+            params![distro],
+            |row| row.get(0),
+        )
+        .optional()?
+        .with_context(|| format!("TUF repository not found for distro {distro}"))?;
+
+    let Some((snapshot_version, snapshot_json)) = query_snapshot_for_timestamp(&conn, repo_id)?
+    else {
+        bail!("snapshot metadata is missing for distro {distro}");
+    };
+    let previous_version: Option<i64> = conn
+        .query_row(
+            "SELECT version FROM tuf_metadata WHERE repository_id = ?1 AND role = 'timestamp'",
+            params![repo_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let version = previous_version.unwrap_or(0) + 1;
+    let snapshot_bytes = snapshot_json.as_bytes();
+    let mut hashes = BTreeMap::new();
+    hashes.insert(
+        "sha256".to_string(),
+        conary_core::hash::sha256(snapshot_bytes),
+    );
+    let mut meta = BTreeMap::new();
+    meta.insert(
+        "snapshot.json".to_string(),
+        MetaFile {
+            version: snapshot_version as u64,
+            length: Some(snapshot_bytes.len() as u64),
+            hashes: Some(hashes),
+        },
+    );
+    let timestamp = TimestampMetadata {
+        type_field: "timestamp".to_string(),
+        spec_version: TUF_SPEC_VERSION.to_string(),
+        version: version as u64,
+        expires: chrono::Utc::now() + chrono::Duration::days(1),
+        meta,
+    };
+    let signed = Signed {
+        signatures: vec![
+            sign_tuf_metadata(&timestamp_key, &timestamp).map_err(anyhow::Error::from)?,
+        ],
+        signed: timestamp,
+    };
+    let signed_json = serde_json::to_string(&signed)?;
+    let metadata_hash = conary_core::hash::sha256(signed_json.as_bytes());
+
+    conn.execute(
+        "INSERT OR REPLACE INTO tuf_metadata
+         (repository_id, role, version, metadata_hash, signed_metadata, expires_at)
+         VALUES (?1, 'timestamp', ?2, ?3, ?4, ?5)",
+        params![
+            repo_id,
+            version,
+            metadata_hash,
+            signed_json,
+            signed.signed.expires.to_rfc3339(),
+        ],
+    )?;
+
+    Ok(TimestampRefreshResult {
+        status: "ok".to_string(),
+        role: "timestamp".to_string(),
+        distro: distro.to_string(),
+        version: version as u64,
+    })
+}
+
+fn query_snapshot_for_timestamp(
+    conn: &rusqlite::Connection,
+    repo_id: i64,
+) -> Result<Option<(i64, String)>> {
+    Ok(conn
+        .query_row(
+            "SELECT version, signed_metadata FROM tuf_metadata
+             WHERE repository_id = ?1 AND role = 'snapshot'",
+            params![repo_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()?)
 }
@@ -546,5 +695,108 @@ mod tests {
         // Arch version 2 should not exist
         let arch_v2 = query_versioned_root(temp_file.path(), "arch", 2).unwrap();
         assert!(arch_v2.is_none());
+    }
+
+    #[tokio::test]
+    async fn remi_tuf_refresh_timestamp_returns_signed_monotonic_metadata() {
+        let fixture = TimestampRefreshFixture::new("test-distro", true);
+        let first = call_refresh_timestamp_for_tests(&fixture, "test-distro").await;
+        assert_eq!(first.status(), StatusCode::OK);
+        let first_json = response_json_for_tests(first).await;
+
+        assert_eq!(first_json["role"], "timestamp");
+        assert_eq!(first_json["distro"], "test-distro");
+        assert!(first_json["version"].as_u64().unwrap() > 0);
+
+        let second = call_refresh_timestamp_for_tests(&fixture, "test-distro").await;
+        assert_eq!(second.status(), StatusCode::OK);
+        let second_json = response_json_for_tests(second).await;
+
+        assert!(second_json["version"].as_u64().unwrap() > first_json["version"].as_u64().unwrap());
+    }
+
+    #[tokio::test]
+    async fn remi_tuf_refresh_timestamp_fails_closed_without_role_key() {
+        let fixture = TimestampRefreshFixture::new("test-distro", false);
+        let response = call_refresh_timestamp_for_tests(&fixture, "test-distro").await;
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    struct TimestampRefreshFixture {
+        _temp: tempfile::TempDir,
+        state: Arc<RwLock<ServerState>>,
+    }
+
+    impl TimestampRefreshFixture {
+        fn new(distro: &str, write_timestamp_key: bool) -> Self {
+            let temp = tempfile::tempdir().unwrap();
+            let db_path = temp.path().join("remi.db");
+            let keys_dir = temp.path().join("keys");
+            let distro_key_dir = keys_dir.join(distro);
+            std::fs::create_dir_all(&distro_key_dir).unwrap();
+
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
+            schema::migrate(&conn).unwrap();
+            let repo_id = insert_tuf_repo(&conn, distro);
+            insert_tuf_metadata(&conn, repo_id, "snapshot", &snapshot_metadata_for_tests());
+            drop(conn);
+
+            if write_timestamp_key {
+                let key =
+                    conary_core::ccs::signing::SigningKeyPair::generate().with_key_id("timestamp");
+                key.save_to_files(
+                    &distro_key_dir.join("timestamp.private"),
+                    &distro_key_dir.join("timestamp.public"),
+                )
+                .unwrap();
+            }
+
+            let release_publish = crate::server::config::ReleasePublishSection {
+                repository_keys_dir: Some(keys_dir),
+                trusted_build_attestation_signers: Vec::new(),
+            };
+            let config = crate::server::ServerConfig {
+                db_path,
+                chunk_dir: temp.path().join("chunks"),
+                cache_dir: temp.path().join("cache"),
+                release_publish,
+                ..Default::default()
+            };
+            let state = Arc::new(RwLock::new(
+                crate::server::ServerState::new(config).expect("test server state"),
+            ));
+
+            Self { _temp: temp, state }
+        }
+    }
+
+    async fn call_refresh_timestamp_for_tests(
+        fixture: &TimestampRefreshFixture,
+        distro: &str,
+    ) -> Response {
+        refresh_timestamp(State(fixture.state.clone()), Path(distro.to_string())).await
+    }
+
+    async fn response_json_for_tests(response: Response) -> serde_json::Value {
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        serde_json::from_slice(&body).unwrap()
+    }
+
+    fn snapshot_metadata_for_tests() -> String {
+        let snapshot = conary_core::trust::Signed {
+            signed: conary_core::trust::SnapshotMetadata {
+                type_field: "snapshot".to_string(),
+                spec_version: conary_core::trust::TUF_SPEC_VERSION.to_string(),
+                version: 1,
+                expires: chrono::Utc::now() + chrono::Duration::days(7),
+                meta: std::collections::BTreeMap::new(),
+            },
+            signatures: Vec::new(),
+        };
+        serde_json::to_string(&snapshot).unwrap()
     }
 }

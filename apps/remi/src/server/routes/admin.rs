@@ -37,7 +37,7 @@ pub fn create_admin_router(state: Arc<RwLock<ServerState>>) -> Router {
         .route("/v1/admin/refresh", post(refresh_upstream))
         .route("/v1/admin/models/{name}", put(models::put_model))
         .route(
-            "/v1/admin/tuf/refresh-timestamp",
+            "/v1/admin/tuf/{distro}/refresh-timestamp",
             post(tuf::refresh_timestamp),
         )
         .route(
@@ -78,6 +78,10 @@ pub fn create_external_admin_router(
         .route(
             "/v1/admin/packages/{distro}/{package}/scriptlet-review",
             get(admin_handlers::get_scriptlet_review_artifact),
+        )
+        .route(
+            "/v1/admin/tuf/{distro}/refresh-timestamp",
+            post(tuf::refresh_timestamp),
         )
         .route("/v1/admin/repos", get(admin_handlers::list_repos))
         .route("/v1/admin/repos", post(admin_handlers::create_repo))
