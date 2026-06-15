@@ -61,6 +61,7 @@ impl StaticRepoFixture {
             accept_destination_state: false,
             rotate_publish_key: false,
             rotate_root_key: false,
+            artifact_gate_context: None,
         })
         .expect("publish static repo fixture");
         assert_eq!(outcome.root_key_ids.len(), 1);

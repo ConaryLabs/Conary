@@ -19,14 +19,15 @@ use conary_core::repository::static_repo::publish::{
 };
 use conary_core::repository::static_repo::publish_context::{
     ProjectFormAttestationInput, attach_project_form_attestation,
-    prepare_project_form_static_context,
+    prepare_artifact_form_static_context, prepare_project_form_static_context,
+};
+use conary_core::repository::static_repo::publish_gate::{
+    format_publish_gate_failures, verify_static_artifact_publish_eligibility,
 };
 
 use super::cook::{recipe_source_base_dir, resolve_recipe_path};
 use super::hermetic_config::{ensure_no_build_dependencies_for_m2a, load_default_hermetic_builder};
 use super::hermetic_state::{load_latest_host_build_record_for_recipe, resolve_default_state_dir};
-
-const ARTIFACT_FORM_REJECTION: &str = "artifact-form publish requires M2 attestation support; run project-form publish from a recipe project";
 
 pub struct PublishOptions {
     pub what: String,
@@ -43,13 +44,17 @@ pub struct PublishOptions {
 }
 
 pub async fn cmd_publish(options: PublishOptions) -> Result<()> {
-    if options.target.is_some() {
-        bail!(ARTIFACT_FORM_REJECTION);
+    if let Some(target) = options.target.clone() {
+        publish_artifact_form(options, &target).await
+    } else {
+        publish_project_form(options).await
     }
+}
 
+async fn publish_project_form(options: PublishOptions) -> Result<()> {
     let destination = RepoLocation::parse(&options.what)
         .with_context(|| format!("parse static repo destination {}", options.what))?;
-    ensure_m1a_publish_destination(&destination)?;
+    ensure_static_local_publish_destination(&destination)?;
     let repo_name = derive_repo_name(&options.what)?;
     let key_dir = resolve_key_dir(options.key_dir.as_deref(), &repo_name)?;
     let state_file = options
@@ -124,6 +129,7 @@ pub async fn cmd_publish(options: PublishOptions) -> Result<()> {
         accept_destination_state: options.accept_destination_state,
         rotate_publish_key: options.rotate_publish_key,
         rotate_root_key: options.rotate_root_key,
+        artifact_gate_context: None,
     })
     .with_context(|| format!("publish static repo {}", repo_name))?;
 
@@ -141,6 +147,51 @@ pub async fn cmd_publish(options: PublishOptions) -> Result<()> {
     if !outcome.preview_warning.is_empty() {
         println!("{}", outcome.preview_warning);
     }
+
+    Ok(())
+}
+
+async fn publish_artifact_form(options: PublishOptions, target: &str) -> Result<()> {
+    let artifact_path = PathBuf::from(&options.what);
+    let destination =
+        RepoLocation::parse(target).with_context(|| format!("parse publish target {target}"))?;
+    ensure_static_local_publish_destination(&destination)?;
+    let repo_name = derive_repo_name(target)?;
+    let key_dir = resolve_key_dir(options.key_dir.as_deref(), &repo_name)?;
+    let prepared =
+        prepare_artifact_form_static_context(&destination, &key_dir, options.force_reinit)
+            .with_context(|| format!("prepare static artifact publish context for {repo_name}"))?;
+    let report = verify_static_artifact_publish_eligibility(
+        &artifact_path,
+        &prepared.accepted_signers,
+        &prepared.publish_policy_digest,
+    )?;
+    if !report.is_passed() {
+        bail!("{}", format_publish_gate_failures(&report));
+    }
+    let state_file = options
+        .state_file
+        .as_deref()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| key_dir.join("last-published.toml"));
+    let outcome = publish_static_repo(StaticPublishOptions {
+        repo_name: repo_name.clone(),
+        repo_description: None,
+        destination,
+        key_dir,
+        state_file,
+        package_paths: vec![artifact_path],
+        refresh: options.refresh,
+        force_reinit: options.force_reinit,
+        accept_destination_state: options.accept_destination_state,
+        rotate_publish_key: options.rotate_publish_key,
+        rotate_root_key: options.rotate_root_key,
+        artifact_gate_context: Some(prepared.artifact_gate_context()),
+    })
+    .with_context(|| format!("publish attested artifact to static repo {repo_name}"))?;
+
+    println!("Published attested artifact to static repo: {repo_name}");
+    println!("Publish key ID: {}", outcome.publish_key_id);
 
     Ok(())
 }
@@ -204,9 +255,11 @@ fn print_divergence_summary(provenance: Option<&ManifestProvenance>) {
     }
 }
 
-fn ensure_m1a_publish_destination(destination: &RepoLocation) -> Result<()> {
+fn ensure_static_local_publish_destination(destination: &RepoLocation) -> Result<()> {
     if matches!(destination, RepoLocation::Http { .. }) {
-        bail!("M1a static publisher supports local filesystem destinations only");
+        bail!(
+            "static publisher supports local filesystem destinations; Remi HTTP(S) targets use the Remi release path"
+        );
     }
 
     Ok(())
@@ -262,24 +315,16 @@ mod tests {
         "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
     #[tokio::test]
-    async fn artifact_form_publish_is_rejected_in_m1a() {
-        let error = cmd_publish(PublishOptions {
-            what: "dist/pkg.ccs".to_string(),
-            target: Some("./repo".to_string()),
-            recipe: None,
-            key_dir: None,
-            state_file: None,
-            refresh: false,
-            force_reinit: false,
-            accept_destination_state: false,
-            rotate_publish_key: false,
-            rotate_root_key: false,
-            yes: false,
-        })
-        .await
-        .unwrap_err();
+    async fn artifact_form_publish_rejects_missing_attestation() {
+        let fixture = ArtifactPublishFixture::without_attestation();
 
-        assert_eq!(error.to_string(), ARTIFACT_FORM_REJECTION);
+        let error = cmd_publish(fixture.options()).await.unwrap_err();
+        let error = format!("{error:#}");
+
+        assert!(
+            error.contains("artifact is missing a build attestation"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -400,7 +445,7 @@ install = "mkdir -p %(destdir)s/usr/share/publish-local && printf hi > %(destdir
 
         assert_eq!(
             error.to_string(),
-            "M1a static publisher supports local filesystem destinations only"
+            "static publisher supports local filesystem destinations; Remi HTTP(S) targets use the Remi release path"
         );
         assert!(!key_dir.exists());
     }
@@ -488,6 +533,75 @@ sysroot_hash = "{TEST_HASH}"
                 what: self.repo_dir.display().to_string(),
                 target: None,
                 recipe: Some(self.recipe_path.display().to_string()),
+                key_dir: Some(self.key_dir.display().to_string()),
+                state_file: Some(self.state_file.display().to_string()),
+                refresh: false,
+                force_reinit: false,
+                accept_destination_state: false,
+                rotate_publish_key: false,
+                rotate_root_key: false,
+                yes: true,
+            }
+        }
+    }
+
+    struct ArtifactPublishFixture {
+        _temp: tempfile::TempDir,
+        package_path: PathBuf,
+        repo_dir: PathBuf,
+        key_dir: PathBuf,
+        state_file: PathBuf,
+    }
+
+    impl ArtifactPublishFixture {
+        fn without_attestation() -> Self {
+            let temp = tempfile::tempdir().unwrap();
+            let source_dir = temp.path().join("source");
+            let package_path = temp.path().join("dist/widget-1.0.0.ccs");
+            let key_dir = temp.path().join("keys");
+            std::fs::create_dir_all(source_dir.join("usr/share/widget")).unwrap();
+            std::fs::create_dir_all(package_path.parent().unwrap()).unwrap();
+            std::fs::write(source_dir.join("usr/share/widget/payload"), "hello\n").unwrap();
+            let manifest = conary_core::ccs::CcsManifest::parse(
+                r#"
+[package]
+name = "widget"
+version = "1.0.0"
+description = "fixture package"
+license = "MIT"
+
+[provenance]
+origin_class = "native-built"
+hardening_level = "hermetic"
+"#,
+            )
+            .unwrap();
+            let result = conary_core::ccs::CcsBuilder::new(manifest, &source_dir)
+                .build()
+                .unwrap();
+            let key = conary_core::ccs::SigningKeyPair::generate().with_key_id("publish");
+            key.save_to_files(
+                &key_dir.join("publish.private"),
+                &key_dir.join("publish.public"),
+            )
+            .unwrap();
+            conary_core::ccs::builder::write_signed_ccs_package(&result, &package_path, &key)
+                .unwrap();
+
+            Self {
+                repo_dir: temp.path().join("repo"),
+                state_file: temp.path().join("artifact-publish-state.toml"),
+                _temp: temp,
+                package_path,
+                key_dir,
+            }
+        }
+
+        fn options(&self) -> PublishOptions {
+            PublishOptions {
+                what: self.package_path.display().to_string(),
+                target: Some(self.repo_dir.display().to_string()),
+                recipe: None,
                 key_dir: Some(self.key_dir.display().to_string()),
                 state_file: Some(self.state_file.display().to_string()),
                 refresh: false,

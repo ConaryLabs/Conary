@@ -550,13 +550,12 @@ pub enum Commands {
         db: DbArgs,
     },
 
-    /// Publish a recipe project to an M1a static repository
+    /// Publish a recipe project or attested CCS artifact
     Publish {
-        /// Project-form destination for static repository publishing
+        /// Project-form destination, or artifact path when TARGET is present
         what: String,
 
-        /// Reserved for future artifact-form publishing
-        #[arg(hide = true)]
+        /// Artifact-form destination target
         target: Option<String>,
 
         /// Recipe file to publish
@@ -883,17 +882,18 @@ mod tests {
     }
 
     #[test]
-    fn help_omits_future_packaging_surfaces() {
+    fn publish_help_exposes_attested_artifact_form() {
         let cook = subcommand_help("cook");
         assert!(!cook.contains("--hermetic"));
         assert!(!cook.contains("foreign"));
 
         let publish = subcommand_help("publish");
-        assert!(!publish.contains("[TARGET]"));
-        assert!(!publish.contains("artifact-form"));
-        assert!(!publish.contains("artifact path"));
-        assert!(!publish.contains("attestation"));
-        assert!(!publish.contains("attest"));
+        assert!(publish.contains("[TARGET]"), "{publish}");
+        assert!(publish.contains("attested CCS artifact"), "{publish}");
+        assert!(
+            publish.contains("Artifact-form destination target"),
+            "{publish}"
+        );
 
         let try_help = subcommand_help("try");
         assert!(!try_help.contains("--watch"));
@@ -957,7 +957,7 @@ mod tests {
     }
 
     #[test]
-    fn publish_artifact_form_is_rejected_in_m1a() {
+    fn publish_artifact_form_parses() {
         let cli = Cli::try_parse_from(["conary", "publish", "dist/pkg.ccs", "./repo"]).unwrap();
         let Some(Commands::Publish {
             what,
