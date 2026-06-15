@@ -79,6 +79,29 @@ pub(crate) fn write_packaging_record_if_possible(output: &PackagingCommandOutput
     }
 }
 
+pub(crate) fn publish_gate_code_to_diagnostic_code(
+    code: conary_core::repository::static_repo::publish_gate::PublishGateFailureCode,
+) -> conary_core::diagnostics::PackagingDiagnosticCode {
+    match code {
+        conary_core::repository::static_repo::publish_gate::PublishGateFailureCode::MissingAttestation
+        | conary_core::repository::static_repo::publish_gate::PublishGateFailureCode::BuildAttestationSignatureMismatch
+        | conary_core::repository::static_repo::publish_gate::PublishGateFailureCode::PackageSignatureMismatch
+        | conary_core::repository::static_repo::publish_gate::PublishGateFailureCode::TomlIntegrityMismatch
+        | conary_core::repository::static_repo::publish_gate::PublishGateFailureCode::OutputIdentityMismatch
+        | conary_core::repository::static_repo::publish_gate::PublishGateFailureCode::UnacceptedSignerKey
+        | conary_core::repository::static_repo::publish_gate::PublishGateFailureCode::RetiredSignerKey
+        | conary_core::repository::static_repo::publish_gate::PublishGateFailureCode::AbsentOrUnknownProvenanceClass
+        | conary_core::repository::static_repo::publish_gate::PublishGateFailureCode::NonHermeticHardeningLevel
+        | conary_core::repository::static_repo::publish_gate::PublishGateFailureCode::StaleOrUnknownPolicy
+        | conary_core::repository::static_repo::publish_gate::PublishGateFailureCode::UncleanCommandRiskReport
+        | conary_core::repository::static_repo::publish_gate::PublishGateFailureCode::ForeignConversionMissingBoundary
+        | conary_core::repository::static_repo::publish_gate::PublishGateFailureCode::ForeignConversionBoundaryHashMismatch
+        | conary_core::repository::static_repo::publish_gate::PublishGateFailureCode::RecordedDraftArtifact => {
+            conary_core::diagnostics::PackagingDiagnosticCode::PublishGateFailed
+        }
+    }
+}
+
 pub(crate) fn redacted_packaging_output(output: &PackagingCommandOutput) -> PackagingCommandOutput {
     let mut output = output.clone();
     if let Some(summary) = &mut output.summary {
@@ -278,5 +301,34 @@ mod tests {
         assert!(!record_text.contains("record.secret"));
         assert!(!record_text.contains("user:pass"));
         assert!(record_text.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn every_publish_gate_failure_code_maps_to_packaging_diagnostic_code() {
+        use conary_core::repository::static_repo::publish_gate::PublishGateFailureCode;
+
+        let codes = [
+            PublishGateFailureCode::MissingAttestation,
+            PublishGateFailureCode::BuildAttestationSignatureMismatch,
+            PublishGateFailureCode::PackageSignatureMismatch,
+            PublishGateFailureCode::TomlIntegrityMismatch,
+            PublishGateFailureCode::OutputIdentityMismatch,
+            PublishGateFailureCode::UnacceptedSignerKey,
+            PublishGateFailureCode::RetiredSignerKey,
+            PublishGateFailureCode::AbsentOrUnknownProvenanceClass,
+            PublishGateFailureCode::NonHermeticHardeningLevel,
+            PublishGateFailureCode::StaleOrUnknownPolicy,
+            PublishGateFailureCode::UncleanCommandRiskReport,
+            PublishGateFailureCode::ForeignConversionMissingBoundary,
+            PublishGateFailureCode::ForeignConversionBoundaryHashMismatch,
+            PublishGateFailureCode::RecordedDraftArtifact,
+        ];
+
+        for code in codes {
+            assert_eq!(
+                publish_gate_code_to_diagnostic_code(code),
+                PackagingDiagnosticCode::PublishGateFailed
+            );
+        }
     }
 }

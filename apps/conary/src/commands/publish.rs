@@ -99,9 +99,14 @@ fn publish_gate_failure_output(
     operation_id: &str,
     report: &PublishLintReport,
 ) -> PackagingCommandOutput {
+    let code = report
+        .failures
+        .first()
+        .map(|failure| super::diagnostics::publish_gate_code_to_diagnostic_code(failure.code))
+        .unwrap_or(PackagingDiagnosticCode::PublishGateFailed);
     let mut diagnostic = PackagingDiagnostic::error(
         PackagingPhase::Publish,
-        PackagingDiagnosticCode::PublishGateFailed,
+        code,
         "Static artifact publish gate failed",
     );
     let report_value = serde_json::to_value(report)
