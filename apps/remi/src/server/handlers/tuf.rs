@@ -270,8 +270,16 @@ fn refresh_timestamp_for_distro_blocking(
     keys_dir: &StdPath,
     distro: &str,
 ) -> Result<TimestampRefreshResult> {
-    let timestamp_key = load_release_tuf_key(keys_dir, distro, "timestamp")?;
     let conn = open_handler_db(db_path)?;
+    refresh_timestamp_for_distro_in_conn(&conn, keys_dir, distro)
+}
+
+pub(crate) fn refresh_timestamp_for_distro_in_conn(
+    conn: &rusqlite::Connection,
+    keys_dir: &StdPath,
+    distro: &str,
+) -> Result<TimestampRefreshResult> {
+    let timestamp_key = load_release_tuf_key(keys_dir, distro, "timestamp")?;
     let repo_id: i64 = conn
         .query_row(
             "SELECT id FROM repositories WHERE name = ?1 AND tuf_enabled = 1",

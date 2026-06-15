@@ -18,9 +18,31 @@ pub use packages::*;
 pub use repos::*;
 pub use tokens::*;
 
-use axum::response::Response;
+use axum::{
+    extract::{Path, Request, State},
+    response::Response,
+};
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
+use crate::server::ServerState;
 use crate::server::auth::{Scope, TokenScopes, json_error};
+
+pub async fn upload_release_package(
+    State(state): State<Arc<RwLock<ServerState>>>,
+    Path(distro): Path<String>,
+    scopes: Option<axum::Extension<TokenScopes>>,
+    request: Request,
+) -> Response {
+    if let Some(err) = check_scope(&scopes, Scope::Admin) {
+        return err;
+    }
+    if let Some(err) = validate_path_param(&distro, "distro") {
+        return err;
+    }
+
+    crate::server::release_publish::handle_release_upload(state, distro, request).await
+}
 
 /// Validate a path parameter against a safe pattern.
 ///

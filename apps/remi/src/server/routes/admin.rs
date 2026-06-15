@@ -45,6 +45,10 @@ pub fn create_admin_router(state: Arc<RwLock<ServerState>>) -> Router {
             post(admin_handlers::upload_package),
         )
         .route(
+            "/v1/admin/releases/{distro}",
+            post(admin_handlers::upload_release_package),
+        )
+        .route(
             "/v1/admin/packages/{distro}/{package}/scriptlet-review",
             get(admin_handlers::get_scriptlet_review_artifact),
         )
@@ -74,6 +78,10 @@ pub fn create_external_admin_router(
         .route(
             "/v1/admin/packages/{distro}",
             post(admin_handlers::upload_package),
+        )
+        .route(
+            "/v1/admin/releases/{distro}",
+            post(admin_handlers::upload_release_package),
         )
         .route(
             "/v1/admin/packages/{distro}/{package}/scriptlet-review",

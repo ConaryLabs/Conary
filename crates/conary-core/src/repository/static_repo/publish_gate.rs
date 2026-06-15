@@ -26,6 +26,12 @@ pub struct AcceptedStaticSignerSet {
     active_keys: BTreeMap<String, String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrustedArtifactSigner {
+    pub key_id: String,
+    pub public_key: String,
+}
+
 impl AcceptedStaticSignerSet {
     pub fn from_verified_package_keys(keys: &PackageKeysFile) -> Result<Self> {
         let mut active_keys = BTreeMap::new();
@@ -54,6 +60,24 @@ impl AcceptedStaticSignerSet {
         Self {
             active_keys: BTreeMap::from([(key_id.into(), public_key.into())]),
         }
+    }
+
+    pub fn from_trusted_artifact_signers(signers: &[TrustedArtifactSigner]) -> Result<Self> {
+        if signers.is_empty() {
+            bail!("no trusted release signers configured");
+        }
+        let mut active_keys = BTreeMap::new();
+        let mut public_keys = BTreeSet::new();
+        for signer in signers {
+            if active_keys.contains_key(&signer.key_id) {
+                bail!("duplicate trusted release signer id {}", signer.key_id);
+            }
+            if !public_keys.insert(signer.public_key.clone()) {
+                bail!("duplicate trusted release signer public key");
+            }
+            active_keys.insert(signer.key_id.clone(), signer.public_key.clone());
+        }
+        Ok(Self { active_keys })
     }
 
     pub fn accepts_key_id(&self, key_id: &str) -> bool {

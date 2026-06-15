@@ -119,6 +119,28 @@ pub async fn openapi_spec() -> Response {
                     "responses": { "200": { "description": "Package uploaded" }, "401": { "description": "Invalid or missing token" }, "403": { "description": "Insufficient scope" } }
                 }
             },
+            "/v1/admin/releases/{distro}": {
+                "post": {
+                    "operationId": "uploadReleasePackage",
+                    "summary": "Upload an attested release package",
+                    "description": "Uploads a CCS release package after verifying the static publish gate with configured trusted build-attestation signers. Public package metadata, CAS chunk visibility, and TUF targets are committed only after the gate passes.",
+                    "tags": ["packages"],
+                    "security": [{ "bearerAuth": [] }],
+                    "parameters": [{ "name": "distro", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Distribution key for the release package" }],
+                    "requestBody": {
+                        "required": true,
+                        "content": { "application/octet-stream": { "schema": { "type": "string", "format": "binary" } } }
+                    },
+                    "responses": {
+                        "201": { "description": "Release package accepted and published" },
+                        "400": { "description": "Invalid upload body or CCS package" },
+                        "401": { "description": "Invalid or missing token" },
+                        "403": { "description": "Insufficient scope" },
+                        "413": { "description": "Upload exceeds maximum size" },
+                        "422": { "description": "Publish gate failed, including missing trusted release signers or rejected attestation signer" }
+                    }
+                }
+            },
             "/v1/admin/packages/{distro}/{package}/scriptlet-review": {
                 "get": {
                     "operationId": "getScriptletReviewArtifact",
@@ -579,6 +601,7 @@ mod tests {
             ("/v1/admin/test-fixtures/{path}", &["put"][..]),
             ("/v1/admin/test-artifacts/{path}", &["put"][..]),
             ("/v1/admin/packages/{distro}", &["post"][..]),
+            ("/v1/admin/releases/{distro}", &["post"][..]),
             (
                 "/v1/admin/packages/{distro}/{package}/scriptlet-review",
                 &["get"][..],
@@ -615,5 +638,28 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[tokio::test]
+    async fn openapi_spec_documents_release_upload_gate_failure() {
+        let resp = openapi_spec().await;
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let spec: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let release_post = &spec["paths"]["/v1/admin/releases/{distro}"]["post"];
+
+        assert_eq!(
+            release_post["operationId"],
+            serde_json::Value::String("uploadReleasePackage".to_string())
+        );
+        assert!(
+            release_post["responses"]["422"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("trusted release signers")
+        );
     }
 }
