@@ -16,6 +16,7 @@ mod config;
 mod convert_pkgbuild;
 mod cook;
 mod db_backup;
+mod diagnostics;
 mod derivation;
 mod derivation_sbom;
 mod derived;
