@@ -325,6 +325,7 @@ impl Kitchen {
         plan.apply_to_kitchen_config(&mut build_config);
         build_config.auto_makedepends = self.config.auto_makedepends;
         build_config.cleanup_makedepends = self.config.cleanup_makedepends;
+        assert_hermetic_build_execution_boundary(&build_config)?;
         let kitchen = self.with_config_preserving_resolver(build_config);
         kitchen.cook(recipe, output_dir)
     }
@@ -672,6 +673,23 @@ impl Kitchen {
 
         Ok(canonical_source)
     }
+}
+
+fn assert_hermetic_build_execution_boundary(config: &KitchenConfig) -> Result<()> {
+    if config.hermetic_evidence.is_none() {
+        return Ok(());
+    }
+    if config.allow_network {
+        return Err(Error::ConfigError(
+            "hermetic build execution requires allow_network=false".to_string(),
+        ));
+    }
+    if config.source_download_policy != SourceDownloadPolicy::OfflineCacheOnly {
+        return Err(Error::ConfigError(
+            "hermetic build execution requires source_download_policy=OfflineCacheOnly".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1278,6 +1296,28 @@ mod tests {
             !error.contains("recipe_source_base_dir"),
             "prefetch should not use the caller's missing KitchenConfig.recipe_source_base_dir: {error}"
         );
+    }
+
+    #[test]
+    fn hermetic_build_execution_boundary_requires_offline_network_policy() {
+        let mut config = KitchenConfig {
+            hermetic_evidence: Some(
+                crate::ccs::attestation::test_support::sample_hermetic_evidence_for_tests(),
+            ),
+            allow_network: true,
+            source_download_policy: SourceDownloadPolicy::AllowDownloads,
+            ..KitchenConfig::default()
+        };
+
+        let error = assert_hermetic_build_execution_boundary(&config).unwrap_err();
+        assert!(error.to_string().contains("allow_network=false"));
+
+        config.allow_network = false;
+        let error = assert_hermetic_build_execution_boundary(&config).unwrap_err();
+        assert!(error.to_string().contains("OfflineCacheOnly"));
+
+        config.source_download_policy = SourceDownloadPolicy::OfflineCacheOnly;
+        assert_hermetic_build_execution_boundary(&config).unwrap();
     }
 
     #[test]
