@@ -2,8 +2,10 @@
 
 pub mod format;
 pub mod location;
+pub mod package_staging;
 pub mod paths;
 pub mod publish;
+pub mod publish_context;
 pub mod publish_gate;
 pub(crate) mod sync;
 

@@ -1,6 +1,5 @@
 // conary-core/src/repository/static_repo/publish.rs
 
-use std::collections::BTreeSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
@@ -10,25 +9,25 @@ use anyhow::{Context, Result, anyhow, bail};
 use chrono::{Duration, Utc};
 use fs2::FileExt;
 
-use crate::ccs::builder::{BuildResult, write_signed_ccs_package};
-use crate::ccs::package::CcsPackage;
 use crate::ccs::signing::SigningKeyPair;
 use crate::hash;
-use crate::packages::traits::PackageFormat;
+use crate::repository::static_repo::package_staging::{
+    PendingPackageWrites, collect_package_entries, stage_packages,
+};
+use crate::repository::static_repo::publish_context::{
+    DestinationState, PendingKeyPromotions, PendingKeyRecovery, PreparedStaticPublishContext,
+    StaticPublishForm, StaticPublishPrepareOptions, build_package_keys_file,
+    create_private_dir_all, ensure_key_pair, read_destination_state, read_optional,
+    recover_pending_key_promotions, verify_destination_matches_operator_keys,
+};
 use crate::repository::static_repo::{
-    PackageKeyEntry, PackageKeyStatus, PackageKeysFile, RepoIdentity, RepoIdentityRepo,
-    RepoIdentityTrust, RepoLocation, StaticIndex, StaticPackageEntry, validate_repo_relative_path,
+    PackageKeysFile, RepoIdentity, RepoIdentityRepo, RepoIdentityTrust, RepoLocation, StaticIndex,
+    StaticPackageEntry, validate_repo_relative_path,
 };
 use crate::trust::ceremony::{create_initial_root, rotate_key, rotate_publish_key};
 use crate::trust::generate::{generate_snapshot, generate_targets, generate_timestamp};
 use crate::trust::keys::{sign_tuf_metadata, signing_keypair_to_tuf_key};
-use crate::trust::metadata::{
-    Role, RootMetadata, Signed, SnapshotMetadata, TargetDescription, TargetsMetadata,
-    TimestampMetadata,
-};
-use crate::trust::verify::{
-    extract_role_keys, verify_metadata_hash, verify_signatures, verify_static_snapshot_consistency,
-};
+use crate::trust::metadata::{RootMetadata, Signed, TargetsMetadata};
 
 const ROOT_EXPIRES_DAYS: i64 = 365;
 const TARGETS_EXPIRES_DAYS: i64 = 90;
@@ -103,23 +102,38 @@ fn publish_static_repo_inner(
     options: StaticPublishOptions,
     forced_refresh: ForcedRefresh,
 ) -> Result<StaticPublishOutcome> {
-    let RepoLocation::File { root: repo_root } = &options.destination else {
+    let context = StaticPublishPrepareOptions {
+        destination: options.destination.clone(),
+        key_dir: Some(options.key_dir.clone()),
+        publish_form: StaticPublishForm::Project,
+        force_reinit: options.force_reinit,
+    }
+    .prepare()?;
+    commit_static_publish(options, context, forced_refresh)
+}
+
+fn commit_static_publish(
+    options: StaticPublishOptions,
+    context: PreparedStaticPublishContext,
+    forced_refresh: ForcedRefresh,
+) -> Result<StaticPublishOutcome> {
+    let PreparedStaticPublishContext {
+        destination,
+        key_dir,
+        active_publish_key,
+        ..
+    } = context;
+    let RepoLocation::File { root: repo_root } = &destination else {
         bail!("M1a static publisher supports local filesystem destinations only");
     };
 
     validate_repo_name_for_identity(&options.repo_name)?;
-    create_private_dir_all(&options.key_dir).with_context(|| {
-        format!(
-            "create static repo key directory {}",
-            options.key_dir.display()
-        )
-    })?;
     fs::create_dir_all(repo_root)
         .with_context(|| format!("create static repo destination {}", repo_root.display()))?;
 
     let _publish_lock = PublishLock::acquire(repo_root)?;
-    let mut root_key = ensure_key_pair(&options.key_dir, "root")?;
-    let mut publish_key = ensure_key_pair(&options.key_dir, "publish")?;
+    let mut root_key = ensure_key_pair(&key_dir, "root")?;
+    let mut publish_key = active_publish_key;
     let mut pending_key_promotions = PendingKeyPromotions::default();
     let destination = read_destination_state(repo_root, options.force_reinit)?;
     check_watermark(&destination, &options)?;
@@ -144,7 +158,7 @@ fn publish_static_repo_inner(
     if !destination.initial {
         recovered_pending_keys = recover_pending_key_promotions(
             &root_metadata,
-            &options.key_dir,
+            &key_dir,
             &mut root_key,
             &mut publish_key,
             &mut pending_key_promotions,
@@ -158,7 +172,7 @@ fn publish_static_repo_inner(
     let should_rotate_root_key = options.rotate_root_key && !recovered_pending_keys.root;
     if should_rotate_publish_key {
         old_publish_public_key = Some(publish_key.public_key_base64());
-        let new_publish_key = pending_key_promotions.stage_or_load(&options.key_dir, "publish")?;
+        let new_publish_key = pending_key_promotions.stage_or_load(&key_dir, "publish")?;
         root_metadata = rotate_publish_key(
             &root_metadata,
             &publish_key,
@@ -171,7 +185,7 @@ fn publish_static_repo_inner(
         root_changed = true;
     }
     if should_rotate_root_key {
-        let new_root_key = pending_key_promotions.stage_or_load(&options.key_dir, "root")?;
+        let new_root_key = pending_key_promotions.stage_or_load(&key_dir, "root")?;
         root_metadata = rotate_key(
             &root_metadata,
             "root",
@@ -374,7 +388,7 @@ fn publish_static_repo_inner(
             options.force_reinit,
         )?;
     }
-    pending_key_promotions.promote(&options.key_dir)?;
+    pending_key_promotions.promote(&key_dir)?;
     pending_package_writes.promote()?;
     ensure_timestamp_unchanged(repo_root, &destination)?;
     conditional_write(
@@ -416,22 +430,6 @@ fn publish_static_repo_inner(
         package_count: index.packages.len(),
         preview_warning: warning,
     })
-}
-
-#[derive(Default)]
-struct DestinationState {
-    initial: bool,
-    root: Option<Signed<RootMetadata>>,
-    targets: Option<Signed<TargetsMetadata>>,
-    snapshot: Option<Signed<SnapshotMetadata>>,
-    timestamp: Option<Signed<TimestampMetadata>>,
-    root_bytes: Option<Vec<u8>>,
-    targets_bytes: Option<Vec<u8>>,
-    snapshot_bytes: Option<Vec<u8>>,
-    timestamp_bytes: Option<Vec<u8>>,
-    identity_bytes: Option<Vec<u8>>,
-    index_bytes: Option<Vec<u8>>,
-    package_keys_bytes: Option<Vec<u8>>,
 }
 
 #[derive(Debug)]
@@ -476,428 +474,12 @@ fn try_acquire_publish_lock_for_test(repo_root: &Path) -> Result<PublishLock> {
     PublishLock::try_acquire(repo_root)
 }
 
-#[derive(Default)]
-struct PendingKeyRecovery {
-    root: bool,
-    publish: bool,
-}
-
-#[derive(Default)]
-struct PendingKeyPromotions {
-    entries: Vec<PendingKeyPromotion>,
-}
-
-struct PendingKeyPromotion {
-    role: String,
-    pending_role: String,
-}
-
-impl PendingKeyPromotions {
-    fn stage_or_load(&mut self, key_dir: &Path, role: &str) -> Result<SigningKeyPair> {
-        let pending_role = format!("{role}.pending");
-        let key = ensure_pending_key_pair(key_dir, role, &pending_role)?;
-        self.track(role);
-        Ok(key)
-    }
-
-    fn track(&mut self, role: &str) {
-        if !self.entries.iter().any(|entry| entry.role == role) {
-            self.entries.push(PendingKeyPromotion {
-                role: role.to_string(),
-                pending_role: format!("{role}.pending"),
-            });
-        }
-    }
-
-    fn promote(&self, key_dir: &Path) -> Result<()> {
-        for entry in &self.entries {
-            promote_pending_key(key_dir, entry)
-                .with_context(|| format!("promote pending {} key", entry.role))?;
-        }
-        Ok(())
-    }
-}
-
-fn recover_pending_key_promotions(
-    root: &Signed<RootMetadata>,
-    key_dir: &Path,
-    root_key: &mut SigningKeyPair,
-    publish_key: &mut SigningKeyPair,
-    pending_key_promotions: &mut PendingKeyPromotions,
-) -> Result<PendingKeyRecovery> {
-    let mut recovered = PendingKeyRecovery::default();
-
-    if !role_contains_key(root, "root", root_key)?
-        && let Some(pending_root_key) = load_pending_key_pair(key_dir, "root")?
-        && role_contains_key(root, "root", &pending_root_key)?
-    {
-        *root_key = pending_root_key;
-        pending_key_promotions.track("root");
-        recovered.root = true;
-    }
-
-    if !publish_roles_contain_key(root, publish_key)?
-        && let Some(pending_publish_key) = load_pending_key_pair(key_dir, "publish")?
-        && publish_roles_contain_key(root, &pending_publish_key)?
-    {
-        *publish_key = pending_publish_key;
-        pending_key_promotions.track("publish");
-        recovered.publish = true;
-    }
-
-    Ok(recovered)
-}
-
-fn role_contains_key(
-    root: &Signed<RootMetadata>,
-    role_name: &str,
-    key: &SigningKeyPair,
-) -> Result<bool> {
-    let (key_id, _) = signing_keypair_to_tuf_key(key).map_err(anyhow::Error::from)?;
-    let role = root
-        .signed
-        .roles
-        .get(role_name)
-        .with_context(|| format!("destination root metadata missing {role_name} role"))?;
-    Ok(role.keyids.contains(&key_id))
-}
-
-fn publish_roles_contain_key(root: &Signed<RootMetadata>, key: &SigningKeyPair) -> Result<bool> {
-    for role_name in ["targets", "snapshot", "timestamp"] {
-        if !role_contains_key(root, role_name, key)? {
-            return Ok(false);
-        }
-    }
-    Ok(true)
-}
-
-fn load_pending_key_pair(key_dir: &Path, role: &str) -> Result<Option<SigningKeyPair>> {
-    let pending_role = format!("{role}.pending");
-    let pending_private = key_dir.join(format!("{pending_role}.private"));
-    if !pending_private.exists() {
-        return Ok(None);
-    }
-
-    let key = SigningKeyPair::load_from_file(&pending_private)
-        .map_err(anyhow::Error::from)
-        .with_context(|| format!("load pending {role} key {}", pending_private.display()))?;
-    save_key_pair(&key, key_dir, &pending_role)
-        .with_context(|| format!("refresh pending {role} key files"))?;
-    Ok(Some(key))
-}
-
-fn ensure_pending_key_pair(
-    key_dir: &Path,
-    role: &str,
-    pending_role: &str,
-) -> Result<SigningKeyPair> {
-    let pending_private = key_dir.join(format!("{pending_role}.private"));
-    if pending_private.exists() {
-        let key = SigningKeyPair::load_from_file(&pending_private)
-            .map_err(anyhow::Error::from)
-            .with_context(|| format!("load pending {role} key {}", pending_private.display()))?;
-        save_key_pair(&key, key_dir, pending_role)
-            .with_context(|| format!("refresh pending {role} key files"))?;
-        return Ok(key);
-    }
-
-    let key = SigningKeyPair::generate().with_key_id(role);
-    save_key_pair(&key, key_dir, pending_role)
-        .with_context(|| format!("stage pending {role} key promotion"))?;
-    Ok(key)
-}
-
-fn promote_pending_key(key_dir: &Path, entry: &PendingKeyPromotion) -> Result<()> {
-    let pending_private = key_dir.join(format!("{}.private", entry.pending_role));
-    let pending_public = key_dir.join(format!("{}.public", entry.pending_role));
-    let active_private = key_dir.join(format!("{}.private", entry.role));
-    let active_public = key_dir.join(format!("{}.public", entry.role));
-
-    fs::rename(&pending_private, &active_private).with_context(|| {
-        format!(
-            "replace active {} private key {} with {}",
-            entry.role,
-            active_private.display(),
-            pending_private.display()
-        )
-    })?;
-    fs::rename(&pending_public, &active_public).with_context(|| {
-        format!(
-            "replace active {} public key {} with {}",
-            entry.role,
-            active_public.display(),
-            pending_public.display()
-        )
-    })
-}
-
 #[derive(serde::Deserialize, serde::Serialize)]
 struct PublishWatermark {
     root_version: u64,
     targets_version: u64,
     snapshot_version: u64,
     timestamp_version: u64,
-}
-
-fn read_destination_state(repo_root: &Path, force_reinit: bool) -> Result<DestinationState> {
-    let root_bytes = read_optional(repo_root, "metadata/root.json")?;
-    let targets_bytes = read_optional(repo_root, "metadata/targets.json")?;
-    let snapshot_bytes = read_optional(repo_root, "metadata/snapshot.json")?;
-    let timestamp_bytes = read_optional(repo_root, "metadata/timestamp.json")?;
-
-    let all_absent = root_bytes.is_none()
-        && targets_bytes.is_none()
-        && snapshot_bytes.is_none()
-        && timestamp_bytes.is_none();
-    if all_absent || force_reinit {
-        return Ok(DestinationState {
-            initial: true,
-            root_bytes,
-            targets_bytes,
-            snapshot_bytes,
-            timestamp_bytes,
-            identity_bytes: read_optional(repo_root, "conary-repo.toml")?,
-            index_bytes: read_optional(repo_root, "index.json")?,
-            package_keys_bytes: read_optional(repo_root, "keys/package-keys.json")?,
-            ..DestinationState::default()
-        });
-    }
-
-    if root_bytes.is_none()
-        || targets_bytes.is_none()
-        || snapshot_bytes.is_none()
-        || timestamp_bytes.is_none()
-    {
-        bail!(
-            "static repo destination is damaged or partially initialized; rerun with force_reinit to start a fresh identity"
-        );
-    }
-
-    let root: Signed<RootMetadata> = serde_json::from_slice(root_bytes.as_ref().expect("checked"))
-        .context("parse destination metadata/root.json")?;
-    let targets: Signed<TargetsMetadata> =
-        serde_json::from_slice(targets_bytes.as_ref().expect("checked"))
-            .context("parse destination metadata/targets.json")?;
-    let snapshot: Signed<SnapshotMetadata> =
-        serde_json::from_slice(snapshot_bytes.as_ref().expect("checked"))
-            .context("parse destination metadata/snapshot.json")?;
-    let timestamp: Signed<TimestampMetadata> =
-        serde_json::from_slice(timestamp_bytes.as_ref().expect("checked"))
-            .context("parse destination metadata/timestamp.json")?;
-    verify_destination_metadata(
-        &root,
-        &targets,
-        &snapshot,
-        &timestamp,
-        targets_bytes.as_ref().expect("checked"),
-        snapshot_bytes.as_ref().expect("checked"),
-    )?;
-    let identity_bytes = read_optional(repo_root, "conary-repo.toml")?;
-    let index_bytes = read_optional(repo_root, "index.json")?;
-    let package_keys_bytes = read_optional(repo_root, "keys/package-keys.json")?;
-    verify_destination_target_payloads(
-        repo_root,
-        &targets.signed,
-        index_bytes.as_deref(),
-        package_keys_bytes.as_deref(),
-    )?;
-
-    Ok(DestinationState {
-        initial: false,
-        root: Some(root),
-        targets: Some(targets),
-        snapshot: Some(snapshot),
-        timestamp: Some(timestamp),
-        root_bytes,
-        targets_bytes,
-        snapshot_bytes,
-        timestamp_bytes,
-        identity_bytes,
-        index_bytes,
-        package_keys_bytes,
-    })
-}
-
-fn verify_destination_metadata(
-    root: &Signed<RootMetadata>,
-    targets: &Signed<TargetsMetadata>,
-    snapshot: &Signed<SnapshotMetadata>,
-    timestamp: &Signed<TimestampMetadata>,
-    targets_bytes: &[u8],
-    snapshot_bytes: &[u8],
-) -> Result<()> {
-    let (root_keys, root_threshold) =
-        extract_role_keys(&root.signed, Role::Root).map_err(anyhow::Error::from)?;
-    verify_signatures(root, Role::Root, &root_keys, root_threshold).map_err(anyhow::Error::from)?;
-
-    let (targets_keys, targets_threshold) =
-        extract_role_keys(&root.signed, Role::Targets).map_err(anyhow::Error::from)?;
-    verify_signatures(targets, Role::Targets, &targets_keys, targets_threshold)
-        .map_err(anyhow::Error::from)?;
-
-    let (snapshot_keys, snapshot_threshold) =
-        extract_role_keys(&root.signed, Role::Snapshot).map_err(anyhow::Error::from)?;
-    verify_signatures(snapshot, Role::Snapshot, &snapshot_keys, snapshot_threshold)
-        .map_err(anyhow::Error::from)?;
-
-    let (timestamp_keys, timestamp_threshold) =
-        extract_role_keys(&root.signed, Role::Timestamp).map_err(anyhow::Error::from)?;
-    verify_signatures(
-        timestamp,
-        Role::Timestamp,
-        &timestamp_keys,
-        timestamp_threshold,
-    )
-    .map_err(anyhow::Error::from)?;
-
-    verify_static_snapshot_consistency(
-        &snapshot.signed,
-        root.signed.version,
-        targets.signed.version,
-    )
-    .map_err(anyhow::Error::from)?;
-    let targets_ref = snapshot
-        .signed
-        .meta
-        .get("targets.json")
-        .context("snapshot metadata missing targets.json")?;
-    verify_metadata_hash(targets_ref, targets_bytes, true).map_err(anyhow::Error::from)?;
-    verify_timestamp_pins_current_snapshot(timestamp, snapshot, snapshot_bytes)?;
-
-    Ok(())
-}
-
-fn verify_timestamp_pins_current_snapshot(
-    timestamp: &Signed<TimestampMetadata>,
-    snapshot: &Signed<SnapshotMetadata>,
-    snapshot_bytes: &[u8],
-) -> Result<()> {
-    let snapshot_ref = timestamp
-        .signed
-        .meta
-        .get("snapshot.json")
-        .context("timestamp metadata missing snapshot.json")?;
-    if snapshot_ref.version != snapshot.signed.version {
-        bail!(
-            "timestamp pins snapshot.json v{} but current snapshot is v{}",
-            snapshot_ref.version,
-            snapshot.signed.version
-        );
-    }
-    let length = snapshot_ref
-        .length
-        .context("timestamp snapshot.json reference missing length")?;
-    if length != snapshot_bytes.len() as u64 {
-        bail!(
-            "timestamp pins snapshot.json length {} but current snapshot length is {}",
-            length,
-            snapshot_bytes.len()
-        );
-    }
-    verify_metadata_hash(snapshot_ref, snapshot_bytes, true).map_err(anyhow::Error::from)?;
-
-    Ok(())
-}
-
-fn verify_destination_target_payloads(
-    repo_root: &Path,
-    targets: &TargetsMetadata,
-    index_bytes: Option<&[u8]>,
-    package_keys_bytes: Option<&[u8]>,
-) -> Result<()> {
-    for (relative, target) in &targets.targets {
-        validate_repo_relative_path(relative)
-            .with_context(|| format!("destination target path {relative} is invalid"))?;
-        match relative.as_str() {
-            "index.json" => {
-                let bytes = index_bytes.context("destination target index.json is missing")?;
-                verify_target_payload(relative, target, bytes)?;
-            }
-            "keys/package-keys.json" => {
-                let bytes = package_keys_bytes
-                    .context("destination target keys/package-keys.json is missing")?;
-                verify_target_payload(relative, target, bytes)?;
-            }
-            _ => {
-                let bytes = fs::read(repo_root.join(relative))
-                    .with_context(|| format!("read destination target {relative}"))?;
-                verify_target_payload(relative, target, &bytes)?;
-            }
-        }
-    }
-
-    Ok(())
-}
-
-fn verify_target_payload(
-    relative: &str,
-    target: &TargetDescription,
-    actual_bytes: &[u8],
-) -> Result<()> {
-    if target.length != actual_bytes.len() as u64 {
-        bail!(
-            "destination target {relative} length mismatch: targets pins {}, actual {}",
-            target.length,
-            actual_bytes.len()
-        );
-    }
-    let expected_sha256 = target
-        .hashes
-        .get("sha256")
-        .with_context(|| format!("destination target {relative} missing sha256 hash"))?;
-    let actual_sha256 = hash::sha256(actual_bytes);
-    if expected_sha256 != &actual_sha256 {
-        bail!(
-            "destination target {relative} sha256 mismatch: expected {expected_sha256}, got {actual_sha256}"
-        );
-    }
-
-    Ok(())
-}
-
-fn verify_destination_matches_operator_keys(
-    root: &Signed<RootMetadata>,
-    root_key: &SigningKeyPair,
-    publish_key: &SigningKeyPair,
-) -> Result<()> {
-    let (root_key_id, _) = signing_keypair_to_tuf_key(root_key).map_err(anyhow::Error::from)?;
-    let root_role = root
-        .signed
-        .roles
-        .get("root")
-        .context("destination root metadata missing root role")?;
-    if !root_role.keyids.contains(&root_key_id) {
-        bail!(
-            "destination root role does not match local root key; use force_reinit only for a fresh repo identity"
-        );
-    }
-
-    let (publish_key_id, _) =
-        signing_keypair_to_tuf_key(publish_key).map_err(anyhow::Error::from)?;
-    for role in ["targets", "snapshot", "timestamp"] {
-        let role_def = root
-            .signed
-            .roles
-            .get(role)
-            .with_context(|| format!("destination root metadata missing {role} role"))?;
-        if !role_def.keyids.contains(&publish_key_id) {
-            bail!(
-                "destination {role} role does not match local publish key; use force_reinit only for a fresh repo identity"
-            );
-        }
-    }
-
-    Ok(())
-}
-
-fn read_optional(root: &Path, relative: &str) -> Result<Option<Vec<u8>>> {
-    validate_repo_relative_path(relative)?;
-    let path = root.join(relative);
-    match fs::read(&path) {
-        Ok(bytes) => Ok(Some(bytes)),
-        Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error).with_context(|| format!("read {}", path.display())),
-    }
 }
 
 fn check_watermark(destination: &DestinationState, options: &StaticPublishOptions) -> Result<()> {
@@ -967,28 +549,6 @@ fn write_watermark(path: &Path, watermark: &PublishWatermark) -> Result<()> {
     write_file_atomic(path, &bytes)
 }
 
-fn ensure_key_pair(key_dir: &Path, role: &str) -> Result<SigningKeyPair> {
-    let private_path = key_dir.join(format!("{role}.private"));
-    if private_path.exists() {
-        return SigningKeyPair::load_from_file(&private_path)
-            .map_err(anyhow::Error::from)
-            .with_context(|| format!("load {role} key {}", private_path.display()));
-    }
-
-    let key = SigningKeyPair::generate().with_key_id(role);
-    save_key_pair(&key, key_dir, role)?;
-    Ok(key)
-}
-
-fn save_key_pair(key: &SigningKeyPair, key_dir: &Path, role: &str) -> Result<()> {
-    key.save_to_files(
-        &key_dir.join(format!("{role}.private")),
-        &key_dir.join(format!("{role}.public")),
-    )
-    .map_err(anyhow::Error::from)
-    .with_context(|| format!("save {role} key in {}", key_dir.display()))
-}
-
 fn should_refresh_root(
     options: &StaticPublishOptions,
     destination: &DestinationState,
@@ -1050,325 +610,6 @@ fn refresh_root(
         signed: root,
         signatures: vec![sig],
     })
-}
-
-#[derive(Default)]
-struct PendingPackageWrites {
-    writes: Vec<PendingPackageWrite>,
-    committed: bool,
-}
-
-struct PendingPackageWrite {
-    entry: StaticPackageEntry,
-    pending_path: PathBuf,
-    final_path: PathBuf,
-    promoted: bool,
-}
-
-impl PendingPackageWrites {
-    fn package_entries(&self) -> Vec<&StaticPackageEntry> {
-        self.writes.iter().map(|write| &write.entry).collect()
-    }
-
-    fn target_entry(&self, relative: &str) -> Option<(u64, String)> {
-        self.writes
-            .iter()
-            .find(|write| write.entry.path == relative)
-            .map(|write| (write.entry.size, write.entry.sha256.clone()))
-    }
-
-    fn promote(&mut self) -> Result<()> {
-        for write in &mut self.writes {
-            if write.final_path.exists() {
-                let existing = fs::read(&write.final_path)
-                    .with_context(|| format!("read {}", write.final_path.display()))?;
-                let pending = fs::read(&write.pending_path)
-                    .with_context(|| format!("read {}", write.pending_path.display()))?;
-                if existing == pending {
-                    fs::remove_file(&write.pending_path)
-                        .with_context(|| format!("remove {}", write.pending_path.display()))?;
-                    continue;
-                }
-                bail!(
-                    "immutable package artifact {} appeared during publish with different bytes",
-                    write.entry.path
-                );
-            }
-            if let Some(parent) = write.final_path.parent() {
-                fs::create_dir_all(parent)
-                    .with_context(|| format!("create package directory {}", parent.display()))?;
-            }
-            fs::rename(&write.pending_path, &write.final_path).with_context(|| {
-                format!(
-                    "promote package {} to {}",
-                    write.pending_path.display(),
-                    write.final_path.display()
-                )
-            })?;
-            write.promoted = true;
-        }
-        Ok(())
-    }
-
-    fn commit(&mut self) {
-        self.committed = true;
-    }
-}
-
-impl Drop for PendingPackageWrites {
-    fn drop(&mut self) {
-        if self.committed {
-            return;
-        }
-        for write in &self.writes {
-            let _ = fs::remove_file(&write.pending_path);
-            if write.promoted {
-                let _ = fs::remove_file(&write.final_path);
-            }
-        }
-    }
-}
-
-fn stage_packages(
-    repo_root: &Path,
-    package_paths: &[PathBuf],
-    publish_key: &SigningKeyPair,
-) -> Result<PendingPackageWrites> {
-    let mut pending = PendingPackageWrites::default();
-    for package_path in package_paths {
-        let package = CcsPackage::parse(package_path.to_str().ok_or_else(|| {
-            anyhow!(
-                "package path is not valid UTF-8: {}",
-                package_path.display()
-            )
-        })?)
-        .map_err(anyhow::Error::from)
-        .with_context(|| format!("parse CCS package {}", package_path.display()))?;
-        let signed_bytes = sign_package_bytes(&package, publish_key)
-            .with_context(|| format!("sign CCS package {}", package_path.display()))?;
-        let relative = package_relative_path(&package);
-        let destination = repo_root.join(&relative);
-        if let Some(existing) = read_optional(repo_root, &relative)? {
-            if existing != signed_bytes {
-                bail!("immutable package artifact {relative} already exists with different bytes");
-            }
-            continue;
-        }
-        let pending_path = write_pending_package(&destination, &signed_bytes)?;
-        pending.writes.push(PendingPackageWrite {
-            entry: package_entry_from_package(&relative, &package, &signed_bytes)?,
-            pending_path,
-            final_path: destination,
-            promoted: false,
-        });
-    }
-
-    Ok(pending)
-}
-
-fn write_pending_package(final_path: &Path, bytes: &[u8]) -> Result<PathBuf> {
-    if let Some(parent) = final_path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("create package directory {}", parent.display()))?;
-    }
-    let (pending_path, mut file) = create_atomic_temp_file(final_path)?;
-    if let Err(error) = write_atomic_temp_file(&pending_path, &mut file, bytes) {
-        drop(file);
-        let _ = fs::remove_file(&pending_path);
-        return Err(error);
-    }
-    drop(file);
-    Ok(pending_path)
-}
-
-fn sign_package_bytes(package: &CcsPackage, publish_key: &SigningKeyPair) -> Result<Vec<u8>> {
-    let build_result = BuildResult {
-        manifest: package.manifest().clone(),
-        components: package.components().clone(),
-        files: package.file_entries().to_vec(),
-        blobs: package.extract_all_content().map_err(anyhow::Error::from)?,
-        total_size: package.file_entries().iter().map(|entry| entry.size).sum(),
-        chunked: package
-            .file_entries()
-            .iter()
-            .any(|entry| entry.chunks.is_some()),
-        chunk_stats: None,
-    };
-    let signed_package = tempfile::NamedTempFile::new()?;
-    write_signed_ccs_package(&build_result, signed_package.path(), publish_key)?;
-    fs::read(signed_package.path())
-        .with_context(|| format!("read signed package {}", signed_package.path().display()))
-}
-
-fn package_relative_path(package: &CcsPackage) -> String {
-    let arch = package.architecture().unwrap_or("noarch");
-    format!(
-        "packages/{}/{}-{}-1-{}.ccs",
-        package.name(),
-        package.name(),
-        package.version(),
-        arch
-    )
-}
-
-fn package_entry_from_package(
-    relative: &str,
-    package: &CcsPackage,
-    bytes: &[u8],
-) -> Result<StaticPackageEntry> {
-    let (name, version, release, arch) = parse_package_filename(relative)?;
-    if package.name() != name || package.version() != version {
-        bail!(
-            "package metadata {}-{} does not match artifact path {}-{}",
-            package.name(),
-            package.version(),
-            name,
-            version
-        );
-    }
-    if package.architecture().unwrap_or("noarch") != arch {
-        bail!(
-            "package architecture {:?} does not match artifact path {arch}",
-            package.architecture()
-        );
-    }
-    Ok(StaticPackageEntry {
-        name,
-        version,
-        release,
-        arch,
-        path: relative.to_string(),
-        sha256: hash::sha256(bytes),
-        size: bytes.len() as u64,
-        description: package.description().map(str::to_string),
-        dependencies: package
-            .dependencies()
-            .iter()
-            .map(|dep| match &dep.version {
-                Some(version) => format!("{} {}", dep.name, version),
-                None => dep.name.clone(),
-            })
-            .collect(),
-    })
-}
-
-fn collect_package_entries(repo_root: &Path) -> Result<Vec<StaticPackageEntry>> {
-    let packages_root = repo_root.join("packages");
-    if !packages_root.exists() {
-        return Ok(Vec::new());
-    }
-
-    let mut package_paths = Vec::new();
-    collect_ccs_paths(&packages_root, &mut package_paths)?;
-    package_paths.sort();
-
-    let mut entries = Vec::new();
-    for path in package_paths {
-        let relative = path
-            .strip_prefix(repo_root)
-            .map_err(|_| anyhow!("package path escaped repo root: {}", path.display()))?
-            .to_string_lossy()
-            .replace('\\', "/");
-        validate_repo_relative_path(&relative)?;
-        let package = CcsPackage::parse(
-            path.to_str()
-                .ok_or_else(|| anyhow!("package path is not valid UTF-8: {}", path.display()))?,
-        )
-        .map_err(anyhow::Error::from)
-        .with_context(|| format!("parse published CCS package {}", path.display()))?;
-        let bytes = fs::read(&path).with_context(|| format!("read package {}", path.display()))?;
-        entries.push(package_entry_from_package(&relative, &package, &bytes)?);
-    }
-
-    Ok(entries)
-}
-
-fn collect_ccs_paths(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
-    for entry in fs::read_dir(dir).with_context(|| format!("read directory {}", dir.display()))? {
-        let entry = entry?;
-        let path = entry.path();
-        let file_type = entry.file_type()?;
-        if file_type.is_dir() {
-            collect_ccs_paths(&path, out)?;
-        } else if file_type.is_file() && path.extension().is_some_and(|ext| ext == "ccs") {
-            out.push(path);
-        }
-    }
-    Ok(())
-}
-
-fn parse_package_filename(relative: &str) -> Result<(String, String, String, String)> {
-    let filename = relative
-        .rsplit('/')
-        .next()
-        .ok_or_else(|| anyhow!("package path has no filename: {relative}"))?;
-    let stem = filename
-        .strip_suffix(".ccs")
-        .ok_or_else(|| anyhow!("package path is not a .ccs artifact: {relative}"))?;
-    let mut parts = stem.rsplitn(4, '-').collect::<Vec<_>>();
-    if parts.len() != 4 {
-        bail!("package filename must be <name>-<version>-<release>-<arch>.ccs: {relative}");
-    }
-    parts.reverse();
-    Ok((
-        parts[0].to_string(),
-        parts[1].to_string(),
-        parts[2].to_string(),
-        parts[3].to_string(),
-    ))
-}
-
-fn build_package_keys_file(
-    old_keys: Option<&PackageKeysFile>,
-    publish_key: &SigningKeyPair,
-    retired_public_key: Option<String>,
-) -> Result<PackageKeysFile> {
-    let active_public_key = publish_key.public_key_base64();
-    let mut entries = Vec::new();
-    let mut seen = BTreeSet::new();
-
-    if let Some(old_keys) = old_keys {
-        for key in &old_keys.keys {
-            let mut key = key.clone();
-            if Some(key.public_key.as_str()) == retired_public_key.as_deref() {
-                key.status = PackageKeyStatus::Retired;
-            }
-            if key.public_key == active_public_key {
-                continue;
-            }
-            if seen.insert(key.public_key.clone()) {
-                entries.push(key);
-            }
-        }
-    }
-
-    if let Some(public_key) = retired_public_key
-        && public_key != active_public_key
-        && seen.insert(public_key.clone())
-    {
-        entries.push(PackageKeyEntry {
-            algorithm: "ed25519".to_string(),
-            public_key,
-            key_id: Some("publish".to_string()),
-            status: PackageKeyStatus::Retired,
-            comment: Some("retired publishing key".to_string()),
-        });
-    }
-
-    entries.push(PackageKeyEntry {
-        algorithm: "ed25519".to_string(),
-        public_key: active_public_key,
-        key_id: Some("publish".to_string()),
-        status: PackageKeyStatus::Active,
-        comment: Some("primary publishing key".to_string()),
-    });
-
-    let keys = PackageKeysFile {
-        schema: 1,
-        keys: entries,
-    };
-    keys.validate()?;
-    Ok(keys)
 }
 
 fn build_index(
@@ -1700,34 +941,20 @@ fn validate_static_repo_name(repo_name: &str) -> Result<()> {
     Ok(())
 }
 
-#[cfg(unix)]
-fn create_private_dir_all(path: &Path) -> std::io::Result<()> {
-    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
-
-    std::fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(path)?;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
-}
-
-#[cfg(not(unix))]
-fn create_private_dir_all(path: &Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(path)
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
         ForcedRefreshForTest, StaticPublishOptions, prepare_static_key_dir, publish_static_repo,
-        publish_static_repo_with_forced_refresh_for_test, save_key_pair, stage_packages,
-        try_acquire_publish_lock_for_test, unique_atomic_temp_path,
+        publish_static_repo_with_forced_refresh_for_test, try_acquire_publish_lock_for_test,
+        unique_atomic_temp_path,
     };
     use crate::ccs::builder::{CcsBuilder, write_ccs_package};
     use crate::ccs::manifest::CcsManifest;
     use crate::ccs::signing::SigningKeyPair;
     use crate::ccs::verify::{SignatureStatus, TrustPolicy, verify_package};
     use crate::packages::traits::PackageFormat;
+    use crate::repository::static_repo::package_staging::stage_packages;
+    use crate::repository::static_repo::publish_context::save_key_pair;
     use crate::repository::static_repo::{
         PackageKeyEntry, PackageKeyStatus, PackageKeysFile, RepoIdentity, RepoLocation, StaticIndex,
     };
