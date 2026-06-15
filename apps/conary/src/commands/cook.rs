@@ -3,7 +3,10 @@
 //! Cook command - build packages from recipes
 
 use anyhow::{Context, Result};
+use conary_core::ccs::convert::{ConversionOptions, FidelityLevel, LegacyConverter};
 use conary_core::ccs::manifest::ManifestProvenance;
+use conary_core::packages::common::PackageMetadata;
+use conary_core::packages::registry::{detect_format, parse_package};
 use conary_core::recipe::CookResult;
 use conary_core::recipe::hermetic::{DivergenceStatus, HermeticBuildInput, detect_ci_mode};
 use conary_core::recipe::inference::{
@@ -210,6 +213,15 @@ async fn cmd_cook_with_output(
         anyhow::bail!("--no-isolation conflicts with --isolated/--hermetic");
     }
 
+    if recipe.is_none()
+        && let Some(target) = target
+    {
+        let target_path = Path::new(target);
+        if foreign_package_format(target_path).is_some() {
+            return cook_foreign_package(target_path, Path::new(output_dir), output);
+        }
+    }
+
     let resolved = resolve_cook_input(target, recipe)?;
     let output_dir = Path::new(output_dir);
     let recipe = resolved.recipe.clone();
@@ -402,6 +414,84 @@ async fn cmd_cook_with_output(
         result.package_path.display()
     );
 
+    Ok(())
+}
+
+fn foreign_package_format(path: &Path) -> Option<&'static str> {
+    let name = path.file_name()?.to_str()?;
+    if name.ends_with(".rpm") {
+        Some("rpm")
+    } else if name.ends_with(".deb") {
+        Some("deb")
+    } else if name.ends_with(".pkg.tar.zst") {
+        Some("arch")
+    } else {
+        None
+    }
+}
+
+fn cook_foreign_package(
+    package_path: &Path,
+    output_dir: &Path,
+    output: &mut impl Write,
+) -> Result<()> {
+    let format = detect_format(package_path).with_context(|| {
+        format!(
+            "Failed to parse foreign package: {}",
+            package_path.display()
+        )
+    })?;
+    let package = parse_package(package_path).with_context(|| {
+        format!(
+            "Failed to parse foreign package: {}",
+            package_path.display()
+        )
+    })?;
+    let package_bytes = std::fs::read(package_path)
+        .with_context(|| format!("Failed to read foreign package: {}", package_path.display()))?;
+    let checksum = conary_core::hash::sha256_prefixed(&package_bytes);
+    let extracted = package.extract_file_contents().with_context(|| {
+        format!(
+            "Failed to extract files for foreign package: {}",
+            package_path.display()
+        )
+    })?;
+    let metadata = PackageMetadata {
+        package_path: package_path.to_path_buf(),
+        name: package.name().to_string(),
+        version: package.version().to_string(),
+        architecture: package.architecture().map(str::to_string),
+        description: package.description().map(str::to_string),
+        files: package.files().to_vec(),
+        dependencies: package.dependencies().to_vec(),
+        provides: package.provides().to_vec(),
+        scriptlets: package.scriptlets().to_vec(),
+        native_scriptlet_abi: package.native_scriptlet_abi().to_vec(),
+        config_files: Vec::new(),
+    };
+    let converter = LegacyConverter::new(ConversionOptions {
+        enable_chunking: true,
+        output_dir: output_dir.to_path_buf(),
+        auto_classify: true,
+        min_fidelity: FidelityLevel::Partial,
+        capture_scriptlets: false,
+        enable_inference: true,
+        inference_options: conary_core::capability::inference::InferenceOptions::fast(),
+    });
+    let result = converter
+        .convert(&metadata, &extracted, format.name(), &checksum)
+        .with_context(|| {
+            format!(
+                "Failed to convert foreign package {}",
+                package_path.display()
+            )
+        })?;
+    let converted = result
+        .package_path
+        .as_ref()
+        .context("foreign conversion succeeded without a CCS output path")?;
+
+    writeln!(output, "Converted foreign package: {}", converted.display())?;
     Ok(())
 }
 
@@ -608,6 +698,47 @@ edition = "2021"
             recipe_source_base_dir(Path::new("/work/recipes/pkg/recipe.toml")),
             PathBuf::from("/work/recipes/pkg")
         );
+    }
+
+    #[test]
+    fn foreign_package_format_detects_release_artifacts() {
+        assert_eq!(foreign_package_format(Path::new("pkg.rpm")), Some("rpm"));
+        assert_eq!(foreign_package_format(Path::new("pkg.deb")), Some("deb"));
+        assert_eq!(
+            foreign_package_format(Path::new("pkg.pkg.tar.zst")),
+            Some("arch")
+        );
+        assert_eq!(foreign_package_format(Path::new("recipe.toml")), None);
+    }
+
+    #[tokio::test]
+    async fn cook_foreign_package_routes_before_recipe_resolution() {
+        let temp = tempfile::tempdir().unwrap();
+        let foreign = temp.path().join("demo.rpm");
+        let output_dir = temp.path().join("out");
+        std::fs::write(&foreign, b"not really rpm").unwrap();
+        let mut output = Vec::new();
+
+        let error = cmd_cook_with_output(
+            Some(foreign.to_str().unwrap()),
+            None,
+            output_dir.to_str().unwrap(),
+            temp.path().join("sources").to_str().unwrap(),
+            None,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            &mut output,
+        )
+        .await
+        .unwrap_err();
+        let error = format!("{error:#}");
+
+        assert!(error.contains("Failed to parse foreign package"), "{error}");
     }
 
     #[test]

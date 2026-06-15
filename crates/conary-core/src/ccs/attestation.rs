@@ -62,7 +62,11 @@ pub struct ForeignConversionBoundary {
     pub source_checksum: String,
     pub output_identity: BuildOutputIdentity,
     pub build_risk_report_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build_risk_report: Option<crate::security::command_risk::CommandRiskReport>,
     pub scriptlet_risk_report_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scriptlet_risk_report: Option<crate::security::command_risk::CommandRiskReport>,
     pub diagnostics: Vec<String>,
 }
 
@@ -75,7 +79,9 @@ impl ForeignConversionBoundary {
             source_checksum: source_checksum.to_string(),
             output_identity: test_support::sample_output_identity_for_tests(),
             build_risk_report_hash: None,
+            build_risk_report: None,
             scriptlet_risk_report_hash: None,
+            scriptlet_risk_report: None,
             diagnostics: Vec::new(),
         }
     }
@@ -207,6 +213,7 @@ pub fn compute_content_identity_excluding_signatures(
     let mut manifest = package.manifest().clone();
     if let Some(provenance) = manifest.provenance.as_mut() {
         provenance.build_attestation = None;
+        provenance.foreign_conversion_boundary = None;
         provenance.signatures.clear();
         provenance.dna_hash = None;
     }
