@@ -151,6 +151,80 @@ pub fn verify_build_attestation_envelope(
         .context("verify build attestation signature")
 }
 
+pub fn compute_build_output_identity(
+    package: &crate::ccs::package::CcsPackage,
+) -> Result<BuildOutputIdentity> {
+    let manifest = package.manifest();
+    let provenance = manifest
+        .provenance
+        .as_ref()
+        .context("build output identity requires manifest provenance")?;
+    let hardening_level = provenance
+        .hardening_level
+        .clone()
+        .context("build output identity requires hardening_level")?;
+    let origin_class = provenance
+        .origin_class
+        .clone()
+        .context("build output identity requires origin_class")?;
+    let hermetic_evidence_hash = provenance
+        .hermetic_evidence
+        .as_ref()
+        .map(canonical_json_hash)
+        .transpose()?
+        .context("build output identity requires hermetic evidence")?;
+    let file_merkle_root = provenance
+        .merkle_root
+        .clone()
+        .or_else(|| {
+            package
+                .binary_manifest()
+                .map(|manifest| manifest.content_root.value.clone())
+        })
+        .context("build output identity requires file Merkle root")?;
+    let canonical_content_identity = compute_content_identity_excluding_signatures(package)?;
+
+    Ok(BuildOutputIdentity {
+        file_merkle_root,
+        package_name: manifest.package.name.clone(),
+        package_version: manifest.package.version.clone(),
+        package_release: "1".to_string(),
+        architecture: manifest
+            .package
+            .platform
+            .as_ref()
+            .and_then(|platform| platform.arch.clone()),
+        origin_class,
+        hardening_level,
+        hermetic_evidence_hash,
+        canonical_content_identity,
+    })
+}
+
+pub fn compute_content_identity_excluding_signatures(
+    package: &crate::ccs::package::CcsPackage,
+) -> Result<String> {
+    let mut manifest = package.manifest().clone();
+    if let Some(provenance) = manifest.provenance.as_mut() {
+        provenance.build_attestation = None;
+        provenance.signatures.clear();
+        provenance.dna_hash = None;
+    }
+
+    let manifest_bytes = canonical_json_bytes(&manifest)
+        .context("serialize content identity manifest projection")?;
+    let components_bytes = canonical_json_bytes(package.components())
+        .context("serialize content identity components")?;
+    let files_bytes = canonical_json_bytes(&package.file_entries())
+        .context("serialize content identity files")?;
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&manifest_bytes);
+    bytes.extend_from_slice(&components_bytes);
+    bytes.extend_from_slice(&files_bytes);
+
+    Ok(crate::hash::sha256_prefixed(&bytes))
+}
+
 #[cfg(test)]
 #[allow(dead_code)]
 pub(crate) mod test_support {
@@ -244,6 +318,7 @@ pub(crate) mod test_support {
 mod tests {
     use super::test_support::*;
     use super::*;
+    use crate::packages::traits::PackageFormat;
 
     #[test]
     fn canonical_payload_hash_is_stable_across_key_ordering() {
@@ -286,5 +361,63 @@ mod tests {
         let second = canonical_json_hash(&boundary).unwrap();
 
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn output_identity_does_not_use_dna_hash() {
+        let (_temp, package) = package_with_attestation_and_signature_for_tests("sha256:dna-a");
+        let identity = compute_build_output_identity(&package).unwrap();
+
+        assert_ne!(identity.canonical_content_identity, "sha256:dna-a");
+    }
+
+    #[test]
+    fn output_identity_survives_resigning_and_attestation_replacement() {
+        let first_key = crate::ccs::signing::SigningKeyPair::generate().with_key_id("first");
+        let second_key = crate::ccs::signing::SigningKeyPair::generate().with_key_id("second");
+        let (_first_temp, first) = signed_package_for_identity_tests(&first_key, "m2-policy-v1");
+        let (_second_temp, second) = signed_package_for_identity_tests(&second_key, "m2-policy-v2");
+
+        let first_identity = compute_build_output_identity(&first).unwrap();
+        let second_identity = compute_build_output_identity(&second).unwrap();
+
+        assert_eq!(
+            first_identity.canonical_content_identity,
+            second_identity.canonical_content_identity
+        );
+    }
+
+    fn package_with_attestation_and_signature_for_tests(
+        dna_hash: &str,
+    ) -> (tempfile::TempDir, crate::ccs::package::CcsPackage) {
+        let key = crate::ccs::signing::SigningKeyPair::generate().with_key_id("identity-test");
+        let (temp, mut package) = signed_package_for_identity_tests(&key, "m2-policy-v1");
+        package
+            .manifest_mut_for_tests()
+            .provenance
+            .get_or_insert_with(Default::default)
+            .dna_hash = Some(dna_hash.to_string());
+        (temp, package)
+    }
+
+    fn signed_package_for_identity_tests(
+        key: &crate::ccs::signing::SigningKeyPair,
+        policy_digest: &str,
+    ) -> (tempfile::TempDir, crate::ccs::package::CcsPackage) {
+        let temp = tempfile::tempdir().unwrap();
+        let package_path = temp.path().join("identity.ccs");
+        let mut result = crate::ccs::builder::test_support::minimal_build_result("identity", "1.0");
+        let mut payload = crate::ccs::attestation::test_support::sample_payload_for_tests();
+        payload.publish_policy_digest = policy_digest.to_string();
+        result
+            .manifest
+            .provenance
+            .get_or_insert_with(Default::default)
+            .build_attestation =
+            Some(crate::ccs::attestation::sign_build_attestation(payload, key).unwrap());
+        crate::ccs::builder::write_signed_ccs_package(&result, &package_path, key).unwrap();
+        let package =
+            crate::ccs::package::CcsPackage::parse(package_path.to_str().unwrap()).unwrap();
+        (temp, package)
     }
 }
