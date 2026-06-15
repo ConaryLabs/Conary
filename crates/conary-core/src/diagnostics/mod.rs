@@ -367,4 +367,13 @@ mod tests {
         assert_eq!(value["kind"], "diagnostic-emitted");
         assert_eq!(value["diagnostic"]["code"], "inference-trace");
     }
+
+    #[test]
+    fn diagnostic_evidence_can_store_redaction_markers() {
+        let evidence = DiagnosticEvidence::log("command", "Bearer [REDACTED]")
+            .with_metadata("source", serde_json::json!("scriptlet"))
+            .with_redaction(RedactionMarker::new("log", "bearer-token"));
+        assert_eq!(evidence.redactions[0].field, "log");
+        assert_eq!(evidence.metadata["source"], "scriptlet");
+    }
 }
