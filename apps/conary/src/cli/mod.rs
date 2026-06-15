@@ -940,8 +940,7 @@ mod tests {
         }
 
         let publish =
-            Cli::try_parse_from(["conary", "publish", "dist/pkg.ccs", "./repo", "--json"])
-                .unwrap();
+            Cli::try_parse_from(["conary", "publish", "dist/pkg.ccs", "./repo", "--json"]).unwrap();
         match publish.command {
             Some(Commands::Publish { json, .. }) => assert!(json),
             other => panic!("unexpected command: {other:?}"),

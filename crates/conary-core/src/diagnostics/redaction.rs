@@ -236,10 +236,12 @@ mod tests {
         assert!(!value.value.contains("abc.def"));
         assert!(value.value.contains("Bearer [REDACTED]"));
         assert!(value.value.contains("[TRUNCATED]"));
-        assert!(value
-            .redactions
-            .iter()
-            .any(|item| item.reason == "log-truncated"));
+        assert!(
+            value
+                .redactions
+                .iter()
+                .any(|item| item.reason == "log-truncated")
+        );
     }
 
     #[test]
@@ -255,6 +257,10 @@ mod tests {
         assert!(!text.contains("user:pass"));
         assert!(!text.contains("sk-secret"));
         assert!(text.contains("[REDACTED]"));
-        assert!(redactions.iter().any(|item| item.field.contains("metadata")));
+        assert!(
+            redactions
+                .iter()
+                .any(|item| item.field.contains("metadata"))
+        );
     }
 }

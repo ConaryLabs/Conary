@@ -5,6 +5,10 @@
 use anyhow::{Context, Result};
 use conary_core::ccs::convert::{ConversionOptions, FidelityLevel, LegacyConverter};
 use conary_core::ccs::manifest::ManifestProvenance;
+use conary_core::diagnostics::{
+    PACKAGING_JSON_SCHEMA_VERSION, PackagingArtifact, PackagingCommandOutput, PackagingDiagnostic,
+    PackagingDiagnosticCode, PackagingEvent, PackagingEventKind, PackagingPhase,
+};
 use conary_core::packages::common::PackageMetadata;
 use conary_core::packages::registry::{detect_format, parse_package};
 use conary_core::recipe::CookResult;
@@ -45,6 +49,23 @@ struct ResolvedCookInput {
     inference_trace: Option<InferenceTrace>,
     source_kind: Option<SourceTargetKind>,
     _source_tree: Option<ResolvedSourceTree>,
+}
+
+struct CookRunOptions<'a> {
+    target: Option<&'a str>,
+    recipe: Option<&'a str>,
+    output_dir: &'a str,
+    source_cache: &'a str,
+    jobs: Option<u32>,
+    keep_builddir: bool,
+    validate_only: bool,
+    fetch_only: bool,
+    explain: bool,
+    isolated: bool,
+    no_isolation: bool,
+    hermetic: bool,
+    json: bool,
+    operation_id: String,
 }
 
 pub(crate) fn resolve_recipe_path(target: Option<&str>, recipe: Option<&str>) -> Result<PathBuf> {
@@ -110,6 +131,84 @@ fn write_inference_trace(output: &mut impl Write, trace: &InferenceTrace) -> Res
         }
     }
     Ok(())
+}
+
+fn cook_operation_id() -> String {
+    super::operation_records::new_operation_id("cook")
+}
+
+fn cook_failure_output(operation_id: &str, error: &anyhow::Error) -> PackagingCommandOutput {
+    let code = cook_error_code(error);
+    let diagnostic = PackagingDiagnostic::error(PackagingPhase::Build, code, error.to_string());
+    let mut output = PackagingCommandOutput::failed(
+        operation_id.to_string(),
+        "conary cook",
+        vec![diagnostic.clone()],
+    );
+    let mut sequence = 0;
+    push_cook_event(
+        &mut output,
+        &mut sequence,
+        PackagingPhase::Build,
+        PackagingEventKind::OperationStarted,
+        "Cook operation started",
+    );
+    sequence += 1;
+    output.events.push(PackagingEvent::diagnostic(
+        operation_id,
+        sequence,
+        diagnostic,
+    ));
+    push_cook_event(
+        &mut output,
+        &mut sequence,
+        PackagingPhase::Build,
+        PackagingEventKind::OperationFinished,
+        "Cook operation failed",
+    );
+    output
+}
+
+fn cook_success_output(operation_id: &str, summary: impl Into<String>) -> PackagingCommandOutput {
+    let mut output = PackagingCommandOutput::succeeded(operation_id.to_string(), "conary cook");
+    output.summary = Some(summary.into());
+    output
+}
+
+fn push_cook_event(
+    report: &mut PackagingCommandOutput,
+    sequence: &mut u64,
+    phase: PackagingPhase,
+    kind: PackagingEventKind,
+    message: impl Into<String>,
+) {
+    *sequence += 1;
+    report.events.push(PackagingEvent {
+        schema_version: PACKAGING_JSON_SCHEMA_VERSION,
+        operation_id: report.operation_id.clone(),
+        sequence: *sequence,
+        phase,
+        kind,
+        message: Some(message.into()),
+        diagnostic: None,
+        artifact: None,
+        progress: None,
+    });
+}
+
+fn cook_error_code(error: &anyhow::Error) -> PackagingDiagnosticCode {
+    let message = format!("{error:#}").to_ascii_lowercase();
+    if message.contains("source cache") || message.contains("cache miss") {
+        PackagingDiagnosticCode::SourceCacheMiss
+    } else if message.contains("network") || message.contains("offline") {
+        PackagingDiagnosticCode::BuildNetworkAccess
+    } else if message.contains("unpinned") || message.contains("content lock") {
+        PackagingDiagnosticCode::UnpinnedDependency
+    } else if message.contains("command risk") || message.contains("risk report") {
+        PackagingDiagnosticCode::CommandRiskEvidence
+    } else {
+        PackagingDiagnosticCode::CookFailed
+    }
 }
 
 fn sha256_prefixed_file(path: &Path) -> Result<String> {
@@ -212,76 +311,178 @@ async fn cmd_cook_with_output(
     json: bool,
     output: &mut impl Write,
 ) -> Result<()> {
-    let _ = json;
-    let hermetic_requested = hermetic || isolated;
-    if hermetic_requested && no_isolation {
+    let operation_id = cook_operation_id();
+    let options = CookRunOptions {
+        target,
+        recipe,
+        output_dir,
+        source_cache,
+        jobs,
+        keep_builddir,
+        validate_only,
+        fetch_only,
+        explain,
+        isolated,
+        no_isolation,
+        hermetic,
+        json,
+        operation_id: operation_id.clone(),
+    };
+    match run_cook_operation(options, output) {
+        Ok(mut report) => {
+            report.operation_id = operation_id.clone();
+            if json {
+                super::diagnostics::write_packaging_output(&report, true, output)?;
+            }
+            super::diagnostics::write_packaging_record_if_possible(&report);
+            Ok(())
+        }
+        Err(error) => {
+            let report = cook_failure_output(&operation_id, &error);
+            if json {
+                super::diagnostics::write_packaging_output(&report, true, output)?;
+            }
+            super::diagnostics::write_packaging_record_if_possible(&report);
+            Err(error)
+        }
+    }
+}
+
+fn run_cook_operation(
+    options: CookRunOptions<'_>,
+    output: &mut impl Write,
+) -> Result<PackagingCommandOutput> {
+    let hermetic_requested = options.hermetic || options.isolated;
+    if hermetic_requested && options.no_isolation {
         anyhow::bail!("--no-isolation conflicts with --isolated/--hermetic");
     }
 
-    if recipe.is_none()
-        && let Some(target) = target
+    if options.recipe.is_none()
+        && let Some(target) = options.target
     {
         let target_path = Path::new(target);
         if foreign_package_format(target_path).is_some() {
-            return cook_foreign_package(target_path, Path::new(output_dir), output);
+            if options.json {
+                let mut sink = io::sink();
+                cook_foreign_package(target_path, Path::new(options.output_dir), &mut sink)?;
+            } else {
+                cook_foreign_package(target_path, Path::new(options.output_dir), output)?;
+            }
+            return Ok(cook_success_output(
+                &options.operation_id,
+                "Foreign package converted",
+            ));
         }
     }
 
-    let resolved = resolve_cook_input(target, recipe)?;
-    let output_dir = Path::new(output_dir);
+    let resolved = resolve_cook_input(options.target, options.recipe)?;
+    let output_dir = Path::new(options.output_dir);
     let recipe = resolved.recipe.clone();
 
-    if let Some(recipe_path) = &resolved.recipe_path {
-        writeln!(output, "Reading recipe: {}", recipe_path.display())?;
-    } else {
+    if !options.json {
+        if let Some(recipe_path) = &resolved.recipe_path {
+            writeln!(output, "Reading recipe: {}", recipe_path.display())?;
+        } else {
+            writeln!(
+                output,
+                "Inferring recipe from: {}",
+                resolved.recipe_source_base_dir.display()
+            )?;
+        }
+
         writeln!(
             output,
-            "Inferring recipe from: {}",
-            resolved.recipe_source_base_dir.display()
+            "Recipe: {} version {}",
+            recipe.package.name, recipe.package.version
         )?;
-    }
 
-    writeln!(
-        output,
-        "Recipe: {} version {}",
-        recipe.package.name, recipe.package.version
-    )?;
-
-    if explain && let Some(trace) = &resolved.inference_trace {
-        write_inference_trace(output, trace)?;
+        if options.explain
+            && let Some(trace) = &resolved.inference_trace
+        {
+            write_inference_trace(output, trace)?;
+        }
     }
 
     // Validate the recipe
     let warnings = validate_recipe(&recipe).with_context(|| "Recipe validation failed")?;
 
-    for warning in &warnings {
-        writeln!(output, "Warning: {}", warning)?;
+    if !options.json {
+        for warning in &warnings {
+            writeln!(output, "Warning: {}", warning)?;
+        }
     }
 
-    if validate_only {
-        writeln!(output, "Recipe validation passed")?;
-        if warnings.is_empty() {
-            writeln!(output, "[OK] No issues found")?;
-        } else {
-            writeln!(output, "[OK] {} warning(s)", warnings.len())?;
+    if options.validate_only {
+        let mut report = cook_success_output(&options.operation_id, "Recipe validation passed");
+        let mut sequence = 0;
+        push_cook_event(
+            &mut report,
+            &mut sequence,
+            PackagingPhase::RecipeValidation,
+            PackagingEventKind::OperationStarted,
+            "Cook operation started",
+        );
+        push_cook_event(
+            &mut report,
+            &mut sequence,
+            PackagingPhase::RecipeValidation,
+            PackagingEventKind::PhaseStarted,
+            "Recipe validation started",
+        );
+        for warning in &warnings {
+            report.diagnostics.push(PackagingDiagnostic::warning(
+                PackagingPhase::RecipeValidation,
+                PackagingDiagnosticCode::RecipeValidationWarning,
+                warning.to_string(),
+            ));
         }
-        return Ok(());
+        for diagnostic in &report.diagnostics {
+            sequence += 1;
+            report.events.push(PackagingEvent::diagnostic(
+                options.operation_id.as_str(),
+                sequence,
+                diagnostic.clone(),
+            ));
+        }
+        push_cook_event(
+            &mut report,
+            &mut sequence,
+            PackagingPhase::RecipeValidation,
+            PackagingEventKind::PhaseFinished,
+            "Recipe validation finished",
+        );
+        push_cook_event(
+            &mut report,
+            &mut sequence,
+            PackagingPhase::RecipeValidation,
+            PackagingEventKind::OperationFinished,
+            "Cook operation finished",
+        );
+        if !options.json {
+            writeln!(output, "Recipe validation passed")?;
+            if warnings.is_empty() {
+                writeln!(output, "[OK] No issues found")?;
+            } else {
+                writeln!(output, "[OK] {} warning(s)", warnings.len())?;
+            }
+        }
+        return Ok(report);
     }
 
     // Configure the kitchen. Host builds remain the compatibility default;
     // --isolated and --hermetic route through the M2a hermetic planner.
     let mut config = KitchenConfig {
-        source_cache: PathBuf::from(source_cache),
+        source_cache: PathBuf::from(options.source_cache),
         recipe_source_base_dir: Some(resolved.recipe_source_base_dir.clone()),
         origin_class_override: resolved.origin_class_override.clone(),
         source_provenance_override: resolved.source_provenance_override.clone(),
-        keep_builddir,
+        keep_builddir: options.keep_builddir,
         use_isolation: false,
         pristine_mode: false,
         ..Default::default()
     };
 
-    if let Some(j) = jobs {
+    if let Some(j) = options.jobs {
         config.jobs = j;
     }
     if !hermetic_requested {
@@ -289,40 +490,110 @@ async fn cmd_cook_with_output(
     }
 
     // Fetch-only mode: just download sources and exit
-    if fetch_only {
+    if options.fetch_only {
         let kitchen = Kitchen::new(config.clone());
         if matches!(resolved.source_kind, Some(SourceTargetKind::Directory))
             && matches!(recipe.source, SourceSection::Local(_))
         {
-            writeln!(
-                output,
-                "No remote source fetch is required for inferred local source tree."
-            )?;
-            return Ok(());
+            if !options.json {
+                writeln!(
+                    output,
+                    "No remote source fetch is required for inferred local source tree."
+                )?;
+            }
+            let mut report =
+                cook_success_output(&options.operation_id, "No remote source fetch is required");
+            let mut sequence = 0;
+            push_cook_event(
+                &mut report,
+                &mut sequence,
+                PackagingPhase::SourceFetch,
+                PackagingEventKind::OperationStarted,
+                "Cook operation started",
+            );
+            push_cook_event(
+                &mut report,
+                &mut sequence,
+                PackagingPhase::SourceFetch,
+                PackagingEventKind::PhaseStarted,
+                "Source fetch started",
+            );
+            push_cook_event(
+                &mut report,
+                &mut sequence,
+                PackagingPhase::SourceFetch,
+                PackagingEventKind::PhaseFinished,
+                "Source fetch finished",
+            );
+            push_cook_event(
+                &mut report,
+                &mut sequence,
+                PackagingPhase::SourceFetch,
+                PackagingEventKind::OperationFinished,
+                "Cook operation finished",
+            );
+            return Ok(report);
         }
 
-        writeln!(output, "Fetching sources (fetch-only mode)...")?;
+        if !options.json {
+            writeln!(output, "Fetching sources (fetch-only mode)...")?;
+        }
         let sources = kitchen
             .fetch(&recipe)
             .with_context(|| format!("Failed to fetch sources for {}", recipe.package.name))?;
 
-        writeln!(
-            output,
-            "\n[COMPLETE] Fetched {} source file(s):",
-            sources.len()
-        )?;
-        for source in &sources {
-            writeln!(output, "  - {}", source.display())?;
-        }
-
-        if kitchen.sources_cached(&recipe) {
+        if !options.json {
             writeln!(
                 output,
-                "\n[OK] All sources are cached. Ready for offline build."
+                "\n[COMPLETE] Fetched {} source file(s):",
+                sources.len()
             )?;
+            for source in &sources {
+                writeln!(output, "  - {}", source.display())?;
+            }
+
+            if kitchen.sources_cached(&recipe) {
+                writeln!(
+                    output,
+                    "\n[OK] All sources are cached. Ready for offline build."
+                )?;
+            }
         }
 
-        return Ok(());
+        let mut report = cook_success_output(
+            &options.operation_id,
+            format!("Fetched {} source file(s)", sources.len()),
+        );
+        let mut sequence = 0;
+        push_cook_event(
+            &mut report,
+            &mut sequence,
+            PackagingPhase::SourceFetch,
+            PackagingEventKind::OperationStarted,
+            "Cook operation started",
+        );
+        push_cook_event(
+            &mut report,
+            &mut sequence,
+            PackagingPhase::SourceFetch,
+            PackagingEventKind::PhaseStarted,
+            "Source fetch started",
+        );
+        push_cook_event(
+            &mut report,
+            &mut sequence,
+            PackagingPhase::SourceFetch,
+            PackagingEventKind::PhaseFinished,
+            "Source fetch finished",
+        );
+        push_cook_event(
+            &mut report,
+            &mut sequence,
+            PackagingPhase::SourceFetch,
+            PackagingEventKind::OperationFinished,
+            "Cook operation finished",
+        );
+        return Ok(report);
     }
 
     let hermetic_builder = if hermetic_requested {
@@ -349,39 +620,41 @@ async fn cmd_cook_with_output(
         )
     })?;
 
-    // Print mode information
-    if hermetic_requested {
-        writeln!(
-            output,
-            "Cooking with {} parallel jobs (hermetic)...",
-            config.jobs
-        )?;
-        writeln!(output, "  - Sources prefetched before build")?;
-        writeln!(output, "  - Network disabled during build")?;
-        writeln!(
-            output,
-            "  - Build evidence recorded without M2b attestation"
-        )?;
-    } else {
-        writeln!(
-            output,
-            "Cooking with {} parallel jobs (host)...",
-            config.jobs
-        )?;
-    }
+    if !options.json {
+        // Print mode information
+        if hermetic_requested {
+            writeln!(
+                output,
+                "Cooking with {} parallel jobs (hermetic)...",
+                config.jobs
+            )?;
+            writeln!(output, "  - Sources prefetched before build")?;
+            writeln!(output, "  - Network disabled during build")?;
+            writeln!(
+                output,
+                "  - Build evidence recorded without M2b attestation"
+            )?;
+        } else {
+            writeln!(
+                output,
+                "Cooking with {} parallel jobs (host)...",
+                config.jobs
+            )?;
+        }
 
-    // Check if sources are cached
-    if kitchen.sources_cached(&recipe) {
-        writeln!(
-            output,
-            "  - Sources already cached (offline build possible)"
-        )?;
-    } else {
-        writeln!(output, "Fetching source...")?;
-    }
+        // Check if sources are cached
+        if kitchen.sources_cached(&recipe) {
+            writeln!(
+                output,
+                "  - Sources already cached (offline build possible)"
+            )?;
+        } else {
+            writeln!(output, "Fetching source...")?;
+        }
 
-    writeln!(output, "Configuring...")?;
-    writeln!(output, "Building ({} parallel jobs)...", config.jobs)?;
+        writeln!(output, "Configuring...")?;
+        writeln!(output, "Building ({} parallel jobs)...", config.jobs)?;
+    }
 
     // Create kitchen and cook
     let result = if let Some(builder) = hermetic_builder {
@@ -393,24 +666,26 @@ async fn cmd_cook_with_output(
     }
     .with_context(|| format!("Failed to cook {}", recipe.package.name))?;
 
-    writeln!(output, "Installing to staging...")?;
+    if !options.json {
+        writeln!(output, "Installing to staging...")?;
 
-    writeln!(
-        output,
-        "\n[COMPLETE] Cooked: {}",
-        result.package_path.display()
-    )?;
+        writeln!(
+            output,
+            "\n[COMPLETE] Cooked: {}",
+            result.package_path.display()
+        )?;
 
-    if !result.warnings.is_empty() {
-        writeln!(output, "\nBuild warnings:")?;
-        for warning in &result.warnings {
-            writeln!(output, "  - {}", warning)?;
+        if !result.warnings.is_empty() {
+            writeln!(output, "\nBuild warnings:")?;
+            for warning in &result.warnings {
+                writeln!(output, "  - {}", warning)?;
+            }
         }
-    }
-    if hermetic_requested {
-        print_divergence_summary(output, result.provenance.as_ref())?;
-    } else {
-        write_host_record_after_host_cook(output, &recipe, &result)?;
+        if hermetic_requested {
+            print_divergence_summary(output, result.provenance.as_ref())?;
+        } else {
+            write_host_record_after_host_cook(output, &recipe, &result)?;
+        }
     }
 
     info!(
@@ -419,7 +694,48 @@ async fn cmd_cook_with_output(
         result.package_path.display()
     );
 
-    Ok(())
+    let mut report = cook_success_output(&options.operation_id, "Cooked package");
+    let mut sequence = 0;
+    push_cook_event(
+        &mut report,
+        &mut sequence,
+        PackagingPhase::Build,
+        PackagingEventKind::OperationStarted,
+        "Cook operation started",
+    );
+    push_cook_event(
+        &mut report,
+        &mut sequence,
+        PackagingPhase::Build,
+        PackagingEventKind::PhaseStarted,
+        "Build started",
+    );
+    report.artifacts.push(PackagingArtifact {
+        path: result.package_path.display().to_string(),
+        kind: Some("ccs".to_string()),
+    });
+    push_cook_event(
+        &mut report,
+        &mut sequence,
+        PackagingPhase::Build,
+        PackagingEventKind::ArtifactCreated,
+        "Cooked artifact created",
+    );
+    push_cook_event(
+        &mut report,
+        &mut sequence,
+        PackagingPhase::Build,
+        PackagingEventKind::PhaseFinished,
+        "Build finished",
+    );
+    push_cook_event(
+        &mut report,
+        &mut sequence,
+        PackagingPhase::Build,
+        PackagingEventKind::OperationFinished,
+        "Cook operation finished",
+    );
+    Ok(report)
 }
 
 fn foreign_package_format(path: &Path) -> Option<&'static str> {
@@ -1042,6 +1358,79 @@ edition = "2021"
             !output_dir.exists(),
             "validate-only custom recipe should not create build output"
         );
+    }
+
+    #[tokio::test]
+    async fn cook_validate_only_json_has_schema_version_and_summary() {
+        let temp = tempfile::tempdir().unwrap();
+        let recipe_path = temp.path().join("recipe.toml");
+        let output_dir = temp.path().join("out");
+        let source_cache = temp.path().join("sources");
+        write_local_recipe(&recipe_path);
+
+        let mut output = Vec::new();
+        cmd_cook_with_output(
+            Some(recipe_path.to_str().unwrap()),
+            None,
+            output_dir.to_str().unwrap(),
+            source_cache.to_str().unwrap(),
+            None,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            true,
+            &mut output,
+        )
+        .await
+        .unwrap();
+
+        let value: serde_json::Value = serde_json::from_slice(&output).expect("valid cook json");
+        assert_eq!(value["schema_version"], 1);
+        assert_eq!(value["command"], "conary cook");
+        assert_eq!(value["status"], "succeeded");
+        assert_eq!(value["summary"], "Recipe validation passed");
+        assert!(value["operation_id"].as_str().unwrap().starts_with("cook-"));
+    }
+
+    #[tokio::test]
+    async fn cook_json_conflict_error_is_single_structured_json() {
+        let temp = tempfile::tempdir().unwrap();
+        let recipe_path = temp.path().join("recipe.toml");
+        let output_dir = temp.path().join("out");
+        let source_cache = temp.path().join("sources");
+        write_local_recipe(&recipe_path);
+
+        let mut output = Vec::new();
+        let error = cmd_cook_with_output(
+            Some(recipe_path.to_str().unwrap()),
+            None,
+            output_dir.to_str().unwrap(),
+            source_cache.to_str().unwrap(),
+            None,
+            false,
+            false,
+            false,
+            false,
+            true,
+            true,
+            false,
+            true,
+            &mut output,
+        )
+        .await
+        .unwrap_err();
+
+        let rendered = String::from_utf8(output).unwrap();
+        assert!(format!("{error:#}").contains("--no-isolation conflicts"));
+        assert!(rendered.trim_start().starts_with('{'), "{rendered}");
+        assert!(!rendered.contains("Reading recipe:"));
+        let value: serde_json::Value = serde_json::from_str(&rendered).expect("valid error json");
+        assert_eq!(value["status"], "failed");
+        assert_eq!(value["diagnostics"][0]["code"], "cook-failed");
     }
 
     #[tokio::test]

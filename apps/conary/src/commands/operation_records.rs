@@ -30,7 +30,10 @@ pub fn bootstrap_operations_dir(work_dir: &Path) -> PathBuf {
 const PACKAGING_RECORD_RETENTION: usize = 50;
 
 pub fn packaging_operations_dir_from_state_home(state_home: &Path) -> PathBuf {
-    state_home.join("conary").join("packaging").join("operations")
+    state_home
+        .join("conary")
+        .join("packaging")
+        .join("operations")
 }
 
 #[allow(dead_code)]
@@ -51,7 +54,9 @@ pub fn default_packaging_operations_dir() -> Result<PathBuf> {
             .join("packaging")
             .join("operations"));
     }
-    anyhow::bail!("cannot determine packaging operation record directory; set XDG_STATE_HOME or HOME")
+    anyhow::bail!(
+        "cannot determine packaging operation record directory; set XDG_STATE_HOME or HOME"
+    )
 }
 
 #[allow(dead_code)]
@@ -192,7 +197,9 @@ mod tests {
             std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777,
             0o700
         );
-        let latest = load_latest_packaging_record::<Fixture>(&dir).unwrap().unwrap();
+        let latest = load_latest_packaging_record::<Fixture>(&dir)
+            .unwrap()
+            .unwrap();
         assert_eq!(latest.operation_id, "cook-54");
         let records = list_packaging_records(&dir).unwrap();
         assert_eq!(records.len(), 50);
