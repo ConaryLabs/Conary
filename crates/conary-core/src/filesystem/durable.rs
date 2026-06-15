@@ -4,6 +4,7 @@ use crate::{Error, Result};
 use serde::Serialize;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 fn temp_path_for(path: &Path) -> PathBuf {
@@ -51,10 +52,40 @@ pub fn write_file_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     sync_parent_directory(path)
 }
 
+pub fn write_file_atomic_with_mode(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let tmp = temp_path_for(path);
+    {
+        let mut file = OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .mode(mode)
+            .open(&tmp)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+    }
+    std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(mode))?;
+    std::fs::rename(&tmp, path)?;
+    sync_parent_directory(path)
+}
+
 pub fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     let bytes = serde_json::to_vec_pretty(value)
         .map_err(|error| Error::InternalError(format!("failed to serialize JSON: {error}")))?;
     write_file_atomic(path, &bytes)
+}
+
+pub fn write_json_atomic_with_mode<T: Serialize>(
+    path: &Path,
+    value: &T,
+    mode: u32,
+) -> Result<()> {
+    let bytes = serde_json::to_vec_pretty(value)
+        .map_err(|error| Error::InternalError(format!("failed to serialize JSON: {error}")))?;
+    write_file_atomic_with_mode(path, &bytes, mode)
 }
 
 pub fn remove_file_and_sync_parent(path: &Path) -> Result<()> {
@@ -64,7 +95,7 @@ pub fn remove_file_and_sync_parent(path: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{sync_parent_directory, write_json_atomic};
+    use super::{sync_parent_directory, write_json_atomic, write_json_atomic_with_mode};
     use tempfile::TempDir;
 
     #[test]
@@ -96,5 +127,23 @@ mod tests {
         let raw = std::fs::read_to_string(path).unwrap();
         assert!(raw.contains("\"fixture\""));
         assert!(!temp.path().join("record.json.tmp").exists());
+    }
+
+    #[test]
+    fn write_json_atomic_with_mode_uses_requested_mode() {
+        use std::os::unix::fs::PermissionsExt;
+
+        #[derive(serde::Serialize)]
+        struct Fixture {
+            name: &'static str,
+        }
+
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("private.json");
+        write_json_atomic_with_mode(&path, &Fixture { name: "private" }, 0o600).unwrap();
+
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        assert!(!temp.path().join("private.json.tmp").exists());
     }
 }
