@@ -517,14 +517,22 @@ git commit -m "fix(try): centralize launcher and boot identity"
 
 - [ ] **Step 1: Add the `after-current-link` failure point**
 
-In `keep_active_try_session_inner`, inside the namespace `promotion_result`, capture the previous current generation before replacing the live DB:
+In `keep_active_try_session_inner`, capture the previous current generation
+immediately before the namespace `promotion_result` closure. Do not declare it
+inside the closure; the recovery block outside the closure must also see it.
 
 ```rust
 let previous_current_generation =
     conary_core::generation::mount::current_generation(runtime_root.root())?;
+
+let promotion_result = (|| -> Result<()> {
+    replace_live_db_with_session_copy(Path::new(db_path), &copied_db_path)?;
+    maybe_force_try_keep_post_backup_failure("after-db-promote")?;
+    // Keep the remaining namespace promotion statements in this closure.
 ```
 
-Then add the new injection point immediately after `publish_generation_link` and before `mark_generation_state_active`:
+Then add the new injection point immediately after `publish_generation_link`
+and before `mark_generation_state_active` inside that closure:
 
 ```rust
 crate::commands::composefs_ops::publish_generation_link(db_path, try_generation_id)?;
@@ -552,7 +560,14 @@ fn restore_previous_current_generation_link(
         None => {
             let current_link = runtime_root.current_link();
             match std::fs::remove_file(&current_link) {
-                Ok(()) => Ok(()),
+                Ok(()) => conary_core::filesystem::durable::sync_parent_directory(&current_link)
+                    .map_err(|error| anyhow::anyhow!(error))
+                    .with_context(|| {
+                        format!(
+                            "failed to sync parent directory after removing {}",
+                            current_link.display()
+                        )
+                    }),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
                 Err(error) => Err(error)
                     .with_context(|| format!("failed to remove {}", current_link.display())),
@@ -782,6 +797,7 @@ Move these tests and their small helpers into a `#[cfg(test)] mod tests` inside 
 - `minimal_package`
 - `manifest_with_post_install_script`
 - `manifest_with_pre_remove_script`
+- `manifest_with_declarative_hook`
 - `manifest_with_systemd_hook`
 - `manifest_with_tmpfiles_hook`
 - `manifest_with_sysctl_hook`
@@ -799,7 +815,29 @@ Move these tests and their small helpers into a `#[cfg(test)] mod tests` inside 
 - `package_round_trip_preserves_declarative_reversibility_for_policy`
 - `allow_irreversible_does_not_permit_scripts_legacy_or_services`
 
-Keep runtime tests that call `begin_try_session` in `mod.rs` for now.
+Start the validation test module with these imports, trimming only if a moved
+helper no longer needs one:
+
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    use conary_core::ccs::builder::write_ccs_package;
+    use conary_core::ccs::manifest::{
+        AlternativeHook, CcsManifest, DirectoryHook, ScriptHook, Service, ServiceAction,
+        SysctlHook, SystemdHook, TmpfilesHook,
+    };
+    use conary_core::ccs::{BuildResult, CcsPackage, ComponentData, FileEntry, FileType};
+    use conary_core::packages::traits::PackageFormat;
+}
+```
+
+Keep runtime tests that call `begin_try_session` in `mod.rs` for now. If a
+manifest helper is used by both validation and runtime tests, either duplicate
+the tiny helper in the moved test module or leave the shared copy in `mod.rs`
+until Task 6 introduces `test_support`.
 
 - [ ] **Step 6: Run focused tests**
 
@@ -838,7 +876,9 @@ Replace `apps/conary/src/commands/try_session/namespace.rs` with:
 
 use anyhow::{Context, Result, bail};
 use conary_core::ccs::manifest::CcsManifest;
+use conary_core::db::models::FileEntry;
 use conary_core::runtime_root::ConaryRuntimeRoot;
+use rusqlite::Connection;
 use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf};
 ```
@@ -861,6 +901,8 @@ Move these existing items from `mod.rs` into `namespace.rs`:
 - `set_file_mode`
 - `root_relative_path`
 - `hook_effect_relative_path`
+- `hook_account_entry_exists`
+- `passwd_like_file_contains_name`
 
 Use `pub(super)` for functions called by `session.rs`:
 
@@ -878,19 +920,27 @@ pub(super) fn promotable_try_hook_root(
 pub(super) fn expose_try_namespace_root(
     runtime_root: &ConaryRuntimeRoot,
     work_dir: &Path,
-    copied_conn: &rusqlite::Connection,
+    copied_conn: &Connection,
     try_generation_id: i64,
     hook_upperdir: &Path,
 ) -> Result<PathBuf>;
 
 pub(super) fn teardown_try_namespace_mounts(work_dir: &Path) -> Result<()>;
 pub(super) fn root_relative_path(path: &str) -> Result<PathBuf>;
+pub(super) fn hook_account_entry_exists(
+    generation_root: &Path,
+    etc_state_root: &Path,
+    relative_file: &str,
+    name: &str,
+) -> bool;
 ```
 
 Move the implementations for those exact functions from `mod.rs` into
 `namespace.rs`, changing only visibility and imports.
 
-Keep the rest private unless a test in the same module needs it.
+Keep the rest private unless a test in the same module needs it. In particular,
+`passwd_like_file_contains_name` stays private behind
+`hook_account_entry_exists`.
 
 - [ ] **Step 2: Move executor helpers into `executor.rs`**
 
@@ -903,6 +953,7 @@ Replace `apps/conary/src/commands/try_session/executor.rs` with:
 use anyhow::{Context, Result, bail};
 use conary_core::db::models::TrySession;
 use std::path::{Path, PathBuf};
+use std::process::{Child, Command};
 
 use super::session::current_boot_id;
 ```
@@ -1011,25 +1062,30 @@ Replace `apps/conary/src/commands/try_session/session.rs` with:
 //! Try-session lifecycle orchestration and liveness policy.
 
 use anyhow::{Context, Result, bail};
+use chrono::Utc;
 use conary_core::ccs::CcsPackage;
 use conary_core::db::backup::{CheckpointReason, create_checkpoint};
 use conary_core::db::models::{CreateTrySession, TrySession, TrySessionMode};
 use conary_core::packages::traits::PackageFormat;
 use conary_core::runtime_root::ConaryRuntimeRoot;
 use conary_core::transaction::{TransactionConfig, TransactionEngine};
+use rusqlite::Connection;
 use std::path::{Path, PathBuf};
+use uuid::Uuid;
 
 use super::executor::run_try_command_for_session;
 use super::install::{build_try_install_plan, build_try_transaction_config, install_try_package};
 use super::namespace::{
-    apply_declarative_try_hooks, expose_try_namespace_root, promotable_try_hook_root,
-    root_relative_path, teardown_try_namespace_mounts,
+    apply_declarative_try_hooks, expose_try_namespace_root, hook_account_entry_exists,
+    promotable_try_hook_root, root_relative_path, teardown_try_namespace_mounts,
 };
 use super::validation::{TryExecutionRoot, validate_try_package_policy};
 use super::{TryStartOutcome, TryStartRequest};
 ```
 
-Move these existing items from `mod.rs` into `session.rs`:
+Move these remaining lifecycle items from `mod.rs` into `session.rs`. The
+`restore_previous_current_generation_link` helper is introduced in Task 4 and
+should also move here during this step.
 
 - `begin_try_session`
 - `rollback_active_try_session`
@@ -1037,8 +1093,6 @@ Move these existing items from `mod.rs` into `session.rs`:
 - `keep_active_try_session_with_probe`
 - `keep_active_try_session_inner`
 - `verify_namespace_try_hook_effects`
-- `hook_account_entry_exists`
-- `passwd_like_file_contains_name`
 - `maybe_force_try_keep_post_backup_failure`
 - `restore_previous_current_generation_link`
 - `restore_live_db_from_checkpoint`
@@ -1066,7 +1120,15 @@ pub(crate) fn current_boot_id() -> String;
 Move the implementations for those exact functions from `mod.rs` into
 `session.rs`, changing only imports and sibling-module qualifiers.
 
-Keep internal helpers private unless needed by a sibling module.
+Inside `verify_namespace_try_hook_effects`, use `root_relative_path` for
+directory effect paths and call `namespace::hook_account_entry_exists` for
+user/group effect checks.
+
+Keep internal helpers private unless needed by a sibling module. If `session.rs`
+exceeds 1500 lines after the move, add a follow-up note naming the DB-promotion
+helpers (`restore_live_db_from_checkpoint`, `checkpoint_session_db`,
+`replace_live_db_with_session_copy`, `vacuum_db_into`, SQLite sidecar helpers)
+as the likely future `db.rs` boundary, but do not split them during M3c0.
 
 - [ ] **Step 2: Move pure liveness helpers from dispatch into `session.rs`**
 
@@ -1106,6 +1168,10 @@ fn try_launcher_pid_is_alive(pid: i64) -> bool {
     Path::new("/proc").join(pid.to_string()).exists()
 }
 ```
+
+Compilation may be temporarily broken after this step until Step 4 updates
+`dispatch/root.rs` imports. Do not stop between those steps except to inspect a
+specific compiler error.
 
 Do not move:
 
@@ -1193,7 +1259,8 @@ Expected: all try-session and dispatch preflight tests pass.
 
 ```bash
 git add apps/conary/src/commands/try_session apps/conary/src/dispatch/root.rs
-git commit -m "refactor(try): split session lifecycle"
+git commit -m "refactor(try): split session lifecycle" \
+  -m "Preserve namespace_try_session_is_decision_pending name from dispatch; a rename is deferred to a separate cleanup slice."
 ```
 
 ### Task 8: Reduce Visibility And Remove Old Monolith Coupling
