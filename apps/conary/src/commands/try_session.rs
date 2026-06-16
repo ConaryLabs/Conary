@@ -1712,24 +1712,19 @@ mod tests {
 
     #[test]
     fn activated_no_command_session_records_boot_without_launcher_pid() -> anyhow::Result<()> {
+        let _env_lock = ENV_LOCK.lock().unwrap();
+        let _boot_guard = EnvVarGuard::set("CONARY_TEST_BOOT_ID", "boot-a");
+        let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
         let fixture = TryRuntimeFixture::new();
-        let conn = fixture.open();
-        let session = TrySession::create_active(
-            &conn,
-            CreateTrySession {
-                id: "try-activated-no-command",
-                package_path: "/tmp/demo.ccs",
-                package_name: Some("demo"),
-                package_version: Some("1.0.0"),
-                previous_generation_id: Some(1),
-                mode: TrySessionMode::Activated,
-                work_dir: "/tmp/try-activated-no-command",
-            },
-        )?;
+        create_current_generation_link(&fixture.root, 1);
+        let package = fixture.write_package(
+            "try-activated-no-command",
+            CcsManifest::new_minimal("try-activated-no-command", "1.0.0"),
+        );
 
-        record_activated_try_boot(&conn, &session.id, "boot-a")?;
+        let outcome = begin_activated_try(&fixture, &package)?;
 
-        let stored = stored_session(&fixture, &session.id);
+        let stored = stored_session(&fixture, &outcome.session_id);
         assert_eq!(stored.launcher_boot_id.as_deref(), Some("boot-a"));
         assert_eq!(stored.launcher_pid, None);
         Ok(())
@@ -2913,6 +2908,55 @@ replacement = "complete"
     }
 
     #[test]
+    fn namespace_keep_restores_current_link_after_post_link_failure() -> anyhow::Result<()> {
+        let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+        let _env_lock = ENV_LOCK.lock().unwrap();
+        let _fail_guard =
+            EnvVarGuard::set("CONARY_TEST_TRY_KEEP_FAIL_AFTER_BACKUP", "after-current-link");
+        let fixture = TryRuntimeFixture::new();
+        create_current_generation_link(&fixture.root, 7);
+        let package = fixture.write_package(
+            "try-restore-current-link",
+            CcsManifest::new_minimal("try-restore-current-link", "1.0.0"),
+        );
+        let outcome = begin_namespace_try(&fixture, &package)?;
+        assert_ne!(
+            conary_core::generation::mount::current_generation(&fixture.root)?,
+            Some(outcome.try_generation_id)
+        );
+
+        let err = keep_active_try_session(&fixture.db_path_string)
+            .expect_err("forced post-link failure should abort keep");
+        let error_chain = format!("{err:#}");
+        assert!(
+            error_chain.contains("forced try keep failure"),
+            "{error_chain}"
+        );
+        assert!(
+            error_chain.contains("restored live DB checkpoint"),
+            "{error_chain}"
+        );
+
+        assert_eq!(
+            conary_core::generation::mount::current_generation(&fixture.root)?,
+            Some(7),
+            "current generation link must be restored after post-link keep failure"
+        );
+        let conn = fixture.open();
+        let installed_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM troves WHERE name = 'try-restore-current-link'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(installed_count, 0);
+        assert_eq!(
+            stored_session(&fixture, &outcome.session_id).status,
+            conary_core::db::models::TrySessionStatus::Active
+        );
+        Ok(())
+    }
+
+    #[test]
     fn namespace_keep_fails_when_declarative_hook_effect_is_not_promotable() -> anyhow::Result<()> {
         let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
         let fixture = TryRuntimeFixture::new();
@@ -3045,6 +3089,7 @@ replacement = "complete"
         let _launcher_guard = EnvVarGuard::set("CONARY_TEST_TRY_LAUNCHER", &launcher);
         let _pid_guard = EnvVarGuard::set("TRY_PID_FILE", &pid_file);
         let _release_guard = EnvVarGuard::set("TRY_RELEASE_FILE", &release_file);
+        let _boot_guard = EnvVarGuard::set("CONARY_TEST_BOOT_ID", "boot-launcher");
         let fixture = TryRuntimeFixture::new();
         let package = fixture.write_package(
             "try-launch-liveness",
@@ -3083,7 +3128,10 @@ replacement = "complete"
             live_session.launcher_pid,
             Some(i64::from(std::process::id()))
         );
-        assert!(live_session.launcher_boot_id.is_some());
+        assert_eq!(
+            live_session.launcher_boot_id.as_deref(),
+            Some("boot-launcher")
+        );
 
         let copied_db_path = PathBuf::from(&live_session.work_dir).join("conary.db");
         let copied_session = poll_until(std::time::Duration::from_secs(5), || {
