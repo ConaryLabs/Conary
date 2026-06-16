@@ -583,12 +583,7 @@ fn activated_try_session_is_live(
 }
 
 fn current_boot_id() -> String {
-    if let Ok(value) = std::env::var("CONARY_TEST_BOOT_ID") {
-        return value;
-    }
-    std::fs::read_to_string("/proc/sys/kernel/random/boot_id")
-        .map(|value| value.trim().to_string())
-        .unwrap_or_else(|_| "unknown-boot".to_string())
+    commands::try_session::current_boot_id()
 }
 
 fn env_forces_non_interactive() -> bool {

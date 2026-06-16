@@ -158,6 +158,32 @@ impl TrySession {
         self.require_open_update(conn, affected)
     }
 
+    pub fn clear_launcher(&self, conn: &Connection) -> Result<()> {
+        let affected = conn.execute(
+            "UPDATE try_sessions
+             SET launcher_pid = NULL,
+                 launcher_boot_id = NULL,
+                 updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+             WHERE id = ?1
+               AND status IN ('active', 'orphaned')",
+            params![self.id],
+        )?;
+        self.require_open_update(conn, affected)
+    }
+
+    pub fn record_boot_without_launcher(&self, conn: &Connection, boot_id: &str) -> Result<()> {
+        let affected = conn.execute(
+            "UPDATE try_sessions
+             SET launcher_pid = NULL,
+                 launcher_boot_id = ?1,
+                 updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+             WHERE id = ?2
+               AND status IN ('active', 'orphaned')",
+            params![boot_id, self.id],
+        )?;
+        self.require_open_update(conn, affected)
+    }
+
     pub fn mark_orphaned(&self, conn: &Connection) -> Result<()> {
         self.set_status(conn, TrySessionStatus::Orphaned, false, None)
     }

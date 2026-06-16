@@ -1374,16 +1374,9 @@ fn wait_try_command(running: &mut RunningTryCommand) -> Result<()> {
 }
 
 fn clear_try_launcher(conn: &rusqlite::Connection, session_id: &str) -> Result<()> {
-    conn.execute(
-        "UPDATE try_sessions
-         SET launcher_pid = NULL,
-             launcher_boot_id = NULL,
-             updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-         WHERE id = ?1
-           AND status IN ('active', 'orphaned')",
-        [session_id],
-    )?;
-    Ok(())
+    let session = TrySession::find_by_id(conn, session_id)?
+        .ok_or_else(|| anyhow::anyhow!("try session {session_id} not found"))?;
+    Ok(session.clear_launcher(conn)?)
 }
 
 fn record_activated_try_boot(
@@ -1391,19 +1384,15 @@ fn record_activated_try_boot(
     session_id: &str,
     boot_id: &str,
 ) -> Result<()> {
-    conn.execute(
-        "UPDATE try_sessions
-         SET launcher_pid = NULL,
-             launcher_boot_id = ?1,
-             updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-         WHERE id = ?2
-           AND status IN ('active', 'orphaned')",
-        rusqlite::params![boot_id, session_id],
-    )?;
-    Ok(())
+    let session = TrySession::find_by_id(conn, session_id)?
+        .ok_or_else(|| anyhow::anyhow!("try session {session_id} not found"))?;
+    Ok(session.record_boot_without_launcher(conn, boot_id)?)
 }
 
-fn current_boot_id() -> String {
+pub(crate) fn current_boot_id() -> String {
+    if let Ok(value) = std::env::var("CONARY_TEST_BOOT_ID") {
+        return value;
+    }
     std::fs::read_to_string("/proc/sys/kernel/random/boot_id")
         .map(|value| value.trim().to_string())
         .unwrap_or_else(|_| "unknown-boot".to_string())
