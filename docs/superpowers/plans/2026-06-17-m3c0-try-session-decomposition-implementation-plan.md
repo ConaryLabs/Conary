@@ -717,7 +717,7 @@ Move these existing items from `mod.rs` into `validation.rs` below that header:
 In `mod.rs`, import what callers/tests still use:
 
 ```rust
-pub(crate) use validation::{
+use validation::{
     TryExecutionRoot, validate_try_manifest_policy, validate_try_package_policy,
 };
 ```
@@ -955,7 +955,7 @@ use conary_core::db::models::TrySession;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 
-use super::session::current_boot_id;
+use super::current_boot_id;
 ```
 
 Move these existing items from `mod.rs` into `executor.rs`:
@@ -1119,6 +1119,12 @@ pub(crate) fn current_boot_id() -> String;
 
 Move the implementations for those exact functions from `mod.rs` into
 `session.rs`, changing only imports and sibling-module qualifiers.
+After `current_boot_id` moves into `session.rs`, update `executor.rs` to import
+it from the session module instead of the parent module:
+
+```rust
+use super::session::current_boot_id;
+```
 
 Inside `verify_namespace_try_hook_effects`, use `root_relative_path` for
 directory effect paths and call `namespace::hook_account_entry_exists` for
@@ -1241,8 +1247,13 @@ Move lifecycle tests into `session.rs`, including:
 - `namespace_keep_restores_current_link_after_post_link_failure`
 - `namespace_keep_fails_when_declarative_hook_effect_is_not_promotable`
 - `keep_time_hook_verification_checks_user_group_effects`
+- `proc_liveness_probe_rejects_non_positive_pids`
 
 Keep shared test fixture helpers in `mod.rs` as `#[cfg(test)] pub(super) mod test_support` if more than one child module needs them.
+Move `proc_liveness_probe_rejects_non_positive_pids` out of
+`dispatch/root.rs` because `try_launcher_pid_is_alive` becomes private in
+`session.rs`. Remove the now-unused `std::path::Path` import from the dispatch
+test module if no remaining dispatch test needs it.
 
 - [ ] **Step 6: Run focused tests**
 
@@ -1275,7 +1286,7 @@ git commit -m "refactor(try): split session lifecycle" \
 Run:
 
 ```bash
-rg -n "pub\\(crate\\)|pub\\(super\\)|pub fn|pub struct|pub enum" apps/conary/src/commands/try_session
+rg -n "pub\\(crate\\)|pub fn|pub struct|pub enum" apps/conary/src/commands/try_session
 ```
 
 Expected crate-facing allowlist only:
@@ -1293,6 +1304,16 @@ current_boot_id
 namespace_try_session_is_decision_pending
 activated_try_session_is_live
 ```
+
+Run a separate sibling-visibility review:
+
+```bash
+rg -n "pub\\(super\\)" apps/conary/src/commands/try_session
+```
+
+Expected: sibling visibility is limited to named collaboration points between
+the child modules, such as install planning, namespace exposure, executor
+launching, and private test support.
 
 - [ ] **Step 2: Tighten visibility**
 
@@ -1352,7 +1373,20 @@ git commit -m "refactor(try): narrow module visibility"
 - Modify: `docs/llms/subsystem-map.md`
 - Modify: `docs/modules/feature-ownership.md`
 
-- [ ] **Step 1: Mark M3c0 landed in the M3 umbrella**
+- [ ] **Step 1: Run the coherency-ledger precheck**
+
+Before editing public or assistant-facing docs, run the AGENTS-required ledger
+lookup:
+
+```bash
+rg -n "docs/llms/subsystem-map.md|docs/modules/feature-ownership.md|2026-06-15-m3-packaging-differentiators-design|apps/conary/src/commands/try_session" docs/superpowers/feature-coherency-ledger.tsv
+```
+
+Expected: if rows match, run the coherency checks named by the ledger before
+committing docs. If no rows match, record that no ledger-gated checks were
+required.
+
+- [ ] **Step 2: Mark M3c0 landed in the M3 umbrella**
 
 In `docs/superpowers/specs/2026-06-15-m3-packaging-differentiators-design.md`, change:
 
@@ -1380,7 +1414,7 @@ to:
 
 Do not mark M3c watch as landed.
 
-- [ ] **Step 2: Update `docs/llms/subsystem-map.md`**
+- [ ] **Step 3: Update `docs/llms/subsystem-map.md`**
 
 Replace the `apps/conary/src/commands/try_session.rs` entry in the packaging look-here list with:
 
@@ -1390,7 +1424,7 @@ Replace the `apps/conary/src/commands/try_session.rs` entry in the packaging loo
 
 If the file list includes individual tests, keep `apps/conary/tests/packaging_m1b.rs`.
 
-- [ ] **Step 3: Update `docs/modules/feature-ownership.md`**
+- [ ] **Step 4: Update `docs/modules/feature-ownership.md`**
 
 In the packaging ownership card, replace:
 
@@ -1412,17 +1446,29 @@ Ensure the focused proof list includes:
 `cargo test -p conary --test packaging_m1b`.
 ```
 
-- [ ] **Step 4: Run docs checks**
+- [ ] **Step 5: Run docs checks**
 
 Run:
 
 ```bash
-rg -n "apps/conary/src/commands/try_session\\.rs" docs/llms/subsystem-map.md docs/modules/feature-ownership.md docs/superpowers/specs/2026-06-15-m3-packaging-differentiators-design.md
+rg -n "apps/conary/src/commands/try_session\\.rs" \
+  docs/llms/subsystem-map.md \
+  docs/modules/feature-ownership.md
 ```
 
-Expected: no active look-here reference remains in those files. Historical discussion in the M3c0 spec may still mention the retired monolith as current-before-M3c0 context.
+Expected: no active look-here reference remains in routing docs.
 
-- [ ] **Step 5: Commit docs routing**
+Then check the M3 umbrella separately:
+
+```bash
+rg -n "apps/conary/src/commands/try_session\\.rs" \
+  docs/superpowers/specs/2026-06-15-m3-packaging-differentiators-design.md
+```
+
+Expected: any remaining matches are explicitly historical/past-tense context.
+Prefer updating or removing them if they still read as current routing.
+
+- [ ] **Step 6: Commit docs routing**
 
 ```bash
 git add docs/superpowers/specs/2026-06-15-m3-packaging-differentiators-design.md docs/llms/subsystem-map.md docs/modules/feature-ownership.md
