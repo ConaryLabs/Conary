@@ -159,6 +159,94 @@ pub fn prepare_artifact_form_static_context(
     .prepare()
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct StaticDestinationMetadataVersions {
+    pub root_version: u64,
+    pub targets_version: u64,
+    pub snapshot_version: u64,
+    pub timestamp_version: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct StaticArtifactDestinationSnapshot {
+    pub initial: bool,
+    pub root_key_fingerprint: Option<String>,
+    pub package_keys_sha256: Option<String>,
+    pub accepted_signer_set_hash: Option<String>,
+    pub publish_policy_digest: String,
+    pub metadata_versions: Option<StaticDestinationMetadataVersions>,
+}
+
+pub fn inspect_artifact_form_static_destination(
+    destination: &RepoLocation,
+) -> Result<StaticArtifactDestinationSnapshot> {
+    ensure_static_local_publish_destination(destination)?;
+    let RepoLocation::File { root } = destination else {
+        bail!("static publish destination inspection only supports file repositories");
+    };
+    let destination = read_destination_state(root, false)?;
+    if destination.initial {
+        return Ok(StaticArtifactDestinationSnapshot {
+            initial: true,
+            root_key_fingerprint: None,
+            package_keys_sha256: destination
+                .package_keys_bytes
+                .as_deref()
+                .map(crate::hash::sha256_prefixed),
+            accepted_signer_set_hash: None,
+            publish_policy_digest: STATIC_PUBLISH_POLICY_DIGEST_V1.to_string(),
+            metadata_versions: None,
+        });
+    }
+
+    let root = destination
+        .root
+        .as_ref()
+        .context("verified destination snapshot missing root metadata")?;
+    let root_key_fingerprint = root_role_keyids_fingerprint(root)?;
+    let package_keys_sha256 = destination
+        .package_keys_bytes
+        .as_deref()
+        .map(crate::hash::sha256_prefixed);
+    let accepted_signer_set_hash = match destination.package_keys_bytes.as_deref() {
+        Some(bytes) => {
+            let text = std::str::from_utf8(bytes)?;
+            let keys = PackageKeysFile::parse(text)?;
+            Some(AcceptedStaticSignerSet::from_verified_package_keys(&keys)?.canonical_hash()?)
+        }
+        None => None,
+    };
+
+    Ok(StaticArtifactDestinationSnapshot {
+        initial: false,
+        root_key_fingerprint: Some(root_key_fingerprint),
+        package_keys_sha256,
+        accepted_signer_set_hash,
+        publish_policy_digest: STATIC_PUBLISH_POLICY_DIGEST_V1.to_string(),
+        metadata_versions: Some(StaticDestinationMetadataVersions {
+            root_version: root.signed.version,
+            targets_version: destination
+                .targets
+                .as_ref()
+                .context("verified destination snapshot missing targets metadata")?
+                .signed
+                .version,
+            snapshot_version: destination
+                .snapshot
+                .as_ref()
+                .context("verified destination snapshot missing snapshot metadata")?
+                .signed
+                .version,
+            timestamp_version: destination
+                .timestamp
+                .as_ref()
+                .context("verified destination snapshot missing timestamp metadata")?
+                .signed
+                .version,
+        }),
+    })
+}
+
 pub struct ProjectFormAttestationInput<'a> {
     pub package_path: &'a Path,
     pub provenance: &'a ManifestProvenance,
@@ -602,6 +690,17 @@ fn verify_target_payload(
     Ok(())
 }
 
+fn root_role_keyids_fingerprint(root: &Signed<RootMetadata>) -> Result<String> {
+    let role = root
+        .signed
+        .roles
+        .get("root")
+        .context("destination root metadata missing root role")?;
+    let mut keyids = role.keyids.clone();
+    keyids.sort();
+    crate::ccs::attestation::canonical_json_hash(&keyids)
+}
+
 pub(crate) fn verify_destination_matches_operator_keys(
     root: &Signed<RootMetadata>,
     root_key: &SigningKeyPair,
@@ -995,6 +1094,60 @@ mod tests {
                 .accepts_key_id(&context.active_publish_key_id)
         );
         assert!(!context.accepted_signers.accepts_key_id("stray"));
+    }
+
+    #[test]
+    fn artifact_destination_snapshot_is_read_only_for_missing_repo() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let repo = temp.path().join("repo");
+        let destination = RepoLocation::File { root: repo.clone() };
+
+        let snapshot = inspect_artifact_form_static_destination(&destination).unwrap();
+
+        assert!(snapshot.initial);
+        assert!(snapshot.root_key_fingerprint.is_none());
+        assert!(
+            !repo.exists(),
+            "read-only snapshot must not create repository directories"
+        );
+    }
+
+    #[test]
+    fn artifact_destination_snapshot_reports_existing_trust_state() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let context = prepare_existing_repo_context_for_tests(temp.path()).unwrap();
+        let destination = context.destination.clone();
+
+        let snapshot = inspect_artifact_form_static_destination(&destination).unwrap();
+
+        assert!(!snapshot.initial);
+        assert!(
+            snapshot
+                .root_key_fingerprint
+                .as_deref()
+                .unwrap()
+                .starts_with("sha256:")
+        );
+        assert!(
+            snapshot
+                .package_keys_sha256
+                .as_deref()
+                .unwrap()
+                .starts_with("sha256:")
+        );
+        assert!(
+            snapshot
+                .accepted_signer_set_hash
+                .as_deref()
+                .unwrap()
+                .starts_with("sha256:")
+        );
+        assert_eq!(snapshot.publish_policy_digest, STATIC_PUBLISH_POLICY_DIGEST_V1);
+        let versions = snapshot.metadata_versions.expect("metadata versions");
+        assert!(versions.root_version >= 1);
+        assert!(versions.targets_version >= 1);
+        assert!(versions.snapshot_version >= 1);
+        assert!(versions.timestamp_version >= 1);
     }
 
     impl StaticPublishPrepareOptions {
