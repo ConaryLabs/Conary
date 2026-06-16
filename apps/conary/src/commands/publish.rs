@@ -10,8 +10,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use conary_core::ccs::manifest::ManifestProvenance;
 use conary_core::diagnostics::{
-    DiagnosticEvidence, PackagingArtifact, PackagingCommandOutput, PackagingDiagnostic,
-    PackagingDiagnosticCode, PackagingPhase,
+    DiagnosticEvidence, PackagingArtifact, PackagingCommandOutput, PackagingCommandStatus,
+    PackagingDiagnostic, PackagingDiagnosticCode, PackagingEvent, PackagingEventKind,
+    PackagingPhase,
 };
 use conary_core::recipe::Recipe;
 use conary_core::recipe::hermetic::{CiMode, DivergenceStatus, HermeticBuildInput};
@@ -48,6 +49,19 @@ pub struct PublishOptions {
     pub rotate_root_key: bool,
     pub yes: bool,
     pub json: bool,
+}
+
+pub(crate) struct StaticArtifactPublishServiceInput {
+    pub artifact_path: PathBuf,
+    pub target: String,
+    pub key_dir: Option<PathBuf>,
+    pub state_file: Option<PathBuf>,
+    pub refresh: bool,
+    pub force_reinit: bool,
+    pub accept_destination_state: bool,
+    pub rotate_publish_key: bool,
+    pub rotate_root_key: bool,
+    pub operation_id: String,
 }
 
 pub async fn cmd_publish(options: PublishOptions) -> Result<()> {
@@ -107,7 +121,7 @@ fn publish_gate_failure_output(
     let mut diagnostic = PackagingDiagnostic::error(
         PackagingPhase::Publish,
         code,
-        "Static artifact publish gate failed",
+        format_publish_gate_failures(report),
     );
     let report_value = serde_json::to_value(report)
         .unwrap_or_else(|error| serde_json::json!({ "serialization_error": error.to_string() }));
@@ -300,32 +314,68 @@ async fn publish_static_artifact_form(
     writer: &mut impl Write,
     operation_id: String,
 ) -> Result<()> {
-    let artifact_path = PathBuf::from(&options.what);
-    let destination =
-        RepoLocation::parse(target).with_context(|| format!("parse publish target {target}"))?;
+    let json = options.json;
+    let input = StaticArtifactPublishServiceInput {
+        artifact_path: PathBuf::from(&options.what),
+        target: target.to_string(),
+        key_dir: options.key_dir.as_deref().map(PathBuf::from),
+        state_file: options.state_file.as_deref().map(PathBuf::from),
+        refresh: options.refresh,
+        force_reinit: options.force_reinit,
+        accept_destination_state: options.accept_destination_state,
+        rotate_publish_key: options.rotate_publish_key,
+        rotate_root_key: options.rotate_root_key,
+        operation_id,
+    };
+    let output = publish_static_artifact_form_service(input).await?;
+
+    if output.status == PackagingCommandStatus::Failed {
+        super::diagnostics::write_packaging_output(&output, json, writer)?;
+        super::diagnostics::write_packaging_record_if_possible(&output);
+        bail!("{}", publish_failure_message_from_output(&output));
+    }
+
+    if json {
+        super::diagnostics::write_packaging_output(&output, true, writer)?;
+    } else {
+        let repo_name = derive_repo_name(target)?;
+        writeln!(
+            writer,
+            "Published attested artifact to static repo: {repo_name}"
+        )?;
+        if let Some(publish_key_id) = publish_key_id_from_output(&output) {
+            writeln!(writer, "Publish key ID: {publish_key_id}")?;
+        }
+    }
+    super::diagnostics::write_packaging_record_if_possible(&output);
+
+    Ok(())
+}
+
+pub(crate) async fn publish_static_artifact_form_service(
+    input: StaticArtifactPublishServiceInput,
+) -> Result<PackagingCommandOutput> {
+    let artifact_path = input.artifact_path;
+    let destination = RepoLocation::parse(&input.target)
+        .with_context(|| format!("parse publish target {}", input.target))?;
     ensure_static_local_publish_destination(&destination)?;
-    let repo_name = derive_repo_name(target)?;
-    let key_dir = resolve_key_dir(options.key_dir.as_deref(), &repo_name)?;
-    let prepared =
-        prepare_artifact_form_static_context(&destination, &key_dir, options.force_reinit)
-            .with_context(|| format!("prepare static artifact publish context for {repo_name}"))?;
+    let repo_name = derive_repo_name(&input.target)?;
+    let key_dir = match input.key_dir {
+        Some(key_dir) => key_dir,
+        None => resolve_key_dir(None, &repo_name)?,
+    };
+    let prepared = prepare_artifact_form_static_context(&destination, &key_dir, input.force_reinit)
+        .with_context(|| format!("prepare static artifact publish context for {repo_name}"))?;
     let report = verify_static_artifact_publish_eligibility(
         &artifact_path,
         &prepared.accepted_signers,
         &prepared.publish_policy_digest,
     )?;
     if !report.is_passed() {
-        if options.json {
-            let output = publish_gate_failure_output(&operation_id, &report);
-            super::diagnostics::write_packaging_output(&output, true, writer)?;
-            super::diagnostics::write_packaging_record_if_possible(&output);
-        }
-        bail!("{}", format_publish_gate_failures(&report));
+        return Ok(publish_gate_failure_output(&input.operation_id, &report));
     }
-    let state_file = options
+    let state_file = input
         .state_file
-        .as_deref()
-        .map(PathBuf::from)
         .unwrap_or_else(|| key_dir.join("last-published.toml"));
     let outcome = publish_static_repo(StaticPublishOptions {
         repo_name: repo_name.clone(),
@@ -334,32 +384,49 @@ async fn publish_static_artifact_form(
         key_dir,
         state_file,
         package_paths: vec![artifact_path.clone()],
-        refresh: options.refresh,
-        force_reinit: options.force_reinit,
-        accept_destination_state: options.accept_destination_state,
-        rotate_publish_key: options.rotate_publish_key,
-        rotate_root_key: options.rotate_root_key,
+        refresh: input.refresh,
+        force_reinit: input.force_reinit,
+        accept_destination_state: input.accept_destination_state,
+        rotate_publish_key: input.rotate_publish_key,
+        rotate_root_key: input.rotate_root_key,
         artifact_gate_context: Some(prepared.artifact_gate_context()),
     })
     .with_context(|| format!("publish attested artifact to static repo {repo_name}"))?;
 
-    let mut output = publish_success_output(&operation_id, "Published static artifact to repo");
+    let mut output =
+        publish_success_output(&input.operation_id, "Published static artifact to repo");
     output.artifacts.push(PackagingArtifact {
         path: artifact_path.display().to_string(),
         kind: Some("ccs".to_string()),
     });
-    if options.json {
-        super::diagnostics::write_packaging_output(&output, true, writer)?;
-    } else {
-        writeln!(
-            writer,
-            "Published attested artifact to static repo: {repo_name}"
-        )?;
-        writeln!(writer, "Publish key ID: {}", outcome.publish_key_id)?;
-    }
-    super::diagnostics::write_packaging_record_if_possible(&output);
+    output.events.push(PackagingEvent {
+        schema_version: conary_core::diagnostics::PACKAGING_JSON_SCHEMA_VERSION,
+        operation_id: input.operation_id,
+        sequence: 1,
+        phase: PackagingPhase::Publish,
+        kind: PackagingEventKind::OperationFinished,
+        message: Some(format!("Publish key ID: {}", outcome.publish_key_id)),
+        diagnostic: None,
+        artifact: None,
+        progress: None,
+    });
+    Ok(output)
+}
 
-    Ok(())
+fn publish_failure_message_from_output(output: &PackagingCommandOutput) -> String {
+    output
+        .diagnostics
+        .first()
+        .map(|diagnostic| diagnostic.message.clone())
+        .unwrap_or_else(|| "static artifact publish failed".to_string())
+}
+
+fn publish_key_id_from_output(output: &PackagingCommandOutput) -> Option<&str> {
+    output
+        .events
+        .iter()
+        .filter_map(|event| event.message.as_deref())
+        .find_map(|message| message.strip_prefix("Publish key ID: "))
 }
 
 async fn publish_remi_artifact_form(options: PublishOptions, target: &str) -> Result<()> {
@@ -557,6 +624,35 @@ mod tests {
             value["diagnostics"][0]["evidence"][0]["metadata"]["publish_lint_report"]["failures"]
                 [0]["code"],
             "missing-attestation"
+        );
+    }
+
+    #[tokio::test]
+    async fn static_artifact_service_helper_returns_structured_gate_failure() {
+        let fixture = ArtifactPublishFixture::without_attestation();
+        let output = publish_static_artifact_form_service(StaticArtifactPublishServiceInput {
+            artifact_path: fixture.package_path.clone(),
+            target: fixture.repo_dir.display().to_string(),
+            key_dir: Some(fixture.key_dir.clone()),
+            state_file: Some(fixture.state_file.clone()),
+            refresh: false,
+            force_reinit: false,
+            accept_destination_state: false,
+            rotate_publish_key: false,
+            rotate_root_key: false,
+            operation_id: "publish-test".to_string(),
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(output.operation_id, "publish-test");
+        assert_eq!(
+            output.status,
+            conary_core::diagnostics::PackagingCommandStatus::Failed
+        );
+        assert_eq!(
+            output.diagnostics[0].code,
+            PackagingDiagnosticCode::PublishGateFailed
         );
     }
 
