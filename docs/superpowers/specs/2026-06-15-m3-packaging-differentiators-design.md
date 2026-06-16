@@ -1,7 +1,7 @@
 # M3 Packaging Differentiators Design
 
 **Date:** 2026-06-15
-**Status:** Review-patched umbrella design, pre-implementation planning
+**Status:** M3a landed; M3b ready for design and planning
 **Parent design:** `docs/superpowers/specs/2026-06-10-packaging-toolchain-design.md`
 **Prerequisite milestone:** M2 release surface
 
@@ -16,11 +16,10 @@ surfaces:
 - `conary try --watch`
 - record mode
 
-These are not four independent inventions. M3 must first establish a shared
-diagnostic, event, operation-record, and redaction contract, then let the CLI,
-MCP, watch mode, and record mode consume it. The first implementation slice
-should therefore be structured diagnostics and events plus the local operation
-record store they need. Record mode remains a prototype spike until tracing,
+These are not four independent inventions. M3 first established a shared
+diagnostic, event, operation-record, and redaction contract in M3a. The CLI,
+MCP, watch mode, and record mode consume that foundation rather than inventing
+separate result formats. Record mode remains a prototype spike until tracing,
 redaction, and draft recipe quality are proven.
 
 The core invariant is:
@@ -46,15 +45,23 @@ those already-classified facts, not inputs to the trust decision.
   `crates/conary-core/src/recipe/inference/`, but M3 still needs a broader
   diagnostic/event model that spans inference, Kitchen execution, try sessions,
   publish gates, and record-mode traces.
-- `apps/conary/src/commands/operation_records.rs` already provides atomic JSON
-  record helpers for takeover/bootstrap operations. It does not yet define a
-  packaging operation store, recent-record listing, retention, or
-  redaction-before-write behavior.
+- `crates/conary-core/src/diagnostics/` now owns the shared packaging
+  diagnostic, event, redaction, and JSON schema contract. M3a set
+  `schema_version = 1` for command JSON and operation records.
+- `apps/conary/src/commands/diagnostics.rs` now owns CLI packaging diagnostic
+  rendering, redaction-before-write, and operation-record integration helpers.
+- `apps/conary/src/commands/operation_records.rs` now provides the private
+  packaging operation store with atomic JSON writes, recent-record listing,
+  newest-50 retention, and `0600` records under a `0700` directory.
+- `conary cook --json` and `conary publish --json` now emit structured
+  packaging command output for the representative M3a paths, including static
+  artifact publish gate failures, project-form publish preflight failures, and
+  the explicit Remi JSON unsupported diagnostic.
 - `apps/conary/src/commands/cook.rs`,
   `apps/conary/src/commands/publish.rs`, and
-  `apps/conary/src/commands/try_session.rs` currently render human output
-  directly in command-owned code. M3 should extract structured reports and keep
-  rendering at the CLI edge.
+  `apps/conary/src/commands/try_session.rs` still retain command-owned human
+  output paths in places. Later M3 slices may deepen structured event coverage,
+  but rendering glue should remain at the CLI edge.
 - `apps/conary/src/commands/try_session.rs` is already over 3000 lines. Watch
   mode must not become another large block in that file. It needs a focused
   watch orchestrator and a narrow try-session API.
@@ -107,7 +114,7 @@ M3 remains one umbrella design executed as reviewable slices:
 
 | Slice | Name | Gate |
 |-------|------|------|
-| M3a | Structured diagnostics and events | Stable JSON schema, renderer parity, no secret leakage |
+| M3a | Structured diagnostics and events | Landed: stable schema v1, renderer parity for cook/publish JSON paths, no secret leakage |
 | M3b | Agent-native packaging MCP surface | Thin transport over shared contract, read/diagnostic tools first |
 | M3c0 | Try-session decomposition | Reviewed move map and parity tests before watch behavior |
 | M3c | Watch mode | Source watch composes cook and try through narrow APIs |
@@ -120,11 +127,12 @@ stabilizes it.
 
 ## M3a: Structured Diagnostics And Events
 
-M3a adds the foundation. Packaging failures and progress become structured
-values, then the CLI chooses how to render them.
+M3a added the foundation. Packaging failures and progress now have shared
+structured values, and the CLI chooses how to render them for the landed
+cook/publish JSON surfaces.
 
-The diagnostic model should be shared from `conary-core`, because the causes
-mostly belong to core packaging concepts:
+The diagnostic model is shared from `conary-core`, because the causes mostly
+belong to core packaging concepts:
 
 ```rust
 PackagingDiagnostic {
@@ -138,23 +146,22 @@ PackagingDiagnostic {
 }
 ```
 
-Recommended ownership:
+Landed ownership:
 
-- `crates/conary-core/src/diagnostics/` or
-  `crates/conary-core/src/recipe/diagnostics/`: shared DTOs, stable codes,
-  evidence records, suggestion records, redaction markers, and schema tests.
+- `crates/conary-core/src/diagnostics/`: shared DTOs, stable codes, evidence
+  records, suggestion records, redaction markers, redaction policy, and schema
+  tests.
 - `apps/conary/src/commands/diagnostics.rs`: CLI rendering helpers for human
-  text and JSON serialization.
-- Packaging commands remain orchestration owners, but they should emit or
-  convert structured diagnostics instead of building ad hoc error strings at
-  every call site.
+  text, JSON serialization, redaction-before-write, and operation-record glue.
+- Packaging commands remain orchestration owners. M3a converted the representative
+  cook and publish JSON/report paths; later slices can convert additional
+  command surfaces as they become agent-facing.
 
 Human rendering and JSON rendering must both derive from these values. M3a
-should not add a parallel JSON-only path while leaving human output on scattered
-`println!` or `writeln!` call sites. `apps/conary/src/commands/diagnostics.rs`
-owns rendering and small formatting helpers; command files own orchestration.
-This preserves the ownership boundary for large command files such as
-`cook.rs`, `publish.rs`, and `try_session.rs`.
+did not add a second packaging JSON contract. `apps/conary/src/commands/diagnostics.rs`
+owns shared rendering and small formatting helpers; command files own
+orchestration. This preserves the ownership boundary for large command files
+such as `cook.rs`, `publish.rs`, and `try_session.rs`.
 
 The event model should cover long-running operations without turning every log
 line into API:
@@ -172,8 +179,8 @@ PackagingEvent {
 }
 ```
 
-M3a should define a small stable set first: operation started, phase started,
-phase finished, command started, command failed, diagnostic emitted, artifact
+M3a defined a small stable set first: operation started, phase started, phase
+finished, command started, command failed, diagnostic emitted, artifact
 created, and operation finished.
 
 `operation_id` is an instance-correlation id, not an operation kind. It should
@@ -196,14 +203,14 @@ M3a also defines the contract relationship with the existing agent vocabulary:
 - MCP adapters project core DTOs into `OperationEnvelope` rather than
   introducing a third evidence or risk vocabulary.
 
-`--json` should have two modes:
+`--json` has one landed M3a mode and one reserved later mode:
 
-- default command JSON: one final object containing outcome, diagnostics,
+- landed default command JSON: one final object containing outcome, diagnostics,
   artifacts, and summary
-- streaming JSON lines for watch/long-running operations, added when a command
-  needs event streaming
+- streaming JSON lines for watch/long-running operations, reserved for the
+  later slice that needs event streaming
 
-M3a must include a redaction policy and operation-record store:
+M3a includes a redaction policy and operation-record store:
 
 - Diagnostics, events, operation records, and MCP responses cannot expose raw
   environment values, bearer tokens, private key paths, full command lines with
@@ -223,7 +230,7 @@ M3a must include a redaction policy and operation-record store:
   user-owned directory created with mode `0700`. The initial retention policy
   keeps the newest 50 packaging records and prunes older records after
   successful writes.
-- M3a does not add a DB migration for operation records.
+- M3a did not add a DB migration for operation records.
 
 ## M3b: Agent-Native Packaging MCP Surface
 
@@ -463,22 +470,25 @@ M3 errors should remain boring and explicit:
 
 ## Testing Strategy
 
-M3a tests:
+M3a landed tests:
 
 - unit tests for diagnostic code serialization, severity, suggestions, evidence,
   and redaction markers
-- tests asserting `schema_version` appears in command JSON and streaming event
-  envelopes
-- golden JSON tests for representative cook, inference, try, and publish gate
-  outcomes
-- golden JSON tests for project-form publish preflight failures that currently
-  originate as direct bail errors
+- tests asserting `schema_version` appears in command JSON and event envelopes
+- JSON tests for representative cook validation outcomes, cook structured error
+  output, static artifact publish gate failures, project-form publish preflight
+  failures, and Remi JSON unsupported output
 - renderer parity tests proving human and JSON output come from the same
   diagnostic values
 - redaction leak tests for env secrets, bearer tokens, credentialed URLs,
-  private key paths, command evidence, inference traces, and operation records
+  private key paths, command evidence, metadata, artifacts, and operation
+  records
 - operation-record tests for atomic write, `0600` file mode, recent-record
   ordering, retention, and redaction-before-write
+- end-to-end CLI tests in `apps/conary/tests/packaging_m3a.rs` proving
+  `cook --json` writes matching operation records and artifact-form
+  `publish --json` fails closed while preserving structured publish gate
+  metadata
 
 M3b tests:
 
@@ -531,8 +541,8 @@ and the doc truth/coherency checks whenever docs or public claims change.
 M3 surfaces appear in help only as they land. Before an implementation slice is
 complete:
 
-- `--json` should not be advertised for packaging commands that still emit only
-  ad hoc text.
+- `--json` is available for landed `cook` and `publish` paths. It should not be
+  advertised for packaging commands that still emit only ad hoc text.
 - MCP tools should not appear in a live catalog until their contract, risk
   labels, and tests exist.
 - `try --watch` should remain hidden or rejected with an honest message until
@@ -551,7 +561,7 @@ Docs to update as M3 lands:
 
 ## Review Checklist
 
-- M3a is the first implementation slice.
+- M3a is landed as the first implementation slice.
 - Record mode is a spike before full commitment.
 - No M3 feature weakens M2 publish gates.
 - M2 risk and gate decisions run before redacted diagnostic projection.
@@ -573,9 +583,8 @@ Docs to update as M3 lands:
 
 ## Ready For Planning
 
-M3 is ready for implementation planning when this design has passed local
-agentic review and any review-derived fixes are committed. The first
-implementation plan should cover M3a only: structured diagnostics, events,
-schema versioning, redaction, and the packaging operation-record store. Later
-plans can consume that foundation for MCP, try-session decomposition, watch
-mode, and record-mode spike work.
+M3a is implemented and merged. The next implementation-planning target is M3b:
+agent-native packaging MCP surfaces over the shared M3a packaging diagnostic,
+event, redaction, and operation-record contract. Later plans can consume the
+same foundation for try-session decomposition, watch mode, and record-mode spike
+work.
