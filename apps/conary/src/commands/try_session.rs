@@ -605,11 +605,14 @@ where
         let backup = create_checkpoint(db_path, CheckpointReason::PreMutation)?;
         drop(live_conn);
 
+        let previous_current_generation =
+            conary_core::generation::mount::current_generation(runtime_root.root())?;
         let promotion_result = (|| -> Result<()> {
             replace_live_db_with_session_copy(Path::new(db_path), &copied_db_path)?;
             maybe_force_try_keep_post_backup_failure("after-db-promote")?;
             let promoted_conn = conary_core::db::open(db_path)?;
             crate::commands::composefs_ops::publish_generation_link(db_path, try_generation_id)?;
+            maybe_force_try_keep_post_backup_failure("after-current-link")?;
             crate::commands::composefs_ops::mark_generation_state_active(
                 &promoted_conn,
                 try_generation_id,
@@ -624,6 +627,15 @@ where
         if let Err(error) = promotion_result {
             match restore_live_db_from_checkpoint(Path::new(db_path), &backup.backup_path) {
                 Ok(()) => {
+                    if let Err(link_error) = restore_previous_current_generation_link(
+                        db_path,
+                        &runtime_root,
+                        previous_current_generation,
+                    ) {
+                        return Err(error.context(format!(
+                            "try keep promotion failed after backup; restored live DB checkpoint but failed to restore current generation link: {link_error}"
+                        )));
+                    }
                     return Err(error.context(
                         "try keep promotion failed after backup; restored live DB checkpoint",
                     ));
@@ -757,6 +769,34 @@ fn maybe_force_try_keep_post_backup_failure(point: &str) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn restore_previous_current_generation_link(
+    db_path: &str,
+    runtime_root: &ConaryRuntimeRoot,
+    previous_generation: Option<i64>,
+) -> Result<()> {
+    match previous_generation {
+        Some(generation) => {
+            crate::commands::composefs_ops::publish_generation_link(db_path, generation)
+        }
+        None => {
+            let current_link = runtime_root.current_link();
+            match std::fs::remove_file(&current_link) {
+                Ok(()) => conary_core::filesystem::durable::sync_parent_directory(&current_link)
+                    .map_err(|error| anyhow::anyhow!(error))
+                    .with_context(|| {
+                        format!(
+                            "failed to sync parent directory after removing {}",
+                            current_link.display()
+                        )
+                    }),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(error) => Err(error)
+                    .with_context(|| format!("failed to remove {}", current_link.display())),
+            }
+        }
+    }
 }
 
 fn restore_live_db_from_checkpoint(live_db_path: &Path, backup_path: &Path) -> Result<()> {
