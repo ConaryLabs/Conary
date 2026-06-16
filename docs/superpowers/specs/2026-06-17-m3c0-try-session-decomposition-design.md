@@ -38,11 +38,12 @@ The core invariant remains:
   around active or orphaned try sessions.
 - The active/orphan liveness predicates
   `namespace_try_session_is_decision_pending`, `activated_try_session_is_live`,
-  `try_launcher_pid_is_alive`, `env_forces_non_interactive`, and the
-  test-aware `current_boot_id` helper currently live in
-  `apps/conary/src/dispatch/root.rs` alongside preflight routing. M3c0 moves
-  the reusable liveness decisions into the try-session ownership boundary while
-  leaving `run_try_session_preflight` orchestration in dispatch.
+  `try_launcher_pid_is_alive`, and the test-aware `current_boot_id` helper
+  currently live in `apps/conary/src/dispatch/root.rs` alongside preflight
+  routing. M3c0 moves the reusable liveness decisions into the try-session
+  ownership boundary while leaving `run_try_session_preflight` orchestration in
+  dispatch. `env_forces_non_interactive` also lives in dispatch today, but it is
+  interaction policy and stays with dispatch preflight.
 - `crates/conary-core/src/db/models/try_session.rs` owns persisted
   `try_sessions` rows, modes, statuses, single-open-session enforcement, and
   status transitions.
@@ -68,8 +69,9 @@ In scope:
   rollback, and keep unless a tiny tested fix is explicitly accepted.
 - Preserve the `try_sessions` schema, row semantics, one-active-session
   invariant, and keep/rollback status transitions.
-- Move reusable active/orphan liveness predicates into the try-session
-  ownership boundary while leaving command-risk routing in dispatch.
+- Move reusable active/orphan liveness predicates and canonical boot-id lookup
+  into the try-session ownership boundary while leaving command-risk routing and
+  interactive/non-interactive policy in dispatch.
 - Keep the watch-mode seam narrow enough that M3c can call try-session logic
   without reaching into mount, DB-promotion, or launcher internals.
 - Update assistant-facing docs that tell future contributors where to start.
@@ -100,7 +102,17 @@ try-session responsibility inspectable.
 - `cmd_try_status`
 - `cmd_try_rollback`
 - `cmd_try_keep`
-- narrow `pub(crate)` re-exports needed by dispatch and later watch mode
+- `rollback_active_try_session`
+- `begin_try_session`
+- the two request/outcome types above
+- `current_boot_id`, `namespace_try_session_is_decision_pending`, and
+  `activated_try_session_is_live` for dispatch preflight
+
+This is the expected crate-facing allowlist. Child modules stay private unless
+the implementation summary names the caller and reason for widening visibility.
+M3c watch may use `begin_try_session`, `TryStartRequest`, and
+`TryStartOutcome`; it should not depend on namespace, install, executor, or DB
+promotion internals without a later reviewed plan update.
 
 `apps/conary/src/commands/try_session/validation.rs` owns package and manifest
 policy:
@@ -129,7 +141,7 @@ policy:
 - DB vacuum/copy/checkpoint/promotion/restore helpers, including recovery that
   restores the previous current-generation link if namespace keep fails after
   publishing the try generation link
-- active/orphan liveness helpers consumed by dispatch preflight
+- pure active/orphan liveness helpers consumed by dispatch preflight
 - cleanup helpers that preserve retryability on failure
 - canonical boot-id lookup with the existing `CONARY_TEST_BOOT_ID` test
   override, consumed by session lifecycle, executor liveness, and dispatch
@@ -192,18 +204,22 @@ The external command flow does not change:
 Inside `begin_try_session`, the internal flow becomes explicit:
 
 1. `session.rs` opens the live DB, rejects an existing active or orphaned
-   session, creates runtime paths, copies the package artifact, parses it, and
-   creates the active try-session row.
-2. `validation.rs` validates the package for namespace or activated try.
-3. `install.rs` builds the copied DB install plan and installs the package into
+   session, creates runtime paths, copies the package artifact, and parses it.
+2. `validation.rs` validates the package for namespace or activated try before
+   any active try-session row is created.
+3. `session.rs` records the active try-session row and copies the live DB for
+   scratch installation.
+4. `install.rs` builds the copied DB install plan and installs the package into
    the scratch root without scripts.
-4. `session.rs` builds the inactive generation and records the generation id on
-   both live and copied session rows.
-5. `namespace.rs` creates the promotable hook upperdir, exposes the namespace
+5. `session.rs` builds the inactive generation.
+6. `namespace.rs` creates the promotable hook upperdir, exposes the namespace
    root, and executes declarative try hooks against that non-host root.
-6. `executor.rs` optionally launches the requested command and records/clears
+7. `session.rs` records the generation id on both live and copied session rows.
+   Activated try then publishes the generation link or records the boot identity
+   as existing behavior requires.
+8. `executor.rs` optionally launches the requested command and records/clears
    launcher liveness.
-7. `session.rs` returns `TryStartOutcome`.
+9. `session.rs` returns `TryStartOutcome`.
 
 M3c0 should not add a watch API object. The watch-facing seam is the existing
 `begin_try_session(TryStartRequest) -> TryStartOutcome` flow plus narrow
@@ -256,6 +272,8 @@ Required behavior gates:
 
 - Begin: package try creates an active session, copied artifact, namespace root,
   and try generation.
+- Validation refusal: unsupported hook classes and other policy failures occur
+  before any active or orphaned try-session row is created.
 - Rollback: namespace rollback marks the session rolled back, cleans workdir,
   unmounts in the expected order, and remains retryable when cleanup fails.
 - Keep: namespace keep promotes the try generation, marks the session kept, and
@@ -268,6 +286,9 @@ Required behavior gates:
   behavior for namespace and activated sessions.
 - Launcher liveness: command execution records child liveness before wait and
   clears it after exit.
+- Boot identity: with `CONARY_TEST_BOOT_ID=boot-a`, activated no-command and
+  launcher paths record `boot-a`, and dispatch preflight evaluates against that
+  same canonical helper.
 - Hook policy: the M1b try hook refusal matrix remains unchanged.
 
 Before the first code move, the implementation plan must map each behavior gate
@@ -290,6 +311,16 @@ cargo test -p conary --lib dispatch::root
 cargo test -p conary --test packaging_m1b
 cargo fmt --check
 ```
+
+When M3c0 changes `crates/conary-core/src/db/models/try_session.rs`, also run:
+
+```bash
+cargo test -p conary-core db::models::try_session
+```
+
+Any new model helper, such as `TrySession::clear_launcher`, must include a
+model unit test proving it updates only active or orphaned sessions and refuses
+completed sessions through the same status guard as existing transitions.
 
 Merge gate:
 
@@ -368,7 +399,10 @@ The implementation plan should proceed in this order:
    `mod.rs`.
 9. Implement any accepted tiny behavior fixes in isolated commits with named
    tests, especially launcher SQL centralization and current-link recovery on
-   failed namespace keep promotion.
+   failed namespace keep promotion. The keep recovery test needs a named
+   post-current-link failure seam, such as
+   `CONARY_TEST_TRY_KEEP_FAIL_AFTER_BACKUP=after-current-link`, injected after
+   `publish_generation_link` and before marking the generation or session kept.
 10. Update assistant routing docs and run focused proofs plus clippy.
 11. Run local agentic review before locking the implementation.
 
