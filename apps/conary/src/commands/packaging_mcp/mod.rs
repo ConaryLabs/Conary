@@ -5,7 +5,21 @@ use anyhow::Result;
 
 pub(crate) mod projection;
 pub(crate) mod records;
+mod server;
+pub(crate) mod service;
+pub(crate) mod types;
 
 pub async fn cmd_mcp_packaging() -> Result<()> {
-    anyhow::bail!("packaging MCP server wiring is added in the next task")
+    use rmcp::ServiceExt;
+
+    let service = service::PackagingAgentService::default();
+    let server = server::PackagingMcpServer::new(service);
+    server
+        .serve(rmcp::transport::stdio())
+        .await
+        .map_err(|error| anyhow::anyhow!("start packaging MCP server: {error}"))?
+        .waiting()
+        .await
+        .map_err(|error| anyhow::anyhow!("packaging MCP server stopped with error: {error}"))?;
+    Ok(())
 }
