@@ -101,6 +101,47 @@ pub fn load_latest_packaging_record<T: DeserializeOwned>(dir: &Path) -> Result<O
     Ok(Some(load_json_record(&path)?))
 }
 
+pub fn load_packaging_record_by_id<T: DeserializeOwned>(
+    dir: &Path,
+    operation_id: &str,
+) -> Result<Option<T>> {
+    validate_operation_id(operation_id)?;
+    let path = dir.join(format!("{operation_id}.json"));
+    if !path.exists() {
+        return Ok(None);
+    }
+    Ok(Some(load_json_record(&path)?))
+}
+
+pub fn load_latest_failed_packaging_record(
+    dir: &Path,
+) -> Result<Option<conary_core::diagnostics::PackagingCommandOutput>> {
+    let mut records = list_packaging_records(dir)?;
+    records.reverse();
+    for path in records {
+        let record: conary_core::diagnostics::PackagingCommandOutput = load_json_record(&path)?;
+        if record.status == conary_core::diagnostics::PackagingCommandStatus::Failed {
+            return Ok(Some(record));
+        }
+    }
+    Ok(None)
+}
+
+fn validate_operation_id(operation_id: &str) -> Result<()> {
+    if operation_id.is_empty()
+        || operation_id.contains('/')
+        || operation_id.contains('\\')
+        || operation_id.contains("..")
+        || operation_id.contains('\0')
+        || !operation_id
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
+    {
+        anyhow::bail!("invalid packaging operation id {operation_id:?}");
+    }
+    Ok(())
+}
+
 fn prune_packaging_records(dir: &Path, keep: usize) -> Result<()> {
     let records = list_packaging_records(dir)?;
     if records.len() <= keep {
@@ -128,7 +169,8 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        list_packaging_records, load_json_record, load_latest_packaging_record,
+        list_packaging_records, load_json_record, load_latest_failed_packaging_record,
+        load_latest_packaging_record, load_packaging_record_by_id,
         packaging_operations_dir_from_state_home, takeover_operations_dir, write_json_record,
         write_packaging_record_unchecked,
     };
@@ -210,5 +252,60 @@ mod tests {
             .mode()
             & 0o777;
         assert_eq!(mode, 0o600);
+    }
+
+    #[test]
+    fn load_packaging_record_by_id_rejects_unsafe_ids_and_reads_safe_ids() {
+        #[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug)]
+        struct Fixture {
+            operation_id: String,
+            status: String,
+        }
+
+        let temp = tempfile::TempDir::new().unwrap();
+        let dir = temp.path().join("ops");
+        write_packaging_record_unchecked(
+            &dir,
+            "publish-1",
+            &Fixture {
+                operation_id: "publish-1".to_string(),
+                status: "failed".to_string(),
+            },
+        )
+        .unwrap();
+
+        let loaded = load_packaging_record_by_id::<Fixture>(&dir, "publish-1")
+            .unwrap()
+            .expect("record");
+        assert_eq!(loaded.operation_id, "publish-1");
+
+        assert!(load_packaging_record_by_id::<Fixture>(&dir, "../publish-1").is_err());
+        assert!(load_packaging_record_by_id::<Fixture>(&dir, "publish/1").is_err());
+    }
+
+    #[test]
+    fn load_latest_failed_packaging_record_skips_successful_records() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let dir = temp.path().join("ops");
+
+        let ok =
+            conary_core::diagnostics::PackagingCommandOutput::succeeded("cook-1", "conary cook");
+        let failed = conary_core::diagnostics::PackagingCommandOutput::failed(
+            "publish-2",
+            "conary publish",
+            vec![conary_core::diagnostics::PackagingDiagnostic::error(
+                conary_core::diagnostics::PackagingPhase::Publish,
+                conary_core::diagnostics::PackagingDiagnosticCode::PublishGateFailed,
+                "gate failed",
+            )],
+        );
+
+        write_packaging_record_unchecked(&dir, "cook-1", &ok).unwrap();
+        write_packaging_record_unchecked(&dir, "publish-2", &failed).unwrap();
+
+        let loaded = load_latest_failed_packaging_record(&dir)
+            .unwrap()
+            .expect("failed record");
+        assert_eq!(loaded.operation_id, "publish-2");
     }
 }

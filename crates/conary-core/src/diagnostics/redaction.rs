@@ -39,6 +39,11 @@ pub fn redact_text(input: &str) -> RedactedText {
         };
     }
 
+    for path in private_key_path_tokens(&value) {
+        value = value.replace(&path, "[REDACTED-PATH]");
+        redactions.push(RedactionMarker::new("text", "private-key-path"));
+    }
+
     if let Some(redacted) = redact_credentialed_url(&value) {
         value = redacted;
         redactions.push(RedactionMarker::new("text", "credentialed-url"));
@@ -78,6 +83,19 @@ pub fn redact_text(input: &str) -> RedactedText {
     }
 
     RedactedText { value, redactions }
+}
+
+fn private_key_path_tokens(value: &str) -> Vec<String> {
+    value
+        .split_whitespace()
+        .map(|token| {
+            token.trim_matches(|ch: char| {
+                ch == '\'' || ch == '"' || ch == ',' || ch == ';' || ch == ':' || ch == ')'
+            })
+        })
+        .filter(|token| is_private_key_path(token))
+        .map(ToOwned::to_owned)
+        .collect()
 }
 
 pub fn redact_log(input: &str) -> RedactedText {
@@ -202,6 +220,13 @@ mod tests {
     fn redacts_private_key_paths() {
         let value = redact_text("/home/dev/.ssh/id_ed25519");
         assert_eq!(value.value, "[REDACTED-PATH]");
+        assert_eq!(value.redactions[0].reason, "private-key-path");
+    }
+
+    #[test]
+    fn redacts_embedded_private_key_paths() {
+        let value = redact_text("failed for /home/dev/.conary/keys/root.pem");
+        assert_eq!(value.value, "failed for [REDACTED-PATH]");
         assert_eq!(value.redactions[0].reason, "private-key-path");
     }
 

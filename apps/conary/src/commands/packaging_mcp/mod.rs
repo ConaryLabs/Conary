@@ -3,6 +3,9 @@
 
 use anyhow::Result;
 
+pub(crate) mod projection;
+pub(crate) mod records;
+
 pub async fn cmd_mcp_packaging() -> Result<()> {
     anyhow::bail!("packaging MCP server wiring is added in the next task")
 }
