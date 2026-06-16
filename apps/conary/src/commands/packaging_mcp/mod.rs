@@ -4,6 +4,7 @@
 use anyhow::Result;
 
 pub(crate) mod projection;
+pub(crate) mod publish_plan;
 pub(crate) mod records;
 mod server;
 pub(crate) mod service;
