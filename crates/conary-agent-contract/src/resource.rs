@@ -82,6 +82,44 @@ pub fn local_bootstrap_status() -> ResourceRef {
     ResourceRef::new("conary-local://bootstrap/status")
 }
 
+pub fn packaging_operations_recent() -> ResourceRef {
+    ResourceRef::new("conary-packaging://operations/recent")
+}
+
+pub fn packaging_operation(operation_id: &str) -> ResourceRef {
+    ResourceRef::named(
+        format!(
+            "conary-packaging://operations/{}",
+            encode_segment(operation_id)
+        ),
+        operation_id,
+    )
+}
+
+pub fn packaging_operation_events(operation_id: &str) -> ResourceRef {
+    ResourceRef::named(
+        format!(
+            "conary-packaging://operations/{}/events",
+            encode_segment(operation_id)
+        ),
+        operation_id,
+    )
+}
+
+pub fn packaging_project(project_id: &str) -> ResourceRef {
+    ResourceRef::named(
+        format!("conary-packaging://projects/{}", encode_segment(project_id)),
+        project_id,
+    )
+}
+
+pub fn packaging_artifact(artifact_id: &str) -> ResourceRef {
+    ResourceRef::named(
+        format!("conary-packaging://artifacts/{}", encode_segment(artifact_id)),
+        artifact_id,
+    )
+}
+
 fn encode_segment(segment: &str) -> String {
     let mut encoded = String::with_capacity(segment.len());
     for byte in segment.bytes() {
@@ -134,6 +172,30 @@ mod tests {
         assert_eq!(
             test_run_artifact(42, "logs/stderr").uri,
             "conary-test://runs/42/artifacts/logs%2Fstderr"
+        );
+    }
+
+    #[test]
+    fn packaging_resource_helpers_emit_stable_uris() {
+        assert_eq!(
+            packaging_operations_recent().uri,
+            "conary-packaging://operations/recent"
+        );
+        assert_eq!(
+            packaging_operation("publish-1700000000000-42").uri,
+            "conary-packaging://operations/publish-1700000000000-42"
+        );
+        assert_eq!(
+            packaging_operation_events("cook-1").uri,
+            "conary-packaging://operations/cook-1/events"
+        );
+        assert_eq!(
+            packaging_project("recipe path").uri,
+            "conary-packaging://projects/recipe%20path"
+        );
+        assert_eq!(
+            packaging_artifact("sha256:abc123").uri,
+            "conary-packaging://artifacts/sha256%3Aabc123"
         );
     }
 }
