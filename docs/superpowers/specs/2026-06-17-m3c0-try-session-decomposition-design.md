@@ -36,6 +36,13 @@ The core invariant remains:
 - `apps/conary/src/dispatch/root.rs` parses `conary try` package/status/
   rollback/keep actions and owns command-risk routing and preflight decisions
   around active or orphaned try sessions.
+- The active/orphan liveness predicates
+  `namespace_try_session_is_decision_pending`, `activated_try_session_is_live`,
+  `try_launcher_pid_is_alive`, `env_forces_non_interactive`, and the
+  test-aware `current_boot_id` helper currently live in
+  `apps/conary/src/dispatch/root.rs` alongside preflight routing. M3c0 moves
+  the reusable liveness decisions into the try-session ownership boundary while
+  leaving `run_try_session_preflight` orchestration in dispatch.
 - `crates/conary-core/src/db/models/try_session.rs` owns persisted
   `try_sessions` rows, modes, statuses, single-open-session enforcement, and
   status transitions.
@@ -54,8 +61,9 @@ In scope:
 - Replace `apps/conary/src/commands/try_session.rs` with
   `apps/conary/src/commands/try_session/`.
 - Move existing behavior into modules with narrow ownership:
-  `mod.rs`, `validation.rs`, `install.rs`, `session.rs`, `namespace.rs`, and
-  `executor.rs`.
+  `mod.rs`, `validation.rs`, `install.rs`, `session.rs`, `namespace.rs`,
+  `executor.rs`, and a small private `util.rs` for shared file/path helpers
+  when avoiding sideways dependencies would otherwise bloat `mod.rs`.
 - Preserve existing CLI output and command behavior for package try, status,
   rollback, and keep unless a tiny tested fix is explicitly accepted.
 - Preserve the `try_sessions` schema, row semantics, one-active-session
@@ -118,13 +126,20 @@ policy:
 - one-active-session enforcement
 - session row creation and generation recording
 - activated and namespace keep/rollback
-- DB vacuum/copy/checkpoint/promotion/restore helpers
+- DB vacuum/copy/checkpoint/promotion/restore helpers, including recovery that
+  restores the previous current-generation link if namespace keep fails after
+  publishing the try generation link
 - active/orphan liveness helpers consumed by dispatch preflight
 - cleanup helpers that preserve retryability on failure
+- canonical boot-id lookup with the existing `CONARY_TEST_BOOT_ID` test
+  override, consumed by session lifecycle, executor liveness, and dispatch
+  preflight
 
 `apps/conary/src/commands/try_session/namespace.rs` owns namespace exposure:
 
 - namespace root exposure
+- promotable try-hook upperdir creation
+- declarative try-hook execution against the exposed namespace root
 - generation mount and overlay mount setup
 - unmount sequencing
 - mountinfo parsing
@@ -139,7 +154,21 @@ policy:
 - activated launcher path
 - child wait behavior
 - launcher PID and boot-id recording and clearing
-- current boot-id lookup if needed for launcher liveness
+- use of the canonical boot-id helper from `session.rs`, rather than a second
+  boot-id implementation
+
+`apps/conary/src/commands/try_session/util.rs` owns shared private helpers when
+they are used by more than one sibling module:
+
+- `remove_dir_if_exists`
+- `remove_path_if_exists`
+- SQLite sidecar path/removal helpers
+- DB quarantine path construction
+
+The DB-adjacent helpers may remain in `session.rs` if they are used only by
+session lifecycle after the split. General path helpers that would otherwise
+create a `session.rs` to `namespace.rs` or `namespace.rs` to `session.rs`
+dependency should move to `util.rs` as `pub(super)`.
 
 The implementation should use Rust privacy as the module-boundary check.
 Functions should be private by default, `pub(super)` only for sibling-module
@@ -170,8 +199,8 @@ Inside `begin_try_session`, the internal flow becomes explicit:
    the scratch root without scripts.
 4. `session.rs` builds the inactive generation and records the generation id on
    both live and copied session rows.
-5. `namespace.rs` exposes the namespace root and provides the root where
-   declarative try-hook effects can be materialized and verified.
+5. `namespace.rs` creates the promotable hook upperdir, exposes the namespace
+   root, and executes declarative try hooks against that non-host root.
 6. `executor.rs` optionally launches the requested command and records/clears
    launcher liveness.
 7. `session.rs` returns `TryStartOutcome`.
@@ -198,6 +227,15 @@ Allowed examples:
 - Tighten a misleading context message around an existing failure.
 - Move duplicated liveness logic behind one tested helper without changing the
   active/orphan decision.
+- Consolidate the duplicate `current_boot_id` implementations into one
+  try-session-owned helper that preserves the existing `CONARY_TEST_BOOT_ID`
+  test override.
+- Add a `TrySession` model method such as `clear_launcher` in
+  `crates/conary-core/src/db/models/try_session.rs` when it only centralizes
+  duplicated raw SQL status guards and does not change schema or existing method
+  signatures.
+- Restore the previous current-generation link if namespace keep promotion
+  fails after the try generation link has already been published.
 - Reduce helper visibility exposed only because of the old monolith.
 
 Not allowed examples:
@@ -221,7 +259,9 @@ Required behavior gates:
 - Rollback: namespace rollback marks the session rolled back, cleans workdir,
   unmounts in the expected order, and remains retryable when cleanup fails.
 - Keep: namespace keep promotes the try generation, marks the session kept, and
-  restores the live DB if promotion fails after backup.
+  restores the live DB if promotion fails after backup. A focused regression
+  test must prove that a failure after publishing the try generation restores
+  the previous current-generation link as well as the live DB checkpoint.
 - One-active refusal: starting a second try session reports the active session
   id and does not create another open session.
 - Orphan handling: active/orphan liveness helpers preserve dispatch preflight
@@ -229,6 +269,18 @@ Required behavior gates:
 - Launcher liveness: command execution records child liveness before wait and
   clears it after exit.
 - Hook policy: the M1b try hook refusal matrix remains unchanged.
+
+Before the first code move, the implementation plan must map each behavior gate
+above to specific existing tests. Any gate without direct coverage needs a
+focused characterization test while the monolith still exists.
+
+The split must also preserve all existing test-injection seams, including
+`CONARY_TEST_TRY_LAUNCHER`, `CONARY_TEST_TRY_MOUNTINFO_PATH`,
+`CONARY_TEST_TRY_UMOUNT_FAIL`, `CONARY_TEST_TRY_UMOUNT_LOG`,
+`CONARY_TEST_TRY_SYNC_PARENT_LOG`, `CONARY_TEST_TRY_REMOVE_DIR_FAIL`,
+`CONARY_TEST_TRY_KEEP_FAIL_AFTER_BACKUP`, `CONARY_TEST_SKIP_GENERATION_MOUNT`,
+and the dispatch-side `CONARY_TEST_BOOT_ID` override after it moves into the
+try-session boundary.
 
 Focused proof:
 
@@ -278,6 +330,12 @@ shared request/outcome types in `mod.rs`, passing explicit arguments between
 modules, and avoiding sideways imports except through narrow `pub(super)`
 helpers.
 
+The intentional sibling dependencies should stay small and named:
+`session.rs` may call `namespace::root_relative_path` for keep-time hook-effect
+verification, `executor.rs` may call the canonical boot-id helper owned by
+`session.rs`, and multiple modules may call private `util.rs` helpers. Other
+cross-module pulls should be treated as a boundary smell during review.
+
 `session.rs` can become the new large file. Mitigate by moving install mechanics
 to `install.rs`, mount mechanics to `namespace.rs`, launcher mechanics to
 `executor.rs`, and policy checks to `validation.rs`.
@@ -294,7 +352,8 @@ changes.
 
 The implementation plan should proceed in this order:
 
-1. Confirm or add parity/orphan tests while the monolith still exists.
+1. Map each required behavior gate to existing tests while the monolith still
+   exists, then add parity/orphan/liveness characterization tests for any gaps.
 2. Convert `try_session.rs` into `try_session/mod.rs` and move validation into
    `validation.rs`.
 3. Move install planning and copied-package installation into `install.rs`.
@@ -302,11 +361,16 @@ The implementation plan should proceed in this order:
    `namespace.rs`.
 5. Move executor and launcher liveness helpers into `executor.rs`.
 6. Move session lifecycle orchestration and dispatch-facing liveness helpers
-   into `session.rs`.
-7. Reduce visibility and re-export only the narrow crate-facing API from
+   into `session.rs`, including the canonical test-aware boot-id helper.
+7. Move shared private path/SQLite helpers into `util.rs` only where doing so
+   avoids module coupling.
+8. Reduce visibility and re-export only the narrow crate-facing API from
    `mod.rs`.
-8. Update assistant routing docs and run focused proofs plus clippy.
-9. Run local agentic review before locking the implementation.
+9. Implement any accepted tiny behavior fixes in isolated commits with named
+   tests, especially launcher SQL centralization and current-link recovery on
+   failed namespace keep promotion.
+10. Update assistant routing docs and run focused proofs plus clippy.
+11. Run local agentic review before locking the implementation.
 
 ## Completion Criteria
 
