@@ -1,7 +1,7 @@
 # M3b Packaging MCP Surface Design
 
 **Date:** 2026-06-16
-**Status:** Locked for implementation planning
+**Status:** Locked for implementation
 **Parent design:** `docs/superpowers/specs/2026-06-15-m3-packaging-differentiators-design.md`
 **Prerequisite milestone:** M3a structured diagnostics and operation records
 
@@ -83,9 +83,10 @@ The first successful mutation path is static artifact-form publish:
 conary publish <pkg.ccs> <static-target>
 ```
 
-Project-form publish may be planned and explained in M3b, but apply can remain
-unsupported until the implementation plan explicitly wires the full hermetic
-cook plus static publish path through the same structured report boundary.
+Project-form publish may be classified and explained in M3b, but successful
+confirmation planning and apply can remain unsupported until the implementation
+plan explicitly wires the full hermetic cook plus static publish path through
+the same structured report boundary.
 Remi publish returns a clear `not_supported` or `unavailable` envelope until
 Remi artifact-form JSON/apply behavior is deliberately added.
 
@@ -277,11 +278,11 @@ It does not accept:
 
 `plan_publish` is strictly read-only. It must not generate keys, create key
 directories, create repository directories, take publish locks, write state
-files, write operation records, or refresh TUF metadata. Static artifact-form
-planning in M3b v1 requires an existing readable static repository publication
-context. If the destination lacks readable trust state, the plan returns a
-missing-prerequisite result and points the user to the normal CLI path or a
-later destructive/reinitialization contract.
+files, write operation records, refresh TUF metadata, or fetch from the network.
+Static artifact-form planning in M3b v1 requires an existing readable static
+repository publication context. If the destination lacks readable trust state,
+the plan returns a missing-prerequisite result and points the user to the normal
+CLI path or a later destructive/reinitialization contract.
 
 The plan output is a `PlanResult` with:
 
@@ -330,6 +331,20 @@ path, or digest mismatch. The stored route enum is compared with the route
 re-derived during apply; mismatch is treated as
 `UnsafeWithoutConfirmation`.
 
+`artifact_manifest_identity_when_available` is the canonical package identity
+read from the CCS manifest when it can be read without extraction or mutation;
+otherwise it is null and the plan must rely on the artifact digest, size, route,
+and publish gates. `key_dir_path_when_supplied` and
+`state_file_path_when_supplied` are internal fingerprint material. MCP responses
+must return a plan id, fingerprint, redacted option evidence, and confirmation
+requirement rather than raw `PublishPlanMaterial`.
+
+Artifact-form planning and apply must reject non-regular artifact inputs,
+including directories, symlinks, FIFOs, sockets, and device nodes. Digesting is
+streaming and bounded by the same size policy used by artifact inspection; if
+that policy is not yet centralized, M3b must introduce a narrow helper and test
+the rejection behavior.
+
 M3b does not need a persistent plan database. A stdio MCP session may keep an
 in-memory plan registry capped at 16 live plans, evicting the oldest expired or
 non-applied plan first. Plans expire after 15 minutes by default. If a later
@@ -353,13 +368,16 @@ Apply behavior:
 3. Recompute the fingerprint from stored plan material and compare it to the
    caller-supplied fingerprint. Fingerprint mismatch is
    `AgentErrorKind::UnsafeWithoutConfirmation`.
-4. Resolve the planned artifact path again, copy the artifact into a private
-   staging directory created mode `0700`, create the staged file mode `0600`,
-   compute the staged artifact digest, and compare it to the planned digest.
+4. Resolve the planned artifact path again, reject non-regular inputs, copy the
+   artifact into a private staging directory created mode `0700`, create the
+   staged file mode `0600`, fsync the staged file and directory where supported,
+   compute the staged artifact digest, and compare it exactly to
+   `PublishPlanMaterial.artifact_sha256`.
 5. Publish only from the staged artifact path. Gate checks and repository writes
-   must use the same staged bytes.
+   must use the same staged bytes. The staged artifact object must own the temp
+   directory so cleanup occurs on drop.
 6. Revalidate inputs and rederive the target route. Compare it to the stored
-   route enum.
+   route enum, normalized planned path, and selected option material.
 7. Acquire the publish lock if the static publish path requires one, then
    rederive destination trust state: root key identity, active package-key hash,
    accepted signer-set hash, publish policy digest, and metadata
@@ -411,13 +429,14 @@ narrower risk class.
 
 ## Read And Diagnostic Tools
 
-`inspect_project` should report packaging-relevant facts without building:
-target kind, recipe presence, inferred package metadata when safe, detected
-publish route hints, and next actions.
+`inspect_project` should report packaging-relevant facts without building or
+fetching from the network: target kind, recipe presence, inferred package
+metadata when safe, detected publish route hints, and next actions.
 
 `explain_inference` should project the existing inference trace through the M3a
-redactor. It should not write a recipe unless a later mutation contract adds a
-plan/apply path for recipe materialization.
+redactor. It should not fetch from the network, materialize remote source state,
+or write a recipe unless a later mutation contract adds a plan/apply path for
+recipe materialization.
 
 `diagnose_latest_failure` reads the newest failed packaging operation record
 from the private M3a store. It summarizes diagnostics, evidence, redactions,

@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+**Status:** Locked for implementation after DeepSeek, Gemini, and local agentic review.
+
 **Goal:** Build the local packaging MCP surface over M3a diagnostics and operation records, including read/diagnostic tools plus static artifact publish plan/apply as the first mutation contract.
 
 **Architecture:** Transport-neutral resource/catalog additions live in `conary-agent-contract`, generic MCP response helpers live in `conary-mcp`, and the Conary CLI owns a local stdio `conary mcp packaging` server. Packaging semantics stay in `apps/conary`: a focused `commands/packaging_mcp/` module handles tools, projection, plan registry, and read-only inspection; `publish.rs` remains the owner of static artifact publish routing, gates, and repository writes through a narrow service helper.
@@ -40,6 +42,9 @@ M3b excludes:
 - Project-form publish apply.
 - Key rotation, root reinitialization, destination-state downgrade acceptance, or `force_reinit` through MCP.
 - Any publish gate bypass.
+- Raw internal `PublishPlanMaterial` in MCP responses. Responses return plan id,
+  fingerprint, confirmation requirement, redacted option evidence, and next
+  action.
 
 ## File Structure
 
@@ -98,6 +103,19 @@ cargo fmt --check
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
+Review lock mapping:
+
+| Review concern | Locked plan owner |
+|----------------|-------------------|
+| `diagnose_latest_failure` promised but not wired | Task 5 service/server signatures and Task 9 seven-tool assertion |
+| MCP projection leaking paths, commands, metadata, or credentials | Task 4 redacted projection helper and Task 9 response leak assertions |
+| Artifact staging accepting symlinks/non-regular files or leaking temp files | Task 7 staging tests/helper and Task 8 apply assertions |
+| Staged digest comparison ambiguity | Task 8 requires `staged.digest == PublishPlanMaterial.artifact_sha256` |
+| CLI option regression from helper extraction | Task 6 preserves CLI option values; Task 8 fixes MCP options off |
+| Project/Remi/auto route ambiguity | Task 8 route classification tests and explicit unsupported/unavailable envelopes |
+| Read/diagnostic network fetch risk | Task 5 offline method contract and Task 9 offline assertions |
+| Absolute path resource identity | Task 1 uses stable artifact ids; path evidence remains redacted metadata |
+
 ---
 
 ### Task 1: Agent Contract Resources And Catalog
@@ -132,8 +150,8 @@ fn packaging_resource_helpers_emit_stable_uris() {
         "conary-packaging://projects/recipe%20path"
     );
     assert_eq!(
-        packaging_artifact("/tmp/pkg.ccs").uri,
-        "conary-packaging://artifacts/%2Ftmp%2Fpkg.ccs"
+        packaging_artifact("sha256:abc123").uri,
+        "conary-packaging://artifacts/sha256%3Aabc123"
     );
 }
 ```
@@ -430,11 +448,9 @@ fn artifact_destination_snapshot_is_read_only_for_missing_repo() {
 
 #[test]
 fn artifact_destination_snapshot_reports_existing_trust_state() {
-    let fixture = StaticPublishFixture::new();
-    fixture.publish_fixture_package();
-    let destination = RepoLocation::File {
-        root: fixture.repo_dir.clone(),
-    };
+    let temp = tempfile::TempDir::new().unwrap();
+    let context = prepare_existing_repo_context_for_tests(temp.path()).unwrap();
+    let destination = context.destination.clone();
 
     let snapshot = inspect_artifact_form_static_destination(&destination).unwrap();
 
@@ -1014,6 +1030,37 @@ mod tests {
         assert_eq!(envelope.status, OperationStatus::Planned);
         assert!(envelope.error.is_none());
     }
+
+    #[test]
+    fn projection_redacts_path_uri_command_and_metadata_before_agent_output() {
+        let diagnostic = PackagingDiagnostic::error(
+            PackagingPhase::Publish,
+            PackagingDiagnosticCode::PublishGateFailed,
+            "failed for /home/alice/.conary/keys/root.pem",
+        )
+        .with_evidence(
+            DiagnosticEvidence::artifact("private-key", "/home/alice/.conary/keys/root.pem")
+                .with_metadata("url", serde_json::json!("https://user:secret@example.invalid/pkg")),
+        );
+        let output = PackagingCommandOutput::failed(
+            "publish-redact",
+            "conary publish --bearer-token secret",
+            vec![diagnostic],
+        );
+
+        let envelope = project_packaging_output(
+            "conary.packaging.publish.apply",
+            &output,
+            RiskLevel::High,
+            AgentProjectionMode::Apply,
+            None,
+        );
+        let rendered = serde_json::to_string(&envelope).unwrap();
+
+        assert!(!rendered.contains("/home/alice"));
+        assert!(!rendered.contains("secret"));
+        assert!(rendered.contains("redactions"));
+    }
 }
 ```
 
@@ -1066,6 +1113,7 @@ pub(crate) fn project_packaging_output(
     mode: AgentProjectionMode,
     subject: Option<ResourceRef>,
 ) -> OperationEnvelope {
+    let output = super::super::diagnostics::redacted_packaging_output(output);
     let status = match (output.status, mode) {
         (PackagingCommandStatus::Succeeded, AgentProjectionMode::Plan) => OperationStatus::Planned,
         (PackagingCommandStatus::Succeeded, _) => OperationStatus::Ok,
@@ -1182,6 +1230,12 @@ fn project_evidence(evidence: &DiagnosticEvidence) -> EvidenceItem {
     }
 }
 ```
+
+The projection helper must be the only place that converts
+`PackagingCommandOutput` into agent evidence, and it must always call
+`redacted_packaging_output` before copying summary, path, URI, command, log, or
+metadata fields. Do not add MCP-specific serialization paths that bypass this
+helper.
 
 - [ ] **Step 7: Add records wrapper module**
 
@@ -1404,6 +1458,48 @@ install = ["mkdir -p $DESTDIR/usr/bin", "touch $DESTDIR/usr/bin/demo"]
         assert_eq!(result.envelope.status, OperationStatus::Ok);
         assert_eq!(result.data["records"][0]["operation_id"], "publish-1");
     }
+
+    #[test]
+    fn diagnose_latest_failure_reads_newest_failed_record_without_stdout() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let service = PackagingAgentService::with_operations_dir(temp.path().join("ops"));
+        let ok = conary_core::diagnostics::PackagingCommandOutput::succeeded(
+            "cook-1",
+            "conary cook",
+        );
+        let failed = conary_core::diagnostics::PackagingCommandOutput::failed(
+            "publish-2",
+            "conary publish",
+            vec![conary_core::diagnostics::PackagingDiagnostic::error(
+                conary_core::diagnostics::PackagingPhase::Publish,
+                conary_core::diagnostics::PackagingDiagnosticCode::PublishGateFailed,
+                "gate failed",
+            )],
+        );
+        crate::commands::operation_records::write_packaging_record_unchecked(
+            service.operations_dir(),
+            "cook-1",
+            &ok,
+        )
+        .unwrap();
+        crate::commands::operation_records::write_packaging_record_unchecked(
+            service.operations_dir(),
+            "publish-2",
+            &failed,
+        )
+        .unwrap();
+
+        let result = service
+            .diagnose_latest_failure(
+                crate::commands::packaging_mcp::types::DiagnoseLatestFailureInput {
+                    limit_events: Some(20),
+                },
+            )
+            .unwrap();
+
+        assert_eq!(result.envelope.status, OperationStatus::Ok);
+        assert_eq!(result.data["operation_id"], "publish-2");
+    }
 }
 ```
 
@@ -1419,7 +1515,12 @@ Expected: fail because the service implementation does not exist.
 
 - [ ] **Step 4: Implement read-only service methods**
 
-Replace `service.rs` with the `PackagingAgentService` implementation described below. It must expose `with_operations_dir`, `operations_dir`, `inspect_project`, `explain_inference`, `list_operation_records`, and `read_operation_record`; it must call `parse_recipe_file`, `validate_recipe`, `resolve_new_from_target`, and `infer_recipe_from_path`; and every result must use `RiskLevel::ReadOnly`.
+Replace `service.rs` with the `PackagingAgentService` implementation described below. It must expose `with_operations_dir`, `operations_dir`, `inspect_project`, `explain_inference`, `diagnose_latest_failure`, `list_operation_records`, and `read_operation_record`; it must call `parse_recipe_file`, `validate_recipe`, `resolve_new_from_target`, and `infer_recipe_from_path`; and every result must use `RiskLevel::ReadOnly`.
+
+Read and diagnostic methods must stay offline. They must not fetch git remotes,
+download archives, refresh metadata, invoke package managers, or build/cook
+sources. Remote-only targets return a redacted `MissingPrerequisite` or
+`NotSupported` envelope.
 
 Key implementation excerpt:
 
@@ -1466,7 +1567,7 @@ pub(crate) mod service;
 
 Create `apps/conary/src/commands/packaging_mcp/server.rs` following the existing Remi and conary-test pattern: `#[derive(Clone)] PackagingMcpServer`, `#[tool_router]`, `ServerHandler`, `list_tools`, `call_tool`, and `get_tool`. Use `conary_mcp::tools::contract_tool_result` for every tool response.
 
-The first four tool methods must have these signatures:
+The five read-only tool methods must have these signatures:
 
 ```rust
 async fn inspect_project(
@@ -1477,6 +1578,11 @@ async fn inspect_project(
 async fn explain_inference(
     &self,
     Parameters(input): Parameters<ExplainInferenceInput>,
+) -> Result<CallToolResult, McpError>;
+
+async fn diagnose_latest_failure(
+    &self,
+    Parameters(input): Parameters<DiagnoseLatestFailureInput>,
 ) -> Result<CallToolResult, McpError>;
 
 async fn operation_records_list(
@@ -1549,13 +1655,17 @@ Add a publish test proving the helper returns `PackagingCommandOutput` for gate 
 ```rust
 #[tokio::test]
 async fn static_artifact_service_helper_returns_structured_gate_failure() {
-    let fixture = PublishFixture::new();
+    let fixture = ArtifactPublishFixture::without_attestation();
     let output = publish_static_artifact_form_service(StaticArtifactPublishServiceInput {
-        artifact_path: fixture.unsigned_package.clone(),
-        target: fixture.repo_target(),
+        artifact_path: fixture.package_path.clone(),
+        target: fixture.repo_dir.display().to_string(),
         key_dir: Some(fixture.key_dir.clone()),
         state_file: Some(fixture.state_file.clone()),
         refresh: false,
+        force_reinit: false,
+        accept_destination_state: false,
+        rotate_publish_key: false,
+        rotate_root_key: false,
         operation_id: "publish-test".to_string(),
     })
     .await
@@ -1588,6 +1698,10 @@ pub(crate) struct StaticArtifactPublishServiceInput {
     pub key_dir: Option<PathBuf>,
     pub state_file: Option<PathBuf>,
     pub refresh: bool,
+    pub force_reinit: bool,
+    pub accept_destination_state: bool,
+    pub rotate_publish_key: bool,
+    pub rotate_root_key: bool,
     pub operation_id: String,
 }
 ```
@@ -1598,9 +1712,15 @@ Add `publish_static_artifact_form_service(input) -> Result<PackagingCommandOutpu
 
 Reduce `publish_static_artifact_form` to construct `StaticArtifactPublishServiceInput`, call the helper, write M3a JSON/human output, write the operation record, and return a CLI error only after writing the structured failed output.
 
-The CLI wrapper must pass these dangerous options as fixed false values inside the helper:
+The CLI wrapper must preserve existing human CLI behavior by passing the current
+`PublishOptions` values for `refresh`, `force_reinit`,
+`accept_destination_state`, `rotate_publish_key`, and `rotate_root_key` into the
+helper. MCP must construct its own `StaticArtifactPublishServiceInput` with
+dangerous options fixed off and record those selected options in
+`PublishPlanMaterial`:
 
 ```rust
+refresh: false,
 force_reinit: false,
 accept_destination_state: false,
 rotate_publish_key: false,
@@ -1672,9 +1792,9 @@ fn default_publish_mode() -> PublishModeInput {
 }
 ```
 
-- [ ] **Step 2: Write failing plan registry tests**
+- [ ] **Step 2: Write failing plan registry and staging tests**
 
-Create `apps/conary/src/commands/packaging_mcp/publish_plan.rs` with tests for registry capacity, fingerprint confirmation, expiry, and private staging mode. The staging test must assert directory mode `0700` and file mode `0600` on Unix.
+Create `apps/conary/src/commands/packaging_mcp/publish_plan.rs` with tests for registry capacity, fingerprint confirmation, expiry, and private staging mode. The staging tests must assert directory mode `0700` and file mode `0600` on Unix, reject symlinks/directories/FIFOs or device nodes where the platform supports creating them, and prove the staged file disappears after `StagedArtifact` is dropped.
 
 - [ ] **Step 3: Run failing plan registry tests**
 
@@ -1720,6 +1840,13 @@ pub(crate) struct PublishPlanMaterial {
     pub expires_at: String,
 }
 
+pub(crate) struct StagedArtifact {
+    _temp: tempfile::TempDir,
+    path: std::path::PathBuf,
+    digest: String,
+    size: u64,
+}
+
 pub(crate) struct PublishPlanRegistry {
     capacity: usize,
     order: std::collections::VecDeque<String>,
@@ -1729,9 +1856,13 @@ pub(crate) struct PublishPlanRegistry {
 pub(crate) fn stage_artifact_private(source: &std::path::Path) -> anyhow::Result<StagedArtifact>;
 ```
 
-`PublishPlanRegistry::insert` must generate a UUIDv4 plan id and compute `canonical_json_hash(&material)`. `get_confirmed` must reject missing, expired, mismatched-fingerprint, and mismatched-confirmation plans.
+`PublishPlanRegistry::insert` must generate a UUIDv4 plan id and compute `canonical_json_hash(&material)`. `get_confirmed` must reject missing, expired, mismatched-fingerprint, and mismatched-confirmation plans. Public `PlanResult` data must not serialize raw `PublishPlanMaterial`; include only the plan id, fingerprint, expiry, redacted route/options evidence, subject resource, and confirmation requirement.
 
-`stage_artifact_private` must create a private temp directory, write the copied artifact with mode `0600` on Unix, fsync the staged file, and return the staged path plus `sha256:` digest.
+`stage_artifact_private` must use `symlink_metadata` before opening the source,
+reject any non-regular source, stream-copy the artifact into a private temp
+directory, write the copied artifact with mode `0600` on Unix, fsync the staged
+file and containing directory where supported, and return a `StagedArtifact`
+that owns the `TempDir` plus staged path, `sha256:` digest, and size.
 
 - [ ] **Step 5: Run plan registry tests and commit**
 
@@ -1794,6 +1925,14 @@ fn publish_plan_for_missing_static_trust_state_returns_missing_prerequisite() {
 
 Add `apps/conary/tests/packaging_m3b.rs` with a parser/help check for `conary mcp packaging --help`.
 
+Also add service tests proving:
+
+- `PublishModeInput::Auto` classifies an artifact plus static target as static artifact-form.
+- `PublishModeInput::ProjectStatic` returns an explicit `NotSupported` plan result in M3b v1 unless a later task wires the full hermetic cook path.
+- Remi targets return explicit `NotSupported` or `Unavailable` plan results without resolving bearer tokens.
+- plan/apply rejects symlink and non-regular artifact inputs.
+- apply rederives route, canonical planned path, selected option material, and destination trust snapshot before publishing.
+
 - [ ] **Step 2: Run failing plan/apply tests**
 
 Run:
@@ -1822,8 +1961,11 @@ Add `plan_publish(&self, input: PublishPlanInput) -> Result<PlanResult>`.
 The method must:
 
 - canonicalize the artifact path;
-- read artifact bytes and compute `sha256:` digest and size;
+- reject symlink and non-regular artifact inputs before opening;
+- stream artifact bytes and compute `sha256:` digest and size;
 - parse the target as `RepoLocation`;
+- classify `artifact_static`, `project_static`, `auto`, and Remi targets before constructing any confirmation material;
+- return explicit `NotSupported` or `Unavailable` results for project-form and Remi routes in M3b v1 without bearer-token resolution;
 - call `inspect_artifact_form_static_destination`;
 - return a failed `PlanResult` with `AgentErrorKind::MissingPrerequisite` if the repo is initial or lacks accepted signer state;
 - create `PublishPlanMaterial` with all fields listed in the M3b design;
@@ -1838,10 +1980,11 @@ The method must:
 
 - call `get_confirmed(plan_id, fingerprint, confirmation)`;
 - map any confirmation error to `AgentErrorKind::UnsafeWithoutConfirmation`;
+- re-canonicalize the planned path, reject symlink and non-regular artifact inputs, rederive target route, and compare the current route/path/options with `PublishPlanMaterial`;
 - re-read destination trust snapshot and compare root fingerprint, package key hash, accepted signer hash, and policy digest with plan material;
 - stage artifact bytes through `stage_artifact_private`;
-- reject staged digest mismatch with `AgentErrorKind::UnsafeWithoutConfirmation`;
-- call `publish_static_artifact_form_service` with the staged path and fixed safe options;
+- reject staged digest mismatch with `AgentErrorKind::UnsafeWithoutConfirmation` when `staged.digest != material.artifact_sha256`;
+- call `publish_static_artifact_form_service` with the staged path and MCP-safe selected options: `refresh=false`, `force_reinit=false`, `accept_destination_state=false`, `rotate_publish_key=false`, and `rotate_root_key=false`;
 - write a redacted operation record with `write_packaging_record_if_possible`;
 - project the resulting `PackagingCommandOutput` with `AgentProjectionMode::Apply` and `RiskLevel::High`.
 
@@ -1912,9 +2055,12 @@ Expand `apps/conary/tests/packaging_m3b.rs` and/or `commands::packaging_mcp` uni
 
 - `conary mcp packaging --help` parses without starting a server.
 - tool list includes all seven M3b tools and excludes Remi/admin tools.
-- operation-record read results do not expose bearer-token text, private key paths, or credentialed URLs.
+- operation-record read, latest-failure diagnosis, publish plan, and publish apply results do not expose bearer-token text, private key paths, credentialed URLs, or unredacted command evidence.
+- inspect/explain paths are offline and do not fetch git remotes, download archives, refresh metadata, invoke package managers, or build/cook sources.
 - `publish.plan` does not create repo dirs, key dirs, locks, state files, metadata, or operation records.
+- `publish.plan` classifies auto, artifact-static, project-static, and Remi targets with explicit unsupported/unavailable envelopes for routes not applied in M3b v1.
 - `publish.apply` rejects missing plan, expired plan, mismatched fingerprint, mismatched confirmation, changed artifact bytes, changed destination trust state, and changed publish options.
+- `publish.apply` rejects symlink and non-regular artifact inputs and compares staged digest exactly to `PublishPlanMaterial.artifact_sha256`.
 - static artifact-form gate refusal returns `validation_failed` with `PublishLintReport` evidence.
 
 - [ ] **Step 2: Run full focused M3b test set**
@@ -1957,10 +2103,18 @@ In `docs/llms/subsystem-map.md`, add:
   `crates/conary-mcp/src/`, and `apps/conary/src/commands/{diagnostics,operation_records,publish}.rs`.
 ```
 
-In `docs/modules/feature-ownership.md`, add:
+In `docs/modules/feature-ownership.md`, add a `### M3b Packaging MCP` subsection under
+`## Packaging, Try Sessions, And Static Repository Publishing`:
 
 ```markdown
-| Packaging MCP | `apps/conary/src/commands/packaging_mcp/` | Owns local stdio MCP tools, agent projection, publish plan registry, and read-only operation-record/project inspection. Publish mutations remain owned by `apps/conary/src/commands/publish.rs`. |
+### M3b Packaging MCP
+
+Start with `apps/conary/src/commands/packaging_mcp/` for local stdio MCP tools,
+agent projection, publish plan registry, and read-only operation-record/project
+inspection. Transport-neutral resource and catalog vocabulary lives in
+`crates/conary-agent-contract/src/{resource,catalog,result}.rs`; generic MCP
+helpers live in `crates/conary-mcp/src/`. Publish mutations remain owned by
+`apps/conary/src/commands/publish.rs`.
 ```
 
 Update the M3 umbrella status to M3b landed and update the M3b design status to landed once the implementation is verified.
