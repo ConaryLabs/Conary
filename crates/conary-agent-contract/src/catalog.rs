@@ -144,8 +144,9 @@ pub fn packaging_tools() -> Vec<CatalogItem> {
         CatalogItem {
             name: "conary.packaging.publish.apply".to_string(),
             description: "Apply a confirmed static artifact publish plan".to_string(),
-            when_to_use: "Use only with a fresh plan id, matching fingerprint, and explicit confirmation"
-                .to_string(),
+            when_to_use:
+                "Use only with a fresh plan id, matching fingerprint, and explicit confirmation"
+                    .to_string(),
             risk: RiskLevel::High,
             cache: CachePolicy::private_short(),
         },

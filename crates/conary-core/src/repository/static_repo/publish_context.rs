@@ -1142,7 +1142,10 @@ mod tests {
                 .unwrap()
                 .starts_with("sha256:")
         );
-        assert_eq!(snapshot.publish_policy_digest, STATIC_PUBLISH_POLICY_DIGEST_V1);
+        assert_eq!(
+            snapshot.publish_policy_digest,
+            STATIC_PUBLISH_POLICY_DIGEST_V1
+        );
         let versions = snapshot.metadata_versions.expect("metadata versions");
         assert!(versions.root_version >= 1);
         assert!(versions.targets_version >= 1);

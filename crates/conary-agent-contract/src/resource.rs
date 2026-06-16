@@ -115,7 +115,10 @@ pub fn packaging_project(project_id: &str) -> ResourceRef {
 
 pub fn packaging_artifact(artifact_id: &str) -> ResourceRef {
     ResourceRef::named(
-        format!("conary-packaging://artifacts/{}", encode_segment(artifact_id)),
+        format!(
+            "conary-packaging://artifacts/{}",
+            encode_segment(artifact_id)
+        ),
         artifact_id,
     )
 }
