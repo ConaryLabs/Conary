@@ -1,6 +1,8 @@
 // apps/conary/src/commands/packaging_mcp/projection.rs
 //! Projection from M3a packaging output into agent operation envelopes.
 
+#![allow(dead_code)] // Consumed by the publish plan/apply slice after read tools land.
+
 use conary_agent_contract::{
     AgentError, AgentErrorKind, EvidenceItem, EvidenceKind, EvidenceRedaction, OperationEnvelope,
     OperationStatus, ResourceRef, RiskLevel,
