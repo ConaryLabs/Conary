@@ -1,7 +1,7 @@
 # M3b Packaging MCP Surface Design
 
 **Date:** 2026-06-16
-**Status:** Review-patched design, ready for implementation planning
+**Status:** Locked for implementation planning
 **Parent design:** `docs/superpowers/specs/2026-06-15-m3-packaging-differentiators-design.md`
 **Prerequisite milestone:** M3a structured diagnostics and operation records
 
@@ -567,7 +567,7 @@ MCP until those contracts and tests exist.
 
 ## Ready For Planning
 
-M3b is ready for implementation planning once this spec is reviewed. The plan
-should split the work into transport-neutral contract additions, MCP adapter
-tool support, CLI packaging agent service methods, publish plan/apply wiring,
-focused tests, and docs/ledger updates.
+M3b is locked for implementation planning. The plan should split the work into
+transport-neutral contract additions, MCP adapter tool support, CLI packaging
+agent service methods, publish plan/apply wiring, focused tests, and
+docs/ledger updates.
