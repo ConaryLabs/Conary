@@ -91,6 +91,10 @@ impl AcceptedStaticSignerSet {
     pub fn trusted_public_keys(&self) -> Vec<String> {
         self.active_keys.values().cloned().collect()
     }
+
+    pub fn canonical_hash(&self) -> Result<String> {
+        canonical_json_hash(&self.active_keys)
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -557,6 +561,26 @@ mod tests {
         let err = AcceptedStaticSignerSet::from_verified_package_keys(&keys).unwrap_err();
 
         assert!(err.to_string().contains("duplicate active package key id"));
+    }
+
+    #[test]
+    fn accepted_signer_set_canonical_hash_is_stable() {
+        let set = AcceptedStaticSignerSet::from_trusted_artifact_signers(&[
+            TrustedArtifactSigner {
+                key_id: "b".to_string(),
+                public_key: "pub-b".to_string(),
+            },
+            TrustedArtifactSigner {
+                key_id: "a".to_string(),
+                public_key: "pub-a".to_string(),
+            },
+        ])
+        .unwrap();
+
+        let first = set.canonical_hash().unwrap();
+        let second = set.canonical_hash().unwrap();
+        assert_eq!(first, second);
+        assert!(first.starts_with("sha256:"));
     }
 
     #[test]
