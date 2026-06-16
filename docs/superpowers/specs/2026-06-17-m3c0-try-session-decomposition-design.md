@@ -290,10 +290,17 @@ Required behavior gates:
   launcher paths record `boot-a`, and dispatch preflight evaluates against that
   same canonical helper.
 - Hook policy: the M1b try hook refusal matrix remains unchanged.
+- Declarative hook execution: pre hooks run before post hooks against the
+  non-host try root; pre-hook failure aborts post-hook execution with the
+  existing pre-hook context; post-hook failures are collected into the existing
+  post-hook failure message.
 
 Before the first code move, the implementation plan must map each behavior gate
 above to specific existing tests. Any gate without direct coverage needs a
 focused characterization test while the monolith still exists.
+
+The pre-move test mapping must include declarative hook pre/post ordering and
+failure behavior before hook execution moves into `namespace.rs`.
 
 The split must also preserve all existing test-injection seams, including
 `CONARY_TEST_TRY_LAUNCHER`, `CONARY_TEST_TRY_MOUNTINFO_PATH`,
