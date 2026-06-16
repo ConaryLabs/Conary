@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-06-13
-revision: 9
+last_updated: 2026-06-16
+revision: 10
 summary: Non-secret infrastructure, agent-operations transport, release, Remi deploy, remote development, and Forge staging guidance for Conary contributors and coding assistants
 ---
 
@@ -55,6 +55,14 @@ intentionally expanded for those services.
 
 - Remi admin and package-service operations
 - `conary-test` run control, deploy/restart flows, image management, and fixture publishing
+
+### Local Packaging MCP
+
+`conary mcp packaging` starts the local stdio MCP server for packaging agent
+workflows. It does not open a network listener. The first mutation contract is
+confirmed static artifact publish through `conary.packaging.publish.plan` and
+`conary.packaging.publish.apply`; Remi publish apply and project-form publish
+apply are intentionally unsupported in this slice.
 
 Use manual SSH, rsync, or curl only when the structured operation surface does
 not cover the task or when you are debugging the underlying service path itself.
