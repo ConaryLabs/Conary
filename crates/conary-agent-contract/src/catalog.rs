@@ -73,6 +73,85 @@ pub fn default_read_resources() -> Vec<CatalogItem> {
     ]
 }
 
+pub fn packaging_resources() -> Vec<CatalogItem> {
+    vec![
+        CatalogItem {
+            name: "conary-packaging.operations.recent".to_string(),
+            description: "Read recent local packaging operation records".to_string(),
+            when_to_use: "Use before diagnosing recent cook or publish failures".to_string(),
+            risk: RiskLevel::ReadOnly,
+            cache: CachePolicy::private_short(),
+        },
+        CatalogItem {
+            name: "conary-packaging.operation".to_string(),
+            description: "Read one redacted local packaging operation record".to_string(),
+            when_to_use: "Use when an operation id is known and detailed diagnostics are needed"
+                .to_string(),
+            risk: RiskLevel::ReadOnly,
+            cache: CachePolicy::private_short(),
+        },
+    ]
+}
+
+pub fn packaging_tools() -> Vec<CatalogItem> {
+    vec![
+        CatalogItem {
+            name: "conary.packaging.inspect_project".to_string(),
+            description: "Inspect local packaging project or artifact facts without building"
+                .to_string(),
+            when_to_use: "Use before planning cook or publish work".to_string(),
+            risk: RiskLevel::ReadOnly,
+            cache: CachePolicy::private_short(),
+        },
+        CatalogItem {
+            name: "conary.packaging.explain_inference".to_string(),
+            description: "Explain recipe inference for a local source tree".to_string(),
+            when_to_use: "Use when a source tree has no explicit recipe or inference is surprising"
+                .to_string(),
+            risk: RiskLevel::ReadOnly,
+            cache: CachePolicy::private_short(),
+        },
+        CatalogItem {
+            name: "conary.packaging.diagnose_latest_failure".to_string(),
+            description: "Diagnose the newest failed packaging operation record".to_string(),
+            when_to_use: "Use after a cook or publish command failed".to_string(),
+            risk: RiskLevel::ReadOnly,
+            cache: CachePolicy::private_short(),
+        },
+        CatalogItem {
+            name: "conary.packaging.operation_records.list".to_string(),
+            description: "List recent redacted packaging operation records".to_string(),
+            when_to_use: "Use to find operation ids for follow-up diagnosis".to_string(),
+            risk: RiskLevel::ReadOnly,
+            cache: CachePolicy::private_short(),
+        },
+        CatalogItem {
+            name: "conary.packaging.operation_records.read".to_string(),
+            description: "Read one redacted packaging operation record".to_string(),
+            when_to_use: "Use when an exact operation id is already known".to_string(),
+            risk: RiskLevel::ReadOnly,
+            cache: CachePolicy::private_short(),
+        },
+        CatalogItem {
+            name: "conary.packaging.publish.plan".to_string(),
+            description: "Plan static artifact publish and return confirmation material"
+                .to_string(),
+            when_to_use: "Use before applying an attested CCS artifact to a static repository"
+                .to_string(),
+            risk: RiskLevel::ReadOnly,
+            cache: CachePolicy::private_short(),
+        },
+        CatalogItem {
+            name: "conary.packaging.publish.apply".to_string(),
+            description: "Apply a confirmed static artifact publish plan".to_string(),
+            when_to_use: "Use only with a fresh plan id, matching fingerprint, and explicit confirmation"
+                .to_string(),
+            risk: RiskLevel::High,
+            cache: CachePolicy::private_short(),
+        },
+    ]
+}
+
 // These are catalog definitions only. Do not register them as live MCP prompts
 // until the stateless MCP adapter decision is satisfied.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -156,6 +235,40 @@ mod tests {
         );
         assert_eq!(suites.risk, RiskLevel::ReadOnly);
         assert_eq!(suites.cache, CachePolicy::private_short());
+    }
+
+    #[test]
+    fn packaging_catalog_exposes_resources_and_tools() {
+        let resources = packaging_resources();
+        assert!(
+            resources
+                .iter()
+                .any(|item| item.name == "conary-packaging.operations.recent")
+        );
+        assert!(
+            resources
+                .iter()
+                .all(|item| item.risk == RiskLevel::ReadOnly)
+        );
+
+        let tools = packaging_tools();
+        let names = tools
+            .iter()
+            .map(|item| item.name.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert!(names.contains("conary.packaging.inspect_project"));
+        assert!(names.contains("conary.packaging.explain_inference"));
+        assert!(names.contains("conary.packaging.diagnose_latest_failure"));
+        assert!(names.contains("conary.packaging.operation_records.list"));
+        assert!(names.contains("conary.packaging.operation_records.read"));
+        assert!(names.contains("conary.packaging.publish.plan"));
+        assert!(names.contains("conary.packaging.publish.apply"));
+
+        let apply = tools
+            .iter()
+            .find(|item| item.name == "conary.packaging.publish.apply")
+            .expect("publish apply catalog entry");
+        assert_eq!(apply.risk, RiskLevel::High);
     }
 
     #[test]
