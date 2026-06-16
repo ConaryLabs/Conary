@@ -1,8 +1,6 @@
 // apps/conary/src/commands/packaging_mcp/publish_plan.rs
 //! Publish plan material, confirmation registry, and private artifact staging.
 
-#![allow(dead_code)] // Consumed by the publish plan/apply service slice.
-
 use std::collections::{BTreeMap, VecDeque};
 use std::fs::{self, File, OpenOptions};
 use std::io;

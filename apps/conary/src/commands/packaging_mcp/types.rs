@@ -49,7 +49,6 @@ pub(crate) struct OperationRecordData {
     pub record: serde_json::Value,
 }
 
-#[allow(dead_code)] // Consumed by the publish plan/apply service slice.
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum PublishModeInput {
@@ -58,7 +57,6 @@ pub(crate) enum PublishModeInput {
     ProjectStatic,
 }
 
-#[allow(dead_code)] // Consumed by the publish plan/apply service slice.
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
 pub(crate) struct PublishPlanInput {
     pub artifact_or_project_path: String,
@@ -73,7 +71,6 @@ pub(crate) struct PublishPlanInput {
     pub mode: PublishModeInput,
 }
 
-#[allow(dead_code)] // Consumed by the publish plan/apply service slice.
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
 pub(crate) struct PublishApplyInput {
     pub plan_id: String,
@@ -81,7 +78,6 @@ pub(crate) struct PublishApplyInput {
     pub confirmation: String,
 }
 
-#[allow(dead_code)] // Referenced by serde default when PublishPlanInput is deserialized.
 fn default_publish_mode() -> PublishModeInput {
     PublishModeInput::Auto
 }

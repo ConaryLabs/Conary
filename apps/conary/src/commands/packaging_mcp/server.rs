@@ -17,7 +17,7 @@ use rmcp::{
 use super::service::PackagingAgentService;
 use super::types::{
     DiagnoseLatestFailureInput, ExplainInferenceInput, InspectProjectInput,
-    OperationRecordsListInput, OperationRecordsReadInput,
+    OperationRecordsListInput, OperationRecordsReadInput, PublishApplyInput, PublishPlanInput,
 };
 
 #[derive(Clone)]
@@ -114,6 +114,36 @@ impl PackagingMcpServer {
             .map_err(map_internal)?;
         contract_tool_result(&result)
     }
+
+    #[tool(
+        name = "conary.packaging.publish.plan",
+        description = "Plan static artifact publish and return confirmation material.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn publish_plan(
+        &self,
+        Parameters(input): Parameters<PublishPlanInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let result = self.service.plan_publish(input).map_err(map_internal)?;
+        contract_tool_result(&result)
+    }
+
+    #[tool(
+        name = "conary.packaging.publish.apply",
+        description = "Apply a confirmed static artifact publish plan.",
+        annotations(read_only_hint = false, open_world_hint = false)
+    )]
+    async fn publish_apply(
+        &self,
+        Parameters(input): Parameters<PublishApplyInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let result = self
+            .service
+            .apply_publish(input)
+            .await
+            .map_err(map_internal)?;
+        contract_tool_result(&result)
+    }
 }
 
 impl ServerHandler for PackagingMcpServer {
@@ -169,6 +199,8 @@ mod tests {
         assert!(names.contains("conary.packaging.diagnose_latest_failure"));
         assert!(names.contains("conary.packaging.operation_records.list"));
         assert!(names.contains("conary.packaging.operation_records.read"));
+        assert!(names.contains("conary.packaging.publish.plan"));
+        assert!(names.contains("conary.packaging.publish.apply"));
     }
 
     #[tokio::test]
