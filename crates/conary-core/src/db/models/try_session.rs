@@ -455,6 +455,56 @@ mod tests {
     }
 
     #[test]
+    fn clear_launcher_clears_process_identity_on_open_session() {
+        let (_temp, conn) = create_test_db();
+        let session = create_namespace_session(&conn, "try-a");
+        session.set_launcher(&conn, 4242, "boot-123").unwrap();
+        force_old_updated_at(&conn, "try-a");
+
+        session.clear_launcher(&conn).unwrap();
+
+        let stored = TrySession::find_by_id(&conn, "try-a").unwrap().unwrap();
+        assert_eq!(stored.launcher_pid, None);
+        assert_eq!(stored.launcher_boot_id, None);
+        assert_ne!(stored.updated_at.as_deref(), Some("2000-01-01T00:00:00Z"));
+    }
+
+    #[test]
+    fn record_boot_without_launcher_records_boot_and_clears_pid_on_open_session() {
+        let (_temp, conn) = create_test_db();
+        let session = create_namespace_session(&conn, "try-a");
+        session.set_launcher(&conn, 4242, "old-boot").unwrap();
+        force_old_updated_at(&conn, "try-a");
+
+        session
+            .record_boot_without_launcher(&conn, "boot-456")
+            .unwrap();
+
+        let stored = TrySession::find_by_id(&conn, "try-a").unwrap().unwrap();
+        assert_eq!(stored.launcher_pid, None);
+        assert_eq!(stored.launcher_boot_id.as_deref(), Some("boot-456"));
+        assert_ne!(stored.updated_at.as_deref(), Some("2000-01-01T00:00:00Z"));
+    }
+
+    #[test]
+    fn launcher_identity_helpers_refuse_terminal_sessions() {
+        let (_temp, conn) = create_test_db();
+        let kept = create_namespace_session(&conn, "try-kept");
+        kept.mark_kept(&conn).unwrap();
+
+        for err in [
+            kept.clear_launcher(&conn).unwrap_err(),
+            kept.record_boot_without_launcher(&conn, "boot-789")
+                .unwrap_err(),
+        ] {
+            let message = err.to_string();
+            assert!(message.contains("Conflict"), "{message}");
+            assert!(message.contains("try-kept"), "{message}");
+            assert!(message.contains("not active or orphaned"), "{message}");
+        }
+    }
+
+    #[test]
     fn set_try_generation_and_mark_failed_orphaned_update_open_session() {
         let (_temp, conn) = create_test_db();
         let session = create_namespace_session(&conn, "try-a");
