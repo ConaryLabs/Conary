@@ -1,9 +1,9 @@
-// src/commands/try_session.rs
+// apps/conary/src/commands/try_session/mod.rs
 //! Try-session policy helpers.
 
 use anyhow::{Context, Result, bail};
 use conary_core::ccs::CcsPackage;
-use conary_core::ccs::manifest::{CcsManifest, HookExecutionRoot};
+use conary_core::ccs::manifest::CcsManifest;
 use conary_core::db::backup::{CheckpointReason, create_checkpoint};
 use conary_core::db::models::{CreateTrySession, TrySession, TrySessionMode};
 use conary_core::packages::traits::PackageFormat;
@@ -12,162 +12,17 @@ use conary_core::transaction::{TransactionConfig, TransactionEngine};
 use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf};
 
-use crate::commands::install::{
-    CcsTransactionInstallOptions, ComponentSelection, LegacyReplayOptions,
-    install_ccs_package_transactionally_with_config,
-};
+mod executor;
+mod install;
+mod namespace;
+mod session;
+mod util;
+mod validation;
 
-#[allow(dead_code)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum TryExecutionRoot {
-    Namespace,
-    Generation,
-    Host,
-}
-
-impl TryExecutionRoot {
-    fn hook_execution_root(self) -> HookExecutionRoot {
-        match self {
-            Self::Namespace => HookExecutionRoot::TryRoot,
-            Self::Generation => HookExecutionRoot::GenerationRoot,
-            Self::Host => HookExecutionRoot::HostRoot,
-        }
-    }
-}
-
-#[allow(dead_code)]
-pub(crate) fn validate_try_package_policy(
-    package: &CcsPackage,
-    execution_root: TryExecutionRoot,
-    allow_irreversible: bool,
-    activated: bool,
-) -> Result<()> {
-    validate_try_manifest_policy(
-        package.manifest(),
-        execution_root,
-        allow_irreversible,
-        activated,
-    )
-}
-
-#[allow(dead_code)]
-pub(crate) fn validate_try_manifest_policy(
-    manifest: &CcsManifest,
-    execution_root: TryExecutionRoot,
-    allow_irreversible: bool,
-    activated: bool,
-) -> Result<()> {
-    let hooks = &manifest.hooks;
-
-    if hooks.has_script_hooks() {
-        bail!("{}", script_hook_policy_error(activated));
-    }
-
-    if manifest.legacy_scriptlets.is_some() {
-        if activated {
-            bail!(
-                "legacy scriptlet bundles are not supported in activated M1b try sessions; \
-                 host-root lifecycle helper is M2 work"
-            );
-        }
-        bail!(
-            "legacy scriptlet bundles are not supported in M1b try sessions; \
-             replay against try roots requires a reviewed lifecycle helper"
-        );
-    }
-
-    if hooks.has_service_hooks() {
-        if activated {
-            bail!(
-                "service lifecycle is not generation-scoped in activated M1b try sessions; \
-                 host-root lifecycle helper is M2 work"
-            );
-        }
-        bail!(
-            "service lifecycle is not generation-scoped in M1b try sessions; \
-            hooks.services cannot run during try"
-        );
-    }
-
-    validate_m1b_try_declarative_hook_support(manifest, activated)?;
-
-    if matches!(execution_root, TryExecutionRoot::Host) && hooks.has_declarative_hooks() {
-        if activated {
-            bail!(
-                "try hooks cannot execute against the host root; \
-                 host-root lifecycle helper is M2 work"
-            );
-        }
-        bail!("try hooks cannot execute against the host root");
-    }
-
-    if hooks.has_irreversible_hooks_for_try_root(execution_root.hook_execution_root())
-        && !allow_irreversible
-    {
-        bail!(
-            "try package contains irreversible hooks for the planned execution root; \
-             pass --allow-irreversible only after review"
-        );
-    }
-
-    Ok(())
-}
-
-fn validate_m1b_try_declarative_hook_support(
-    manifest: &CcsManifest,
-    activated: bool,
-) -> Result<()> {
-    let hooks = &manifest.hooks;
-    if !hooks.systemd.is_empty() {
-        bail!(
-            "{}",
-            unsupported_declarative_hook_error("hooks.systemd", activated)
-        );
-    }
-    if !hooks.tmpfiles.is_empty() {
-        bail!(
-            "{}",
-            unsupported_declarative_hook_error("hooks.tmpfiles", activated)
-        );
-    }
-    if !hooks.sysctl.is_empty() {
-        bail!(
-            "{}",
-            unsupported_declarative_hook_error("hooks.sysctl", activated)
-        );
-    }
-    if !hooks.alternatives.is_empty() {
-        bail!(
-            "{}",
-            unsupported_declarative_hook_error("hooks.alternatives", activated)
-        );
-    }
-    Ok(())
-}
-
-fn unsupported_declarative_hook_error(hook_class: &str, activated: bool) -> String {
-    if activated {
-        format!(
-            "{hook_class} are not supported in activated M1b try sessions; \
-             generation-scoped effect verification for this hook class is M2 work"
-        )
-    } else {
-        format!(
-            "{hook_class} are not supported in M1b try sessions; \
-             promotable try-root effect verification for this hook class is M2 work"
-        )
-    }
-}
-
-fn script_hook_policy_error(activated: bool) -> &'static str {
-    if activated {
-        "script hooks are not supported in activated M1b try sessions; \
-         host-root lifecycle helper is M2 work"
-    } else {
-        "script hooks are not supported in M1b try sessions; \
-         scripts cannot run against the host root"
-    }
-}
+#[cfg(test)]
+use install::build_try_transaction_config;
+use install::{build_try_install_plan, install_try_package};
+use validation::{TryExecutionRoot, validate_try_package_policy};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct TryStartRequest<'a> {
@@ -260,14 +115,6 @@ pub(crate) async fn cmd_try_keep(db_path: &str) -> Result<()> {
     keep_active_try_session(db_path)?;
     println!("Try session kept");
     Ok(())
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct TryInstallPlan {
-    pub install_root: PathBuf,
-    pub copied_db_path: PathBuf,
-    pub transaction_config: TransactionConfig,
-    pub no_scripts: bool,
 }
 
 pub(crate) fn begin_try_session(request: TryStartRequest<'_>) -> Result<TryStartOutcome> {
@@ -407,66 +254,6 @@ pub(crate) fn begin_try_session(request: TryStartRequest<'_>) -> Result<TryStart
         namespace_root,
         try_generation_id: built.generation_number,
     })
-}
-
-fn install_try_package(
-    conn: &mut rusqlite::Connection,
-    package: &CcsPackage,
-    plan: &TryInstallPlan,
-) -> Result<()> {
-    let db_path_string = plan.copied_db_path.to_string_lossy().into_owned();
-    let root_string = plan.install_root.to_string_lossy().into_owned();
-    install_ccs_package_transactionally_with_config(
-        conn,
-        package,
-        CcsTransactionInstallOptions {
-            db_path: &db_path_string,
-            root: &root_string,
-            dry_run: false,
-            defer_generation: true,
-            no_scripts: plan.no_scripts,
-            sandbox_mode: conary_core::scriptlet::SandboxMode::None,
-            allow_downgrade: false,
-            reinstall: false,
-            selection_reason: Some("conary try"),
-            component_selection: ComponentSelection::All,
-            selected_manifest_components: None,
-            repository_provenance: None,
-            legacy_replay: LegacyReplayOptions::default(),
-        },
-        plan.transaction_config.clone(),
-    )?;
-    Ok(())
-}
-
-pub(crate) fn build_try_install_plan(
-    runtime_root: &ConaryRuntimeRoot,
-    work_dir: &Path,
-    copied_db_path: PathBuf,
-    _mode: TrySessionMode,
-) -> TryInstallPlan {
-    TryInstallPlan {
-        install_root: work_dir.join("root"),
-        copied_db_path: copied_db_path.clone(),
-        transaction_config: build_try_transaction_config(runtime_root, copied_db_path),
-        no_scripts: true,
-    }
-}
-
-pub(crate) fn build_try_transaction_config(
-    runtime_root: &ConaryRuntimeRoot,
-    copied_db_path: PathBuf,
-) -> TransactionConfig {
-    TransactionConfig {
-        root: runtime_root.root().to_path_buf(),
-        db_path: copied_db_path,
-        objects_dir: runtime_root.objects_dir(),
-        generations_dir: runtime_root.generations_dir(),
-        etc_state_dir: runtime_root.etc_state_dir(),
-        mount_point: runtime_root.mount_dir(),
-        hash_algorithm: conary_core::hash::HashAlgorithm::Sha256,
-        lock_timeout_secs: TransactionConfig::DEFAULT_LOCK_TIMEOUT_SECS,
-    }
 }
 
 pub(crate) fn apply_declarative_try_hooks(manifest: &CcsManifest, root: &Path) -> Result<()> {
@@ -1526,77 +1313,14 @@ mod tests {
 
     use conary_core::ccs::builder::write_ccs_package;
     use conary_core::ccs::manifest::{
-        AlternativeHook, CcsManifest, DirectoryHook, GroupHook, ScriptHook, Service, ServiceAction,
-        SysctlHook, SystemdHook, TmpfilesHook, UserHook,
+        AlternativeHook, CcsManifest, DirectoryHook, GroupHook, SysctlHook, SystemdHook,
+        TmpfilesHook, UserHook,
     };
-    use conary_core::ccs::{BuildResult, CcsPackage, ComponentData, FileEntry, FileType};
+    use conary_core::ccs::{BuildResult, ComponentData, FileEntry, FileType};
     use conary_core::db::models::{TrySession, TrySessionMode};
-    use conary_core::packages::traits::PackageFormat;
     use conary_core::runtime_root::ConaryRuntimeRoot;
 
     use super::*;
-
-    fn validate_manifest(
-        manifest: &CcsManifest,
-        execution_root: TryExecutionRoot,
-        allow_irreversible: bool,
-        activated: bool,
-    ) -> anyhow::Result<()> {
-        validate_try_manifest_policy(manifest, execution_root, allow_irreversible, activated)
-    }
-
-    fn assert_policy_error_contains(
-        manifest: &CcsManifest,
-        execution_root: TryExecutionRoot,
-        allow_irreversible: bool,
-        activated: bool,
-        expected: &str,
-    ) {
-        let err = validate_manifest(manifest, execution_root, allow_irreversible, activated)
-            .expect_err("policy should reject package");
-        let message = err.to_string();
-        assert!(
-            message.contains(expected),
-            "expected error to contain {expected:?}, got {message:?}"
-        );
-    }
-
-    fn minimal_package(manifest: CcsManifest) -> anyhow::Result<CcsPackage> {
-        let temp_dir = tempfile::tempdir()?;
-        let package_path = temp_dir.path().join("try-policy.ccs");
-        let content = b"try package".to_vec();
-        let hash = conary_core::hash::sha256(&content);
-        let files = vec![FileEntry {
-            path: "/usr/bin/try-policy".to_string(),
-            hash: hash.clone(),
-            size: content.len() as u64,
-            mode: 0o100755,
-            component: "runtime".to_string(),
-            file_type: FileType::Regular,
-            target: None,
-            chunks: None,
-        }];
-        let result = BuildResult {
-            manifest,
-            components: HashMap::from([(
-                "runtime".to_string(),
-                ComponentData {
-                    name: "runtime".to_string(),
-                    files: files.clone(),
-                    hash: "runtime".to_string(),
-                    size: content.len() as u64,
-                },
-            )]),
-            files,
-            blobs: HashMap::from([(hash, content)]),
-            total_size: 11,
-            chunked: false,
-            chunk_stats: None,
-        };
-        write_ccs_package(&result, &package_path)?;
-        <CcsPackage as PackageFormat>::parse(&package_path.to_string_lossy())
-            .map_err(|error| anyhow::anyhow!(error))
-    }
 
     struct TryRuntimeFixture {
         _temp: tempfile::TempDir,
@@ -1825,24 +1549,6 @@ mod tests {
 
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-    fn manifest_with_post_install_script() -> CcsManifest {
-        let mut manifest = CcsManifest::new_minimal("script-post", "1.0.0");
-        manifest.hooks.post_install = Some(ScriptHook {
-            script: "echo post-install".to_string(),
-            reversible: None,
-        });
-        manifest
-    }
-
-    fn manifest_with_pre_remove_script() -> CcsManifest {
-        let mut manifest = CcsManifest::new_minimal("script-pre", "1.0.0");
-        manifest.hooks.pre_remove = Some(ScriptHook {
-            script: "echo pre-remove".to_string(),
-            reversible: None,
-        });
-        manifest
-    }
-
     fn manifest_with_declarative_hook() -> CcsManifest {
         let mut manifest = CcsManifest::new_minimal("declarative", "1.0.0");
         manifest.hooks.directories.push(DirectoryHook {
@@ -1919,176 +1625,6 @@ mod tests {
         manifest
     }
 
-    fn manifest_with_service_hook() -> CcsManifest {
-        let mut manifest = CcsManifest::new_minimal("service-hook", "1.0.0");
-        manifest.hooks.services.push(Service {
-            name: "service-hook.service".to_string(),
-            action: ServiceAction::Restart,
-            reversible: None,
-        });
-        manifest
-    }
-
-    fn manifest_with_legacy_scriptlet_bundle() -> CcsManifest {
-        let body = "ldconfig";
-        let body_sha256 = conary_core::hash::sha256_prefixed(body.as_bytes());
-        let toml = format!(
-            r#"
-[package]
-name = "legacy-scriptlets"
-version = "1.0.0"
-description = "legacy scriptlets"
-
-[legacy_scriptlets]
-schema = "conary.legacy-scriptlets.v1"
-schema_revision = 1
-source_format = "rpm"
-source_family = "fedora-rhel"
-source_distro = "fedora"
-source_release = "44"
-source_arch = "x86_64"
-source_package = "legacy-scriptlets"
-source_version = "1.0.0-1.fc44"
-source_checksum = "sha256:3333333333333333333333333333333333333333333333333333333333333333"
-version_scheme = "rpm"
-conversion_tool = "remi"
-conversion_tool_version = "0.8.0"
-conversion_policy = "safe-or-legacy"
-target_compatibility = "source-native"
-allowed_targets = ["rpm/fedora/44/x86_64"]
-foreign_replay_policy = "deny"
-publication_policy = "public-if-no-blocked"
-publication_status = "private-review"
-scriptlet_fidelity = "legacy-replay"
-
-[legacy_scriptlets.decision_counts]
-legacy = 1
-
-[[legacy_scriptlets.entries]]
-id = "rpm:%post"
-native_slot = "%post"
-phase = "post-install"
-lifecycle_paths = ["install:first"]
-interpreter = "/bin/sh"
-interpreter_args = ["-e"]
-body_sha256 = "{body_sha256}"
-body = "{body}"
-native_invocation = {{ args = ["1"], environment = ["RPM_INSTALL_PREFIX=/"], stdin = "none", chroot = "install-root" }}
-transaction_order = {{ position = "after-payload", after = ["payload"] }}
-timeout_ms = 30000
-decision = "legacy"
-reason_code = "protected-replay-required"
-
-[[legacy_scriptlets.entries.effects]]
-kind = "ldconfig"
-source = "static-signal"
-confidence = "declared"
-replacement = "complete"
-"#
-        );
-
-        CcsManifest::parse(&toml).expect("parse legacy scriptlet fixture")
-    }
-
-    #[test]
-    fn package_with_no_hooks_is_allowed() -> anyhow::Result<()> {
-        let manifest = CcsManifest::new_minimal("no-hooks", "1.0.0");
-        validate_manifest(&manifest, TryExecutionRoot::Namespace, false, false)?;
-        validate_manifest(&manifest, TryExecutionRoot::Generation, false, false)?;
-        validate_manifest(&manifest, TryExecutionRoot::Host, false, true)?;
-
-        let package = minimal_package(manifest)?;
-        validate_try_package_policy(&package, TryExecutionRoot::Namespace, false, false)
-    }
-
-    #[test]
-    fn declarative_hooks_are_allowed_only_for_try_or_generation_roots() {
-        let manifest = manifest_with_declarative_hook();
-
-        validate_manifest(&manifest, TryExecutionRoot::Namespace, false, false)
-            .expect("namespace-root declarative hooks should be allowed");
-        validate_manifest(&manifest, TryExecutionRoot::Generation, false, false)
-            .expect("generation-root declarative hooks should be allowed");
-        assert_policy_error_contains(
-            &manifest,
-            TryExecutionRoot::Host,
-            false,
-            false,
-            "try hooks cannot execute against the host root",
-        );
-    }
-
-    #[test]
-    fn post_install_script_hooks_are_rejected_by_default() {
-        let manifest = manifest_with_post_install_script();
-
-        assert_policy_error_contains(
-            &manifest,
-            TryExecutionRoot::Namespace,
-            false,
-            false,
-            "scripts cannot run against the host root",
-        );
-    }
-
-    #[test]
-    fn pre_remove_script_hooks_are_rejected_by_default() {
-        let manifest = manifest_with_pre_remove_script();
-
-        assert_policy_error_contains(
-            &manifest,
-            TryExecutionRoot::Namespace,
-            false,
-            false,
-            "scripts cannot run against the host root",
-        );
-    }
-
-    #[test]
-    fn legacy_scriptlet_bundles_are_rejected_by_default() {
-        let manifest = manifest_with_legacy_scriptlet_bundle();
-
-        assert_policy_error_contains(
-            &manifest,
-            TryExecutionRoot::Namespace,
-            false,
-            false,
-            "legacy scriptlet bundles are not supported in M1b try sessions",
-        );
-    }
-
-    #[test]
-    fn service_hooks_are_rejected_in_m1b() {
-        let manifest = manifest_with_service_hook();
-
-        assert_policy_error_contains(
-            &manifest,
-            TryExecutionRoot::Namespace,
-            false,
-            false,
-            "service lifecycle is not generation-scoped",
-        );
-    }
-
-    #[test]
-    fn unsupported_declarative_hook_classes_are_rejected_in_m1b_try_policy() {
-        for (manifest, expected) in [
-            (manifest_with_systemd_hook(), "hooks.systemd"),
-            (manifest_with_tmpfiles_hook(), "hooks.tmpfiles"),
-            (manifest_with_sysctl_hook(), "hooks.sysctl"),
-            (manifest_with_alternative_hook(), "hooks.alternatives"),
-        ] {
-            assert_policy_error_contains(
-                &manifest,
-                TryExecutionRoot::Namespace,
-                true,
-                false,
-                expected,
-            );
-            assert_policy_error_contains(&manifest, TryExecutionRoot::Generation, true, true, "M2");
-        }
-    }
-
     #[test]
     fn namespace_try_start_rejects_unsupported_declarative_hook_classes_before_session()
     -> anyhow::Result<()> {
@@ -2113,85 +1649,6 @@ replacement = "complete"
             );
         }
         Ok(())
-    }
-
-    #[test]
-    fn package_round_trip_preserves_service_hooks_for_policy() -> anyhow::Result<()> {
-        let package = minimal_package(manifest_with_service_hook())?;
-
-        let err = validate_try_package_policy(&package, TryExecutionRoot::Namespace, false, false)
-            .expect_err("package service hook should be rejected after round trip");
-
-        assert!(
-            err.to_string()
-                .contains("service lifecycle is not generation-scoped"),
-            "unexpected error: {err}"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn package_round_trip_preserves_declarative_reversibility_for_policy() -> anyhow::Result<()> {
-        let mut manifest = manifest_with_declarative_hook();
-        manifest.hooks.directories[0].reversible = Some(false);
-        let package = minimal_package(manifest)?;
-
-        let err = validate_try_package_policy(&package, TryExecutionRoot::Namespace, false, false)
-            .expect_err("irreversible declarative hook should be rejected after round trip");
-        assert!(
-            err.to_string()
-                .contains("try package contains irreversible hooks"),
-            "unexpected error: {err}"
-        );
-
-        validate_try_package_policy(&package, TryExecutionRoot::Namespace, true, false)?;
-        validate_try_package_policy(&package, TryExecutionRoot::Generation, true, false)
-    }
-
-    #[test]
-    fn allow_irreversible_does_not_permit_scripts_legacy_or_services() {
-        assert_policy_error_contains(
-            &manifest_with_post_install_script(),
-            TryExecutionRoot::Namespace,
-            true,
-            false,
-            "scripts cannot run against the host root",
-        );
-        assert_policy_error_contains(
-            &manifest_with_pre_remove_script(),
-            TryExecutionRoot::Namespace,
-            true,
-            true,
-            "host-root lifecycle helper is M2 work",
-        );
-        assert_policy_error_contains(
-            &manifest_with_legacy_scriptlet_bundle(),
-            TryExecutionRoot::Namespace,
-            true,
-            false,
-            "legacy scriptlet bundles are not supported in M1b try sessions",
-        );
-        assert_policy_error_contains(
-            &manifest_with_legacy_scriptlet_bundle(),
-            TryExecutionRoot::Namespace,
-            true,
-            true,
-            "host-root lifecycle helper is M2 work",
-        );
-        assert_policy_error_contains(
-            &manifest_with_service_hook(),
-            TryExecutionRoot::Generation,
-            true,
-            false,
-            "service lifecycle is not generation-scoped",
-        );
-        assert_policy_error_contains(
-            &manifest_with_service_hook(),
-            TryExecutionRoot::Generation,
-            true,
-            true,
-            "host-root lifecycle helper is M2 work",
-        );
     }
 
     #[test]
@@ -2940,8 +2397,10 @@ replacement = "complete"
     fn namespace_keep_restores_current_link_after_post_link_failure() -> anyhow::Result<()> {
         let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
         let _env_lock = ENV_LOCK.lock().unwrap();
-        let _fail_guard =
-            EnvVarGuard::set("CONARY_TEST_TRY_KEEP_FAIL_AFTER_BACKUP", "after-current-link");
+        let _fail_guard = EnvVarGuard::set(
+            "CONARY_TEST_TRY_KEEP_FAIL_AFTER_BACKUP",
+            "after-current-link",
+        );
         let fixture = TryRuntimeFixture::new();
         create_current_generation_link(&fixture.root, 7);
         let package = fixture.write_package(
