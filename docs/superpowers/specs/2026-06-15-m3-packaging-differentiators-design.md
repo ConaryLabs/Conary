@@ -1,7 +1,7 @@
 # M3 Packaging Differentiators Design
 
 **Date:** 2026-06-15
-**Status:** M3a landed; M3b ready for design and planning
+**Status:** M3a and M3b landed; M3c0 try-session decomposition is next
 **Parent design:** `docs/superpowers/specs/2026-06-10-packaging-toolchain-design.md`
 **Prerequisite milestone:** M2 release surface
 
@@ -115,7 +115,7 @@ M3 remains one umbrella design executed as reviewable slices:
 | Slice | Name | Gate |
 |-------|------|------|
 | M3a | Structured diagnostics and events | Landed: stable schema v1, renderer parity for cook/publish JSON paths, no secret leakage |
-| M3b | Agent-native packaging MCP surface | Thin transport over shared contract, read/diagnostic tools first |
+| M3b | Agent-native packaging MCP surface | Landed: local stdio MCP, read/diagnostic tools, and confirmed static artifact publish plan/apply |
 | M3c0 | Try-session decomposition | Reviewed move map and parity tests before watch behavior |
 | M3c | Watch mode | Source watch composes cook and try through narrow APIs |
 | M3d | Record-mode spike | Prototype proves tracing/redaction/draft quality before commitment |
@@ -235,29 +235,16 @@ M3a includes a redaction policy and operation-record store:
 ## M3b: Agent-Native Packaging MCP Surface
 
 M3b exposes packaging capabilities through the existing MCP/agent-contract
-architecture. The MCP layer should adapt stable packaging DTOs; it should not
-become the product contract.
+architecture. The MCP layer adapts stable packaging DTOs; it does not become
+the product contract.
 
-Initial tools/resources should be intentionally conservative:
-
-- inspect packaging project
-- explain inference for a directory or fetched source
-- diagnose the last packaging failure from an operation record
-- dry-run cook planning
-- read recent packaging operation events
-
-Mutating tools can follow only after the read/diagnostic surface is stable:
-
-- cook
-- try
-- publish
-
-Those mutating tools must carry risk labels and plan/apply confirmation. The
-risk labels must be derived from the same CLI mutation classification used for
-ordinary commands, then mapped into `conary-agent-contract` risk and
-confirmation values. MCP cannot classify a command as lower-risk because the
-serialized response is redacted or because the request arrived through an agent
-surface.
+The landed M3b surface is `conary mcp packaging`, a local stdio server with
+seven tools: inspect project, explain inference, diagnose latest failure, list
+operation records, read an operation record, plan static artifact publish, and
+apply a confirmed static artifact publish plan. Static artifact publish apply
+is high risk and requires exact plan id confirmation plus a matching plan
+fingerprint. Cook, try, project-form publish apply, Remi publish apply, watch
+mode, and record mode remain out of scope for this slice.
 
 Publish tools must also surface the M2 gate outcome rather than retrying,
 bypassing, or special-casing it. Static artifact-form publish surfaces should
@@ -268,13 +255,10 @@ preflight failures that still bail directly must be converted to structured
 packaging diagnostics or a project-form gate report before M3b exposes them
 through MCP.
 
-M3b should not require Remi. It may run locally through the CLI-side app or a
-small Conary packaging MCP server, but the transport should be local stdio or
-another authenticated local process boundary and should reuse
-`crates/conary-agent-contract` and `crates/conary-mcp` patterns. The initial M3
-packaging surface must not expose an unauthenticated TCP listener. The design
-should avoid copying Remi's admin-heavy MCP catalog into the packaging surface;
-packaging needs progressive discovery and narrowly-scoped tools.
+M3b does not require Remi. It runs locally through the CLI-side packaging MCP
+server and reuses `crates/conary-agent-contract` and `crates/conary-mcp`
+patterns. It does not expose an unauthenticated TCP listener or copy Remi's
+admin-heavy MCP catalog into the packaging surface.
 
 M3b depends on the M3a packaging operation store. `diagnose last failure` and
 `read recent packaging operation events` read redacted records from that store;
@@ -561,7 +545,7 @@ Docs to update as M3 lands:
 
 ## Review Checklist
 
-- M3a is landed as the first implementation slice.
+- M3a and M3b are landed as the first implementation slices.
 - Record mode is a spike before full commitment.
 - No M3 feature weakens M2 publish gates.
 - M2 risk and gate decisions run before redacted diagnostic projection.
@@ -581,10 +565,9 @@ Docs to update as M3 lands:
 - Record mode has explicit privilege, storage, redaction, and cleanup bounds.
 - Help text does not advertise unavailable M3 features.
 
-## Ready For Planning
+## Next Slice
 
-M3a is implemented and merged. The next implementation-planning target is M3b:
-agent-native packaging MCP surfaces over the shared M3a packaging diagnostic,
-event, redaction, and operation-record contract. Later plans can consume the
-same foundation for try-session decomposition, watch mode, and record-mode spike
-work.
+M3a and M3b are implemented. The next implementation-planning target is M3c0:
+try-session decomposition before watch mode adds new orchestration behavior.
+Later plans can consume the same M3a/M3b foundation for watch mode and the
+record-mode spike.

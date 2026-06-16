@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-06-15
-revision: 13
-summary: Route M3a packaging diagnostics ownership
+last_updated: 2026-06-16
+revision: 14
+summary: Route M3b packaging MCP ownership
 ---
 
 # Feature Ownership And Interaction Gates
@@ -333,6 +333,7 @@ pinned by the repository.
 `crates/conary-core/src/recipe/hermetic/`;
 `crates/conary-core/src/recipe/kitchen/`;
 `crates/conary-core/src/diagnostics/`;
+`apps/conary/src/commands/packaging_mcp/`;
 `crates/conary-core/src/db/models/try_session.rs`;
 `apps/conary/src/commands/new.rs`;
 `apps/conary/src/commands/publish.rs`;
@@ -345,6 +346,10 @@ pinned by the repository.
 `apps/conary/src/commands/repo_static.rs`;
 `apps/conary/tests/packaging_m1b.rs`;
 `apps/conary/tests/packaging_m2a.rs`;
+`apps/conary/tests/packaging_m3a.rs`;
+`apps/conary/tests/packaging_m3b.rs`;
+`crates/conary-agent-contract/src/{resource,catalog,result}.rs`;
+`crates/conary-mcp/src/`;
 `crates/conary-core/src/ccs/attestation.rs`;
 `crates/conary-core/src/repository/static_repo/`;
 `crates/conary-core/src/trust/`;
@@ -365,7 +370,9 @@ docs-audit truth gates.
 `cargo test -p conary --test static_repo_m1a`;
 `cargo test -p conary --test packaging_m2a`;
 `cargo test -p conary --test packaging_m3a`;
+`cargo test -p conary --test packaging_m3b`;
 `cargo test -p conary commands::diagnostics::tests`;
+`cargo test -p conary commands::packaging_mcp`;
 `cargo test -p conary --test packaging_m1b`.
 
 **Interaction gate:** `cargo test -p conary-core`;
@@ -405,6 +412,15 @@ Start with `crates/conary-core/src/diagnostics/` for the shared diagnostic,
 event, redaction, and JSON schema contract. CLI rendering and operation-record
 glue live in `apps/conary/src/commands/diagnostics.rs`; command-specific report
 construction stays in `cook.rs` and `publish.rs`.
+
+### M3b Packaging MCP
+
+Start with `apps/conary/src/commands/packaging_mcp/` for local stdio MCP tools,
+agent projection, publish plan registry, and read-only operation-record/project
+inspection. Transport-neutral resource and catalog vocabulary lives in
+`crates/conary-agent-contract/src/{resource,catalog,result}.rs`; generic MCP
+helpers live in `crates/conary-mcp/src/`. Publish mutations remain owned by
+`apps/conary/src/commands/publish.rs`.
 
 ## Remi Publication, Serving, Admin, And Fixture Artifacts
 

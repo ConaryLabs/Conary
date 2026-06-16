@@ -1,7 +1,7 @@
 # M3b Packaging MCP Surface Design
 
 **Date:** 2026-06-16
-**Status:** Locked for implementation
+**Status:** Landed
 **Parent design:** `docs/superpowers/specs/2026-06-15-m3-packaging-differentiators-design.md`
 **Prerequisite milestone:** M3a structured diagnostics and operation records
 
@@ -32,8 +32,8 @@ The core invariant is:
 - `crates/conary-mcp` owns shared MCP adapter helpers. Its draft stateless path
   currently supports discovery and resources; live tool execution exists in
   the session-based Remi and `conary-test` MCP servers.
-- `apps/conary` does not currently expose an MCP server command and does not
-  depend on `conary-agent-contract` or `conary-mcp`.
+- `apps/conary` exposes the local stdio `conary mcp packaging` server command
+  and depends on `conary-agent-contract` plus `conary-mcp` for the M3b surface.
 - `apps/conary/src/command_risk.rs` owns CLI mutation classification. Packaging
   MCP risk must project from this vocabulary and can only be equal-or-higher
   than the CLI risk.
@@ -49,10 +49,9 @@ The core invariant is:
 - `conary publish --json` already emits structured M3a output for static
   artifact-form gate failures, project-form preflight failures, and explicit
   Remi JSON unsupported diagnostics.
-- The current publish code is command-oriented. The static artifact-form path
-  writes to a `Write` and returns `Result<()>`; M3b needs a narrow service-safe
-  helper that returns `PackagingCommandOutput` without moving publish ownership
-  into MCP.
+- The static artifact-form publish path now has a narrow service-safe helper
+  that returns `PackagingCommandOutput` without moving publish ownership into
+  MCP.
 - `crates/conary-core/src/ccs/attestation.rs` already provides
   `canonical_json_hash`, which is the right primitive for plan fingerprinting
   once M3b defines a concrete `PublishPlanMaterial` DTO.
@@ -62,7 +61,7 @@ The core invariant is:
 M3b should expose:
 
 - inspect a packaging project or artifact
-- explain recipe inference for a local source tree, archive, or git target
+- explain recipe inference for a local source tree
 - diagnose the latest packaging failure from the M3a operation-record store
 - list and read recent packaging operation records and events
 - plan publish
@@ -584,9 +583,12 @@ MCP until those contracts and tests exist.
 - No public unauthenticated listener is added.
 - No shell/env/token/key passthrough is accepted.
 
-## Ready For Planning
+## Landed Surface
 
-M3b is locked for implementation planning. The plan should split the work into
-transport-neutral contract additions, MCP adapter tool support, CLI packaging
-agent service methods, publish plan/apply wiring, focused tests, and
-docs/ledger updates.
+M3b is implemented as a local stdio packaging MCP surface. The landed slice
+includes transport-neutral packaging resources and catalog entries, read-only
+project/inference/operation-record tools, M3a-to-agent projection, static
+destination trust snapshots, static artifact publish planning, exact
+confirmation apply, private artifact staging, trust-state rechecks, and focused
+M3b tests. Project-form and Remi publish apply remain explicit
+unsupported/unavailable paths.
