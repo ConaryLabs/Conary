@@ -2348,6 +2348,76 @@ replacement = "complete"
     }
 
     #[test]
+    fn declarative_try_hooks_abort_post_hooks_when_pre_hooks_fail() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let mut manifest = CcsManifest::new_minimal("bad-pre-hook", "1.0.0");
+        manifest.hooks.users.push(UserHook {
+            name: "BadName!".to_string(),
+            system: true,
+            home: None,
+            shell: Some("/usr/sbin/nologin".to_string()),
+            group: None,
+            reversible: None,
+        });
+        manifest.hooks.sysctl.push(SysctlHook {
+            key: "kernel.modules_disabled".to_string(),
+            value: "1".to_string(),
+            only_if_lower: false,
+            reversible: None,
+        });
+
+        let err = apply_declarative_try_hooks(&manifest, temp.path())
+            .expect_err("pre-hook failure should abort try hook execution");
+        let message = format!("{err:#}");
+
+        assert!(
+            message.contains("failed to execute try declarative pre-hooks"),
+            "{message}"
+        );
+        assert!(
+            !temp.path().join("etc/sysctl.d").exists(),
+            "post-hook sysctl config must not be written after pre-hook failure"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn declarative_try_hooks_collect_post_hook_failures() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let mut manifest = CcsManifest::new_minimal("bad-post-hooks", "1.0.0");
+        manifest.hooks.sysctl.push(SysctlHook {
+            key: "kernel.modules_disabled".to_string(),
+            value: "1".to_string(),
+            only_if_lower: false,
+            reversible: None,
+        });
+        manifest.hooks.alternatives.push(AlternativeHook {
+            name: "bad/name".to_string(),
+            path: "/usr/bin/demo".to_string(),
+            priority: 50,
+            reversible: None,
+        });
+
+        let err = apply_declarative_try_hooks(&manifest, temp.path())
+            .expect_err("post-hook failures should be collected");
+        let message = format!("{err:#}");
+
+        assert!(
+            message.contains("failed to execute try declarative post-hooks"),
+            "{message}"
+        );
+        assert!(
+            message.contains("sysctl 'kernel.modules_disabled' failed"),
+            "{message}"
+        );
+        assert!(
+            message.contains("alternatives 'bad/name' failed"),
+            "{message}"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn namespace_declarative_hooks_write_to_live_etc_state_not_workdir() -> anyhow::Result<()> {
         let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
         let fixture = TryRuntimeFixture::new();
