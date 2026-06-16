@@ -16,11 +16,14 @@ default = []
 [dependencies]
 # Core library
 conary-bootstrap = { path = "../../crates/conary-bootstrap" }
+conary-agent-contract = { path = "../../crates/conary-agent-contract" }
 conary-core = { path = "../../crates/conary-core" }
+conary-mcp = { path = "../../crates/conary-mcp" }
 
 # CLI
 clap = { workspace = true, features = ["cargo"] }
 clap_complete = "4.5"
+rmcp = { workspace = true, features = ["server", "macros", "transport-io"] }
 
 # Logging (needed directly by commands/)
 tracing.workspace = true
@@ -33,6 +36,7 @@ rusqlite.workspace = true
 sha2.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+schemars.workspace = true
 chrono.workspace = true
 rayon.workspace = true
 indicatif.workspace = true

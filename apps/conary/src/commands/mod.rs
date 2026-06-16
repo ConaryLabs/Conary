@@ -38,6 +38,7 @@ mod operation_records;
 mod package_parsing;
 #[allow(dead_code)]
 mod package_target;
+pub(crate) mod packaging_mcp;
 mod profile;
 pub mod progress;
 mod provenance;
@@ -142,6 +143,7 @@ pub(crate) use package_target::{
     InstalledPackageSelector, ResolvedInstalledPackage, format_installed_variant,
     format_installed_variants, package_authority_label, resolve_installed_package,
 };
+pub use packaging_mcp::cmd_mcp_packaging;
 pub use profile::{cmd_profile_diff, cmd_profile_generate, cmd_profile_publish, cmd_profile_show};
 pub use provenance::{
     cmd_provenance_audit, cmd_provenance_diff, cmd_provenance_export, cmd_provenance_find_by_dep,

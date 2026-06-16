@@ -664,6 +664,10 @@ pub enum Commands {
     // =========================================================================
     // Advanced/Developer
     // =========================================================================
+    /// Local MCP servers for agent integrations
+    #[command(subcommand, hide = true)]
+    Mcp(McpCommands),
+
     /// Dependency analysis and advanced queries
     #[command(subcommand)]
     Query(QueryCommands),
@@ -832,6 +836,12 @@ pub enum Commands {
     },
 }
 
+#[derive(Subcommand)]
+pub enum McpCommands {
+    /// Start the local packaging MCP server on stdio
+    Packaging,
+}
+
 impl std::fmt::Debug for Commands {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("Commands")
@@ -841,7 +851,7 @@ impl std::fmt::Debug for Commands {
 #[cfg(test)]
 mod tests {
     use super::{
-        CcsCommands, Cli, CliSandboxMode, Commands, GenerationCommands, RepoCommands,
+        CcsCommands, Cli, CliSandboxMode, Commands, GenerationCommands, McpCommands, RepoCommands,
         SystemCommands,
     };
     use clap::{CommandFactory, Parser};
@@ -999,6 +1009,15 @@ mod tests {
         assert_eq!(what, "dist/pkg.ccs");
         assert_eq!(target.as_deref(), Some("./repo"));
         assert_eq!(recipe, None);
+    }
+
+    #[test]
+    fn parses_hidden_mcp_packaging_command() {
+        let cli = Cli::try_parse_from(["conary", "mcp", "packaging"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Mcp(McpCommands::Packaging))
+        ));
     }
 
     #[test]

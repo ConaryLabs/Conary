@@ -92,6 +92,7 @@ fn command_uses_try_session_preflight_db(command: &Commands) -> bool {
         Commands::Cook { .. }
         | Commands::New { .. }
         | Commands::Publish { .. }
+        | Commands::Mcp(_)
         | Commands::Bootstrap(
             cli::BootstrapCommands::VerifyConvergence { .. }
             | cli::BootstrapCommands::DiffSeeds { .. },
@@ -985,6 +986,8 @@ pub(super) async fn dispatch_command(
         Some(Commands::RecipeAudit { recipe, all, trace }) => {
             commands::cmd_recipe_audit(recipe.as_deref(), all, trace).await
         }
+
+        Some(Commands::Mcp(cli::McpCommands::Packaging)) => commands::cmd_mcp_packaging().await,
 
         Some(Commands::Cache(cmd)) => dispatch_cache_command(cmd).await,
 

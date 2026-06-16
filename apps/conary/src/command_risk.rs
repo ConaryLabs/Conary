@@ -173,6 +173,7 @@ pub fn classify_cli(cli: &Cli) -> Option<CommandRiskPolicy> {
         | Commands::Sbom { .. }
         | Commands::VerifyDerivation(_)
         | Commands::Capability(_) => Some(read_only("conary read-only or non-host command")),
+        Commands::Mcp(cli::McpCommands::Packaging) => Some(read_only("conary mcp packaging")),
         Commands::Publish { .. } => Some(local_state("conary publish")),
         Commands::System(command) => classify_system(command),
         Commands::Repo(command) => Some(classify_repo(command)),
@@ -773,7 +774,7 @@ fn local_state(command_label: &'static str) -> CommandRiskPolicy {
 #[cfg(test)]
 mod tests {
     use super::{CommandRisk, classify_cli};
-    use crate::cli::Cli;
+    use crate::cli::{self, Cli, Commands};
     use clap::Parser;
 
     fn policy(args: &[&str]) -> super::CommandRiskPolicy {
@@ -786,6 +787,21 @@ mod tests {
         let policy = policy(&["conary", "system", "adopt", "--status"]);
         assert_eq!(policy.risk, CommandRisk::ReadOnly);
         assert!(!policy.requires_ack());
+    }
+
+    #[test]
+    fn mcp_packaging_startup_is_read_only() {
+        let cli = Cli {
+            seccomp_warn: false,
+            allow_live_system_mutation: false,
+            command: Some(Commands::Mcp(cli::McpCommands::Packaging)),
+        };
+
+        let policy = classify_cli(&cli).expect("mcp packaging should have a risk policy");
+        assert_eq!(policy.command_label, "conary mcp packaging");
+        assert_eq!(policy.risk, CommandRisk::ReadOnly);
+        assert!(!policy.dry_run);
+        assert!(!policy.apply_intent);
     }
 
     #[test]
