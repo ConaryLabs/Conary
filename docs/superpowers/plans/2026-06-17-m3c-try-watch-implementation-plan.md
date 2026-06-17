@@ -20,6 +20,7 @@ M3c includes:
 - Polling-first source wakeups, with canonical source identity deciding whether a refresh is meaningful.
 - Explicit `WatchSourceSet` handling for recipe files, local source roots, local additional source files, local patch files, and inferred source trees.
 - In-process cook adapter with suppressed per-refresh operation records and offline-cache-only refresh policy for hermetic watch refreshes.
+- Non-hermetic watch refreshes preserve the current cook source policy; M3c does not silently turn host iteration builds into hermetic builds.
 - One active watch session row whose `work_dir` remains stable for startup, refresh, status, keep refusal, rollback, and cleanup.
 - Watch-created session marker file under the stable try-session `work_dir`, written fail-closed before the session is externally keepable.
 - `conary try keep` refusal for watch-created sessions without a schema migration.
@@ -107,6 +108,7 @@ Review lock mapping:
 | Watch marker is created after session becomes keepable | Task 6 marker creation inside `begin_try_session` before active row commit |
 | Source identity misses recipe/patch/additional-source edits | Task 3 explicit `WatchSourceSet` |
 | Watch records can grow unbounded or leak secrets | Task 2 event redaction and bounded retention, Task 8 record finalization |
+| Active mount roots cannot be renamed or deleted as transient staging | Task 7 generational mount directories and `mount --move` switch contract |
 
 ---
 
@@ -573,6 +575,9 @@ pub(crate) fn bounded_watch_events(
     }
     let omitted = events.len() - limit + 1;
     let mut retained = Vec::with_capacity(limit);
+    // This synthetic event is only persisted in the final operation record. It
+    // is not emitted on the live NDJSON stream, so sequence reuse cannot confuse
+    // stream consumers.
     retained.push(PackagingEvent {
         schema_version: PACKAGING_JSON_SCHEMA_VERSION,
         operation_id: operation_id.to_string(),
@@ -689,6 +694,15 @@ pub fn validate_canonical_local_file_list(
                 target.display()
             )));
         }
+        if let Ok(canonical_target) = std::fs::canonicalize(&normalized)
+            && !canonical_target.starts_with(&root)
+        {
+            return Err(Error::ConfigError(format!(
+                "Local source symlink must stay within the source directory: {} -> {}",
+                file.relative_path.display(),
+                target.display()
+            )));
+        }
     }
     Ok(())
 }
@@ -793,6 +807,49 @@ files = [{ file = "patches/fix.patch", strip = 1 }]
         assert_ne!(patch_changed.digest, recipe_changed.digest);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn watch_source_set_rejects_symlink_escape_in_patch_file() {
+        let temp = tempfile::tempdir().unwrap();
+        write_recipe(temp.path());
+        let outside = temp.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("escape.patch"), "secret\n").unwrap();
+        std::fs::remove_file(temp.path().join("patches/fix.patch")).unwrap();
+        std::os::unix::fs::symlink("../outside/escape.patch", temp.path().join("patches/fix.patch")).unwrap();
+
+        let err = resolve_watch_source_set(
+            Some(temp.path().join("recipe.toml").to_str().unwrap()),
+            None,
+        )
+        .unwrap_err();
+
+        assert!(
+            err.to_string().contains("must stay within the recipe directory"),
+            "{err:#}"
+        );
+    }
+
+    #[test]
+    fn identity_changes_when_recipe_points_to_different_local_source_root() {
+        let temp = tempfile::tempdir().unwrap();
+        write_recipe(temp.path());
+        std::fs::create_dir_all(temp.path().join("src2")).unwrap();
+        std::fs::write(temp.path().join("src2/main.txt"), "hello two\n").unwrap();
+        let recipe = temp.path().join("recipe.toml");
+        let first_set = resolve_watch_source_set(Some(recipe.to_str().unwrap()), None).unwrap();
+        let first = compute_watch_identity(&first_set).unwrap();
+
+        let edited = std::fs::read_to_string(&recipe)
+            .unwrap()
+            .replace("path = \"src\"", "path = \"src2\"");
+        std::fs::write(&recipe, edited).unwrap();
+        let second_set = resolve_watch_source_set(Some(recipe.to_str().unwrap()), None).unwrap();
+        let second = compute_watch_identity(&second_set).unwrap();
+
+        assert_ne!(first.digest, second.digest);
+    }
+
     #[test]
     fn debounce_coalesces_rapid_changes() {
         let start = Instant::now();
@@ -823,6 +880,7 @@ mod watch_source;
 Implement the core types and functions in `watch_source.rs`:
 
 ```rust
+use std::fs::File;
 use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -967,11 +1025,27 @@ pub(super) fn compute_watch_identity(source_set: &WatchSourceSet) -> Result<Watc
     let mut hasher = Hasher::new(HashAlgorithm::Sha256);
     let mut file_count = 0usize;
 
+    hasher.update(format!("{:?}\0", source_set.mode).as_bytes());
+    if let Some(recipe_path) = &source_set.recipe_path {
+        hasher.update(recipe_path.to_string_lossy().as_bytes());
+        hasher.update(b"\0");
+    }
+    for root in &source_set.local_roots {
+        hasher.update(root.to_string_lossy().as_bytes());
+        hasher.update(b"\0");
+    }
     for file in &source_set.local_files {
-        let bytes = std::fs::read(file)
-            .with_context(|| format!("failed to read watched file {}", file.display()))?;
         hasher.update(file.to_string_lossy().as_bytes());
-        hasher.update(&bytes);
+        hasher.update(b"\0");
+    }
+
+    for file in &source_set.local_files {
+        let mut reader = File::open(file)
+            .with_context(|| format!("failed to open watched file {}", file.display()))?;
+        let file_hash = conary_core::hash::sha256_reader_hex(&mut reader)
+            .with_context(|| format!("failed to hash watched file {}", file.display()))?;
+        hasher.update(file.to_string_lossy().as_bytes());
+        hasher.update(format!("sha256:{file_hash}").as_bytes());
         file_count += 1;
     }
 
@@ -1099,6 +1173,25 @@ fn watch_refresh_cook_options_force_offline_policy_for_hermetic_refresh() {
         Some(SourceDownloadPolicy::OfflineCacheOnly)
     );
 }
+
+#[test]
+fn watch_refresh_preserves_source_policy_for_non_hermetic_refresh() {
+    let options = CookForTryWatchOptions {
+        target: Some("."),
+        recipe: None,
+        output_dir: "dist",
+        source_cache: "sources",
+        jobs: None,
+        keep_builddir: false,
+        isolated: false,
+        no_isolation: false,
+        hermetic: false,
+        source_policy: WatchCookSourcePolicy::Refresh,
+        operation_id: "watch-1".to_string(),
+    };
+
+    assert_eq!(watch_source_download_policy_override(&options), None);
+}
 ```
 
 - [ ] **Step 2: Add source-policy override to `CookRunOptions`**
@@ -1151,13 +1244,7 @@ pub(crate) struct CookForTryWatchOptions<'a> {
 pub(crate) fn run_cook_for_try_watch(
     options: CookForTryWatchOptions<'_>,
 ) -> Result<PackagingCommandOutput> {
-    let hermetic_requested = options.hermetic || options.isolated;
-    let source_download_policy_override =
-        if hermetic_requested && options.source_policy == WatchCookSourcePolicy::Refresh {
-            Some(SourceDownloadPolicy::OfflineCacheOnly)
-        } else {
-            None
-        };
+    let source_download_policy_override = watch_source_download_policy_override(&options);
     let mut sink = io::sink();
     run_cook_operation(
         CookRunOptions {
@@ -1181,6 +1268,17 @@ pub(crate) fn run_cook_for_try_watch(
     )
 }
 
+fn watch_source_download_policy_override(
+    options: &CookForTryWatchOptions<'_>,
+) -> Option<SourceDownloadPolicy> {
+    let hermetic_requested = options.hermetic || options.isolated;
+    if hermetic_requested && options.source_policy == WatchCookSourcePolicy::Refresh {
+        Some(SourceDownloadPolicy::OfflineCacheOnly)
+    } else {
+        None
+    }
+}
+
 pub(crate) fn cooked_artifact_path(output: &PackagingCommandOutput) -> Result<PathBuf> {
     let artifacts = output
         .artifacts
@@ -1196,6 +1294,8 @@ pub(crate) fn cooked_artifact_path(output: &PackagingCommandOutput) -> Result<Pa
 ```
 
 This adapter must not call `write_packaging_record_if_possible`.
+It must not force `OfflineCacheOnly` for non-hermetic refreshes; that would
+change the host-iteration build mode beyond the reviewed M3c design.
 
 - [ ] **Step 4: Run cook tests**
 
@@ -1606,11 +1706,75 @@ fn refresh_try_session_cas_miss_preserves_previous_generation() -> anyhow::Resul
     assert_eq!(session.status, conary_core::db::models::TrySessionStatus::Orphaned);
     Ok(())
 }
+
+#[test]
+fn refresh_try_session_cleans_staging_after_generation_build_failure() -> anyhow::Result<()> {
+    let fixture = super::test_support::TryRuntimeFixture::new();
+    let first = fixture.write_package(
+        "watch-demo-a",
+        conary_core::ccs::manifest::CcsManifest::new_minimal("watch-demo", "1.0.0"),
+    );
+    let second = fixture.write_package(
+        "watch-demo-b",
+        conary_core::ccs::manifest::CcsManifest::new_minimal("watch-demo", "1.0.1"),
+    );
+    let started = begin_try_session(TryStartRequest {
+        db_path: &fixture.db_path_string,
+        package_path: &first,
+        activate: false,
+        allow_irreversible: false,
+        command: None,
+        watch_marker: Some(TryWatchMarkerRequest {
+            operation_id: "watch-1",
+        }),
+    })?;
+    let _guard = EnvVarGuard::set(
+        "CONARY_TEST_FAIL_GENERATION_REBUILD",
+        "forced watch refresh generation failure",
+    );
+
+    let err = refresh_try_session(TryRefreshRequest {
+        db_path: &fixture.db_path_string,
+        session_id: &started.session_id,
+        expected_try_generation_id: started.try_generation_id,
+        package_path: &second,
+    })
+    .unwrap_err();
+
+    assert!(
+        err.to_string().contains("forced watch refresh generation failure"),
+        "{err:#}"
+    );
+    let conn = fixture.open();
+    let session = TrySession::find_by_id(&conn, &started.session_id)?.unwrap();
+    assert_eq!(session.try_generation_id, Some(started.try_generation_id));
+    assert!(
+        std::fs::read_dir(&started.work_dir)?
+            .filter_map(|entry| entry.ok())
+            .all(|entry| !entry.file_name().to_string_lossy().starts_with("refresh-")),
+        "failed refresh staging directory should be cleaned"
+    );
+    Ok(())
+}
 ```
 
-- [ ] **Step 3: Add staged namespace path helpers and tests**
+- [ ] **Step 3: Add staged namespace path helpers and mount-move tests**
 
-In `apps/conary/src/commands/try_session/namespace.rs`, add test-only failure support and a recoverable switch helper. The stable path must remain `work_dir/namespace-root`; staged paths must live under `work_dir/refresh-N/`.
+In `apps/conary/src/commands/try_session/namespace.rs`, add test-only failure support and a recoverable switch helper. The stable path must remain `work_dir/namespace-root`. Real mounted paths must not live under a transient directory that will be deleted after commit. Use generational directories under the stable `work_dir`:
+
+```text
+try/<session-id>/
+  namespace-root/              # stable visible mount
+  namespace-root.next/         # staged visible mount before switch
+  namespace-root.previous/     # temporary previous visible mount during switch
+  generation-root-42/          # active composefs lowerdir for generation 42
+  namespace-work-42/           # active overlay workdir for generation 42
+  generation-root-43/          # staged composefs lowerdir for generation 43
+  namespace-work-43/           # staged overlay workdir for generation 43
+  refresh-43/                  # transient package/db/install staging only
+```
+
+The real switch must use `mount --move` for active mount points. `std::fs::rename` is allowed only in `CONARY_TEST_SKIP_GENERATION_MOUNT` test mode where namespace roots are symlink materializations rather than Linux mounts.
 
 Add tests:
 
@@ -1620,7 +1784,7 @@ fn switch_stable_namespace_root_restores_previous_on_forced_failure() -> anyhow:
     let temp = tempfile::tempdir()?;
     let stable = temp.path().join("namespace-root");
     let previous = temp.path().join("previous-root");
-    let staged = temp.path().join("refresh-2").join("namespace-root");
+    let staged = temp.path().join("namespace-root.next");
     std::fs::create_dir_all(&previous)?;
     std::fs::create_dir_all(staged.parent().unwrap())?;
     std::fs::create_dir_all(&staged)?;
@@ -1628,11 +1792,20 @@ fn switch_stable_namespace_root_restores_previous_on_forced_failure() -> anyhow:
     std::fs::write(staged.join("marker"), "new")?;
     recreate_path_symlink(&previous, &stable)?;
 
-    let _guard = EnvVarGuard::set(
+    let _mount_guard = EnvVarGuard::set("CONARY_TEST_SKIP_GENERATION_MOUNT", "1");
+    let _fail_guard = EnvVarGuard::set(
         "CONARY_TEST_TRY_REFRESH_FAIL_NAMESPACE_SWITCH",
         "1",
     );
-    let err = switch_stable_namespace_root(&stable, &staged).unwrap_err();
+    let exposure = StagedNamespaceExposure {
+        generation_id: 2,
+        next_namespace_root: staged,
+        stable_namespace_root: stable.clone(),
+        previous_namespace_root: temp.path().join("namespace-root.previous"),
+        generation_root: temp.path().join("generation-root-2"),
+        namespace_workdir: temp.path().join("namespace-work-2"),
+    };
+    let err = switch_stable_namespace_root(exposure).unwrap_err();
 
     assert!(err.to_string().contains("failed to switch stable try namespace"), "{err:#}");
     assert_eq!(std::fs::read_link(&stable)?, previous);
@@ -1647,80 +1820,150 @@ pub(super) fn refresh_staging_dir(work_dir: &Path, next_generation_id: i64) -> P
     work_dir.join(format!("refresh-{next_generation_id}"))
 }
 
+#[derive(Debug, Clone)]
+pub(super) struct StagedNamespaceExposure {
+    pub(super) generation_id: i64,
+    pub(super) next_namespace_root: PathBuf,
+    pub(super) stable_namespace_root: PathBuf,
+    pub(super) previous_namespace_root: PathBuf,
+    pub(super) generation_root: PathBuf,
+    pub(super) namespace_workdir: PathBuf,
+}
+
 pub(super) fn expose_staged_try_namespace_root(
     runtime_root: &ConaryRuntimeRoot,
-    refresh_dir: &Path,
+    work_dir: &Path,
     copied_conn: &Connection,
     try_generation_id: i64,
     hook_upperdir: &Path,
-) -> Result<PathBuf> {
-    expose_try_namespace_root(runtime_root, refresh_dir, copied_conn, try_generation_id, hook_upperdir)
+) -> Result<StagedNamespaceExposure> {
+    let next_namespace_root = work_dir.join("namespace-root.next");
+    let generation_root = work_dir.join(format!("generation-root-{try_generation_id}"));
+    let namespace_workdir = work_dir.join(format!("namespace-work-{try_generation_id}"));
+
+    if std::env::var_os("CONARY_TEST_SKIP_GENERATION_MOUNT").is_some() {
+        materialize_test_try_namespace_root(copied_conn, runtime_root, hook_upperdir)?;
+        recreate_path_symlink(hook_upperdir, &next_namespace_root)?;
+    } else {
+        expose_try_namespace_root_at_paths(
+            runtime_root,
+            copied_conn,
+            try_generation_id,
+            hook_upperdir,
+            &generation_root,
+            &namespace_workdir,
+            &next_namespace_root,
+        )?;
+    }
+
+    Ok(StagedNamespaceExposure {
+        generation_id: try_generation_id,
+        next_namespace_root,
+        stable_namespace_root: work_dir.join("namespace-root"),
+        previous_namespace_root: work_dir.join("namespace-root.previous"),
+        generation_root,
+        namespace_workdir,
+    })
 }
 
 pub(super) struct NamespaceSwitch {
-    stable_namespace_root: PathBuf,
-    backup_namespace_root: PathBuf,
+    exposure: StagedNamespaceExposure,
 }
 
 impl NamespaceSwitch {
     pub(super) fn commit(self) -> Result<()> {
-        remove_path_if_exists(&self.backup_namespace_root)
+        if std::env::var_os("CONARY_TEST_SKIP_GENERATION_MOUNT").is_some() {
+            remove_path_if_exists(&self.exposure.previous_namespace_root)?;
+            return Ok(());
+        }
+        unmount_try_path_if_mounted(&self.exposure.previous_namespace_root)?;
+        remove_path_if_exists(&self.exposure.previous_namespace_root)?;
+        Ok(())
     }
 
     pub(super) fn restore(self) -> Result<()> {
-        remove_path_if_exists(&self.stable_namespace_root)?;
-        if self.backup_namespace_root.exists() {
-            std::fs::rename(&self.backup_namespace_root, &self.stable_namespace_root)?;
+        if std::env::var_os("CONARY_TEST_SKIP_GENERATION_MOUNT").is_some() {
+            remove_path_if_exists(&self.exposure.stable_namespace_root)?;
+            if self.exposure.previous_namespace_root.exists() {
+                std::fs::rename(
+                    &self.exposure.previous_namespace_root,
+                    &self.exposure.stable_namespace_root,
+                )?;
+            }
+            return Ok(());
         }
-        Ok(())
+        run_mount_move(
+            &self.exposure.stable_namespace_root,
+            &self.exposure.next_namespace_root,
+        )?;
+        run_mount_move(
+            &self.exposure.previous_namespace_root,
+            &self.exposure.stable_namespace_root,
+        )
     }
 }
 
 pub(super) fn switch_stable_namespace_root(
-    stable_namespace_root: &Path,
-    staged_namespace_root: &Path,
+    exposure: StagedNamespaceExposure,
 ) -> Result<NamespaceSwitch> {
-    let backup = stable_namespace_root.with_extension("previous");
-    if backup.exists() {
-        remove_path_if_exists(&backup)?;
-    }
-    if stable_namespace_root.exists() {
-        std::fs::rename(stable_namespace_root, &backup).with_context(|| {
-            format!(
-                "failed to preserve previous try namespace root {}",
-                stable_namespace_root.display()
-            )
-        })?;
+    if std::env::var_os("CONARY_TEST_SKIP_GENERATION_MOUNT").is_some() {
+        remove_path_if_exists(&exposure.previous_namespace_root)?;
+        if exposure.stable_namespace_root.exists() {
+            std::fs::rename(&exposure.stable_namespace_root, &exposure.previous_namespace_root)?;
+        }
+        #[cfg(test)]
+        if std::env::var_os("CONARY_TEST_TRY_REFRESH_FAIL_NAMESPACE_SWITCH").is_some() {
+            if exposure.previous_namespace_root.exists() {
+                let _ = std::fs::rename(
+                    &exposure.previous_namespace_root,
+                    &exposure.stable_namespace_root,
+                );
+            }
+            anyhow::bail!("failed to switch stable try namespace: forced test failure");
+        }
+        std::fs::rename(&exposure.next_namespace_root, &exposure.stable_namespace_root)?;
+        return Ok(NamespaceSwitch { exposure });
     }
 
-    #[cfg(test)]
-    if std::env::var_os("CONARY_TEST_TRY_REFRESH_FAIL_NAMESPACE_SWITCH").is_some() {
-        if backup.exists() {
-            let _ = std::fs::rename(&backup, stable_namespace_root);
-        }
-        anyhow::bail!("failed to switch stable try namespace: forced test failure");
-    }
-
-    let result = std::fs::rename(staged_namespace_root, stable_namespace_root).with_context(|| {
-        format!(
-            "failed to switch stable try namespace root {}",
-            stable_namespace_root.display()
-        )
-    });
-    if let Err(error) = result {
-        if backup.exists() {
-            let _ = std::fs::rename(&backup, stable_namespace_root);
-        }
+    std::fs::create_dir_all(&exposure.previous_namespace_root)?;
+    run_mount_move(&exposure.stable_namespace_root, &exposure.previous_namespace_root)?;
+    if let Err(error) = run_mount_move(&exposure.next_namespace_root, &exposure.stable_namespace_root) {
+        let _ = run_mount_move(&exposure.previous_namespace_root, &exposure.stable_namespace_root);
         return Err(error.context("failed to switch stable try namespace and restored previous namespace root"));
     }
-    Ok(NamespaceSwitch {
-        stable_namespace_root: stable_namespace_root.to_path_buf(),
-        backup_namespace_root: backup,
-    })
+    Ok(NamespaceSwitch { exposure })
+}
+
+pub(super) fn teardown_staged_namespace_exposure(exposure: &StagedNamespaceExposure) -> Result<()> {
+    if std::env::var_os("CONARY_TEST_SKIP_GENERATION_MOUNT").is_none() {
+        unmount_try_path_if_mounted(&exposure.next_namespace_root)?;
+        unmount_try_path_if_mounted(&exposure.generation_root)?;
+    }
+    remove_path_if_exists(&exposure.next_namespace_root)?;
+    remove_path_if_exists(&exposure.namespace_workdir)?;
+    remove_path_if_exists(&exposure.generation_root)?;
+    Ok(())
+}
+
+fn run_mount_move(from: &Path, to: &Path) -> Result<()> {
+    let status = std::process::Command::new("mount")
+        .arg("--move")
+        .arg(from)
+        .arg(to)
+        .status()
+        .context("failed to execute mount --move for try namespace switch")?;
+    if !status.success() {
+        bail!(
+            "failed to move try namespace mount from {} to {}",
+            from.display(),
+            to.display()
+        );
+    }
+    Ok(())
 }
 ```
 
-When real mount points cannot be renamed, replace the internals with a mount-aware recoverable primitive that remounts the previous generation on failure. Keep the same tests and stable API.
+`expose_try_namespace_root_at_paths` should be a small refactor of the existing `expose_try_namespace_root` body that accepts explicit lower, work, and namespace paths. The existing startup path should keep calling `expose_try_namespace_root` so normal try behavior stays stable.
 
 - [ ] **Step 4: Implement `refresh_try_session` in session ownership**
 
@@ -1728,6 +1971,10 @@ In `apps/conary/src/commands/try_session/session.rs`, implement a refresh path t
 
 ```rust
 pub(crate) fn refresh_try_session(request: TryRefreshRequest<'_>) -> Result<TryRefreshOutcome> {
+    let mut namespace_switch_started = false;
+    let mut refresh_dir: Option<PathBuf> = None;
+    let mut staged_namespace_cleanup: Option<namespace::StagedNamespaceExposure> = None;
+    let result = (|| -> Result<TryRefreshOutcome> {
     let live_conn = conary_core::db::open(request.db_path)
         .with_context(|| format!("failed to open Conary DB {}", request.db_path))?;
     let session = TrySession::find_by_id(&live_conn, request.session_id)?
@@ -1744,10 +1991,11 @@ pub(crate) fn refresh_try_session(request: TryRefreshRequest<'_>) -> Result<TryR
 
     let runtime_root = ConaryRuntimeRoot::from_db_path(PathBuf::from(request.db_path));
     let work_dir = PathBuf::from(&session.work_dir);
-    let refresh_dir = namespace::refresh_staging_dir(&work_dir, request.expected_try_generation_id + 1);
-    let install_root = refresh_dir.join("root");
-    let copied_package_path = refresh_dir.join("package.ccs");
-    let copied_db_path = refresh_dir.join("conary.db");
+    let staging_dir = namespace::refresh_staging_dir(&work_dir, request.expected_try_generation_id + 1);
+    refresh_dir = Some(staging_dir.clone());
+    let install_root = staging_dir.join("root");
+    let copied_package_path = staging_dir.join("package.ccs");
+    let copied_db_path = staging_dir.join("conary.db");
     std::fs::create_dir_all(&install_root)?;
     std::fs::copy(request.package_path, &copied_package_path)?;
 
@@ -1760,7 +2008,7 @@ pub(crate) fn refresh_try_session(request: TryRefreshRequest<'_>) -> Result<TryR
     let mut copied_conn = conary_core::db::open(&copied_db_path)?;
     let install_plan = build_try_install_plan(
         &runtime_root,
-        &refresh_dir,
+        &staging_dir,
         copied_db_path.clone(),
         TrySessionMode::Namespace,
     );
@@ -1774,14 +2022,15 @@ pub(crate) fn refresh_try_session(request: TryRefreshRequest<'_>) -> Result<TryR
         None,
     )?;
     let hook_upperdir = promotable_try_hook_root(&runtime_root, built.generation_number)?;
-    let staged_namespace_root = namespace::expose_staged_try_namespace_root(
+    let staged_namespace = namespace::expose_staged_try_namespace_root(
         &runtime_root,
-        &refresh_dir,
+        &work_dir,
         &copied_conn,
         built.generation_number,
         &hook_upperdir,
     )?;
-    apply_declarative_try_hooks(package.manifest(), &staged_namespace_root)?;
+    staged_namespace_cleanup = Some(staged_namespace.clone());
+    apply_declarative_try_hooks(package.manifest(), &staged_namespace.next_namespace_root)?;
 
     let stable_package_path = work_dir.join("package.ccs");
     let stable_db_path = work_dir.join("conary.db");
@@ -1793,8 +2042,9 @@ pub(crate) fn refresh_try_session(request: TryRefreshRequest<'_>) -> Result<TryR
     )?;
 
     let stable_namespace_root = work_dir.join("namespace-root");
-    let namespace_switch =
-        namespace::switch_stable_namespace_root(&stable_namespace_root, &staged_namespace_root)?;
+    let namespace_switch = namespace::switch_stable_namespace_root(staged_namespace)?;
+    namespace_switch_started = true;
+    staged_namespace_cleanup = None;
     let stable_package_path_string = stable_package_path.to_string_lossy().into_owned();
     let replaced = session.replace_active_try_generation(
         &live_conn,
@@ -1810,14 +2060,27 @@ pub(crate) fn refresh_try_session(request: TryRefreshRequest<'_>) -> Result<TryR
 
     namespace_switch.commit()?;
     file_switch.commit()?;
-    remove_dir_if_exists(refresh_dir)?;
+    remove_dir_if_exists(staging_dir)?;
 
     Ok(TryRefreshOutcome {
         previous_generation_id: request.expected_try_generation_id,
         try_generation_id: built.generation_number,
         namespace_root: stable_namespace_root,
-        copied_package_path,
+        copied_package_path: stable_package_path,
     })
+    })();
+
+    if result.is_err()
+        && !namespace_switch_started
+    {
+        if let Some(staged_namespace) = &staged_namespace_cleanup {
+            let _ = namespace::teardown_staged_namespace_exposure(staged_namespace);
+        }
+        if let Some(staging_dir) = refresh_dir {
+            remove_dir_if_exists(staging_dir)?;
+        }
+    }
+    result
 }
 ```
 
@@ -1859,10 +2122,11 @@ fn switch_stable_try_files(
     staged_package_path: &Path,
     staged_db_path: &Path,
 ) -> Result<StableTryFileSwitch> {
-    let package_tmp = stable_package_path.with_extension("ccs.next");
-    let db_tmp = stable_db_path.with_extension("db.next");
-    let package_backup = stable_package_path.with_extension("ccs.previous");
-    let db_backup = stable_db_path.with_extension("db.previous");
+    let switch_id = uuid::Uuid::new_v4();
+    let package_tmp = stable_package_path.with_extension(format!("{switch_id}.ccs.next"));
+    let db_tmp = stable_db_path.with_extension(format!("{switch_id}.db.next"));
+    let package_backup = stable_package_path.with_extension(format!("{switch_id}.ccs.previous"));
+    let db_backup = stable_db_path.with_extension(format!("{switch_id}.db.previous"));
 
     std::fs::copy(staged_package_path, &package_tmp)?;
     std::fs::copy(staged_db_path, &db_tmp)?;
@@ -1894,6 +2158,7 @@ Run:
 cargo test -p conary --lib commands::try_session::namespace::tests::switch_stable_namespace_root_restores_previous_on_forced_failure
 cargo test -p conary --lib commands::try_session::session::tests::refresh_try_session_updates_generation_after_staging_succeeds
 cargo test -p conary --lib commands::try_session::session::tests::refresh_try_session_cas_miss_preserves_previous_generation
+cargo test -p conary --lib commands::try_session::session::tests::refresh_try_session_cleans_staging_after_generation_build_failure
 cargo test -p conary --lib commands::try_session
 ```
 
@@ -1954,6 +2219,29 @@ fn watch_record_output_is_bounded_and_redacted() {
     assert!(!rendered.contains("API_TOKEN=secret"), "{rendered}");
     assert!(rendered.contains("older watch events were omitted"), "{rendered}");
 }
+
+#[test]
+fn watch_state_does_not_retry_same_failed_identity_without_new_changes() {
+    let first = WatchIdentity {
+        digest: "sha256:first".to_string(),
+        file_count: 1,
+    };
+    let mut state = WatchRefreshState::new(first.clone(), 41);
+
+    assert!(state.should_attempt(&first));
+    state.record_attempt(first.clone());
+    state.record_failure();
+
+    assert!(
+        !state.should_attempt(&first),
+        "same failed source snapshot should not rebuild again until files change"
+    );
+    let changed = WatchIdentity {
+        digest: "sha256:changed".to_string(),
+        file_count: 1,
+    };
+    assert!(state.should_attempt(&changed));
+}
 ```
 
 - [ ] **Step 2: Implement event builder and command-output finalization**
@@ -1972,7 +2260,9 @@ use conary_core::diagnostics::{
     PackagingPhase,
 };
 
-use super::watch_source::{DebounceState, compute_watch_identity, resolve_watch_source_set};
+use super::watch_source::{
+    DebounceState, WatchIdentity, compute_watch_identity, resolve_watch_source_set,
+};
 use super::{TryRefreshRequest, TryStartRequest, TryWatchMarkerRequest};
 
 const WATCH_EVENT_RECORD_LIMIT: usize = 500;
@@ -2056,6 +2346,38 @@ impl WatchEvents {
         }
     }
 }
+
+struct WatchRefreshState {
+    last_successful_identity: WatchIdentity,
+    last_attempted_identity: Option<WatchIdentity>,
+    last_good_generation_id: i64,
+}
+
+impl WatchRefreshState {
+    fn new(initial_identity: WatchIdentity, last_good_generation_id: i64) -> Self {
+        Self {
+            last_successful_identity: initial_identity,
+            last_attempted_identity: None,
+            last_good_generation_id,
+        }
+    }
+
+    fn should_attempt(&self, current: &WatchIdentity) -> bool {
+        self.last_attempted_identity.as_ref() != Some(current)
+    }
+
+    fn record_attempt(&mut self, identity: WatchIdentity) {
+        self.last_attempted_identity = Some(identity);
+    }
+
+    fn record_success(&mut self, identity: WatchIdentity, generation_id: i64) {
+        self.last_successful_identity = identity.clone();
+        self.last_attempted_identity = Some(identity);
+        self.last_good_generation_id = generation_id;
+    }
+
+    fn record_failure(&mut self) {}
+}
 ```
 
 - [ ] **Step 3: Implement `cmd_try_watch_with_output` with deterministic test controls**
@@ -2095,19 +2417,22 @@ pub(super) async fn cmd_try_watch(options: TryWatchOptions<'_>) -> Result<()> {
 Implement the loop so it:
 
 - creates one `operation_id` with `operation_records::new_operation_id("try-watch")`
-- resolves a `WatchSourceSet`
 - cooks into a watch-owned output directory under the Conary runtime root, for example `runtime_root.root()/try/watch-cook/{operation_id}/refresh-N`
 - uses `CONARY_TRY_WATCH_SOURCE_CACHE` when set, otherwise the existing cook source-cache default `/var/cache/conary/sources`
+- resolves a fresh `WatchSourceSet` before every identity comparison so recipe edits that change local source roots, patch paths, or additional-source paths are reflected before deciding whether to cook
 - computes initial identity before cooking
 - runs `run_cook_for_try_watch` with `WatchCookSourcePolicy::Initial`
 - starts a namespace try session with `watch_marker: Some(TryWatchMarkerRequest { operation_id: &operation_id })`
 - writes `CONARY_TEST_TRY_WATCH_READY_FILE` after the initial try session is active when the env var is set
 - polls identity on `poll_interval`
 - uses `DebounceState` before rebuild
-- skips unchanged identity
+- tracks both `last_successful_identity` and `last_attempted_identity`
+- skips rebuild when the current identity equals `last_attempted_identity`; this prevents repeated cook failures for the same broken source snapshot from hot-looping
 - runs refresh cook with `WatchCookSourcePolicy::Refresh`
+- updates `last_attempted_identity` before running cook for both success and failure paths
 - recomputes identity after cook and skips stale artifacts
 - calls `refresh_try_session` only after cook succeeds and identity is still current
+- updates `last_successful_identity` and `last_good_generation_id` only after refresh commit succeeds
 - keeps `last_good_generation_id` unchanged on cook, source identity, validation, staging, namespace, or hook failure
 - writes `CONARY_TEST_TRY_WATCH_FAILURE_FILE` after a non-destructive refresh failure when the env var is set
 - stops on CAS miss, cleanup failure, source root removal, cancellation, or configured `max_refreshes`
@@ -2351,6 +2676,57 @@ fn try_watch_json_outputs_ndjson_without_human_stdout() {
         assert!(value["operation_id"].as_str().unwrap().starts_with("try-watch-"));
         assert!(value["sequence"].as_u64().unwrap() >= 1);
     }
+}
+
+#[test]
+fn try_watch_refuses_dirty_tracked_tree_in_ci() {
+    let fixture = WatchFixture::new();
+    Command::new("git")
+        .args(["init"])
+        .current_dir(&fixture.source)
+        .status()
+        .expect("git init")
+        .success()
+        .then_some(())
+        .expect("git init should succeed");
+    Command::new("git")
+        .args(["config", "user.email", "conary@example.invalid"])
+        .current_dir(&fixture.source)
+        .status()
+        .expect("git config email");
+    Command::new("git")
+        .args(["config", "user.name", "Conary Test"])
+        .current_dir(&fixture.source)
+        .status()
+        .expect("git config name");
+    Command::new("git")
+        .args(["add", "."])
+        .current_dir(&fixture.source)
+        .status()
+        .expect("git add");
+    Command::new("git")
+        .args(["commit", "-m", "initial"])
+        .current_dir(&fixture.source)
+        .status()
+        .expect("git commit");
+    fs::write(
+        fixture.source.join("src/main.rs"),
+        "fn main() { println!(\"dirty\"); }\n",
+    )
+    .unwrap();
+
+    let output = base_watch_command(&fixture)
+        .env("CI", "1")
+        .output()
+        .expect("failed to run conary try --watch");
+
+    assert_failure(&output);
+    assert!(
+        output_text(&output).contains("dirty local source"),
+        "{}",
+        output_text(&output)
+    );
+    assert!(active_try_session(&fixture.db_path).is_none());
 }
 ```
 
