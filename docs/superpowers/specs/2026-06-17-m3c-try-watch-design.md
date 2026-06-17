@@ -1,7 +1,7 @@
 # M3c Try Watch Design
 
 **Date:** 2026-06-17
-**Status:** Draft design for user review; implementation plan next
+**Status:** Landed in M3c; implementation complete on `main`
 **Parent design:** `docs/superpowers/specs/2026-06-15-m3-packaging-differentiators-design.md`
 **Prerequisite milestone:** M3c0 try-session decomposition landed
 

@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-06-17
 revision: 28
-summary: Route try watch ownership
+summary: Route M3 packaging ownership
 ---
 
 # Assistant Subsystem Map
@@ -25,6 +25,7 @@ summary: Route try watch ownership
   `docs/specs/static-repo-format-v1.md`,
   `docs/superpowers/specs/2026-06-10-packaging-toolchain-design.md`,
   `docs/superpowers/specs/2026-06-15-m3-packaging-differentiators-design.md`,
+  `docs/superpowers/specs/2026-06-17-m3d-record-mode-spike-design.md`,
   `docs/superpowers/specs/2026-06-13-m2-publish-hardening-remi-design.md`,
   `docs/superpowers/specs/2026-06-14-m2a-builder-config-publish-divergence-design.md`,
   `docs/superpowers/plans/2026-06-14-m2a-hermetic-publish-foundation-implementation-plan.md`,
