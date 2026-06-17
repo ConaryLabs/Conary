@@ -1,7 +1,9 @@
 // apps/conary/src/commands/try_session/util.rs
 //! Private shared filesystem helpers for try-session modules.
 
-use anyhow::{Context, Result, bail};
+#[cfg(test)]
+use anyhow::bail;
+use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
 pub(super) fn remove_dir_if_exists(path: PathBuf) -> Result<()> {

@@ -7,7 +7,7 @@ use conary_core::ccs::manifest::{CcsManifest, HookExecutionRoot};
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum TryExecutionRoot {
+pub(super) enum TryExecutionRoot {
     Namespace,
     Generation,
     Host,
@@ -24,7 +24,7 @@ impl TryExecutionRoot {
 }
 
 #[allow(dead_code)]
-pub(crate) fn validate_try_package_policy(
+pub(super) fn validate_try_package_policy(
     package: &CcsPackage,
     execution_root: TryExecutionRoot,
     allow_irreversible: bool,
@@ -39,7 +39,7 @@ pub(crate) fn validate_try_package_policy(
 }
 
 #[allow(dead_code)]
-pub(crate) fn validate_try_manifest_policy(
+fn validate_try_manifest_policy(
     manifest: &CcsManifest,
     execution_root: TryExecutionRoot,
     allow_irreversible: bool,
