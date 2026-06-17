@@ -153,6 +153,7 @@ pub fn classify_cli(cli: &Cli) -> Option<CommandRiskPolicy> {
             target,
             activate,
             allow_irreversible,
+            watch,
             run,
             ..
         } => Some(classify_try(
@@ -160,6 +161,7 @@ pub fn classify_cli(cli: &Cli) -> Option<CommandRiskPolicy> {
             *activate,
             *allow_irreversible,
             run,
+            *watch,
         )),
         Commands::Search { .. }
         | Commands::List { .. }
@@ -222,7 +224,12 @@ fn classify_try(
     activate: bool,
     allow_irreversible: bool,
     run: &[String],
+    watch: bool,
 ) -> CommandRiskPolicy {
+    if watch {
+        return local_state("conary try --watch");
+    }
+
     if let Some(target) = target
         && matches!(target, "status" | "rollback" | "keep")
         && !activate
@@ -903,6 +910,18 @@ mod tests {
         let namespace = policy(&["conary", "try", "pkg.ccs"]);
         assert_eq!(namespace.risk, CommandRisk::LocalStateMutation);
         assert!(!namespace.requires_ack());
+
+        let watch = policy(&["conary", "try", "--watch"]);
+        assert_eq!(watch.command_label.as_ref(), "conary try --watch");
+        assert_eq!(watch.risk, CommandRisk::LocalStateMutation);
+        assert!(!watch.requires_ack());
+
+        let invalid_activated_watch = policy(&["conary", "try", "--watch", "--activate"]);
+        assert_eq!(
+            invalid_activated_watch.risk,
+            CommandRisk::LocalStateMutation
+        );
+        assert!(!invalid_activated_watch.requires_ack());
 
         let activated = policy(&["conary", "try", "pkg.ccs", "--activate"]);
         assert_eq!(activated.risk, CommandRisk::ActiveHostMutation);

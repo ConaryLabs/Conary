@@ -11,6 +11,7 @@ mod namespace;
 mod session;
 mod util;
 mod validation;
+mod watch;
 
 pub(crate) use session::{
     activated_try_session_is_live, begin_try_session, current_boot_id,
@@ -107,6 +108,21 @@ pub(crate) async fn cmd_try_keep(db_path: &str) -> Result<()> {
     session::keep_active_try_session(db_path)?;
     println!("Try session kept");
     Ok(())
+}
+
+pub(crate) async fn cmd_try_watch(
+    db_path: &str,
+    target: &str,
+    recipe: Option<&str>,
+    json: bool,
+) -> Result<()> {
+    watch::cmd_try_watch(watch::TryWatchOptions {
+        db_path,
+        target,
+        recipe,
+        json,
+    })
+    .await
 }
 
 #[cfg(test)]
