@@ -105,9 +105,9 @@ The spike adds hidden CLI controls:
 - `--keep-raw-trace`: hidden developer escape hatch for debugging only.
 - `--record-unsafe-host`: hidden developer escape hatch that runs the command
   outside the sandbox after a loud explicit acknowledgement.
-- `--record-allow-network`: optional explicit network escape hatch if the
-  implementation plan decides the spike needs to observe network-fetch
-  behavior; default record execution has no network.
+- `--record-allow-network`: reserved hidden network escape hatch. It is not
+  part of the minimum M3d implementation unless the implementation plan makes a
+  separate explicit decision to opt in. Default record execution has no network.
 
 Normal public help should continue not to advertise `--record` until the spike
 graduates. Hidden help and CLI tests may assert the experimental surface exists.
@@ -115,7 +115,7 @@ graduates. Hidden help and CLI tests may assert the experimental surface exists.
 Default human output is concise:
 
 ```text
-Recording with fanotify-inotify
+Recording with <selected-backend>
 Running command: ...
 Command exited: 0
 Draft recipe: recorded/foo/recipe.toml
@@ -124,8 +124,26 @@ Validation: skipped | succeeded | failed
 Recorded draft: not directly publishable
 ```
 
+Backend limitations are named next to the selected-backend line. For example,
+inotify-only output must say read evidence is incomplete.
+
 With `--json`, the command emits the existing final M3 command JSON object.
 Streaming NDJSON is not required for the spike.
+
+Public output layout under `--record-output`:
+
+- `source/`: the source snapshot used by the generated recipe and optional
+  validation cook.
+- `recipe.toml`: the generated draft recipe with `[source] path = "source"` or
+  equivalent existing recipe syntax.
+- `trace-report.json`: the redacted structured report.
+- `trace-report.txt`: optional redacted human-readable summary.
+- `dist/`: optional validation artifacts for inspection.
+
+The public `source/` snapshot is not redacted. Users must treat
+`--record-output` as private when the source tree is private. Raw traces,
+private work roots, and private install roots stay outside `--record-output`
+unless the hidden `--keep-raw-trace` developer escape hatch is used.
 
 ## Architecture
 
@@ -182,10 +200,14 @@ TraceBackend
   start(scope) -> TraceSession
 
 TraceSession
-  run_command(command_env)
   drain_events()
   finish()
 ```
+
+The trace backend owns watcher lifecycle only. Process spawning, namespace
+setup, sandbox mount construction, command environment construction, exit
+capture, and timeout handling belong to the record command runner under
+`apps/conary/src/commands/record_mode/`.
 
 The default `auto` backend prefers fanotify plus recursive inotify:
 
@@ -224,6 +246,22 @@ Conary does not watch `/`, `$HOME`, `/etc`, `/var`, or arbitrary host roots by
 default. Symlink escapes are not followed into new watch roots unless the target
 is already inside the canonical trace scope. Events outside scope are ignored
 and counted in the report as ignored or out-of-scope evidence.
+
+Sandbox visibility is part of the trace contract. The roots watched on the host
+must be the same inode trees mounted into the sandbox:
+
+| Scope | Host root | Sandbox path | Mode | Environment |
+| --- | --- | --- | --- | --- |
+| source | private source copy | `/conary/source` | read-write | command cwd |
+| work | private work root | `/conary/work` | read-write | `CONARY_WORKDIR` |
+| install | private install root | `/conary/destdir` | read-write | `DESTDIR`, `CONARY_DESTDIR` |
+
+The source snapshot is read-write during the recorded command so generated files
+or configure-time rewrites can be observed, then copied into public
+`--record-output/source` after redaction succeeds. The install root visible as
+`/conary/destdir` must be the same tree watched as the install scope. Tests must
+prove changes made inside the sandbox are observed through the host watchers for
+each scope.
 
 Event loss is a correctness failure, not a warning hidden in logs. Fanotify
 queue errors, inotify queue overflow, watch-limit exhaustion, or watcher thread
@@ -308,11 +346,18 @@ Draft generation is conservative:
 - Package name and version come from existing source inference when possible.
   Otherwise use the source directory name and `0.1.0-recorded`.
 - Record mode copies `SOURCE_DIR` into the recording workspace before running
-  the command. The draft recipe source is a local relative path to that source
-  copy, usually `source`. Public recipe output must not contain absolute host
-  paths or `..` escapes.
+  the command, then publishes the final snapshot under
+  `--record-output/source`. The draft recipe source is a local relative path to
+  that public snapshot, usually `source`. Public recipe output must not contain
+  absolute host paths or `..` escapes.
 - The recorded command vector is rendered with a structured shell-quoting
   helper, not ad hoc string joining.
+- Generated recipe commands normalize `$CONARY_DESTDIR`, `${CONARY_DESTDIR}`,
+  and the concrete recording destdir path to the existing `%(destdir)s` cook
+  token. Normal cook validation must not depend on Kitchen exporting
+  `CONARY_DESTDIR`; the generated draft has to be valid with the current
+  `DESTDIR`-only Kitchen contract unless the implementation plan explicitly
+  changes Kitchen to provide the alias everywhere.
 - If the install root contains files, the recorded command becomes the draft
   install step.
 - If no install files are observed, the recorded command becomes the draft
@@ -348,8 +393,9 @@ Default storage rules:
 
 - Private record workspace directory mode is `0700`.
 - Raw trace fragments are mode `0600`.
-- Raw trace fragments are deleted on success, command failure, backend failure,
-  redaction failure, validation failure, Ctrl-C, and kill-switch cleanup.
+- Raw trace fragments are deleted on handled success, command failure, backend
+  failure, redaction failure, validation failure, cancellation, timeout, and
+  kill-switch cleanup paths.
 - Public report files are written only after redaction.
 - Operation records are written only after redaction through the existing
   packaging operation-record path.
@@ -376,6 +422,11 @@ tested separately.
 If redaction fails, Conary must not write a public trace report or operation
 record. It may return a human diagnostic describing the failure without leaking
 raw trace details.
+
+Uncatchable process death may leave a private `0700` record workspace behind.
+The next record-mode run should attempt best-effort cleanup of stale private
+workspaces that match the record-mode prefix and are owned by the current user,
+without traversing unrelated paths.
 
 `--keep-raw-trace` is hidden, loud, and developer-only. It keeps raw trace under
 a private directory and prints a warning that the data may contain secrets. It
@@ -428,11 +479,16 @@ M3d spike tests:
 - Command containment tests prove record mode uses the sandbox by default,
   disables network by default, and refuses to run when the sandbox is
   unavailable unless hidden unsafe host mode is explicitly requested.
+- Sandbox visibility tests prove the watched host roots are the same inode trees
+  mounted into the sandbox for source, work, and install scopes.
 - Trace report tests prove inotify-only runs declare incomplete read evidence.
 - Redaction tests cover env secrets, token-like args, credentialed URLs,
   private key paths, logs, trace metadata, and operation records.
 - Draft recipe tests prove a simple fixture produces a recipe with relative
   source paths and a safely rendered recorded command.
+- Draft recipe tests prove `$CONARY_DESTDIR`, `${CONARY_DESTDIR}`, and concrete
+  recording destdir paths normalize to `%(destdir)s` so normal cook validation
+  works with the existing Kitchen environment.
 - Validation tests prove a generated draft can pass normal cook for the simple
   fixture when `--record-validate` is used.
 - Recorded-draft tests prove validation artifacts carry
@@ -477,17 +533,24 @@ with next-step recommendations rather than a public feature.
 - The recorded command runs in a contained sandbox by default.
 - Unsafe host execution is hidden, explicit, and noisy.
 - The source tree is copied into the recording workspace before execution.
+- The public source snapshot lives under `--record-output/source` and the
+  generated recipe points at it with a relative source path.
 - Draft recipes and public reports use scope-relative paths, not private
   absolute paths.
 - Fanotify/inotify scope is bounded to source, work, and install roots.
+- Watcher lifecycle stays separate from command spawning and sandbox setup.
+- Watched host roots are the same inode trees mounted into the sandbox.
 - Explicit fanotify failure is fail-closed.
 - Fanotify privilege requirements are checked before command execution.
 - Inotify-only traces declare incomplete read evidence.
 - Event loss is visible and prevents overclaiming completeness.
 - Raw trace is private, ephemeral by default, and never written to operation
   records.
+- Uncatchable process death cleanup is best-effort stale workspace recovery,
+  not a hard guarantee.
 - Public trace reports and operation records are redacted before write.
-- Draft recipes avoid absolute host paths.
+- Draft recipes avoid absolute host paths and normalize `CONARY_DESTDIR` forms
+  to the existing `%(destdir)s` cook token.
 - Recorded validation artifacts use `origin_class = "recorded-draft"`.
 - Recorded drafts remain unpublishable.
 - M3d does not weaken M2 publish gates.

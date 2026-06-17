@@ -64,6 +64,8 @@ docs/superpowers/plans/2026-06-14-m2-release-surface-implementation.md	planning	
 docs/superpowers/plans/2026-06-14-m2a-hermetic-publish-foundation-implementation-plan.md	planning	maintainer
 docs/superpowers/plans/2026-06-15-m3a-structured-diagnostics-events.md	planning	maintainer
 docs/superpowers/plans/2026-06-16-m3b-packaging-mcp-implementation-plan.md	planning	maintainer
+docs/superpowers/plans/2026-06-17-m3c-try-watch-implementation-plan.md	planning	maintainer
+docs/superpowers/plans/2026-06-17-m3c0-try-session-decomposition-implementation-plan.md	planning	maintainer
 docs/superpowers/plans/archive/2026-04-10-all-tracks-release-hardening-plan.md	historical	historical
 docs/superpowers/plans/archive/2026-04-16-conaryd-forge-staging-deployment-plan.md	historical	historical
 docs/superpowers/plans/archive/2026-04-22-generation-artifact-export-unification-plan.md	historical	historical
@@ -148,6 +150,9 @@ docs/superpowers/specs/2026-06-13-m2-publish-hardening-remi-design.md	planning	m
 docs/superpowers/specs/2026-06-14-m2a-builder-config-publish-divergence-design.md	planning	maintainer
 docs/superpowers/specs/2026-06-15-m3-packaging-differentiators-design.md	planning	maintainer
 docs/superpowers/specs/2026-06-16-m3b-packaging-mcp-design.md	planning	maintainer
+docs/superpowers/specs/2026-06-17-m3c-try-watch-design.md	planning	maintainer
+docs/superpowers/specs/2026-06-17-m3c0-try-session-decomposition-design.md	planning	maintainer
+docs/superpowers/specs/2026-06-17-m3d-record-mode-spike-design.md	planning	maintainer
 docs/superpowers/specs/archive/2026-04-10-all-tracks-release-hardening-design.md	historical	historical
 docs/superpowers/specs/archive/2026-04-10-conaryd-forge-staging-deployment-design.md	historical	historical
 docs/superpowers/specs/archive/2026-04-16-bootstrap-self-hosting-vm-design.md	historical	historical
