@@ -29,6 +29,7 @@ pub mod package;
 pub mod policy;
 pub mod signing;
 pub mod target_compatibility;
+pub mod v2;
 pub mod verify;
 
 pub use binary_manifest::{BinaryManifest, ComponentRef, Hash, MerkleTree};
