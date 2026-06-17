@@ -5,7 +5,7 @@ use crate::hash::{self, HashAlgorithm, Hasher};
 use crate::recipe::hermetic::evidence::{LocalTreeIdentity, LocalTreeMode};
 use std::ffi::OsString;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use walkdir::WalkDir;
 
@@ -65,6 +65,72 @@ pub fn canonical_local_file_list(root: &Path, ci_mode: CiMode) -> Result<Vec<Can
     } else {
         canonical_filesystem_file_list(&root)
     }
+}
+
+pub fn validate_canonical_local_file_list(root: &Path, files: &[CanonicalLocalFile]) -> Result<()> {
+    let root = canonical_source_root(root)?;
+    for file in files {
+        if file.relative_path.as_os_str().is_empty() {
+            return Err(Error::InvalidPath(
+                "Local source file list entry cannot be empty".to_string(),
+            ));
+        }
+        if file.relative_path.is_absolute() {
+            return Err(Error::InvalidPath(format!(
+                "Local source file list entry must be relative, not absolute: {}",
+                file.relative_path.display()
+            )));
+        }
+        for component in file.relative_path.components() {
+            match component {
+                Component::Normal(_) | Component::CurDir => {}
+                Component::ParentDir => {
+                    return Err(Error::PathTraversal(format!(
+                        "Local source file list entry contains parent traversal: {}",
+                        file.relative_path.display()
+                    )));
+                }
+                Component::RootDir | Component::Prefix(_) => {
+                    return Err(Error::InvalidPath(format!(
+                        "Local source file list entry must be relative, not absolute: {}",
+                        file.relative_path.display()
+                    )));
+                }
+            }
+        }
+
+        let Some(target) = &file.symlink_target else {
+            continue;
+        };
+        let link_parent = file
+            .relative_path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_default();
+        let resolved = if target.is_absolute() {
+            target.clone()
+        } else {
+            root.join(link_parent).join(target)
+        };
+        let normalized = normalize_path_without_require_existing(&resolved);
+        if !normalized.starts_with(&root) {
+            return Err(Error::ConfigError(format!(
+                "Local source symlink must stay within the source directory: {} -> {}",
+                file.relative_path.display(),
+                target.display()
+            )));
+        }
+        if let Ok(canonical_target) = std::fs::canonicalize(&normalized)
+            && !canonical_target.starts_with(&root)
+        {
+            return Err(Error::ConfigError(format!(
+                "Local source symlink must stay within the source directory: {} -> {}",
+                file.relative_path.display(),
+                target.display()
+            )));
+        }
+    }
+    Ok(())
 }
 
 pub fn local_tree_identity(root: &Path, ci_mode: CiMode) -> Result<LocalTreeIdentity> {
@@ -299,6 +365,22 @@ fn tree_hash(files: &[CanonicalLocalFile]) -> String {
     }
     let hash = hasher.finalize();
     format!("sha256:{}", hash.value)
+}
+
+fn normalize_path_without_require_existing(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            component @ Component::RootDir => normalized.push(component.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            Component::Normal(part) => normalized.push(part),
+        }
+    }
+    normalized
 }
 
 fn kind_label(kind: CanonicalLocalFileKind) -> &'static str {
@@ -576,6 +658,27 @@ mod tests {
                 .any(|warning| warning.contains("filesystem-walk identity is weaker")),
             "expected filesystem walk warning, got {:?}",
             identity.warnings
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn validate_canonical_file_list_rejects_symlink_escape() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source");
+        let outside = dir.path().join("outside");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("secret.txt"), "secret\n").unwrap();
+        std::os::unix::fs::symlink("../outside/secret.txt", source.join("escape.txt")).unwrap();
+
+        let files = canonical_local_file_list(&source, CiMode::Off).unwrap();
+        let err = validate_canonical_local_file_list(&source, &files).unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("Local source symlink must stay within the source directory"),
+            "{err}"
         );
     }
 }
