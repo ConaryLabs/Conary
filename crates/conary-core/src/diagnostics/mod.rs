@@ -23,6 +23,7 @@ pub enum PackagingPhase {
     SourceFetch,
     Build,
     TrySession,
+    RecordMode,
     Publish,
     OperationRecord,
 }
@@ -55,6 +56,13 @@ pub enum PackagingDiagnosticCode {
     WatchTryRefreshFailed,
     WatchCleanupFailed,
     WatchSourceIdentityFailed,
+    RecordBackendUnavailable,
+    RecordTraceFailed,
+    RecordCommandFailed,
+    RecordDraftGenerated,
+    RecordValidationFailed,
+    RecordRedactionFailed,
+    RecordCleanupFailed,
     TryWatchUnsupported,
     Unknown,
 }
@@ -251,6 +259,15 @@ pub enum PackagingEventKind {
     WatchRefreshSucceeded,
     WatchRefreshFailed,
     WatchCancelled,
+    RecordStarted,
+    RecordBackendSelected,
+    RecordCommandStarted,
+    RecordCommandFinished,
+    RecordTraceFinished,
+    RecordDraftGenerated,
+    RecordValidationStarted,
+    RecordValidationFinished,
+    RecordFinished,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -406,6 +423,21 @@ mod tests {
         );
         let value = serde_json::to_value(&diagnostic).unwrap();
         assert_eq!(value["code"], "watch-try-refresh-failed");
+    }
+
+    #[test]
+    fn record_mode_diagnostics_and_events_serialize_stably() {
+        let diagnostic = PackagingDiagnostic::error(
+            PackagingPhase::RecordMode,
+            PackagingDiagnosticCode::RecordTraceFailed,
+            "trace evidence is incomplete",
+        );
+        let event = PackagingEvent::diagnostic("record-1", 1, diagnostic);
+        let value = serde_json::to_value(&event).unwrap();
+
+        assert_eq!(value["phase"], "record-mode");
+        assert_eq!(value["diagnostic"]["code"], "record-trace-failed");
+        assert_eq!(value["kind"], "diagnostic-emitted");
     }
 
     #[test]

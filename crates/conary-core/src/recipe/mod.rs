@@ -53,6 +53,7 @@ pub mod inference;
 mod kitchen;
 pub mod parser;
 pub mod pkgbuild;
+pub mod recording;
 
 pub use cache::{BuildCache, CacheConfig, CacheEntry, CacheStats, DependencyHashes, ToolchainInfo};
 pub use format::{
