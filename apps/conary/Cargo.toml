@@ -52,6 +52,7 @@ url.workspace = true
 walkdir.workspace = true
 glob.workspace = true
 libc.workspace = true
+inotify.workspace = true
 
 # Sigstore verification (used directly in commands/ccs/signing.rs)
 sigstore.workspace = true
