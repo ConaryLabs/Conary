@@ -7,9 +7,7 @@ pub enum ManifestFormatClassification {
     Unknown,
 }
 
-pub fn classify_manifest_format(
-    format_version: Option<u64>,
-) -> ManifestFormatClassification {
+pub fn classify_manifest_format(format_version: Option<u64>) -> ManifestFormatClassification {
     match format_version {
         Some(2) => ManifestFormatClassification::V2Native,
         Some(1) => ManifestFormatClassification::LegacyV1,
