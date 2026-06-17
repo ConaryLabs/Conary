@@ -3,6 +3,7 @@
 use crate::error::{Error, Result};
 use crate::recipe::hermetic::source_identity::{
     CanonicalLocalFile, CanonicalLocalFileKind, hash_canonical_local_file_at,
+    validate_canonical_local_file_list,
 };
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -12,6 +13,7 @@ pub fn materialize_local_source_from_file_list(
     destination: &Path,
     files: &[CanonicalLocalFile],
 ) -> Result<()> {
+    validate_canonical_local_file_list(source_root, files)?;
     let source_root = canonical_source_root(source_root)?;
     fs::create_dir_all(destination)?;
 
@@ -364,6 +366,34 @@ mod tests {
                 .to_string()
                 .contains("Local source symlink must stay within the source directory"),
             "expected symlink escape rejection, got: {error}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn local_source_symlink_escape_reuses_shared_validator() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source");
+        let outside = dir.path().join("outside");
+        let destination = dir.path().join("dest");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("secret.txt"), "secret\n").unwrap();
+        std::os::unix::fs::symlink("../outside/secret.txt", source.join("escape.txt")).unwrap();
+        let files = canonical_local_file_list(&source, CiMode::Off).unwrap();
+
+        let error =
+            materialize_local_source_from_file_list(&source, &destination, &files).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("Local source symlink must stay within the source directory"),
+            "expected shared symlink validation rejection, got: {error}"
+        );
+        assert!(
+            !destination.exists(),
+            "shared validation should reject before materialization creates the destination"
         );
     }
 

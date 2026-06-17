@@ -12,6 +12,7 @@ mod session;
 mod util;
 mod validation;
 mod watch;
+mod watch_source;
 
 pub(crate) use session::{
     activated_try_session_is_live, begin_try_session, current_boot_id,
