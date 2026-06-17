@@ -2,6 +2,7 @@
 
 mod fanotify_backend;
 mod inotify_backend;
+mod report;
 mod runner;
 mod trace;
 mod types;
