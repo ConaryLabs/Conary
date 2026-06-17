@@ -195,15 +195,8 @@ fn mark_root(fd: RawFd, root: &ScopeRoot) -> Result<()> {
         | libc::FAN_EVENT_ON_CHILD;
     // SAFETY: `path` is a valid NUL-terminated path buffer, `fd` is expected to
     // be a fanotify descriptor, and the call does not retain the pointer.
-    let result = unsafe {
-        libc::fanotify_mark(
-            fd,
-            libc::FAN_MARK_ADD,
-            mask as u64,
-            libc::AT_FDCWD,
-            path.as_ptr(),
-        )
-    };
+    let result =
+        unsafe { libc::fanotify_mark(fd, libc::FAN_MARK_ADD, mask, libc::AT_FDCWD, path.as_ptr()) };
     if result == 0 {
         Ok(())
     } else {
@@ -280,19 +273,17 @@ fn classify_fanotify_path(
 }
 
 fn fanotify_operation(mask: u64, scope: ReportScope) -> TraceOperation {
-    if mask & (libc::FAN_DELETE | libc::FAN_MOVED_FROM) as u64 != 0 {
+    if mask & (libc::FAN_DELETE | libc::FAN_MOVED_FROM) != 0 {
         return match scope {
             ReportScope::Install => TraceOperation::InstallDelete,
             ReportScope::Source => TraceOperation::SourceWrite,
             ReportScope::Work => TraceOperation::WorkWrite,
         };
     }
-    if mask & (libc::FAN_CREATE | libc::FAN_MOVED_TO | libc::FAN_MODIFY | libc::FAN_ATTRIB) as u64
-        != 0
-    {
+    if mask & (libc::FAN_CREATE | libc::FAN_MOVED_TO | libc::FAN_MODIFY | libc::FAN_ATTRIB) != 0 {
         return match scope {
             ReportScope::Install => {
-                if mask & (libc::FAN_CREATE | libc::FAN_MOVED_TO) as u64 != 0 {
+                if mask & (libc::FAN_CREATE | libc::FAN_MOVED_TO) != 0 {
                     TraceOperation::InstallCreate
                 } else {
                     TraceOperation::InstallModify

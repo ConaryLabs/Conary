@@ -39,12 +39,12 @@ impl TraceBackend for InotifyTraceBackend {
 
     fn start(&self, scope: TraceScope) -> Result<Box<dyn TraceSession>> {
         let directory_count = count_directories(&scope)?;
-        if let Some(max_user_watches) = read_max_user_watches()? {
-            if directory_count > max_user_watches {
-                bail!(
-                    "record-mode inotify needs {directory_count} watches, exceeding max_user_watches={max_user_watches}"
-                );
-            }
+        if let Some(max_user_watches) = read_max_user_watches()?
+            && directory_count > max_user_watches
+        {
+            bail!(
+                "record-mode inotify needs {directory_count} watches, exceeding max_user_watches={max_user_watches}"
+            );
         }
 
         let mut inotify = Inotify::init().context("failed to initialize inotify")?;
