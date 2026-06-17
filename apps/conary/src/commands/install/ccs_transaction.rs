@@ -11,9 +11,9 @@ use super::legacy_replay::{
 };
 use super::scriptlets::build_execution_mode;
 use super::{
-    ComponentSelection, ExtractionResult, InstallPhase, InstallProgress, InstallSemantics,
-    LegacyReplayOptions, RepositoryInstallProvenance, ScriptletContext, TransactionContext,
-    UpgradeCheck, check_upgrade_status, execute_install_transaction,
+    ComponentSelection, ExtractionResult, FinalizeInstallOutput, InstallPhase, InstallProgress,
+    InstallSemantics, LegacyReplayOptions, RepositoryInstallProvenance, ScriptletContext,
+    TransactionContext, UpgradeCheck, check_upgrade_status, execute_install_transaction,
     execute_install_transaction_with_config, finalize_install_without_snapshot,
     merge_old_upgrade_legacy_replay_state, plan_ccs_fresh_install_legacy_replay,
     plan_ccs_old_installed_upgrade_legacy_replay, preflight_extracted_live_root_file_ownership,
@@ -443,8 +443,7 @@ fn install_ccs_package_transactionally_inner(
         &scriptlet_ctx,
         &pre_state,
         &tx_result,
-        &progress,
-        opts.quiet,
+        FinalizeInstallOutput::new(&progress, opts.quiet),
     )?;
 
     let mut post_commit_warnings = Vec::new();
