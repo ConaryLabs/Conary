@@ -14,7 +14,7 @@
 
 M3c includes:
 
-- `conary try --watch`, `conary try --watch .`, `conary try --watch --recipe path/to/recipe.toml`, and `conary try --watch --json`.
+- `conary try --watch`, `conary try --watch .`, `conary try --watch --recipe path/to/recipe.toml`, `conary try --watch --json`, and `conary try --watch --isolated`.
 - Namespace-only watch sessions.
 - Parser/dispatch refusal for `.ccs` artifacts, action words, `--activate`, `--allow-irreversible`, and trailing run commands when `--watch` is set.
 - Polling-first source wakeups, with canonical source identity deciding whether a refresh is meaningful.
