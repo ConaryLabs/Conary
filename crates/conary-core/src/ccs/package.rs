@@ -34,6 +34,10 @@ pub struct CcsPackage {
     binary_manifest: Option<BinaryManifest>,
     /// Parsed v2 authority, when this package is native CCS v2.
     v2_authority: Option<crate::ccs::v2::AuthorityDocumentV2>,
+    /// Parsed v2 build attestation envelope from MANIFEST.attestation.json.
+    v2_build_attestation: Option<crate::ccs::attestation::BuildAttestationEnvelope>,
+    /// Parsed v2 foreign conversion boundary from MANIFEST.conversion-boundary.json.
+    v2_foreign_conversion_boundary: Option<crate::ccs::attestation::ForeignConversionBoundary>,
     /// File entries from FILES.json
     files: Vec<FileEntry>,
     /// Component data
@@ -240,6 +244,80 @@ pub fn convert_binary_to_ccs_manifest(
     }
 }
 
+fn compatibility_manifest_from_v2(
+    authority: &crate::ccs::v2::AuthorityDocumentV2,
+    build_attestation: Option<crate::ccs::attestation::BuildAttestationEnvelope>,
+    foreign_conversion_boundary: Option<crate::ccs::attestation::ForeignConversionBoundary>,
+) -> Result<CcsManifest> {
+    let mut manifest =
+        CcsManifest::new_minimal(&authority.identity.name, &authority.identity.version);
+    manifest.package.description = format!("CCS v2 {}", authority.identity.name);
+    let provenance = manifest.provenance.get_or_insert_with(Default::default);
+    provenance.origin_class = authority.provenance.origin_class.clone();
+    provenance.hardening_level = authority.provenance.hardening_level.clone();
+    provenance.build_attestation = build_attestation;
+    provenance.foreign_conversion_boundary = foreign_conversion_boundary;
+    Ok(manifest)
+}
+
+fn files_from_v2_authority(
+    authority: &crate::ccs::v2::AuthorityDocumentV2,
+) -> Result<Vec<crate::ccs::builder::FileEntry>> {
+    use crate::ccs::builder::{FileEntry, FileType};
+    use crate::ccs::v2::schema::{FileTypeV2, PackageKindV2};
+
+    let PackageKindV2::Package(data) = &authority.kind else {
+        return Err(Error::ParseError(
+            "group and redirect v2 packages are not installable in M4a".to_string(),
+        ));
+    };
+
+    Ok(data
+        .files
+        .iter()
+        .map(|file| FileEntry {
+            path: file.path.clone(),
+            hash: file.sha256.clone(),
+            size: file.size,
+            mode: file.mode,
+            component: file.component.clone(),
+            file_type: match file.file_type {
+                FileTypeV2::Regular => FileType::Regular,
+                FileTypeV2::Directory => FileType::Directory,
+                FileTypeV2::Symlink => FileType::Symlink,
+            },
+            target: file.symlink_target.clone(),
+            chunks: None,
+        })
+        .collect())
+}
+
+fn dependencies_from_v2_authority(
+    authority: &crate::ccs::v2::AuthorityDocumentV2,
+) -> Vec<Dependency> {
+    use crate::ccs::v2::schema::DependencyKindV2;
+
+    authority
+        .requires
+        .iter()
+        .filter_map(|dependency| match dependency.kind {
+            DependencyKindV2::Package => Some(Dependency {
+                name: dependency.name.clone(),
+                version: dependency.version_constraint.clone(),
+                dep_type: DependencyType::Runtime,
+                description: None,
+            }),
+            DependencyKindV2::Capability => Some(Dependency {
+                name: format!("capability:{}", dependency.name),
+                version: dependency.version_constraint.clone(),
+                dep_type: DependencyType::Runtime,
+                description: None,
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
 impl CcsPackage {
     fn validate_file_content(file: &FileEntry, content: &[u8]) -> Result<()> {
         let actual_size = u64::try_from(content.len()).map_err(|_| {
@@ -282,6 +360,63 @@ impl CcsPackage {
     /// Get the parsed v2 authority, when present.
     pub fn v2_authority(&self) -> Option<&crate::ccs::v2::AuthorityDocumentV2> {
         self.v2_authority.as_ref()
+    }
+
+    pub fn v2_build_attestation(
+        &self,
+    ) -> Option<&crate::ccs::attestation::BuildAttestationEnvelope> {
+        self.v2_build_attestation.as_ref()
+    }
+
+    pub fn v2_foreign_conversion_boundary(
+        &self,
+    ) -> Option<&crate::ccs::attestation::ForeignConversionBoundary> {
+        self.v2_foreign_conversion_boundary.as_ref()
+    }
+
+    pub fn parse_verified_v2(
+        path: &str,
+        verification: &crate::ccs::verify::VerificationResult,
+    ) -> Result<Self> {
+        if !verification.valid
+            || !matches!(
+                &verification.content_status,
+                crate::ccs::verify::ContentStatus::Valid { .. }
+            )
+        {
+            return Err(Error::ParseError(
+                "native CCS v2 package did not pass signature and payload verification".to_string(),
+            ));
+        }
+
+        let package_path = PathBuf::from(path);
+        let file = File::open(&package_path)?;
+        let contents =
+            read_ccs_archive(file).map_err(|error| Error::ParseError(error.to_string()))?;
+        let Some(authority) = contents.v2_authority.as_ref() else {
+            return <Self as PackageFormat>::parse(path);
+        };
+        let manifest = compatibility_manifest_from_v2(
+            authority,
+            contents.v2_build_attestation.clone(),
+            contents.v2_foreign_conversion_boundary.clone(),
+        )?;
+        let files = files_from_v2_authority(authority)?;
+        let dependencies = dependencies_from_v2_authority(authority);
+        let package_files = Self::convert_files(&files);
+        Ok(Self {
+            package_path,
+            manifest,
+            binary_manifest: None,
+            v2_authority: Some(authority.clone()),
+            v2_build_attestation: contents.v2_build_attestation,
+            v2_foreign_conversion_boundary: contents.v2_foreign_conversion_boundary,
+            files,
+            components: contents.components,
+            package_files,
+            dependencies,
+            config_files_cache: Vec::new(),
+        })
     }
 
     #[cfg(test)]
@@ -368,6 +503,37 @@ impl CcsPackage {
     }
 }
 
+#[cfg(test)]
+impl CcsPackage {
+    pub(crate) fn from_v2_authority_for_tests(
+        authority: crate::ccs::v2::AuthorityDocumentV2,
+        build_attestation: Option<crate::ccs::attestation::BuildAttestationEnvelope>,
+        foreign_conversion_boundary: Option<crate::ccs::attestation::ForeignConversionBoundary>,
+    ) -> Result<Self> {
+        let manifest = compatibility_manifest_from_v2(
+            &authority,
+            build_attestation.clone(),
+            foreign_conversion_boundary.clone(),
+        )?;
+        let files = files_from_v2_authority(&authority)?;
+        let dependencies = dependencies_from_v2_authority(&authority);
+        let package_files = Self::convert_files(&files);
+        Ok(Self {
+            package_path: PathBuf::from("v2-test.ccs"),
+            manifest,
+            binary_manifest: None,
+            v2_authority: Some(authority),
+            v2_build_attestation: build_attestation,
+            v2_foreign_conversion_boundary: foreign_conversion_boundary,
+            files,
+            components: HashMap::new(),
+            package_files,
+            dependencies,
+            config_files_cache: Vec::new(),
+        })
+    }
+}
+
 impl PackageFormat for CcsPackage {
     fn parse(path: &str) -> Result<Self>
     where
@@ -376,6 +542,13 @@ impl PackageFormat for CcsPackage {
         let package_path = PathBuf::from(path);
         let file = File::open(&package_path)?;
         let contents = read_ccs_archive(file).map_err(|e| Error::ParseError(e.to_string()))?;
+
+        if contents.v2_authority.is_some() {
+            return Err(Error::ParseError(
+                "native CCS v2 packages require verified parsing; call CcsPackage::parse_verified_v2"
+                    .to_string(),
+            ));
+        }
 
         let manifest = &contents.manifest;
 
@@ -427,6 +600,8 @@ impl PackageFormat for CcsPackage {
             manifest: contents.manifest,
             binary_manifest: contents.binary_manifest,
             v2_authority: None,
+            v2_build_attestation: None,
+            v2_foreign_conversion_boundary: None,
             files,
             components: contents.components,
             package_files,
@@ -722,6 +897,62 @@ license = "MIT"
         assert!(
             err.contains("File size mismatch") || err.contains("File truncated"),
             "{err}"
+        );
+    }
+
+    #[test]
+    fn v2_packages_do_not_use_binary_manifest_default_reconstruction() {
+        let authority = crate::ccs::v2::test_support::package_authority_with_one_file("adapter-v2");
+        let package =
+            CcsPackage::from_v2_authority_for_tests(authority.clone(), None, None).unwrap();
+        assert_eq!(package.manifest().package.name, "adapter-v2");
+        assert!(package.binary_manifest().is_none());
+        assert!(package.v2_authority().is_some());
+    }
+
+    #[test]
+    fn v2_compatibility_manifest_preserves_attestation_metadata() {
+        let authority =
+            crate::ccs::v2::test_support::package_authority_with_one_file("attested-v2");
+        let key = crate::ccs::signing::SigningKeyPair::generate().with_key_id("publish");
+        let envelope = crate::ccs::attestation::test_support::sample_envelope_for_tests(&key);
+        let package =
+            CcsPackage::from_v2_authority_for_tests(authority, Some(envelope.clone()), None)
+                .unwrap();
+        let provenance = package.manifest().provenance.as_ref().unwrap();
+        assert_eq!(provenance.build_attestation.as_ref(), Some(&envelope));
+    }
+
+    #[test]
+    fn parse_rejects_native_v2_and_verified_parse_accepts_after_verification() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("adapter-v2.ccs");
+        let authority = crate::ccs::v2::test_support::package_authority_with_one_file("adapter-v2");
+        let payloads = crate::ccs::v2::test_support::one_file_payloads_for_tests();
+        let key = crate::ccs::signing::SigningKeyPair::generate();
+        crate::ccs::builder::write_v2_ccs_package(
+            &authority, &payloads, &path, &key, None, None, None,
+        )
+        .unwrap();
+
+        let plain_error = CcsPackage::parse(path.to_str().unwrap()).unwrap_err();
+        assert!(plain_error.to_string().contains("verified parsing"));
+
+        let mut verification = crate::ccs::verify::verify_package(
+            &path,
+            &crate::ccs::verify::TrustPolicy::strict(vec![key.public_key_base64()]),
+        )
+        .unwrap();
+        let package = CcsPackage::parse_verified_v2(path.to_str().unwrap(), &verification).unwrap();
+        assert!(package.v2_authority().is_some());
+
+        verification.valid = false;
+        let verified_error =
+            CcsPackage::parse_verified_v2(path.to_str().unwrap(), &verification).unwrap_err();
+        assert!(
+            verified_error
+                .to_string()
+                .contains("did not pass signature and payload verification")
         );
     }
 }
