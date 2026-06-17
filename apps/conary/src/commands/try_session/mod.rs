@@ -25,6 +25,12 @@ pub(crate) struct TryStartRequest<'a> {
     pub activate: bool,
     pub allow_irreversible: bool,
     pub command: Option<&'a [&'a str]>,
+    pub watch_marker: Option<TryWatchMarkerRequest<'a>>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TryWatchMarkerRequest<'a> {
+    pub(crate) operation_id: &'a str,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,6 +62,7 @@ pub(crate) async fn cmd_try_package(
         } else {
             Some(command.as_slice())
         },
+        watch_marker: None,
     })?;
 
     println!("Try session {} is active", outcome.session_id);
@@ -257,6 +264,7 @@ pub(super) mod test_support {
             activate: false,
             allow_irreversible: false,
             command: None,
+            watch_marker: None,
         })
     }
 
@@ -270,6 +278,7 @@ pub(super) mod test_support {
             activate: true,
             allow_irreversible: false,
             command: None,
+            watch_marker: None,
         })
     }
 
