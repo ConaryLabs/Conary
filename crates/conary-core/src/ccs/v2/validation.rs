@@ -195,7 +195,7 @@ fn validate_provenance(provenance: &ProvenanceAuthorityV2, diagnostics: &mut Vec
             provenance.hermetic_evidence_hash.as_deref(),
         ),
     ] {
-        if value.map_or(true, |value| value.trim().is_empty()) {
+        if value.is_none_or(|value| value.trim().is_empty()) {
             diagnostics.push(V2Diagnostic::error(
                 V2DiagnosticCode::MissingAuthority,
                 format!("v2 authority requires {field}"),
@@ -284,7 +284,7 @@ fn validate_files(
                 }
             }
             FileTypeV2::Symlink => {
-                if file.symlink_target.as_deref().map_or(true, str::is_empty) {
+                if file.symlink_target.as_deref().is_none_or(str::is_empty) {
                     diagnostics.push(V2Diagnostic::error(
                         V2DiagnosticCode::MissingAuthority,
                         format!("symlink {} requires signed target authority", file.path),
