@@ -4,7 +4,7 @@
 
 **Goal:** Build `conary try --watch` as a namespace-only package-authoring loop that cooks on meaningful source changes, refreshes the active try session, and preserves the last successful generation when a refresh fails.
 
-**Architecture:** Watch orchestration lives in `apps/conary/src/commands/try_session/watch.rs`, source identity and debounce live in `watch_source.rs`, and try-session lifecycle internals stay in `session.rs` plus `namespace.rs`. Cook integration uses an in-process adapter so watch writes one operation record for the whole process and can force offline-cache-only refreshes for hermetic builds without adding hidden public CLI flags. Refresh commit is two-phase: stage a new package/DB/generation/namespace exposure, switch visible namespace state recoverably, then update the active session row through an active-only expected-generation compare-and-swap.
+**Architecture:** Watch orchestration lives in `apps/conary/src/commands/try_session/watch.rs`, source identity and debounce live in `watch_source.rs`, and try-session lifecycle internals stay in `session.rs` plus `namespace.rs`. Cook integration uses an in-process adapter so watch writes one operation record for the whole process and can force offline-cache-only refreshes for hermetic builds without adding hidden public CLI flags. Cancellation during an in-process cook is cooperative: the loop records cancellation, waits for the cook call to return, removes watch-owned partial output, and then rolls back. Refresh commit is two-phase: stage a new package/DB/generation/namespace exposure, switch visible namespace state recoverably, switch stable copied package/DB files only after namespace switch succeeds, then update the active session row through an active-only expected-generation compare-and-swap.
 
 **Tech Stack:** Rust 2024, `anyhow`, `serde`, `serde_json`, `tokio`, `uuid`, `rusqlite`, existing `conary-core::diagnostics`, existing hermetic source identity and cook APIs, existing try-session namespace/test fixtures, `cargo test`.
 
@@ -21,6 +21,7 @@ M3c includes:
 - Explicit `WatchSourceSet` handling for recipe files, local source roots, local additional source files, local patch files, and inferred source trees.
 - In-process cook adapter with suppressed per-refresh operation records and offline-cache-only refresh policy for hermetic watch refreshes.
 - Non-hermetic watch refreshes preserve the current cook source policy; M3c does not silently turn host iteration builds into hermetic builds.
+- Cooperative cancellation for in-process cook calls; M3c does not claim to hard-kill a cook mid-call unless a future slice switches to a child-process adapter.
 - One active watch session row whose `work_dir` remains stable for startup, refresh, status, keep refusal, rollback, and cleanup.
 - Watch-created session marker file under the stable try-session `work_dir`, written fail-closed before the session is externally keepable.
 - `conary try keep` refusal for watch-created sessions without a schema migration.
@@ -37,6 +38,7 @@ M3c excludes:
 - DB schema migrations.
 - A `notify`/file-watcher dependency in this slice.
 - Reworking cook into a new package-building subsystem.
+- A child-process cook adapter or hard mid-cook cancellation.
 
 ## File Structure
 
@@ -109,6 +111,11 @@ Review lock mapping:
 | Source identity misses recipe/patch/additional-source edits | Task 3 explicit `WatchSourceSet` |
 | Watch records can grow unbounded or leak secrets | Task 2 event redaction and bounded retention, Task 8 record finalization |
 | Active mount roots cannot be renamed or deleted as transient staging | Task 7 generational mount directories and `mount --move` switch contract |
+| Stable package/DB files can diverge from last-good namespace on switch failure | Task 7 prepares stable file copies before namespace switch, switches files only after namespace switch succeeds, and restores both files and namespace before row CAS failures |
+| Generational namespace roots can leak across refresh or rollback | Task 7 committed exposure cleanup plus rollback teardown for `namespace-root*`, `generation-root-*`, and `namespace-work-*` |
+| In-process cook cannot be killed on Ctrl-C | Task 8 cooperative cancellation contract and no hard-kill promise |
+| Watch hot-loops or rebuilds initial unchanged identity | Task 8 `WatchRefreshState` skips `last_successful_identity` and `last_attempted_identity` |
+| JSON stream lacks terminal event | Task 8 `OperationFinished` emission and Task 9 final-line NDJSON assertion |
 
 ---
 
@@ -1296,6 +1303,11 @@ pub(crate) fn cooked_artifact_path(output: &PackagingCommandOutput) -> Result<Pa
 This adapter must not call `write_packaging_record_if_possible`.
 It must not force `OfflineCacheOnly` for non-hermetic refreshes; that would
 change the host-iteration build mode beyond the reviewed M3c design.
+Because the adapter is in-process, it cannot be killed independently on
+Ctrl-C. The watch loop must call it through a small blocking-task wrapper,
+observe cancellation while the task is running, and then wait for the cook call
+to return before removing watch-owned partial output and rolling back. Do not
+claim child-process hard cancellation in M3c.
 
 - [ ] **Step 4: Run cook tests**
 
@@ -1612,6 +1624,7 @@ pub(crate) struct TryRefreshOutcome {
     pub(crate) try_generation_id: i64,
     pub(crate) namespace_root: PathBuf,
     pub(crate) copied_package_path: PathBuf,
+    pub(crate) cleanup_error: Option<String>,
 }
 ```
 
@@ -1657,6 +1670,7 @@ fn refresh_try_session_updates_generation_after_staging_succeeds() -> anyhow::Re
 
     assert_eq!(refreshed.previous_generation_id, started.try_generation_id);
     assert!(refreshed.try_generation_id > started.try_generation_id);
+    assert_eq!(refreshed.cleanup_error, None);
     let conn = fixture.open();
     let session = TrySession::find_by_id(&conn, &started.session_id)?.unwrap();
     assert_eq!(session.try_generation_id, Some(refreshed.try_generation_id));
@@ -1756,6 +1770,104 @@ fn refresh_try_session_cleans_staging_after_generation_build_failure() -> anyhow
     );
     Ok(())
 }
+
+#[test]
+fn refresh_try_session_namespace_switch_failure_preserves_stable_files() -> anyhow::Result<()> {
+    let fixture = super::test_support::TryRuntimeFixture::new();
+    let first = fixture.write_package(
+        "watch-demo-a",
+        conary_core::ccs::manifest::CcsManifest::new_minimal("watch-demo", "1.0.0"),
+    );
+    let second = fixture.write_package(
+        "watch-demo-b",
+        conary_core::ccs::manifest::CcsManifest::new_minimal("watch-demo", "1.0.1"),
+    );
+    let _mount_guard = EnvVarGuard::set("CONARY_TEST_SKIP_GENERATION_MOUNT", "1");
+    let started = begin_try_session(TryStartRequest {
+        db_path: &fixture.db_path_string,
+        package_path: &first,
+        activate: false,
+        allow_irreversible: false,
+        command: None,
+        watch_marker: Some(TryWatchMarkerRequest {
+            operation_id: "watch-1",
+        }),
+    })?;
+    let stable_package_path = started.work_dir.join("package.ccs");
+    let stable_db_path = started.work_dir.join("conary.db");
+    let stable_package_before = std::fs::read(&stable_package_path)?;
+    let stable_db_before = std::fs::read(&stable_db_path)?;
+    let namespace_before = std::fs::read_link(started.work_dir.join("namespace-root"))?;
+    let _fail_guard = EnvVarGuard::set(
+        "CONARY_TEST_TRY_REFRESH_FAIL_NAMESPACE_SWITCH",
+        "1",
+    );
+
+    let err = refresh_try_session(TryRefreshRequest {
+        db_path: &fixture.db_path_string,
+        session_id: &started.session_id,
+        expected_try_generation_id: started.try_generation_id,
+        package_path: &second,
+    })
+    .unwrap_err();
+
+    assert!(
+        err.to_string().contains("failed to switch stable try namespace"),
+        "{err:#}"
+    );
+    let conn = fixture.open();
+    let session = TrySession::find_by_id(&conn, &started.session_id)?.unwrap();
+    assert_eq!(session.try_generation_id, Some(started.try_generation_id));
+    assert_eq!(std::fs::read(&stable_package_path)?, stable_package_before);
+    assert_eq!(std::fs::read(&stable_db_path)?, stable_db_before);
+    assert_eq!(
+        std::fs::read_link(started.work_dir.join("namespace-root"))?,
+        namespace_before
+    );
+    Ok(())
+}
+
+#[test]
+fn refresh_try_session_reports_committed_cleanup_failure_with_new_generation_active() -> anyhow::Result<()> {
+    let fixture = super::test_support::TryRuntimeFixture::new();
+    let first = fixture.write_package(
+        "watch-demo-a",
+        conary_core::ccs::manifest::CcsManifest::new_minimal("watch-demo", "1.0.0"),
+    );
+    let second = fixture.write_package(
+        "watch-demo-b",
+        conary_core::ccs::manifest::CcsManifest::new_minimal("watch-demo", "1.0.1"),
+    );
+    let _mount_guard = EnvVarGuard::set("CONARY_TEST_SKIP_GENERATION_MOUNT", "1");
+    let started = begin_try_session(TryStartRequest {
+        db_path: &fixture.db_path_string,
+        package_path: &first,
+        activate: false,
+        allow_irreversible: false,
+        command: None,
+        watch_marker: Some(TryWatchMarkerRequest {
+            operation_id: "watch-1",
+        }),
+    })?;
+    let _cleanup_guard = EnvVarGuard::set(
+        "CONARY_TEST_TRY_REFRESH_FAIL_NAMESPACE_COMMIT_CLEANUP",
+        "forced cleanup failure",
+    );
+
+    let refreshed = refresh_try_session(TryRefreshRequest {
+        db_path: &fixture.db_path_string,
+        session_id: &started.session_id,
+        expected_try_generation_id: started.try_generation_id,
+        package_path: &second,
+    })?;
+
+    assert!(refreshed.cleanup_error.as_deref().unwrap_or("").contains("forced cleanup failure"));
+    let conn = fixture.open();
+    let session = TrySession::find_by_id(&conn, &started.session_id)?.unwrap();
+    assert_eq!(session.try_generation_id, Some(refreshed.try_generation_id));
+    assert!(refreshed.try_generation_id > started.try_generation_id);
+    Ok(())
+}
 ```
 
 - [ ] **Step 3: Add staged namespace path helpers and mount-move tests**
@@ -1775,6 +1887,7 @@ try/<session-id>/
 ```
 
 The real switch must use `mount --move` for active mount points. `std::fs::rename` is allowed only in `CONARY_TEST_SKIP_GENERATION_MOUNT` test mode where namespace roots are symlink materializations rather than Linux mounts.
+Commit cleanup must remove the superseded namespace exposure and generation/work directories after the session-row CAS succeeds. Rollback cleanup must unmount and remove `namespace-root`, `namespace-root.next`, `namespace-root.previous`, `generation-root`, `namespace-work`, `generation-root-*`, and `namespace-work-*`.
 
 Add tests:
 
@@ -1805,10 +1918,81 @@ fn switch_stable_namespace_root_restores_previous_on_forced_failure() -> anyhow:
         generation_root: temp.path().join("generation-root-2"),
         namespace_workdir: temp.path().join("namespace-work-2"),
     };
-    let err = switch_stable_namespace_root(exposure).unwrap_err();
+    let err = switch_stable_namespace_root(exposure, 1).unwrap_err();
 
     assert!(err.to_string().contains("failed to switch stable try namespace"), "{err:#}");
     assert_eq!(std::fs::read_link(&stable)?, previous);
+    Ok(())
+}
+
+#[test]
+fn teardown_try_namespace_mounts_removes_watch_generation_paths() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    for name in [
+        "namespace-root.next",
+        "namespace-root.previous",
+        "generation-root-41",
+        "namespace-work-41",
+        "generation-root",
+        "namespace-work",
+    ] {
+        std::fs::create_dir_all(temp.path().join(name))?;
+    }
+
+    teardown_try_namespace_mounts(temp.path())?;
+
+    for name in [
+        "namespace-root.next",
+        "namespace-root.previous",
+        "generation-root-41",
+        "namespace-work-41",
+        "generation-root",
+        "namespace-work",
+    ] {
+        assert!(!temp.path().join(name).exists(), "{name} should be removed");
+    }
+    Ok(())
+}
+
+#[test]
+fn namespace_switch_commit_removes_superseded_generation_paths() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let stable = temp.path().join("namespace-root");
+    let previous = temp.path().join("previous-root");
+    let staged = temp.path().join("namespace-root.next");
+    std::fs::create_dir_all(&previous)?;
+    std::fs::create_dir_all(&staged)?;
+    recreate_path_symlink(&previous, &stable)?;
+    for name in [
+        "generation-root-1",
+        "namespace-work-1",
+        "generation-root",
+        "namespace-work",
+    ] {
+        std::fs::create_dir_all(temp.path().join(name))?;
+    }
+
+    let _mount_guard = EnvVarGuard::set("CONARY_TEST_SKIP_GENERATION_MOUNT", "1");
+    let exposure = StagedNamespaceExposure {
+        generation_id: 2,
+        next_namespace_root: staged,
+        stable_namespace_root: stable,
+        previous_namespace_root: temp.path().join("namespace-root.previous"),
+        generation_root: temp.path().join("generation-root-2"),
+        namespace_workdir: temp.path().join("namespace-work-2"),
+    };
+
+    let switch = switch_stable_namespace_root(exposure, 1)?;
+    switch.commit()?;
+
+    for name in [
+        "generation-root-1",
+        "namespace-work-1",
+        "generation-root",
+        "namespace-work",
+    ] {
+        assert!(!temp.path().join(name).exists(), "{name} should be removed");
+    }
     Ok(())
 }
 ```
@@ -1868,16 +2052,39 @@ pub(super) fn expose_staged_try_namespace_root(
 
 pub(super) struct NamespaceSwitch {
     exposure: StagedNamespaceExposure,
+    superseded_generation_roots: Vec<PathBuf>,
+    superseded_namespace_workdirs: Vec<PathBuf>,
 }
 
 impl NamespaceSwitch {
     pub(super) fn commit(self) -> Result<()> {
+        #[cfg(test)]
+        if let Some(message) = std::env::var_os("CONARY_TEST_TRY_REFRESH_FAIL_NAMESPACE_COMMIT_CLEANUP") {
+            anyhow::bail!("{}", message.to_string_lossy());
+        }
         if std::env::var_os("CONARY_TEST_SKIP_GENERATION_MOUNT").is_some() {
             remove_path_if_exists(&self.exposure.previous_namespace_root)?;
+            for path in self
+                .superseded_generation_roots
+                .iter()
+                .chain(self.superseded_namespace_workdirs.iter())
+            {
+                remove_path_if_exists(path)?;
+            }
             return Ok(());
         }
         unmount_try_path_if_mounted(&self.exposure.previous_namespace_root)?;
+        for root in &self.superseded_generation_roots {
+            unmount_try_path_if_mounted(root)?;
+        }
         remove_path_if_exists(&self.exposure.previous_namespace_root)?;
+        for path in self
+            .superseded_namespace_workdirs
+            .iter()
+            .chain(self.superseded_generation_roots.iter())
+        {
+            remove_path_if_exists(path)?;
+        }
         Ok(())
     }
 
@@ -1905,7 +2112,20 @@ impl NamespaceSwitch {
 
 pub(super) fn switch_stable_namespace_root(
     exposure: StagedNamespaceExposure,
+    previous_generation_id: i64,
 ) -> Result<NamespaceSwitch> {
+    let work_dir = exposure
+        .stable_namespace_root
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("try namespace root has no parent work dir"))?;
+    let superseded_generation_roots = vec![
+        work_dir.join(format!("generation-root-{previous_generation_id}")),
+        work_dir.join("generation-root"),
+    ];
+    let superseded_namespace_workdirs = vec![
+        work_dir.join(format!("namespace-work-{previous_generation_id}")),
+        work_dir.join("namespace-work"),
+    ];
     if std::env::var_os("CONARY_TEST_SKIP_GENERATION_MOUNT").is_some() {
         remove_path_if_exists(&exposure.previous_namespace_root)?;
         if exposure.stable_namespace_root.exists() {
@@ -1922,7 +2142,11 @@ pub(super) fn switch_stable_namespace_root(
             anyhow::bail!("failed to switch stable try namespace: forced test failure");
         }
         std::fs::rename(&exposure.next_namespace_root, &exposure.stable_namespace_root)?;
-        return Ok(NamespaceSwitch { exposure });
+        return Ok(NamespaceSwitch {
+            exposure,
+            superseded_generation_roots,
+            superseded_namespace_workdirs,
+        });
     }
 
     std::fs::create_dir_all(&exposure.previous_namespace_root)?;
@@ -1931,7 +2155,11 @@ pub(super) fn switch_stable_namespace_root(
         let _ = run_mount_move(&exposure.previous_namespace_root, &exposure.stable_namespace_root);
         return Err(error.context("failed to switch stable try namespace and restored previous namespace root"));
     }
-    Ok(NamespaceSwitch { exposure })
+    Ok(NamespaceSwitch {
+        exposure,
+        superseded_generation_roots,
+        superseded_namespace_workdirs,
+    })
 }
 
 pub(super) fn teardown_staged_namespace_exposure(exposure: &StagedNamespaceExposure) -> Result<()> {
@@ -1961,6 +2189,41 @@ fn run_mount_move(from: &Path, to: &Path) -> Result<()> {
     }
     Ok(())
 }
+
+pub(super) fn teardown_try_namespace_mounts(work_dir: &Path) -> Result<()> {
+    let mut mounted_roots = vec![
+        work_dir.join("namespace-root.next"),
+        work_dir.join("namespace-root.previous"),
+        work_dir.join("namespace-root"),
+        work_dir.join("generation-root"),
+    ];
+    let mut removable_dirs = vec![
+        work_dir.join("namespace-root.next"),
+        work_dir.join("namespace-root.previous"),
+        work_dir.join("namespace-work"),
+        work_dir.join("generation-root"),
+    ];
+    for entry in std::fs::read_dir(work_dir)
+        .with_context(|| format!("failed to read try work dir {}", work_dir.display()))?
+    {
+        let entry = entry?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with("generation-root-") {
+            mounted_roots.push(entry.path());
+            removable_dirs.push(entry.path());
+        } else if name.starts_with("namespace-work-") {
+            removable_dirs.push(entry.path());
+        }
+    }
+    for path in &mounted_roots {
+        unmount_try_path_if_mounted(path)?;
+    }
+    for path in &removable_dirs {
+        remove_path_if_exists(path)?;
+    }
+    Ok(())
+}
 ```
 
 `expose_try_namespace_root_at_paths` should be a small refactor of the existing `expose_try_namespace_root` body that accepts explicit lower, work, and namespace paths. The existing startup path should keep calling `expose_try_namespace_root` so normal try behavior stays stable.
@@ -1971,7 +2234,7 @@ In `apps/conary/src/commands/try_session/session.rs`, implement a refresh path t
 
 ```rust
 pub(crate) fn refresh_try_session(request: TryRefreshRequest<'_>) -> Result<TryRefreshOutcome> {
-    let mut namespace_switch_started = false;
+    let mut refresh_committed = false;
     let mut refresh_dir: Option<PathBuf> = None;
     let mut staged_namespace_cleanup: Option<namespace::StagedNamespaceExposure> = None;
     let result = (|| -> Result<TryRefreshOutcome> {
@@ -2034,7 +2297,7 @@ pub(crate) fn refresh_try_session(request: TryRefreshRequest<'_>) -> Result<TryR
 
     let stable_package_path = work_dir.join("package.ccs");
     let stable_db_path = work_dir.join("conary.db");
-    let file_switch = switch_stable_try_files(
+    let prepared_files = prepare_stable_try_files(
         &stable_package_path,
         &stable_db_path,
         &copied_package_path,
@@ -2042,9 +2305,17 @@ pub(crate) fn refresh_try_session(request: TryRefreshRequest<'_>) -> Result<TryR
     )?;
 
     let stable_namespace_root = work_dir.join("namespace-root");
-    let namespace_switch = namespace::switch_stable_namespace_root(staged_namespace)?;
-    namespace_switch_started = true;
-    staged_namespace_cleanup = None;
+    let namespace_switch = namespace::switch_stable_namespace_root(
+        staged_namespace.clone(),
+        request.expected_try_generation_id,
+    )?;
+    let file_switch = match prepared_files.switch() {
+        Ok(file_switch) => file_switch,
+        Err(error) => {
+            let _ = namespace_switch.restore();
+            return Err(error.context("failed to switch stable try package files after namespace switch"));
+        }
+    };
     let stable_package_path_string = stable_package_path.to_string_lossy().into_owned();
     let replaced = session.replace_active_try_generation(
         &live_conn,
@@ -2058,21 +2329,30 @@ pub(crate) fn refresh_try_session(request: TryRefreshRequest<'_>) -> Result<TryR
         bail!("try watch session {} changed outside the watcher", request.session_id);
     }
 
-    namespace_switch.commit()?;
-    file_switch.commit()?;
-    remove_dir_if_exists(staging_dir)?;
+    refresh_committed = true;
+    staged_namespace_cleanup = None;
+    let mut cleanup_errors = Vec::new();
+    if let Err(error) = file_switch.commit() {
+        cleanup_errors.push(format!("failed to clean previous stable try files: {error:#}"));
+    }
+    if let Err(error) = namespace_switch.commit() {
+        cleanup_errors.push(format!("failed to clean previous try namespace: {error:#}"));
+    }
+    if let Err(error) = remove_dir_if_exists(staging_dir) {
+        cleanup_errors.push(format!("failed to clean refresh staging directory: {error:#}"));
+    }
+    let cleanup_error = (!cleanup_errors.is_empty()).then(|| cleanup_errors.join("; "));
 
     Ok(TryRefreshOutcome {
         previous_generation_id: request.expected_try_generation_id,
         try_generation_id: built.generation_number,
         namespace_root: stable_namespace_root,
         copied_package_path: stable_package_path,
+        cleanup_error,
     })
     })();
 
-    if result.is_err()
-        && !namespace_switch_started
-    {
+    if result.is_err() && !refresh_committed {
         if let Some(staged_namespace) = &staged_namespace_cleanup {
             let _ = namespace::teardown_staged_namespace_exposure(staged_namespace);
         }
@@ -2084,10 +2364,19 @@ pub(crate) fn refresh_try_session(request: TryRefreshRequest<'_>) -> Result<TryR
 }
 ```
 
-Add `switch_stable_try_files` next to the refresh helper:
+Add `prepare_stable_try_files` next to the refresh helper:
 
 ```rust
 use super::util::{remove_dir_if_exists, remove_path_if_exists};
+
+struct PreparedStableTryFiles {
+    package_tmp: PathBuf,
+    package_path: PathBuf,
+    package_backup: PathBuf,
+    db_tmp: PathBuf,
+    db_path: PathBuf,
+    db_backup: PathBuf,
+}
 
 struct StableTryFileSwitch {
     package_path: PathBuf,
@@ -2116,12 +2405,38 @@ impl StableTryFileSwitch {
     }
 }
 
-fn switch_stable_try_files(
+impl PreparedStableTryFiles {
+    fn switch(self) -> Result<StableTryFileSwitch> {
+        if self.package_path.exists() {
+            std::fs::rename(&self.package_path, &self.package_backup)?;
+        }
+        if self.db_path.exists() {
+            std::fs::rename(&self.db_path, &self.db_backup)?;
+        }
+        if let Err(error) = std::fs::rename(&self.package_tmp, &self.package_path) {
+            let _ = restore_prepared_try_files(&self);
+            anyhow::bail!("failed to publish stable try package: {error}");
+        }
+        if let Err(error) = std::fs::rename(&self.db_tmp, &self.db_path) {
+            let _ = restore_prepared_try_files(&self);
+            anyhow::bail!("failed to publish stable try DB: {error}");
+        }
+
+        Ok(StableTryFileSwitch {
+            package_path: self.package_path,
+            package_backup: self.package_backup,
+            db_path: self.db_path,
+            db_backup: self.db_backup,
+        })
+    }
+}
+
+fn prepare_stable_try_files(
     stable_package_path: &Path,
     stable_db_path: &Path,
     staged_package_path: &Path,
     staged_db_path: &Path,
-) -> Result<StableTryFileSwitch> {
+) -> Result<PreparedStableTryFiles> {
     let switch_id = uuid::Uuid::new_v4();
     let package_tmp = stable_package_path.with_extension(format!("{switch_id}.ccs.next"));
     let db_tmp = stable_db_path.with_extension(format!("{switch_id}.db.next"));
@@ -2130,25 +2445,37 @@ fn switch_stable_try_files(
 
     std::fs::copy(staged_package_path, &package_tmp)?;
     std::fs::copy(staged_db_path, &db_tmp)?;
-    if stable_package_path.exists() {
-        std::fs::rename(stable_package_path, &package_backup)?;
-    }
-    if stable_db_path.exists() {
-        std::fs::rename(stable_db_path, &db_backup)?;
-    }
-    std::fs::rename(&package_tmp, stable_package_path)?;
-    std::fs::rename(&db_tmp, stable_db_path)?;
 
-    Ok(StableTryFileSwitch {
+    Ok(PreparedStableTryFiles {
+        package_tmp,
         package_path: stable_package_path.to_path_buf(),
         package_backup,
+        db_tmp,
         db_path: stable_db_path.to_path_buf(),
         db_backup,
     })
 }
+
+fn restore_prepared_try_files(files: &PreparedStableTryFiles) -> Result<()> {
+    remove_path_if_exists(&files.package_path)?;
+    remove_path_if_exists(&files.db_path)?;
+    if files.package_backup.exists() {
+        std::fs::rename(&files.package_backup, &files.package_path)?;
+    }
+    if files.db_backup.exists() {
+        std::fs::rename(&files.db_backup, &files.db_path)?;
+    }
+    remove_path_if_exists(&files.package_tmp)?;
+    remove_path_if_exists(&files.db_tmp)?;
+    Ok(())
+}
 ```
 
 Keep the expected-generation CAS as the only session row update for the refresh.
+Stable package/DB content must not be replaced until after
+`switch_stable_namespace_root` succeeds. Any failure before the CAS row update
+must restore both the stable namespace and stable copied files before returning
+the error.
 
 - [ ] **Step 5: Run refresh and namespace tests**
 
@@ -2156,9 +2483,13 @@ Run:
 
 ```bash
 cargo test -p conary --lib commands::try_session::namespace::tests::switch_stable_namespace_root_restores_previous_on_forced_failure
+cargo test -p conary --lib commands::try_session::namespace::tests::teardown_try_namespace_mounts_removes_watch_generation_paths
+cargo test -p conary --lib commands::try_session::namespace::tests::namespace_switch_commit_removes_superseded_generation_paths
 cargo test -p conary --lib commands::try_session::session::tests::refresh_try_session_updates_generation_after_staging_succeeds
 cargo test -p conary --lib commands::try_session::session::tests::refresh_try_session_cas_miss_preserves_previous_generation
 cargo test -p conary --lib commands::try_session::session::tests::refresh_try_session_cleans_staging_after_generation_build_failure
+cargo test -p conary --lib commands::try_session::session::tests::refresh_try_session_namespace_switch_failure_preserves_stable_files
+cargo test -p conary --lib commands::try_session::session::tests::refresh_try_session_reports_committed_cleanup_failure_with_new_generation_active
 cargo test -p conary --lib commands::try_session
 ```
 
@@ -2228,13 +2559,25 @@ fn watch_state_does_not_retry_same_failed_identity_without_new_changes() {
     };
     let mut state = WatchRefreshState::new(first.clone(), 41);
 
-    assert!(state.should_attempt(&first));
-    state.record_attempt(first.clone());
+    assert!(
+        !state.should_attempt(&first),
+        "initial successful source snapshot should not rebuild without a change"
+    );
+    let broken = WatchIdentity {
+        digest: "sha256:broken".to_string(),
+        file_count: 1,
+    };
+    assert!(state.should_attempt(&broken));
+    state.record_attempt(broken.clone());
     state.record_failure();
 
     assert!(
-        !state.should_attempt(&first),
+        !state.should_attempt(&broken),
         "same failed source snapshot should not rebuild again until files change"
+    );
+    assert!(
+        !state.should_attempt(&first),
+        "returning to the last successful source snapshot is already active"
     );
     let changed = WatchIdentity {
         digest: "sha256:changed".to_string(),
@@ -2320,6 +2663,14 @@ impl WatchEvents {
         event
     }
 
+    fn operation_finished(&mut self, summary: impl Into<String>) -> PackagingEvent {
+        self.push(
+            PackagingPhase::OperationRecord,
+            PackagingEventKind::OperationFinished,
+            summary,
+        )
+    }
+
     fn all(&self) -> &[PackagingEvent] {
         &self.events
     }
@@ -2363,7 +2714,8 @@ impl WatchRefreshState {
     }
 
     fn should_attempt(&self, current: &WatchIdentity) -> bool {
-        self.last_attempted_identity.as_ref() != Some(current)
+        current != &self.last_successful_identity
+            && self.last_attempted_identity.as_ref() != Some(current)
     }
 
     fn record_attempt(&mut self, identity: WatchIdentity) {
@@ -2389,6 +2741,7 @@ struct WatchLoopConfig {
     poll_interval: Duration,
     debounce: Duration,
     max_refreshes: Option<usize>,
+    exit_after_ready: bool,
     ready_file: Option<PathBuf>,
     failure_file: Option<PathBuf>,
 }
@@ -2402,6 +2755,7 @@ impl WatchLoopConfig {
             poll_interval: Duration::from_millis(DEFAULT_POLL_MS),
             debounce: Duration::from_millis(DEFAULT_DEBOUNCE_MS),
             max_refreshes,
+            exit_after_ready: std::env::var_os("CONARY_TEST_TRY_WATCH_EXIT_AFTER_READY").is_some(),
             ready_file: std::env::var_os("CONARY_TEST_TRY_WATCH_READY_FILE").map(PathBuf::from),
             failure_file: std::env::var_os("CONARY_TEST_TRY_WATCH_FAILURE_FILE").map(PathBuf::from),
         }
@@ -2424,19 +2778,23 @@ Implement the loop so it:
 - runs `run_cook_for_try_watch` with `WatchCookSourcePolicy::Initial`
 - starts a namespace try session with `watch_marker: Some(TryWatchMarkerRequest { operation_id: &operation_id })`
 - writes `CONARY_TEST_TRY_WATCH_READY_FILE` after the initial try session is active when the env var is set
+- when `CONARY_TEST_TRY_WATCH_EXIT_AFTER_READY` is set, exits after startup and rolls back without fabricating a refresh
 - polls identity on `poll_interval`
 - uses `DebounceState` before rebuild
 - tracks both `last_successful_identity` and `last_attempted_identity`
-- skips rebuild when the current identity equals `last_attempted_identity`; this prevents repeated cook failures for the same broken source snapshot from hot-looping
+- skips rebuild when the current identity equals `last_successful_identity` or `last_attempted_identity`; this prevents unchanged startup sources and repeated cook failures for the same broken source snapshot from hot-looping
 - runs refresh cook with `WatchCookSourcePolicy::Refresh`
 - updates `last_attempted_identity` before running cook for both success and failure paths
 - recomputes identity after cook and skips stale artifacts
 - calls `refresh_try_session` only after cook succeeds and identity is still current
 - updates `last_successful_identity` and `last_good_generation_id` only after refresh commit succeeds
+- if `refresh_try_session` returns `cleanup_error: Some(_)`, treats the new generation as committed/last-good, emits a cleanup diagnostic, writes the final record, and stops instead of retrying as a non-destructive failure
 - keeps `last_good_generation_id` unchanged on cook, source identity, validation, staging, namespace, or hook failure
 - writes `CONARY_TEST_TRY_WATCH_FAILURE_FILE` after a non-destructive refresh failure when the env var is set
 - stops on CAS miss, cleanup failure, source root removal, cancellation, or configured `max_refreshes`
+- when cancellation is requested while an in-process cook is running, emits a cancellation-requested event, waits for the cook call to return, removes the watch-owned partial output directory, then calls `rollback_active_try_session`
 - on normal cancellation or configured `max_refreshes`, calls `rollback_active_try_session`
+- emits and renders one final `OperationFinished` event on normal test exit, configured `max_refreshes`, and successful cancellation cleanup
 - writes one final redacted operation record with `write_packaging_record_if_possible`
 
 Use this rendering helper for every emitted event:
@@ -2456,7 +2814,7 @@ fn write_event(
 }
 ```
 
-For cancellation, use `tokio::signal::ctrl_c()` in the async loop. Unit tests can use `CONARY_TEST_TRY_WATCH_EXIT_AFTER_REFRESHES` rather than sending signals.
+For cancellation, use `tokio::signal::ctrl_c()` in the async loop. Cook calls should run through `tokio::task::spawn_blocking` so the loop can notice Ctrl-C while the in-process cook is running, but the cancellation path must still wait for that cook call to return before rollback. Unit tests can use `CONARY_TEST_TRY_WATCH_EXIT_AFTER_READY` and `CONARY_TEST_TRY_WATCH_EXIT_AFTER_REFRESHES` rather than sending signals.
 
 - [ ] **Step 4: Replace the Task 1 stub**
 
@@ -2557,7 +2915,7 @@ fn base_watch_command(fixture: &WatchFixture) -> Command {
 
 fn watch_until_test_exit(fixture: &WatchFixture, json: bool) -> Output {
     let mut command = base_watch_command(fixture);
-    command.env("CONARY_TEST_TRY_WATCH_EXIT_AFTER_REFRESHES", "1");
+    command.env("CONARY_TEST_TRY_WATCH_EXIT_AFTER_READY", "1");
     if json {
         command.arg("--json");
     }
@@ -2669,13 +3027,21 @@ fn try_watch_json_outputs_ndjson_without_human_stdout() {
     assert_success(&output);
     let stdout = stdout_text(&output);
 
-    assert!(!stdout.contains("Watching .\n"), "{stdout}");
+    assert!(
+        !String::from_utf8_lossy(&output.stderr).contains("Watching"),
+        "{}",
+        output_text(&output)
+    );
+    let mut last = None;
     for line in stdout.lines() {
         let value: serde_json::Value = serde_json::from_str(line).unwrap();
         assert_eq!(value["schema_version"], 1);
         assert!(value["operation_id"].as_str().unwrap().starts_with("try-watch-"));
         assert!(value["sequence"].as_u64().unwrap() >= 1);
+        last = Some(value);
     }
+    let last = last.expect("expected at least one NDJSON event");
+    assert_eq!(last["kind"], "operation-finished");
 }
 
 #[test]
@@ -2772,7 +3138,7 @@ fn try_watch_discards_cook_when_source_changes_during_build() {
     let fixture = WatchFixture::new();
     let mut child = Command::new(env!("CARGO_BIN_EXE_conary"))
         .env("CONARY_TEST_SKIP_GENERATION_MOUNT", "1")
-        .env("CONARY_TEST_TRY_WATCH_EXIT_AFTER_REFRESHES", "2")
+        .env("CONARY_TEST_TRY_WATCH_EXIT_AFTER_REFRESHES", "1")
         .env("CONARY_TEST_TRY_WATCH_PAUSE_DURING_COOK", "1")
         .args(["try", "--watch"])
         .arg(&fixture.source)
