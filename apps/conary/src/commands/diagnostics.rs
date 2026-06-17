@@ -9,8 +9,8 @@ use conary_core::diagnostics::redaction::{
     redact_command, redact_json_value, redact_log, redact_text,
 };
 use conary_core::diagnostics::{
-    DiagnosticEvidence, PackagingArtifact, PackagingCommandOutput, PackagingDiagnostic,
-    PackagingSeverity,
+    DiagnosticEvidence, PACKAGING_JSON_SCHEMA_VERSION, PackagingArtifact, PackagingCommandOutput,
+    PackagingDiagnostic, PackagingEvent, PackagingEventKind, PackagingPhase, PackagingSeverity,
 };
 
 pub(crate) fn render_packaging_json(output: &PackagingCommandOutput) -> Result<String> {
@@ -115,18 +115,60 @@ pub(crate) fn redacted_packaging_output(output: &PackagingCommandOutput) -> Pack
         redact_artifact(artifact);
     }
     for event in &mut output.events {
-        if let Some(message) = &mut event.message {
-            let redacted = redact_text(message);
-            *message = redacted.value;
-        }
-        if let Some(artifact) = &mut event.artifact {
-            redact_artifact(artifact);
-        }
-        if let Some(diagnostic) = &mut event.diagnostic {
-            redact_diagnostic(diagnostic);
-        }
+        *event = redacted_packaging_event(event);
     }
     output
+}
+
+pub(crate) fn redacted_packaging_event(event: &PackagingEvent) -> PackagingEvent {
+    let mut event = event.clone();
+    if let Some(message) = &mut event.message {
+        let redacted = redact_text(message);
+        *message = redacted.value;
+    }
+    if let Some(diagnostic) = &mut event.diagnostic {
+        redact_diagnostic(diagnostic);
+    }
+    if let Some(artifact) = &mut event.artifact {
+        redact_artifact(artifact);
+    }
+    event
+}
+
+pub(crate) fn render_packaging_event_ndjson(event: &PackagingEvent) -> Result<String> {
+    let mut rendered = serde_json::to_string(&redacted_packaging_event(event))?;
+    rendered.push('\n');
+    Ok(rendered)
+}
+
+pub(crate) fn bounded_watch_events(
+    operation_id: &str,
+    events: &[PackagingEvent],
+    limit: usize,
+) -> Vec<PackagingEvent> {
+    if events.len() <= limit {
+        return events.to_vec();
+    }
+    let omitted = events.len() - limit;
+    let mut retained = Vec::with_capacity(limit);
+    // This synthetic event is only persisted in the final operation record. It
+    // is not emitted on the live NDJSON stream, so sequence reuse cannot confuse
+    // stream consumers.
+    retained.push(PackagingEvent {
+        schema_version: PACKAGING_JSON_SCHEMA_VERSION,
+        operation_id: operation_id.to_string(),
+        sequence: events[omitted].sequence,
+        phase: PackagingPhase::OperationRecord,
+        kind: PackagingEventKind::WatchRefreshSkipped,
+        message: Some(format!(
+            "{omitted} older watch events were omitted from this operation record"
+        )),
+        diagnostic: None,
+        artifact: None,
+        progress: None,
+    });
+    retained.extend(events[omitted + 1..].iter().cloned());
+    retained
 }
 
 fn redact_diagnostic(diagnostic: &mut PackagingDiagnostic) {
@@ -178,8 +220,9 @@ fn redact_artifact(artifact: &mut PackagingArtifact) {
 mod tests {
     use super::*;
     use conary_core::diagnostics::{
-        DiagnosticEvidence, PackagingArtifact, PackagingCommandOutput, PackagingDiagnostic,
-        PackagingDiagnosticCode, PackagingEvent, PackagingPhase,
+        DiagnosticEvidence, PACKAGING_JSON_SCHEMA_VERSION, PackagingArtifact,
+        PackagingCommandOutput, PackagingDiagnostic, PackagingDiagnosticCode, PackagingEvent,
+        PackagingEventKind, PackagingPhase,
     };
 
     #[test]
@@ -265,6 +308,56 @@ mod tests {
         assert!(json.contains("Bearer [REDACTED]"));
         assert!(json.contains("[TRUNCATED]"));
         assert!(json.contains("\"redactions\""));
+    }
+
+    #[test]
+    fn packaging_event_ndjson_redacts_diagnostic_before_serializing() {
+        let diagnostic = PackagingDiagnostic::error(
+            PackagingPhase::Build,
+            PackagingDiagnosticCode::WatchCookFailed,
+            "failed with API_TOKEN=secret",
+        )
+        .with_evidence(DiagnosticEvidence::log(
+            "build log",
+            "Authorization: Bearer abc.def",
+        ));
+        let event = PackagingEvent::diagnostic("watch-1", 3, diagnostic);
+
+        let line = render_packaging_event_ndjson(&event).unwrap();
+
+        assert!(line.ends_with('\n'));
+        assert!(!line.contains("API_TOKEN=secret"), "{line}");
+        assert!(!line.contains("abc.def"), "{line}");
+        assert!(line.contains("\"schema_version\""), "{line}");
+        assert!(line.contains("\"redactions\""), "{line}");
+    }
+
+    #[test]
+    fn bounded_watch_events_retains_newest_events_and_records_trim_count() {
+        let events = (1..=505)
+            .map(|sequence| PackagingEvent {
+                schema_version: PACKAGING_JSON_SCHEMA_VERSION,
+                operation_id: "watch-1".to_string(),
+                sequence,
+                phase: PackagingPhase::TrySession,
+                kind: PackagingEventKind::WatchDebounced,
+                message: Some(format!("event {sequence}")),
+                diagnostic: None,
+                artifact: None,
+                progress: None,
+            })
+            .collect::<Vec<_>>();
+
+        let retained = bounded_watch_events("watch-1", &events, 500);
+
+        assert_eq!(retained.len(), 500);
+        assert_eq!(retained[0].sequence, 6);
+        assert_eq!(retained[0].kind, PackagingEventKind::WatchRefreshSkipped);
+        assert_eq!(
+            retained[0].message.as_deref(),
+            Some("5 older watch events were omitted from this operation record")
+        );
+        assert_eq!(retained.last().unwrap().sequence, 505);
     }
 
     #[test]
