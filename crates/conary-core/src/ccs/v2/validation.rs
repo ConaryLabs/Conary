@@ -3,7 +3,87 @@
 use super::diagnostics::{V2Diagnostic, V2DiagnosticCode, V2ValidationError};
 use super::schema::*;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProfileConstraintStatus {
+    Accepted,
+    Unsupported,
+}
+
+pub trait TargetProfileQuery {
+    fn service_status(&self, service: &str) -> ProfileConstraintStatus;
+    fn tmpfiles_status(&self, entry: &str) -> ProfileConstraintStatus;
+    fn sysctl_status(&self, key: &str) -> ProfileConstraintStatus;
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct M4aNoProfileFacts;
+
+impl TargetProfileQuery for M4aNoProfileFacts {
+    fn service_status(&self, _service: &str) -> ProfileConstraintStatus {
+        ProfileConstraintStatus::Unsupported
+    }
+
+    fn tmpfiles_status(&self, _entry: &str) -> ProfileConstraintStatus {
+        ProfileConstraintStatus::Unsupported
+    }
+
+    fn sysctl_status(&self, _key: &str) -> ProfileConstraintStatus {
+        ProfileConstraintStatus::Unsupported
+    }
+}
+
 pub fn validate_authority(authority: &AuthorityDocumentV2) -> Result<(), V2ValidationError> {
+    validate_authority_with_profile(authority, &M4aNoProfileFacts)
+}
+
+pub fn validate_authority_with_profile(
+    authority: &AuthorityDocumentV2,
+    profile: &impl TargetProfileQuery,
+) -> Result<(), V2ValidationError> {
+    let mut diagnostics = validate_authority_common(authority)
+        .err()
+        .map(|error| error.diagnostics)
+        .unwrap_or_default();
+
+    for service in &authority.lifecycle.services {
+        if profile.service_status(service) == ProfileConstraintStatus::Unsupported {
+            diagnostics.push(V2Diagnostic::error(
+                V2DiagnosticCode::LifecycleUnsupported,
+                format!("service {service} is not supported by the target profile"),
+                Some("lifecycle.services".to_string()),
+                "remove the service declaration or wait for M4d target profile support",
+            ));
+        }
+    }
+    for entry in &authority.lifecycle.tmpfiles {
+        if profile.tmpfiles_status(entry) == ProfileConstraintStatus::Unsupported {
+            diagnostics.push(V2Diagnostic::error(
+                V2DiagnosticCode::LifecycleUnsupported,
+                format!("tmpfiles entry {entry} is not supported by the target profile"),
+                Some("lifecycle.tmpfiles".to_string()),
+                "remove the tmpfiles declaration or wait for M4d target profile support",
+            ));
+        }
+    }
+    for key in &authority.lifecycle.sysctl {
+        if profile.sysctl_status(key) == ProfileConstraintStatus::Unsupported {
+            diagnostics.push(V2Diagnostic::error(
+                V2DiagnosticCode::LifecycleUnsupported,
+                format!("sysctl key {key} is not supported by the target profile"),
+                Some("lifecycle.sysctl".to_string()),
+                "remove the sysctl declaration or wait for M4d target profile support",
+            ));
+        }
+    }
+
+    if diagnostics.is_empty() {
+        Ok(())
+    } else {
+        Err(V2ValidationError { diagnostics })
+    }
+}
+
+fn validate_authority_common(authority: &AuthorityDocumentV2) -> Result<(), V2ValidationError> {
     let mut diagnostics = Vec::new();
 
     if authority.format_version != FORMAT_VERSION_V2 {
@@ -58,7 +138,6 @@ pub fn validate_authority(authority: &AuthorityDocumentV2) -> Result<(), V2Valid
             }
             validate_files(data, authority, &mut diagnostics);
             validate_component_totals(data, authority, &mut diagnostics);
-            validate_lifecycle(&authority.lifecycle, &mut diagnostics);
         }
         (PackageKindTagV2::Group, PackageKindV2::Group(data)) => {
             reject_group_redirect_payload_authority(authority, &mut diagnostics);
@@ -252,23 +331,6 @@ fn validate_component_totals(
     }
 }
 
-fn validate_lifecycle(lifecycle: &LifecycleAuthorityV2, diagnostics: &mut Vec<V2Diagnostic>) {
-    // M4a accepts local user/group/directory/alternative declarations, but
-    // profile-bound service/tmpfiles/sysctl checks must fail closed until M4d
-    // provides target facts.
-    if !lifecycle.services.is_empty()
-        || !lifecycle.tmpfiles.is_empty()
-        || !lifecycle.sysctl.is_empty()
-    {
-        diagnostics.push(V2Diagnostic::error(
-            V2DiagnosticCode::LifecycleUnsupported,
-            "v2 lifecycle services, tmpfiles, and sysctl declarations require target profile facts",
-            Some("lifecycle".to_string()),
-            "defer profile-bound lifecycle declarations until M4d target profiles are available",
-        ));
-    }
-}
-
 fn reject_group_redirect_payload_authority(
     authority: &AuthorityDocumentV2,
     diagnostics: &mut Vec<V2Diagnostic>,
@@ -403,6 +465,34 @@ mod tests {
                 .diagnostics
                 .iter()
                 .any(|d| d.field.as_deref() == Some("kind.package.files.symlink_target"))
+        );
+    }
+
+    #[test]
+    fn profile_hook_can_reject_lifecycle_without_target_facts() {
+        struct RejectServices;
+        impl TargetProfileQuery for RejectServices {
+            fn service_status(&self, _service: &str) -> ProfileConstraintStatus {
+                ProfileConstraintStatus::Unsupported
+            }
+
+            fn tmpfiles_status(&self, _entry: &str) -> ProfileConstraintStatus {
+                ProfileConstraintStatus::Unsupported
+            }
+
+            fn sysctl_status(&self, _key: &str) -> ProfileConstraintStatus {
+                ProfileConstraintStatus::Unsupported
+            }
+        }
+
+        let mut authority = AuthorityDocumentV2::package_for_tests("svc");
+        authority.lifecycle.services.push("svc.service".to_string());
+        let error = validate_authority_with_profile(&authority, &RejectServices).unwrap_err();
+        assert!(
+            error
+                .diagnostics
+                .iter()
+                .any(|d| d.code == V2DiagnosticCode::LifecycleUnsupported)
         );
     }
 }
