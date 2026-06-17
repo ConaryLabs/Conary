@@ -1,6 +1,6 @@
 // apps/conary/src/commands/record_mode/runner.rs
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Result, bail};
@@ -25,6 +25,7 @@ pub(crate) struct RecordSandboxPlan {
 }
 
 impl RecordSandboxPlan {
+    #[cfg(test)]
     fn env_value(&self, key: &str) -> Option<&str> {
         self.env
             .iter()
@@ -32,7 +33,8 @@ impl RecordSandboxPlan {
             .map(|(_, value)| value.as_str())
     }
 
-    fn has_mount(&self, source: &Path, target: &str, writable: bool) -> bool {
+    #[cfg(test)]
+    fn has_mount(&self, source: &std::path::Path, target: &str, writable: bool) -> bool {
         self.mounts
             .iter()
             .any(|(candidate, mount_target, mount_writable)| {
@@ -119,6 +121,7 @@ pub(crate) fn run_record_command(request: &RecordCommandRequest) -> Result<Recor
     let mut config = ContainerConfig::default().for_untrusted();
     config.timeout = Duration::from_secs(3600);
     config.workdir = PathBuf::from(&plan.cwd);
+    config.isolate_network = plan.network_isolated;
     config.bind_mounts.clear();
     for (source, target, writable) in &plan.mounts {
         let mount = if *writable {
