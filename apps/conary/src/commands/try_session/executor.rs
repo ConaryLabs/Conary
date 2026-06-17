@@ -250,6 +250,7 @@ mod tests {
                 activate: false,
                 allow_irreversible: false,
                 command: Some(&command),
+                watch_marker: None,
             })
         });
 

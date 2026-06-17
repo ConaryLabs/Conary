@@ -19,7 +19,15 @@ use super::namespace::{
 };
 use super::util::remove_dir_if_exists;
 use super::validation::{TryExecutionRoot, validate_try_package_policy};
-use super::{TryStartOutcome, TryStartRequest};
+use super::{TryStartOutcome, TryStartRequest, TryWatchMarkerRequest};
+
+const TRY_WATCH_MARKER_FILE: &str = ".conary-try-watch-session.json";
+
+#[derive(serde::Serialize)]
+struct TryWatchMarker<'a> {
+    schema_version: u16,
+    operation_id: &'a str,
+}
 
 pub(crate) fn begin_try_session(request: TryStartRequest<'_>) -> Result<TryStartOutcome> {
     let live_conn = conary_core::db::open(request.db_path)
@@ -76,6 +84,9 @@ pub(crate) fn begin_try_session(request: TryStartRequest<'_>) -> Result<TryStart
         request.allow_irreversible,
         request.activate,
     )?;
+    if let Some(marker) = request.watch_marker {
+        write_try_watch_marker(&work_dir, marker)?;
+    }
 
     let previous_generation_id = if request.activate {
         conary_core::generation::mount::current_generation(runtime_root.root())?
@@ -221,6 +232,12 @@ where
     let session = TrySession::find_active_or_orphaned(&live_conn)?
         .ok_or_else(|| anyhow::anyhow!("no active or orphaned try session found"))?;
     let runtime_root = ConaryRuntimeRoot::from_db_path(PathBuf::from(db_path));
+    if is_watch_created_try_session(&session) {
+        bail!(
+            "cannot keep watch-created try session {}; stop watch or run `conary try rollback`",
+            session.id
+        );
+    }
 
     if session.mode == TrySessionMode::Activated {
         let mut lock_config = build_try_transaction_config(&runtime_root, PathBuf::from(db_path));
@@ -321,6 +338,29 @@ where
 
     lock_engine.release_lock();
     result
+}
+
+fn write_try_watch_marker(work_dir: &Path, marker: TryWatchMarkerRequest<'_>) -> Result<()> {
+    #[cfg(test)]
+    if std::env::var_os("CONARY_TEST_TRY_WATCH_MARKER_FAIL").is_some() {
+        anyhow::bail!("failed to write try watch marker: forced test failure");
+    }
+
+    let path = work_dir.join(TRY_WATCH_MARKER_FILE);
+    let payload = TryWatchMarker {
+        schema_version: 1,
+        operation_id: marker.operation_id,
+    };
+    let json = serde_json::to_vec(&payload)?;
+    std::fs::write(&path, json)
+        .with_context(|| format!("failed to write try watch marker {}", path.display()))?;
+    Ok(())
+}
+
+fn is_watch_created_try_session(session: &TrySession) -> bool {
+    Path::new(&session.work_dir)
+        .join(TRY_WATCH_MARKER_FILE)
+        .is_file()
 }
 
 fn verify_namespace_try_hook_effects(
@@ -683,6 +723,7 @@ mod tests {
     use conary_core::db::models::{TrySession, TrySessionMode};
     use conary_core::transaction::TransactionEngine;
 
+    use super::super::TryWatchMarkerRequest;
     use super::super::test_support::*;
     use super::*;
 
@@ -956,6 +997,76 @@ mod tests {
             "failed cleanup must leave work dir for retry"
         );
         Ok(())
+    }
+
+    #[test]
+    fn namespace_watch_start_writes_marker_before_session_is_keepable() -> anyhow::Result<()> {
+        let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+        let fixture = TryRuntimeFixture::new();
+        let package = fixture.write_package(
+            "watch-demo",
+            conary_core::ccs::manifest::CcsManifest::new_minimal("watch-demo", "1.0.0"),
+        );
+
+        let outcome = begin_try_session(TryStartRequest {
+            db_path: &fixture.db_path_string,
+            package_path: &package,
+            activate: false,
+            allow_irreversible: false,
+            command: None,
+            watch_marker: Some(TryWatchMarkerRequest {
+                operation_id: "watch-1",
+            }),
+        })?;
+
+        let marker = outcome.work_dir.join(".conary-try-watch-session.json");
+        let marker_text = std::fs::read_to_string(&marker)?;
+        assert!(
+            marker_text.contains("\"operation_id\":\"watch-1\""),
+            "{marker_text}"
+        );
+
+        let err = keep_active_try_session(&fixture.db_path_string).unwrap_err();
+        assert!(
+            err.to_string().contains("watch-created try session"),
+            "{err:#}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn watch_marker_write_failure_does_not_leave_active_session() {
+        let _env_lock = ENV_LOCK.lock().unwrap();
+        let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+        let fixture = TryRuntimeFixture::new();
+        let package = fixture.write_package(
+            "watch-demo",
+            conary_core::ccs::manifest::CcsManifest::new_minimal("watch-demo", "1.0.0"),
+        );
+
+        let _guard = EnvVarGuard::set("CONARY_TEST_TRY_WATCH_MARKER_FAIL", "1");
+        let err = begin_try_session(TryStartRequest {
+            db_path: &fixture.db_path_string,
+            package_path: &package,
+            activate: false,
+            allow_irreversible: false,
+            command: None,
+            watch_marker: Some(TryWatchMarkerRequest {
+                operation_id: "watch-1",
+            }),
+        })
+        .unwrap_err();
+
+        assert!(
+            err.to_string().contains("failed to write try watch marker"),
+            "{err:#}"
+        );
+        let conn = fixture.open();
+        assert!(
+            TrySession::find_active_or_orphaned(&conn)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

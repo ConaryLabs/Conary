@@ -570,6 +570,7 @@ mod tests {
             activate: false,
             allow_irreversible: false,
             command: Some(&command),
+            watch_marker: None,
         })?;
 
         let launcher_root = PathBuf::from(std::fs::read_to_string(seen_root)?.trim());
