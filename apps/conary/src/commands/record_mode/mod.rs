@@ -1,6 +1,7 @@
 // apps/conary/src/commands/record_mode/mod.rs
 
 mod types;
+mod workspace;
 
 use anyhow::{Result, bail};
 
