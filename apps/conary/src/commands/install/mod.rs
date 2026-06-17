@@ -67,9 +67,9 @@ use execute::{
     run_triggers,
 };
 use lifecycle::{
-    ExtractionResult, PreScriptletState, ScriptletContext, extract_and_classify_files,
-    finalize_install, finalize_install_without_snapshot, mark_upgraded_parent_deriveds_stale,
-    run_pre_install_phase, show_dry_run_summary,
+    ExtractionResult, FinalizeInstallOutput, PreScriptletState, ScriptletContext,
+    extract_and_classify_files, finalize_install, finalize_install_without_snapshot,
+    mark_upgraded_parent_deriveds_stale, run_pre_install_phase, show_dry_run_summary,
 };
 use prepare::check_upgrade_status;
 use semantics::{InstallSemantics, PreparedSourceKind, scheme_to_string};

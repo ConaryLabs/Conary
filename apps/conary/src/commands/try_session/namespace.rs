@@ -142,15 +142,15 @@ fn expose_try_namespace_root_at_paths(
                     generation_dir.display()
                 )
             })?;
-    std::fs::create_dir_all(&lower_root)
+    std::fs::create_dir_all(lower_root)
         .with_context(|| format!("failed to create try lower root {}", lower_root.display()))?;
-    std::fs::create_dir_all(&namespace_root).with_context(|| {
+    std::fs::create_dir_all(namespace_root).with_context(|| {
         format!(
             "failed to create try namespace root {}",
             namespace_root.display()
         )
     })?;
-    std::fs::create_dir_all(&overlay_workdir).with_context(|| {
+    std::fs::create_dir_all(overlay_workdir).with_context(|| {
         format!(
             "failed to create try namespace overlay workdir {}",
             overlay_workdir.display()
@@ -178,13 +178,10 @@ fn expose_try_namespace_root_at_paths(
                 lower_root.display()
             )
         })?;
-    if let Err(error) = mount_try_namespace_overlay(
-        &lower_root,
-        hook_upperdir,
-        &overlay_workdir,
-        &namespace_root,
-    ) {
-        let _ = conary_core::generation::mount::unmount_generation(&lower_root);
+    if let Err(error) =
+        mount_try_namespace_overlay(lower_root, hook_upperdir, overlay_workdir, namespace_root)
+    {
+        let _ = conary_core::generation::mount::unmount_generation(lower_root);
         return Err(error);
     }
 

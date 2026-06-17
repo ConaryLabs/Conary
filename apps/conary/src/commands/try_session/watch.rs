@@ -501,51 +501,55 @@ async fn run_refresh_loop(
             _ = tokio::time::sleep(config.poll_interval) => {}
         }
 
-        let current_source_set =
-            match resolve_watch_source_set(Some(options.target), options.recipe) {
-                Ok(source_set) => source_set,
-                Err(error) => {
-                    if watched_sources_missing(&last_source_set) {
-                        emit_diagnostic(
-                            events,
-                            watch_error(
-                                PackagingPhase::Inference,
-                                PackagingDiagnosticCode::WatchSourceIdentityFailed,
-                                "watched source root is no longer available",
-                                &error,
-                            ),
-                            options.json,
-                            output,
-                        )?;
-                        rollback_or_fail(
-                            options.db_path,
-                            events,
-                            "try watch stopped after watched source disappeared",
-                            options.json,
-                            output,
-                        )?;
-                        finish_current_events(
-                            events,
-                            PackagingCommandStatus::Failed,
-                            "try watch stopped after watched source disappeared",
-                            options.json,
-                            output,
-                        )?;
-                        return Err(error);
-                    }
-                    emit_non_destructive_failure(
+        let current_source_set = match resolve_watch_source_set(
+            Some(options.target),
+            options.recipe,
+        ) {
+            Ok(source_set) => source_set,
+            Err(error) => {
+                if watched_sources_missing(&last_source_set) {
+                    emit_diagnostic(
                         events,
-                        &config,
-                        PackagingPhase::Inference,
-                        PackagingDiagnosticCode::WatchSourceIdentityFailed,
-                        "failed to resolve watched sources; keeping last successful generation",
-                        &error,
+                        watch_error(
+                            PackagingPhase::Inference,
+                            PackagingDiagnosticCode::WatchSourceIdentityFailed,
+                            "watched source root is no longer available",
+                            &error,
+                        ),
                         options.json,
                         output,
                     )?;
-                    continue;
+                    rollback_or_fail(
+                        options.db_path,
+                        events,
+                        "try watch stopped after watched source disappeared",
+                        options.json,
+                        output,
+                    )?;
+                    finish_current_events(
+                        events,
+                        PackagingCommandStatus::Failed,
+                        "try watch stopped after watched source disappeared",
+                        options.json,
+                        output,
+                    )?;
+                    return Err(error);
                 }
-            };
+                emit_non_destructive_failure(
+                    events,
+                    &config,
+                    WatchFailure {
+                        phase: PackagingPhase::Inference,
+                        code: PackagingDiagnosticCode::WatchSourceIdentityFailed,
+                        message: "failed to resolve watched sources; keeping last successful generation",
+                        error: &error,
+                    },
+                    options.json,
+                    output,
+                )?;
+                continue;
+            }
+        };
         let current_identity = match compute_watch_identity(&current_source_set) {
             Ok(identity) => identity,
             Err(error) => {
@@ -580,10 +584,12 @@ async fn run_refresh_loop(
                 emit_non_destructive_failure(
                     events,
                     &config,
-                    PackagingPhase::Inference,
-                    PackagingDiagnosticCode::WatchSourceIdentityFailed,
-                    "failed to compute watched source identity; keeping last successful generation",
-                    &error,
+                    WatchFailure {
+                        phase: PackagingPhase::Inference,
+                        code: PackagingDiagnosticCode::WatchSourceIdentityFailed,
+                        message: "failed to compute watched source identity; keeping last successful generation",
+                        error: &error,
+                    },
                     options.json,
                     output,
                 )?;
@@ -645,10 +651,12 @@ async fn run_refresh_loop(
                 emit_non_destructive_failure(
                     events,
                     &config,
-                    PackagingPhase::Build,
-                    PackagingDiagnosticCode::WatchCookFailed,
-                    "refresh cook failed; keeping last successful generation",
-                    &error,
+                    WatchFailure {
+                        phase: PackagingPhase::Build,
+                        code: PackagingDiagnosticCode::WatchCookFailed,
+                        message: "refresh cook failed; keeping last successful generation",
+                        error: &error,
+                    },
                     options.json,
                     output,
                 )?;
@@ -680,10 +688,12 @@ async fn run_refresh_loop(
                 emit_non_destructive_failure(
                     events,
                     &config,
-                    PackagingPhase::Inference,
-                    PackagingDiagnosticCode::WatchSourceIdentityFailed,
-                    "failed to resolve watched sources after cook; keeping last successful generation",
-                    &error,
+                    WatchFailure {
+                        phase: PackagingPhase::Inference,
+                        code: PackagingDiagnosticCode::WatchSourceIdentityFailed,
+                        message: "failed to resolve watched sources after cook; keeping last successful generation",
+                        error: &error,
+                    },
                     options.json,
                     output,
                 )?;
@@ -697,10 +707,12 @@ async fn run_refresh_loop(
                 emit_non_destructive_failure(
                     events,
                     &config,
-                    PackagingPhase::Inference,
-                    PackagingDiagnosticCode::WatchSourceIdentityFailed,
-                    "failed to compute watched source identity after cook; keeping last successful generation",
-                    &error,
+                    WatchFailure {
+                        phase: PackagingPhase::Inference,
+                        code: PackagingDiagnosticCode::WatchSourceIdentityFailed,
+                        message: "failed to compute watched source identity after cook; keeping last successful generation",
+                        error: &error,
+                    },
                     options.json,
                     output,
                 )?;
@@ -727,10 +739,12 @@ async fn run_refresh_loop(
                 emit_non_destructive_failure(
                     events,
                     &config,
-                    PackagingPhase::Build,
-                    PackagingDiagnosticCode::WatchCookFailed,
-                    "refresh cook did not produce one CCS artifact; keeping last successful generation",
-                    &error,
+                    WatchFailure {
+                        phase: PackagingPhase::Build,
+                        code: PackagingDiagnosticCode::WatchCookFailed,
+                        message: "refresh cook did not produce one CCS artifact; keeping last successful generation",
+                        error: &error,
+                    },
                     options.json,
                     output,
                 )?;
@@ -914,31 +928,35 @@ fn emit_diagnostic(
     write_event(&event, json, output)
 }
 
+struct WatchFailure<'a> {
+    phase: PackagingPhase,
+    code: PackagingDiagnosticCode,
+    message: &'a str,
+    error: &'a anyhow::Error,
+}
+
 fn emit_non_destructive_failure(
     events: &mut WatchEvents,
     config: &WatchLoopConfig,
-    phase: PackagingPhase,
-    code: PackagingDiagnosticCode,
-    message: &str,
-    error: &anyhow::Error,
+    failure: WatchFailure<'_>,
     json: bool,
     output: &mut impl Write,
 ) -> Result<()> {
     emit_diagnostic(
         events,
-        watch_error(phase, code, message, error),
+        watch_error(failure.phase, failure.code, failure.message, failure.error),
         json,
         output,
     )?;
     emit_push(
         events,
-        phase,
+        failure.phase,
         PackagingEventKind::WatchRefreshFailed,
-        message,
+        failure.message,
         json,
         output,
     )?;
-    write_optional_file(&config.failure_file, &error.to_string())
+    write_optional_file(&config.failure_file, &failure.error.to_string())
 }
 
 fn watch_error(

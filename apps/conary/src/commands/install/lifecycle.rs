@@ -38,6 +38,17 @@ pub(super) struct PreScriptletState {
     run_scriptlets: bool,
 }
 
+pub(super) struct FinalizeInstallOutput<'a> {
+    progress: &'a InstallProgress,
+    quiet: bool,
+}
+
+impl<'a> FinalizeInstallOutput<'a> {
+    pub(super) fn new(progress: &'a InstallProgress, quiet: bool) -> Self {
+        Self { progress, quiet }
+    }
+}
+
 /// Result of file extraction and component classification.
 pub(super) struct ExtractionResult {
     pub(super) extracted_files: Vec<ExtractedFile>,
@@ -327,8 +338,7 @@ pub(super) fn finalize_install_without_snapshot(
     scriptlet_ctx: &ScriptletContext<'_>,
     pre_state: &PreScriptletState,
     tx_result: &InstallTransactionResult,
-    progress: &InstallProgress,
-    quiet: bool,
+    output: FinalizeInstallOutput<'_>,
 ) -> Result<()> {
     let mut scriptlet_warnings = Vec::new();
 
@@ -350,7 +360,9 @@ pub(super) fn finalize_install_without_snapshot(
     // Execute post-install scriptlet (after files are deployed)
     let scriptlets = pkg.scriptlets();
     if !scriptlet_ctx.no_scripts && !scriptlets.is_empty() && pre_state.run_scriptlets {
-        progress.set_phase(pkg.name(), InstallPhase::PostScript);
+        output
+            .progress
+            .set_phase(pkg.name(), InstallPhase::PostScript);
         scriptlet_warnings.extend(run_post_install(
             Path::new(scriptlet_ctx.root),
             pkg.name(),
@@ -370,7 +382,9 @@ pub(super) fn finalize_install_without_snapshot(
         )?;
     }
 
-    progress.set_phase(pkg.name(), InstallPhase::Triggers);
+    output
+        .progress
+        .set_phase(pkg.name(), InstallPhase::Triggers);
     let file_paths: Vec<String> = extraction
         .extracted_files
         .iter()
@@ -383,9 +397,11 @@ pub(super) fn finalize_install_without_snapshot(
         &file_paths,
     );
 
-    progress.finish(&format!("Installed {} {}", pkg.name(), pkg.version()));
+    output
+        .progress
+        .finish(&format!("Installed {} {}", pkg.name(), pkg.version()));
 
-    if !quiet {
+    if !output.quiet {
         // Show what components were available vs installed
         let skipped_info = if !extraction.skipped_components.is_empty() {
             format!(" (skipped: {})", extraction.skipped_components.join(", "))
@@ -438,8 +454,7 @@ pub(super) fn finalize_install(
         scriptlet_ctx,
         pre_state,
         tx_result,
-        progress,
-        false,
+        FinalizeInstallOutput::new(progress, false),
     )?;
     if let Err(error) = create_state_snapshot(
         conn,

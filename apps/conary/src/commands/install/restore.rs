@@ -407,8 +407,7 @@ pub(crate) fn finalize_prepared_install_without_snapshot(
         &scriptlet_ctx,
         &execution.pre_state,
         &tx_result,
-        &execution.progress,
-        false,
+        super::FinalizeInstallOutput::new(&execution.progress, false),
     )
 }
 
