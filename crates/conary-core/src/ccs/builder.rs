@@ -21,7 +21,9 @@ use walkdir::WalkDir;
 
 mod package_writer;
 
-pub use package_writer::{print_build_summary, write_ccs_package, write_signed_ccs_package};
+pub use package_writer::{
+    print_build_summary, write_ccs_package, write_signed_ccs_package, write_v2_ccs_package,
+};
 
 #[cfg(test)]
 pub(crate) mod test_support;

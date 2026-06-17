@@ -8,7 +8,7 @@
 use super::{BuildResult, BuilderError};
 use crate::ccs::manifest::parse_octal_mode;
 use crate::hash;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
@@ -25,6 +25,127 @@ pub fn write_signed_ccs_package(
     signing_key: &super::super::signing::SigningKeyPair,
 ) -> Result<()> {
     write_ccs_package_internal(result, output_path, Some(signing_key))
+}
+
+pub fn write_v2_ccs_package(
+    authority: &crate::ccs::v2::AuthorityDocumentV2,
+    payloads_by_path: &std::collections::BTreeMap<String, Vec<u8>>,
+    output_path: &Path,
+    signing_key: &super::super::signing::SigningKeyPair,
+    debug_toml: Option<&str>,
+    build_attestation: Option<&crate::ccs::attestation::BuildAttestationEnvelope>,
+    foreign_conversion_boundary: Option<&crate::ccs::attestation::ForeignConversionBoundary>,
+) -> Result<()> {
+    use crate::ccs::builder::{ComponentData, FileEntry, FileType};
+    use crate::ccs::v2::schema::{FileTypeV2, PackageKindV2};
+    use flate2::Compression;
+    use flate2::write::GzEncoder;
+    use std::collections::BTreeMap;
+    use tar::Builder;
+
+    crate::ccs::v2::validate_authority(authority).map_err(|error| anyhow::anyhow!("{error}"))?;
+    let temp_dir = tempfile::tempdir()?;
+    let manifest_cbor = authority.to_cbor()?;
+    fs::write(temp_dir.path().join("MANIFEST"), &manifest_cbor)?;
+    if let Some(debug_toml) = debug_toml {
+        fs::write(temp_dir.path().join("MANIFEST.toml"), debug_toml)?;
+    }
+    if let Some(build_attestation) = build_attestation {
+        fs::write(
+            temp_dir.path().join("MANIFEST.attestation.json"),
+            serde_json::to_string_pretty(build_attestation)?,
+        )?;
+    }
+    if let Some(foreign_conversion_boundary) = foreign_conversion_boundary {
+        fs::write(
+            temp_dir.path().join("MANIFEST.conversion-boundary.json"),
+            serde_json::to_string_pretty(foreign_conversion_boundary)?,
+        )?;
+    }
+    let signature = signing_key.sign(&manifest_cbor);
+    fs::write(
+        temp_dir.path().join("MANIFEST.sig"),
+        serde_json::to_string_pretty(&signature)?,
+    )?;
+
+    let PackageKindV2::Package(data) = &authority.kind else {
+        anyhow::bail!("M4a v2 writer only writes package payloads");
+    };
+    let mut components: BTreeMap<String, ComponentData> = authority
+        .components
+        .keys()
+        .map(|name| {
+            (
+                name.clone(),
+                ComponentData {
+                    name: name.clone(),
+                    files: Vec::new(),
+                    hash: String::new(),
+                    size: 0,
+                },
+            )
+        })
+        .collect();
+
+    let objects_dir = temp_dir.path().join("objects");
+    for file in &data.files {
+        let entry = FileEntry {
+            path: file.path.clone(),
+            hash: file.sha256.clone(),
+            size: file.size,
+            mode: file.mode,
+            component: file.component.clone(),
+            file_type: match file.file_type {
+                FileTypeV2::Regular => FileType::Regular,
+                FileTypeV2::Directory => FileType::Directory,
+                FileTypeV2::Symlink => FileType::Symlink,
+            },
+            target: file.symlink_target.clone(),
+            chunks: None,
+        };
+        if matches!(file.file_type, FileTypeV2::Regular) {
+            let payload = payloads_by_path
+                .get(&file.path)
+                .with_context(|| format!("missing payload for {}", file.path))?;
+            if crate::hash::sha256(payload) != file.sha256 || payload.len() as u64 != file.size {
+                anyhow::bail!(
+                    "payload for {} does not match signed v2 authority",
+                    file.path
+                );
+            }
+            if file.sha256.len() < 2 {
+                anyhow::bail!("invalid signed v2 sha256 for {}", file.path);
+            }
+            let (prefix, suffix) = file.sha256.split_at(2);
+            let object_dir = objects_dir.join(prefix);
+            fs::create_dir_all(&object_dir)?;
+            fs::write(object_dir.join(suffix), payload)?;
+        }
+        let component = components
+            .get_mut(&file.component)
+            .with_context(|| format!("missing component {}", file.component))?;
+        component.size += file.size;
+        component.files.push(entry);
+    }
+
+    let components_dir = temp_dir.path().join("components");
+    fs::create_dir_all(&components_dir)?;
+    for (name, component) in &mut components {
+        component.hash = crate::hash::sha256_prefixed(
+            &crate::ccs::attestation::canonical_json_bytes(&component.files)?,
+        );
+        fs::write(
+            components_dir.join(format!("{name}.json")),
+            serde_json::to_vec_pretty(component)?,
+        )?;
+    }
+
+    let output_file = fs::File::create(output_path)?;
+    let encoder = GzEncoder::new(output_file, Compression::default());
+    let mut archive = Builder::new(encoder);
+    archive.append_dir_all(".", temp_dir.path())?;
+    archive.into_inner()?.finish()?;
+    Ok(())
 }
 
 /// Print a concise build summary.
@@ -395,5 +516,45 @@ fn convert_hooks_to_binary(
         Ok(None)
     } else {
         Ok(Some(binary))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn write_v2_package_preserves_signed_authority() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("hello-v2.ccs");
+        let authority = crate::ccs::v2::test_support::package_authority_with_one_file("hello-v2");
+        let payloads = crate::ccs::v2::test_support::one_file_payloads_for_tests();
+        let key = crate::ccs::signing::SigningKeyPair::generate();
+
+        write_v2_ccs_package(
+            &authority,
+            &payloads,
+            &path,
+            &key,
+            Some("[package]\nname = \"hello-v2\"\nversion = \"1.0.0\"\ndescription = \"debug\"\n"),
+            None,
+            None,
+        )
+        .unwrap();
+
+        let contents =
+            crate::ccs::archive_reader::read_ccs_archive(std::fs::File::open(path).unwrap())
+                .unwrap();
+        assert_eq!(
+            contents.v2_authority.as_ref().unwrap().identity.name,
+            "hello-v2"
+        );
+        assert!(contents.binary_manifest.is_none());
+        assert_eq!(contents.components["main"].files.len(), 1);
+        assert!(
+            contents
+                .blobs
+                .contains_key(&crate::hash::sha256(b"hello world\n"))
+        );
     }
 }

@@ -5,6 +5,8 @@ pub mod diagnostics;
 pub mod legacy;
 pub mod reader;
 pub mod schema;
+#[cfg(test)]
+pub(crate) mod test_support;
 pub mod validation;
 
 pub use diagnostics::{V2Diagnostic, V2DiagnosticCode, V2ValidationError};
