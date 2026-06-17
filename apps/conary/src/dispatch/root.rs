@@ -41,8 +41,17 @@ use conary_core::runtime_root::ConaryRuntimeRoot;
 
 const DEFAULT_DB_PATH: &str = "/var/lib/conary/conary.db";
 
+#[derive(Debug)]
+struct TryWatchDispatch {
+    target: String,
+    recipe: Option<String>,
+    json: bool,
+}
+
+#[derive(Debug)]
 enum TryDispatchAction {
     Package(String),
+    Watch(TryWatchDispatch),
     Status,
     Rollback,
     Keep,
@@ -53,7 +62,34 @@ fn try_dispatch_action(
     activate: bool,
     allow_irreversible: bool,
     run: &[String],
+    watch: bool,
+    recipe: Option<String>,
+    json: bool,
 ) -> Result<TryDispatchAction> {
+    if watch {
+        if activate {
+            bail!("conary try --watch cannot be combined with --activate");
+        }
+        if allow_irreversible {
+            bail!("conary try --watch cannot be combined with --allow-irreversible");
+        }
+        if !run.is_empty() {
+            bail!("conary try --watch cannot run a command");
+        }
+        let target = target.unwrap_or_else(|| ".".to_string());
+        if is_reserved_try_action(&target) {
+            bail!("conary try --watch cannot be combined with try action '{target}'");
+        }
+        if target.ends_with(".ccs") {
+            bail!("conary try --watch does not accept prebuilt .ccs artifacts");
+        }
+        return Ok(TryDispatchAction::Watch(TryWatchDispatch {
+            target,
+            recipe,
+            json,
+        }));
+    }
+
     match target {
         Some(target)
             if is_reserved_try_action(&target)
@@ -894,9 +930,20 @@ pub(super) async fn dispatch_command(
             target,
             activate,
             allow_irreversible,
+            watch,
+            recipe,
+            json,
             run,
             db,
-        }) => match try_dispatch_action(target, activate, allow_irreversible, &run)? {
+        }) => match try_dispatch_action(
+            target,
+            activate,
+            allow_irreversible,
+            &run,
+            watch,
+            recipe,
+            json,
+        )? {
             TryDispatchAction::Package(package) => {
                 commands::cmd_try_package(
                     &db.db_path,
@@ -904,6 +951,15 @@ pub(super) async fn dispatch_command(
                     activate,
                     allow_irreversible,
                     &run,
+                )
+                .await
+            }
+            TryDispatchAction::Watch(watch) => {
+                commands::cmd_try_watch(
+                    &db.db_path,
+                    &watch.target,
+                    watch.recipe.as_deref(),
+                    watch.json,
                 )
                 .await
             }
@@ -1260,6 +1316,85 @@ mod tests {
         assert!(message.contains("try status"), "{message}");
         assert!(message.contains("try rollback"), "{message}");
         assert!(message.contains("try keep"), "{message}");
+    }
+
+    #[test]
+    fn try_dispatch_watch_defaults_to_current_dir() {
+        match super::try_dispatch_action(None, false, false, &[], true, None, false).unwrap() {
+            super::TryDispatchAction::Watch(watch) => {
+                assert_eq!(watch.target, ".");
+                assert_eq!(watch.recipe, None);
+                assert!(!watch.json);
+            }
+            other => panic!("unexpected try dispatch action: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn try_dispatch_watch_rejects_artifacts_actions_activation_and_run_commands() {
+        for (target, activate, allow_irreversible, run, message) in [
+            (
+                Some("pkg.ccs".to_string()),
+                false,
+                false,
+                vec![],
+                "does not accept prebuilt .ccs artifacts",
+            ),
+            (
+                Some("status".to_string()),
+                false,
+                false,
+                vec![],
+                "cannot be combined with try action",
+            ),
+            (
+                Some("rollback".to_string()),
+                false,
+                false,
+                vec![],
+                "cannot be combined with try action",
+            ),
+            (
+                Some("keep".to_string()),
+                false,
+                false,
+                vec![],
+                "cannot be combined with try action",
+            ),
+            (
+                None,
+                true,
+                false,
+                vec![],
+                "cannot be combined with --activate",
+            ),
+            (
+                None,
+                false,
+                true,
+                vec![],
+                "cannot be combined with --allow-irreversible",
+            ),
+            (
+                None,
+                false,
+                false,
+                vec!["/bin/true".to_string()],
+                "cannot run a command",
+            ),
+        ] {
+            let err = super::try_dispatch_action(
+                target,
+                activate,
+                allow_irreversible,
+                &run,
+                true,
+                None,
+                false,
+            )
+            .expect_err("watch conflict should fail");
+            assert!(err.to_string().contains(message), "{err:#}");
+        }
     }
 
     #[test]

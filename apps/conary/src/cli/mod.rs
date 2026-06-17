@@ -546,6 +546,18 @@ pub enum Commands {
         #[arg(long)]
         allow_irreversible: bool,
 
+        /// Watch a recipe project or inferable source tree and refresh a namespace try session
+        #[arg(long)]
+        watch: bool,
+
+        /// Recipe file to use for watch mode
+        #[arg(long)]
+        recipe: Option<String>,
+
+        /// Stream watch events as newline-delimited JSON
+        #[arg(long)]
+        json: bool,
+
         /// Command to run inside the try session
         #[arg(last = true)]
         run: Vec<String>,
@@ -914,9 +926,10 @@ mod tests {
         );
 
         let try_help = subcommand_help("try");
-        assert!(!try_help.contains("--watch"));
+        assert!(try_help.contains("--watch"));
+        assert!(try_help.contains("--recipe"));
+        assert!(try_help.contains("--json"));
         assert!(!try_help.contains("--record"));
-        assert!(!try_help.contains("--json"));
     }
 
     #[test]
@@ -942,7 +955,7 @@ mod tests {
     }
 
     #[test]
-    fn cook_and_publish_accept_json_flag_but_try_does_not() {
+    fn cook_publish_and_watch_accept_json_flags() {
         let cook = Cli::try_parse_from(["conary", "cook", ".", "--json"]).unwrap();
         match cook.command {
             Some(Commands::Cook { json, .. }) => assert!(json),
@@ -956,8 +969,14 @@ mod tests {
             other => panic!("unexpected command: {other:?}"),
         }
 
-        let try_json = Cli::try_parse_from(["conary", "try", "pkg.ccs", "--json"]);
-        assert!(try_json.is_err(), "try --json is not part of M3a");
+        let watch = Cli::try_parse_from(["conary", "try", "--watch", "--json"]).unwrap();
+        match watch.command {
+            Some(Commands::Try { watch, json, .. }) => {
+                assert!(watch);
+                assert!(json);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
     }
 
     #[test]
@@ -1940,12 +1959,58 @@ mod tests {
             }
             _ => panic!("expected activated irreversible try package command"),
         }
+    }
 
-        let watch = match Cli::try_parse_from(["conary", "try", "--watch"]) {
-            Ok(_) => panic!("try --watch is M3 and must not parse in M1b"),
-            Err(err) => err,
-        };
-        assert_eq!(watch.kind(), clap::error::ErrorKind::UnknownArgument);
+    #[test]
+    fn try_watch_parses_project_recipe_and_json_forms() {
+        let default_target = Cli::try_parse_from(["conary", "try", "--watch"]).unwrap();
+        match default_target.command {
+            Some(Commands::Try {
+                target,
+                watch,
+                recipe,
+                json,
+                activate,
+                allow_irreversible,
+                run,
+                ..
+            }) => {
+                assert_eq!(target, None);
+                assert!(watch);
+                assert_eq!(recipe, None);
+                assert!(!json);
+                assert!(!activate);
+                assert!(!allow_irreversible);
+                assert!(run.is_empty());
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+
+        let recipe = Cli::try_parse_from([
+            "conary",
+            "try",
+            "--watch",
+            ".",
+            "--recipe",
+            "packaging/recipe.toml",
+            "--json",
+        ])
+        .unwrap();
+        match recipe.command {
+            Some(Commands::Try {
+                target,
+                watch,
+                recipe,
+                json,
+                ..
+            }) => {
+                assert_eq!(target.as_deref(), Some("."));
+                assert!(watch);
+                assert_eq!(recipe.as_deref(), Some("packaging/recipe.toml"));
+                assert!(json);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
     }
 
     #[test]
