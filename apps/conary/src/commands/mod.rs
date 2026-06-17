@@ -45,6 +45,7 @@ mod provenance;
 mod publish;
 mod query;
 mod recipe_audit;
+pub(crate) mod record_mode;
 mod redirect;
 pub mod registry;
 mod remi_publish;
@@ -156,6 +157,7 @@ pub use query::{
     cmd_scripts, cmd_scripts_with_options, cmd_whatbreaks, cmd_whatprovides,
 };
 pub use recipe_audit::cmd_recipe_audit;
+pub(crate) use record_mode::cmd_cook_record;
 pub use redirect::{
     cmd_redirect_add, cmd_redirect_list, cmd_redirect_remove, cmd_redirect_resolve,
     cmd_redirect_show,
