@@ -67,6 +67,7 @@ struct CookRunOptions<'a> {
     json: bool,
     operation_id: String,
     source_download_policy_override: Option<SourceDownloadPolicy>,
+    origin_class_override: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -111,6 +112,7 @@ pub(crate) fn run_cook_for_try_watch(
             json: true,
             operation_id: options.operation_id,
             source_download_policy_override,
+            origin_class_override: None,
         },
         &mut sink,
     )
@@ -138,6 +140,52 @@ pub(crate) fn cooked_artifact_path(output: &PackagingCommandOutput) -> Result<Pa
         [] => anyhow::bail!("watch cook completed without a CCS artifact"),
         _ => anyhow::bail!("watch cook produced multiple CCS artifacts"),
     }
+}
+
+pub(crate) struct CookRecordedDraftOptions {
+    pub(crate) recipe: PathBuf,
+    pub(crate) output_dir: PathBuf,
+    pub(crate) source_cache: PathBuf,
+    pub(crate) operation_id: String,
+}
+
+fn recorded_draft_run_options<'a>(
+    options: &'a CookRecordedDraftOptions,
+    recipe: &'a str,
+    output_dir: &'a str,
+    source_cache: &'a str,
+) -> CookRunOptions<'a> {
+    CookRunOptions {
+        target: Some(recipe),
+        recipe: None,
+        output_dir,
+        source_cache,
+        jobs: None,
+        keep_builddir: false,
+        validate_only: false,
+        fetch_only: false,
+        explain: false,
+        isolated: true,
+        no_isolation: false,
+        hermetic: false,
+        json: true,
+        operation_id: options.operation_id.clone(),
+        source_download_policy_override: None,
+        origin_class_override: Some("recorded-draft".to_string()),
+    }
+}
+
+pub(crate) fn run_cook_for_recorded_draft(
+    options: CookRecordedDraftOptions,
+) -> Result<PackagingCommandOutput> {
+    let mut sink = io::sink();
+    let recipe = options.recipe.to_string_lossy().to_string();
+    let output_dir = options.output_dir.to_string_lossy().to_string();
+    let source_cache = options.source_cache.to_string_lossy().to_string();
+    run_cook_operation(
+        recorded_draft_run_options(&options, &recipe, &output_dir, &source_cache),
+        &mut sink,
+    )
 }
 
 pub(crate) fn resolve_recipe_path(target: Option<&str>, recipe: Option<&str>) -> Result<PathBuf> {
@@ -400,6 +448,7 @@ async fn cmd_cook_with_output(
         json,
         operation_id: operation_id.clone(),
         source_download_policy_override: None,
+        origin_class_override: None,
     };
     match run_cook_operation(options, output) {
         Ok(mut report) => {
@@ -547,7 +596,10 @@ fn run_cook_operation(
     let mut config = KitchenConfig {
         source_cache: PathBuf::from(options.source_cache),
         recipe_source_base_dir: Some(resolved.recipe_source_base_dir.clone()),
-        origin_class_override: resolved.origin_class_override.clone(),
+        origin_class_override: options
+            .origin_class_override
+            .clone()
+            .or_else(|| resolved.origin_class_override.clone()),
         source_provenance_override: resolved.source_provenance_override.clone(),
         keep_builddir: options.keep_builddir,
         use_isolation: false,
@@ -1261,6 +1313,49 @@ edition = "2021"
 
         assert_eq!(resolved.recipe_path.as_deref(), Some(expected.as_path()));
         assert!(resolved.origin_class_override.is_none());
+    }
+
+    #[test]
+    fn recorded_draft_validation_run_options_set_origin_override_and_isolation() {
+        let options = CookRecordedDraftOptions {
+            recipe: PathBuf::from("recorded/demo/recipe.toml"),
+            output_dir: PathBuf::from("recorded/demo/dist"),
+            source_cache: PathBuf::from("recorded/demo/sources"),
+            operation_id: "record-1".to_string(),
+        };
+        let recipe = options.recipe.to_string_lossy().to_string();
+        let output_dir = options.output_dir.to_string_lossy().to_string();
+        let source_cache = options.source_cache.to_string_lossy().to_string();
+        let run = recorded_draft_run_options(&options, &recipe, &output_dir, &source_cache);
+
+        assert!(run.isolated);
+        assert!(!run.no_isolation);
+        assert_eq!(run.origin_class_override.as_deref(), Some("recorded-draft"));
+    }
+
+    #[test]
+    fn ordinary_cook_run_options_leave_origin_override_unset() {
+        let operation_id = "cook-1".to_string();
+        let run = CookRunOptions {
+            target: Some("recipe.toml"),
+            recipe: None,
+            output_dir: "dist",
+            source_cache: "sources",
+            jobs: None,
+            keep_builddir: false,
+            validate_only: false,
+            fetch_only: false,
+            explain: false,
+            isolated: false,
+            no_isolation: false,
+            hermetic: false,
+            json: false,
+            operation_id,
+            source_download_policy_override: None,
+            origin_class_override: None,
+        };
+
+        assert!(run.origin_class_override.is_none());
     }
 
     #[test]

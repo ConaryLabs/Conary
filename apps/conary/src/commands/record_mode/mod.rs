@@ -7,6 +7,7 @@ mod report;
 mod runner;
 mod trace;
 mod types;
+mod validation;
 mod workspace;
 
 use anyhow::{Result, bail};
