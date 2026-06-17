@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-06-17
-revision: 28
-summary: Route M3 packaging ownership
+last_updated: 2026-06-18
+revision: 29
+summary: Route M4 CCS v2 ownership
 ---
 
 # Assistant Subsystem Map
@@ -180,6 +180,9 @@ summary: Route M3 packaging ownership
 - CCS package building, chunking, verification, conversion, install, and
   fixture proof:
   `crates/conary-core/src/ccs/builder.rs`,
+  `crates/conary-core/src/ccs/v2/`,
+  `crates/conary-core/src/ccs/archive_reader.rs`,
+  `crates/conary-core/src/ccs/package.rs`,
   `crates/conary-core/src/ccs/manifest.rs`,
   `crates/conary-core/src/ccs/manifest_provenance.rs`,
   `crates/conary-core/src/ccs/binary_manifest.rs`,
@@ -191,6 +194,9 @@ summary: Route M3 packaging ownership
   `apps/conary/src/commands/ccs/install/dependency.rs`,
   `apps/conary/src/commands/ccs/payload_paths.rs`, and
   `docs/modules/test-fixtures.md`
+  Start in `crates/conary-core/src/ccs/v2/` for v2 authority, validation,
+  diagnostics, archive reading, and content identity. Use `archive_reader.rs`
+  and `package.rs` only as version-routing/adaptation surfaces.
 - TUF trust and signature verification:
   `crates/conary-core/src/trust/verify.rs`,
   `crates/conary-core/src/trust/client.rs`, and

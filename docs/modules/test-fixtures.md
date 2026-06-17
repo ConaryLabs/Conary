@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-06-06
-revision: 2
-summary: Map Remi, CCS, and install replay fixture ownership and proof gates
+last_updated: 2026-06-18
+revision: 3
+summary: Map Remi, CCS v2, and install replay fixture ownership and proof gates
 ---
 
 # Test Fixtures And Proof Maps
@@ -34,6 +34,7 @@ Each fixture family should record:
 | Family ID | Owner | Fast proof |
 |-----------|-------|------------|
 | `ccs-convert-golden-cases` | CCS convert | `cargo test -p conary-core golden_fixtures`; `cargo test -p conary-core support_matrix` |
+| `ccs-v2-native-authority-fixtures` | CCS v2 native authority | `cargo test -p conary-core ccs::v2`; `cargo test -p conary --test packaging_m4a` |
 | `legacy-scriptlet-bundle-fixtures` | Install replay adapter and Conary CLI tests | `cargo test -p conary --test bundle_replay synthetic_legacy_bundle_fixtures_cover_task5_matrix` |
 | `remi-scriptlet-publication-gate` | Remi server publication | `cargo test -p remi publication` |
 | `remi-test-artifact-fixtures` | Remi artifact handlers | `cargo test -p remi test_upload_fixture`; `cargo test -p remi test_public_fixture_get_and_head` |
@@ -58,6 +59,34 @@ Each fixture family should record:
   supported-target, and support-matrix alignment tests.
 - **Safety notes:** Public-ready fixtures must use exact supported target IDs:
   `fedora-44`, `ubuntu-26.04`, or `arch`.
+
+### ccs-v2-native-authority-fixtures
+
+- **Owner:** CCS v2 contract:
+  `crates/conary-core/src/ccs/v2/`; archive/package routing:
+  `crates/conary-core/src/ccs/archive_reader.rs` and
+  `crates/conary-core/src/ccs/package.rs`.
+- **Purpose:** Signed native CCS v2 authority, exact-byte signature
+  verification, verified install parsing, publish-gate compatibility, and
+  fail-closed rejection of legacy/default-reconstructed authority.
+- **Fixture sources:** in-test builders under
+  `crates/conary-core/src/ccs/v2/test_support.rs`;
+  `apps/conary/tests/packaging_m4a.rs`; targeted unit fixtures in
+  `crates/conary-core/src/ccs/{archive_reader,package,verify}.rs`.
+- **Consumes:** CCS v2 schema/reader/validation/identity tests, verifier tests,
+  static publish-gate tests, and M4a CLI install integration tests.
+- **Fast proof:** `cargo test -p conary-core ccs::v2`;
+  `cargo test -p conary --test packaging_m4a`.
+- **Medium proof:** `cargo test -p conary-core ccs::verify`;
+  `cargo test -p conary-core repository::static_repo::publish_gate`.
+- **Slow proof:** No slow gate for fixture-map-only changes.
+- **Regeneration:** Hand-maintained Rust builders until M4b authoring emits
+  native v2 packages directly.
+- **Safety notes:** v2 native fixtures are signed `format_version = 2`
+  authority with complete file, component, dependency, provenance,
+  TOML-debug-hash, and content-identity coverage. Legacy rejection fixtures are
+  v1 `BinaryManifest` packages and CBOR-only default-reconstruction packages
+  that prove fail-closed diagnostics.
 
 ### legacy-scriptlet-bundle-fixtures
 
