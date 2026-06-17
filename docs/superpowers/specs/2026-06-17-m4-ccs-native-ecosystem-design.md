@@ -47,6 +47,9 @@ contract is not yet a complete install-time authority:
 - `crates/conary-core/src/ccs/manifest.rs` is large enough that M4a child work
   should name the ownership boundary for v2 schema and validation rather than
   adding all new behavior to the existing file.
+- Current Remi release upload paths already run
+  `verify_static_artifact_publish_eligibility`; M4c native intake must preserve
+  that gate instead of creating a parallel trust shortcut.
 
 Those facts do not make v1 a compatibility obligation. They are the reason M4a
 must define v2 authority clearly and then delete, narrow, or fail closed on old
@@ -119,7 +122,12 @@ it.
 Remi consumes native CCS packages through native intake and verification. It
 indexes native identity, dependencies, capabilities, components, trust state,
 provenance, and public-readiness data without treating a legacy conversion as a
-native package.
+native package. M4c child design must name the owning Remi surface for native
+intake, with `apps/remi/src/server/native_intake.rs` or a dedicated
+`apps/remi/src/server/native/` subtree as the preferred starting points. Native
+intake may add native-specific checks, but it must reuse the shared
+`publish_gate` chain for build-attestation verification, signer authority,
+output identity, and origin-class refusal.
 
 ### Profile Layer
 
@@ -165,7 +173,12 @@ v1 migration stance.
 
 **Acceptance gate:** a native package can round-trip through the v2 contract
 without silently losing install-time authority. Missing, defaulted, or
-unsupported authority fails visibly.
+unsupported authority fails visibly. The M4a child design must name the module
+that owns v2 schema and validation before implementation starts, with
+`crates/conary-core/src/ccs/v2/` as the preferred ownership boundary unless the
+child design proves a narrower sibling module is safer. It must also state which
+types, validation rules, archive-reader bridges, and temporary migration
+scaffolding stay in or move out of `manifest.rs`.
 
 **Child spec questions:**
 
@@ -177,8 +190,18 @@ unsupported authority fails visibly.
   and install-time authority?
 - Which v1 reader paths are deleted, narrowed to migration scaffolding, or made
   fail-closed?
-- Which module owns v2 schema and validation so `manifest.rs` does not absorb
-  all new behavior?
+- How are current v1 test fixtures inventoried, regenerated to v2, retained as
+  explicit legacy-only reader coverage, or deleted without breaking the suite
+  during the transition?
+- Should the legacy conversion pipeline emit v2-native packages after M4a
+  lands, or continue producing explicitly legacy v1 packages behind a documented
+  v1-to-v2 bridge until a child spec proves conversion fidelity?
+- How does the v2 schema affect `ManifestProvenance`,
+  `BuildAttestationEnvelope`, and content-identity hashing, including tests that
+  prove signature-related fields are excluded from stable package identity?
+- If the child design does not use the preferred `ccs/v2/` boundary, what
+  narrower module boundary prevents `manifest.rs` from absorbing the new v2
+  behavior?
 
 ### M4b: Native Authoring, Build, Lint, And Local Test Workflow
 
@@ -211,10 +234,17 @@ unsafe lifecycle behavior.
 native package artifacts.
 
 **Decides:** native intake, verification, staging, promotion, indexing,
-search/list surfaces, trust/signing policy, and client fetch/install proof.
+search/list surfaces, trust/signing policy, owner module, storage/migration
+semantics, and client fetch/install proof.
 
 **Acceptance gate:** a native CCS package can be published to a local Remi,
 verified, indexed, fetched, and installed without legacy conversion semantics.
+Native intake reuses `verify_static_artifact_publish_eligibility` and the shared
+`publish_gate` trust path for build-attestation verification, signer authority,
+output identity, and origin-class checks. It must not reuse conversion-shaped
+metadata rows or upload-prefixed source checksum semantics for first-class
+native packages unless the child design explicitly defines a migration boundary
+and proves no native package is treated as a legacy conversion.
 
 **Child spec questions:**
 
@@ -222,6 +252,10 @@ verified, indexed, fetched, and installed without legacy conversion semantics.
 - Which verification failures block intake, staging, promotion, or serving?
 - How does Remi expose trust state without depending on unverified operator
   state?
+- Which Remi module owns native intake, and which legacy conversion/publication
+  paths are reused, wrapped, or left untouched?
+- How does native intake execute `verify_static_artifact_publish_eligibility`
+  with the repository's trusted signers before indexing or serving a package?
 - What client proof demonstrates fetch and install of a Remi-served native
   package?
 
@@ -258,7 +292,10 @@ validation.
 verification commands, and milestone closeout criteria.
 
 **Acceptance gate:** the corpus proves the package contract, authoring loop,
-Remi publication path, and supported-target profiles with honest docs.
+Remi publication path, and supported-target profiles with honest docs. The
+corpus must be reproducible from scratch and must re-run the focused
+verification command sets from M4a through M4d to prove the final corpus did not
+regress earlier slice guarantees.
 
 **Child spec questions:**
 
@@ -289,7 +326,10 @@ remain only as temporary migration scaffolding while M4a lands and repo fixtures
 move forward. New native packages target CCS v2. v1 packages are not
 first-class M4-native packages. Compatibility shims should be deleted, narrowed,
 or made explicitly legacy-only unless a child plan proves they are required for
-current fixtures or current code migration.
+current fixtures or current code migration. M4a must inventory existing v1 CCS
+test fixtures and classify each one before enforcing v2 failure behavior:
+regenerate to v2, keep as explicit legacy-reader coverage, or delete as obsolete
+coverage.
 
 ## Testing Strategy
 
@@ -309,6 +349,16 @@ Each child plan must name the focused verification commands it will run. Public
 claim, command-help, route, or assistant-facing changes must also update the
 docs-audit and feature-coherency ledgers when the touched paths are covered by
 those systems.
+
+Any child plan that touches CCS package metadata, publish readiness, authoring,
+Remi intake, or conversion output must include focused M2 publish-gate
+regression proof in its verification list:
+
+```bash
+cargo test -p conary --test packaging_m2a
+cargo test -p conary --lib commands::publish
+cargo test -p conary-core repository::static_repo::publish_gate
+```
 
 ## Review And Execution Flow
 
@@ -338,11 +388,18 @@ bash scripts/docs-audit-inventory.sh > docs/superpowers/documentation-accuracy-a
 bash scripts/docs-audit-inventory.sh | diff -u docs/superpowers/documentation-accuracy-audit-inventory.tsv -
 bash scripts/check-doc-audit-ledger.sh docs/superpowers/documentation-accuracy-audit-ledger.tsv --require-complete
 bash scripts/check-doc-truth.sh
+! rg -n "TB[D]|TO[D]O" docs/superpowers/specs/2026-06-17-m4-ccs-native-ecosystem-design.md
+! rg -n "(?i)\\b([c]entos|[r]hel|[d]ebian|[o]pensuse|[a]lpine|[t]umbleweed)\\b" docs/superpowers/specs/2026-06-17-m4-ccs-native-ecosystem-design.md
+rg -n "Fedora 4[4]|Ubuntu 26\\.[0]4|\\bArc[h]\\b" docs/superpowers/specs/2026-06-17-m4-ccs-native-ecosystem-design.md
 git diff --check
 cargo fmt --check
 ```
 
-Child slices add their own code and integration verification.
+If the docs-audit ledger check reports this umbrella design as missing, add a
+reviewed ledger row for
+`docs/superpowers/specs/2026-06-17-m4-ccs-native-ecosystem-design.md` before
+committing. Child slices add their own code, integration verification, and
+ledger rows.
 
 ## First Follow-Up Packet
 
