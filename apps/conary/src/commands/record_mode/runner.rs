@@ -122,7 +122,6 @@ pub(crate) fn run_record_command(request: &RecordCommandRequest) -> Result<Recor
     config.timeout = Duration::from_secs(3600);
     config.workdir = PathBuf::from(&plan.cwd);
     config.isolate_network = plan.network_isolated;
-    config.bind_mounts.clear();
     for (source, target, writable) in &plan.mounts {
         let mount = if *writable {
             BindMount::writable(source, target)
