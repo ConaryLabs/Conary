@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-06-17
-revision: 15
-summary: Route decomposed try-session ownership
+revision: 16
+summary: Route try watch ownership
 ---
 
 # Feature Ownership And Interaction Gates
@@ -343,10 +343,13 @@ pinned by the repository.
 `apps/conary/src/commands/hermetic_config.rs`;
 `apps/conary/src/commands/hermetic_state.rs`;
 `apps/conary/src/commands/try_session/`;
+`apps/conary/src/commands/try_session/watch.rs`;
+`apps/conary/src/commands/try_session/watch_source.rs`;
 `apps/conary/src/commands/repo_static.rs`;
 `apps/conary/tests/packaging_m1b.rs`;
 `apps/conary/tests/packaging_m2a.rs`;
 `apps/conary/tests/packaging_m3a.rs`;
+`apps/conary/tests/packaging_m3c.rs`;
 `apps/conary/tests/packaging_m3b.rs`;
 `crates/conary-agent-contract/src/{resource,catalog,result}.rs`;
 `crates/conary-mcp/src/`;
@@ -376,7 +379,8 @@ docs-audit truth gates.
 `cargo test -p conary commands::packaging_mcp`;
 `cargo test -p conary --lib commands::try_session`;
 `cargo test -p conary --lib dispatch::root`;
-`cargo test -p conary --test packaging_m1b`.
+`cargo test -p conary --test packaging_m1b`;
+`cargo test -p conary --test packaging_m3c`.
 
 **Interaction gate:** `cargo test -p conary-core`;
 `cargo test -p conary`;
@@ -424,6 +428,15 @@ inspection. Transport-neutral resource and catalog vocabulary lives in
 `crates/conary-agent-contract/src/{resource,catalog,result}.rs`; generic MCP
 helpers live in `crates/conary-mcp/src/`. Publish mutations remain owned by
 `apps/conary/src/commands/publish.rs`.
+
+### M3c Try Watch Mode
+
+Start with `apps/conary/src/commands/try_session/watch.rs` for watch lifecycle,
+event streaming, refresh retry behavior, and cancellation. Source-set discovery,
+identity hashing, and debounce live in
+`apps/conary/src/commands/try_session/watch_source.rs`; staged generation
+refresh remains behind the try-session API in `session.rs` and namespace
+switching helpers in `namespace.rs`.
 
 ## Remi Publication, Serving, Admin, And Fixture Artifacts
 

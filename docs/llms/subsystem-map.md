@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-06-17
-revision: 27
-summary: Route decomposed try-session ownership
+revision: 28
+summary: Route try watch ownership
 ---
 
 # Assistant Subsystem Map
@@ -43,10 +43,13 @@ summary: Route decomposed try-session ownership
   `apps/conary/src/commands/hermetic_config.rs`,
   `apps/conary/src/commands/hermetic_state.rs`,
   `apps/conary/src/commands/try_session/`,
+  `apps/conary/src/commands/try_session/watch.rs`,
+  `apps/conary/src/commands/try_session/watch_source.rs`,
   `apps/conary/src/commands/repo_static.rs`,
   `apps/conary/tests/packaging_m1b.rs`,
   `apps/conary/tests/packaging_m2a.rs`,
   `apps/conary/tests/packaging_m3a.rs`,
+  `apps/conary/tests/packaging_m3c.rs`,
   `apps/conary/tests/packaging_m3b.rs`,
   `crates/conary-agent-contract/src/{resource,catalog,result}.rs`,
   `crates/conary-mcp/src/`,

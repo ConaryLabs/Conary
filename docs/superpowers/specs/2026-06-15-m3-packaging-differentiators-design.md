@@ -1,7 +1,7 @@
 # M3 Packaging Differentiators Design
 
 **Date:** 2026-06-15
-**Status:** M3a, M3b, and M3c0 landed; M3c watch mode is next
+**Status:** M3a, M3b, M3c0, and M3c landed; M3d record-mode spike is next
 **Parent design:** `docs/superpowers/specs/2026-06-10-packaging-toolchain-design.md`
 **Prerequisite milestone:** M2 release surface
 
@@ -117,7 +117,7 @@ M3 remains one umbrella design executed as reviewable slices:
 | M3a | Structured diagnostics and events | Landed: stable schema v1, renderer parity for cook/publish JSON paths, no secret leakage |
 | M3b | Agent-native packaging MCP surface | Landed: local stdio MCP, read/diagnostic tools, and confirmed static artifact publish plan/apply |
 | M3c0 | Try-session decomposition | Landed: try-session module boundary, parity tests, and no watch behavior |
-| M3c | Watch mode | Source watch composes cook and try through narrow APIs |
+| M3c | Watch mode | Landed: namespace-only source watch, cook-on-change, last-good try refresh preservation, redacted NDJSON events |
 | M3d | Record-mode spike | Prototype proves tracing/redaction/draft quality before commitment |
 
 The slices should land in that order. M3c0 is a refactor gate before M3c, not
@@ -529,8 +529,8 @@ complete:
   advertised for packaging commands that still emit only ad hoc text.
 - MCP tools should not appear in a live catalog until their contract, risk
   labels, and tests exist.
-- `try --watch` should remain hidden or rejected with an honest message until
-  the watch orchestrator lands.
+- `try --watch` is available after M3c for namespace-only package-authoring
+  loops, with redacted NDJSON events through `--json`.
 - `--record` should remain hidden or clearly experimental until the spike
   graduates into an implementation plan.
 
@@ -560,14 +560,14 @@ Docs to update as M3 lands:
 - M3c0 decomposes `try_session.rs` before watch behavior lands.
 - Watch mode preserves try-session invariants.
 - Watch mode is namespace-only, does not auto-keep, and does not publish.
-- Watch rebuilds rerun hook/scriptlet policy and use offline-cache-only inputs
-  after the initial prefetch.
+- Watch rebuilds rerun hook/scriptlet policy. Hermetic refresh cooks use
+  offline-cache-only inputs after the initial prefetch; non-hermetic refreshes
+  preserve the existing host-iteration source policy.
 - Record mode has explicit privilege, storage, redaction, and cleanup bounds.
 - Help text does not advertise unavailable M3 features.
 
 ## Next Slice
 
-M3a and M3b are implemented. The next implementation-planning target is M3c0:
-try-session decomposition before watch mode adds new orchestration behavior.
-Later plans can consume the same M3a/M3b foundation for watch mode and the
-record-mode spike.
+M3a, M3b, M3c0, and M3c are implemented. The next implementation-planning
+target is M3d: a record-mode spike that proves tracing, redaction, and draft
+quality before committing to the full workflow.
