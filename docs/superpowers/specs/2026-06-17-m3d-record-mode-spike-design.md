@@ -20,7 +20,8 @@ conary cook --record [SOURCE_DIR] -- <build-or-install-command...>
 ```
 
 `SOURCE_DIR` defaults to the current directory. The trailing command is
-required. Conary runs it with `DESTDIR` and `CONARY_DESTDIR` pointing at a
+required. Conary copies the source into a private recording workspace, runs the
+command in a contained sandbox with `DESTDIR` and `CONARY_DESTDIR` pointing at a
 private install root, records scoped filesystem activity with fanotify/inotify,
 derives a draft recipe, and writes a redacted trace report.
 
@@ -64,6 +65,8 @@ In scope for M3d:
 - Hidden experimental `conary cook --record` routing.
 - A fanotify-first, recursive-inotify-assisted filesystem trace collector for
   scoped source, work, and install roots.
+- Contained command execution using existing namespace/container infrastructure,
+  with a hidden unsafe host escape hatch only for developer debugging.
 - Private record workspace setup and cleanup.
 - Redacted trace report generation.
 - Conservative draft recipe generation from command, inference, trace, and
@@ -82,6 +85,7 @@ Out of scope for M3d:
 - Full syscall tracing, ptrace, seccomp-notify, or network syscall observation.
 - A host-root tracer or broad `/` watch.
 - A setuid helper, sudo escalation, or new daemon.
+- Default host execution of arbitrary demonstration commands.
 - Any relaxation of M2 hermetic, attestation, static-repository, or
   recorded-draft publish gates.
 - Direct publication of a recorded draft.
@@ -99,6 +103,11 @@ The spike adds hidden CLI controls:
   to `auto`.
 - `--record-validate`: run a normal cook against the generated draft recipe.
 - `--keep-raw-trace`: hidden developer escape hatch for debugging only.
+- `--record-unsafe-host`: hidden developer escape hatch that runs the command
+  outside the sandbox after a loud explicit acknowledgement.
+- `--record-allow-network`: optional explicit network escape hatch if the
+  implementation plan decides the spike needs to observe network-fetch
+  behavior; default record execution has no network.
 
 Normal public help should continue not to advertise `--record` until the spike
 graduates. Hidden help and CLI tests may assert the experimental surface exists.
@@ -137,6 +146,16 @@ record-mode requests to the new module and expose a narrow validation helper if
 needed. `apps/conary/src/cli/mod.rs` owns hidden flag definitions. Dispatch
 continues to route the `Cook` command normally.
 
+The recorded command is contained by default. The command runs inside the
+existing Linux namespace/container execution path with only the recording
+source copy, private work root, private install root, and necessary build-tool
+inputs mounted. The default network namespace is disabled. If the sandbox
+cannot be created, record mode fails closed before running the command unless
+the hidden `--record-unsafe-host` developer escape hatch is explicitly used.
+Unsafe host mode must be visually noisy, must not be advertised in normal help,
+and must state that Conary is observing only scoped filesystem activity, not
+containing the command. Even in unsafe host mode, trace scope remains bounded.
+
 Core should receive only reusable product concepts. A focused
 `crates/conary-core/src/recipe/recording/` module is appropriate for DTOs and
 pure helpers such as trace report types, event classification, draft derivation,
@@ -174,16 +193,28 @@ The default `auto` backend prefers fanotify plus recursive inotify:
   to mark the scoped roots.
 - Inotify records creates, writes, deletes, renames, and new directories.
 - New directories under watched roots are added dynamically.
+- Fanotify setup checks the required capability, normally `CAP_SYS_ADMIN`,
+  before starting the command.
 - If fanotify is unavailable in `auto`, Conary may fall back to inotify-only,
   but the trace report must say read evidence is incomplete.
 - If the user explicitly requests `fanotify`, missing permission or kernel
   support is a fail-closed setup error and the command does not run.
 - If the user explicitly requests `inotify`, read evidence is declared
   incomplete from the start.
+- Fanotify setup diagnostics should point users at a disposable privileged
+  development environment when they need read evidence. They should not suggest
+  weakening the installed production binary with a blanket setcap recipe.
+
+The implementation plan must choose concrete Linux API surfaces. The intended
+baseline is raw `libc::fanotify_init`, `libc::fanotify_mark`, and fanotify event
+reads through the existing workspace `libc` dependency, plus a deliberately
+added workspace `inotify` crate for recursive inotify. `nix` remains useful for
+process, signal, mount, and namespace code, but M3d must not assume `nix`
+exposes fanotify or inotify wrappers.
 
 Trace scope is bounded to canonical roots:
 
-- source root
+- private source copy
 - private work root
 - private install root
 - later optional declared extra roots, if the implementation plan decides they
@@ -198,7 +229,10 @@ Event loss is a correctness failure, not a warning hidden in logs. Fanotify
 queue errors, inotify queue overflow, watch-limit exhaustion, or watcher thread
 failure must produce a diagnostic. The operation may still write a redacted
 partial report, but it must not claim complete trace evidence or successful
-validation.
+validation. Recursive inotify setup must check the initial directory count
+against the current `max_user_watches` budget, dynamically report watch-limit
+exhaustion for newly created directories, and treat `IN_Q_OVERFLOW` as trace
+loss.
 
 ## Data Model
 
@@ -209,7 +243,7 @@ RecordingReport
   schema_version
   operation_id
   backend
-  source_root
+  scope_roots
   command_summary
   command_exit
   observed_paths
@@ -234,10 +268,23 @@ Observed paths carry scope and operation class:
 - `out-of-scope`
 - `unknown`
 
+Public observed paths are relative to their scoped root. For example, a file
+created at `<private-install-root>/usr/bin/foo` is reported as `usr/bin/foo`
+with scope `install-create`. Public reports may name root labels such as
+`source`, `work`, and `install`, but they must not emit the private workspace
+or install-root absolute path.
+
 The report must separate observed facts from guesses. Fanotify read evidence is
 observed. Inotify-only read evidence is absent and must be named as a
 limitation. Capability suggestions and dependency hints are advisory, with
 confidence and rationale.
+
+Recording-specific DTOs such as `RecordingReport`, trace event classifications,
+scope-relative path helpers, and draft derivation inputs live under
+`crates/conary-core/src/recipe/recording/`. They do not belong in
+`crates/conary-core/src/ccs/manifest.rs`; record-mode validation already uses
+the existing `ManifestProvenance.origin_class` field, so no manifest schema
+addition is needed for M3d.
 
 The M3 packaging command output remains `PackagingCommandOutput` with
 `schema_version = 1`. M3d may add:
@@ -260,8 +307,10 @@ Draft generation is conservative:
 
 - Package name and version come from existing source inference when possible.
   Otherwise use the source directory name and `0.1.0-recorded`.
-- The recipe source is a local relative path under the recipe directory. Public
-  recipe output must not contain absolute host paths.
+- Record mode copies `SOURCE_DIR` into the recording workspace before running
+  the command. The draft recipe source is a local relative path to that source
+  copy, usually `source`. Public recipe output must not contain absolute host
+  paths or `..` escapes.
 - The recorded command vector is rendered with a structured shell-quoting
   helper, not ad hoc string joining.
 - If the install root contains files, the recorded command becomes the draft
@@ -276,12 +325,20 @@ Draft generation is conservative:
 - Network evidence is reported only if a selected backend or explicit
   command/log heuristic can support it. Otherwise the report says network was
   not observed by this spike.
+- The trace report compares the source copy before and after the command. New
+  or modified source files are recorded as `source-modifications`. When network
+  observation is unavailable, source modifications plus package-manager/fetch
+  command evidence are annotated as `network-likely`, not `network-confirmed`.
+  The generated recipe should carry a visible review note to verify dependency
+  sources when network-like behavior was observed or could not be ruled out.
 
 If `--record-validate` is set, Conary runs a normal cook against the generated
-draft recipe as a separate validation step. Validation does not reuse raw trace
-authority. If validation produces an artifact, the Kitchen config must stamp
-`origin_class_override = "recorded-draft"`. The artifact is for inspection and
-publish-refusal proof only.
+draft recipe as a separate validation step using the copied source workspace,
+not the user's original checkout. Validation does not reuse raw trace
+authority. If validation produces an artifact, the record-mode validator must
+explicitly inject `origin_class_override = Some("recorded-draft")` into the
+`KitchenConfig` and must not rely on the normal recipe-file resolution default
+of `None`. The artifact is for inspection and publish-refusal proof only.
 
 ## Redaction And Storage
 
@@ -307,6 +364,7 @@ Redaction covers:
 - bearer tokens and token-like strings
 - private key paths
 - absolute private paths
+- private workspace and install-root prefixes
 - logs
 - trace metadata
 - sampled file names when they match secret patterns
@@ -323,6 +381,11 @@ raw trace details.
 a private directory and prints a warning that the data may contain secrets. It
 does not change operation-record redaction.
 
+For the spike, packaging operation-record retention remains newest 50. Rapid
+recording iterations may evict older operation records. The durable graduation
+evidence is the redacted trace report written under `--record-output`; any
+public record-mode launch after the spike should revisit retention explicitly.
+
 ## Failure Behavior
 
 Record mode fails closed before running the command when:
@@ -332,6 +395,7 @@ Record mode fails closed before running the command when:
 - the private workspace cannot be created with private permissions
 - the command is missing
 - the command would run without `DESTDIR`/`CONARY_DESTDIR`
+- the command sandbox cannot be created, unless `--record-unsafe-host` is used
 - redaction setup fails
 
 If the recorded command exits nonzero, Conary still writes a redacted partial
@@ -358,6 +422,12 @@ M3d spike tests:
   dynamic new-directory events inside scoped roots.
 - Fanotify behavior is tested through the backend trait and gated integration
   tests so normal CI does not require elevated privileges.
+- Backend tests cover `CAP_SYS_ADMIN` absence, explicit fanotify fail-closed
+  behavior, automatic inotify fallback, `max_user_watches` exhaustion, and
+  `IN_Q_OVERFLOW`.
+- Command containment tests prove record mode uses the sandbox by default,
+  disables network by default, and refuses to run when the sandbox is
+  unavailable unless hidden unsafe host mode is explicitly requested.
 - Trace report tests prove inotify-only runs declare incomplete read evidence.
 - Redaction tests cover env secrets, token-like args, credentialed URLs,
   private key paths, logs, trace metadata, and operation records.
@@ -368,6 +438,9 @@ M3d spike tests:
 - Recorded-draft tests prove validation artifacts carry
   `origin_class = "recorded-draft"`.
 - Publish refusal tests prove recorded-draft artifacts still report
+  `RecordedDraftArtifact`.
+- A cross-gate publish test proves a recorded-draft artifact with an otherwise
+  valid build attestation signed by an active key is still refused with
   `RecordedDraftArtifact`.
 - Cleanup tests prove raw trace fragments are removed on success, command
   failure, backend failure, validation failure, redaction failure, and
@@ -401,8 +474,14 @@ with next-step recommendations rather than a public feature.
 - Record mode remains hidden and experimental.
 - The first UX is `conary cook --record [SOURCE_DIR] -- <command>`, not an
   interactive shell.
+- The recorded command runs in a contained sandbox by default.
+- Unsafe host execution is hidden, explicit, and noisy.
+- The source tree is copied into the recording workspace before execution.
+- Draft recipes and public reports use scope-relative paths, not private
+  absolute paths.
 - Fanotify/inotify scope is bounded to source, work, and install roots.
 - Explicit fanotify failure is fail-closed.
+- Fanotify privilege requirements are checked before command execution.
 - Inotify-only traces declare incomplete read evidence.
 - Event loss is visible and prevents overclaiming completeness.
 - Raw trace is private, ephemeral by default, and never written to operation
