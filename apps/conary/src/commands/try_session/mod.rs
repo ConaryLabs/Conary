@@ -3,14 +3,13 @@
 
 use anyhow::{Context, Result, bail};
 use conary_core::ccs::CcsPackage;
-use conary_core::ccs::manifest::CcsManifest;
 use conary_core::db::backup::{CheckpointReason, create_checkpoint};
 use conary_core::db::models::{CreateTrySession, TrySession, TrySessionMode};
 use conary_core::packages::traits::PackageFormat;
 use conary_core::runtime_root::ConaryRuntimeRoot;
 use conary_core::transaction::{TransactionConfig, TransactionEngine};
 use std::ffi::OsString;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 mod executor;
 mod install;
@@ -19,9 +18,15 @@ mod session;
 mod util;
 mod validation;
 
+use executor::run_try_command_for_session;
 #[cfg(test)]
 use install::build_try_transaction_config;
 use install::{build_try_install_plan, install_try_package};
+use namespace::{
+    apply_declarative_try_hooks, expose_try_namespace_root, hook_account_entry_exists,
+    promotable_try_hook_root, root_relative_path, teardown_try_namespace_mounts,
+};
+use util::remove_dir_if_exists;
 use validation::{TryExecutionRoot, validate_try_package_policy};
 
 #[derive(Debug, Clone, Copy)]
@@ -256,39 +261,6 @@ pub(crate) fn begin_try_session(request: TryStartRequest<'_>) -> Result<TryStart
     })
 }
 
-pub(crate) fn apply_declarative_try_hooks(manifest: &CcsManifest, root: &Path) -> Result<()> {
-    if root == Path::new("/") {
-        bail!("refusing to execute try hooks against the host root");
-    }
-    if !manifest.hooks.has_declarative_hooks() {
-        return Ok(());
-    }
-
-    let mut executor = conary_core::ccs::HookExecutor::new(root);
-    executor
-        .execute_pre_hooks(&manifest.hooks)
-        .context("failed to execute try declarative pre-hooks")?;
-    let results = executor.execute_post_hooks_with_results(&manifest.hooks);
-    let failures = results
-        .failures()
-        .map(|failure| {
-            format!(
-                "{} '{}' failed: {}",
-                failure.hook_type,
-                failure.name,
-                failure.error.as_deref().unwrap_or("unknown error")
-            )
-        })
-        .collect::<Vec<_>>();
-    if !failures.is_empty() {
-        bail!(
-            "failed to execute try declarative post-hooks: {}",
-            failures.join("; ")
-        );
-    }
-    Ok(())
-}
-
 pub(crate) fn rollback_active_try_session(db_path: &str) -> Result<()> {
     let live_conn = conary_core::db::open(db_path)?;
     let session = TrySession::find_active_or_orphaned(&live_conn)?
@@ -467,7 +439,7 @@ fn verify_namespace_try_hook_effects(
         .join(try_generation_id.to_string());
 
     for directory in &manifest.hooks.directories {
-        let relative = hook_effect_relative_path(&directory.path)?;
+        let relative = root_relative_path(&directory.path)?;
         let in_generation = generation_root.join(&relative);
         let in_etc_state = etc_state_root.join(&relative);
         if !in_generation.exists() && !in_etc_state.exists() {
@@ -495,51 +467,6 @@ fn verify_namespace_try_hook_effects(
     }
 
     Ok(())
-}
-
-fn hook_effect_relative_path(path: &str) -> Result<PathBuf> {
-    root_relative_path(path)
-}
-
-fn root_relative_path(path: &str) -> Result<PathBuf> {
-    let path = Path::new(path);
-    let relative = if path.is_absolute() {
-        path.strip_prefix("/").unwrap_or(path)
-    } else {
-        path
-    };
-    if relative.as_os_str().is_empty() {
-        bail!("empty try root path {path:?}");
-    }
-    if relative.components().any(|component| {
-        matches!(
-            component,
-            Component::ParentDir | Component::RootDir | Component::Prefix(_)
-        )
-    }) {
-        bail!("unsafe try hook effects path {path:?}");
-    }
-    Ok(relative.to_path_buf())
-}
-
-fn hook_account_entry_exists(
-    generation_root: &Path,
-    etc_state_root: &Path,
-    relative_file: &str,
-    name: &str,
-) -> bool {
-    [generation_root, etc_state_root]
-        .iter()
-        .any(|root| passwd_like_file_contains_name(&root.join(relative_file), name))
-}
-
-fn passwd_like_file_contains_name(path: &Path, name: &str) -> bool {
-    let Ok(contents) = std::fs::read_to_string(path) else {
-        return false;
-    };
-    contents
-        .lines()
-        .any(|line| line.split(':').next() == Some(name))
 }
 
 fn maybe_force_try_keep_post_backup_failure(point: &str) -> Result<()> {
@@ -730,482 +657,6 @@ fn vacuum_db_into(conn: &rusqlite::Connection, destination: &Path) -> Result<()>
     Ok(())
 }
 
-fn promotable_try_hook_root(
-    runtime_root: &ConaryRuntimeRoot,
-    try_generation_id: i64,
-) -> Result<PathBuf> {
-    let root = runtime_root
-        .etc_state_dir()
-        .join(try_generation_id.to_string());
-    std::fs::create_dir_all(&root)
-        .with_context(|| format!("failed to create try hook root {}", root.display()))?;
-    Ok(root)
-}
-
-fn expose_try_namespace_root(
-    runtime_root: &ConaryRuntimeRoot,
-    work_dir: &Path,
-    copied_conn: &rusqlite::Connection,
-    try_generation_id: i64,
-    hook_upperdir: &Path,
-) -> Result<PathBuf> {
-    let namespace_root = work_dir.join("namespace-root");
-    if std::env::var_os("CONARY_TEST_SKIP_GENERATION_MOUNT").is_some() {
-        materialize_test_try_namespace_root(copied_conn, runtime_root, hook_upperdir)?;
-        recreate_path_symlink(hook_upperdir, &namespace_root)?;
-        return Ok(namespace_root);
-    }
-
-    let generation_dir = runtime_root.generation_path(try_generation_id);
-    let metadata =
-        conary_core::generation::metadata::GenerationMetadata::read_from(&generation_dir)
-            .map_err(|error| anyhow::anyhow!(error))
-            .with_context(|| {
-                format!(
-                    "failed to read try generation metadata from {}",
-                    generation_dir.display()
-                )
-            })?;
-    let lower_root = work_dir.join("generation-root");
-    let overlay_workdir = work_dir.join("namespace-work");
-    std::fs::create_dir_all(&lower_root)
-        .with_context(|| format!("failed to create try lower root {}", lower_root.display()))?;
-    std::fs::create_dir_all(&namespace_root).with_context(|| {
-        format!(
-            "failed to create try namespace root {}",
-            namespace_root.display()
-        )
-    })?;
-    std::fs::create_dir_all(&overlay_workdir).with_context(|| {
-        format!(
-            "failed to create try namespace overlay workdir {}",
-            overlay_workdir.display()
-        )
-    })?;
-
-    let mount_options = conary_core::generation::mount::MountOptions {
-        image_path: generation_dir.join(conary_core::generation::metadata::EROFS_IMAGE_NAME),
-        basedir: runtime_root.objects_dir(),
-        mount_point: lower_root.clone(),
-        verity: metadata.fsverity_enabled,
-        digest: metadata
-            .fsverity_enabled
-            .then(|| metadata.erofs_verity_digest.clone())
-            .flatten(),
-        upperdir: None,
-        workdir: None,
-    };
-    conary_core::generation::mount::mount_generation(&mount_options)
-        .map_err(|error| anyhow::anyhow!(error))
-        .with_context(|| {
-            format!(
-                "failed to mount try generation {} at {}",
-                try_generation_id,
-                lower_root.display()
-            )
-        })?;
-    if let Err(error) = mount_try_namespace_overlay(
-        &lower_root,
-        hook_upperdir,
-        &overlay_workdir,
-        &namespace_root,
-    ) {
-        let _ = conary_core::generation::mount::unmount_generation(&lower_root);
-        return Err(error);
-    }
-
-    Ok(namespace_root)
-}
-
-fn mount_try_namespace_overlay(
-    lower_root: &Path,
-    hook_upperdir: &Path,
-    overlay_workdir: &Path,
-    namespace_root: &Path,
-) -> Result<()> {
-    let options = format!(
-        "lowerdir={},upperdir={},workdir={}",
-        lower_root.display(),
-        hook_upperdir.display(),
-        overlay_workdir.display()
-    );
-    let status = std::process::Command::new("mount")
-        .args([
-            "-t",
-            "overlay",
-            "overlay",
-            "-o",
-            &options,
-            &namespace_root.to_string_lossy(),
-        ])
-        .status()
-        .context("failed to execute try namespace overlay mount")?;
-    if status.success() {
-        return Ok(());
-    }
-    bail!(
-        "failed to mount try namespace overlay at {} with lower {} and upper {}",
-        namespace_root.display(),
-        lower_root.display(),
-        hook_upperdir.display()
-    )
-}
-
-fn teardown_try_namespace_mounts(work_dir: &Path) -> Result<()> {
-    unmount_try_path_if_mounted(&work_dir.join("namespace-root"))?;
-    unmount_try_path_if_mounted(&work_dir.join("generation-root"))?;
-    Ok(())
-}
-
-fn unmount_try_path_if_mounted(path: &Path) -> Result<()> {
-    if !try_path_is_mounted(path)? {
-        return Ok(());
-    }
-    run_try_unmount(path)
-}
-
-fn try_path_is_mounted(path: &Path) -> Result<bool> {
-    let mountinfo = read_try_mountinfo()?;
-    Ok(mountinfo.lines().any(|line| {
-        line.split_whitespace()
-            .nth(4)
-            .map(decode_mountinfo_path)
-            .as_deref()
-            == Some(path)
-    }))
-}
-
-fn read_try_mountinfo() -> Result<String> {
-    #[cfg(test)]
-    if let Some(path) = std::env::var_os("CONARY_TEST_TRY_MOUNTINFO_PATH") {
-        return std::fs::read_to_string(&path).with_context(|| {
-            format!(
-                "failed to read try mountinfo {}",
-                Path::new(&path).display()
-            )
-        });
-    }
-
-    std::fs::read_to_string("/proc/self/mountinfo").context("failed to read /proc/self/mountinfo")
-}
-
-fn decode_mountinfo_path(raw: &str) -> PathBuf {
-    let bytes = raw.as_bytes();
-    let mut decoded = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] == b'\\'
-            && index + 3 < bytes.len()
-            && bytes[index + 1].is_ascii_digit()
-            && bytes[index + 2].is_ascii_digit()
-            && bytes[index + 3].is_ascii_digit()
-        {
-            let value = ((bytes[index + 1] - b'0') << 6)
-                | ((bytes[index + 2] - b'0') << 3)
-                | (bytes[index + 3] - b'0');
-            decoded.push(value);
-            index += 4;
-        } else {
-            decoded.push(bytes[index]);
-            index += 1;
-        }
-    }
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::ffi::OsStringExt;
-        PathBuf::from(OsString::from_vec(decoded))
-    }
-    #[cfg(not(unix))]
-    {
-        PathBuf::from(String::from_utf8_lossy(&decoded).into_owned())
-    }
-}
-
-fn run_try_unmount(path: &Path) -> Result<()> {
-    #[cfg(test)]
-    if let Some(fail_path) = std::env::var_os("CONARY_TEST_TRY_UMOUNT_FAIL")
-        && Path::new(&fail_path) == path
-    {
-        bail!(
-            "forced try namespace unmount failure for {}",
-            path.display()
-        );
-    }
-
-    #[cfg(test)]
-    if let Some(log_path) = std::env::var_os("CONARY_TEST_TRY_UMOUNT_LOG") {
-        use std::io::Write as _;
-
-        let mut log = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&log_path)
-            .with_context(|| {
-                format!(
-                    "failed to open try unmount log {}",
-                    Path::new(&log_path).display()
-                )
-            })?;
-        writeln!(log, "{}", path.display())?;
-        return Ok(());
-    }
-
-    conary_core::generation::mount::unmount_generation(path)
-        .map_err(|error| anyhow::anyhow!(error))
-        .with_context(|| format!("failed to unmount try namespace path {}", path.display()))
-}
-
-fn materialize_test_try_namespace_root(
-    copied_conn: &rusqlite::Connection,
-    runtime_root: &ConaryRuntimeRoot,
-    hook_upperdir: &Path,
-) -> Result<()> {
-    std::fs::create_dir_all(hook_upperdir).with_context(|| {
-        format!(
-            "failed to create test try namespace root {}",
-            hook_upperdir.display()
-        )
-    })?;
-    for entry in conary_core::db::models::FileEntry::find_all_ordered(copied_conn)
-        .map_err(|error| anyhow::anyhow!(error))?
-    {
-        if conary_core::generation::metadata::is_excluded(&entry.path) {
-            continue;
-        }
-        let relative = root_relative_path(&entry.path)?;
-        let destination = hook_upperdir.join(relative);
-        if let Some(parent) = destination.parent() {
-            std::fs::create_dir_all(parent).with_context(|| {
-                format!(
-                    "failed to create parent directory for test try namespace file {}",
-                    destination.display()
-                )
-            })?;
-        }
-        remove_path_if_exists(&destination)?;
-        if let Some(target) = &entry.symlink_target {
-            create_symlink(target.as_ref(), &destination)?;
-            continue;
-        }
-
-        let object_path =
-            conary_core::filesystem::object_path(&runtime_root.objects_dir(), &entry.sha256_hash)
-                .map_err(|error| anyhow::anyhow!(error))
-                .with_context(|| format!("failed to locate CAS object {}", entry.sha256_hash))?;
-        if let Err(_error) = std::fs::hard_link(&object_path, &destination) {
-            std::fs::copy(&object_path, &destination).with_context(|| {
-                format!(
-                    "failed to copy CAS object {} to test try namespace file {}",
-                    object_path.display(),
-                    destination.display()
-                )
-            })?;
-        }
-        set_file_mode(&destination, entry.permissions)?;
-    }
-
-    for (link, target) in conary_core::generation::metadata::ROOT_SYMLINKS {
-        let link_path = hook_upperdir.join(link);
-        if link_path.exists() || std::fs::symlink_metadata(&link_path).is_ok() {
-            continue;
-        }
-        create_symlink((*target).as_ref(), &link_path)?;
-    }
-
-    Ok(())
-}
-
-fn recreate_path_symlink(target: &Path, link: &Path) -> Result<()> {
-    if let Some(parent) = link.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    remove_path_if_exists(link)?;
-    create_symlink(target, link)
-}
-
-fn create_symlink(target: &Path, link: &Path) -> Result<()> {
-    #[cfg(unix)]
-    {
-        std::os::unix::fs::symlink(target, link).with_context(|| {
-            format!(
-                "failed to create symlink {} -> {}",
-                link.display(),
-                target.display()
-            )
-        })?;
-        Ok(())
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = target;
-        let _ = link;
-        bail!("try namespace root materialization requires symlink support")
-    }
-}
-
-fn set_file_mode(path: &Path, permissions: i32) -> Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mode = (permissions as u32) & 0o7777;
-        let mut file_permissions = std::fs::metadata(path)?.permissions();
-        file_permissions.set_mode(mode);
-        std::fs::set_permissions(path, file_permissions)
-            .with_context(|| format!("failed to set permissions on {}", path.display()))?;
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = path;
-        let _ = permissions;
-    }
-    Ok(())
-}
-
-struct RunningTryCommand {
-    child: std::process::Child,
-    pid: i64,
-    boot_id: String,
-    label: &'static str,
-}
-
-fn run_try_command_for_session(
-    command: &[&str],
-    namespace_root: &Path,
-    activated: bool,
-    live_conn: &rusqlite::Connection,
-    copied_conn: &rusqlite::Connection,
-    live_session: &TrySession,
-    copied_session: &TrySession,
-) -> Result<()> {
-    let mut running = spawn_try_command(command, namespace_root, activated)?;
-    let record_result = (|| -> Result<()> {
-        live_session.set_launcher(live_conn, running.pid, &running.boot_id)?;
-        copied_session.set_launcher(copied_conn, running.pid, &running.boot_id)?;
-        Ok(())
-    })();
-    if let Err(error) = record_result {
-        let _ = running.child.kill();
-        let _ = running.child.wait();
-        return Err(error.context("failed to record try launcher liveness before waiting"));
-    }
-
-    let wait_result = wait_try_command(&mut running);
-    let clear_result = clear_try_launcher(live_conn, &live_session.id)
-        .and_then(|()| clear_try_launcher(copied_conn, &copied_session.id));
-
-    match wait_result {
-        Ok(()) => clear_result,
-        Err(error) => {
-            if let Err(clear_error) = clear_result {
-                return Err(error.context(format!(
-                    "also failed to clear try launcher liveness after exit: {clear_error}"
-                )));
-            }
-            Err(error)
-        }
-    }
-}
-
-#[cfg(test)]
-fn launch_try_command(
-    command: &[&str],
-    namespace_root: &Path,
-    activated: bool,
-) -> Result<(i64, String)> {
-    let mut running = spawn_try_command(command, namespace_root, activated)?;
-    let pid = running.pid;
-    let boot_id = running.boot_id.clone();
-    wait_try_command(&mut running)?;
-    Ok((pid, boot_id))
-}
-
-fn spawn_try_command(
-    command: &[&str],
-    namespace_root: &Path,
-    activated: bool,
-) -> Result<RunningTryCommand> {
-    if command.is_empty() {
-        bail!("try launcher command cannot be empty");
-    }
-    let boot_id = current_boot_id();
-    if let Some(test_launcher) = std::env::var_os("CONARY_TEST_TRY_LAUNCHER") {
-        let child = std::process::Command::new(test_launcher)
-            .arg(namespace_root)
-            .args(command)
-            .spawn()
-            .context("failed to start CONARY_TEST_TRY_LAUNCHER")?;
-        return Ok(running_try_command(
-            child,
-            boot_id,
-            "CONARY_TEST_TRY_LAUNCHER",
-        ));
-    }
-    if activated {
-        let child = std::process::Command::new(command[0])
-            .args(&command[1..])
-            .spawn()
-            .with_context(|| format!("failed to start activated try command {}", command[0]))?;
-        return Ok(running_try_command(child, boot_id, "activated try command"));
-    }
-    let Some(bwrap) = find_command("bwrap") else {
-        bail!(
-            "bubblewrap is required for namespace try; `conary try --activate` is the M1b fallback for host-global testing and mutates the host-global current generation"
-        );
-    };
-    let child = std::process::Command::new(bwrap)
-        .arg("--unshare-all")
-        .arg("--die-with-parent")
-        .arg("--proc")
-        .arg("/proc")
-        .arg("--dev")
-        .arg("/dev")
-        .arg("--ro-bind")
-        .arg(namespace_root)
-        .arg("/")
-        .arg("--chdir")
-        .arg("/")
-        .arg("--")
-        .args(command)
-        .spawn()
-        .context("failed to start bubblewrap namespace try launcher")?;
-    Ok(running_try_command(
-        child,
-        boot_id,
-        "bubblewrap namespace try launcher",
-    ))
-}
-
-fn running_try_command(
-    child: std::process::Child,
-    boot_id: String,
-    label: &'static str,
-) -> RunningTryCommand {
-    RunningTryCommand {
-        pid: i64::from(child.id()),
-        child,
-        boot_id,
-        label,
-    }
-}
-
-fn wait_try_command(running: &mut RunningTryCommand) -> Result<()> {
-    let status = running
-        .child
-        .wait()
-        .with_context(|| format!("failed to wait for {}", running.label))?;
-    if !status.success() {
-        bail!("{} exited with status {status}", running.label);
-    }
-    Ok(())
-}
-
-fn clear_try_launcher(conn: &rusqlite::Connection, session_id: &str) -> Result<()> {
-    let session = TrySession::find_by_id(conn, session_id)?
-        .ok_or_else(|| anyhow::anyhow!("try session {session_id} not found"))?;
-    Ok(session.clear_launcher(conn)?)
-}
-
 fn record_activated_try_boot(
     conn: &rusqlite::Connection,
     session_id: &str,
@@ -1223,47 +674,6 @@ pub(crate) fn current_boot_id() -> String {
     std::fs::read_to_string("/proc/sys/kernel/random/boot_id")
         .map(|value| value.trim().to_string())
         .unwrap_or_else(|_| "unknown-boot".to_string())
-}
-
-fn find_command(command: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path)
-        .map(|dir| dir.join(command))
-        .find(|candidate| candidate.is_file())
-}
-
-fn remove_dir_if_exists(path: PathBuf) -> Result<()> {
-    #[cfg(test)]
-    if let Some(fail_path) = std::env::var_os("CONARY_TEST_TRY_REMOVE_DIR_FAIL")
-        && Path::new(&fail_path) == path
-    {
-        bail!(
-            "forced try directory removal failure for {}",
-            path.display()
-        );
-    }
-
-    match std::fs::remove_dir_all(&path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error).with_context(|| format!("failed to remove {}", path.display())),
-    }
-}
-
-fn remove_path_if_exists(path: &Path) -> Result<()> {
-    let metadata = match std::fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => {
-            return Err(error).with_context(|| format!("failed to inspect {}", path.display()));
-        }
-    };
-    if metadata.is_dir() && !metadata.file_type().is_symlink() {
-        std::fs::remove_dir_all(path)
-    } else {
-        std::fs::remove_file(path)
-    }
-    .with_context(|| format!("failed to remove {}", path.display()))
 }
 
 fn remove_sqlite_sidecars(db_path: &Path) -> Result<()> {
@@ -1307,8 +717,9 @@ fn quarantine_path(path: &Path, stamp: &str) -> Result<PathBuf> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod test_support {
     use std::collections::HashMap;
+    use std::ffi::OsString;
     use std::path::{Path, PathBuf};
 
     use conary_core::ccs::builder::write_ccs_package;
@@ -1317,20 +728,20 @@ mod tests {
         TmpfilesHook, UserHook,
     };
     use conary_core::ccs::{BuildResult, ComponentData, FileEntry, FileType};
-    use conary_core::db::models::{TrySession, TrySessionMode};
+    use conary_core::db::models::TrySession;
     use conary_core::runtime_root::ConaryRuntimeRoot;
 
-    use super::*;
+    use super::{TryStartOutcome, TryStartRequest, begin_try_session};
 
-    struct TryRuntimeFixture {
-        _temp: tempfile::TempDir,
-        root: PathBuf,
-        db_path: PathBuf,
-        db_path_string: String,
+    pub(super) struct TryRuntimeFixture {
+        pub(super) _temp: tempfile::TempDir,
+        pub(super) root: PathBuf,
+        pub(super) db_path: PathBuf,
+        pub(super) db_path_string: String,
     }
 
     impl TryRuntimeFixture {
-        fn new() -> Self {
+        pub(super) fn new() -> Self {
             let temp = tempfile::tempdir().unwrap();
             let root = temp.path().to_path_buf();
             let db_path = root.join("conary.db");
@@ -1345,15 +756,15 @@ mod tests {
             }
         }
 
-        fn runtime_root(&self) -> ConaryRuntimeRoot {
+        pub(super) fn runtime_root(&self) -> ConaryRuntimeRoot {
             ConaryRuntimeRoot::from_db_path(self.db_path.clone())
         }
 
-        fn write_package(&self, name: &str, manifest: CcsManifest) -> PathBuf {
+        pub(super) fn write_package(&self, name: &str, manifest: CcsManifest) -> PathBuf {
             write_try_package(self.root.join(format!("{name}.ccs")), manifest)
         }
 
-        fn open(&self) -> rusqlite::Connection {
+        pub(super) fn open(&self) -> rusqlite::Connection {
             conary_core::db::open(&self.db_path).unwrap()
         }
     }
@@ -1426,7 +837,7 @@ mod tests {
         package_path
     }
 
-    fn begin_namespace_try(
+    pub(super) fn begin_namespace_try(
         fixture: &TryRuntimeFixture,
         package_path: &Path,
     ) -> anyhow::Result<TryStartOutcome> {
@@ -1439,7 +850,7 @@ mod tests {
         })
     }
 
-    fn begin_activated_try(
+    pub(super) fn begin_activated_try(
         fixture: &TryRuntimeFixture,
         package_path: &Path,
     ) -> anyhow::Result<TryStartOutcome> {
@@ -1452,38 +863,18 @@ mod tests {
         })
     }
 
-    fn stored_session(fixture: &TryRuntimeFixture, id: &str) -> TrySession {
+    pub(super) fn stored_session(fixture: &TryRuntimeFixture, id: &str) -> TrySession {
         TrySession::find_by_id(&fixture.open(), id)
             .unwrap()
             .expect("stored try session")
     }
 
-    fn create_current_generation_link(root: &Path, generation: i64) {
+    pub(super) fn create_current_generation_link(root: &Path, generation: i64) {
         std::fs::create_dir_all(root.join(format!("generations/{generation}"))).unwrap();
         conary_core::generation::mount::update_current_symlink(root, generation).unwrap();
     }
 
-    #[test]
-    fn activated_no_command_session_records_boot_without_launcher_pid() -> anyhow::Result<()> {
-        let _env_lock = ENV_LOCK.lock().unwrap();
-        let _boot_guard = EnvVarGuard::set("CONARY_TEST_BOOT_ID", "boot-a");
-        let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
-        let fixture = TryRuntimeFixture::new();
-        create_current_generation_link(&fixture.root, 1);
-        let package = fixture.write_package(
-            "try-activated-no-command",
-            CcsManifest::new_minimal("try-activated-no-command", "1.0.0"),
-        );
-
-        let outcome = begin_activated_try(&fixture, &package)?;
-
-        let stored = stored_session(&fixture, &outcome.session_id);
-        assert_eq!(stored.launcher_boot_id.as_deref(), Some("boot-a"));
-        assert_eq!(stored.launcher_pid, None);
-        Ok(())
-    }
-
-    fn has_cas_object(root: &Path) -> bool {
+    pub(super) fn has_cas_object(root: &Path) -> bool {
         let objects_dir = root.join("objects");
         if !objects_dir.exists() {
             return false;
@@ -1498,7 +889,7 @@ mod tests {
             })
     }
 
-    fn write_try_mountinfo(path: &Path, mounted_paths: &[&Path]) -> anyhow::Result<()> {
+    pub(super) fn write_try_mountinfo(path: &Path, mounted_paths: &[&Path]) -> anyhow::Result<()> {
         let mut contents = String::new();
         for (index, mounted_path) in mounted_paths.iter().enumerate() {
             contents.push_str(&format!(
@@ -1520,13 +911,13 @@ mod tests {
             .replace('\n', "\\012")
     }
 
-    struct EnvVarGuard {
+    pub(super) struct EnvVarGuard {
         key: &'static str,
         previous: Option<OsString>,
     }
 
     impl EnvVarGuard {
-        fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+        pub(super) fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
             let previous = std::env::var_os(key);
             unsafe {
                 std::env::set_var(key, value);
@@ -1547,9 +938,9 @@ mod tests {
         }
     }
 
-    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    pub(super) static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-    fn manifest_with_declarative_hook() -> CcsManifest {
+    pub(super) fn manifest_with_declarative_hook() -> CcsManifest {
         let mut manifest = CcsManifest::new_minimal("declarative", "1.0.0");
         manifest.hooks.directories.push(DirectoryHook {
             path: "/var/lib/declarative".to_string(),
@@ -1562,7 +953,7 @@ mod tests {
         manifest
     }
 
-    fn manifest_with_user_group_hooks() -> CcsManifest {
+    pub(super) fn manifest_with_user_group_hooks() -> CcsManifest {
         let mut manifest = CcsManifest::new_minimal("user-group-hooks", "1.0.0");
         manifest.hooks.groups.push(GroupHook {
             name: "trygroup".to_string(),
@@ -1580,7 +971,7 @@ mod tests {
         manifest
     }
 
-    fn manifest_with_systemd_hook() -> CcsManifest {
+    pub(super) fn manifest_with_systemd_hook() -> CcsManifest {
         let mut manifest = CcsManifest::new_minimal("systemd-hook", "1.0.0");
         manifest.hooks.systemd.push(SystemdHook {
             unit: "try-systemd.service".to_string(),
@@ -1590,7 +981,7 @@ mod tests {
         manifest
     }
 
-    fn manifest_with_tmpfiles_hook() -> CcsManifest {
+    pub(super) fn manifest_with_tmpfiles_hook() -> CcsManifest {
         let mut manifest = CcsManifest::new_minimal("tmpfiles-hook", "1.0.0");
         manifest.hooks.tmpfiles.push(TmpfilesHook {
             entry_type: "d".to_string(),
@@ -1603,7 +994,7 @@ mod tests {
         manifest
     }
 
-    fn manifest_with_sysctl_hook() -> CcsManifest {
+    pub(super) fn manifest_with_sysctl_hook() -> CcsManifest {
         let mut manifest = CcsManifest::new_minimal("sysctl-hook", "1.0.0");
         manifest.hooks.sysctl.push(SysctlHook {
             key: "net.ipv4.ip_forward".to_string(),
@@ -1614,7 +1005,7 @@ mod tests {
         manifest
     }
 
-    fn manifest_with_alternative_hook() -> CcsManifest {
+    pub(super) fn manifest_with_alternative_hook() -> CcsManifest {
         let mut manifest = CcsManifest::new_minimal("alternative-hook", "1.0.0");
         manifest.hooks.alternatives.push(AlternativeHook {
             name: "try-editor".to_string(),
@@ -1623,6 +1014,37 @@ mod tests {
             reversible: Some(true),
         });
         manifest
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+
+    use conary_core::ccs::manifest::CcsManifest;
+    use conary_core::db::models::{TrySession, TrySessionMode};
+
+    use super::test_support::*;
+    use super::*;
+
+    #[test]
+    fn activated_no_command_session_records_boot_without_launcher_pid() -> anyhow::Result<()> {
+        let _env_lock = ENV_LOCK.lock().unwrap();
+        let _boot_guard = EnvVarGuard::set("CONARY_TEST_BOOT_ID", "boot-a");
+        let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+        let fixture = TryRuntimeFixture::new();
+        create_current_generation_link(&fixture.root, 1);
+        let package = fixture.write_package(
+            "try-activated-no-command",
+            CcsManifest::new_minimal("try-activated-no-command", "1.0.0"),
+        );
+
+        let outcome = begin_activated_try(&fixture, &package)?;
+
+        let stored = stored_session(&fixture, &outcome.session_id);
+        assert_eq!(stored.launcher_boot_id.as_deref(), Some("boot-a"));
+        assert_eq!(stored.launcher_pid, None);
+        Ok(())
     }
 
     #[test]
@@ -1819,201 +1241,6 @@ mod tests {
     }
 
     #[test]
-    fn declarative_try_hooks_refuse_host_root() {
-        let manifest = manifest_with_declarative_hook();
-
-        let err = apply_declarative_try_hooks(&manifest, Path::new("/"))
-            .expect_err("try hooks must not run against host root");
-
-        assert!(err.to_string().contains("host root"));
-    }
-
-    #[test]
-    fn declarative_try_hooks_abort_post_hooks_when_pre_hooks_fail() -> anyhow::Result<()> {
-        let temp = tempfile::tempdir()?;
-        let mut manifest = CcsManifest::new_minimal("bad-pre-hook", "1.0.0");
-        manifest.hooks.users.push(UserHook {
-            name: "BadName!".to_string(),
-            system: true,
-            home: None,
-            shell: Some("/usr/sbin/nologin".to_string()),
-            group: None,
-            reversible: None,
-        });
-        manifest.hooks.sysctl.push(SysctlHook {
-            key: "kernel.modules_disabled".to_string(),
-            value: "1".to_string(),
-            only_if_lower: false,
-            reversible: None,
-        });
-
-        let err = apply_declarative_try_hooks(&manifest, temp.path())
-            .expect_err("pre-hook failure should abort try hook execution");
-        let message = format!("{err:#}");
-
-        assert!(
-            message.contains("failed to execute try declarative pre-hooks"),
-            "{message}"
-        );
-        assert!(
-            !temp.path().join("etc/sysctl.d").exists(),
-            "post-hook sysctl config must not be written after pre-hook failure"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn declarative_try_hooks_collect_post_hook_failures() -> anyhow::Result<()> {
-        let temp = tempfile::tempdir()?;
-        let mut manifest = CcsManifest::new_minimal("bad-post-hooks", "1.0.0");
-        manifest.hooks.sysctl.push(SysctlHook {
-            key: "kernel.modules_disabled".to_string(),
-            value: "1".to_string(),
-            only_if_lower: false,
-            reversible: None,
-        });
-        manifest.hooks.alternatives.push(AlternativeHook {
-            name: "bad/name".to_string(),
-            path: "/usr/bin/demo".to_string(),
-            priority: 50,
-            reversible: None,
-        });
-
-        let err = apply_declarative_try_hooks(&manifest, temp.path())
-            .expect_err("post-hook failures should be collected");
-        let message = format!("{err:#}");
-
-        assert!(
-            message.contains("failed to execute try declarative post-hooks"),
-            "{message}"
-        );
-        assert!(
-            message.contains("sysctl 'kernel.modules_disabled' failed"),
-            "{message}"
-        );
-        assert!(
-            message.contains("alternatives 'bad/name' failed"),
-            "{message}"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn namespace_declarative_hooks_write_to_live_etc_state_not_workdir() -> anyhow::Result<()> {
-        let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
-        let fixture = TryRuntimeFixture::new();
-        let package = fixture.write_package("try-hooks", manifest_with_declarative_hook());
-
-        let outcome = begin_namespace_try(&fixture, &package)?;
-
-        assert!(
-            fixture
-                .root
-                .join(format!(
-                    "etc-state/{}/var/lib/declarative",
-                    outcome.try_generation_id
-                ))
-                .is_dir(),
-            "declarative hook effects must land in live etc-state upperdir"
-        );
-        assert!(
-            !outcome.work_dir.join("root/var/lib/declarative").exists(),
-            "throwaway install scratch root must not be the only hook effect location"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn namespace_command_sees_generation_files_and_hook_upperdir() -> anyhow::Result<()> {
-        let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
-        let _env_lock = ENV_LOCK.lock().unwrap();
-        let temp = tempfile::tempdir()?;
-        let launcher = temp.path().join("launcher.sh");
-        let seen_root = temp.path().join("seen-root");
-        std::fs::write(
-            &launcher,
-            "#!/bin/sh\nroot=\"$1\"\nif [ ! -f \"$root/usr/bin/try-launch-root\" ]; then echo missing package file >&2; exit 43; fi\nif [ ! -d \"$root/var/lib/declarative\" ]; then echo missing hook dir >&2; exit 44; fi\nprintf '%s\\n' \"$root\" > \"$TRY_SEEN_ROOT_FILE\"\n",
-        )?;
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut permissions = std::fs::metadata(&launcher)?.permissions();
-            permissions.set_mode(0o755);
-            std::fs::set_permissions(&launcher, permissions)?;
-        }
-        let _launcher_guard = EnvVarGuard::set("CONARY_TEST_TRY_LAUNCHER", &launcher);
-        let _seen_guard = EnvVarGuard::set("TRY_SEEN_ROOT_FILE", &seen_root);
-        let fixture = TryRuntimeFixture::new();
-        let mut manifest = CcsManifest::new_minimal("try-launch-root", "1.0.0");
-        manifest.hooks.directories.push(DirectoryHook {
-            path: "/var/lib/declarative".to_string(),
-            mode: "0755".to_string(),
-            owner: "root".to_string(),
-            group: "root".to_string(),
-            cleanup: None,
-            reversible: None,
-        });
-        let package = fixture.write_package("try-launch-root", manifest);
-        let command = ["/usr/bin/try-launch-root"];
-
-        let outcome = begin_try_session(TryStartRequest {
-            db_path: &fixture.db_path_string,
-            package_path: &package,
-            activate: false,
-            allow_irreversible: false,
-            command: Some(&command),
-        })?;
-
-        let launcher_root = PathBuf::from(std::fs::read_to_string(seen_root)?.trim());
-        assert_eq!(launcher_root, outcome.namespace_root);
-        assert_ne!(outcome.namespace_root, outcome.install_root);
-        assert!(
-            outcome
-                .namespace_root
-                .join("usr/bin/try-launch-root")
-                .is_file(),
-            "namespace root must expose installed package files"
-        );
-        assert!(
-            fixture
-                .root
-                .join(format!(
-                    "etc-state/{}/var/lib/declarative",
-                    outcome.try_generation_id
-                ))
-                .is_dir(),
-            "hook writes must land in the live etc-state upperdir"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn activated_declarative_hooks_use_promotable_etc_state_before_publish() -> anyhow::Result<()> {
-        let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
-        let fixture = TryRuntimeFixture::new();
-        create_current_generation_link(&fixture.root, 3);
-        let package =
-            fixture.write_package("try-activated-hooks", manifest_with_declarative_hook());
-
-        let outcome = begin_activated_try(&fixture, &package)?;
-
-        assert!(
-            fixture
-                .root
-                .join(format!(
-                    "etc-state/{}/var/lib/declarative",
-                    outcome.try_generation_id
-                ))
-                .is_dir(),
-            "activated declarative hooks must use the promotable generation upperdir"
-        );
-        assert_eq!(
-            conary_core::generation::mount::current_generation(&fixture.root)?,
-            Some(outcome.try_generation_id)
-        );
-        Ok(())
-    }
-
-    #[test]
     fn activated_rollback_uses_copied_package_after_original_is_deleted() -> anyhow::Result<()> {
         let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
         let fixture = TryRuntimeFixture::new();
@@ -2080,99 +1307,12 @@ mod tests {
     }
 
     #[test]
-    fn namespace_rollback_unmounts_namespace_before_generation_root() -> anyhow::Result<()> {
-        let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
-        let _env_lock = ENV_LOCK
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let fixture = TryRuntimeFixture::new();
-        create_current_generation_link(&fixture.root, 2);
-        let package = fixture.write_package(
-            "try-rollback-unmount",
-            CcsManifest::new_minimal("try-rollback-unmount", "1.0.0"),
-        );
-        let outcome = begin_namespace_try(&fixture, &package)?;
-        let mountinfo = fixture.root.join("try-mountinfo");
-        let unmount_log = fixture.root.join("try-unmount.log");
-        let namespace_root = outcome.work_dir.join("namespace-root");
-        let generation_root = outcome.work_dir.join("generation-root");
-        write_try_mountinfo(&mountinfo, &[&namespace_root, &generation_root])?;
-        let _mountinfo_guard = EnvVarGuard::set("CONARY_TEST_TRY_MOUNTINFO_PATH", &mountinfo);
-        let _unmount_guard = EnvVarGuard::set("CONARY_TEST_TRY_UMOUNT_LOG", &unmount_log);
-
-        rollback_active_try_session(&fixture.db_path_string)?;
-
-        let unmounted = std::fs::read_to_string(unmount_log)?
-            .lines()
-            .map(PathBuf::from)
-            .collect::<Vec<_>>();
-        assert_eq!(unmounted, vec![namespace_root, generation_root]);
-        assert_eq!(
-            stored_session(&fixture, &outcome.session_id).status,
-            conary_core::db::models::TrySessionStatus::RolledBack
-        );
-        assert!(
-            !outcome.work_dir.exists(),
-            "rollback must remove try work dir after unmounting"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn namespace_rollback_leaves_session_retryable_when_unmount_fails() -> anyhow::Result<()> {
-        let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
-        let _env_lock = ENV_LOCK
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let fixture = TryRuntimeFixture::new();
-        create_current_generation_link(&fixture.root, 2);
-        let package = fixture.write_package(
-            "try-rollback-unmount-fail",
-            CcsManifest::new_minimal("try-rollback-unmount-fail", "1.0.0"),
-        );
-        let outcome = begin_namespace_try(&fixture, &package)?;
-        let mountinfo = fixture.root.join("try-mountinfo");
-        let unmount_log = fixture.root.join("try-unmount.log");
-        let namespace_root = outcome.work_dir.join("namespace-root");
-        let generation_root = outcome.work_dir.join("generation-root");
-        write_try_mountinfo(&mountinfo, &[&namespace_root, &generation_root])?;
-        let _mountinfo_guard = EnvVarGuard::set("CONARY_TEST_TRY_MOUNTINFO_PATH", &mountinfo);
-        let _unmount_guard = EnvVarGuard::set("CONARY_TEST_TRY_UMOUNT_LOG", &unmount_log);
-        let _fail_guard = EnvVarGuard::set("CONARY_TEST_TRY_UMOUNT_FAIL", &namespace_root);
-
-        let err = rollback_active_try_session(&fixture.db_path_string)
-            .expect_err("rollback should fail before marking rolled_back when unmount fails");
-        let message = format!("{err:#}");
-        assert!(
-            message.contains("forced try namespace unmount failure"),
-            "{message}"
-        );
-        assert!(message.contains("namespace-root"), "{message}");
-        assert_eq!(
-            stored_session(&fixture, &outcome.session_id).status,
-            conary_core::db::models::TrySessionStatus::Active
-        );
-        assert!(
-            outcome.work_dir.exists(),
-            "failed cleanup must leave work dir for retry"
-        );
-        assert!(
-            fixture
-                .root
-                .join(format!("generations/{}", outcome.try_generation_id))
-                .exists(),
-            "failed cleanup must leave generation artifacts for retry"
-        );
-        Ok(())
-    }
-
-    #[test]
     fn namespace_rollback_leaves_session_retryable_when_work_dir_removal_fails()
     -> anyhow::Result<()> {
-        let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
         let _env_lock = ENV_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
         let fixture = TryRuntimeFixture::new();
         create_current_generation_link(&fixture.root, 2);
         let package = fixture.write_package(
@@ -2355,8 +1495,8 @@ mod tests {
 
     #[test]
     fn namespace_keep_restores_live_db_after_post_backup_failure() -> anyhow::Result<()> {
-        let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
         let _env_lock = ENV_LOCK.lock().unwrap();
+        let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
         let _fail_guard =
             EnvVarGuard::set("CONARY_TEST_TRY_KEEP_FAIL_AFTER_BACKUP", "after-db-promote");
         let fixture = TryRuntimeFixture::new();
@@ -2395,8 +1535,8 @@ mod tests {
 
     #[test]
     fn namespace_keep_restores_current_link_after_post_link_failure() -> anyhow::Result<()> {
-        let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
         let _env_lock = ENV_LOCK.lock().unwrap();
+        let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
         let _fail_guard = EnvVarGuard::set(
             "CONARY_TEST_TRY_KEEP_FAIL_AFTER_BACKUP",
             "after-current-link",
@@ -2508,164 +1648,5 @@ mod tests {
 
         verify_namespace_try_hook_effects(&session, &runtime_root, 42)?;
         Ok(())
-    }
-
-    #[test]
-    fn namespace_launcher_executes_bubblewrap_when_available() -> anyhow::Result<()> {
-        let _env_lock = ENV_LOCK.lock().unwrap();
-        let temp = tempfile::tempdir()?;
-        let bin_dir = temp.path().join("bin");
-        std::fs::create_dir_all(&bin_dir)?;
-        let bwrap = bin_dir.join("bwrap");
-        let args_file = temp.path().join("bwrap.args");
-        let pid_file = temp.path().join("bwrap.pid");
-        std::fs::write(
-            &bwrap,
-            "#!/bin/sh\nprintf '%s\\n' \"$$\" > \"$BWRAP_PID_FILE\"\nprintf '%s\\n' \"$@\" > \"$BWRAP_ARGS_FILE\"\n",
-        )?;
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut permissions = std::fs::metadata(&bwrap)?.permissions();
-            permissions.set_mode(0o755);
-            std::fs::set_permissions(&bwrap, permissions)?;
-        }
-        let _path_guard = EnvVarGuard::set("PATH", &bin_dir);
-        let _args_guard = EnvVarGuard::set("BWRAP_ARGS_FILE", &args_file);
-        let _pid_guard = EnvVarGuard::set("BWRAP_PID_FILE", &pid_file);
-        let namespace_root = temp.path().join("namespace-root");
-        std::fs::create_dir_all(&namespace_root)?;
-
-        let (pid, _) = launch_try_command(&["/bin/echo", "hello"], &namespace_root, false)?;
-
-        let args = std::fs::read_to_string(args_file)?;
-        assert!(args.contains("--ro-bind"), "{args}");
-        assert!(
-            args.contains(&namespace_root.display().to_string()),
-            "{args}"
-        );
-        assert!(args.contains("/bin/echo"), "{args}");
-        assert!(args.contains("hello"), "{args}");
-        let child_pid: i64 = std::fs::read_to_string(pid_file)?.trim().parse()?;
-        assert_eq!(pid, child_pid, "launcher must return the spawned child PID");
-        assert_ne!(
-            pid,
-            i64::from(std::process::id()),
-            "launcher must not record the conary parent process PID"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn try_command_records_child_liveness_before_wait_and_clears_after_exit() -> anyhow::Result<()>
-    {
-        let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
-        let _env_lock = ENV_LOCK.lock().unwrap();
-        let temp = tempfile::tempdir()?;
-        let launcher = temp.path().join("launcher.sh");
-        let pid_file = temp.path().join("launcher.pid");
-        let release_file = temp.path().join("release");
-        std::fs::write(
-            &launcher,
-            "#!/bin/sh\nprintf '%s\\n' \"$$\" > \"$TRY_PID_FILE\"\nwhile [ ! -f \"$TRY_RELEASE_FILE\" ]; do sleep 0.05; done\n",
-        )?;
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut permissions = std::fs::metadata(&launcher)?.permissions();
-            permissions.set_mode(0o755);
-            std::fs::set_permissions(&launcher, permissions)?;
-        }
-        let _launcher_guard = EnvVarGuard::set("CONARY_TEST_TRY_LAUNCHER", &launcher);
-        let _pid_guard = EnvVarGuard::set("TRY_PID_FILE", &pid_file);
-        let _release_guard = EnvVarGuard::set("TRY_RELEASE_FILE", &release_file);
-        let _boot_guard = EnvVarGuard::set("CONARY_TEST_BOOT_ID", "boot-launcher");
-        let fixture = TryRuntimeFixture::new();
-        let package = fixture.write_package(
-            "try-launch-liveness",
-            CcsManifest::new_minimal("try-launch-liveness", "1.0.0"),
-        );
-        let db_path_string = fixture.db_path_string.clone();
-        let package_for_thread = package.clone();
-
-        let handle = std::thread::spawn(move || {
-            let command = ["/bin/true"];
-            begin_try_session(TryStartRequest {
-                db_path: &db_path_string,
-                package_path: package_for_thread.as_path(),
-                activate: false,
-                allow_irreversible: false,
-                command: Some(&command),
-            })
-        });
-
-        let child_pid = poll_until(std::time::Duration::from_secs(5), || {
-            std::fs::read_to_string(&pid_file)
-                .ok()
-                .and_then(|value| value.trim().parse::<i64>().ok())
-        })
-        .ok_or_else(|| anyhow::anyhow!("launcher did not write child PID"))?;
-
-        let live_session = poll_until(std::time::Duration::from_secs(5), || {
-            TrySession::find_active_or_orphaned(&fixture.open())
-                .ok()
-                .flatten()
-                .filter(|session| session.launcher_pid.is_some())
-        })
-        .ok_or_else(|| anyhow::anyhow!("live DB never recorded launcher liveness"))?;
-        assert_eq!(live_session.launcher_pid, Some(child_pid));
-        assert_ne!(
-            live_session.launcher_pid,
-            Some(i64::from(std::process::id()))
-        );
-        assert_eq!(
-            live_session.launcher_boot_id.as_deref(),
-            Some("boot-launcher")
-        );
-
-        let copied_db_path = PathBuf::from(&live_session.work_dir).join("conary.db");
-        let copied_session = poll_until(std::time::Duration::from_secs(5), || {
-            conary_core::db::open(&copied_db_path)
-                .ok()
-                .and_then(|conn| {
-                    TrySession::find_by_id(&conn, &live_session.id)
-                        .ok()
-                        .flatten()
-                        .filter(|session| session.launcher_pid == Some(child_pid))
-                })
-        })
-        .ok_or_else(|| anyhow::anyhow!("copied DB never recorded launcher liveness"))?;
-        assert_eq!(
-            copied_session.launcher_boot_id,
-            live_session.launcher_boot_id
-        );
-
-        std::fs::write(&release_file, b"release")?;
-        let outcome = handle
-            .join()
-            .map_err(|_| anyhow::anyhow!("try launcher thread panicked"))??;
-
-        let live_after = stored_session(&fixture, &outcome.session_id);
-        assert_eq!(live_after.launcher_pid, None);
-        assert_eq!(live_after.launcher_boot_id, None);
-        let copied = conary_core::db::open(&outcome.copied_db_path)?;
-        let copied_after = TrySession::find_by_id(&copied, &outcome.session_id)?.unwrap();
-        assert_eq!(copied_after.launcher_pid, None);
-        assert_eq!(copied_after.launcher_boot_id, None);
-        Ok(())
-    }
-
-    fn poll_until<T>(
-        timeout: std::time::Duration,
-        mut probe: impl FnMut() -> Option<T>,
-    ) -> Option<T> {
-        let start = std::time::Instant::now();
-        loop {
-            if let Some(value) = probe() {
-                return Some(value);
-            }
-            if start.elapsed() >= timeout {
-                return None;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(25));
-        }
     }
 }
