@@ -32,6 +32,9 @@ use super::verify_derivation::dispatch_verify_derivation_command;
 use crate::cli::{self, Commands};
 use crate::command_risk::{self, CommandRisk};
 use crate::commands;
+use crate::commands::try_session::{
+    activated_try_session_is_live, current_boot_id, namespace_try_session_is_decision_pending,
+};
 use crate::live_host_safety::{LiveMutationClass, MutationIntent};
 use conary_core::db::models::{TrySession, TrySessionMode};
 use conary_core::runtime_root::ConaryRuntimeRoot;
@@ -559,42 +562,8 @@ fn selected_update_channel_db_path(command: &cli::UpdateChannelAction) -> &str {
     }
 }
 
-fn namespace_try_session_is_decision_pending(session: &TrySession, current_boot_id: &str) -> bool {
-    if session
-        .launcher_boot_id
-        .as_deref()
-        .is_some_and(|boot_id| boot_id != current_boot_id)
-    {
-        return false;
-    }
-
-    session.launcher_pid.is_none_or(try_launcher_pid_is_alive)
-}
-
-fn activated_try_session_is_live(
-    session: &TrySession,
-    current_boot_id: &str,
-    current_generation: Option<i64>,
-) -> bool {
-    session.launcher_boot_id.as_deref() == Some(current_boot_id)
-        && session.try_generation_id.is_some()
-        && current_generation == session.try_generation_id
-        && session.launcher_pid.is_none_or(try_launcher_pid_is_alive)
-}
-
-fn current_boot_id() -> String {
-    commands::try_session::current_boot_id()
-}
-
 fn env_forces_non_interactive() -> bool {
     std::env::var("CONARY_NON_INTERACTIVE").as_deref() == Ok("1")
-}
-
-fn try_launcher_pid_is_alive(pid: i64) -> bool {
-    if pid <= 0 {
-        return false;
-    }
-    Path::new("/proc").join(pid.to_string()).exists()
 }
 
 pub(super) async fn dispatch_command(
@@ -1166,7 +1135,6 @@ mod tests {
     use clap::Parser;
     use conary_core::db::models::{CreateTrySession, TrySession, TrySessionMode, TrySessionStatus};
     use std::ffi::OsString;
-    use std::path::Path;
 
     struct TryPreflightFixture {
         _temp: tempfile::TempDir,
@@ -1659,12 +1627,6 @@ mod tests {
             let cli = fixture.parse_with_db(&["conary", "try", package]);
             run_try_session_preflight_for_test(&cli, true).unwrap();
         }
-    }
-
-    #[test]
-    fn proc_liveness_probe_rejects_non_positive_pids() {
-        assert!(!Path::new("/proc/0").exists() || !super::try_launcher_pid_is_alive(0));
-        assert!(!super::try_launcher_pid_is_alive(-1));
     }
 
     #[test]

@@ -6,7 +6,7 @@ use conary_core::db::models::TrySession;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 
-use super::current_boot_id;
+use super::session::current_boot_id;
 
 struct RunningTryCommand {
     child: Child,
