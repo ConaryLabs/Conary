@@ -8,6 +8,9 @@ use anyhow::{Context, Result};
 use tempfile::Builder;
 use walkdir::WalkDir;
 
+const ACTIVE_MARKER: &str = ".conary-record-active";
+const KEEP_RAW_TRACE_MARKER: &str = ".conary-record-keep-raw-trace";
+
 #[derive(Debug)]
 pub(crate) struct RecordWorkspace {
     pub(crate) private_root: PathBuf,
@@ -27,6 +30,7 @@ impl RecordWorkspace {
         let private_temp = Builder::new().prefix("conary-record-").tempdir()?;
         let private_root = private_temp.keep();
         fs::set_permissions(&private_root, fs::Permissions::from_mode(0o700))?;
+        fs::write(private_root.join(ACTIVE_MARKER), b"active")?;
 
         let workspace = Self {
             source_root: private_root.join("source"),
@@ -61,6 +65,14 @@ impl RecordWorkspace {
                     fs::remove_dir_all(path)?;
                 }
             }
+            let active_marker = self.private_root.join(ACTIVE_MARKER);
+            if active_marker.exists() {
+                fs::remove_file(active_marker)?;
+            }
+            fs::write(
+                self.private_root.join(KEEP_RAW_TRACE_MARKER),
+                b"keep-raw-trace",
+            )?;
             return Ok(());
         }
         if self.private_root.exists() {
@@ -81,7 +93,11 @@ pub(crate) fn cleanup_stale_workspaces(parent: &Path) -> Result<usize> {
         let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
             continue;
         };
-        if name.starts_with("conary-record-") && path.is_dir() {
+        if name.starts_with("conary-record-")
+            && path.is_dir()
+            && !path.join(ACTIVE_MARKER).exists()
+            && !path.join(KEEP_RAW_TRACE_MARKER).exists()
+        {
             fs::remove_dir_all(&path)?;
             removed += 1;
         }
@@ -200,5 +216,20 @@ mod tests {
         assert_eq!(cleanup_stale_workspaces(temp.path()).unwrap(), 1);
         assert!(!temp.path().join("conary-record-old").exists());
         assert!(temp.path().join("unrelated").exists());
+    }
+
+    #[test]
+    fn stale_cleanup_skips_active_and_kept_raw_trace_workspaces() {
+        let temp = tempfile::tempdir().unwrap();
+        let active = temp.path().join("conary-record-active");
+        let kept = temp.path().join("conary-record-kept");
+        std::fs::create_dir_all(&active).unwrap();
+        std::fs::create_dir_all(&kept).unwrap();
+        std::fs::write(active.join(ACTIVE_MARKER), "active").unwrap();
+        std::fs::write(kept.join(KEEP_RAW_TRACE_MARKER), "keep").unwrap();
+
+        assert_eq!(cleanup_stale_workspaces(temp.path()).unwrap(), 0);
+        assert!(active.exists());
+        assert!(kept.exists());
     }
 }
