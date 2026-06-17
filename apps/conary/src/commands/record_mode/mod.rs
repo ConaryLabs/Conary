@@ -2,6 +2,7 @@
 
 mod fanotify_backend;
 mod inotify_backend;
+mod runner;
 mod trace;
 mod types;
 mod workspace;
