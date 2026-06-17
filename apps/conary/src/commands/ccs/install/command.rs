@@ -1,8 +1,11 @@
 // src/commands/ccs/install/command.rs
 
 use anyhow::{Context, Result};
+use conary_core::ccs::archive_reader::read_ccs_archive;
+use conary_core::ccs::verify::VerificationResult;
 use conary_core::ccs::{CcsPackage, TrustPolicy, verify};
 use conary_core::packages::traits::PackageFormat;
+use std::fs::File;
 use std::path::Path;
 
 use super::super::payload_paths::validate_ccs_payload_paths;
@@ -80,6 +83,20 @@ pub async fn cmd_ccs_install_with_replay_options(
 
     println!("Installing CCS package: {}", package_path.display());
 
+    let archive = read_ccs_archive(
+        File::open(package_path)
+            .with_context(|| format!("Failed to open package {}", package_path.display()))?,
+    )
+    .context("Failed to read CCS archive")?;
+    let has_v2_authority = archive.v2_authority.is_some();
+    if allow_unsigned && has_v2_authority {
+        anyhow::bail!(
+            "native CCS v2 packages require strict signature verification; --allow-unsigned cannot bypass v2 authority"
+        );
+    }
+
+    let mut verification_result: Option<VerificationResult> = None;
+
     // Step 1: Verify signature (unless --allow-unsigned)
     if !allow_unsigned {
         let trust_policy = if let Some(policy_path) = &policy {
@@ -125,13 +142,21 @@ pub async fn cmd_ccs_install_with_replay_options(
         } else {
             println!("Signature verified: {:?}", result.signature_status);
         }
+        verification_result = Some(result);
     } else {
         println!("Warning: Skipping signature verification (--allow-unsigned)");
     }
 
     // Step 2: Parse the package
     println!("Parsing package...");
-    let ccs_pkg = CcsPackage::parse(package)?;
+    let ccs_pkg = if has_v2_authority {
+        let verification = verification_result.as_ref().context(
+            "native CCS v2 packages require strict signature verification before parsing",
+        )?;
+        CcsPackage::parse_verified_v2(package, verification)?
+    } else {
+        CcsPackage::parse(package)?
+    };
 
     println!(
         "Package: {} v{} ({} files)",

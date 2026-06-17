@@ -1072,4 +1072,45 @@ mod tests {
             ContentStatus::Invalid { .. }
         ));
     }
+
+    #[test]
+    fn verify_v2_package_rejects_payload_not_in_signed_authority() {
+        let temp = tempfile::tempdir().unwrap();
+        let package_path = temp.path().join("tampered-v2.ccs");
+        let signer = crate::ccs::signing::SigningKeyPair::generate();
+        let authority =
+            crate::ccs::v2::test_support::package_authority_with_one_file("tampered-v2");
+        let payloads = crate::ccs::v2::test_support::one_file_payloads_for_tests();
+        crate::ccs::builder::write_v2_ccs_package(
+            &authority,
+            &payloads,
+            &package_path,
+            &signer,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        let tampered_path = temp.path().join("tampered-v2-extra.ccs");
+        crate::ccs::v2::test_support::rewrite_v2_archive_for_tests(
+            &package_path,
+            &tampered_path,
+            |entries| {
+                entries.insert(
+                    "components/extra.json".to_string(),
+                    br#"{"name":"extra","files":[],"hash":"sha256:extra","size":0}"#.to_vec(),
+                );
+            },
+        )
+        .unwrap();
+
+        let policy = TrustPolicy::strict(vec![signer.public_key_base64()]);
+        let result = verify_package(&tampered_path, &policy).unwrap();
+        assert!(!result.valid);
+        assert!(matches!(
+            result.content_status,
+            ContentStatus::Invalid { .. }
+        ));
+    }
 }
