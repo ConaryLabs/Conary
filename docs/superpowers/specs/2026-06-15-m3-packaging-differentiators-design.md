@@ -1,7 +1,7 @@
 # M3 Packaging Differentiators Design
 
 **Date:** 2026-06-15
-**Status:** M3a and M3b landed; M3c0 try-session decomposition is next
+**Status:** M3a, M3b, and M3c0 landed; M3c watch mode is next
 **Parent design:** `docs/superpowers/specs/2026-06-10-packaging-toolchain-design.md`
 **Prerequisite milestone:** M2 release surface
 
@@ -59,12 +59,12 @@ those already-classified facts, not inputs to the trust decision.
   the explicit Remi JSON unsupported diagnostic.
 - `apps/conary/src/commands/cook.rs`,
   `apps/conary/src/commands/publish.rs`, and
-  `apps/conary/src/commands/try_session.rs` still retain command-owned human
+  `apps/conary/src/commands/try_session/` still retain command-owned human
   output paths in places. Later M3 slices may deepen structured event coverage,
   but rendering glue should remain at the CLI edge.
-- `apps/conary/src/commands/try_session.rs` is already over 3000 lines. Watch
-  mode must not become another large block in that file. It needs a focused
-  watch orchestrator and a narrow try-session API.
+- `apps/conary/src/commands/try_session/` now owns the decomposed try-session
+  command surface. Watch mode must compose through that directory's narrow
+  session API instead of rebuilding a command monolith.
 - Existing MCP patterns live in `apps/remi/src/server/mcp.rs`,
   `apps/conary-test/src/server/mcp.rs`,
   `apps/conary-test/src/server/stateless_mcp.rs`, `crates/conary-agent-contract`,
@@ -116,7 +116,7 @@ M3 remains one umbrella design executed as reviewable slices:
 |-------|------|------|
 | M3a | Structured diagnostics and events | Landed: stable schema v1, renderer parity for cook/publish JSON paths, no secret leakage |
 | M3b | Agent-native packaging MCP surface | Landed: local stdio MCP, read/diagnostic tools, and confirmed static artifact publish plan/apply |
-| M3c0 | Try-session decomposition | Reviewed move map and parity tests before watch behavior |
+| M3c0 | Try-session decomposition | Landed: try-session module boundary, parity tests, and no watch behavior |
 | M3c | Watch mode | Source watch composes cook and try through narrow APIs |
 | M3d | Record-mode spike | Prototype proves tracing/redaction/draft quality before commitment |
 
@@ -266,11 +266,11 @@ they do not scrape terminal output.
 
 ## M3c0: Try-Session Decomposition
 
-`apps/conary/src/commands/try_session.rs` is over 3000 lines. Before watch mode
-adds new behavior, M3c0 must move existing behavior into a reviewed ownership
-boundary without changing semantics.
+`apps/conary/src/commands/try_session.rs` was over 3000 lines before M3c0.
+M3c0 moved existing behavior into a reviewed ownership boundary without
+changing semantics.
 
-Required move map:
+Landed ownership map:
 
 - `apps/conary/src/commands/try_session/mod.rs`: command entrypoint and narrow
   public API re-exports.
