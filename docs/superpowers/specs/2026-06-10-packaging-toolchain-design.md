@@ -57,10 +57,11 @@ suite is green:
   provenance classes and publish lint gates, foreign-package ingestion
   (.rpm/.deb/.pkg.tar.zst), Remi upload endpoint (which requires finishing Remi's TUF
   timestamp refresh — currently a 501 stub in `apps/remi/src/server/handlers/tuf.rs`).
-- **M3 — differentiators.** M3a has landed the shared structured
-  diagnostics/events contract, redaction, `cook --json`, `publish --json`, and
-  file-backed packaging operation records. Later M3 slices cover the MCP surface,
-  watch mode, and record mode (prototype spike first; see Record mode).
+- **M3 — differentiators.** M3 landed the shared structured diagnostics/events
+  contract, redaction, `cook --json`, `publish --json`, file-backed packaging
+  operation records, the local packaging MCP surface, `conary try --watch`, and
+  the hidden record-mode prototype spike. Record mode remains experimental until
+  a later milestone decides whether and how it graduates.
 
 Universal ingestion is split: directory/recipe in M1a, tarball/git in M1b, foreign
 packages in M2 alongside the provenance-class gates they require.
@@ -355,14 +356,16 @@ with `--explain` and resolved by an explicit recipe.
 
 ### Record mode — packaging by demonstration
 
-`conary cook --record` opens a shell; the user builds their software the way they
-always do. Conary traces the session and **derives the recipe**: commands run, files
-read (dependency evidence), files installed (manifest), plus suggested capability
-declarations. To be precise about what exists: the `capability/` module provides the
-**declaration schema** record mode would populate — it is not an observation
-mechanism. The recording path (seccomp-notify/fanotify → trace → derived recipe and
-capabilities) is entirely new infrastructure. This is the riskiest technical bet in
-the design and gets a prototype spike before commitment.
+`conary cook --record [SOURCE_DIR] -- <command>` records one demonstrated build
+command in a private workspace. Conary traces the session and **derives the
+recipe**: command evidence, source/install snapshots, installed-file evidence,
+redacted trace reports, and suggested runtime capabilities. To be precise about
+what exists: the `capability/` module provides the **declaration schema** record
+mode can suggest — it is not an observation mechanism. The landed prototype uses
+bounded fanotify/inotify tracing plus installed-file reconciliation rather than
+claiming complete host-root observation. This remains the riskiest technical bet
+in the design and stays hidden until a later milestone decides whether and how it
+graduates.
 
 Reliability bar: record mode output is **always a draft** — it emits a recipe marked
 `recorded-draft` plus a trace report, and a recorded session is never directly
@@ -375,10 +378,11 @@ these before the feature is committed.
 
 ### Agent-native diagnostics
 
-M3a starts the agent-native diagnostics path with a shared packaging diagnostic,
-event, redaction, JSON, and operation-record contract used by `conary cook` and
-`conary publish`. Later M3 slices extend the same contract to MCP tools, watch
-mode, and richer build-runner event streams.
+M3a started the agent-native diagnostics path with a shared packaging
+diagnostic, event, redaction, JSON, and operation-record contract used by
+`conary cook` and `conary publish`. M3b, M3c, and M3d extended that contract to
+MCP tools, watch mode, and record mode. Richer build-runner event streams remain
+future work.
 
 Every build failure should be representable as a structured value:
 
@@ -388,9 +392,9 @@ Diagnostic { phase, code, message, evidence, suggestions: [{description, patch}]
 
 Rendered for humans as: what happened, why probably, and the exact next command or
 recipe edit to try. Emitted as JSON under `--json` for the landed M3a cook and
-publish paths. The MCP packaging tools (`cook`, `diagnose`, `try`, `publish`) use
-the same contract in a later slice so an agent can drive the entire
-package-fix-rebuild loop.
+publish paths. The M3b packaging MCP surface uses the same contract so an agent
+can drive the supported package inspect, diagnose, and static publish plan/apply
+loop without a separate result format.
 
 Diagnostics come in three honest tiers, because arbitrary build systems fail in
 arbitrary ways:

@@ -1,7 +1,7 @@
 # M3 Packaging Differentiators Design
 
 **Date:** 2026-06-15
-**Status:** M3a, M3b, M3c0, and M3c landed; M3d record-mode spike is next
+**Status:** M3 closeout complete; M3a, M3b, M3c0, M3c, and M3d landed on `main`
 **Parent design:** `docs/superpowers/specs/2026-06-10-packaging-toolchain-design.md`
 **Prerequisite milestone:** M2 release surface
 
@@ -19,8 +19,10 @@ surfaces:
 These are not four independent inventions. M3 first established a shared
 diagnostic, event, operation-record, and redaction contract in M3a. The CLI,
 MCP, watch mode, and record mode consume that foundation rather than inventing
-separate result formats. Record mode remains a prototype spike until tracing,
-redaction, and draft recipe quality are proven.
+separate result formats. Record mode landed as a hidden prototype spike. Its
+evidence is strong enough to preserve the experiment and inform a later
+graduation decision, but not enough to expose record mode as a public, fully
+supported packaging workflow yet.
 
 The core invariant is:
 
@@ -110,7 +112,7 @@ Out of scope for M3:
 
 ## Milestone Shape
 
-M3 remains one umbrella design executed as reviewable slices:
+M3 was executed as one umbrella design split into reviewable slices:
 
 | Slice | Name | Gate |
 |-------|------|------|
@@ -118,12 +120,11 @@ M3 remains one umbrella design executed as reviewable slices:
 | M3b | Agent-native packaging MCP surface | Landed: local stdio MCP, read/diagnostic tools, and confirmed static artifact publish plan/apply |
 | M3c0 | Try-session decomposition | Landed: try-session module boundary, parity tests, and no watch behavior |
 | M3c | Watch mode | Landed: namespace-only source watch, cook-on-change, last-good try refresh preservation, redacted NDJSON events |
-| M3d | Record-mode spike | Prototype proves tracing/redaction/draft quality before commitment |
+| M3d | Record-mode spike | Landed: hidden command-mode prototype, scoped fanotify/inotify tracing, redacted reports, recorded-draft validation, and publish refusal |
 
-The slices should land in that order. M3c0 is a refactor gate before M3c, not
-optional cleanup after watch mode exists. M3b, M3c, and M3d may add new event
-kinds, but they must not redefine the core diagnostic schema after M3a
-stabilizes it.
+The slices landed in that order. M3c0 was a refactor gate before M3c, not
+optional cleanup after watch mode existed. M3b, M3c, and M3d added to the event
+surface without redefining the core diagnostic schema that M3a stabilized.
 
 ## M3a: Structured Diagnostics And Events
 
@@ -522,19 +523,19 @@ and the doc truth/coherency checks whenever docs or public claims change.
 
 ## Documentation And Rollout
 
-M3 surfaces appear in help only as they land. Before an implementation slice is
-complete:
+M3 surfaces appear in help only as they land. At closeout:
 
-- `--json` is available for landed `cook` and `publish` paths. It should not be
-  advertised for packaging commands that still emit only ad hoc text.
-- MCP tools should not appear in a live catalog until their contract, risk
-  labels, and tests exist.
-- `try --watch` is available after M3c for namespace-only package-authoring
-  loops, with redacted NDJSON events through `--json`.
-- `--record` should remain hidden or clearly experimental until the spike
-  graduates into an implementation plan.
+- `--json` is available for landed `cook`, `publish`, and watch-mode paths that
+  emit structured packaging output.
+- MCP tools appear through the local packaging MCP surface with shared contract
+  DTOs, risk labels, tests, and plan/apply confirmation for the supported static
+  artifact publish path.
+- `try --watch` is available for namespace-only package-authoring loops, with
+  redacted NDJSON events through `--json`.
+- `--record` remains hidden and experimental. M3d produced the spike evidence;
+  public graduation is future work.
 
-Docs to update as M3 lands:
+Docs touched or kept aligned during M3:
 
 - `docs/superpowers/specs/2026-06-10-packaging-toolchain-design.md`
 - `docs/guides/first-package.md` after user-facing command behavior changes
@@ -566,8 +567,10 @@ Docs to update as M3 lands:
 - Record mode has explicit privilege, storage, redaction, and cleanup bounds.
 - Help text does not advertise unavailable M3 features.
 
-## Next Slice
+## Closeout
 
-M3a, M3b, M3c0, and M3c are implemented. The next implementation-planning
-target is M3d: a record-mode spike that proves tracing, redaction, and draft
-quality before committing to the full workflow.
+M3 is complete as an implementation umbrella. The next work should start a new
+M4 design/spec rather than adding more implementation slices under M3. Recommended
+M4 scope: decide whether record mode graduates, tighten the public first-package
+packaging UX, refresh command help/tutorial truth, and define any remaining v1
+acceptance gates before calling the packaging authoring loop public-ready.
