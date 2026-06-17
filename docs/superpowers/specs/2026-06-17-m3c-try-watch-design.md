@@ -63,6 +63,7 @@ In scope:
 
 - Add `conary try --watch` for recipe projects or inferable source trees.
 - Keep watch mode namespace-only.
+- Classify watch as local state mutation, not activated host mutation.
 - Preserve the last successful try generation when cook, validation, hooks,
   namespace exposure, or staged cleanup fails.
 - Emit M3a structured watch events and diagnostics.
@@ -99,7 +100,9 @@ conary try --watch --json
 ```
 
 `target` defaults to `.` when `--watch` is set and no package/action target is
-provided.
+provided. Dispatch must make this default before applying the existing package
+or action-word routing so `conary try --watch` does not hit the ordinary
+"package artifact or status/rollback/keep" error.
 
 Rejected combinations:
 
@@ -120,7 +123,15 @@ no keep for watch-created sessions. The refusal must not require a schema
 migration. M3c should write a durable marker file under the active try
 `work_dir`, such as `.conary-try-watch-session.json`, and have keep check that
 marker before promotion. Rollback treats the marker as ordinary workdir content
-and removes it during cleanup.
+and removes it during cleanup. The marker is a normal-use product guard, not a
+same-user tamper-proof trust boundary. A user who deliberately edits try state
+can already bypass local CLI policy; M2 publish and provenance gates still
+decide whether any artifact may be released.
+
+Command-risk classification should treat `conary try --watch` as local state
+mutation because M3c is namespace-only and never publishes an activated
+generation as host-global current. `--watch --activate` remains a parser or
+pre-dispatch refusal.
 
 `--json` for watch is streaming NDJSON, one redacted `PackagingEvent` per line,
 not the final-object JSON used by one-shot `cook --json`. The final line should
@@ -158,8 +169,14 @@ Existing large-file changes should stay thin:
 - `apps/conary/src/cli/mod.rs`: add flags and parser tests only.
 - `apps/conary/src/dispatch/root.rs`: route watch to one command function and
   preserve try-management action handling.
-- `apps/conary/src/commands/cook.rs`: expose a narrow internal cook API only
-  if needed; do not move watch orchestration into cook.
+- `apps/conary/src/command_risk.rs`: classify watch as local state mutation
+  and keep activated/non-watch try behavior unchanged.
+- `apps/conary/src/commands/cook.rs`: avoid edits when possible. The preferred
+  M3c cook adapter launches the current `conary` binary as a child process with
+  `cook --json`, captures the final command JSON, and kills the child process
+  group on cancellation. If implementation proves an in-process cook API is
+  cleaner, expose only a narrow `pub(crate)` helper and keep watch
+  orchestration out of cook.
 - `apps/conary/src/commands/try_session/session.rs`: add narrow staged refresh
   helpers and small model-facing state updates, not a watch loop.
 - `crates/conary-core/src/diagnostics/mod.rs`: add only additive event kinds or
@@ -195,36 +212,48 @@ Startup:
 2. Refuse unsupported CLI combinations before opening a try session.
 3. Check for an existing active or orphaned try session using the normal
    preflight path.
-4. Compute the initial source identity.
-5. Cook the initial package.
-6. Start a normal namespace try session through the try-session boundary.
-7. Write the watch-session marker under the try session workdir.
-8. Record the session id, generation id, source identity hash, and operation id
+4. Validate the watch root with the same local-source safety expectations used
+   by cook, including refusal for symlink escapes outside the project tree.
+5. Compute the initial source identity.
+6. Cook the initial package.
+7. Start a normal namespace try session through the try-session boundary.
+8. Write the watch-session marker under the try session workdir.
+9. Record the session id, generation id, source identity hash, and operation id
    in in-memory watch state.
-9. Emit `OperationStarted`, `PhaseStarted`, cook/try events, and a successful
+10. Emit `OperationStarted`, `PhaseStarted`, cook/try events, and a successful
    refresh event.
 
 Loop:
 
 1. Wait for a filesystem wakeup or polling tick.
-2. Debounce for a fixed initial delay, recommended default 750 ms.
-3. Recompute canonical local source identity.
-4. If the identity is unchanged, emit no refresh and continue waiting.
-5. Cook the package into a watch-owned output directory.
-6. If cook fails, emit a diagnostic and keep the last successful generation.
-7. If cook succeeds, stage a try refresh.
-8. Commit the new generation to the active watch session only after validation,
+2. Confirm the recorded session is still active. If another terminal already
+   rolled back, kept, or orphaned it, emit a diagnostic and exit the loop
+   without starting another cook.
+3. Debounce for a fixed initial delay, recommended default 750 ms.
+4. Recompute canonical local source identity.
+5. If the identity is unchanged, emit no refresh and continue waiting.
+6. Cook the package into a watch-owned output directory.
+7. Recompute source identity after cook. If it changed during the cook, discard
+   the cooked artifact, emit a skipped/stale-build event, and enqueue another
+   debounce cycle instead of trying an artifact whose source snapshot is no
+   longer current.
+8. If cook fails, emit a diagnostic and keep the last successful generation.
+9. If cook succeeds, stage a try refresh.
+10. Commit the new generation to the active watch session only after validation,
    copied DB installation, generation build, namespace exposure, and hook
    execution all succeed.
-9. Tear down and remove the previous generation/workdir only after the new
+11. Tear down and remove the previous generation/workdir only after the new
    generation is the recorded active generation.
 
 Shutdown:
 
 1. On Ctrl-C or process termination handled by the loop, emit cancellation.
-2. Roll back the active watch session through normal try rollback.
-3. If rollback succeeds, emit `OperationFinished` with a cancellation summary.
-4. If rollback fails, emit a cleanup diagnostic, leave the session active or
+2. If a cook child process is running, signal its process group, wait briefly,
+   then kill it and remove the watch-owned partial output directory if it does
+   not exit cleanly.
+3. Roll back the active watch session through normal try rollback.
+4. If rollback succeeds, emit `OperationFinished` with a cancellation summary.
+5. If rollback fails, emit a cleanup diagnostic, leave the session active or
    orphaned according to existing try-session rules, and exit non-zero.
 
 M3c should not keep a watch session alive after the watch process exits. The
@@ -237,12 +266,18 @@ state design.
 The central M3c behavior is staged refresh with last-good preservation.
 
 The active try-session row remains the single open session for the watch loop.
-Each refresh creates temporary staging paths under the watch work directory,
+The persisted `work_dir` stays fixed at the top-level session directory for the
+entire watch session. This preserves compatibility with existing status,
+rollback, keep refusal, unmount, and cleanup code. Each refresh creates
+temporary staging paths under that stable work directory,
 for example:
 
 ```text
 try/<session-id>/
-  current/
+  conary.db
+  package.ccs
+  namespace-root/
+  generation-root/
   refresh-0002/
 ```
 
@@ -252,17 +287,18 @@ normal namespace try. It builds the new inactive generation under the live
 runtime artifact roots, exposes a staged namespace root, and runs declarative
 try hooks against that staged non-host root.
 
-Only after all staged work succeeds does try-session update the open session to
-the new package path, copied DB path if needed, generation id, and namespace
-root/workdir pointers. The implementation may either keep the existing
-`work_dir` stable and move staged content into a stable `current/` subdirectory,
-or keep generation-specific staging directories and make rollback aware of the
-recorded current staging directory. It must not require a schema migration.
+Only after all staged work succeeds does try-session commit the refresh. Commit
+means unmounting the previous stable namespace paths, atomically replacing the
+stable `package.ccs` and `conary.db` files from the staged refresh, recreating
+the stable `namespace-root` and `generation-root` exposure for the new
+generation, and updating the open session's package path and generation id.
+The implementation must not update `work_dir` to a generation-specific
+subdirectory and must not require a schema migration.
 
 If staging fails before commit:
 
 - the active session row still points at the last successful generation
-- the last successful namespace root remains available
+- the stable namespace root remains on the last successful generation
 - the failed staged generation and staging directory are removed when possible
 - cleanup failure stops the loop and surfaces an orphan/cleanup diagnostic
 
@@ -273,9 +309,12 @@ If commit succeeds but previous-generation cleanup fails:
 - normal rollback remains retryable
 
 The try-session model may need a small open-session update method, for example
-`replace_try_generation`, that updates only `active` or `orphaned` sessions and
-preserves the existing completed-session guard. It must not add a new status,
-mode, or table.
+`replace_try_generation`, that updates package path and generation id only for
+`active` or `orphaned` sessions and preserves the existing completed-session
+guard. This helper belongs in
+`crates/conary-core/src/db/models/try_session.rs`; the CLI should not write raw
+session-update SQL for the refresh commit. It must not add a new status, mode,
+or table.
 
 ## Source Watching And Debounce
 
@@ -303,6 +342,11 @@ Identity rules:
 - Dirty tracked files do trigger refresh outside CI.
 - CI dirty-tree refusal remains owned by hermetic source identity and should
   surface as a diagnostic rather than silently watching a different file set.
+- Watch startup and refresh should reject local-source symlink escapes with the
+  existing cook/local-source safety semantics and a watch diagnostic.
+- Source identity is used to decide whether to rebuild, not as publishable
+  provenance by itself. Cook still owns its own source materialization and
+  provenance evidence.
 
 ## Cook And Source Policy
 
@@ -314,13 +358,16 @@ M3c should use hermetic cook behavior when the existing cook defaults or flags
 select it. It must not claim stronger provenance than the underlying cook
 produced. Source fetching follows M2a expectations:
 
-- initial startup may use the normal prefetch path
-- rebuilds should prefer offline-cache-only behavior after startup when the
-  existing cook API can express it
-- if the existing cook API cannot express "prefetch once, rebuild offline" in
-  the first slice without broad cook refactoring, the implementation plan must
-  either add a narrow cook-run option or explicitly limit M3c to the current
-  cook source policy and keep the provenance text honest
+- initial startup may use the normal prefetch path selected by the underlying
+  cook mode
+- hermetic watch refreshes after startup use offline-cache-only source behavior
+  and fail non-destructively on cache misses
+- when a recipe edit adds a new remote source or patch that is not cached, the
+  refresh emits a source-cache diagnostic and preserves the last successful try
+  generation; the user restarts watch, or runs the normal fetch/prefetch path,
+  to admit new network inputs
+- non-hermetic watch refreshes keep the current cook source policy and must not
+  claim hermetic provenance
 
 Every refresh must rerun try package validation after cook. A source edit that
 introduces unsafe scriptlets, unsupported declarative hooks, irreversible
@@ -344,6 +391,11 @@ If adding event kinds is too broad, these can be represented initially as
 with watch-specific messages. The implementation plan should choose one
 approach and include serialization tests.
 
+M3c must add a per-event redaction helper before streaming NDJSON. The helper
+may live in `apps/conary/src/commands/diagnostics.rs` by factoring the existing
+private redaction functions, but every `PackagingEvent` must be redacted before
+it is serialized to stdout or written into the watch operation record.
+
 Recommended diagnostic codes:
 
 - `WatchCookFailed`
@@ -366,6 +418,8 @@ Operation records:
   event.
 - Include a bounded event list. The implementation should cap stored events,
   recommended newest 500, before writing the final record.
+- If events are trimmed, insert a synthetic retained event that states how many
+  older events were omitted so the record does not look complete by accident.
 - Redact before write through existing diagnostics helpers.
 - Use the existing private file store and newest-50 retention.
 - If record writing fails, print/log a warning event but do not fail an
@@ -408,6 +462,7 @@ Refresh failures:
 Cancellation:
 
 - Ctrl-C triggers rollback.
+- Ctrl-C during cook cancels the cook child process before rollback.
 - A second Ctrl-C may exit immediately after printing that manual rollback may
   be required.
 - Successful cancellation cleanup exits zero.
@@ -424,19 +479,36 @@ Unit tests:
 - CLI parses `try --watch`, default target, `--recipe`, and `--json`.
 - CLI rejects watch with `.ccs`, `--activate`, `--allow-irreversible`, action
   words, and trailing run commands.
+- Command-risk classification treats watch as local state mutation and keeps
+  activated try as host mutation.
 - Debounce coalesces rapid changes into one refresh.
 - Unchanged canonical source identity skips refresh.
 - Git untracked files do not trigger refresh; tracked dirty files do.
 - Filesystem identity ignores the existing default ignored directories.
+- Plain non-git inferable source trees trigger refresh on meaningful file
+  changes and ignore changes below the existing default ignored directories.
+- Local-source symlink escapes are refused before entering the steady watch
+  loop.
 - Event sequences are monotonic and JSON lines serialize with schema version.
+- Per-event redaction removes secrets from diagnostic-bearing NDJSON events.
 - Bounded operation records drop older watch events before write.
+- Trimmed operation records include a synthetic event explaining how many older
+  events were omitted.
 - Watch-created sessions write a workdir marker, and `conary try keep` refuses
   marked sessions without changing the `try_sessions` schema.
+- `conary try keep` refusal for a watch-created session is covered through the
+  CLI path, not only a helper unit test.
 - Refresh success updates the active session generation only after staging
   succeeds.
 - Cook failure preserves the previous generation id and namespace root.
+- A source change during cook discards the stale cooked artifact and queues
+  another refresh.
 - Try policy failure on the second refresh preserves the previous generation id.
 - Staging cleanup failure stops the loop and leaves rollback retryable.
+- External rollback or keep from another terminal makes the watch loop exit
+  cleanly on the next tick.
+- Ctrl-C during an in-progress cook cancels the cook child, removes partial
+  watch-owned output, and rolls back the active try session.
 - Cancellation calls normal try rollback.
 
 Focused CLI/integration tests:
@@ -446,6 +518,8 @@ Focused CLI/integration tests:
   generation.
 - A failing rebuild reports failure while `conary try status` still shows the
   last successful generation.
+- `conary try keep` against a watch-created session fails with watch-specific
+  guidance.
 - `conary try rollback` after a failed refresh cleans the active session.
 - `conary try --watch --json` emits NDJSON events and no human stdout.
 
@@ -484,18 +558,23 @@ cargo clippy --workspace --all-targets -- -D warnings
 The implementation plan should split M3c into these reviewable tasks:
 
 1. Add CLI parsing and routing for watch with unsupported-combination tests.
-2. Add watch source identity/debounce units using canonical local source
-   identity.
-3. Expose a narrow internal cook function for watch if the current cook command
-   API cannot be reused without stdout coupling.
-4. Add staged namespace refresh helpers under `try_session/session.rs` and keep
-   watch orchestration outside that file.
-5. Add watch loop orchestration, cancellation, and human rendering.
-6. Add structured events, JSON streaming, bounded operation record writing, and
-   redaction tests.
-7. Add failure recovery tests for last-good preservation and cleanup stop
-   behavior.
-8. Update `docs/superpowers/specs/2026-06-15-m3-packaging-differentiators-design.md`,
+2. Add command-risk classification for namespace-only watch mode.
+3. Add watch source identity/debounce units using canonical local source
+   identity, including plain-directory inference and symlink-escape refusal.
+4. Add a cancellation-aware cook adapter. Prefer a child-process adapter using
+   the current `conary cook --json`; expose an internal cook helper only if the
+   plan proves it is smaller and equally cancellable.
+5. Add model-level open-session replacement helpers in
+   `crates/conary-core/src/db/models/try_session.rs`.
+6. Add staged namespace refresh helpers under `try_session/session.rs` with a
+   stable top-level `work_dir`, and keep watch orchestration outside that file.
+7. Add watch loop orchestration, external-session liveness checks,
+   cancellation, and human rendering.
+8. Add structured events, per-event redaction, JSON streaming, bounded
+   operation record writing, and redaction tests.
+9. Add failure recovery tests for last-good preservation, stale cook output,
+   keep refusal, and cleanup stop behavior.
+10. Update `docs/superpowers/specs/2026-06-15-m3-packaging-differentiators-design.md`,
    `docs/modules/feature-ownership.md`, and `docs/llms/subsystem-map.md` only
    after implementation proves the active watch behavior.
 
