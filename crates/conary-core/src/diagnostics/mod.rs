@@ -51,6 +51,11 @@ pub enum PackagingDiagnosticCode {
     PublishJsonUnsupported,
     OperationRecordWriteFailed,
     RedactionFailed,
+    WatchCookFailed,
+    WatchTryRefreshFailed,
+    WatchCleanupFailed,
+    WatchSourceIdentityFailed,
+    TryWatchUnsupported,
     Unknown,
 }
 
@@ -239,6 +244,13 @@ pub enum PackagingEventKind {
     DiagnosticEmitted,
     ArtifactCreated,
     OperationFinished,
+    WatchStarted,
+    WatchDebounced,
+    WatchRefreshStarted,
+    WatchRefreshSkipped,
+    WatchRefreshSucceeded,
+    WatchRefreshFailed,
+    WatchCancelled,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -369,6 +381,31 @@ mod tests {
         assert_eq!(value["sequence"], 7);
         assert_eq!(value["kind"], "diagnostic-emitted");
         assert_eq!(value["diagnostic"]["code"], "inference-trace");
+    }
+
+    #[test]
+    fn watch_event_kinds_and_diagnostics_serialize_as_kebab_case() {
+        let event = PackagingEvent {
+            schema_version: PACKAGING_JSON_SCHEMA_VERSION,
+            operation_id: "watch-1".to_string(),
+            sequence: 1,
+            phase: PackagingPhase::TrySession,
+            kind: PackagingEventKind::WatchRefreshSucceeded,
+            message: Some("refreshed try generation 42".to_string()),
+            diagnostic: None,
+            artifact: None,
+            progress: None,
+        };
+        let value = serde_json::to_value(&event).unwrap();
+        assert_eq!(value["kind"], "watch-refresh-succeeded");
+
+        let diagnostic = PackagingDiagnostic::error(
+            PackagingPhase::TrySession,
+            PackagingDiagnosticCode::WatchTryRefreshFailed,
+            "refresh failed",
+        );
+        let value = serde_json::to_value(&diagnostic).unwrap();
+        assert_eq!(value["code"], "watch-try-refresh-failed");
     }
 
     #[test]

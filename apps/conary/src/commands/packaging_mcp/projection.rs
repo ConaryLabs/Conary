@@ -107,9 +107,14 @@ fn diagnostic_code_to_error_kind(code: PackagingDiagnosticCode) -> AgentErrorKin
         | PackagingDiagnosticCode::ProjectPublishPreflightFailed => {
             AgentErrorKind::ValidationFailed
         }
-        PackagingDiagnosticCode::SourceCacheMiss => AgentErrorKind::MissingPrerequisite,
-        PackagingDiagnosticCode::PublishJsonUnsupported => AgentErrorKind::NotSupported,
+        PackagingDiagnosticCode::SourceCacheMiss
+        | PackagingDiagnosticCode::WatchSourceIdentityFailed => AgentErrorKind::MissingPrerequisite,
+        PackagingDiagnosticCode::PublishJsonUnsupported
+        | PackagingDiagnosticCode::TryWatchUnsupported => AgentErrorKind::NotSupported,
         PackagingDiagnosticCode::CookFailed
+        | PackagingDiagnosticCode::WatchCookFailed
+        | PackagingDiagnosticCode::WatchTryRefreshFailed
+        | PackagingDiagnosticCode::WatchCleanupFailed
         | PackagingDiagnosticCode::OperationRecordWriteFailed
         | PackagingDiagnosticCode::RedactionFailed
         | PackagingDiagnosticCode::Unknown => AgentErrorKind::PartialFailure,
