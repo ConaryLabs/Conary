@@ -592,6 +592,7 @@ mod tests {
             root: "/",
             dry_run: true,
             defer_generation: false,
+            quiet: false,
             no_scripts: false,
             sandbox_mode: SandboxMode::None,
             allow_downgrade: false,

@@ -236,6 +236,7 @@ fn preflight_prepared_full_update_legacy_replay(
         root,
         dry_run: false,
         defer_generation: false,
+        quiet: false,
         no_scripts,
         sandbox_mode,
         allow_downgrade: false,
