@@ -20,7 +20,11 @@ M3d includes:
 - Hidden flags: `--record-output`, `--record-backend`, `--record-validate`, `--keep-raw-trace`, `--record-unsafe-host`, and reserved fail-closed `--record-allow-network`.
 - Default sandboxed command execution with network isolation.
 - Exact source/work/install host roots watched and bind-mounted into the sandbox at `/conary/source`, `/conary/work`, and `/conary/destdir`.
-- `DESTDIR` and `CONARY_DESTDIR` exported to the recorded command.
+- `DESTDIR`, `CONARY_DESTDIR`, `CONARY_WORKDIR`, and `SOURCE_DATE_EPOCH` exported to the recorded command.
+- `/conary/source` is writable in M3d so build systems that patch or generate
+  source files can still run. Source mutations must be recorded as
+  `TraceOperation::SourceWrite` and surfaced in the trace report; later public
+  UX can evaluate a read-only source default.
 - Fanotify-first backend selection with recursive inotify support.
 - Inotify-only fallback that declares incomplete read evidence.
 - Event-loss handling for fanotify queue errors, inotify queue overflow, watch-limit exhaustion, and watcher thread failure.
@@ -30,6 +34,11 @@ M3d includes:
 - Conservative draft recipe generation with `CONARY_DESTDIR` and concrete recording destdir normalization to `%(destdir)s`.
 - Optional `--record-validate` normal cook using `origin_class_override = Some("recorded-draft")`.
 - Publish-refusal regression proof for recorded-draft artifacts.
+- Source and installed-tree symlinks are preserved as symlinks in snapshots and
+  installed-file evidence. M3d does not follow symlinks into new trace roots.
+- Source copying preserves fidelity by default. M3d does not silently skip
+  `.git`, `target`, `node_modules`, or other large paths; large source copies
+  are a known spike cost and a later public UX may add explicit exclude rules.
 
 M3d excludes:
 
@@ -88,6 +97,9 @@ Maintainability boundaries:
 - `apps/conary/src/dispatch/root.rs` is over 1500 lines. This plan allows only the record-mode cook branch and routing tests there.
 - `apps/conary/src/commands/cook.rs` is over 1500 lines. This plan allows only a small validation helper and route-preserving tests; record behavior lives in `record_mode/`.
 - `crates/conary-core/src/recipe/kitchen/cook.rs` is over 1500 lines. M3d must not change Kitchen execution unless a test proves the validation helper cannot inject `origin_class_override` through existing config.
+- `crates/conary-core/src/ccs/manifest.rs` is over 1500 lines. M3d must not
+  modify it; recorded-draft provenance uses existing manifest provenance
+  fields.
 - Linux watcher implementation stays out of `crates/conary-core` because it is CLI-owned spike infrastructure.
 
 Focused verification commands:
@@ -119,11 +131,16 @@ Review lock mapping:
 | Public source snapshot lifecycle can point recipes at missing private data | Task 4 workspace/output lifecycle and Task 8 draft source tests |
 | `CONARY_DESTDIR` does not exist in normal Kitchen validation | Task 8 destdir normalization tests and Task 9 normal cook validation |
 | Trace backend must not spawn commands | Task 5 backend trait and Task 7 runner ownership |
-| Sandbox watches must see exact bind-mounted inodes | Task 7 mount contract tests and Task 10 integration test |
+| Sandbox watches must see exact bind-mounted inodes | Task 6 mount contract tests and Task 10 integration test |
 | Failed tracing must not overclaim completeness | Task 5/6 event-loss tests and Task 11 final output diagnostics |
 | Raw traces can leak secrets | Task 4 private workspace and Task 11 redaction/record tests |
-| Recorded-draft publish gates must remain closed | Task 9 validation stamping and Task 10 publish-refusal tests |
+| Recorded-draft publish gates must remain closed | Task 9 validation stamping and Task 11 publish-refusal tests |
 | `--record-allow-network` is reserved, not minimum behavior | Task 1 fail-closed parser/routing test |
+| Source symlinks and installed symlinks silently disappear | Task 3 snapshot symlink tests and Task 10 installed symlink evidence |
+| Inotify can miss writes inside newly-created directories | Task 4 recursive watch tests plus Task 10 installed-file reconciliation limitation |
+| Unsafe host mode can be missed in output | Task 10 stderr warning and report limitation |
+| Sandbox environment can produce non-reproducible binaries | Task 6 `SOURCE_DATE_EPOCH` export |
+| Writable source mounts can hide build-time mutations | Task 6 source-write contract and Task 10 trace/report reconciliation |
 
 ---
 
@@ -588,12 +605,18 @@ mod tests {
     fn scoped_path_rejects_private_prefix_leaks() {
         let source = ScopeRoot::new(TraceScope::Source, "/tmp/conary-record/source").unwrap();
         let scoped = source
-            .scope_path("/tmp/conary-record/source/src/main.rs")
+            .scope_path(
+                "/tmp/conary-record/source/src/main.rs",
+                TraceOperation::SourceRead,
+            )
             .unwrap();
         assert_eq!(scoped.scope, TraceScope::Source);
+        assert_eq!(scoped.operation, TraceOperation::SourceRead);
         assert_eq!(scoped.path, "src/main.rs");
 
-        let error = source.scope_path("/tmp/conary-record/other/secret").unwrap_err();
+        let error = source
+            .scope_path("/tmp/conary-record/other/secret", TraceOperation::SourceRead)
+            .unwrap_err();
         assert!(error.to_string().contains("outside trace scope"));
     }
 
@@ -616,6 +639,7 @@ mod tests {
                 file_type: "file".to_string(),
                 executable: true,
                 size: 12,
+                link_target: None,
             }],
             inferred_build_steps: Vec::new(),
             inferred_install_steps: vec!["make install DESTDIR=%(destdir)s".to_string()],
@@ -697,6 +721,7 @@ pub struct InstalledFileEvidence {
     pub file_type: String,
     pub executable: bool,
     pub size: u64,
+    pub link_target: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -721,6 +746,7 @@ pub enum RecordingLimitation {
     CommandFailed,
     ValidationSkipped,
     ValidationFailed,
+    UnsafeHost,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -756,7 +782,11 @@ impl ScopeRoot {
         Ok(Self { scope, root })
     }
 
-    pub fn scope_path(&self, path: impl AsRef<Path>) -> Result<ObservedPath> {
+    pub fn scope_path(
+        &self,
+        path: impl AsRef<Path>,
+        operation: TraceOperation,
+    ) -> Result<ObservedPath> {
         let path = path.as_ref();
         let relative = path
             .strip_prefix(&self.root)
@@ -766,7 +796,7 @@ impl ScopeRoot {
         }
         Ok(ObservedPath {
             scope: self.scope,
-            operation: TraceOperation::Unknown,
+            operation,
             path: relative.to_string_lossy().trim_start_matches('/').to_string(),
         })
     }
@@ -837,6 +867,8 @@ mod tests {
         let output = temp.path().join("recorded/demo");
         std::fs::create_dir_all(&source).unwrap();
         std::fs::write(source.join("main.c"), "int main(void){return 0;}\n").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("main.c", source.join("main-link.c")).unwrap();
 
         let workspace = RecordWorkspace::create(&source, &output, false).unwrap();
         let mode = std::fs::metadata(&workspace.private_root)
@@ -849,6 +881,11 @@ mod tests {
 
         workspace.publish_source_snapshot().unwrap();
         assert!(output.join("source/main.c").is_file());
+        #[cfg(unix)]
+        assert_eq!(
+            std::fs::read_link(output.join("source/main-link.c")).unwrap(),
+            std::path::PathBuf::from("main.c")
+        );
         assert!(!output.join("raw-trace").exists());
     }
 
@@ -970,6 +1007,17 @@ fn copy_tree(source: &Path, destination: &Path) -> Result<()> {
                 fs::create_dir_all(parent)?;
             }
             fs::copy(entry.path(), &target)?;
+        } else if entry.file_type().is_symlink() {
+            #[cfg(unix)]
+            {
+                if let Some(parent) = target.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                let link_target = fs::read_link(entry.path())?;
+                std::os::unix::fs::symlink(link_target, &target)?;
+            }
+            #[cfg(not(unix))]
+            anyhow::bail!("record-mode source snapshots require Unix symlink support");
         }
     }
     Ok(())
@@ -1234,6 +1282,10 @@ mod tests {
 
         let drain = session.finish().unwrap();
         assert!(drain.events.iter().any(|event| event.observed.path == "usr/bin/demo"));
+        assert!(drain.events.iter().any(|event| {
+            event.observed.path == "usr/bin/demo"
+                && event.observed.operation != conary_core::recipe::recording::TraceOperation::Unknown
+        }));
         assert!(!drain.event_loss);
     }
 }
@@ -1259,6 +1311,9 @@ Required behavior:
 - `start` recursively adds watches for every directory under source, work, and install roots.
 - `start` reads `/proc/sys/fs/inotify/max_user_watches`; if initial directory count is greater than the budget, return an error containing `max_user_watches`.
 - `drain_events` maps create, modify, delete, and move events to `TraceOperation` based on the matched root and path.
+- `drain_events` must call `ScopeRoot::scope_path(path, operation)` with a
+  concrete operation. It must not emit `TraceOperation::Unknown` for known
+  inotify masks.
 - New directories get watches before returning from `drain_events`.
 - `IN_Q_OVERFLOW` sets `TraceDrain.event_loss = true`.
 
@@ -1390,6 +1445,8 @@ impl FanotifyTraceBackend {
 }
 
 fn probe_fanotify_support() -> FanotifyProbe {
+    // SAFETY: fanotify_init is called with constant flags and returns either a
+    // new file descriptor or -1. No pointer arguments are passed.
     let fd = unsafe {
         libc::fanotify_init(
             libc::FAN_CLASS_NOTIF | libc::FAN_CLOEXEC | libc::FAN_NONBLOCK,
@@ -1397,6 +1454,8 @@ fn probe_fanotify_support() -> FanotifyProbe {
         )
     };
     if fd >= 0 {
+        // SAFETY: fd was returned by fanotify_init above and has not been
+        // moved or closed yet.
         unsafe {
             libc::close(fd);
         }
@@ -1412,6 +1471,13 @@ fn probe_fanotify_support() -> FanotifyProbe {
 ```
 
 Then implement `TraceBackend` for `FanotifyTraceBackend`. `start` must call raw `libc::fanotify_init`, mark the three scoped roots with `libc::fanotify_mark`, and return a `FanotifyTraceSession`. It is acceptable for the first implementation to include tests through fakeable probe and trait-level event classification while gated live fanotify integration is opt-in through an ignored test.
+
+Every `unsafe` block in `fanotify_backend.rs` must have a `// SAFETY:` comment.
+Add a unit test around the fakeable syscall adapter proving file descriptors
+are closed when fanotify probing succeeds and a later mark/setup step fails.
+Document kernel limitations in the backend diagnostic: fanotify read evidence
+depends on kernel fanotify support for the selected marks, and the spike falls
+back to inotify-only in `auto` when that support or permission is absent.
 
 - [ ] **Step 3: Add auto backend selector**
 
@@ -1510,6 +1576,8 @@ mod tests {
         assert_eq!(plan.cwd, "/conary/source");
         assert_eq!(plan.env_value("DESTDIR"), Some("/conary/destdir"));
         assert_eq!(plan.env_value("CONARY_DESTDIR"), Some("/conary/destdir"));
+        assert_eq!(plan.env_value("CONARY_WORKDIR"), Some("/conary/work"));
+        assert!(plan.env_value("SOURCE_DATE_EPOCH").is_some());
         assert!(plan.has_mount(&source, "/conary/source", true));
         assert!(plan.has_mount(&work, "/conary/work", true));
         assert!(plan.has_mount(&install, "/conary/destdir", true));
@@ -1536,6 +1604,11 @@ mod tests {
             plan.env_value("CONARY_DESTDIR"),
             Some(request.install_root.to_str().unwrap())
         );
+        assert_eq!(
+            plan.env_value("CONARY_WORKDIR"),
+            Some(request.work_root.to_str().unwrap())
+        );
+        assert!(plan.env_value("SOURCE_DATE_EPOCH").is_some());
     }
 }
 ```
@@ -1587,6 +1660,8 @@ impl RecordSandboxPlan {
 }
 
 pub(crate) fn sandbox_plan(request: &RecordCommandRequest) -> Result<RecordSandboxPlan> {
+    let source_date_epoch = std::env::var("SOURCE_DATE_EPOCH").unwrap_or_else(|_| "0".to_string());
+
     if request.unsafe_host {
         let install = request.install_root.to_string_lossy().to_string();
         return Ok(RecordSandboxPlan {
@@ -1601,6 +1676,7 @@ pub(crate) fn sandbox_plan(request: &RecordCommandRequest) -> Result<RecordSandb
                     "CONARY_WORKDIR".to_string(),
                     request.work_root.to_string_lossy().to_string(),
                 ),
+                ("SOURCE_DATE_EPOCH".to_string(), source_date_epoch),
             ],
         });
     }
@@ -1618,10 +1694,16 @@ pub(crate) fn sandbox_plan(request: &RecordCommandRequest) -> Result<RecordSandb
             ("DESTDIR".to_string(), "/conary/destdir".to_string()),
             ("CONARY_DESTDIR".to_string(), "/conary/destdir".to_string()),
             ("CONARY_WORKDIR".to_string(), "/conary/work".to_string()),
+            ("SOURCE_DATE_EPOCH".to_string(), source_date_epoch),
         ],
     })
 }
 ```
+
+The `/conary/source` mount is writable by design for this spike. Trace backends
+must classify source mutations as `TraceOperation::SourceWrite` and report them;
+M3d does not hide the fact that a recorded build patched or generated source
+files.
 
 - [ ] **Step 3: Implement command execution**
 
@@ -1687,12 +1769,16 @@ Add the renderer in the same file:
 fn render_command_for_shell(command: &[String]) -> String {
     command
         .iter()
-        .map(|arg| shell_quote(arg))
+        .map(|arg| shell_quote_for_execution(arg))
         .collect::<Vec<_>>()
         .join(" ")
 }
 
-fn shell_quote(value: &str) -> String {
+/// Quote a command argument for the temporary `/bin/sh` execution wrapper.
+///
+/// `$` remains unquoted so `$CONARY_DESTDIR` can expand inside the recording
+/// sandbox. Do not use this helper for generated recipe text.
+fn shell_quote_for_execution(value: &str) -> String {
     if value
         .chars()
         .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '.' | '_' | '-' | '=' | '$'))
@@ -1703,6 +1789,9 @@ fn shell_quote(value: &str) -> String {
     }
 }
 ```
+
+Add a test proving `shell_quote_for_execution("$CONARY_DESTDIR/usr/bin")`
+keeps the `$CONARY_DESTDIR` expansion intact.
 
 - [ ] **Step 4: Run Task 6 verification**
 
@@ -1763,6 +1852,7 @@ mod tests {
             }],
             installed_files: Vec::new(),
             limitations: vec![RecordingLimitation::IncompleteReadEvidence],
+            ignored_events: Vec::new(),
             private_prefixes: vec![private_root.clone()],
         })
         .unwrap();
@@ -1798,6 +1888,7 @@ pub(crate) struct ReportInput {
     pub(crate) observed_paths: Vec<ObservedPath>,
     pub(crate) installed_files: Vec<InstalledFileEvidence>,
     pub(crate) limitations: Vec<RecordingLimitation>,
+    pub(crate) ignored_events: Vec<IgnoredEvent>,
     pub(crate) private_prefixes: Vec<PathBuf>,
 }
 
@@ -1815,10 +1906,7 @@ pub(crate) fn build_recording_report(input: ReportInput) -> Result<RecordingRepo
         inferred_build_steps: Vec::new(),
         inferred_install_steps: Vec::new(),
         capability_suggestions: Vec::new(),
-        ignored_events: vec![IgnoredEvent {
-            reason: "out-of-scope".to_string(),
-            count: 0,
-        }],
+        ignored_events: input.ignored_events,
         redactions: command
             .redactions
             .into_iter()
@@ -1963,6 +2051,18 @@ mod tests {
     }
 
     #[test]
+    fn recipe_quote_preserves_destdir_macro_without_shell_expansion() {
+        assert_eq!(
+            shell_quote_for_recipe("%(destdir)s/usr/bin/app"),
+            "%(destdir)s/usr/bin/app"
+        );
+        assert_eq!(
+            shell_quote_for_recipe("$CONARY_DESTDIR/usr/bin/app"),
+            "'$CONARY_DESTDIR/usr/bin/app'"
+        );
+    }
+
+    #[test]
     fn draft_recipe_uses_public_source_snapshot_and_install_step_when_files_exist() {
         let recipe = derive_draft_recipe(DraftRecipeInput {
             package_name: "demo".to_string(),
@@ -2007,7 +2107,7 @@ pub fn render_recorded_command(command: &[String], recording_destdir: &str) -> S
                 .replace("${CONARY_DESTDIR}", "%(destdir)s")
                 .replace("$CONARY_DESTDIR", "%(destdir)s")
                 .replace(recording_destdir, "%(destdir)s");
-            shell_quote(&normalized)
+            shell_quote_for_recipe(&normalized)
         })
         .collect::<Vec<_>>()
         .join(" ")
@@ -2045,7 +2145,11 @@ path = "source"
     ))
 }
 
-fn shell_quote(value: &str) -> String {
+/// Quote an argument for generated recipe text.
+///
+/// `%(destdir)s` syntax remains unquoted so normal Kitchen substitution can
+/// replace it. Do not use this helper for live command execution.
+fn shell_quote_for_recipe(value: &str) -> String {
     if value
         .chars()
         .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '.' | '_' | '-' | '%' | '(' | ')'))
@@ -2186,15 +2290,21 @@ In `apps/conary/src/commands/cook.rs` tests, add:
 
 ```rust
 #[test]
-fn recorded_draft_validation_options_set_origin_override() {
+fn recorded_draft_validation_run_options_set_origin_override_and_isolation() {
     let options = CookRecordedDraftOptions {
         recipe: PathBuf::from("recorded/demo/recipe.toml"),
         output_dir: PathBuf::from("recorded/demo/dist"),
         source_cache: PathBuf::from("recorded/demo/sources"),
         operation_id: "record-1".to_string(),
     };
-    let config = recorded_draft_kitchen_config(&options, Path::new("recorded/demo")).unwrap();
-    assert_eq!(config.origin_class_override.as_deref(), Some("recorded-draft"));
+    let recipe = options.recipe.to_string_lossy().to_string();
+    let output_dir = options.output_dir.to_string_lossy().to_string();
+    let source_cache = options.source_cache.to_string_lossy().to_string();
+    let run = recorded_draft_run_options(&options, &recipe, &output_dir, &source_cache);
+
+    assert!(run.isolated);
+    assert!(!run.no_isolation);
+    assert_eq!(run.origin_class_override.as_deref(), Some("recorded-draft"));
 }
 ```
 
@@ -2228,21 +2338,33 @@ pub(crate) struct CookRecordedDraftOptions {
 }
 ```
 
-Add a config helper:
+Add a run-options helper that is used by the real validation path:
 
 ```rust
-pub(crate) fn recorded_draft_kitchen_config(
-    options: &CookRecordedDraftOptions,
-    recipe_source_base_dir: &Path,
-) -> Result<KitchenConfig> {
-    Ok(KitchenConfig {
-        source_cache: options.source_cache.clone(),
-        recipe_source_base_dir: Some(recipe_source_base_dir.to_path_buf()),
+fn recorded_draft_run_options<'a>(
+    options: &'a CookRecordedDraftOptions,
+    recipe: &'a str,
+    output_dir: &'a str,
+    source_cache: &'a str,
+) -> CookRunOptions<'a> {
+    CookRunOptions {
+        target: Some(recipe),
+        recipe: None,
+        output_dir,
+        source_cache,
+        jobs: None,
+        keep_builddir: false,
+        validate_only: false,
+        fetch_only: false,
+        explain: false,
+        isolated: true,
+        no_isolation: false,
+        hermetic: false,
+        json: true,
+        operation_id: options.operation_id.clone(),
+        source_download_policy_override: None,
         origin_class_override: Some("recorded-draft".to_string()),
-        use_isolation: false,
-        pristine_mode: false,
-        ..Default::default()
-    })
+    }
 }
 ```
 
@@ -2257,24 +2379,7 @@ pub(crate) fn run_cook_for_recorded_draft(
     let output_dir = options.output_dir.to_string_lossy().to_string();
     let source_cache = options.source_cache.to_string_lossy().to_string();
     run_cook_operation(
-        CookRunOptions {
-            target: Some(&recipe),
-            recipe: None,
-            output_dir: &output_dir,
-            source_cache: &source_cache,
-            jobs: None,
-            keep_builddir: false,
-            validate_only: false,
-            fetch_only: false,
-            explain: false,
-            isolated: false,
-            no_isolation: false,
-            hermetic: false,
-            json: true,
-            operation_id: options.operation_id,
-            source_download_policy_override: None,
-            origin_class_override: Some("recorded-draft".to_string()),
-        },
+        recorded_draft_run_options(&options, &recipe, &output_dir, &source_cache),
         &mut sink,
     )
 }
@@ -2337,9 +2442,14 @@ pub(crate) fn validate_recorded_draft(
 }
 ```
 
-- [ ] **Step 5: Add publish-gate regression if missing**
+- [ ] **Step 5: Verify publish-gate regression coverage**
 
-In `crates/conary-core/src/repository/static_repo/publish_gate.rs`, add or extend a test that builds a lint context whose payload has:
+In `crates/conary-core/src/repository/static_repo/publish_gate.rs`, verify
+there is existing attested-path coverage for recorded-draft artifacts. The
+current tree has a table case named like `recorded-draft artifacts are not
+publishable`; keep that coverage instead of adding a duplicate. If the test is
+missing or no longer checks an otherwise-valid attestation payload, add or
+extend one that builds a lint context whose payload has:
 
 ```rust
 payload.origin_class = "recorded-draft".to_string();
@@ -2355,6 +2465,11 @@ assert_eq!(
 ```
 
 If there is already exact coverage for recorded-draft plus otherwise valid attestation, reference that test in the final task notes and do not duplicate it.
+
+Generated recorded-draft validation artifacts may fail artifact-form publish
+earlier with `MissingAttestation`. That CLI path is covered in Task 11; this
+unit coverage must continue proving the specific `RecordedDraftArtifact` gate
+for an otherwise-valid attested payload.
 
 - [ ] **Step 6: Run Task 9 verification**
 
@@ -2441,6 +2556,16 @@ mod tests {
 16. Print concise human output or return JSON if a later task wires JSON into record mode.
 17. Cleanup workspace.
 
+When `request.unsafe_host` is true, print a loud warning to stderr before the
+command starts:
+
+```text
+WARNING: executing record command directly on the host without sandboxing.
+```
+
+Also add `RecordingLimitation::UnsafeHost` to the report limitations. This
+marker must survive even if the host command succeeds.
+
 Use this helper:
 
 ```rust
@@ -2473,24 +2598,67 @@ pub(crate) fn installed_file_evidence(
     let mut files = Vec::new();
     for entry in walkdir::WalkDir::new(install_root).follow_links(false) {
         let entry = entry?;
-        if !entry.file_type().is_file() {
+        if entry.file_type().is_dir() {
             continue;
         }
         let relative = entry.path().strip_prefix(install_root)?;
+        if entry.file_type().is_symlink() {
+            let link_target = std::fs::read_link(entry.path())?;
+            files.push(conary_core::recipe::recording::InstalledFileEvidence {
+                path: relative.to_string_lossy().to_string(),
+                file_type: "symlink".to_string(),
+                executable: false,
+                size: 0,
+                link_target: Some(link_target.to_string_lossy().to_string()),
+            });
+            continue;
+        }
+        if !entry.file_type().is_file() {
+            continue;
+        }
         let metadata = entry.metadata()?;
         files.push(conary_core::recipe::recording::InstalledFileEvidence {
             path: relative.to_string_lossy().to_string(),
             file_type: "file".to_string(),
-            executable: metadata.permissions().mode() & 0o111 != 0,
+            executable: executable_bit(&metadata),
             size: metadata.len(),
+            link_target: None,
         });
     }
     files.sort_by(|left, right| left.path.cmp(&right.path));
     Ok(files)
 }
+
+fn executable_bit(metadata: &std::fs::Metadata) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = metadata;
+        false
+    }
+}
 ```
 
-Import `std::os::unix::fs::PermissionsExt`.
+Use a cfg-gated executable-bit helper as above instead of a module-level
+`std::os::unix::fs::PermissionsExt` import.
+
+After scanning installed files, reconcile the scan with traced install writes:
+
+- Build a set of installed evidence paths for `file_type == "file"` and
+  `file_type == "symlink"`.
+- Build a set of observed install paths where `scope == TraceScope::Install`
+  and `operation` is `InstallCreate` or `InstallModify`.
+- If any installed path has no matching observed write, add
+  `RecordingLimitation::EventLoss` and an ignored-event/report diagnostic with
+  reason `installed-scan-reconciled-missing-watch-event` and the missing count.
+
+This makes the known recursive-inotify dynamic-directory race non-destructive:
+the final installed scan still drives the draft recipe, while the report admits
+that watch evidence was incomplete.
 
 - [ ] **Step 4: Wire backend modules**
 
@@ -2703,10 +2871,39 @@ fn cook_record_validate_stamps_recorded_draft_artifact() {
         package.manifest().provenance.as_ref().unwrap().origin_class,
         "recorded-draft"
     );
+
+    let publish_repo = temp.path().join("repo");
+    let publish_keys = temp.path().join("publish-keys");
+    let publish_state = temp.path().join("publish-state.toml");
+    let publish = Command::new(env!("CARGO_BIN_EXE_conary"))
+        .arg("publish")
+        .arg(&artifact)
+        .arg(&publish_repo)
+        .arg("--key-dir")
+        .arg(&publish_keys)
+        .arg("--state-file")
+        .arg(&publish_state)
+        .arg("--json")
+        .output()
+        .expect("publish recorded draft artifact");
+    assert_failure(&publish);
+    let value: serde_json::Value = serde_json::from_slice(&publish.stdout).expect("valid json");
+    let failure_code = value["diagnostics"][0]["evidence"][0]["metadata"]
+        ["publish_lint_report"]["failures"][0]["code"]
+        .as_str()
+        .expect("publish gate failure code");
+    assert!(
+        matches!(failure_code, "missing-attestation" | "recorded-draft-artifact"),
+        "{}",
+        output_text(&publish)
+    );
+    assert!(!publish_repo.exists(), "publish gate failure must not create repo");
 }
 ```
 
-If static publish requires signing material in this integration test, keep publish refusal in the focused core publish-gate unit test and assert the artifact provenance here.
+The expected first failure for a generated validation artifact is usually
+`missing-attestation`; the focused Task 9 unit coverage proves the more specific
+`recorded-draft-artifact` failure for otherwise-valid attested payloads.
 
 - [ ] **Step 6: Run Task 11 verification**
 
