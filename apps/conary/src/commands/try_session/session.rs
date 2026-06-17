@@ -4,7 +4,7 @@
 use anyhow::{Context, Result, bail};
 use conary_core::ccs::CcsPackage;
 use conary_core::db::backup::{CheckpointReason, create_checkpoint};
-use conary_core::db::models::{CreateTrySession, TrySession, TrySessionMode};
+use conary_core::db::models::{CreateTrySession, SystemState, TrySession, TrySessionMode};
 use conary_core::packages::traits::PackageFormat;
 use conary_core::runtime_root::ConaryRuntimeRoot;
 use conary_core::transaction::{TransactionConfig, TransactionEngine};
@@ -14,12 +14,14 @@ use std::path::{Path, PathBuf};
 use super::executor::run_try_command_for_session;
 use super::install::{build_try_install_plan, build_try_transaction_config, install_try_package};
 use super::namespace::{
-    apply_declarative_try_hooks, expose_try_namespace_root, hook_account_entry_exists,
+    self, apply_declarative_try_hooks, expose_try_namespace_root, hook_account_entry_exists,
     promotable_try_hook_root, root_relative_path, teardown_try_namespace_mounts,
 };
-use super::util::remove_dir_if_exists;
+use super::util::{remove_dir_if_exists, remove_path_if_exists};
 use super::validation::{TryExecutionRoot, validate_try_package_policy};
-use super::{TryStartOutcome, TryStartRequest, TryWatchMarkerRequest};
+use super::{
+    TryRefreshOutcome, TryRefreshRequest, TryStartOutcome, TryStartRequest, TryWatchMarkerRequest,
+};
 
 const TRY_WATCH_MARKER_FILE: &str = ".conary-try-watch-session.json";
 
@@ -169,6 +171,290 @@ pub(crate) fn begin_try_session(request: TryStartRequest<'_>) -> Result<TryStart
         namespace_root,
         try_generation_id: built.generation_number,
     })
+}
+
+pub(crate) fn refresh_try_session(request: TryRefreshRequest<'_>) -> Result<TryRefreshOutcome> {
+    let mut refresh_committed = false;
+    let mut refresh_dir: Option<PathBuf> = None;
+    let mut staged_namespace_cleanup: Option<namespace::StagedNamespaceExposure> = None;
+    let result = (|| -> Result<TryRefreshOutcome> {
+        let live_conn = conary_core::db::open(request.db_path)
+            .with_context(|| format!("failed to open Conary DB {}", request.db_path))?;
+        let session = TrySession::find_by_id(&live_conn, request.session_id)?
+            .ok_or_else(|| anyhow::anyhow!("try watch session {} missing", request.session_id))?;
+        if session.status != conary_core::db::models::TrySessionStatus::Active {
+            bail!(
+                "try watch session {} changed outside the watcher",
+                request.session_id
+            );
+        }
+        if session.try_generation_id != Some(request.expected_try_generation_id) {
+            bail!(
+                "try watch session {} changed outside the watcher",
+                request.session_id
+            );
+        }
+        if session.mode != TrySessionMode::Namespace {
+            bail!("try watch refresh requires a namespace try session");
+        }
+        if !is_watch_created_try_session(&session) {
+            bail!("try watch refresh requires a watch-created try session");
+        }
+
+        let runtime_root = ConaryRuntimeRoot::from_db_path(PathBuf::from(request.db_path));
+        let work_dir = PathBuf::from(&session.work_dir);
+        let staging_dir =
+            namespace::refresh_staging_dir(&work_dir, request.expected_try_generation_id + 1);
+        refresh_dir = Some(staging_dir.clone());
+        let install_root = staging_dir.join("root");
+        let copied_package_path = staging_dir.join("package.ccs");
+        let copied_db_path = staging_dir.join("conary.db");
+        std::fs::create_dir_all(&install_root)?;
+        std::fs::copy(request.package_path, &copied_package_path)?;
+
+        let copied_package_path_string = copied_package_path.to_string_lossy().into_owned();
+        let package = <CcsPackage as PackageFormat>::parse(&copied_package_path_string)
+            .map_err(|error| anyhow::anyhow!(error))?;
+        validate_try_package_policy(&package, TryExecutionRoot::Namespace, false, false)?;
+
+        vacuum_db_into(&live_conn, &copied_db_path)?;
+        let mut copied_conn = conary_core::db::open(&copied_db_path)?;
+        ensure_staging_db_generation_floor(
+            &copied_conn,
+            request.expected_try_generation_id,
+            &session,
+        )?;
+        let install_plan = build_try_install_plan(
+            &runtime_root,
+            &staging_dir,
+            copied_db_path.clone(),
+            TrySessionMode::Namespace,
+        );
+        install_try_package(&mut copied_conn, &package, &install_plan)?;
+
+        let summary = format!("Try {}-{}", package.name(), package.version());
+        let built = crate::commands::composefs_ops::build_inactive_generation_for_runtime(
+            &copied_conn,
+            &runtime_root,
+            &summary,
+            None,
+        )?;
+        let hook_upperdir = promotable_try_hook_root(&runtime_root, built.generation_number)?;
+        let staged_namespace = namespace::expose_staged_try_namespace_root(
+            &runtime_root,
+            &work_dir,
+            &copied_conn,
+            built.generation_number,
+            &hook_upperdir,
+        )?;
+        staged_namespace_cleanup = Some(staged_namespace.clone());
+        apply_declarative_try_hooks(package.manifest(), &staged_namespace.next_namespace_root)?;
+
+        let stable_package_path = work_dir.join("package.ccs");
+        let stable_db_path = work_dir.join("conary.db");
+        let stable_package_path_string = stable_package_path.to_string_lossy().into_owned();
+        let copied_session = TrySession::find_by_id(&copied_conn, request.session_id)?
+            .ok_or_else(|| anyhow::anyhow!("copied try session {} missing", request.session_id))?;
+        if !copied_session.replace_active_try_generation(
+            &copied_conn,
+            request.expected_try_generation_id,
+            &stable_package_path_string,
+            built.generation_number,
+        )? {
+            bail!(
+                "copied try watch session {} changed outside the watcher",
+                request.session_id
+            );
+        }
+
+        let prepared_files = prepare_stable_try_files(
+            &stable_package_path,
+            &stable_db_path,
+            &copied_package_path,
+            &copied_db_path,
+        )?;
+
+        let stable_namespace_root = work_dir.join("namespace-root");
+        let namespace_switch = namespace::switch_stable_namespace_root(
+            staged_namespace.clone(),
+            request.expected_try_generation_id,
+        )?;
+        let file_switch = match prepared_files.switch() {
+            Ok(file_switch) => file_switch,
+            Err(error) => {
+                let _ = namespace_switch.restore();
+                return Err(error
+                    .context("failed to switch stable try package files after namespace switch"));
+            }
+        };
+        let replaced = session.replace_active_try_generation(
+            &live_conn,
+            request.expected_try_generation_id,
+            &stable_package_path_string,
+            built.generation_number,
+        )?;
+        if !replaced {
+            let _ = namespace_switch.restore();
+            let _ = file_switch.restore();
+            bail!(
+                "try watch session {} changed outside the watcher",
+                request.session_id
+            );
+        }
+
+        refresh_committed = true;
+        staged_namespace_cleanup = None;
+        let mut cleanup_errors = Vec::new();
+        if let Err(error) = file_switch.commit() {
+            cleanup_errors.push(format!(
+                "failed to clean previous stable try files: {error:#}"
+            ));
+        }
+        if let Err(error) = namespace_switch.commit() {
+            cleanup_errors.push(format!("failed to clean previous try namespace: {error:#}"));
+        }
+        if let Err(error) = remove_dir_if_exists(staging_dir) {
+            cleanup_errors.push(format!(
+                "failed to clean refresh staging directory: {error:#}"
+            ));
+        }
+        let cleanup_error = (!cleanup_errors.is_empty()).then(|| cleanup_errors.join("; "));
+
+        Ok(TryRefreshOutcome {
+            previous_generation_id: request.expected_try_generation_id,
+            try_generation_id: built.generation_number,
+            namespace_root: stable_namespace_root,
+            copied_package_path: stable_package_path,
+            cleanup_error,
+        })
+    })();
+
+    if result.is_err() && !refresh_committed {
+        if let Some(staged_namespace) = &staged_namespace_cleanup {
+            let _ = namespace::teardown_staged_namespace_exposure(staged_namespace);
+        }
+        if let Some(staging_dir) = refresh_dir {
+            remove_dir_if_exists(staging_dir)?;
+        }
+    }
+    result
+}
+
+fn ensure_staging_db_generation_floor(
+    conn: &rusqlite::Connection,
+    expected_try_generation_id: i64,
+    session: &TrySession,
+) -> Result<()> {
+    if SystemState::find_by_number(conn, expected_try_generation_id)?.is_some() {
+        return Ok(());
+    }
+    let mut state = SystemState::new(
+        expected_try_generation_id,
+        format!("Previous try generation for {}", session.id),
+    );
+    state.insert(conn)?;
+    Ok(())
+}
+
+struct PreparedStableTryFiles {
+    package_tmp: PathBuf,
+    package_path: PathBuf,
+    package_backup: PathBuf,
+    db_tmp: PathBuf,
+    db_path: PathBuf,
+    db_backup: PathBuf,
+}
+
+struct StableTryFileSwitch {
+    package_path: PathBuf,
+    package_backup: PathBuf,
+    db_path: PathBuf,
+    db_backup: PathBuf,
+}
+
+impl StableTryFileSwitch {
+    fn commit(self) -> Result<()> {
+        remove_path_if_exists(&self.package_backup)?;
+        remove_path_if_exists(&self.db_backup)?;
+        Ok(())
+    }
+
+    fn restore(self) -> Result<()> {
+        remove_path_if_exists(&self.package_path)?;
+        remove_path_if_exists(&self.db_path)?;
+        if self.package_backup.exists() {
+            std::fs::rename(&self.package_backup, &self.package_path)?;
+        }
+        if self.db_backup.exists() {
+            std::fs::rename(&self.db_backup, &self.db_path)?;
+        }
+        Ok(())
+    }
+}
+
+impl PreparedStableTryFiles {
+    fn switch(self) -> Result<StableTryFileSwitch> {
+        if self.package_path.exists() {
+            std::fs::rename(&self.package_path, &self.package_backup)?;
+        }
+        if self.db_path.exists() {
+            std::fs::rename(&self.db_path, &self.db_backup)?;
+        }
+        if let Err(error) = std::fs::rename(&self.package_tmp, &self.package_path) {
+            let _ = restore_prepared_try_files(&self);
+            anyhow::bail!("failed to publish stable try package: {error}");
+        }
+        if let Err(error) = std::fs::rename(&self.db_tmp, &self.db_path) {
+            let _ = restore_prepared_try_files(&self);
+            anyhow::bail!("failed to publish stable try DB: {error}");
+        }
+
+        Ok(StableTryFileSwitch {
+            package_path: self.package_path,
+            package_backup: self.package_backup,
+            db_path: self.db_path,
+            db_backup: self.db_backup,
+        })
+    }
+}
+
+fn prepare_stable_try_files(
+    stable_package_path: &Path,
+    stable_db_path: &Path,
+    staged_package_path: &Path,
+    staged_db_path: &Path,
+) -> Result<PreparedStableTryFiles> {
+    let switch_id = uuid::Uuid::new_v4();
+    let package_tmp = stable_package_path.with_extension(format!("{switch_id}.ccs.next"));
+    let db_tmp = stable_db_path.with_extension(format!("{switch_id}.db.next"));
+    let package_backup = stable_package_path.with_extension(format!("{switch_id}.ccs.previous"));
+    let db_backup = stable_db_path.with_extension(format!("{switch_id}.db.previous"));
+
+    std::fs::copy(staged_package_path, &package_tmp)?;
+    std::fs::copy(staged_db_path, &db_tmp)?;
+
+    Ok(PreparedStableTryFiles {
+        package_tmp,
+        package_path: stable_package_path.to_path_buf(),
+        package_backup,
+        db_tmp,
+        db_path: stable_db_path.to_path_buf(),
+        db_backup,
+    })
+}
+
+fn restore_prepared_try_files(files: &PreparedStableTryFiles) -> Result<()> {
+    remove_path_if_exists(&files.package_path)?;
+    remove_path_if_exists(&files.db_path)?;
+    if files.package_backup.exists() {
+        std::fs::rename(&files.package_backup, &files.package_path)?;
+    }
+    if files.db_backup.exists() {
+        std::fs::rename(&files.db_backup, &files.db_path)?;
+    }
+    remove_path_if_exists(&files.package_tmp)?;
+    remove_path_if_exists(&files.db_tmp)?;
+    Ok(())
 }
 
 pub(crate) fn rollback_active_try_session(db_path: &str) -> Result<()> {
@@ -723,8 +1009,8 @@ mod tests {
     use conary_core::db::models::{TrySession, TrySessionMode};
     use conary_core::transaction::TransactionEngine;
 
-    use super::super::TryWatchMarkerRequest;
     use super::super::test_support::*;
+    use super::super::{TryRefreshRequest, TryWatchMarkerRequest};
     use super::*;
 
     #[test]
@@ -1067,6 +1353,254 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn refresh_try_session_updates_generation_after_staging_succeeds() -> anyhow::Result<()> {
+        let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+        let fixture = TryRuntimeFixture::new();
+        let first = fixture.write_package(
+            "watch-demo-a",
+            conary_core::ccs::manifest::CcsManifest::new_minimal("watch-demo", "1.0.0"),
+        );
+        let second = fixture.write_package(
+            "watch-demo-b",
+            conary_core::ccs::manifest::CcsManifest::new_minimal("watch-demo", "1.0.1"),
+        );
+        let started = begin_try_session(TryStartRequest {
+            db_path: &fixture.db_path_string,
+            package_path: &first,
+            activate: false,
+            allow_irreversible: false,
+            command: None,
+            watch_marker: Some(TryWatchMarkerRequest {
+                operation_id: "watch-1",
+            }),
+        })?;
+
+        let refreshed = refresh_try_session(TryRefreshRequest {
+            db_path: &fixture.db_path_string,
+            session_id: &started.session_id,
+            expected_try_generation_id: started.try_generation_id,
+            package_path: &second,
+        })?;
+
+        assert_eq!(refreshed.previous_generation_id, started.try_generation_id);
+        assert!(refreshed.try_generation_id > started.try_generation_id);
+        assert_eq!(refreshed.cleanup_error, None);
+        let conn = fixture.open();
+        let session = TrySession::find_by_id(&conn, &started.session_id)?.unwrap();
+        assert_eq!(session.try_generation_id, Some(refreshed.try_generation_id));
+        assert_eq!(Path::new(&session.work_dir), started.work_dir);
+        Ok(())
+    }
+
+    #[test]
+    fn refresh_try_session_cas_miss_preserves_previous_generation() -> anyhow::Result<()> {
+        let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+        let fixture = TryRuntimeFixture::new();
+        let first = fixture.write_package(
+            "watch-demo-a",
+            conary_core::ccs::manifest::CcsManifest::new_minimal("watch-demo", "1.0.0"),
+        );
+        let second = fixture.write_package(
+            "watch-demo-b",
+            conary_core::ccs::manifest::CcsManifest::new_minimal("watch-demo", "1.0.1"),
+        );
+        let started = begin_try_session(TryStartRequest {
+            db_path: &fixture.db_path_string,
+            package_path: &first,
+            activate: false,
+            allow_irreversible: false,
+            command: None,
+            watch_marker: Some(TryWatchMarkerRequest {
+                operation_id: "watch-1",
+            }),
+        })?;
+        {
+            let conn = fixture.open();
+            let session = TrySession::find_by_id(&conn, &started.session_id)?.unwrap();
+            session.mark_orphaned(&conn)?;
+        }
+
+        let err = refresh_try_session(TryRefreshRequest {
+            db_path: &fixture.db_path_string,
+            session_id: &started.session_id,
+            expected_try_generation_id: started.try_generation_id,
+            package_path: &second,
+        })
+        .unwrap_err();
+
+        assert!(
+            err.to_string().contains("changed outside the watcher"),
+            "{err:#}"
+        );
+        let conn = fixture.open();
+        let session = TrySession::find_by_id(&conn, &started.session_id)?.unwrap();
+        assert_eq!(session.try_generation_id, Some(started.try_generation_id));
+        assert_eq!(
+            session.status,
+            conary_core::db::models::TrySessionStatus::Orphaned
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn refresh_try_session_cleans_staging_after_generation_build_failure() -> anyhow::Result<()> {
+        let _env_lock = ENV_LOCK.lock().unwrap();
+        let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+        let fixture = TryRuntimeFixture::new();
+        let first = fixture.write_package(
+            "watch-demo-a",
+            conary_core::ccs::manifest::CcsManifest::new_minimal("watch-demo", "1.0.0"),
+        );
+        let second = fixture.write_package(
+            "watch-demo-b",
+            conary_core::ccs::manifest::CcsManifest::new_minimal("watch-demo", "1.0.1"),
+        );
+        let started = begin_try_session(TryStartRequest {
+            db_path: &fixture.db_path_string,
+            package_path: &first,
+            activate: false,
+            allow_irreversible: false,
+            command: None,
+            watch_marker: Some(TryWatchMarkerRequest {
+                operation_id: "watch-1",
+            }),
+        })?;
+        let _guard = EnvVarGuard::set(
+            "CONARY_TEST_FAIL_GENERATION_REBUILD",
+            "forced watch refresh generation failure",
+        );
+
+        let err = refresh_try_session(TryRefreshRequest {
+            db_path: &fixture.db_path_string,
+            session_id: &started.session_id,
+            expected_try_generation_id: started.try_generation_id,
+            package_path: &second,
+        })
+        .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("forced watch refresh generation failure"),
+            "{err:#}"
+        );
+        let conn = fixture.open();
+        let session = TrySession::find_by_id(&conn, &started.session_id)?.unwrap();
+        assert_eq!(session.try_generation_id, Some(started.try_generation_id));
+        assert!(
+            std::fs::read_dir(&started.work_dir)?
+                .filter_map(|entry| entry.ok())
+                .all(|entry| !entry.file_name().to_string_lossy().starts_with("refresh-")),
+            "failed refresh staging directory should be cleaned"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn refresh_try_session_namespace_switch_failure_preserves_stable_files() -> anyhow::Result<()> {
+        let _env_lock = ENV_LOCK.lock().unwrap();
+        let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+        let fixture = TryRuntimeFixture::new();
+        let first = fixture.write_package(
+            "watch-demo-a",
+            conary_core::ccs::manifest::CcsManifest::new_minimal("watch-demo", "1.0.0"),
+        );
+        let second = fixture.write_package(
+            "watch-demo-b",
+            conary_core::ccs::manifest::CcsManifest::new_minimal("watch-demo", "1.0.1"),
+        );
+        let started = begin_try_session(TryStartRequest {
+            db_path: &fixture.db_path_string,
+            package_path: &first,
+            activate: false,
+            allow_irreversible: false,
+            command: None,
+            watch_marker: Some(TryWatchMarkerRequest {
+                operation_id: "watch-1",
+            }),
+        })?;
+        let stable_package_path = started.work_dir.join("package.ccs");
+        let stable_db_path = started.work_dir.join("conary.db");
+        let stable_package_before = std::fs::read(&stable_package_path)?;
+        let stable_db_before = std::fs::read(&stable_db_path)?;
+        let namespace_before = std::fs::read_link(started.work_dir.join("namespace-root"))?;
+        let _fail_guard = EnvVarGuard::set("CONARY_TEST_TRY_REFRESH_FAIL_NAMESPACE_SWITCH", "1");
+
+        let err = refresh_try_session(TryRefreshRequest {
+            db_path: &fixture.db_path_string,
+            session_id: &started.session_id,
+            expected_try_generation_id: started.try_generation_id,
+            package_path: &second,
+        })
+        .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("failed to switch stable try namespace"),
+            "{err:#}"
+        );
+        let conn = fixture.open();
+        let session = TrySession::find_by_id(&conn, &started.session_id)?.unwrap();
+        assert_eq!(session.try_generation_id, Some(started.try_generation_id));
+        assert_eq!(std::fs::read(&stable_package_path)?, stable_package_before);
+        assert_eq!(std::fs::read(&stable_db_path)?, stable_db_before);
+        assert_eq!(
+            std::fs::read_link(started.work_dir.join("namespace-root"))?,
+            namespace_before
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn refresh_try_session_reports_committed_cleanup_failure_with_new_generation_active()
+    -> anyhow::Result<()> {
+        let _env_lock = ENV_LOCK.lock().unwrap();
+        let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+        let fixture = TryRuntimeFixture::new();
+        let first = fixture.write_package(
+            "watch-demo-a",
+            conary_core::ccs::manifest::CcsManifest::new_minimal("watch-demo", "1.0.0"),
+        );
+        let second = fixture.write_package(
+            "watch-demo-b",
+            conary_core::ccs::manifest::CcsManifest::new_minimal("watch-demo", "1.0.1"),
+        );
+        let started = begin_try_session(TryStartRequest {
+            db_path: &fixture.db_path_string,
+            package_path: &first,
+            activate: false,
+            allow_irreversible: false,
+            command: None,
+            watch_marker: Some(TryWatchMarkerRequest {
+                operation_id: "watch-1",
+            }),
+        })?;
+        let _cleanup_guard = EnvVarGuard::set(
+            "CONARY_TEST_TRY_REFRESH_FAIL_NAMESPACE_COMMIT_CLEANUP",
+            "forced cleanup failure",
+        );
+
+        let refreshed = refresh_try_session(TryRefreshRequest {
+            db_path: &fixture.db_path_string,
+            session_id: &started.session_id,
+            expected_try_generation_id: started.try_generation_id,
+            package_path: &second,
+        })?;
+
+        assert!(
+            refreshed
+                .cleanup_error
+                .as_deref()
+                .unwrap_or("")
+                .contains("forced cleanup failure")
+        );
+        let conn = fixture.open();
+        let session = TrySession::find_by_id(&conn, &started.session_id)?.unwrap();
+        assert_eq!(session.try_generation_id, Some(refreshed.try_generation_id));
+        assert!(refreshed.try_generation_id > started.try_generation_id);
+        Ok(())
     }
 
     #[test]

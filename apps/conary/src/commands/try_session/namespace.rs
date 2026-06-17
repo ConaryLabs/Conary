@@ -105,12 +105,33 @@ pub(super) fn expose_try_namespace_root(
     hook_upperdir: &Path,
 ) -> Result<PathBuf> {
     let namespace_root = work_dir.join("namespace-root");
+    let lower_root = work_dir.join("generation-root");
+    let overlay_workdir = work_dir.join("namespace-work");
     if std::env::var_os("CONARY_TEST_SKIP_GENERATION_MOUNT").is_some() {
         materialize_test_try_namespace_root(copied_conn, runtime_root, hook_upperdir)?;
         recreate_path_symlink(hook_upperdir, &namespace_root)?;
         return Ok(namespace_root);
     }
 
+    expose_try_namespace_root_at_paths(
+        runtime_root,
+        try_generation_id,
+        hook_upperdir,
+        &lower_root,
+        &overlay_workdir,
+        &namespace_root,
+    )?;
+    Ok(namespace_root)
+}
+
+fn expose_try_namespace_root_at_paths(
+    runtime_root: &ConaryRuntimeRoot,
+    try_generation_id: i64,
+    hook_upperdir: &Path,
+    lower_root: &Path,
+    overlay_workdir: &Path,
+    namespace_root: &Path,
+) -> Result<()> {
     let generation_dir = runtime_root.generation_path(try_generation_id);
     let metadata =
         conary_core::generation::metadata::GenerationMetadata::read_from(&generation_dir)
@@ -121,8 +142,6 @@ pub(super) fn expose_try_namespace_root(
                     generation_dir.display()
                 )
             })?;
-    let lower_root = work_dir.join("generation-root");
-    let overlay_workdir = work_dir.join("namespace-work");
     std::fs::create_dir_all(&lower_root)
         .with_context(|| format!("failed to create try lower root {}", lower_root.display()))?;
     std::fs::create_dir_all(&namespace_root).with_context(|| {
@@ -141,7 +160,7 @@ pub(super) fn expose_try_namespace_root(
     let mount_options = conary_core::generation::mount::MountOptions {
         image_path: generation_dir.join(conary_core::generation::metadata::EROFS_IMAGE_NAME),
         basedir: runtime_root.objects_dir(),
-        mount_point: lower_root.clone(),
+        mount_point: lower_root.to_path_buf(),
         verity: metadata.fsverity_enabled,
         digest: metadata
             .fsverity_enabled
@@ -169,7 +188,7 @@ pub(super) fn expose_try_namespace_root(
         return Err(error);
     }
 
-    Ok(namespace_root)
+    Ok(())
 }
 
 fn mount_try_namespace_overlay(
@@ -206,9 +225,253 @@ fn mount_try_namespace_overlay(
     )
 }
 
+pub(super) fn refresh_staging_dir(work_dir: &Path, next_generation_id: i64) -> PathBuf {
+    work_dir.join(format!("refresh-{next_generation_id}"))
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct StagedNamespaceExposure {
+    pub(super) generation_id: i64,
+    pub(super) next_namespace_root: PathBuf,
+    pub(super) stable_namespace_root: PathBuf,
+    pub(super) previous_namespace_root: PathBuf,
+    pub(super) generation_root: PathBuf,
+    pub(super) namespace_workdir: PathBuf,
+}
+
+pub(super) fn expose_staged_try_namespace_root(
+    runtime_root: &ConaryRuntimeRoot,
+    work_dir: &Path,
+    copied_conn: &Connection,
+    try_generation_id: i64,
+    hook_upperdir: &Path,
+) -> Result<StagedNamespaceExposure> {
+    let next_namespace_root = work_dir.join("namespace-root.next");
+    let generation_root = work_dir.join(format!("generation-root-{try_generation_id}"));
+    let namespace_workdir = work_dir.join(format!("namespace-work-{try_generation_id}"));
+
+    if std::env::var_os("CONARY_TEST_SKIP_GENERATION_MOUNT").is_some() {
+        materialize_test_try_namespace_root(copied_conn, runtime_root, hook_upperdir)?;
+        recreate_path_symlink(hook_upperdir, &next_namespace_root)?;
+    } else {
+        expose_try_namespace_root_at_paths(
+            runtime_root,
+            try_generation_id,
+            hook_upperdir,
+            &generation_root,
+            &namespace_workdir,
+            &next_namespace_root,
+        )?;
+    }
+
+    Ok(StagedNamespaceExposure {
+        generation_id: try_generation_id,
+        next_namespace_root,
+        stable_namespace_root: work_dir.join("namespace-root"),
+        previous_namespace_root: work_dir.join("namespace-root.previous"),
+        generation_root,
+        namespace_workdir,
+    })
+}
+
+#[derive(Debug)]
+pub(super) struct NamespaceSwitch {
+    exposure: StagedNamespaceExposure,
+    superseded_generation_roots: Vec<PathBuf>,
+    superseded_namespace_workdirs: Vec<PathBuf>,
+}
+
+impl NamespaceSwitch {
+    pub(super) fn commit(self) -> Result<()> {
+        let _committed_generation_id = self.exposure.generation_id;
+        #[cfg(test)]
+        if let Some(message) =
+            std::env::var_os("CONARY_TEST_TRY_REFRESH_FAIL_NAMESPACE_COMMIT_CLEANUP")
+        {
+            anyhow::bail!("{}", message.to_string_lossy());
+        }
+
+        if std::env::var_os("CONARY_TEST_SKIP_GENERATION_MOUNT").is_some() {
+            remove_path_if_exists(&self.exposure.previous_namespace_root)?;
+            for path in self
+                .superseded_generation_roots
+                .iter()
+                .chain(self.superseded_namespace_workdirs.iter())
+            {
+                remove_path_if_exists(path)?;
+            }
+            return Ok(());
+        }
+
+        unmount_try_path_if_mounted(&self.exposure.previous_namespace_root)?;
+        for root in &self.superseded_generation_roots {
+            unmount_try_path_if_mounted(root)?;
+        }
+        remove_path_if_exists(&self.exposure.previous_namespace_root)?;
+        for path in self
+            .superseded_namespace_workdirs
+            .iter()
+            .chain(self.superseded_generation_roots.iter())
+        {
+            remove_path_if_exists(path)?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn restore(self) -> Result<()> {
+        if std::env::var_os("CONARY_TEST_SKIP_GENERATION_MOUNT").is_some() {
+            remove_path_if_exists(&self.exposure.stable_namespace_root)?;
+            if self.exposure.previous_namespace_root.exists() {
+                std::fs::rename(
+                    &self.exposure.previous_namespace_root,
+                    &self.exposure.stable_namespace_root,
+                )?;
+            }
+            return Ok(());
+        }
+
+        run_mount_move(
+            &self.exposure.stable_namespace_root,
+            &self.exposure.next_namespace_root,
+        )?;
+        run_mount_move(
+            &self.exposure.previous_namespace_root,
+            &self.exposure.stable_namespace_root,
+        )
+    }
+}
+
+pub(super) fn switch_stable_namespace_root(
+    exposure: StagedNamespaceExposure,
+    previous_generation_id: i64,
+) -> Result<NamespaceSwitch> {
+    let work_dir = exposure
+        .stable_namespace_root
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("try namespace root has no parent work dir"))?;
+    let superseded_generation_roots = vec![
+        work_dir.join(format!("generation-root-{previous_generation_id}")),
+        work_dir.join("generation-root"),
+    ];
+    let superseded_namespace_workdirs = vec![
+        work_dir.join(format!("namespace-work-{previous_generation_id}")),
+        work_dir.join("namespace-work"),
+    ];
+
+    if std::env::var_os("CONARY_TEST_SKIP_GENERATION_MOUNT").is_some() {
+        remove_path_if_exists(&exposure.previous_namespace_root)?;
+        if exposure.stable_namespace_root.exists() {
+            std::fs::rename(
+                &exposure.stable_namespace_root,
+                &exposure.previous_namespace_root,
+            )?;
+        }
+        #[cfg(test)]
+        if std::env::var_os("CONARY_TEST_TRY_REFRESH_FAIL_NAMESPACE_SWITCH").is_some() {
+            if exposure.previous_namespace_root.exists() {
+                let _ = std::fs::rename(
+                    &exposure.previous_namespace_root,
+                    &exposure.stable_namespace_root,
+                );
+            }
+            anyhow::bail!("failed to switch stable try namespace: forced test failure");
+        }
+        std::fs::rename(
+            &exposure.next_namespace_root,
+            &exposure.stable_namespace_root,
+        )?;
+        return Ok(NamespaceSwitch {
+            exposure,
+            superseded_generation_roots,
+            superseded_namespace_workdirs,
+        });
+    }
+
+    std::fs::create_dir_all(&exposure.previous_namespace_root)?;
+    run_mount_move(
+        &exposure.stable_namespace_root,
+        &exposure.previous_namespace_root,
+    )?;
+    if let Err(error) = run_mount_move(
+        &exposure.next_namespace_root,
+        &exposure.stable_namespace_root,
+    ) {
+        let _ = run_mount_move(
+            &exposure.previous_namespace_root,
+            &exposure.stable_namespace_root,
+        );
+        return Err(error.context(
+            "failed to switch stable try namespace and restored previous namespace root",
+        ));
+    }
+
+    Ok(NamespaceSwitch {
+        exposure,
+        superseded_generation_roots,
+        superseded_namespace_workdirs,
+    })
+}
+
+pub(super) fn teardown_staged_namespace_exposure(exposure: &StagedNamespaceExposure) -> Result<()> {
+    if std::env::var_os("CONARY_TEST_SKIP_GENERATION_MOUNT").is_none() {
+        unmount_try_path_if_mounted(&exposure.next_namespace_root)?;
+        unmount_try_path_if_mounted(&exposure.generation_root)?;
+    }
+    remove_path_if_exists(&exposure.next_namespace_root)?;
+    remove_path_if_exists(&exposure.namespace_workdir)?;
+    remove_path_if_exists(&exposure.generation_root)?;
+    Ok(())
+}
+
+fn run_mount_move(from: &Path, to: &Path) -> Result<()> {
+    let status = std::process::Command::new("mount")
+        .arg("--move")
+        .arg(from)
+        .arg(to)
+        .status()
+        .context("failed to execute mount --move for try namespace switch")?;
+    if !status.success() {
+        bail!(
+            "failed to move try namespace mount from {} to {}",
+            from.display(),
+            to.display()
+        );
+    }
+    Ok(())
+}
+
 pub(super) fn teardown_try_namespace_mounts(work_dir: &Path) -> Result<()> {
-    unmount_try_path_if_mounted(&work_dir.join("namespace-root"))?;
-    unmount_try_path_if_mounted(&work_dir.join("generation-root"))?;
+    let mut mounted_roots = vec![
+        work_dir.join("namespace-root.next"),
+        work_dir.join("namespace-root.previous"),
+        work_dir.join("namespace-root"),
+        work_dir.join("generation-root"),
+    ];
+    let mut removable_dirs = vec![
+        work_dir.join("namespace-root.next"),
+        work_dir.join("namespace-root.previous"),
+        work_dir.join("namespace-work"),
+        work_dir.join("generation-root"),
+    ];
+    for entry in std::fs::read_dir(work_dir)
+        .with_context(|| format!("failed to read try work dir {}", work_dir.display()))?
+    {
+        let entry = entry?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with("generation-root-") {
+            mounted_roots.push(entry.path());
+            removable_dirs.push(entry.path());
+        } else if name.starts_with("namespace-work-") {
+            removable_dirs.push(entry.path());
+        }
+    }
+    for path in &mounted_roots {
+        unmount_try_path_if_mounted(path)?;
+    }
+    for path in &removable_dirs {
+        remove_path_if_exists(path)?;
+    }
     Ok(())
 }
 
@@ -707,6 +970,113 @@ mod tests {
                 .exists(),
             "failed cleanup must leave generation artifacts for retry"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn switch_stable_namespace_root_restores_previous_on_forced_failure() -> anyhow::Result<()> {
+        let _env_lock = ENV_LOCK.lock().unwrap();
+        let temp = tempfile::tempdir()?;
+        let stable = temp.path().join("namespace-root");
+        let previous = temp.path().join("previous-root");
+        let staged = temp.path().join("namespace-root.next");
+        std::fs::create_dir_all(&previous)?;
+        std::fs::create_dir_all(staged.parent().unwrap())?;
+        std::fs::create_dir_all(&staged)?;
+        std::fs::write(previous.join("marker"), "old")?;
+        std::fs::write(staged.join("marker"), "new")?;
+        recreate_path_symlink(&previous, &stable)?;
+
+        let _mount_guard = EnvVarGuard::set("CONARY_TEST_SKIP_GENERATION_MOUNT", "1");
+        let _fail_guard = EnvVarGuard::set("CONARY_TEST_TRY_REFRESH_FAIL_NAMESPACE_SWITCH", "1");
+        let exposure = StagedNamespaceExposure {
+            generation_id: 2,
+            next_namespace_root: staged,
+            stable_namespace_root: stable.clone(),
+            previous_namespace_root: temp.path().join("namespace-root.previous"),
+            generation_root: temp.path().join("generation-root-2"),
+            namespace_workdir: temp.path().join("namespace-work-2"),
+        };
+        let err = switch_stable_namespace_root(exposure, 1).unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("failed to switch stable try namespace"),
+            "{err:#}"
+        );
+        assert_eq!(std::fs::read_link(&stable)?, previous);
+        Ok(())
+    }
+
+    #[test]
+    fn teardown_try_namespace_mounts_removes_watch_generation_paths() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        for name in [
+            "namespace-root.next",
+            "namespace-root.previous",
+            "generation-root-41",
+            "namespace-work-41",
+            "generation-root",
+            "namespace-work",
+        ] {
+            std::fs::create_dir_all(temp.path().join(name))?;
+        }
+
+        teardown_try_namespace_mounts(temp.path())?;
+
+        for name in [
+            "namespace-root.next",
+            "namespace-root.previous",
+            "generation-root-41",
+            "namespace-work-41",
+            "generation-root",
+            "namespace-work",
+        ] {
+            assert!(!temp.path().join(name).exists(), "{name} should be removed");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn namespace_switch_commit_removes_superseded_generation_paths() -> anyhow::Result<()> {
+        let _env_lock = ENV_LOCK.lock().unwrap();
+        let temp = tempfile::tempdir()?;
+        let stable = temp.path().join("namespace-root");
+        let previous = temp.path().join("previous-root");
+        let staged = temp.path().join("namespace-root.next");
+        std::fs::create_dir_all(&previous)?;
+        std::fs::create_dir_all(&staged)?;
+        recreate_path_symlink(&previous, &stable)?;
+        for name in [
+            "generation-root-1",
+            "namespace-work-1",
+            "generation-root",
+            "namespace-work",
+        ] {
+            std::fs::create_dir_all(temp.path().join(name))?;
+        }
+
+        let _mount_guard = EnvVarGuard::set("CONARY_TEST_SKIP_GENERATION_MOUNT", "1");
+        let exposure = StagedNamespaceExposure {
+            generation_id: 2,
+            next_namespace_root: staged,
+            stable_namespace_root: stable,
+            previous_namespace_root: temp.path().join("namespace-root.previous"),
+            generation_root: temp.path().join("generation-root-2"),
+            namespace_workdir: temp.path().join("namespace-work-2"),
+        };
+
+        let switch = switch_stable_namespace_root(exposure, 1)?;
+        switch.commit()?;
+
+        for name in [
+            "generation-root-1",
+            "namespace-work-1",
+            "generation-root",
+            "namespace-work",
+        ] {
+            assert!(!temp.path().join(name).exists(), "{name} should be removed");
+        }
         Ok(())
     }
 }
