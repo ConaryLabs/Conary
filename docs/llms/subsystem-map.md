@@ -39,6 +39,7 @@ summary: Route M3 packaging ownership
   `apps/conary/src/commands/new.rs`,
   `apps/conary/src/commands/publish.rs`,
   `apps/conary/src/commands/cook.rs`,
+  `apps/conary/src/commands/record_mode/`,
   `apps/conary/src/commands/diagnostics.rs`,
   `apps/conary/src/commands/operation_records.rs`,
   `apps/conary/src/commands/hermetic_config.rs`,
@@ -47,11 +48,13 @@ summary: Route M3 packaging ownership
   `apps/conary/src/commands/try_session/watch.rs`,
   `apps/conary/src/commands/try_session/watch_source.rs`,
   `apps/conary/src/commands/repo_static.rs`,
+  `crates/conary-core/src/recipe/recording/`,
   `apps/conary/tests/packaging_m1b.rs`,
   `apps/conary/tests/packaging_m2a.rs`,
   `apps/conary/tests/packaging_m3a.rs`,
   `apps/conary/tests/packaging_m3c.rs`,
   `apps/conary/tests/packaging_m3b.rs`,
+  `apps/conary/tests/packaging_m3d.rs`,
   `crates/conary-agent-contract/src/{resource,catalog,result}.rs`,
   `crates/conary-mcp/src/`,
   `crates/conary-core/src/ccs/attestation.rs`,
@@ -62,6 +65,11 @@ summary: Route M3 packaging ownership
   `crates/conary-core/src/repository/static_repo/`,
   `crates/conary-core/src/trust/`, and
   `crates/conary-core/src/ccs/signing.rs`
+- `conary cook --record` / record-mode spike: start in
+  `apps/conary/src/commands/record_mode/`; use
+  `crates/conary-core/src/recipe/recording/` for pure report/draft helpers and
+  keep `apps/conary/src/commands/cook.rs` to routing plus recorded-draft
+  validation helper work.
 - Source selection, runtime policy mirrors, and replatform convergence:
   `crates/conary-core/src/repository/effective_policy.rs`,
   `crates/conary-core/src/model/parser.rs`,
