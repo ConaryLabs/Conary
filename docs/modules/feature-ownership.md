@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-06-16
-revision: 14
-summary: Route M3b packaging MCP ownership
+last_updated: 2026-06-17
+revision: 15
+summary: Route decomposed try-session ownership
 ---
 
 # Feature Ownership And Interaction Gates
@@ -342,7 +342,7 @@ pinned by the repository.
 `apps/conary/src/commands/operation_records.rs`;
 `apps/conary/src/commands/hermetic_config.rs`;
 `apps/conary/src/commands/hermetic_state.rs`;
-`apps/conary/src/commands/try_session.rs`;
+`apps/conary/src/commands/try_session/`;
 `apps/conary/src/commands/repo_static.rs`;
 `apps/conary/tests/packaging_m1b.rs`;
 `apps/conary/tests/packaging_m2a.rs`;
@@ -367,12 +367,15 @@ docs-audit truth gates.
 `cargo test -p conary-core recipe::kitchen`;
 `cargo test -p conary-core trust::client`;
 `cargo test -p conary-core trust::verify`;
+`cargo test -p conary-core db::models::try_session`;
 `cargo test -p conary --test static_repo_m1a`;
 `cargo test -p conary --test packaging_m2a`;
 `cargo test -p conary --test packaging_m3a`;
 `cargo test -p conary --test packaging_m3b`;
 `cargo test -p conary commands::diagnostics::tests`;
 `cargo test -p conary commands::packaging_mcp`;
+`cargo test -p conary --lib commands::try_session`;
+`cargo test -p conary --lib dispatch::root`;
 `cargo test -p conary --test packaging_m1b`.
 
 **Interaction gate:** `cargo test -p conary-core`;
