@@ -140,6 +140,31 @@ impl TrySession {
         self.require_open_update(conn, affected)
     }
 
+    pub fn replace_active_try_generation(
+        &self,
+        conn: &Connection,
+        expected_try_generation_id: i64,
+        package_path: &str,
+        next_try_generation_id: i64,
+    ) -> Result<bool> {
+        let rows = conn.execute(
+            "UPDATE try_sessions
+             SET package_path = ?1,
+                 try_generation_id = ?2,
+                 updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+             WHERE id = ?3
+               AND status = 'active'
+               AND try_generation_id = ?4",
+            params![
+                package_path,
+                next_try_generation_id,
+                self.id,
+                expected_try_generation_id,
+            ],
+        )?;
+        Ok(rows == 1)
+    }
+
     pub fn set_launcher(
         &self,
         conn: &Connection,
@@ -562,6 +587,49 @@ mod tests {
                 .id,
             "try-a"
         );
+    }
+
+    #[test]
+    fn replace_active_try_generation_updates_only_matching_active_generation() {
+        let (_temp, conn) = create_test_db();
+        let session = create_namespace_session(&conn, "try-a");
+        session.set_try_generation(&conn, 41).unwrap();
+
+        let replaced = session
+            .replace_active_try_generation(&conn, 41, "/tmp/new.ccs", 42)
+            .unwrap();
+
+        assert!(replaced);
+        let stored = TrySession::find_by_id(&conn, "try-a").unwrap().unwrap();
+        assert_eq!(stored.package_path, "/tmp/new.ccs");
+        assert_eq!(stored.try_generation_id, Some(42));
+        assert_eq!(stored.status, TrySessionStatus::Active);
+    }
+
+    #[test]
+    fn replace_active_try_generation_refuses_stale_or_non_active_rows() {
+        let (_temp, conn) = create_test_db();
+        let session = create_namespace_session(&conn, "try-a");
+        session.set_try_generation(&conn, 41).unwrap();
+
+        assert!(
+            !session
+                .replace_active_try_generation(&conn, 40, "/tmp/new.ccs", 42)
+                .unwrap()
+        );
+        let stored = TrySession::find_by_id(&conn, "try-a").unwrap().unwrap();
+        assert_eq!(stored.try_generation_id, Some(41));
+        assert_eq!(stored.package_path, "/tmp/try-a.ccs");
+
+        session.mark_orphaned(&conn).unwrap();
+        assert!(
+            !session
+                .replace_active_try_generation(&conn, 41, "/tmp/new.ccs", 42)
+                .unwrap()
+        );
+        let stored = TrySession::find_by_id(&conn, "try-a").unwrap().unwrap();
+        assert_eq!(stored.status, TrySessionStatus::Orphaned);
+        assert_eq!(stored.try_generation_id, Some(41));
     }
 
     #[test]
