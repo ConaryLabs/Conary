@@ -899,7 +899,47 @@ pub(super) async fn dispatch_command(
             no_isolation,
             hermetic,
             json,
+            record,
+            record_output,
+            record_backend,
+            record_validate,
+            keep_raw_trace,
+            record_unsafe_host,
+            record_allow_network,
+            record_command,
         }) => {
+            if record {
+                let source = target
+                    .as_deref()
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(|| std::path::PathBuf::from("."));
+                let output_dir = record_output
+                    .as_deref()
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(|| {
+                        let name = source
+                            .file_name()
+                            .and_then(|value| value.to_str())
+                            .filter(|value| !value.is_empty())
+                            .unwrap_or("source");
+                        std::path::PathBuf::from("recorded").join(name)
+                    });
+                return commands::cmd_cook_record(commands::record_mode::RecordCliRequest {
+                    source,
+                    output_dir,
+                    backend: commands::record_mode::RequestedRecordBackend::parse(
+                        record_backend.as_deref(),
+                    )?,
+                    validate: record_validate,
+                    keep_raw_trace,
+                    unsafe_host: record_unsafe_host,
+                    allow_network: record_allow_network,
+                    json,
+                    command: record_command,
+                })
+                .await;
+            }
+
             commands::cmd_cook(
                 target.as_deref(),
                 recipe.as_deref(),

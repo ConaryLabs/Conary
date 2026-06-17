@@ -509,6 +509,46 @@ pub enum Commands {
         /// Emit structured M3a JSON output
         #[arg(long)]
         json: bool,
+
+        /// Run hidden experimental record-mode recipe drafting
+        #[arg(long)]
+        #[arg(hide = true)]
+        record: bool,
+
+        /// Directory for record-mode public outputs
+        #[arg(long)]
+        #[arg(hide = true)]
+        record_output: Option<String>,
+
+        /// Trace backend for record mode: auto, fanotify, or inotify
+        #[arg(long)]
+        #[arg(hide = true)]
+        record_backend: Option<String>,
+
+        /// Validate the generated draft recipe with a normal cook
+        #[arg(long)]
+        #[arg(hide = true)]
+        record_validate: bool,
+
+        /// Keep private raw trace fragments for developer debugging
+        #[arg(long)]
+        #[arg(hide = true)]
+        keep_raw_trace: bool,
+
+        /// Run record command on the host without sandbox containment
+        #[arg(long)]
+        #[arg(hide = true)]
+        record_unsafe_host: bool,
+
+        /// Reserved hidden flag; M3d fails closed when this is set
+        #[arg(long)]
+        #[arg(hide = true)]
+        record_allow_network: bool,
+
+        /// Command to record, passed after `--`
+        #[arg(last = true)]
+        #[arg(hide = true)]
+        record_command: Vec<String>,
     },
 
     /// Create or infer a package recipe
@@ -947,6 +987,66 @@ mod tests {
     fn cook_accepts_hidden_m1a_compatibility_flags() {
         assert!(Cli::try_parse_from(["conary", "cook", "--hermetic", "recipe.toml"]).is_ok());
         assert!(Cli::try_parse_from(["conary", "cook", "--no-isolation", "recipe.toml"]).is_ok());
+    }
+
+    #[test]
+    fn cook_record_hidden_flags_parse_after_separator() {
+        let cli = Cli::try_parse_from([
+            "conary",
+            "cook",
+            "--record",
+            "demo-source",
+            "--record-output",
+            "recorded/demo",
+            "--record-backend",
+            "inotify",
+            "--record-validate",
+            "--",
+            "make",
+            "install",
+            "DESTDIR=$CONARY_DESTDIR",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Some(Commands::Cook {
+                target,
+                record,
+                record_output,
+                record_backend,
+                record_validate,
+                keep_raw_trace,
+                record_unsafe_host,
+                record_allow_network,
+                record_command,
+                ..
+            }) => {
+                assert_eq!(target.as_deref(), Some("demo-source"));
+                assert!(record);
+                assert_eq!(record_output.as_deref(), Some("recorded/demo"));
+                assert_eq!(record_backend.as_deref(), Some("inotify"));
+                assert!(record_validate);
+                assert!(!keep_raw_trace);
+                assert!(!record_unsafe_host);
+                assert!(!record_allow_network);
+                assert_eq!(
+                    record_command,
+                    ["make", "install", "DESTDIR=$CONARY_DESTDIR"]
+                        .into_iter()
+                        .map(str::to_string)
+                        .collect::<Vec<_>>()
+                );
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn public_cook_help_hides_record_mode_flags() {
+        let help = subcommand_help("cook");
+        assert!(!help.contains("--record"));
+        assert!(!help.contains("--record-output"));
+        assert!(!help.contains("--keep-raw-trace"));
     }
 
     #[test]

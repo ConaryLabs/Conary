@@ -964,6 +964,14 @@ mod tests {
     }
 
     #[test]
+    fn cook_record_is_local_state_mutation_like_cook() {
+        let policy = policy(&["conary", "cook", "--record", ".", "--", "make"]);
+        assert_eq!(policy.risk, CommandRisk::LocalStateMutation);
+        assert!(!policy.requires_ack());
+        assert_eq!(policy.command_label.as_ref(), "conary cook");
+    }
+
+    #[test]
     fn classify_system_init_and_repo_sync_as_local_state_mutations() {
         for args in [
             ["conary", "system", "init"].as_slice(),
