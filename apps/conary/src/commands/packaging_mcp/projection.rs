@@ -115,6 +115,13 @@ fn diagnostic_code_to_error_kind(code: PackagingDiagnosticCode) -> AgentErrorKin
         | PackagingDiagnosticCode::WatchCookFailed
         | PackagingDiagnosticCode::WatchTryRefreshFailed
         | PackagingDiagnosticCode::WatchCleanupFailed
+        | PackagingDiagnosticCode::RecordBackendUnavailable
+        | PackagingDiagnosticCode::RecordTraceFailed
+        | PackagingDiagnosticCode::RecordCommandFailed
+        | PackagingDiagnosticCode::RecordDraftGenerated
+        | PackagingDiagnosticCode::RecordValidationFailed
+        | PackagingDiagnosticCode::RecordRedactionFailed
+        | PackagingDiagnosticCode::RecordCleanupFailed
         | PackagingDiagnosticCode::OperationRecordWriteFailed
         | PackagingDiagnosticCode::RedactionFailed
         | PackagingDiagnosticCode::Unknown => AgentErrorKind::PartialFailure,
