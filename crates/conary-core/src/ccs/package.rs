@@ -32,6 +32,8 @@ pub struct CcsPackage {
     manifest: CcsManifest,
     /// Parsed CBOR manifest, when the package carries the binary format
     binary_manifest: Option<BinaryManifest>,
+    /// Parsed v2 authority, when this package is native CCS v2.
+    v2_authority: Option<crate::ccs::v2::AuthorityDocumentV2>,
     /// File entries from FILES.json
     files: Vec<FileEntry>,
     /// Component data
@@ -277,6 +279,11 @@ impl CcsPackage {
         self.binary_manifest.as_ref()
     }
 
+    /// Get the parsed v2 authority, when present.
+    pub fn v2_authority(&self) -> Option<&crate::ccs::v2::AuthorityDocumentV2> {
+        self.v2_authority.as_ref()
+    }
+
     #[cfg(test)]
     pub(crate) fn manifest_mut_for_tests(&mut self) -> &mut CcsManifest {
         &mut self.manifest
@@ -419,6 +426,7 @@ impl PackageFormat for CcsPackage {
             package_path,
             manifest: contents.manifest,
             binary_manifest: contents.binary_manifest,
+            v2_authority: None,
             files,
             components: contents.components,
             package_files,

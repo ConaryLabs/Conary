@@ -157,9 +157,45 @@ pub fn verify_build_attestation_envelope(
         .context("verify build attestation signature")
 }
 
+pub fn compute_v2_content_identity(
+    authority: &crate::ccs::v2::AuthorityDocumentV2,
+) -> Result<String> {
+    crate::ccs::v2::compute_v2_content_identity(authority)
+}
+
+pub fn compute_v2_file_merkle_root(
+    authority: &crate::ccs::v2::AuthorityDocumentV2,
+) -> Result<String> {
+    crate::ccs::v2::compute_v2_file_merkle_root(authority)
+}
+
 pub fn compute_build_output_identity(
     package: &crate::ccs::package::CcsPackage,
 ) -> Result<BuildOutputIdentity> {
+    if let Some(authority) = package.v2_authority() {
+        let provenance = &authority.provenance;
+        return Ok(BuildOutputIdentity {
+            file_merkle_root: compute_v2_file_merkle_root(authority)?,
+            package_name: authority.identity.name.clone(),
+            package_version: authority.identity.version.clone(),
+            package_release: authority.identity.release.clone(),
+            architecture: authority.identity.architecture.clone(),
+            origin_class: provenance
+                .origin_class
+                .clone()
+                .context("v2 build output identity requires origin_class")?,
+            hardening_level: provenance
+                .hardening_level
+                .clone()
+                .context("v2 build output identity requires hardening_level")?,
+            hermetic_evidence_hash: provenance
+                .hermetic_evidence_hash
+                .clone()
+                .context("v2 build output identity requires hermetic_evidence_hash")?,
+            canonical_content_identity: compute_v2_content_identity(authority)?,
+        });
+    }
+
     let manifest = package.manifest();
     let provenance = manifest
         .provenance
