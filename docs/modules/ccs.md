@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-06-15
-revision: 15
-summary: Route CCS manifest provenance and M2 release attestations
+last_updated: 2026-06-18
+revision: 16
+summary: Route CCS v2 authority, manifest provenance, and release attestations
 ---
 
 # CCS Module (conary-core/src/ccs/)
@@ -43,6 +43,7 @@ CcsBuilder::new(manifest, source_dir)
 | `CcsBuilder` | builder.rs | Builds a CCS package from manifest + source directory |
 | `BuildResult` | builder.rs | Output: manifest, components, files, blobs, total_size |
 | `CcsPackage` | package.rs | Parsed .ccs file ready for installation via PackageFormat trait |
+| `AuthorityDocumentV2` | v2/schema.rs | Signed CCS v2 native package authority |
 | `BinaryManifest` | binary_manifest.rs | CBOR-encoded compact manifest (FORMAT_VERSION=1) |
 | `SigningKeyPair` | signing.rs | Ed25519 key generation, signing, file I/O |
 | `PackageSignature` | signing.rs | Embedded signature with algorithm, key_id, timestamp |
@@ -85,6 +86,11 @@ timeouts, and evidence digests. It is TOML-only in this revision; the CBOR
 `BinaryManifest` remains unchanged and archive reads overlay the TOML field
 when both manifest formats are present.
 
+**v2/** -- CCS v2 native package authority. Start in
+`crates/conary-core/src/ccs/v2/` for v2 authority, validation, diagnostics,
+archive reading, and content identity. Use `archive_reader.rs` and `package.rs`
+only as version-routing/adaptation surfaces.
+
 **enhancement/** -- Post-conversion enrichment via trait-based plugins.
 Adds capabilities, provenance, and subpackage relationships that the
 original format lacked. Uses EnhancementRunner with a registry pattern.
@@ -118,6 +124,14 @@ If conversion output changes, also run:
 ```bash
 cargo test -p conary --test conversion_integration golden_conversion
 ```
+
+## CCS v2 Native Authority
+
+CCS v2 packages use the CBOR `MANIFEST` with `format_version = 2` as signed
+install-time authority. `MANIFEST.toml` may be present for source/debug
+visibility, but TOML-only install behavior is not native authority. The v2
+implementation lives under `crates/conary-core/src/ccs/v2/`; legacy v1
+`BinaryManifest` parsing remains a migration/fixture surface.
 
 ## Legacy Scriptlet Bundles And Replay
 

@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-06-17
-revision: 16
-summary: Route M3 packaging ownership
+last_updated: 2026-06-18
+revision: 17
+summary: Route M4 CCS v2 ownership
 ---
 
 # Feature Ownership And Interaction Gates
@@ -276,6 +276,9 @@ schema or format changes require explicit compatibility decisions.
 install CCS packages, and preserve/replay legacy scriptlet metadata safely.
 
 **Start here:** `crates/conary-core/src/ccs/`;
+`crates/conary-core/src/ccs/v2/`;
+`crates/conary-core/src/ccs/archive_reader.rs`;
+`crates/conary-core/src/ccs/package.rs`;
 `crates/conary-core/src/ccs/convert/`;
 `crates/conary-core/src/ccs/convert/scriptlet_bundle.rs`;
 `crates/conary-core/src/ccs/convert/scriptlet_bundle/`;
@@ -298,20 +301,25 @@ metadata, scriptlet sandboxing (`crates/conary-core/src/scriptlet/mod.rs`,
 `crates/conary-core/src/scriptlet/process.rs`,
 `crates/conary-core/src/scriptlet/legacy.rs`), fixture maps.
 
-**Focused proof:** `cargo test -p conary-core golden_fixtures`;
+**Focused proof:** `cargo test -p conary-core ccs::v2`;
+`cargo test -p conary-core golden_fixtures`;
 `cargo test -p conary-core support_matrix`;
 `cargo test -p conary-core legacy_replay`.
 
 **Interaction gate:** `cargo test -p conary --test conversion_integration golden_conversion`;
+`cargo test -p conary --test packaging_m4a`;
 `cargo test -p conary --test bundle_replay`;
 `cargo test -p remi publication` when conversion output affects public serving.
 
 **Docs to update:** `docs/modules/ccs.md`; `docs/modules/test-fixtures.md`;
 `docs/llms/subsystem-map.md`; CCS roadmap child specs when active.
 
-**Safety notes:** text-pattern detections are advisory, public-ready serving is
-gated by adapter/support-matrix evidence, and raw legacy replay remains local
-and fail-closed.
+**Safety notes:** start in `crates/conary-core/src/ccs/v2/` for v2 authority,
+validation, diagnostics, archive reading, and content identity. Use
+`archive_reader.rs` and `package.rs` only as version-routing/adaptation
+surfaces. Text-pattern detections are advisory, public-ready serving is gated
+by adapter/support-matrix evidence, and raw legacy replay remains local and
+fail-closed.
 
 ## Packaging, Try Sessions, And Static Repository Publishing
 
