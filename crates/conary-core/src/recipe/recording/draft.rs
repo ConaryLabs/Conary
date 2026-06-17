@@ -34,9 +34,9 @@ pub fn derive_draft_recipe(input: DraftRecipeInput) -> Result<String> {
     }
     let rendered = render_recorded_command(&input.command, &input.recording_destdir);
     let step = if input.installed_files.is_empty() {
-        format!("build = \"{rendered}\"")
+        format!("build = {}", toml_string(&rendered))
     } else {
-        format!("install = \"{rendered}\"")
+        format!("install = {}", toml_string(&rendered))
     };
     let review_note = if input.network_likely {
         "# Review: network-like behavior was observed or could not be ruled out.\n"
@@ -82,6 +82,16 @@ fn shell_quote_for_recipe(value: &str) -> String {
     } else {
         format!("'{}'", value.replace('\'', "'\\''"))
     }
+}
+
+fn toml_string(value: &str) -> String {
+    let escaped = value
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t");
+    format!("\"{escaped}\"")
 }
 
 #[cfg(test)]
@@ -133,6 +143,26 @@ mod tests {
         assert!(recipe.contains("path = \"source\""));
         assert!(recipe.contains("install = \"make install\""));
         assert!(!recipe.contains("/tmp/private"));
+    }
+
+    #[test]
+    fn draft_recipe_escapes_recorded_shell_quotes_as_valid_toml() {
+        let recipe = derive_draft_recipe(DraftRecipeInput {
+            package_name: "demo".to_string(),
+            package_version: "0.1.0-recorded".to_string(),
+            command: vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                "printf \"%s\" \"$CONARY_DESTDIR\"".to_string(),
+            ],
+            recording_destdir: "/tmp/private/destdir".to_string(),
+            installed_files: vec!["usr/bin/demo".to_string()],
+            network_likely: false,
+        })
+        .unwrap();
+
+        toml::from_str::<toml::Value>(&recipe).unwrap();
+        assert!(recipe.contains("\\\"%s\\\""));
     }
 
     #[test]

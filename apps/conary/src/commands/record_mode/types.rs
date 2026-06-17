@@ -24,7 +24,6 @@ impl RequestedRecordBackend {
     }
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub(crate) struct RecordCliRequest {
     pub(crate) source: PathBuf,

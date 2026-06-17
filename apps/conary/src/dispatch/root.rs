@@ -916,14 +916,7 @@ pub(super) async fn dispatch_command(
                 let output_dir = record_output
                     .as_deref()
                     .map(std::path::PathBuf::from)
-                    .unwrap_or_else(|| {
-                        let name = source
-                            .file_name()
-                            .and_then(|value| value.to_str())
-                            .filter(|value| !value.is_empty())
-                            .unwrap_or("source");
-                        std::path::PathBuf::from("recorded").join(name)
-                    });
+                    .unwrap_or_else(|| commands::record_mode::default_record_output_dir(&source));
                 return commands::cmd_cook_record(commands::record_mode::RecordCliRequest {
                     source,
                     output_dir,

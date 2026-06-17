@@ -13,6 +13,9 @@ use conary_core::recipe::recording::{
     IgnoredEvent, InstalledFileEvidence, ObservedPath, RecordingLimitation, RecordingReport,
     ScopeRootLabel, SelectedBackend,
 };
+use conary_core::recipe::recording::{
+    TraceOperation, TraceScope, suggest_capabilities_from_evidence,
+};
 
 pub(crate) struct ReportInput {
     pub(crate) operation_id: String,
@@ -42,6 +45,7 @@ pub(crate) fn build_recording_report(input: ReportInput) -> Result<RecordingRepo
     }
     redactions.sort();
     redactions.dedup();
+    let capability_suggestions = suggest_capabilities_from_evidence(&input.installed_files);
 
     Ok(RecordingReport {
         schema_version: 1,
@@ -58,11 +62,94 @@ pub(crate) fn build_recording_report(input: ReportInput) -> Result<RecordingRepo
         installed_files: input.installed_files,
         inferred_build_steps: Vec::new(),
         inferred_install_steps: Vec::new(),
-        capability_suggestions: Vec::new(),
+        capability_suggestions,
         ignored_events: input.ignored_events,
         redactions,
         limitations: input.limitations,
     })
+}
+
+pub(crate) fn installed_file_evidence(install_root: &Path) -> Result<Vec<InstalledFileEvidence>> {
+    let mut files = Vec::new();
+    for entry in walkdir::WalkDir::new(install_root).follow_links(false) {
+        let entry = entry?;
+        if entry.file_type().is_dir() {
+            continue;
+        }
+        let relative = entry.path().strip_prefix(install_root)?;
+        if entry.file_type().is_symlink() {
+            let link_target = std::fs::read_link(entry.path())?;
+            files.push(InstalledFileEvidence {
+                path: relative.to_string_lossy().to_string(),
+                file_type: "symlink".to_string(),
+                executable: false,
+                size: 0,
+                link_target: Some(link_target.to_string_lossy().to_string()),
+            });
+            continue;
+        }
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let metadata = entry.metadata()?;
+        files.push(InstalledFileEvidence {
+            path: relative.to_string_lossy().to_string(),
+            file_type: "file".to_string(),
+            executable: executable_bit(&metadata),
+            size: metadata.len(),
+            link_target: None,
+        });
+    }
+    files.sort_by(|left, right| left.path.cmp(&right.path));
+    Ok(files)
+}
+
+fn executable_bit(metadata: &std::fs::Metadata) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = metadata;
+        false
+    }
+}
+
+pub(crate) fn reconcile_installed_scan_with_trace(
+    installed_files: &[InstalledFileEvidence],
+    observed_paths: &[ObservedPath],
+) -> (Vec<RecordingLimitation>, Vec<IgnoredEvent>) {
+    use std::collections::HashSet;
+
+    let installed = installed_files
+        .iter()
+        .filter(|file| matches!(file.file_type.as_str(), "file" | "symlink"))
+        .map(|file| file.path.clone())
+        .collect::<HashSet<_>>();
+    let observed_writes = observed_paths
+        .iter()
+        .filter(|path| {
+            path.scope == TraceScope::Install
+                && matches!(
+                    path.operation,
+                    TraceOperation::InstallCreate | TraceOperation::InstallModify
+                )
+        })
+        .map(|path| path.path.clone())
+        .collect::<HashSet<_>>();
+    let missing = installed.difference(&observed_writes).count();
+    if missing == 0 {
+        return (Vec::new(), Vec::new());
+    }
+    (
+        vec![RecordingLimitation::EventLoss],
+        vec![IgnoredEvent {
+            reason: "installed-scan-reconciled-missing-watch-event".to_string(),
+            count: missing as u64,
+        }],
+    )
 }
 
 fn redact_private_prefixes(values: Vec<String>, private_prefixes: &[PathBuf]) -> Vec<String> {
@@ -215,5 +302,34 @@ mod tests {
         assert_eq!(output.diagnostics[0].severity, PackagingSeverity::Error);
         assert_eq!(output.events[0], event);
         assert_eq!(output.summary.as_deref(), Some("recording failed"));
+    }
+
+    #[test]
+    fn installed_scan_records_files_symlinks_and_executable_bits() {
+        let temp = tempfile::tempdir().unwrap();
+        let install = temp.path().join("destdir");
+        std::fs::create_dir_all(install.join("usr/bin")).unwrap();
+        let bin = install.join("usr/bin/demo");
+        std::fs::write(&bin, "bin").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = std::fs::metadata(&bin).unwrap().permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(&bin, permissions).unwrap();
+            std::os::unix::fs::symlink("demo", install.join("usr/bin/demo-link")).unwrap();
+        }
+
+        let files = installed_file_evidence(&install).unwrap();
+
+        assert!(
+            files
+                .iter()
+                .any(|file| file.path == "usr/bin/demo" && file.executable)
+        );
+        #[cfg(unix)]
+        assert!(files.iter().any(|file| file.path == "usr/bin/demo-link"
+            && file.file_type == "symlink"
+            && file.link_target.as_deref() == Some("demo")));
     }
 }
