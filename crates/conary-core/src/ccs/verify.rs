@@ -200,16 +200,40 @@ pub fn verify_package(path: &Path, policy: &TrustPolicy) -> Result<VerificationR
 
     let mut warnings = Vec::new();
 
+    let verified_v2 = if let Some(raw_manifest) = contents.v2_manifest_raw.as_deref() {
+        Some(crate::ccs::v2::read_authority_document(
+            raw_manifest,
+            contents.signature_raw.as_deref(),
+            contents.toml_raw.as_deref(),
+            contents.v2_build_attestation_raw.as_deref(),
+            contents.v2_foreign_conversion_boundary_raw.as_deref(),
+            policy,
+        )?)
+    } else {
+        None
+    };
+
     // Verify signature (over raw manifest bytes - CBOR or TOML)
-    let signature_status = verify_signature(
-        &contents.manifest_raw,
-        signature.as_ref(),
-        policy,
-        &mut warnings,
-    )?;
+    let signature_status = if let Some(verified) = verified_v2.as_ref() {
+        SignatureStatus::Valid {
+            key_id: verified.signature.key_id.clone(),
+            timestamp: verified.signature.timestamp.clone(),
+        }
+    } else {
+        verify_signature(
+            &contents.manifest_raw,
+            signature.as_ref(),
+            policy,
+            &mut warnings,
+        )?
+    };
 
     // Verify content hashes
-    let mut content_status = verify_content_hashes(&files, &contents.blobs)?;
+    let mut content_status = if let Some(verified) = verified_v2.as_ref() {
+        verify_v2_archive_payload(&verified.authority, &contents.components, &contents.blobs)?
+    } else {
+        verify_content_hashes(&files, &contents.blobs)?
+    };
 
     // Verify Merkle root against binary manifest's content_root.
     // A Merkle root mismatch is a structural integrity failure: also mark
@@ -297,6 +321,24 @@ pub fn verify_toml_integrity(
 
 /// Verify the package signature
 fn verify_signature(
+    manifest_raw: &[u8],
+    signature: Option<&PackageSignature>,
+    policy: &TrustPolicy,
+    warnings: &mut Vec<String>,
+) -> Result<SignatureStatus> {
+    verify_manifest_signature_with_warnings(manifest_raw, signature, policy, warnings)
+}
+
+pub(crate) fn verify_manifest_signature(
+    manifest_raw: &[u8],
+    signature: Option<&PackageSignature>,
+    policy: &TrustPolicy,
+) -> Result<SignatureStatus> {
+    let mut warnings = Vec::new();
+    verify_manifest_signature_with_warnings(manifest_raw, signature, policy, &mut warnings)
+}
+
+fn verify_manifest_signature_with_warnings(
     manifest_raw: &[u8],
     signature: Option<&PackageSignature>,
     policy: &TrustPolicy,
@@ -419,6 +461,103 @@ fn verify_signature(
         key_id: sig.key_id.clone(),
         timestamp: sig.timestamp.clone(),
     })
+}
+
+fn verify_v2_archive_payload(
+    authority: &crate::ccs::v2::AuthorityDocumentV2,
+    components: &std::collections::HashMap<String, crate::ccs::builder::ComponentData>,
+    blobs: &std::collections::HashMap<String, Vec<u8>>,
+) -> Result<ContentStatus> {
+    use crate::ccs::builder::FileType as LegacyFileType;
+    use crate::ccs::v2::schema::{FileTypeV2, PackageKindV2};
+    use std::collections::HashSet;
+
+    let PackageKindV2::Package(data) = &authority.kind else {
+        return Ok(ContentStatus::Skipped);
+    };
+
+    let mut errors = Vec::new();
+    let signed_files: HashSet<(&str, &str)> = data
+        .files
+        .iter()
+        .map(|file| (file.component.as_str(), file.path.as_str()))
+        .collect();
+
+    for (component_name, component) in components {
+        if !authority.components.contains_key(component_name) {
+            errors.push(format!(
+                "v2 archive carries unsigned component {component_name}"
+            ));
+        }
+        for component_file in &component.files {
+            if !signed_files.contains(&(component_name.as_str(), component_file.path.as_str())) {
+                errors.push(format!(
+                    "v2 archive carries unsigned file {} in component {}",
+                    component_file.path, component_name
+                ));
+            }
+        }
+    }
+
+    for file in &data.files {
+        let component = match components.get(&file.component) {
+            Some(component) => component,
+            None => {
+                errors.push(format!(
+                    "v2 file {} references missing component {}",
+                    file.path, file.component
+                ));
+                continue;
+            }
+        };
+        let Some(component_file) = component.files.iter().find(|item| item.path == file.path)
+        else {
+            errors.push(format!(
+                "v2 signed file {} missing from component {}",
+                file.path, file.component
+            ));
+            continue;
+        };
+        let expected_type = match file.file_type {
+            FileTypeV2::Regular => LegacyFileType::Regular,
+            FileTypeV2::Directory => LegacyFileType::Directory,
+            FileTypeV2::Symlink => LegacyFileType::Symlink,
+        };
+        if component_file.hash != file.sha256
+            || component_file.size != file.size
+            || component_file.mode != file.mode
+            || component_file.file_type != expected_type
+            || component_file.component != file.component
+            || component_file.target != file.symlink_target
+        {
+            errors.push(format!(
+                "v2 file authority mismatch for {} in component {}",
+                file.path, file.component
+            ));
+        }
+        if matches!(file.file_type, FileTypeV2::Regular) {
+            match blobs.get(&file.sha256) {
+                Some(content)
+                    if crate::hash::sha256(content) == file.sha256
+                        && content.len() as u64 == file.size => {}
+                Some(content) if content.len() as u64 != file.size => {
+                    errors.push(format!("v2 blob size mismatch for {}", file.path));
+                }
+                Some(_) => errors.push(format!("v2 blob hash mismatch for {}", file.path)),
+                None => errors.push(format!("v2 blob missing for {}", file.path)),
+            }
+        } else if matches!(file.file_type, FileTypeV2::Symlink) && file.symlink_target.is_none() {
+            errors.push(format!("v2 symlink target missing for {}", file.path));
+        }
+    }
+
+    if errors.is_empty() {
+        Ok(ContentStatus::Valid {
+            files_checked: data.files.len(),
+        })
+    } else {
+        Ok(ContentStatus::Invalid { errors })
+    }
 }
 
 /// Verify content hashes match
@@ -823,5 +962,114 @@ mod tests {
             "{:?}",
             verification.warnings
         );
+    }
+
+    fn write_v2_archive_for_verify_test(
+        path: &Path,
+        mutate_component: impl FnOnce(
+            &mut crate::ccs::builder::ComponentData,
+            &mut HashMap<String, Vec<u8>>,
+        ),
+    ) -> String {
+        use crate::ccs::builder::{ComponentData, FileEntry, FileType};
+        use flate2::Compression;
+        use flate2::write::GzEncoder;
+        use std::io::Write;
+        use tar::Builder;
+
+        fn append_bytes<W: Write>(builder: &mut Builder<W>, path: &str, bytes: &[u8]) {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(bytes.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            builder.append_data(&mut header, path, bytes).unwrap();
+        }
+
+        let authority = crate::ccs::v2::schema::AuthorityDocumentV2::package_for_tests("verify-v2");
+        let raw = authority.to_cbor().unwrap();
+        let key = crate::ccs::signing::SigningKeyPair::generate();
+        let public_key = key.public_key_base64();
+        let signature = serde_json::to_vec(&key.sign(&raw)).unwrap();
+        let hello_hash = crate::hash::sha256(b"hello world\n");
+        let mut component = ComponentData {
+            name: "main".to_string(),
+            files: vec![FileEntry {
+                path: "/usr/bin/hello".to_string(),
+                hash: hello_hash.clone(),
+                size: 12,
+                mode: 0o755,
+                component: "main".to_string(),
+                file_type: FileType::Regular,
+                target: None,
+                chunks: None,
+            }],
+            hash: "component-hash-unused-by-v2-verify-test".to_string(),
+            size: 12,
+        };
+        let mut blobs = HashMap::from([(hello_hash, b"hello world\n".to_vec())]);
+        mutate_component(&mut component, &mut blobs);
+        let component_json = serde_json::to_vec(&component).unwrap();
+
+        let file = std::fs::File::create(path).unwrap();
+        let encoder = GzEncoder::new(file, Compression::default());
+        let mut builder = Builder::new(encoder);
+        append_bytes(&mut builder, "MANIFEST", &raw);
+        append_bytes(&mut builder, "MANIFEST.sig", &signature);
+        append_bytes(&mut builder, "components/main.json", &component_json);
+        for (hash, content) in blobs {
+            let object_path = format!("objects/{}/{}", &hash[..2], &hash[2..]);
+            append_bytes(&mut builder, &object_path, &content);
+        }
+        builder.into_inner().unwrap().finish().unwrap();
+        public_key
+    }
+
+    #[test]
+    fn verify_package_rejects_v2_component_mode_mismatch_against_signed_authority() {
+        let temp = tempfile::tempdir().unwrap();
+        let package_path = temp.path().join("mode-mismatch.ccs");
+        let public_key = write_v2_archive_for_verify_test(&package_path, |component, _blobs| {
+            component.files[0].mode = 0o644;
+        });
+
+        let verification =
+            verify_package(&package_path, &TrustPolicy::strict(vec![public_key])).unwrap();
+
+        assert!(!verification.valid);
+        assert!(matches!(
+            verification.content_status,
+            ContentStatus::Invalid { .. }
+        ));
+    }
+
+    #[test]
+    fn verify_package_rejects_unsigned_extra_v2_component_file() {
+        use crate::ccs::builder::{FileEntry, FileType};
+
+        let temp = tempfile::tempdir().unwrap();
+        let package_path = temp.path().join("extra-file.ccs");
+        let public_key = write_v2_archive_for_verify_test(&package_path, |component, blobs| {
+            let extra_hash = crate::hash::sha256(b"extra\n");
+            component.files.push(FileEntry {
+                path: "/usr/bin/extra".to_string(),
+                hash: extra_hash.clone(),
+                size: 6,
+                mode: 0o755,
+                component: "main".to_string(),
+                file_type: FileType::Regular,
+                target: None,
+                chunks: None,
+            });
+            blobs.insert(extra_hash, b"extra\n".to_vec());
+        });
+
+        let verification =
+            verify_package(&package_path, &TrustPolicy::strict(vec![public_key])).unwrap();
+
+        assert!(!verification.valid);
+        assert!(matches!(
+            verification.content_status,
+            ContentStatus::Invalid { .. }
+        ));
     }
 }

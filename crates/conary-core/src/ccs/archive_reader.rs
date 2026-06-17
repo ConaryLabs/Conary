@@ -10,7 +10,9 @@ use crate::ccs::binary_manifest::{BinaryManifest, Hash};
 use crate::ccs::builder::ComponentData;
 use crate::ccs::manifest::CcsManifest;
 use crate::ccs::package::convert_binary_to_ccs_manifest;
+use crate::ccs::v2::AuthorityDocumentV2;
 use flate2::read::GzDecoder;
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::io::Read;
 use tar::Archive;
@@ -39,6 +41,27 @@ pub struct CcsArchiveContents {
 
     /// The CBOR `BinaryManifest`, if the archive contained one.
     pub binary_manifest: Option<BinaryManifest>,
+
+    /// Parsed CCS v2 authority, if the archive contained a v2 MANIFEST.
+    ///
+    /// This value is decoded for routing only. It is not trusted until
+    /// `ccs::v2::read_authority_document` verifies the raw bytes and signature.
+    pub v2_authority: Option<AuthorityDocumentV2>,
+
+    /// Raw v2 MANIFEST bytes retained for exact-byte signature verification.
+    pub v2_manifest_raw: Option<Vec<u8>>,
+
+    /// Raw v2 build attestation JSON, if present.
+    pub v2_build_attestation_raw: Option<String>,
+
+    /// Raw v2 foreign conversion boundary JSON, if present.
+    pub v2_foreign_conversion_boundary_raw: Option<String>,
+
+    /// Parsed v2 build attestation JSON, if present.
+    pub v2_build_attestation: Option<crate::ccs::attestation::BuildAttestationEnvelope>,
+
+    /// Parsed v2 foreign conversion boundary JSON, if present.
+    pub v2_foreign_conversion_boundary: Option<crate::ccs::attestation::ForeignConversionBoundary>,
 
     /// Raw MANIFEST.toml bytes, if the archive contained one.
     /// Used by the verifier to check the TOML integrity hash.
@@ -69,6 +92,30 @@ pub fn read_ccs_archive<R: Read>(reader: R) -> anyhow::Result<CcsArchiveContents
     read_ccs_archive_with_limits(reader, MAX_TOTAL_EXTRACTION_SIZE)
 }
 
+fn cbor_format_version(raw: &[u8]) -> Option<u64> {
+    #[derive(Deserialize)]
+    struct Header {
+        format_version: u64,
+    }
+
+    ciborium::from_reader::<Header, _>(raw)
+        .ok()
+        .map(|header| header.format_version)
+}
+
+fn compatibility_manifest_from_v2(authority: &AuthorityDocumentV2) -> CcsManifest {
+    // This is a routing compatibility projection only. Install, publish, and
+    // verification callers must use signed v2 authority instead of this legacy
+    // manifest shape for package truth.
+    let mut manifest =
+        CcsManifest::new_minimal(&authority.identity.name, &authority.identity.version);
+    manifest.package.description = format!(
+        "Compatibility projection for CCS v2 {:?} authority",
+        authority.identity.kind
+    );
+    manifest
+}
+
 fn read_ccs_archive_with_limits<R: Read>(
     reader: R,
     total_extraction_limit: u64,
@@ -77,10 +124,18 @@ fn read_ccs_archive_with_limits<R: Read>(
     let mut archive = Archive::new(decoder);
 
     let mut binary_manifest: Option<BinaryManifest> = None;
+    let mut v2_authority: Option<AuthorityDocumentV2> = None;
+    let mut unsupported_cbor_format: Option<u64> = None;
     let mut toml_manifest: Option<CcsManifest> = None;
     let mut toml_manifest_raw: Option<Vec<u8>> = None;
     let mut cbor_manifest_raw: Option<Vec<u8>> = None;
     let mut signature_raw: Option<String> = None;
+    let mut v2_build_attestation_raw: Option<String> = None;
+    let mut v2_foreign_conversion_boundary_raw: Option<String> = None;
+    let mut v2_build_attestation: Option<crate::ccs::attestation::BuildAttestationEnvelope> = None;
+    let mut v2_foreign_conversion_boundary: Option<
+        crate::ccs::attestation::ForeignConversionBoundary,
+    > = None;
     let mut components: HashMap<String, ComponentData> = HashMap::new();
     // Raw bytes of each component JSON, keyed by component name (for hash verification)
     let mut component_raw: HashMap<String, Vec<u8>> = HashMap::new();
@@ -114,12 +169,27 @@ fn read_ccs_archive_with_limits<R: Read>(
             let mut content = Vec::new();
             entry.read_to_end(&mut content)?;
             cbor_manifest_raw = Some(content.clone());
-            if let Ok(bin) = BinaryManifest::from_cbor(&content) {
-                binary_manifest = Some(bin);
-            } else {
-                warn!(
-                    "Failed to parse CBOR MANIFEST entry; falling back to MANIFEST.toml if present"
-                );
+            match cbor_format_version(&content) {
+                Some(2) => {
+                    v2_authority =
+                        Some(AuthorityDocumentV2::from_cbor(&content).map_err(|error| {
+                            anyhow::anyhow!("Invalid CCS v2 MANIFEST: {error}")
+                        })?);
+                }
+                Some(1) => {
+                    binary_manifest =
+                        Some(BinaryManifest::from_cbor(&content).map_err(|error| {
+                            anyhow::anyhow!("Invalid CCS v1 binary MANIFEST: {error}")
+                        })?);
+                }
+                Some(version) => {
+                    unsupported_cbor_format = Some(version);
+                }
+                None => {
+                    warn!(
+                        "Failed to parse CBOR MANIFEST entry; falling back to MANIFEST.toml if present"
+                    );
+                }
             }
         }
         // ── MANIFEST.toml ────────────────────────────────────────────
@@ -139,6 +209,30 @@ fn read_ccs_archive_with_limits<R: Read>(
             let mut content = String::new();
             entry.read_to_string(&mut content)?;
             signature_raw = Some(content);
+        }
+        // ── v2 attestation metadata ─────────────────────────────────
+        else if entry_path_str == "MANIFEST.attestation.json"
+            || entry_path_str == "./MANIFEST.attestation.json"
+        {
+            let mut content = String::new();
+            entry.read_to_string(&mut content)?;
+            v2_build_attestation =
+                Some(serde_json::from_str(&content).map_err(|error| {
+                    anyhow::anyhow!("Invalid MANIFEST.attestation.json: {error}")
+                })?);
+            v2_build_attestation_raw = Some(content);
+        }
+        // ── v2 foreign conversion boundary metadata ─────────────────
+        else if entry_path_str == "MANIFEST.conversion-boundary.json"
+            || entry_path_str == "./MANIFEST.conversion-boundary.json"
+        {
+            let mut content = String::new();
+            entry.read_to_string(&mut content)?;
+            v2_foreign_conversion_boundary =
+                Some(serde_json::from_str(&content).map_err(|error| {
+                    anyhow::anyhow!("Invalid MANIFEST.conversion-boundary.json: {error}")
+                })?);
+            v2_foreign_conversion_boundary_raw = Some(content);
         }
         // ── components/*.json ────────────────────────────────────────
         else if (entry_path_str.starts_with("components/")
@@ -217,6 +311,22 @@ fn read_ccs_archive_with_limits<R: Read>(
         }
     }
 
+    if let Some(authority) = &v2_authority
+        && let Some(expected) = &authority.provenance.foreign_conversion_boundary_hash
+    {
+        let boundary = v2_foreign_conversion_boundary.as_ref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "v2 foreign conversion boundary hash present but MANIFEST.conversion-boundary.json is missing"
+            )
+        })?;
+        let actual = crate::ccs::attestation::canonical_json_hash(boundary)?;
+        if &actual != expected {
+            anyhow::bail!(
+                "v2 foreign conversion boundary hash mismatch: expected {expected}, got {actual}"
+            );
+        }
+    }
+
     // Save a copy of the raw TOML bytes for integrity verification.
     // The resolution logic below consumes `toml_manifest_raw` in the
     // TOML-only path, so we must clone before that happens.
@@ -227,7 +337,18 @@ fn read_ccs_archive_with_limits<R: Read>(
     // (it carries fields like config, redirects, policy, provenance that
     // CBOR omits) and verify consistency with the signed CBOR manifest
     // for the fields it does carry.
-    let (manifest, manifest_raw) = if let Some(ref bin) = binary_manifest {
+    let v2_manifest_raw = if v2_authority.is_some() {
+        cbor_manifest_raw.clone()
+    } else {
+        None
+    };
+
+    let (manifest, manifest_raw) = if let Some(ref authority) = v2_authority {
+        let raw = cbor_manifest_raw
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("CCS v2 authority present but raw bytes missing"))?;
+        (compatibility_manifest_from_v2(authority), raw)
+    } else if let Some(ref bin) = binary_manifest {
         if let Some(toml) = toml_manifest {
             // CBOR is signed and authoritative for all fields it carries.
             // Start from the CBOR-converted manifest, then merge in
@@ -268,6 +389,8 @@ fn read_ccs_archive_with_limits<R: Read>(
             })?;
             (convert_binary_to_ccs_manifest(bin), raw)
         }
+    } else if let Some(version) = unsupported_cbor_format {
+        anyhow::bail!("unsupported CCS MANIFEST format_version {version}");
     } else if let Some(toml) = toml_manifest {
         let raw = toml_manifest_raw
             .ok_or_else(|| anyhow::anyhow!("TOML manifest present but raw bytes missing"))?;
@@ -280,6 +403,12 @@ fn read_ccs_archive_with_limits<R: Read>(
         manifest,
         manifest_raw,
         binary_manifest,
+        v2_authority,
+        v2_manifest_raw,
+        v2_build_attestation_raw,
+        v2_foreign_conversion_boundary_raw,
+        v2_build_attestation,
+        v2_foreign_conversion_boundary,
         toml_raw: toml_raw_copy,
         signature_raw,
         components,
@@ -499,6 +628,67 @@ license = "MIT"
 
         assert!(toml_raw.contains("[legacy_scriptlets]"));
         assert!(contents.manifest.legacy_scriptlets.is_some());
+    }
+
+    #[test]
+    fn archive_reader_routes_v2_manifest_without_legacy_binary_defaulting() {
+        use crate::ccs::builder::{ComponentData, FileEntry, FileType};
+        use crate::ccs::signing::SigningKeyPair;
+        use flate2::Compression;
+        use flate2::write::GzEncoder;
+        use tar::Builder;
+
+        fn append_bytes<W: std::io::Write>(builder: &mut Builder<W>, path: &str, bytes: &[u8]) {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(bytes.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            builder.append_data(&mut header, path, bytes).unwrap();
+        }
+
+        let authority =
+            crate::ccs::v2::schema::AuthorityDocumentV2::package_for_tests("archive-v2");
+        let raw = authority.to_cbor().unwrap();
+        let key = SigningKeyPair::generate();
+        let signature = serde_json::to_vec(&key.sign(&raw)).unwrap();
+        let component = ComponentData {
+            name: "main".to_string(),
+            files: vec![FileEntry {
+                path: "/usr/bin/hello".to_string(),
+                hash: crate::hash::sha256(b"hello world\n"),
+                size: 12,
+                mode: 0o755,
+                component: "main".to_string(),
+                file_type: FileType::Regular,
+                target: None,
+                chunks: None,
+            }],
+            hash: "component-hash-unused-by-v2-routing-test".to_string(),
+            size: 12,
+        };
+        let component_json = serde_json::to_vec(&component).unwrap();
+        let blob_hash = crate::hash::sha256(b"hello world\n");
+        let object_path = format!("objects/{}/{}", &blob_hash[..2], &blob_hash[2..]);
+
+        let mut archive_bytes = Vec::new();
+        {
+            let encoder = GzEncoder::new(&mut archive_bytes, Compression::default());
+            let mut builder = Builder::new(encoder);
+            append_bytes(&mut builder, "MANIFEST", &raw);
+            append_bytes(&mut builder, "MANIFEST.sig", &signature);
+            append_bytes(&mut builder, "components/main.json", &component_json);
+            append_bytes(&mut builder, &object_path, b"hello world\n");
+            builder.into_inner().unwrap().finish().unwrap();
+        }
+
+        let contents = read_ccs_archive(std::io::Cursor::new(archive_bytes)).unwrap();
+        assert_eq!(
+            contents.v2_authority.as_ref().unwrap().identity.name,
+            "archive-v2"
+        );
+        assert!(contents.binary_manifest.is_none());
+        assert_eq!(contents.manifest.package.name, "archive-v2");
+        assert_eq!(contents.components["main"].files.len(), 1);
     }
 
     #[test]
