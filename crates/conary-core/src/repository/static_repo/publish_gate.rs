@@ -7,6 +7,7 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
+use crate::ccs::archive_reader::read_ccs_archive;
 use crate::ccs::attestation::{
     BuildAttestationEnvelope, BuildOutputIdentity, canonical_json_hash,
     compute_build_output_identity,
@@ -174,12 +175,18 @@ pub fn verify_static_artifact_publish_eligibility(
     accepted_policy_digest: &str,
 ) -> Result<PublishLintReport> {
     let verification = verify_package_for_static_gate(artifact_path, accepted_signers)?;
-    let package = CcsPackage::parse(
-        artifact_path
-            .to_str()
-            .context("artifact path must be valid UTF-8 for CCS parsing")?,
-    )
-    .map_err(anyhow::Error::from)?;
+    let artifact_path_str = artifact_path
+        .to_str()
+        .context("artifact path must be valid UTF-8 for CCS parsing")?;
+    let has_v2_authority = read_ccs_archive(std::fs::File::open(artifact_path)?)
+        .map(|contents| contents.v2_authority.is_some())
+        .map_err(anyhow::Error::from)?;
+    let package = if has_v2_authority {
+        CcsPackage::parse_verified_v2(artifact_path_str, &verification)
+            .map_err(anyhow::Error::from)?
+    } else {
+        CcsPackage::parse(artifact_path_str).map_err(anyhow::Error::from)?
+    };
     verify_verified_static_artifact_publish_eligibility(
         &package,
         &verification,

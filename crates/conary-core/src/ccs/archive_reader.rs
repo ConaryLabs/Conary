@@ -692,6 +692,15 @@ license = "MIT"
     }
 
     #[test]
+    fn v1_manifest_is_legacy_not_v2_authority() {
+        let (_temp, path) = build_test_package();
+        let file = std::fs::File::open(&path).unwrap();
+        let contents = read_ccs_archive(file).unwrap();
+        assert!(contents.binary_manifest.is_some());
+        assert!(contents.v2_authority.is_none());
+    }
+
+    #[test]
     fn test_read_ccs_archive_missing_manifest() {
         // Build a tar.gz with no MANIFEST
         use flate2::Compression;
