@@ -319,6 +319,7 @@ pub(crate) struct RecordCliRequest {
     pub(crate) keep_raw_trace: bool,
     pub(crate) unsafe_host: bool,
     pub(crate) allow_network: bool,
+    pub(crate) json: bool,
     pub(crate) command: Vec<String>,
 }
 ```
@@ -362,6 +363,7 @@ mod tests {
             keep_raw_trace: false,
             unsafe_host: false,
             allow_network: false,
+            json: false,
             command,
         }
     }
@@ -441,6 +443,7 @@ In `apps/conary/src/dispatch/root.rs`, replace the `Commands::Cook` match arm wi
                     keep_raw_trace,
                     unsafe_host: record_unsafe_host,
                     allow_network: record_allow_network,
+                    json,
                     command: record_command,
                 })
                 .await;
@@ -465,7 +468,7 @@ In `apps/conary/src/dispatch/root.rs`, replace the `Commands::Cook` match arm wi
         }
 ```
 
-Do not pass `recipe`, `output`, `source_cache`, `jobs`, `keep_builddir`, `validate_only`, `fetch_only`, `explain`, `isolated`, `no_isolation`, `hermetic`, or `json` into record mode in M3d. Record mode has its own hidden contract.
+Do not pass `recipe`, `output`, `source_cache`, `jobs`, `keep_builddir`, `validate_only`, `fetch_only`, `explain`, `isolated`, `no_isolation`, or `hermetic` into record mode in M3d. Record mode has its own hidden contract, but it must honor the existing M3 `--json` packaging-output convention.
 
 - [ ] **Step 6: Add route and risk tests**
 
@@ -914,9 +917,15 @@ mod tests {
         let workspace = RecordWorkspace::create(&source, &output, true).unwrap();
         std::fs::write(workspace.raw_trace_dir.join("events.jsonl"), "secret").unwrap();
         let raw_trace_dir = workspace.raw_trace_dir.clone();
+        let source_root = workspace.source_root.clone();
+        let work_root = workspace.work_root.clone();
+        let install_root = workspace.install_root.clone();
         workspace.cleanup().unwrap();
 
         assert!(raw_trace_dir.exists());
+        assert!(!source_root.exists());
+        assert!(!work_root.exists());
+        assert!(!install_root.exists());
         assert!(!output.join("raw-trace").exists());
     }
 }
@@ -983,6 +992,11 @@ impl RecordWorkspace {
 
     pub(crate) fn cleanup(self) -> Result<()> {
         if self.keep_raw_trace {
+            for path in [&self.source_root, &self.work_root, &self.install_root] {
+                if path.exists() {
+                    fs::remove_dir_all(path)?;
+                }
+            }
             return Ok(());
         }
         if self.private_root.exists() {
@@ -1268,14 +1282,15 @@ mod tests {
     }
 
     #[test]
-    fn recursive_inotify_records_create_modify_delete_and_new_directory() {
+    fn recursive_inotify_records_create_modify_delete_in_preexisting_directory() {
         let temp = tempfile::tempdir().unwrap();
         let scope = scope(&temp);
+        let install_dir = temp.path().join("install/usr/bin");
+        std::fs::create_dir_all(&install_dir).unwrap();
         let backend = InotifyTraceBackend::new();
         let mut session = backend.start(scope).unwrap();
 
-        let install_file = temp.path().join("install/usr/bin/demo");
-        std::fs::create_dir_all(install_file.parent().unwrap()).unwrap();
+        let install_file = install_dir.join("demo");
         std::fs::write(&install_file, "one").unwrap();
         std::fs::write(&install_file, "two").unwrap();
         std::fs::remove_file(&install_file).unwrap();
@@ -1314,7 +1329,9 @@ Required behavior:
 - `drain_events` must call `ScopeRoot::scope_path(path, operation)` with a
   concrete operation. It must not emit `TraceOperation::Unknown` for known
   inotify masks.
-- New directories get watches before returning from `drain_events`.
+- New directories get watches before returning from `drain_events`, but writes
+  that happen before a dynamic directory watch is installed are admitted as a
+  known inotify race and reconciled in Task 10.
 - `IN_Q_OVERFLOW` sets `TraceDrain.event_loss = true`.
 
 Use these masks:
@@ -1843,6 +1860,7 @@ mod tests {
                 "curl".to_string(),
                 "-H".to_string(),
                 "Authorization: Bearer secret-token".to_string(),
+                private_root.join("destdir/usr/bin/demo").to_string_lossy().to_string(),
             ],
             command_exit: Some(0),
             observed_paths: vec![ObservedPath {
@@ -1862,6 +1880,7 @@ mod tests {
         assert!(text.contains("Bearer [REDACTED]"));
         assert!(!text.contains("secret-token"));
         assert!(!text.contains(private_root.to_str().unwrap()));
+        assert!(text.contains("[PRIVATE-PATH]"));
     }
 }
 ```
@@ -1894,12 +1913,21 @@ pub(crate) struct ReportInput {
 
 pub(crate) fn build_recording_report(input: ReportInput) -> Result<RecordingReport> {
     let command = redact_command(&input.command);
+    let command_summary = redact_private_prefixes(command.value, &input.private_prefixes);
+    let mut redactions = command
+        .redactions
+        .into_iter()
+        .map(|marker| marker.reason)
+        .collect::<Vec<_>>();
+    if command_summary.iter().any(|value| value.contains("[PRIVATE-PATH]")) {
+        redactions.push("private-path".to_string());
+    }
     Ok(RecordingReport {
         schema_version: 1,
         operation_id: input.operation_id,
         backend: input.backend,
         scope_roots: vec![ScopeRootLabel::Source, ScopeRootLabel::Work, ScopeRootLabel::Install],
-        command_summary: command.value,
+        command_summary,
         command_exit: input.command_exit,
         observed_paths: input.observed_paths,
         installed_files: input.installed_files,
@@ -1907,13 +1935,21 @@ pub(crate) fn build_recording_report(input: ReportInput) -> Result<RecordingRepo
         inferred_install_steps: Vec::new(),
         capability_suggestions: Vec::new(),
         ignored_events: input.ignored_events,
-        redactions: command
-            .redactions
-            .into_iter()
-            .map(|marker| marker.reason)
-            .collect(),
+        redactions,
         limitations: input.limitations,
     })
+}
+
+fn redact_private_prefixes(values: Vec<String>, private_prefixes: &[PathBuf]) -> Vec<String> {
+    values
+        .into_iter()
+        .map(|value| {
+            private_prefixes.iter().fold(value, |redacted, prefix| {
+                let prefix = prefix.to_string_lossy();
+                redacted.replace(prefix.as_ref(), "[PRIVATE-PATH]")
+            })
+        })
+        .collect()
 }
 
 pub(crate) fn write_report_files(output_dir: &Path, report: &RecordingReport) -> Result<()> {
@@ -2513,6 +2549,9 @@ In `apps/conary/src/commands/record_mode/mod.rs`, add:
 #[cfg(test)]
 mod tests {
     use super::*;
+    use conary_core::recipe::recording::{
+        InstalledFileEvidence, ObservedPath, RecordingLimitation, TraceOperation, TraceScope,
+    };
 
     #[test]
     fn operation_id_uses_record_prefix() {
@@ -2530,6 +2569,29 @@ mod tests {
             default_record_output_dir(std::path::Path::new(".")),
             std::path::PathBuf::from("recorded/source")
         );
+    }
+
+    #[test]
+    fn installed_scan_reconciliation_marks_unobserved_installed_path() {
+        let installed = vec![InstalledFileEvidence {
+            path: "usr/bin/demo".to_string(),
+            file_type: "file".to_string(),
+            executable: true,
+            size: 3,
+            link_target: None,
+        }];
+        let observed = vec![ObservedPath {
+            scope: TraceScope::Install,
+            operation: TraceOperation::InstallCreate,
+            path: "usr/bin/other".to_string(),
+        }];
+
+        let (limitations, ignored) = reconcile_installed_scan_with_trace(&installed, &observed);
+
+        assert!(limitations.contains(&RecordingLimitation::EventLoss));
+        assert!(ignored.iter().any(|event| {
+            event.reason == "installed-scan-reconciled-missing-watch-event" && event.count == 1
+        }));
     }
 }
 ```
@@ -2553,7 +2615,9 @@ mod tests {
 13. Materialize `recipe.toml`.
 14. Run validation only when `request.validate` is true.
 15. Write operation record through `commands::diagnostics::write_packaging_record_if_possible`.
-16. Print concise human output or return JSON if a later task wires JSON into record mode.
+16. If `request.json` is true, write the final
+    `PackagingCommandOutput`/record-mode command object using the existing M3
+    JSON writer; otherwise print concise human output.
 17. Cleanup workspace.
 
 When `request.unsafe_host` is true, print a loud warning to stderr before the
@@ -2660,6 +2724,51 @@ This makes the known recursive-inotify dynamic-directory race non-destructive:
 the final installed scan still drives the draft recipe, while the report admits
 that watch evidence was incomplete.
 
+Use a small pure helper for the reconciliation so the behavior is unit-tested:
+
+```rust
+pub(crate) fn reconcile_installed_scan_with_trace(
+    installed_files: &[conary_core::recipe::recording::InstalledFileEvidence],
+    observed_paths: &[conary_core::recipe::recording::ObservedPath],
+) -> (
+    Vec<conary_core::recipe::recording::RecordingLimitation>,
+    Vec<conary_core::recipe::recording::IgnoredEvent>,
+) {
+    use std::collections::HashSet;
+    use conary_core::recipe::recording::{
+        IgnoredEvent, RecordingLimitation, TraceOperation, TraceScope,
+    };
+
+    let installed = installed_files
+        .iter()
+        .filter(|file| matches!(file.file_type.as_str(), "file" | "symlink"))
+        .map(|file| file.path.clone())
+        .collect::<HashSet<_>>();
+    let observed_writes = observed_paths
+        .iter()
+        .filter(|path| {
+            path.scope == TraceScope::Install
+                && matches!(
+                    path.operation,
+                    TraceOperation::InstallCreate | TraceOperation::InstallModify
+                )
+        })
+        .map(|path| path.path.clone())
+        .collect::<HashSet<_>>();
+    let missing = installed.difference(&observed_writes).count();
+    if missing == 0 {
+        return (Vec::new(), Vec::new());
+    }
+    (
+        vec![RecordingLimitation::EventLoss],
+        vec![IgnoredEvent {
+            reason: "installed-scan-reconciled-missing-watch-event".to_string(),
+            count: missing as u64,
+        }],
+    )
+}
+```
+
 - [ ] **Step 4: Wire backend modules**
 
 In `record_mode/mod.rs`:
@@ -2707,8 +2816,10 @@ Create `apps/conary/tests/packaging_m3d.rs`:
 ```rust
 mod common;
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Output};
+
+use conary_core::packages::PackageFormat;
 
 fn output_text(output: &Output) -> String {
     format!(
@@ -2733,8 +2844,8 @@ fn write_record_source(root: &Path) {
         root.join("install.sh"),
         r#"#!/bin/sh
 set -eu
-mkdir -p "$CONARY_DESTDIR/usr/share/record-demo"
-cp payload.txt "$CONARY_DESTDIR/usr/share/record-demo/payload.txt"
+mkdir -p "$DESTDIR/usr/share/record-demo"
+cp payload.txt "$DESTDIR/usr/share/record-demo/payload.txt"
 "#,
     )
     .unwrap();
@@ -2799,7 +2910,7 @@ fn cook_record_inotify_generates_source_recipe_and_redacted_report() {
     assert!(recorded.join("source/payload.txt").is_file());
     let recipe = std::fs::read_to_string(recorded.join("recipe.toml")).unwrap();
     assert!(recipe.contains("path = \"source\""));
-    assert!(recipe.contains("%(destdir)s"));
+    assert!(recipe.contains("install.sh"));
     assert!(!recipe.contains(temp.path().to_str().unwrap()));
 
     let report = std::fs::read_to_string(recorded.join("trace-report.json")).unwrap();
@@ -2807,6 +2918,34 @@ fn cook_record_inotify_generates_source_recipe_and_redacted_report() {
     assert!(report.contains("incomplete-read-evidence"));
     assert!(report.contains("usr/share/record-demo/payload.txt"));
     assert!(!report.contains(temp.path().to_str().unwrap()));
+}
+
+#[test]
+fn cook_record_json_emits_packaging_output() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("source");
+    let recorded = temp.path().join("recorded/demo");
+    write_record_source(&source);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_conary"))
+        .arg("cook")
+        .arg("--record")
+        .arg("--json")
+        .arg(&source)
+        .args(["--record-backend", "inotify"])
+        .arg("--record-output")
+        .arg(&recorded)
+        .arg("--")
+        .arg("/bin/sh")
+        .arg("install.sh")
+        .output()
+        .expect("cook record json");
+
+    assert_success(&output);
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).expect("valid json");
+    assert_eq!(value["schema_version"], 1);
+    assert_eq!(value["command"], "conary cook --record");
+    assert_eq!(value["status"], "succeeded");
 }
 ```
 
