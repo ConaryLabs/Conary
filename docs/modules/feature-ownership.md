@@ -339,6 +339,7 @@ pinned by the repository.
 `apps/conary/src/commands/new.rs`;
 `apps/conary/src/commands/publish.rs`;
 `apps/conary/src/commands/cook.rs`;
+`apps/conary/src/commands/record_mode/`;
 `apps/conary/src/commands/diagnostics.rs`;
 `apps/conary/src/commands/operation_records.rs`;
 `apps/conary/src/commands/hermetic_config.rs`;
@@ -347,11 +348,13 @@ pinned by the repository.
 `apps/conary/src/commands/try_session/watch.rs`;
 `apps/conary/src/commands/try_session/watch_source.rs`;
 `apps/conary/src/commands/repo_static.rs`;
+`crates/conary-core/src/recipe/recording/`;
 `apps/conary/tests/packaging_m1b.rs`;
 `apps/conary/tests/packaging_m2a.rs`;
 `apps/conary/tests/packaging_m3a.rs`;
 `apps/conary/tests/packaging_m3c.rs`;
 `apps/conary/tests/packaging_m3b.rs`;
+`apps/conary/tests/packaging_m3d.rs`;
 `crates/conary-agent-contract/src/{resource,catalog,result}.rs`;
 `crates/conary-mcp/src/`;
 `crates/conary-core/src/ccs/attestation.rs`;
@@ -376,6 +379,9 @@ docs-audit truth gates.
 `cargo test -p conary --test packaging_m2a`;
 `cargo test -p conary --test packaging_m3a`;
 `cargo test -p conary --test packaging_m3b`;
+`cargo test -p conary --lib commands::record_mode`;
+`cargo test -p conary-core recipe::recording`;
+`cargo test -p conary --test packaging_m3d`;
 `cargo test -p conary commands::diagnostics::tests`;
 `cargo test -p conary commands::packaging_mcp`;
 `cargo test -p conary --lib commands::try_session`;
@@ -413,6 +419,13 @@ do not allow `--allow-unsigned` to bypass static repository package signature
 checks; keep static repo GPG and TUF trust surfaces separate; retired package
 keys are audit/history only unless a later compatibility task explicitly
 changes that policy.
+
+- Record-mode spike: start in `apps/conary/src/commands/record_mode/`, keep
+  `apps/conary/src/commands/cook.rs` as a thin router/validator helper, and put
+  reusable DTO/draft helpers under `crates/conary-core/src/recipe/recording/`.
+- Focused proof: `cargo test -p conary --lib commands::record_mode`,
+  `cargo test -p conary-core recipe::recording`, and
+  `cargo test -p conary --test packaging_m3d`.
 
 ### M3a Packaging Diagnostics
 
