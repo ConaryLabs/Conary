@@ -329,7 +329,7 @@ fn verify_static_attestation(
             "build attestation identity fields do not match artifact provenance",
         ));
     }
-    verify_command_risk_evidence(provenance, envelope, &mut failures)?;
+    verify_command_risk_evidence(package, provenance, envelope, &mut failures)?;
     verify_foreign_boundary_evidence(provenance, envelope, &actual_identity, &mut failures)?;
     if failures.is_empty() {
         Ok(PublishLintReport::passed())
@@ -339,6 +339,7 @@ fn verify_static_attestation(
 }
 
 fn verify_command_risk_evidence(
+    package: &CcsPackage,
     provenance: &ManifestProvenance,
     envelope: &BuildAttestationEnvelope,
     failures: &mut Vec<PublishGateFailure>,
@@ -353,6 +354,10 @@ fn verify_command_risk_evidence(
     }
 
     let Some(evidence) = provenance.hermetic_evidence.as_ref() else {
+        if package.v2_authority().is_some() {
+            verify_v2_attested_command_risk_evidence(envelope, failures);
+            return Ok(());
+        }
         failures.push(failure(
             PublishGateFailureCode::UncleanCommandRiskReport,
             "artifact is missing hermetic command-risk evidence",
@@ -374,6 +379,32 @@ fn verify_command_risk_evidence(
         ));
     }
     Ok(())
+}
+
+fn verify_v2_attested_command_risk_evidence(
+    envelope: &BuildAttestationEnvelope,
+    failures: &mut Vec<PublishGateFailure>,
+) {
+    if envelope.payload.hermetic_evidence_hash
+        != envelope.payload.output_identity.hermetic_evidence_hash
+        || envelope.payload.hermetic_evidence_hash.trim().is_empty()
+    {
+        failures.push(failure(
+            PublishGateFailureCode::UncleanCommandRiskReport,
+            "v2 attestation hermetic evidence hash does not match output identity",
+        ));
+    }
+    if envelope
+        .payload
+        .build_command_risk_report_hash
+        .trim()
+        .is_empty()
+    {
+        failures.push(failure(
+            PublishGateFailureCode::UncleanCommandRiskReport,
+            "v2 attestation is missing command-risk report hash",
+        ));
+    }
 }
 
 fn verify_foreign_boundary_evidence(
@@ -605,6 +636,73 @@ mod tests {
     }
 
     #[test]
+    fn artifact_gate_accepts_attested_v2_package() {
+        let signer = SigningKeyPair::generate().with_key_id("publish");
+        let temp = tempfile::tempdir().unwrap();
+        let package_path = temp.path().join("attested-v2.ccs");
+        let authority =
+            crate::ccs::v2::test_support::package_authority_with_one_file("attested-v2");
+        let payloads = crate::ccs::v2::test_support::one_file_payloads_for_tests();
+        let envelope = crate::ccs::attestation::test_support::sample_v2_envelope_for_tests(
+            &authority,
+            &signer,
+            STATIC_PUBLISH_POLICY_DIGEST_V1,
+        );
+        crate::ccs::builder::write_v2_ccs_package(
+            &authority,
+            &payloads,
+            &package_path,
+            &signer,
+            None,
+            Some(&envelope),
+            None,
+        )
+        .unwrap();
+
+        let report = verify_static_artifact_publish_eligibility(
+            &package_path,
+            &accepted_signers_for_key(&signer),
+            STATIC_PUBLISH_POLICY_DIGEST_V1,
+        )
+        .unwrap();
+
+        assert!(report.is_passed(), "{report:?}");
+    }
+
+    #[test]
+    fn m4a_preserves_active_publish_gate_failure_codes() {
+        let active = active_failure_codes_for_tests();
+        for expected in [
+            PublishGateFailureCode::MissingAttestation,
+            PublishGateFailureCode::BuildAttestationSignatureMismatch,
+            PublishGateFailureCode::PackageSignatureMismatch,
+            PublishGateFailureCode::TomlIntegrityMismatch,
+            PublishGateFailureCode::OutputIdentityMismatch,
+            PublishGateFailureCode::UnacceptedSignerKey,
+            PublishGateFailureCode::NonHermeticHardeningLevel,
+            PublishGateFailureCode::StaleOrUnknownPolicy,
+            PublishGateFailureCode::UncleanCommandRiskReport,
+            PublishGateFailureCode::ForeignConversionMissingBoundary,
+            PublishGateFailureCode::ForeignConversionBoundaryHashMismatch,
+            PublishGateFailureCode::RecordedDraftArtifact,
+        ] {
+            assert!(
+                active.contains(&expected),
+                "missing active publish gate code {expected:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn m4a_preserves_reserved_publish_gate_mappings() {
+        let reserved = [
+            PublishGateFailureCode::RetiredSignerKey,
+            PublishGateFailureCode::AbsentOrUnknownProvenanceClass,
+        ];
+        assert_eq!(reserved.len(), 2);
+    }
+
+    #[test]
     fn artifact_gate_reports_release_policy_failures() {
         type ArtifactGateCase = (
             &'static str,
@@ -825,6 +923,23 @@ mod tests {
             key.key_id().unwrap_or("publish"),
             key.public_key_base64(),
         )
+    }
+
+    fn active_failure_codes_for_tests() -> Vec<PublishGateFailureCode> {
+        vec![
+            PublishGateFailureCode::MissingAttestation,
+            PublishGateFailureCode::BuildAttestationSignatureMismatch,
+            PublishGateFailureCode::PackageSignatureMismatch,
+            PublishGateFailureCode::TomlIntegrityMismatch,
+            PublishGateFailureCode::OutputIdentityMismatch,
+            PublishGateFailureCode::UnacceptedSignerKey,
+            PublishGateFailureCode::NonHermeticHardeningLevel,
+            PublishGateFailureCode::StaleOrUnknownPolicy,
+            PublishGateFailureCode::UncleanCommandRiskReport,
+            PublishGateFailureCode::ForeignConversionMissingBoundary,
+            PublishGateFailureCode::ForeignConversionBoundaryHashMismatch,
+            PublishGateFailureCode::RecordedDraftArtifact,
+        ]
     }
 
     fn failure_text_for_artifact(

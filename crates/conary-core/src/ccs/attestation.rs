@@ -338,6 +338,32 @@ pub(crate) mod test_support {
         sign_build_attestation(sample_payload_for_tests(), key).unwrap()
     }
 
+    pub(crate) fn sample_v2_envelope_for_tests(
+        authority: &crate::ccs::v2::AuthorityDocumentV2,
+        key: &crate::ccs::signing::SigningKeyPair,
+        policy_digest: &str,
+    ) -> BuildAttestationEnvelope {
+        let provenance = &authority.provenance;
+        let output_identity = BuildOutputIdentity {
+            file_merkle_root: compute_v2_file_merkle_root(authority).unwrap(),
+            package_name: authority.identity.name.clone(),
+            package_version: authority.identity.version.clone(),
+            package_release: authority.identity.release.clone(),
+            architecture: authority.identity.architecture.clone(),
+            origin_class: provenance.origin_class.clone().unwrap(),
+            hardening_level: provenance.hardening_level.clone().unwrap(),
+            hermetic_evidence_hash: provenance.hermetic_evidence_hash.clone().unwrap(),
+            canonical_content_identity: compute_v2_content_identity(authority).unwrap(),
+        };
+        let mut payload = sample_payload_for_tests();
+        payload.origin_class = output_identity.origin_class.clone();
+        payload.hardening_level = output_identity.hardening_level.clone();
+        payload.hermetic_evidence_hash = output_identity.hermetic_evidence_hash.clone();
+        payload.output_identity = output_identity;
+        payload.publish_policy_digest = policy_digest.to_string();
+        sign_build_attestation(payload, key).unwrap()
+    }
+
     pub(crate) fn sample_hermetic_evidence_for_tests()
     -> crate::recipe::hermetic::HermeticBuildEvidence {
         crate::recipe::hermetic::HermeticBuildEvidence {

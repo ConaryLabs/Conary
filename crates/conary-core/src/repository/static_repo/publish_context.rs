@@ -259,6 +259,9 @@ pub fn attach_project_form_attestation(input: ProjectFormAttestationInput<'_>) -
         fs::File::open(input.package_path)
             .with_context(|| format!("open {}", input.package_path.display()))?,
     )?;
+    if archive.v2_authority.is_some() {
+        return attach_v2_project_form_attestation(input, archive);
+    }
     if archive.signature_raw.is_some() {
         bail!("project-form publish expected an unsigned cook output before attestation signing");
     }
@@ -320,6 +323,120 @@ pub fn attach_project_form_attestation(input: ProjectFormAttestationInput<'_>) -
         .map_err(|error| anyhow::anyhow!("persist attested package: {}", error.error))?
         .1;
     Ok(persisted)
+}
+
+fn attach_v2_project_form_attestation(
+    input: ProjectFormAttestationInput<'_>,
+    archive: crate::ccs::archive_reader::CcsArchiveContents,
+) -> Result<PathBuf> {
+    let trusted_key = input.context.active_publish_key.public_key_base64();
+    let verification = crate::ccs::verify::verify_package(
+        input.package_path,
+        &crate::ccs::verify::TrustPolicy::strict(vec![trusted_key.clone()]),
+    )?;
+    if !verification.valid || !verification.toml_integrity_valid {
+        bail!("v2 project-form package failed initial CCS verification");
+    }
+
+    let package = crate::ccs::CcsPackage::parse_verified_v2(
+        input.package_path.to_str().with_context(|| {
+            format!(
+                "package path is not valid UTF-8: {}",
+                input.package_path.display()
+            )
+        })?,
+        &verification,
+    )
+    .map_err(anyhow::Error::from)?;
+    let output_identity = crate::ccs::attestation::compute_build_output_identity(&package)?;
+    let payload = build_project_form_attestation_payload(
+        input.provenance,
+        output_identity,
+        input.context.publish_policy_digest.as_str(),
+        input.conary_version,
+    )?;
+    preflight_project_form_attestation_payload(&payload, input.provenance)?;
+    let envelope = crate::ccs::attestation::sign_build_attestation(
+        payload,
+        &input.context.active_publish_key,
+    )?;
+    let authority = package
+        .v2_authority()
+        .context("verified v2 package missing authority")?;
+    let payloads_by_path = v2_payloads_by_path(&package, authority)?;
+    let debug_toml = archive
+        .toml_raw
+        .as_deref()
+        .map(std::str::from_utf8)
+        .transpose()
+        .context("decode v2 MANIFEST.toml as UTF-8")?;
+    let signed_temp =
+        tempfile::Builder::new()
+            .prefix("conary-attested-")
+            .suffix(".ccs")
+            .tempfile_in(input.package_path.parent().with_context(|| {
+                format!("resolve parent for {}", input.package_path.display())
+            })?)?;
+
+    crate::ccs::builder::write_v2_ccs_package(
+        authority,
+        &payloads_by_path,
+        signed_temp.path(),
+        &input.context.active_publish_key,
+        debug_toml,
+        Some(&envelope),
+        package.v2_foreign_conversion_boundary(),
+    )?;
+
+    let verification = crate::ccs::verify::verify_package(
+        signed_temp.path(),
+        &crate::ccs::verify::TrustPolicy::strict(vec![trusted_key]),
+    )?;
+    if !verification.valid || !verification.toml_integrity_valid {
+        bail!("attested v2 project-form package failed final CCS verification");
+    }
+    let report =
+        crate::repository::static_repo::publish_gate::verify_static_artifact_publish_eligibility(
+            signed_temp.path(),
+            &input.context.accepted_signers,
+            &input.context.publish_policy_digest,
+        )?;
+    if !report.is_passed() {
+        bail!(
+            "{}",
+            crate::repository::static_repo::publish_gate::format_publish_gate_failures(&report)
+        );
+    }
+    let persisted = signed_temp
+        .keep()
+        .map_err(|error| anyhow::anyhow!("persist attested package: {}", error.error))?
+        .1;
+    Ok(persisted)
+}
+
+fn v2_payloads_by_path(
+    package: &crate::ccs::CcsPackage,
+    authority: &crate::ccs::v2::AuthorityDocumentV2,
+) -> Result<std::collections::BTreeMap<String, Vec<u8>>> {
+    use crate::ccs::v2::schema::{FileTypeV2, PackageKindV2};
+
+    let PackageKindV2::Package(data) = &authority.kind else {
+        bail!("M4a project-form v2 attestation only supports package payloads");
+    };
+    let blobs = package.extract_all_content().map_err(anyhow::Error::from)?;
+    let mut payloads_by_path = std::collections::BTreeMap::new();
+    for file in &data.files {
+        if matches!(file.file_type, FileTypeV2::Regular) {
+            let payload = blobs.get(&file.sha256).with_context(|| {
+                format!(
+                    "verified v2 package is missing payload blob {} for {}",
+                    file.sha256, file.path
+                )
+            })?;
+            payloads_by_path.insert(file.path.clone(), payload.clone());
+        }
+    }
+    Ok(payloads_by_path)
 }
 
 fn build_project_form_attestation_payload(
@@ -400,6 +517,9 @@ fn build_result_from_package_with_attestation(
     package: &crate::ccs::CcsPackage,
     envelope: crate::ccs::attestation::BuildAttestationEnvelope,
 ) -> Result<crate::ccs::BuildResult> {
+    if package.v2_authority().is_some() {
+        bail!("native CCS v2 packages must be re-emitted through the v2 writer");
+    }
     let mut manifest = package.manifest().clone();
     manifest
         .provenance
@@ -1035,6 +1155,57 @@ mod tests {
                 .accepted_signers
                 .accepts_key_id(&context.active_publish_key_id)
         );
+    }
+
+    #[test]
+    fn project_form_attestation_reemits_v2_package_as_v2() {
+        let temp = tempfile::tempdir().unwrap();
+        let key_dir = temp.path().join("keys-local");
+        let context = prepare_project_form_static_context(
+            &RepoLocation::File {
+                root: temp.path().join("repo"),
+            },
+            &key_dir,
+            false,
+        )
+        .unwrap();
+        let evidence = crate::ccs::attestation::test_support::sample_hermetic_evidence_for_tests();
+        let evidence_hash = crate::ccs::attestation::canonical_json_hash(&evidence).unwrap();
+        let provenance = ManifestProvenance {
+            origin_class: Some("native-built".to_string()),
+            hardening_level: Some("hermetic".to_string()),
+            hermetic_evidence: Some(evidence),
+            ..Default::default()
+        };
+        let package_path = temp.path().join("project-v2.ccs");
+        let mut authority =
+            crate::ccs::v2::test_support::package_authority_with_one_file("project-v2");
+        authority.provenance.hermetic_evidence_hash = Some(evidence_hash);
+        crate::ccs::builder::write_v2_ccs_package(
+            &authority,
+            &crate::ccs::v2::test_support::one_file_payloads_for_tests(),
+            &package_path,
+            &context.active_publish_key,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        let attested = attach_project_form_attestation(ProjectFormAttestationInput {
+            package_path: &package_path,
+            provenance: &provenance,
+            context: &context,
+            conary_version: "test",
+        })
+        .unwrap();
+
+        let archive =
+            crate::ccs::archive_reader::read_ccs_archive(fs::File::open(attested).unwrap())
+                .unwrap();
+        assert!(archive.v2_authority.is_some());
+        assert!(archive.binary_manifest.is_none());
+        assert!(archive.v2_build_attestation.is_some());
     }
 
     #[test]
