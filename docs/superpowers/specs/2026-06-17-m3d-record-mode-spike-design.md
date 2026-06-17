@@ -1,7 +1,7 @@
 # M3d Record-Mode Spike Design
 
 **Date:** 2026-06-17
-**Status:** Approved design; implementation plan next
+**Status:** Locked design; implementation plan written
 **Parent design:** `docs/superpowers/specs/2026-06-15-m3-packaging-differentiators-design.md`
 **Prerequisite milestones:** M3a diagnostics/events, M3b packaging MCP, M3c try watch mode
 
