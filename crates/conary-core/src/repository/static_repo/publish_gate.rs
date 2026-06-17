@@ -179,8 +179,7 @@ pub fn verify_static_artifact_publish_eligibility(
         .to_str()
         .context("artifact path must be valid UTF-8 for CCS parsing")?;
     let has_v2_authority = read_ccs_archive(std::fs::File::open(artifact_path)?)
-        .map(|contents| contents.v2_authority.is_some())
-        .map_err(anyhow::Error::from)?;
+        .map(|contents| contents.v2_authority.is_some())?;
     let package = if has_v2_authority {
         CcsPackage::parse_verified_v2(artifact_path_str, &verification)
             .map_err(anyhow::Error::from)?
