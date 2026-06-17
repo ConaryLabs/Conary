@@ -1,5 +1,6 @@
 // apps/conary/src/commands/record_mode/mod.rs
 
+mod draft;
 mod fanotify_backend;
 mod inotify_backend;
 mod report;
