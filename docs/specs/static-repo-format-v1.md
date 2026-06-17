@@ -15,7 +15,7 @@ logic. It carries CCS packages, a package index (`index.json`), and TUF
 `conary publish` (M1a) and, later, Remi (M2). Consumer: the conary client
 (`repo add` / sync / install).
 
-Parent design: `docs/superpowers/specs/2026-06-10-packaging-toolchain-design.md`.
+Parent design: `docs/superpowers/specs/archive/2026-06-10-packaging-toolchain-design.md`.
 
 ## Scope
 
