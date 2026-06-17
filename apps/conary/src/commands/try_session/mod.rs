@@ -14,6 +14,8 @@ mod validation;
 mod watch;
 mod watch_source;
 
+#[allow(unused_imports)]
+pub(crate) use session::refresh_try_session;
 pub(crate) use session::{
     activated_try_session_is_live, begin_try_session, current_boot_id,
     namespace_try_session_is_decision_pending, rollback_active_try_session,
@@ -31,6 +33,23 @@ pub(crate) struct TryStartRequest<'a> {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct TryWatchMarkerRequest<'a> {
     pub(crate) operation_id: &'a str,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TryRefreshRequest<'a> {
+    pub(crate) db_path: &'a str,
+    pub(crate) session_id: &'a str,
+    pub(crate) expected_try_generation_id: i64,
+    pub(crate) package_path: &'a Path,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TryRefreshOutcome {
+    pub(crate) previous_generation_id: i64,
+    pub(crate) try_generation_id: i64,
+    pub(crate) namespace_root: PathBuf,
+    pub(crate) copied_package_path: PathBuf,
+    pub(crate) cleanup_error: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
