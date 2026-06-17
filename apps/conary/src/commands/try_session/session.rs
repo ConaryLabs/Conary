@@ -206,7 +206,7 @@ pub(super) fn keep_active_try_session(db_path: &str) -> Result<()> {
 }
 
 #[cfg(test)]
-pub(super) fn keep_active_try_session_with_probe<F>(db_path: &str, probe: F) -> Result<()>
+fn keep_active_try_session_with_probe<F>(db_path: &str, probe: F) -> Result<()>
 where
     F: FnOnce(),
 {
@@ -283,24 +283,33 @@ where
         })();
 
         if let Err(error) = promotion_result {
-            match restore_live_db_from_checkpoint(Path::new(db_path), &backup.backup_path) {
-                Ok(()) => {
-                    if let Err(link_error) = restore_previous_current_generation_link(
-                        db_path,
-                        &runtime_root,
-                        previous_current_generation,
-                    ) {
-                        return Err(error.context(format!(
-                            "try keep promotion failed after backup; restored live DB checkpoint but failed to restore current generation link: {link_error}"
-                        )));
-                    }
+            let db_restore_result =
+                restore_live_db_from_checkpoint(Path::new(db_path), &backup.backup_path);
+            let link_restore_result = restore_previous_current_generation_link(
+                db_path,
+                &runtime_root,
+                previous_current_generation,
+            );
+            match (db_restore_result, link_restore_result) {
+                (Ok(()), Ok(())) => {
                     return Err(error.context(
-                        "try keep promotion failed after backup; restored live DB checkpoint",
+                        "try keep promotion failed after backup; restored live DB checkpoint and current generation link",
                     ));
                 }
-                Err(restore_error) => {
+                (Ok(()), Err(link_error)) => {
                     return Err(error.context(format!(
-                        "try keep promotion failed after backup; failed to restore live DB checkpoint {}: {restore_error}",
+                        "try keep promotion failed after backup; restored live DB checkpoint but failed to restore current generation link: {link_error}"
+                    )));
+                }
+                (Err(restore_error), Ok(())) => {
+                    return Err(error.context(format!(
+                        "try keep promotion failed after backup; failed to restore live DB checkpoint {}: {restore_error}; restored current generation link",
+                        backup.backup_path.display()
+                    )));
+                }
+                (Err(restore_error), Err(link_error)) => {
+                    return Err(error.context(format!(
+                        "try keep promotion failed after backup; failed to restore live DB checkpoint {}: {restore_error}; failed to restore current generation link: {link_error}",
                         backup.backup_path.display()
                     )));
                 }
@@ -314,7 +323,7 @@ where
     result
 }
 
-pub(super) fn verify_namespace_try_hook_effects(
+fn verify_namespace_try_hook_effects(
     session: &TrySession,
     runtime_root: &ConaryRuntimeRoot,
     try_generation_id: i64,
@@ -413,6 +422,11 @@ fn restore_previous_current_generation_link(
 }
 
 fn restore_live_db_from_checkpoint(live_db_path: &Path, backup_path: &Path) -> Result<()> {
+    #[cfg(test)]
+    if std::env::var("CONARY_TEST_TRY_RESTORE_DB_FAIL").as_deref() == Ok("1") {
+        bail!("forced try DB checkpoint restore failure");
+    }
+
     let parent = live_db_path
         .parent()
         .ok_or_else(|| anyhow::anyhow!("live DB path {} has no parent", live_db_path.display()))?;
@@ -485,10 +499,7 @@ fn checkpoint_session_db(copied_db_path: &Path) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn replace_live_db_with_session_copy(
-    live_db_path: &Path,
-    copied_db_path: &Path,
-) -> Result<()> {
+fn replace_live_db_with_session_copy(live_db_path: &Path, copied_db_path: &Path) -> Result<()> {
     let parent = live_db_path
         .parent()
         .ok_or_else(|| anyhow::anyhow!("live DB path {} has no parent", live_db_path.display()))?;
@@ -511,10 +522,23 @@ pub(super) fn replace_live_db_with_session_copy(
         }
     }
     remove_sqlite_sidecars(live_db_path)?;
-    std::fs::rename(copied_db_path, live_db_path).with_context(|| {
+    let promote_tmp = live_db_path.with_extension("try-promote.tmp");
+    if promote_tmp.exists() {
+        std::fs::remove_file(&promote_tmp)
+            .with_context(|| format!("failed to remove {}", promote_tmp.display()))?;
+    }
+    std::fs::copy(copied_db_path, &promote_tmp).with_context(|| {
         format!(
-            "failed to promote try DB {} to {}",
+            "failed to copy try DB {} to promotion temp {}",
             copied_db_path.display(),
+            promote_tmp.display()
+        )
+    })?;
+    std::fs::File::open(&promote_tmp)?.sync_all()?;
+    std::fs::rename(&promote_tmp, live_db_path).with_context(|| {
+        format!(
+            "failed to promote temp DB {} to {}",
+            promote_tmp.display(),
             live_db_path.display()
         )
     })?;
@@ -1005,7 +1029,7 @@ mod tests {
         replace_live_db_with_session_copy(&live_db, &copied_db)?;
 
         assert_eq!(std::fs::read(&live_db)?, b"copy");
-        assert!(!copied_db.exists());
+        assert_eq!(std::fs::read(&copied_db)?, b"copy");
         let synced = std::fs::read_to_string(sync_log)?
             .lines()
             .map(PathBuf::from)
@@ -1126,7 +1150,7 @@ mod tests {
     fn namespace_keep_restores_current_link_after_post_link_failure() -> anyhow::Result<()> {
         let _env_lock = ENV_LOCK.lock().unwrap();
         let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
-        let _fail_guard = EnvVarGuard::set(
+        let fail_guard = EnvVarGuard::set(
             "CONARY_TEST_TRY_KEEP_FAIL_AFTER_BACKUP",
             "after-current-link",
         );
@@ -1169,6 +1193,60 @@ mod tests {
         assert_eq!(
             stored_session(&fixture, &outcome.session_id).status,
             conary_core::db::models::TrySessionStatus::Active
+        );
+        assert!(
+            outcome.copied_db_path.exists(),
+            "failed keep must preserve copied DB so the session can be retried"
+        );
+
+        drop(fail_guard);
+        keep_active_try_session(&fixture.db_path_string)?;
+
+        assert_eq!(
+            conary_core::generation::mount::current_generation(&fixture.root)?,
+            Some(outcome.try_generation_id),
+            "retrying keep after a recovered failure should promote the try generation"
+        );
+        assert_eq!(
+            stored_session(&fixture, &outcome.session_id).status,
+            conary_core::db::models::TrySessionStatus::Kept
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn namespace_keep_restores_current_link_even_when_db_restore_fails() -> anyhow::Result<()> {
+        let _env_lock = ENV_LOCK.lock().unwrap();
+        let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+        let _fail_guard = EnvVarGuard::set(
+            "CONARY_TEST_TRY_KEEP_FAIL_AFTER_BACKUP",
+            "after-current-link",
+        );
+        let _restore_fail_guard = EnvVarGuard::set("CONARY_TEST_TRY_RESTORE_DB_FAIL", "1");
+        let fixture = TryRuntimeFixture::new();
+        create_current_generation_link(&fixture.root, 7);
+        let package = fixture.write_package(
+            "try-restore-link-after-db-restore-fails",
+            CcsManifest::new_minimal("try-restore-link-after-db-restore-fails", "1.0.0"),
+        );
+        let outcome = begin_namespace_try(&fixture, &package)?;
+
+        let err = keep_active_try_session(&fixture.db_path_string)
+            .expect_err("forced DB restore failure should keep promotion failed");
+        let error_chain = format!("{err:#}");
+        assert!(
+            error_chain.contains("failed to restore live DB checkpoint"),
+            "{error_chain}"
+        );
+
+        assert_eq!(
+            conary_core::generation::mount::current_generation(&fixture.root)?,
+            Some(7),
+            "current generation link must be restored even when DB checkpoint restore fails"
+        );
+        assert!(
+            outcome.copied_db_path.exists(),
+            "failed keep must preserve copied DB even when DB restore fails"
         );
         Ok(())
     }
