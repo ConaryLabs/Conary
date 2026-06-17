@@ -181,7 +181,11 @@ Existing large-file changes should stay thin:
   work starts: either an in-process helper that returns `PackagingCommandOutput`
   without writing operation records, or a child-process adapter with explicit
   controls for suppressing per-refresh records, selecting offline refresh
-  source policy, and killing the child process group on cancellation.
+  source policy, and killing the child process group on cancellation. If M3c
+  chooses the in-process helper, cancellation during a cook is cooperative: the
+  watch loop may observe the signal while the cook is running, but rollback
+  waits for the in-process cook call to return because there is no child
+  process group to kill.
 - `apps/conary/src/commands/try_session/session.rs`: add narrow staged refresh
   helpers and small model-facing state updates, not a watch loop.
 - `crates/conary-core/src/diagnostics/mod.rs`: add only additive event kinds or
@@ -253,9 +257,11 @@ Loop:
 Shutdown:
 
 1. On Ctrl-C or process termination handled by the loop, emit cancellation.
-2. If a cook child process is running, signal its process group, wait briefly,
-   then kill it and remove the watch-owned partial output directory if it does
-   not exit cleanly.
+2. If an in-process cook is running, mark cancellation pending, wait for the
+   cook call to return, then remove the watch-owned partial output directory
+   before rollback. A future child-process adapter may hard-kill its process
+   group, but M3c must not promise hard cancellation while using the
+   in-process cook adapter.
 3. Roll back the active watch session through normal try rollback.
 4. If rollback succeeds, emit `OperationFinished` with a cancellation summary.
 5. If rollback fails, emit a cleanup diagnostic, leave the session active or
@@ -273,17 +279,24 @@ The central M3c behavior is staged refresh with last-good preservation.
 The active try-session row remains the single open session for the watch loop.
 The persisted `work_dir` stays fixed at the top-level session directory for the
 entire watch session. This preserves compatibility with existing status,
-rollback, keep refusal, unmount, and cleanup code. Each refresh creates
-temporary staging paths under that stable work directory,
-for example:
+rollback, keep refusal, unmount, and cleanup code. Each refresh creates a
+temporary package/DB/install staging path under that stable work directory, but
+real mounted namespace paths must live in generational directories directly
+under the stable work directory so they are not deleted while still mounted.
+For example:
 
 ```text
 try/<session-id>/
   conary.db
   package.ccs
-  namespace-root/
-  generation-root/
-  refresh-0002/
+  namespace-root/              # stable visible mount
+  namespace-root.next/         # staged visible mount before switch
+  namespace-root.previous/     # temporary previous visible mount during switch
+  generation-root-42/          # active composefs lowerdir for generation 42
+  namespace-work-42/           # active overlay workdir for generation 42
+  generation-root-43/          # staged composefs lowerdir for generation 43
+  namespace-work-43/           # staged overlay workdir for generation 43
+  refresh-43/                  # transient package/DB/install staging only
 ```
 
 The staging area gets its own copied package and copied DB. The staged refresh
@@ -295,15 +308,20 @@ try hooks against that staged non-host root.
 Only after all staged work succeeds does try-session commit the refresh. Commit
 must be a two-phase switch:
 
-1. Prepare the new namespace exposure under the staged refresh directory while
-   the stable namespace root still points at the last successful generation.
+1. Prepare the new namespace exposure under `namespace-root.next` with
+   generation-scoped lower/work directories while the stable namespace root
+   still points at the last successful generation.
 2. Verify the staged exposure and hook effects.
 3. Atomically switch the stable visible namespace pointer to the staged
    exposure, or use a recoverable namespace-switch primitive that can restore
    the previous stable exposure if the switch fails.
-4. Update the session row only after the visible namespace switch succeeds.
-5. Remove old generation/workdir material only after both the visible namespace
-   switch and the session-row update succeed.
+4. Switch the stable copied `package.ccs` and copied `conary.db` only after the
+   visible namespace switch succeeds; restore both the namespace and files if a
+   later pre-row-update step fails.
+5. Update the session row only after the visible namespace and copied files
+   match the staged refresh.
+6. Remove old generation/workdir material only after the visible namespace
+   switch, copied-file switch, and session-row update succeed.
 
 The implementation must not unmount or remove the stable last-good namespace
 before it can either atomically publish the replacement or restore the previous
@@ -322,6 +340,14 @@ If commit succeeds but previous-generation cleanup fails:
 - the new generation remains active for the watch session
 - the loop stops and reports cleanup failure rather than piling up state
 - normal rollback remains retryable
+- the refresh API returns an explicit committed-cleanup-failed outcome, not the
+  same error path used for non-destructive refresh failures, so the watch loop
+  records the new generation as last-good before stopping
+
+Rollback cleanup must unmount and remove all watch namespace paths under the
+stable work directory, including `namespace-root`, `namespace-root.next`,
+`namespace-root.previous`, `generation-root`, `namespace-work`,
+`generation-root-*`, and `namespace-work-*`.
 
 M3c must add a small open-session update method, for example
 `replace_active_try_generation`, that updates package path and generation id
@@ -467,6 +493,8 @@ Streaming JSON:
 - Each line includes `schema_version`, `operation_id`, `sequence`, `phase`, and
   `kind`.
 - Event sequences are monotonic for the whole watch process.
+- Normal exit, configured test exit, and successful cancellation cleanup emit a
+  final `OperationFinished` event as the last NDJSON line.
 - The stream must not print human text mixed into stdout.
 - Diagnostics with secret-bearing logs go through the existing redactor before
   serialization.
@@ -498,7 +526,9 @@ Refresh failures:
 Cancellation:
 
 - Ctrl-C triggers rollback.
-- Ctrl-C during cook cancels the cook child process before rollback.
+- With the in-process cook adapter, Ctrl-C during cook records cancellation and
+  rolls back after the cook call returns. It does not claim to kill the cook
+  mid-call.
 - A second Ctrl-C may exit immediately after printing that manual rollback may
   be required.
 - Successful cancellation cleanup exits zero.
@@ -525,7 +555,8 @@ Unit tests:
   changes and ignore changes below the existing default ignored directories.
 - Local-source symlink escapes are refused before entering the steady watch
   loop.
-- Event sequences are monotonic and JSON lines serialize with schema version.
+- Event sequences are monotonic, JSON lines serialize with schema version, and
+  the final NDJSON line on normal exit is `OperationFinished`.
 - Per-event redaction removes secrets from diagnostic-bearing NDJSON events.
 - Bounded operation records drop older watch events before write.
 - Trimmed operation records include a synthetic event explaining how many older
@@ -549,8 +580,9 @@ Unit tests:
 - Staging cleanup failure stops the loop and leaves rollback retryable.
 - External rollback or keep from another terminal makes the watch loop exit
   cleanly on the next tick.
-- Ctrl-C during an in-progress cook cancels the cook child, removes partial
-  watch-owned output, and rolls back the active try session.
+- Ctrl-C before or during an in-progress in-process cook requests
+  cancellation, removes partial watch-owned output after the cook returns, and
+  rolls back the active try session.
 - Cancellation calls normal try rollback.
 
 Focused CLI/integration tests:
@@ -605,9 +637,9 @@ The implementation plan should split M3c into these reviewable tasks:
 3. Add watch source identity/debounce units using canonical local source
    identity, including the explicit `WatchSourceSet`, plain-directory
    inference, and symlink-escape refusal.
-4. Add a cancellation-aware cook adapter. Choose either an in-process helper or
-   a child-process adapter with suppress-record and offline-policy controls
-   before implementing the watch loop.
+4. Add a cook adapter. M3c chooses an in-process helper with suppress-record
+   and offline-policy controls; cancellation during the cook is cooperative
+   unless a future slice switches to a child-process adapter.
 5. Add model-level open-session replacement helpers in
    `crates/conary-core/src/db/models/try_session.rs`.
 6. Add staged namespace refresh helpers under `try_session/session.rs` with a
