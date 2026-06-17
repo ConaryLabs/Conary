@@ -54,7 +54,7 @@ pub(super) fn run_try_command_for_session(
 }
 
 #[cfg(test)]
-pub(super) fn launch_try_command(
+fn launch_try_command(
     command: &[&str],
     namespace_root: &Path,
     activated: bool,
