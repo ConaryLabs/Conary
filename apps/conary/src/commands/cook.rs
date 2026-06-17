@@ -18,8 +18,8 @@ use conary_core::recipe::inference::{
     infer_recipe_from_path, resolve_cook_target,
 };
 use conary_core::recipe::{
-    InferenceOptions, InferenceTrace, Kitchen, KitchenConfig, Recipe, SourceSection,
-    parse_recipe_file, validate_recipe,
+    InferenceOptions, InferenceTrace, Kitchen, KitchenConfig, Recipe, SourceDownloadPolicy,
+    SourceSection, parse_recipe_file, validate_recipe,
 };
 use std::fs::File;
 use std::io::{self, Write};
@@ -66,6 +66,78 @@ struct CookRunOptions<'a> {
     hermetic: bool,
     json: bool,
     operation_id: String,
+    source_download_policy_override: Option<SourceDownloadPolicy>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WatchCookSourcePolicy {
+    Initial,
+    Refresh,
+}
+
+pub(crate) struct CookForTryWatchOptions<'a> {
+    pub(crate) target: Option<&'a str>,
+    pub(crate) recipe: Option<&'a str>,
+    pub(crate) output_dir: &'a str,
+    pub(crate) source_cache: &'a str,
+    pub(crate) jobs: Option<u32>,
+    pub(crate) keep_builddir: bool,
+    pub(crate) isolated: bool,
+    pub(crate) no_isolation: bool,
+    pub(crate) hermetic: bool,
+    pub(crate) source_policy: WatchCookSourcePolicy,
+    pub(crate) operation_id: String,
+}
+
+pub(crate) fn run_cook_for_try_watch(
+    options: CookForTryWatchOptions<'_>,
+) -> Result<PackagingCommandOutput> {
+    let source_download_policy_override = watch_source_download_policy_override(&options);
+    let mut sink = io::sink();
+    run_cook_operation(
+        CookRunOptions {
+            target: options.target,
+            recipe: options.recipe,
+            output_dir: options.output_dir,
+            source_cache: options.source_cache,
+            jobs: options.jobs,
+            keep_builddir: options.keep_builddir,
+            validate_only: false,
+            fetch_only: false,
+            explain: false,
+            isolated: options.isolated,
+            no_isolation: options.no_isolation,
+            hermetic: options.hermetic,
+            json: true,
+            operation_id: options.operation_id,
+            source_download_policy_override,
+        },
+        &mut sink,
+    )
+}
+
+fn watch_source_download_policy_override(
+    options: &CookForTryWatchOptions<'_>,
+) -> Option<SourceDownloadPolicy> {
+    let hermetic_requested = options.hermetic || options.isolated;
+    if hermetic_requested && options.source_policy == WatchCookSourcePolicy::Refresh {
+        Some(SourceDownloadPolicy::OfflineCacheOnly)
+    } else {
+        None
+    }
+}
+
+pub(crate) fn cooked_artifact_path(output: &PackagingCommandOutput) -> Result<PathBuf> {
+    let artifacts = output
+        .artifacts
+        .iter()
+        .filter(|artifact| artifact.kind.as_deref() == Some("ccs"))
+        .collect::<Vec<_>>();
+    match artifacts.as_slice() {
+        [artifact] => Ok(PathBuf::from(&artifact.path)),
+        [] => anyhow::bail!("watch cook completed without a CCS artifact"),
+        _ => anyhow::bail!("watch cook produced multiple CCS artifacts"),
+    }
 }
 
 pub(crate) fn resolve_recipe_path(target: Option<&str>, recipe: Option<&str>) -> Result<PathBuf> {
@@ -327,6 +399,7 @@ async fn cmd_cook_with_output(
         hermetic,
         json,
         operation_id: operation_id.clone(),
+        source_download_policy_override: None,
     };
     match run_cook_operation(options, output) {
         Ok(mut report) => {
@@ -487,6 +560,9 @@ fn run_cook_operation(
     }
     if !hermetic_requested {
         add_host_iteration_env(&mut config);
+    }
+    if let Some(policy) = options.source_download_policy_override {
+        config.source_download_policy = policy;
     }
 
     // Fetch-only mode: just download sources and exit
@@ -895,6 +971,7 @@ mod tests {
     use super::*;
     use conary_core::ccs::CcsPackage;
     use conary_core::packages::PackageFormat;
+    use conary_core::recipe::SourceDownloadPolicy;
     use std::fs::File;
     use std::process::Command;
     use tar::Builder;
@@ -1019,6 +1096,86 @@ edition = "2021"
             recipe_source_base_dir(Path::new("/work/recipes/pkg/recipe.toml")),
             PathBuf::from("/work/recipes/pkg")
         );
+    }
+
+    #[test]
+    fn cooked_artifact_path_extracts_single_ccs_artifact() {
+        let mut output = PackagingCommandOutput::succeeded("watch-1", "conary cook");
+        output.artifacts.push(PackagingArtifact {
+            path: "/tmp/demo.ccs".to_string(),
+            kind: Some("ccs".to_string()),
+        });
+
+        assert_eq!(
+            cooked_artifact_path(&output).unwrap(),
+            PathBuf::from("/tmp/demo.ccs")
+        );
+    }
+
+    #[test]
+    fn watch_refresh_cook_options_force_offline_policy_for_hermetic_refresh() {
+        let options = CookRunOptions {
+            target: Some("."),
+            recipe: None,
+            output_dir: "dist",
+            source_cache: "sources",
+            jobs: None,
+            keep_builddir: false,
+            validate_only: false,
+            fetch_only: false,
+            explain: false,
+            isolated: true,
+            no_isolation: false,
+            hermetic: false,
+            json: true,
+            operation_id: "watch-1".to_string(),
+            source_download_policy_override: Some(SourceDownloadPolicy::OfflineCacheOnly),
+        };
+
+        assert_eq!(
+            options.source_download_policy_override,
+            Some(SourceDownloadPolicy::OfflineCacheOnly)
+        );
+    }
+
+    #[test]
+    fn watch_refresh_preserves_source_policy_for_non_hermetic_refresh() {
+        let options = CookForTryWatchOptions {
+            target: Some("."),
+            recipe: None,
+            output_dir: "dist",
+            source_cache: "sources",
+            jobs: None,
+            keep_builddir: false,
+            isolated: false,
+            no_isolation: false,
+            hermetic: false,
+            source_policy: WatchCookSourcePolicy::Refresh,
+            operation_id: "watch-1".to_string(),
+        };
+
+        assert_eq!(watch_source_download_policy_override(&options), None);
+    }
+
+    #[test]
+    fn watch_initial_cook_does_not_force_offline_policy() {
+        let options = CookForTryWatchOptions {
+            target: Some("."),
+            recipe: None,
+            output_dir: "dist",
+            source_cache: "sources",
+            jobs: None,
+            keep_builddir: false,
+            isolated: true,
+            no_isolation: false,
+            hermetic: false,
+            source_policy: WatchCookSourcePolicy::Initial,
+            operation_id: "watch-1".to_string(),
+        };
+
+        let _adapter: for<'a> fn(CookForTryWatchOptions<'a>) -> Result<PackagingCommandOutput> =
+            run_cook_for_try_watch;
+        assert_eq!(watch_source_download_policy_override(&options), None);
     }
 
     #[test]
