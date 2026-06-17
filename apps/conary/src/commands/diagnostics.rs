@@ -102,6 +102,29 @@ pub(crate) fn publish_gate_code_to_diagnostic_code(
     }
 }
 
+pub(crate) fn ccs_v2_diagnostic_to_packaging(
+    diagnostic: &conary_core::ccs::v2::V2Diagnostic,
+) -> conary_core::diagnostics::PackagingDiagnostic {
+    use conary_core::ccs::v2::V2DiagnosticCode;
+    use conary_core::diagnostics::{
+        PackagingDiagnostic, PackagingDiagnosticCode, PackagingPhase, PackagingSuggestion,
+    };
+
+    let code = match diagnostic.code {
+        V2DiagnosticCode::LegacyV1Package => PackagingDiagnosticCode::CcsV2LegacyRejected,
+        _ => PackagingDiagnosticCode::CcsV2ValidationFailed,
+    };
+    let mut rendered = PackagingDiagnostic::error(
+        PackagingPhase::RecipeValidation,
+        code,
+        diagnostic.message.clone(),
+    );
+    rendered
+        .suggestions
+        .push(PackagingSuggestion::new(diagnostic.suggestion.clone()));
+    rendered
+}
+
 pub(crate) fn redacted_packaging_output(output: &PackagingCommandOutput) -> PackagingCommandOutput {
     let mut output = output.clone();
     if let Some(summary) = &mut output.summary {
@@ -423,5 +446,21 @@ mod tests {
                 PackagingDiagnosticCode::PublishGateFailed
             );
         }
+    }
+
+    #[test]
+    fn ccs_v2_diagnostics_map_to_packaging_diagnostics() {
+        let diagnostic = conary_core::ccs::v2::V2Diagnostic::error(
+            conary_core::ccs::v2::V2DiagnosticCode::LegacyV1Package,
+            "legacy package",
+            Some("format_version".to_string()),
+            "rebuild as v2",
+        );
+        let rendered = ccs_v2_diagnostic_to_packaging(&diagnostic);
+        assert_eq!(
+            rendered.code,
+            conary_core::diagnostics::PackagingDiagnosticCode::CcsV2LegacyRejected
+        );
+        assert_eq!(rendered.suggestions[0].message, "rebuild as v2");
     }
 }

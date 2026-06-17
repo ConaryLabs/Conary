@@ -48,6 +48,8 @@ pub enum PackagingDiagnosticCode {
     CommandRiskEvidence,
     CookFailed,
     PublishGateFailed,
+    CcsV2ValidationFailed,
+    CcsV2LegacyRejected,
     ProjectPublishPreflightFailed,
     PublishJsonUnsupported,
     OperationRecordWriteFailed,
