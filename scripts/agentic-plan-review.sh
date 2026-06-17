@@ -158,7 +158,7 @@ Required local context to inspect before judging:
 - docs/modules/recipe.md
 - docs/modules/ccs.md
 - docs/modules/feature-ownership.md
-- docs/superpowers/specs/2026-06-13-m2-publish-hardening-remi-design.md
+- docs/superpowers/specs/archive/2026-06-13-m2-publish-hardening-remi-design.md
 - apps/conary/src/commands/publish.rs
 - apps/conary/src/commands/cook.rs
 - apps/conary/src/command_risk.rs

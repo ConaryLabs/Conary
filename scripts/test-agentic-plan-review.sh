@@ -26,7 +26,7 @@ printf 'reasonix args:'
 printf ' [%s]' "$@"
 printf '\n'
 printf 'reasonix prompt contains target: '
-grep -q 'docs/superpowers/plans/2026-06-14-m2a-hermetic-publish-foundation-implementation-plan.md' && printf 'yes\n'
+grep -q 'docs/superpowers/plans/archive/2026-06-14-m2a-hermetic-publish-foundation-implementation-plan.md' && printf 'yes\n'
 STUB
 chmod +x "$bin_dir/reasonix"
 
@@ -39,7 +39,7 @@ printf '\n'
 printf 'agy prompt contains target: '
 for arg in "$@"; do
     case "$arg" in
-        *docs/superpowers/plans/2026-06-14-m2a-hermetic-publish-foundation-implementation-plan.md*)
+        *docs/superpowers/plans/archive/2026-06-14-m2a-hermetic-publish-foundation-implementation-plan.md*)
             printf 'yes\n'
             ;;
     esac
@@ -47,7 +47,7 @@ done
 STUB
 chmod +x "$bin_dir/agy"
 
-target="docs/superpowers/plans/2026-06-14-m2a-hermetic-publish-foundation-implementation-plan.md"
+target="docs/superpowers/plans/archive/2026-06-14-m2a-hermetic-publish-foundation-implementation-plan.md"
 
 help_output="$("$script" --help 2>&1)"
 grep -q "Usage: scripts/agentic-plan-review.sh" <<<"$help_output" \
