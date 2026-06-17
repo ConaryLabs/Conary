@@ -132,6 +132,34 @@ fn wait_for_file_or_child_exit(path: &Path, child: &mut Child) {
     );
 }
 
+fn wait_for_generation_change_or_child_exit(
+    db_path: &str,
+    previous_generation: i64,
+    child: &mut Child,
+) -> i64 {
+    for _ in 0..150 {
+        if let Some(session) = active_try_session(db_path)
+            && let Some(generation) = session.try_generation_id
+            && generation != previous_generation
+        {
+            return generation;
+        }
+        if let Some(status) = child.try_wait().expect("watch child status") {
+            panic!(
+                "watch exited before generation changed with {status}\n{}",
+                read_child_pipes(child)
+            );
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    let _ = child.kill();
+    let status = child.wait().expect("watch child wait after kill");
+    panic!(
+        "timed out waiting for try generation change after {status}\n{}",
+        read_child_pipes(child)
+    );
+}
+
 fn read_child_pipes(child: &mut Child) -> String {
     let mut stdout = String::new();
     if let Some(mut pipe) = child.stdout.take() {
@@ -309,6 +337,40 @@ fn try_watch_failed_refresh_keeps_last_successful_generation() {
 
     let session = active_try_session(&fixture.db_path).expect("active watch session");
     assert_eq!(session.try_generation_id, Some(first_generation));
+
+    child.kill().expect("kill watch process");
+    let _ = child.wait();
+    rollback(&fixture);
+}
+
+#[test]
+fn try_watch_retries_after_failed_refresh_when_source_is_fixed() {
+    let fixture = WatchFixture::new();
+    let ready = fixture.source.join(".watch-ready");
+    let failure = fixture.source.join(".watch-failure");
+
+    let mut child = spawn_watch(&fixture, &ready, Some(&failure), &[]);
+    wait_for_file_or_child_exit(&ready, &mut child);
+    let session = active_try_session(&fixture.db_path).expect("active watch session");
+    let first_generation = session.try_generation_id.expect("initial generation");
+
+    fs::write(
+        fixture.source.join("src/main.rs"),
+        "fn main() { this is not rust }\n",
+    )
+    .unwrap();
+    wait_for_file_or_child_exit(&failure, &mut child);
+    let session = active_try_session(&fixture.db_path).expect("active watch session");
+    assert_eq!(session.try_generation_id, Some(first_generation));
+
+    fs::write(
+        fixture.source.join("src/main.rs"),
+        "fn main() { println!(\"fixed refresh\"); }\n",
+    )
+    .unwrap();
+    let refreshed_generation =
+        wait_for_generation_change_or_child_exit(&fixture.db_path, first_generation, &mut child);
+    assert!(refreshed_generation > first_generation);
 
     child.kill().expect("kill watch process");
     let _ = child.wait();

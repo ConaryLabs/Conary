@@ -560,9 +560,9 @@ Docs to update as M3 lands:
 - M3c0 decomposes `try_session.rs` before watch behavior lands.
 - Watch mode preserves try-session invariants.
 - Watch mode is namespace-only, does not auto-keep, and does not publish.
-- Watch rebuilds rerun hook/scriptlet policy. Hermetic refresh cooks use
-  offline-cache-only inputs after the initial prefetch; non-hermetic refreshes
-  preserve the existing host-iteration source policy.
+- Watch rebuilds rerun hook/scriptlet policy. `try --watch --isolated` refresh
+  cooks use offline-cache-only inputs after the initial prefetch; non-isolated
+  refreshes preserve the existing host-iteration source policy.
 - Record mode has explicit privilege, storage, redaction, and cleanup bounds.
 - Help text does not advertise unavailable M3 features.
 

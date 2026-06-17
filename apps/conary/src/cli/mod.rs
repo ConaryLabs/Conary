@@ -550,6 +550,10 @@ pub enum Commands {
         #[arg(long)]
         watch: bool,
 
+        /// Use the hermetic isolated cook path for watch mode
+        #[arg(long)]
+        isolated: bool,
+
         /// Recipe file to use for watch mode
         #[arg(long)]
         recipe: Option<String>,
@@ -1970,6 +1974,7 @@ mod tests {
                 watch,
                 recipe,
                 json,
+                isolated,
                 activate,
                 allow_irreversible,
                 run,
@@ -1979,6 +1984,7 @@ mod tests {
                 assert!(watch);
                 assert_eq!(recipe, None);
                 assert!(!json);
+                assert!(!isolated);
                 assert!(!activate);
                 assert!(!allow_irreversible);
                 assert!(run.is_empty());
@@ -1994,6 +2000,7 @@ mod tests {
             "--recipe",
             "packaging/recipe.toml",
             "--json",
+            "--isolated",
         ])
         .unwrap();
         match recipe.command {
@@ -2002,12 +2009,14 @@ mod tests {
                 watch,
                 recipe,
                 json,
+                isolated,
                 ..
             }) => {
                 assert_eq!(target.as_deref(), Some("."));
                 assert!(watch);
                 assert_eq!(recipe.as_deref(), Some("packaging/recipe.toml"));
                 assert!(json);
+                assert!(isolated);
             }
             other => panic!("unexpected command: {other:?}"),
         }

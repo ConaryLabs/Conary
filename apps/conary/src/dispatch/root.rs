@@ -45,6 +45,7 @@ const DEFAULT_DB_PATH: &str = "/var/lib/conary/conary.db";
 struct TryWatchDispatch {
     target: String,
     recipe: Option<String>,
+    isolated: bool,
     json: bool,
 }
 
@@ -57,26 +58,29 @@ enum TryDispatchAction {
     Keep,
 }
 
-fn try_dispatch_action(
+struct TryDispatchInput<'a> {
     target: Option<String>,
     activate: bool,
     allow_irreversible: bool,
-    run: &[String],
+    isolated: bool,
+    run: &'a [String],
     watch: bool,
     recipe: Option<String>,
     json: bool,
-) -> Result<TryDispatchAction> {
-    if watch {
-        if activate {
+}
+
+fn try_dispatch_action(input: TryDispatchInput<'_>) -> Result<TryDispatchAction> {
+    if input.watch {
+        if input.activate {
             bail!("conary try --watch cannot be combined with --activate");
         }
-        if allow_irreversible {
+        if input.allow_irreversible {
             bail!("conary try --watch cannot be combined with --allow-irreversible");
         }
-        if !run.is_empty() {
+        if !input.run.is_empty() {
             bail!("conary try --watch cannot run a command");
         }
-        let target = target.unwrap_or_else(|| ".".to_string());
+        let target = input.target.unwrap_or_else(|| ".".to_string());
         if is_reserved_try_action(&target) {
             bail!("conary try --watch cannot be combined with try action '{target}'");
         }
@@ -85,17 +89,22 @@ fn try_dispatch_action(
         }
         return Ok(TryDispatchAction::Watch(TryWatchDispatch {
             target,
-            recipe,
-            json,
+            recipe: input.recipe,
+            isolated: input.isolated,
+            json: input.json,
         }));
     }
 
-    match target {
+    if input.isolated {
+        bail!("conary try --isolated requires --watch");
+    }
+
+    match input.target {
         Some(target)
             if is_reserved_try_action(&target)
-                && !activate
-                && !allow_irreversible
-                && run.is_empty() =>
+                && !input.activate
+                && !input.allow_irreversible
+                && input.run.is_empty() =>
         {
             Ok(match target.as_str() {
                 "status" => TryDispatchAction::Status,
@@ -931,19 +940,21 @@ pub(super) async fn dispatch_command(
             activate,
             allow_irreversible,
             watch,
+            isolated,
             recipe,
             json,
             run,
             db,
-        }) => match try_dispatch_action(
+        }) => match try_dispatch_action(TryDispatchInput {
             target,
             activate,
             allow_irreversible,
-            &run,
+            isolated,
+            run: &run,
             watch,
             recipe,
             json,
-        )? {
+        })? {
             TryDispatchAction::Package(package) => {
                 commands::cmd_try_package(
                     &db.db_path,
@@ -959,6 +970,7 @@ pub(super) async fn dispatch_command(
                     &db.db_path,
                     &watch.target,
                     watch.recipe.as_deref(),
+                    watch.isolated,
                     watch.json,
                 )
                 .await
@@ -1320,14 +1332,68 @@ mod tests {
 
     #[test]
     fn try_dispatch_watch_defaults_to_current_dir() {
-        match super::try_dispatch_action(None, false, false, &[], true, None, false).unwrap() {
+        match super::try_dispatch_action(super::TryDispatchInput {
+            target: None,
+            activate: false,
+            allow_irreversible: false,
+            isolated: false,
+            run: &[],
+            watch: true,
+            recipe: None,
+            json: false,
+        })
+        .unwrap()
+        {
             super::TryDispatchAction::Watch(watch) => {
                 assert_eq!(watch.target, ".");
                 assert_eq!(watch.recipe, None);
                 assert!(!watch.json);
+                assert!(!watch.isolated);
             }
             other => panic!("unexpected try dispatch action: {other:?}"),
         }
+    }
+
+    #[test]
+    fn try_dispatch_watch_accepts_isolated() {
+        match super::try_dispatch_action(super::TryDispatchInput {
+            target: Some(".".to_string()),
+            activate: false,
+            allow_irreversible: false,
+            isolated: true,
+            run: &[],
+            watch: true,
+            recipe: None,
+            json: true,
+        })
+        .unwrap()
+        {
+            super::TryDispatchAction::Watch(watch) => {
+                assert_eq!(watch.target, ".");
+                assert!(watch.isolated);
+                assert!(watch.json);
+            }
+            other => panic!("unexpected try dispatch action: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn try_dispatch_rejects_isolated_without_watch() {
+        let err = super::try_dispatch_action(super::TryDispatchInput {
+            target: Some("pkg.ccs".to_string()),
+            activate: false,
+            allow_irreversible: false,
+            isolated: true,
+            run: &[],
+            watch: false,
+            recipe: None,
+            json: false,
+        })
+        .expect_err("isolated without watch should fail");
+        assert!(
+            err.to_string().contains("--isolated requires --watch"),
+            "{err:#}"
+        );
     }
 
     #[test]
@@ -1383,15 +1449,16 @@ mod tests {
                 "cannot run a command",
             ),
         ] {
-            let err = super::try_dispatch_action(
+            let err = super::try_dispatch_action(super::TryDispatchInput {
                 target,
                 activate,
                 allow_irreversible,
-                &run,
-                true,
-                None,
-                false,
-            )
+                isolated: false,
+                run: &run,
+                watch: true,
+                recipe: None,
+                json: false,
+            })
             .expect_err("watch conflict should fail");
             assert!(err.to_string().contains(message), "{err:#}");
         }

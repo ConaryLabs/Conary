@@ -1114,26 +1114,22 @@ edition = "2021"
 
     #[test]
     fn watch_refresh_cook_options_force_offline_policy_for_hermetic_refresh() {
-        let options = CookRunOptions {
+        let options = CookForTryWatchOptions {
             target: Some("."),
             recipe: None,
             output_dir: "dist",
             source_cache: "sources",
             jobs: None,
             keep_builddir: false,
-            validate_only: false,
-            fetch_only: false,
-            explain: false,
             isolated: true,
             no_isolation: false,
             hermetic: false,
-            json: true,
             operation_id: "watch-1".to_string(),
-            source_download_policy_override: Some(SourceDownloadPolicy::OfflineCacheOnly),
+            source_policy: WatchCookSourcePolicy::Refresh,
         };
 
         assert_eq!(
-            options.source_download_policy_override,
+            watch_source_download_policy_override(&options),
             Some(SourceDownloadPolicy::OfflineCacheOnly)
         );
     }

@@ -35,6 +35,7 @@ pub(super) struct TryWatchOptions<'a> {
     pub(super) db_path: &'a str,
     pub(super) target: &'a str,
     pub(super) recipe: Option<&'a str>,
+    pub(super) isolated: bool,
     pub(super) json: bool,
 }
 
@@ -128,6 +129,7 @@ impl WatchEvents {
 struct WatchRefreshState {
     last_successful_identity: WatchIdentity,
     last_attempted_identity: Option<WatchIdentity>,
+    pending_identity: Option<WatchIdentity>,
     last_good_generation_id: i64,
 }
 
@@ -136,6 +138,7 @@ impl WatchRefreshState {
         Self {
             last_successful_identity: initial_identity,
             last_attempted_identity: None,
+            pending_identity: None,
             last_good_generation_id,
         }
     }
@@ -146,16 +149,51 @@ impl WatchRefreshState {
     }
 
     fn record_attempt(&mut self, identity: WatchIdentity) {
+        self.pending_identity = None;
         self.last_attempted_identity = Some(identity);
     }
 
     fn record_success(&mut self, identity: WatchIdentity, generation_id: i64) {
         self.last_successful_identity = identity.clone();
+        self.pending_identity = None;
         self.last_attempted_identity = Some(identity);
         self.last_good_generation_id = generation_id;
     }
 
-    fn record_failure(&mut self) {}
+    fn record_failure(&mut self) {
+        self.pending_identity = None;
+        self.last_attempted_identity = None;
+    }
+
+    fn clear_pending(&mut self) {
+        self.pending_identity = None;
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DebouncedRefresh {
+    Waiting,
+    Ready,
+}
+
+fn debounce_refresh_identity(
+    state: &mut WatchRefreshState,
+    debounce: &mut DebounceState,
+    identity: WatchIdentity,
+    now: Instant,
+) -> DebouncedRefresh {
+    if state.pending_identity.as_ref() != Some(&identity) {
+        state.pending_identity = Some(identity);
+        debounce.record_wakeup(now);
+        return DebouncedRefresh::Waiting;
+    }
+
+    if debounce.take_ready(now).is_some() {
+        state.clear_pending();
+        DebouncedRefresh::Ready
+    } else {
+        DebouncedRefresh::Waiting
+    }
 }
 
 struct WatchLoopConfig {
@@ -188,6 +226,7 @@ struct WatchCookRequest {
     recipe: Option<String>,
     output_dir: PathBuf,
     source_cache: PathBuf,
+    isolated: bool,
     source_policy: WatchCookSourcePolicy,
     operation_id: String,
 }
@@ -279,6 +318,7 @@ async fn cmd_try_watch_with_output(
                 recipe: options.recipe.map(ToOwned::to_owned),
                 output_dir: initial_output_dir.clone(),
                 source_cache: source_cache.clone(),
+                isolated: options.isolated,
                 source_policy: WatchCookSourcePolicy::Initial,
                 operation_id: operation_id.clone(),
             },
@@ -597,12 +637,29 @@ async fn run_refresh_loop(
             }
         };
         if !state.should_attempt(&current_identity) {
+            state.clear_pending();
+            debounce.clear();
             continue;
         }
 
         let now = Instant::now();
-        if debounce.ready_at().is_none() {
-            debounce.record_wakeup(now);
+        let pending_changed = state.pending_identity.as_ref() != Some(&current_identity);
+        if debounce_refresh_identity(state, debounce, current_identity.clone(), now)
+            == DebouncedRefresh::Waiting
+        {
+            if pending_changed {
+                emit_push(
+                    events,
+                    PackagingPhase::Build,
+                    PackagingEventKind::WatchDebounced,
+                    "Change detected; waiting for sources to settle",
+                    options.json,
+                    output,
+                )?;
+            }
+            continue;
+        }
+        if pending_changed {
             emit_push(
                 events,
                 PackagingPhase::Build,
@@ -611,10 +668,6 @@ async fn run_refresh_loop(
                 options.json,
                 output,
             )?;
-            continue;
-        }
-        if debounce.take_ready(now).is_none() {
-            continue;
         }
 
         state.record_attempt(current_identity.clone());
@@ -636,6 +689,7 @@ async fn run_refresh_loop(
                 recipe: options.recipe.map(ToOwned::to_owned),
                 output_dir: output_dir.clone(),
                 source_cache: source_cache.clone(),
+                isolated: options.isolated,
                 source_policy: WatchCookSourcePolicy::Refresh,
                 operation_id: operation_id.clone(),
             },
@@ -892,7 +946,7 @@ fn run_watch_cook(request: WatchCookRequest) -> Result<PackagingCommandOutput> {
         source_cache: &source_cache,
         jobs: None,
         keep_builddir: false,
-        isolated: false,
+        isolated: request.isolated,
         no_isolation: false,
         hermetic: false,
         source_policy: request.source_policy,
@@ -1100,11 +1154,6 @@ fn remove_dir_if_exists(path: &Path) -> Result<()> {
 
 fn watched_sources_missing(source_set: &WatchSourceSet) -> bool {
     source_set.local_roots.iter().any(|path| !path.exists())
-        || source_set.local_files.iter().any(|path| !path.exists())
-        || source_set
-            .recipe_path
-            .as_ref()
-            .is_some_and(|path| !path.exists())
 }
 
 #[cfg(test)]
@@ -1156,7 +1205,7 @@ mod tests {
     }
 
     #[test]
-    fn watch_state_does_not_retry_same_failed_identity_without_new_changes() {
+    fn watch_state_suppresses_duplicate_attempt_until_result() {
         let first = WatchIdentity {
             digest: "sha256:first".to_string(),
             file_count: 1,
@@ -1173,12 +1222,13 @@ mod tests {
         };
         assert!(state.should_attempt(&broken));
         state.record_attempt(broken.clone());
-        state.record_failure();
 
         assert!(
             !state.should_attempt(&broken),
-            "same failed source snapshot should not rebuild again until files change"
+            "same source snapshot should not start a duplicate in-flight rebuild"
         );
+        state.record_failure();
+        assert!(state.should_attempt(&broken));
         assert!(
             !state.should_attempt(&first),
             "returning to the last successful source snapshot is already active"
@@ -1188,5 +1238,110 @@ mod tests {
             file_count: 1,
         };
         assert!(state.should_attempt(&changed));
+    }
+
+    #[test]
+    fn watch_state_retries_same_identity_after_failed_attempt() {
+        let first = WatchIdentity {
+            digest: "sha256:first".to_string(),
+            file_count: 1,
+        };
+        let mut state = WatchRefreshState::new(first, 41);
+        let broken = WatchIdentity {
+            digest: "sha256:broken".to_string(),
+            file_count: 1,
+        };
+
+        state.record_attempt(broken.clone());
+        state.record_failure();
+
+        assert!(
+            state.should_attempt(&broken),
+            "failed source snapshots should be retryable after the visible failure"
+        );
+    }
+
+    #[test]
+    fn watched_sources_missing_ignores_recipe_and_auxiliary_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let source_root = temp.path().join("src");
+        std::fs::create_dir_all(&source_root).unwrap();
+        let source_set = WatchSourceSet {
+            mode: super::super::watch_source::WatchSourceMode::ExplicitRecipe,
+            recipe_path: Some(temp.path().join("missing-recipe.toml")),
+            local_roots: vec![source_root.clone()],
+            local_files: vec![temp.path().join("missing.patch")],
+        };
+
+        assert!(
+            !watched_sources_missing(&source_set),
+            "transient recipe, patch, or additional-file disappearance should be non-destructive"
+        );
+
+        std::fs::remove_dir_all(source_root).unwrap();
+        assert!(
+            watched_sources_missing(&source_set),
+            "source root disappearance should still stop the watch session"
+        );
+    }
+
+    #[test]
+    fn debounce_step_resets_deadline_when_identity_changes_before_ready() {
+        let start = Instant::now();
+        let mut debounce = DebounceState::new(Duration::from_millis(750));
+        let success = WatchIdentity {
+            digest: "sha256:success".to_string(),
+            file_count: 1,
+        };
+        let first_change = WatchIdentity {
+            digest: "sha256:first-change".to_string(),
+            file_count: 1,
+        };
+        let second_change = WatchIdentity {
+            digest: "sha256:second-change".to_string(),
+            file_count: 1,
+        };
+        let mut state = WatchRefreshState::new(success, 41);
+
+        assert_eq!(
+            debounce_refresh_identity(&mut state, &mut debounce, first_change, start),
+            DebouncedRefresh::Waiting
+        );
+        assert_eq!(
+            debounce.ready_at(),
+            Some(start + Duration::from_millis(750))
+        );
+
+        assert_eq!(
+            debounce_refresh_identity(
+                &mut state,
+                &mut debounce,
+                second_change.clone(),
+                start + Duration::from_millis(100)
+            ),
+            DebouncedRefresh::Waiting
+        );
+        assert_eq!(
+            debounce.ready_at(),
+            Some(start + Duration::from_millis(850))
+        );
+        assert_eq!(
+            debounce_refresh_identity(
+                &mut state,
+                &mut debounce,
+                second_change.clone(),
+                start + Duration::from_millis(849)
+            ),
+            DebouncedRefresh::Waiting
+        );
+        assert_eq!(
+            debounce_refresh_identity(
+                &mut state,
+                &mut debounce,
+                second_change,
+                start + Duration::from_millis(850)
+            ),
+            DebouncedRefresh::Ready
+        );
     }
 }

@@ -417,8 +417,9 @@ refresh from the recipe or inferred source tree and then tries the resulting
 CCS artifact.
 
 M3c should use hermetic cook behavior when the existing cook defaults or flags
-select it. It must not claim stronger provenance than the underlying cook
-produced. Source fetching follows M2a expectations:
+select it; the user-facing M3c watch surface for that path is
+`conary try --watch --isolated`. It must not claim stronger provenance than the
+underlying cook produced. Source fetching follows M2a expectations:
 
 - initial startup may use the normal prefetch path selected by the underlying
   cook mode

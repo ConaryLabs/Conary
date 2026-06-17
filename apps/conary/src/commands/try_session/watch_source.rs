@@ -214,8 +214,13 @@ impl DebounceState {
         None
     }
 
+    #[cfg(test)]
     pub(super) fn ready_at(&self) -> Option<Instant> {
         self.ready_at
+    }
+
+    pub(super) fn clear(&mut self) {
+        self.ready_at = None;
     }
 
     pub(super) fn take_ready(&mut self, now: Instant) -> Option<()> {

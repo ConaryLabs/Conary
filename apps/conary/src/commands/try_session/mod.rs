@@ -141,12 +141,14 @@ pub(crate) async fn cmd_try_watch(
     db_path: &str,
     target: &str,
     recipe: Option<&str>,
+    isolated: bool,
     json: bool,
 ) -> Result<()> {
     watch::cmd_try_watch(watch::TryWatchOptions {
         db_path,
         target,
         recipe,
+        isolated,
         json,
     })
     .await
