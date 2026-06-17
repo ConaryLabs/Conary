@@ -3207,5 +3207,9 @@ Type consistency:
 Implementation choice:
 
 - M3d keeps `--record-allow-network` parsed but fail-closed. This preserves the reserved contract without widening the spike.
-- M3d adds `CONARY_DESTDIR` only to the recorded demonstration command, not to normal Kitchen validation. Generated recipes normalize to `%(destdir)s`, so current normal cook behavior remains valid.
+- M3d exports both `DESTDIR` and `CONARY_DESTDIR` to recorded commands, but
+  validation fixtures use plain `DESTDIR` so normal Kitchen validation remains
+  representative. Generated recipes normalize observed concrete destdir paths
+  and supported destdir variables without requiring Kitchen to learn the
+  record-only alias.
 - Fanotify live behavior is gated by environment capability; inotify and fakeable probe tests carry normal CI.
