@@ -778,6 +778,7 @@ async fn install_converted_ccs_with_pending(
             root,
             dry_run,
             defer_generation,
+            quiet: false,
             no_scripts,
             sandbox_mode,
             allow_downgrade,

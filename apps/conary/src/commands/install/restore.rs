@@ -271,6 +271,7 @@ pub(crate) async fn prepare_install_for_restore(
             root,
             dry_run: false,
             defer_generation: false,
+            quiet: false,
             no_scripts,
             sandbox_mode,
             allow_downgrade,
@@ -407,6 +408,7 @@ pub(crate) fn finalize_prepared_install_without_snapshot(
         &execution.pre_state,
         &tx_result,
         &execution.progress,
+        false,
     )
 }
 

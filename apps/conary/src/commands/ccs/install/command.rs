@@ -231,6 +231,7 @@ pub async fn cmd_ccs_install_with_replay_options(
                 root,
                 dry_run,
                 defer_generation: false,
+                quiet: false,
                 no_scripts,
                 sandbox_mode: match sandbox {
                     crate::commands::SandboxMode::None => conary_core::scriptlet::SandboxMode::None,
@@ -261,6 +262,7 @@ pub async fn cmd_ccs_install_with_replay_options(
             root,
             dry_run,
             defer_generation: false,
+            quiet: false,
             no_scripts,
             sandbox_mode: match sandbox {
                 crate::commands::SandboxMode::None => conary_core::scriptlet::SandboxMode::None,

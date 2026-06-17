@@ -328,6 +328,7 @@ pub(super) fn finalize_install_without_snapshot(
     pre_state: &PreScriptletState,
     tx_result: &InstallTransactionResult,
     progress: &InstallProgress,
+    quiet: bool,
 ) -> Result<()> {
     let mut scriptlet_warnings = Vec::new();
 
@@ -384,36 +385,38 @@ pub(super) fn finalize_install_without_snapshot(
 
     progress.finish(&format!("Installed {} {}", pkg.name(), pkg.version()));
 
-    // Show what components were available vs installed
-    let skipped_info = if !extraction.skipped_components.is_empty() {
-        format!(" (skipped: {})", extraction.skipped_components.join(", "))
-    } else {
-        String::new()
-    };
+    if !quiet {
+        // Show what components were available vs installed
+        let skipped_info = if !extraction.skipped_components.is_empty() {
+            format!(" (skipped: {})", extraction.skipped_components.join(", "))
+        } else {
+            String::new()
+        };
 
-    println!(
-        "Installed package: {} version {}",
-        pkg.name(),
-        pkg.version()
-    );
-    println!("  Architecture: {}", pkg.architecture().unwrap_or("none"));
-    println!("  Files installed: {}", extraction.extracted_files.len());
-    println!(
-        "  Components: {}{}",
-        extraction
-            .installed_component_types
-            .iter()
-            .map(|c| format!(":{}", c.as_str()))
-            .collect::<Vec<_>>()
-            .join(", "),
-        skipped_info
-    );
-    println!("  Dependencies: {}", pkg.dependencies().len());
-    if !extraction.language_provides.is_empty() {
         println!(
-            "  Provides: {} (language-specific capabilities)",
-            extraction.language_provides.len()
+            "Installed package: {} version {}",
+            pkg.name(),
+            pkg.version()
         );
+        println!("  Architecture: {}", pkg.architecture().unwrap_or("none"));
+        println!("  Files installed: {}", extraction.extracted_files.len());
+        println!(
+            "  Components: {}{}",
+            extraction
+                .installed_component_types
+                .iter()
+                .map(|c| format!(":{}", c.as_str()))
+                .collect::<Vec<_>>()
+                .join(", "),
+            skipped_info
+        );
+        println!("  Dependencies: {}", pkg.dependencies().len());
+        if !extraction.language_provides.is_empty() {
+            println!(
+                "  Provides: {} (language-specific capabilities)",
+                extraction.language_provides.len()
+            );
+        }
     }
 
     Ok(())
@@ -436,6 +439,7 @@ pub(super) fn finalize_install(
         pre_state,
         tx_result,
         progress,
+        false,
     )?;
     if let Err(error) = create_state_snapshot(
         conn,

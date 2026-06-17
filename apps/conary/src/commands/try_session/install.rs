@@ -36,6 +36,7 @@ pub(super) fn install_try_package(
             root: &root_string,
             dry_run: false,
             defer_generation: true,
+            quiet: true,
             no_scripts: plan.no_scripts,
             sandbox_mode: conary_core::scriptlet::SandboxMode::None,
             allow_downgrade: false,

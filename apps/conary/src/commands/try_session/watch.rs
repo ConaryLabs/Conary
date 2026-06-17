@@ -97,6 +97,7 @@ impl WatchEvents {
         )
     }
 
+    #[cfg(test)]
     fn all(&self) -> &[PackagingEvent] {
         &self.events
     }
@@ -435,16 +436,6 @@ async fn cmd_try_watch_with_output(
             options.json,
             output,
         )?;
-        refresh_count += 1;
-        if config.max_refreshes.is_some_and(|max| refresh_count >= max) {
-            return finish_watch(
-                events,
-                PackagingCommandStatus::Succeeded,
-                "try watch stopped after stale initial cook check",
-                options.json,
-                output,
-            );
-        }
     }
 }
 

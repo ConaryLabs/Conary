@@ -34,6 +34,7 @@ pub(crate) struct CcsTransactionInstallOptions<'a> {
     pub root: &'a str,
     pub dry_run: bool,
     pub defer_generation: bool,
+    pub quiet: bool,
     pub no_scripts: bool,
     pub sandbox_mode: SandboxMode,
     pub allow_downgrade: bool,
@@ -443,6 +444,7 @@ fn install_ccs_package_transactionally_inner(
         &pre_state,
         &tx_result,
         &progress,
+        opts.quiet,
     )?;
 
     let mut post_commit_warnings = Vec::new();
