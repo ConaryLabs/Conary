@@ -607,9 +607,11 @@ fn classify_ccs(command: &cli::CcsCommands) -> CommandRiskPolicy {
             CommandRisk::LocalStateMutation,
             *dry_run,
         ),
-        cli::CcsCommands::Init { .. }
-        | cli::CcsCommands::Build { .. }
-        | cli::CcsCommands::Inspect { .. }
+        cli::CcsCommands::Init { .. } => local_state("conary ccs init"),
+        cli::CcsCommands::Build { .. } => local_state("conary ccs build"),
+        cli::CcsCommands::Lint { .. } => read_only("conary ccs lint"),
+        cli::CcsCommands::Test { .. } => local_state("conary ccs test"),
+        cli::CcsCommands::Inspect { .. }
         | cli::CcsCommands::Verify { .. }
         | cli::CcsCommands::Sign { .. }
         | cli::CcsCommands::Keygen { .. }
@@ -809,6 +811,21 @@ mod tests {
         assert_eq!(policy.risk, CommandRisk::ReadOnly);
         assert!(!policy.dry_run);
         assert!(!policy.apply_intent);
+    }
+
+    #[test]
+    fn m4b_ccs_authoring_commands_are_not_active_host_mutations() {
+        let init = policy(&["conary", "ccs", "init", "--template", "minimal-file"]);
+        assert_eq!(init.risk, CommandRisk::LocalStateMutation);
+
+        let lint = policy(&["conary", "ccs", "lint"]);
+        assert_eq!(lint.risk, CommandRisk::ReadOnly);
+
+        let build = policy(&["conary", "ccs", "build", "--format", "v2", "--local-dev"]);
+        assert_eq!(build.risk, CommandRisk::LocalStateMutation);
+
+        let test = policy(&["conary", "ccs", "test", "pkg.ccs", "--dry-run"]);
+        assert_eq!(test.risk, CommandRisk::LocalStateMutation);
     }
 
     #[test]

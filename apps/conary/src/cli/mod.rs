@@ -61,7 +61,7 @@ pub use bootstrap::BootstrapCommands;
 pub use cache::CacheCommands;
 pub use canonical::CanonicalCommands;
 pub use capability::CapabilityCommands;
-pub use ccs::CcsCommands;
+pub use ccs::{CcsBuildFormat, CcsCommands, CcsOutputFormat};
 pub use collection::CollectionCommands;
 pub use config::ConfigCommands;
 pub use derivation::DerivationCommands;

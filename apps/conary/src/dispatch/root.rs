@@ -149,8 +149,10 @@ fn command_uses_try_session_preflight_db(command: &Commands) -> bool {
         | Commands::Ccs(
             cli::CcsCommands::Init { .. }
             | cli::CcsCommands::Build { .. }
+            | cli::CcsCommands::Lint { .. }
             | cli::CcsCommands::Inspect { .. }
             | cli::CcsCommands::Verify { .. }
+            | cli::CcsCommands::Test { .. }
             | cli::CcsCommands::Sign { .. }
             | cli::CcsCommands::Keygen { .. },
         )
@@ -398,8 +400,10 @@ fn selected_ccs_db_path(command: &cli::CcsCommands) -> &str {
         | cli::CcsCommands::Enhance { db, .. } => &db.db_path,
         cli::CcsCommands::Init { .. }
         | cli::CcsCommands::Build { .. }
+        | cli::CcsCommands::Lint { .. }
         | cli::CcsCommands::Inspect { .. }
         | cli::CcsCommands::Verify { .. }
+        | cli::CcsCommands::Test { .. }
         | cli::CcsCommands::Sign { .. }
         | cli::CcsCommands::Keygen { .. } => DEFAULT_DB_PATH,
     }
@@ -1767,8 +1771,20 @@ mod tests {
             ]
             .as_slice(),
             ["conary", "ccs", "build", "/tmp/ccs-demo"].as_slice(),
+            [
+                "conary",
+                "ccs",
+                "build",
+                "/tmp/ccs-demo",
+                "--format",
+                "v2",
+                "--local-dev",
+            ]
+            .as_slice(),
+            ["conary", "ccs", "lint", "/tmp/ccs-demo"].as_slice(),
             ["conary", "ccs", "inspect", "/tmp/pkg.ccs"].as_slice(),
             ["conary", "ccs", "verify", "/tmp/pkg.ccs"].as_slice(),
+            ["conary", "ccs", "test", "/tmp/pkg.ccs", "--dry-run"].as_slice(),
             ["conary", "ccs", "sign", "/tmp/pkg.ccs", "--key", "/tmp/key"].as_slice(),
             ["conary", "ccs", "keygen", "--output", "/tmp/key"].as_slice(),
             ["conary", "capability", "validate", "/tmp/ccs.toml"].as_slice(),

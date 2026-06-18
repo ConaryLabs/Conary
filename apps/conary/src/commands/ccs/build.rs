@@ -5,6 +5,7 @@
 //! Commands for building CCS packages from manifests,
 //! including generation of legacy format packages.
 
+use crate::cli::CcsBuildFormat;
 use anyhow::{Context, Result};
 use conary_core::ccs::{CcsBuilder, CcsManifest, builder, legacy};
 use std::path::Path;
@@ -18,6 +19,9 @@ pub async fn cmd_ccs_build(
     no_classify: bool,
     chunked: bool,
     dry_run: bool,
+    _format: CcsBuildFormat,
+    _local_dev: bool,
+    _key: Option<String>,
 ) -> Result<()> {
     let path = Path::new(path);
 
