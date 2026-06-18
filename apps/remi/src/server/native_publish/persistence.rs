@@ -260,7 +260,7 @@ fn insert_native_publication(
     artifact: &VerifiedNativeArtifact,
     promoted: &PromotedNativeArtifact,
 ) -> Result<()> {
-    let chunk_hashes_json = serde_json::to_string(&[artifact.content_hash.clone()])?;
+    let chunk_hashes_json = serde_json::to_string(std::slice::from_ref(&artifact.content_hash))?;
     let mut publication = NativePackagePublication {
         id: None,
         repository_id: repo_id,
