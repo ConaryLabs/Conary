@@ -11,6 +11,7 @@ mod init_template;
 mod inspect;
 mod install;
 mod lint;
+mod local_dev;
 mod payload_paths;
 mod runtime;
 mod signing;
