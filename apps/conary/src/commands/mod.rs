@@ -89,6 +89,7 @@ pub use capability::{
     cmd_capability_audit, cmd_capability_generate, cmd_capability_list, cmd_capability_run,
     cmd_capability_show, cmd_capability_validate,
 };
+pub use ccs::CcsInitTemplate;
 #[allow(unused_imports)]
 pub(crate) use changeset_metadata::{
     AdoptionWarning, ChangesetMetadataEnvelope, DeferredFollowUp, DeferredFollowUpKind,

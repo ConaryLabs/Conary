@@ -7,16 +7,19 @@
 mod build;
 mod enhance;
 mod init;
+mod init_template;
 mod inspect;
 mod install;
 mod payload_paths;
 mod runtime;
 mod signing;
+mod templates;
 
 // Re-export all public commands
 pub use build::cmd_ccs_build;
 pub use enhance::cmd_ccs_enhance;
 pub use init::cmd_ccs_init;
+pub use init_template::CcsInitTemplate;
 pub use inspect::{cmd_ccs_inspect, cmd_ccs_verify};
 pub(crate) use install::enforce_ccs_capability_policy;
 pub use install::{cmd_ccs_install, cmd_ccs_install_with_replay_options};

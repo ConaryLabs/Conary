@@ -7,10 +7,14 @@ use std::fs;
 use std::path::PathBuf;
 
 #[allow(dead_code)]
+#[path = "src/commands/ccs/init_template.rs"]
+mod ccs_init_template;
+#[allow(dead_code)]
 #[path = "src/commands/install/dep_mode.rs"]
 mod dep_mode;
 
 mod commands {
+    pub use super::ccs_init_template::CcsInitTemplate;
     pub use super::dep_mode::DepMode;
 }
 
@@ -21,6 +25,7 @@ mod cli;
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=src/cli");
+    println!("cargo:rerun-if-changed=src/commands/ccs/init_template.rs");
     println!("cargo:rerun-if-changed=src/commands/install/dep_mode.rs");
 
     let manifest_dir = match env::var("CARGO_MANIFEST_DIR") {

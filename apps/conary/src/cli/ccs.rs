@@ -23,6 +23,10 @@ pub enum CcsCommands {
         /// Overwrite existing ccs.toml
         #[arg(long)]
         force: bool,
+
+        /// Authoring template to generate
+        #[arg(long, value_enum)]
+        template: Option<crate::commands::CcsInitTemplate>,
     },
 
     /// Build a CCS package from the current project

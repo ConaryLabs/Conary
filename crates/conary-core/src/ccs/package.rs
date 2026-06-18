@@ -221,6 +221,8 @@ pub fn convert_binary_to_ccs_manifest(
             name: bin.name.clone(),
             version: bin.version.clone(),
             description: bin.description.clone(),
+            release: None,
+            kind: None,
             license: bin.license.clone(),
             homepage: None,
             repository: None,

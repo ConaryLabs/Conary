@@ -546,6 +546,8 @@ impl LegacyConverter {
                 description: metadata.description.clone().unwrap_or_else(|| {
                     format!("Converted from {} package", metadata.package_path.display())
                 }),
+                release: None,
+                kind: None,
                 license: None,
                 homepage: None,
                 repository: None,
