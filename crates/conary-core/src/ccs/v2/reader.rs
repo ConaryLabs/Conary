@@ -90,6 +90,7 @@ fn reject_install_authority_toml(toml_raw: Option<&[u8]>) -> Result<()> {
         || !toml_manifest.requires.capabilities.is_empty()
         || !toml_manifest.config.files.is_empty()
         || toml_manifest.hooks.has_script_hooks()
+        || toml_manifest.hooks.has_service_hooks()
         || toml_manifest.hooks.has_declarative_hooks()
         || toml_manifest.scriptlets.has_capability_declarations()
         || toml_manifest.legacy_scriptlets.is_some()
@@ -179,6 +180,23 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("TOML"));
+    }
+
+    #[test]
+    fn v2_debug_toml_with_service_hooks_is_rejected() {
+        let toml = r#"
+[package]
+name = "hello"
+version = "0.1.0"
+description = "hello"
+
+[[hooks.services]]
+name = "hello.service"
+action = "restart"
+"#;
+
+        let error = reject_install_authority_toml(Some(toml.as_bytes())).unwrap_err();
+        assert!(error.to_string().contains("install-affecting"));
     }
 
     #[test]
