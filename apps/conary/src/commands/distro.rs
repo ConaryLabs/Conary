@@ -29,15 +29,21 @@ fn validate_selection_mode(mode: &str) -> Result<()> {
 
 pub async fn cmd_distro_set(db_path: &str, distro: &str, mixing: &str) -> Result<()> {
     validate_mixing_policy(mixing)?;
+    let profile = conary_core::repository::supported_profiles::profile_by_public_id(distro)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Unsupported distro: {distro}. Use 'conary distro list' to see supported targets."
+            )
+        })?;
     let conn = open_db(db_path)?;
     DistroPin::set_from_source_pin(
         &conn,
         &SourcePinConfig {
-            distro: distro.to_string(),
+            distro: profile.id().to_string(),
             strength: Some(mixing.to_string()),
         },
     )?;
-    println!("Pinned to {distro} (mixing: {mixing})");
+    println!("Pinned to {} (mixing: {mixing})", profile.id());
     Ok(())
 }
 
@@ -118,7 +124,8 @@ fn render_distro_list_for_repos(repos: &[Repository]) -> String {
         let matching_repos: Vec<_> = repos
             .iter()
             .filter(|repo| {
-                repo.name == distro.id || repo.default_strategy_distro.as_deref() == Some(distro.id)
+                repo.name == distro.id
+                    || repo.default_strategy_distro.as_deref() == Some(distro.id.as_str())
             })
             .collect();
         let enabled_count = matching_repos.iter().filter(|repo| repo.enabled).count();
@@ -185,7 +192,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_cmd_distro_set_persists_compatibility_pin() {
+    async fn test_cmd_distro_set_persists_supported_public_pin() {
         let (_temp, db_path, conn) = create_test_db();
 
         cmd_distro_set(&db_path, "arch", "strict").await.unwrap();
@@ -194,6 +201,30 @@ mod tests {
         let source_pin = pin.as_source_pin();
         assert_eq!(source_pin.distro, "arch");
         assert_eq!(source_pin.strength.as_deref(), Some("strict"));
+    }
+
+    #[tokio::test]
+    async fn test_cmd_distro_set_rejects_unsupported_public_id() {
+        let (_temp, db_path, conn) = create_test_db();
+
+        let err = cmd_distro_set(&db_path, "debian-13", "strict")
+            .await
+            .unwrap_err();
+
+        assert!(err.to_string().contains("Unsupported distro"));
+        assert!(DistroPin::get_current(&conn).unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_cmd_distro_set_rejects_internal_only_route_slug() {
+        let (_temp, db_path, conn) = create_test_db();
+
+        let err = cmd_distro_set(&db_path, "fedora", "strict")
+            .await
+            .unwrap_err();
+
+        assert!(err.to_string().contains("Unsupported distro"));
+        assert!(DistroPin::get_current(&conn).unwrap().is_none());
     }
 
     #[tokio::test]

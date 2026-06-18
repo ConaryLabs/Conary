@@ -2,8 +2,8 @@
 
 use anyhow::Result;
 use conary_core::repository::dependency_model::RepositoryDependencyFlavor;
-use conary_core::repository::distro::flavor_from_distro_name;
 use conary_core::repository::resolution_policy::{RequestScope, ResolutionPolicy};
+use conary_core::repository::supported_profiles::dependency_flavor_for_name;
 use tracing::{info, warn};
 
 /// Overlay install-specific request scope from CLI flags onto the effective policy.
@@ -101,7 +101,7 @@ pub(super) fn resolve_canonical_name(
 ///
 /// Returns `None` for unrecognised distro names.
 fn distro_name_to_flavor(distro: &str) -> Option<RepositoryDependencyFlavor> {
-    flavor_from_distro_name(distro)
+    dependency_flavor_for_name(distro)
 }
 
 #[cfg(test)]
@@ -109,9 +109,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn distro_name_to_flavor_known() {
+    fn distro_name_to_flavor_accepts_public_ids_and_route_slugs() {
         assert_eq!(
             distro_name_to_flavor("fedora-44"),
+            Some(RepositoryDependencyFlavor::Rpm)
+        );
+        assert_eq!(
+            distro_name_to_flavor("fedora"),
             Some(RepositoryDependencyFlavor::Rpm)
         );
         assert_eq!(
@@ -119,9 +123,26 @@ mod tests {
             Some(RepositoryDependencyFlavor::Deb)
         );
         assert_eq!(
+            distro_name_to_flavor("ubuntu"),
+            Some(RepositoryDependencyFlavor::Deb)
+        );
+        assert_eq!(
             distro_name_to_flavor("arch"),
             Some(RepositoryDependencyFlavor::Arch)
         );
+    }
+
+    #[test]
+    fn distro_name_to_flavor_rejects_unsupported_derivatives() {
+        for name in [
+            "debian",
+            "debian-13",
+            "linux-mint",
+            "ubuntu-noble",
+            "fedora-45",
+        ] {
+            assert_eq!(distro_name_to_flavor(name), None, "{name}");
+        }
     }
 
     #[test]
