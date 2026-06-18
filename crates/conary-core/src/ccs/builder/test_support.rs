@@ -27,6 +27,41 @@ pub(crate) fn minimal_build_result(name: &str, version: &str) -> BuildResult {
     }
 }
 
+pub(crate) fn minimal_file_build_result(name: &str, version: &str, bytes: &[u8]) -> BuildResult {
+    use super::{ComponentData, FileEntry, FileType};
+    use std::collections::HashMap;
+
+    let manifest = crate::ccs::manifest::CcsManifest::new_minimal(name, version);
+    let hash = crate::hash::sha256(bytes);
+    let entry = FileEntry {
+        path: format!("/{name}"),
+        hash: hash.clone(),
+        size: bytes.len() as u64,
+        mode: 0o755,
+        component: "runtime".to_string(),
+        file_type: FileType::Regular,
+        target: None,
+        chunks: None,
+    };
+    BuildResult {
+        manifest,
+        components: HashMap::from([(
+            "runtime".to_string(),
+            ComponentData {
+                name: "runtime".to_string(),
+                files: vec![entry.clone()],
+                hash: hash.clone(),
+                size: bytes.len() as u64,
+            },
+        )]),
+        files: vec![entry],
+        blobs: HashMap::from([(hash, bytes.to_vec())]),
+        total_size: bytes.len() as u64,
+        chunked: false,
+        chunk_stats: None,
+    }
+}
+
 pub(crate) fn rewrite_manifest_toml_for_tests<F>(
     from: &Path,
     to: &Path,
