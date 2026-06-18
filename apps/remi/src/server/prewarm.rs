@@ -262,6 +262,7 @@ fn get_packages_to_convert(
             repository_id: row.get(1)?,
             name: row.get(2)?,
             version: row.get(3)?,
+            package_release: String::new(),
             architecture: row.get(4)?,
             description: row.get(5)?,
             size: row.get(6)?,

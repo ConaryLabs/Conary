@@ -11,7 +11,7 @@ use rusqlite::Connection;
 use tracing::info;
 
 /// Current schema version
-pub const SCHEMA_VERSION: i32 = 73;
+pub const SCHEMA_VERSION: i32 = 74;
 
 /// Initialize the schema version tracking table
 fn init_schema_version(conn: &Connection) -> Result<()> {
@@ -197,6 +197,7 @@ fn apply_migration(conn: &Connection, version: i32) -> Result<()> {
         71 => migrations::migrate_v71(conn),
         72 => migrations::migrate_v72(conn),
         73 => migrations::migrate_v73(conn),
+        74 => migrations::migrate_v74(conn),
         _ => Err(crate::error::Error::InitError(format!(
             "Unknown migration version: {}",
             version
@@ -561,7 +562,7 @@ mod tests {
         migrate(&conn).unwrap();
 
         assert_eq!(get_schema_version(&conn).unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 73);
+        assert_eq!(SCHEMA_VERSION, 74);
 
         let columns: Vec<(String, String, bool, Option<String>, i32)> = conn
             .prepare("PRAGMA table_info(try_sessions)")
