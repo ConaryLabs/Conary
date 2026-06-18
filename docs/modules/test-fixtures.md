@@ -37,6 +37,7 @@ Each fixture family should record:
 | `ccs-v2-native-authority-fixtures` | CCS v2 native authority | `cargo test -p conary-core ccs::v2`; `cargo test -p conary --test packaging_m4a` |
 | `ccs-v2-local-authoring-smoke` | CCS v2 local authoring | `cargo test -p conary --test packaging_m4b` |
 | `legacy-scriptlet-bundle-fixtures` | Install replay adapter and Conary CLI tests | `cargo test -p conary --test bundle_replay synthetic_legacy_bundle_fixtures_cover_task5_matrix` |
+| `remi-native-ccs-publication` | Remi native publication | `cargo test -p remi release_upload_`; `cargo test -p conary --test packaging_m4c` |
 | `remi-scriptlet-publication-gate` | Remi server publication | `cargo test -p remi publication` |
 | `remi-test-artifact-fixtures` | Remi artifact handlers | `cargo test -p remi test_upload_fixture`; `cargo test -p remi test_public_fixture_get_and_head` |
 | `conary-test-remi-manifests` | Integration harness | `cargo run -p conary-test -- list`; `cargo test -p conary-test suite_inventory` |
@@ -109,6 +110,34 @@ Each fixture family should record:
 - **Safety notes:** Local-dev keys are isolated with test HOME/XDG directories.
   Local-dev v2 artifacts are for local verify/test only and must remain
   rejected by static publish and Remi release trust.
+
+### remi-native-ccs-publication
+
+- **Owner:** Remi native publication:
+  `apps/remi/src/server/native_publish/`; release upload route/staging:
+  `apps/remi/src/server/release_publish.rs`.
+- **Purpose:** Release-eligible CCS v2 artifacts published through local Remi
+  without conversion-shaped storage.
+- **Fixture sources:** in-test release-eligible v2 builders in
+  `apps/remi/src/server/release_publish.rs` and
+  `apps/conary/tests/packaging_m4c.rs`.
+- **Consumes:** native release upload, replacement, public metadata/download,
+  client dry-run install, sparse/search/index, and chunk-GC tests.
+- **Fast proof:** `cargo test -p remi release_upload_`;
+  `cargo test -p conary --test packaging_m4c`.
+- **Medium proof:** `cargo test -p remi native_publish`;
+  `cargo test -p remi publication`;
+  `cargo test -p remi metadata_includes_native_only_package_as_native_not_converted`;
+  `cargo test -p remi sparse_index_preserves_native_sibling_releases`;
+  `cargo test -p remi search_rebuild_preserves_native_release_identity_and_converted_false`.
+- **Slow proof:** No cloud or QEMU proof is required for local native
+  publication; run `cargo test -p remi` when public serving behavior changes.
+- **Regeneration:** Temporary signed and attested v2 packages are generated in
+  Rust tests.
+- **Safety notes:** fixtures must prove no `converted_packages` row is written,
+  local-dev or otherwise publish-gate-rejected artifacts write no public state,
+  failed replacement preserves the last public native row, and active native
+  chunks remain protected from serving and garbage collection regressions.
 
 ### legacy-scriptlet-bundle-fixtures
 
@@ -218,9 +247,11 @@ Each fixture family should record:
 - For local replay or query fixture edits, start with the focused Conary test
   that consumes the fixture family and then run the full owning integration test
   file.
-- For Remi publication or serving edits, run the focused Remi filter that names
-  the gate being changed, then run `cargo test -p remi` when public listing,
-  chunk serving, or conversion state changes.
+- For Remi native publication edits, run `cargo test -p remi release_upload_`
+  and `cargo test -p conary --test packaging_m4c`.
+- For Remi converted publication or serving edits, run the focused Remi filter
+  that names the gate being changed, then run `cargo test -p remi` when public
+  listing, chunk serving, or conversion state changes.
 - For `conary-test` manifest edits, run `cargo run -p conary-test -- list`
   before any suite execution. If a manifest schema or semantic changes, run the
   parser tests named above before a live suite.
