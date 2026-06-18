@@ -138,6 +138,98 @@ fn ccs_test_requires_dry_run_for_m4b() {
     assert_failure_contains(&test, &["dry-run"]);
 }
 
+#[test]
+fn m4b_minimal_file_smoke_path_creates_lints_builds_verifies_and_tests_v2_package() {
+    let fixture = MinimalPackageFixture::new();
+
+    let lint = fixture
+        .conary()
+        .arg("ccs")
+        .arg("lint")
+        .arg(fixture.project_dir())
+        .output()
+        .expect("run conary ccs lint");
+    assert_success(&lint);
+
+    let package = fixture.build_v2_local_dev();
+    assert!(
+        package.exists(),
+        "expected v2 package {}",
+        package.display()
+    );
+
+    let verify = fixture
+        .conary()
+        .arg("ccs")
+        .arg("verify")
+        .arg(&package)
+        .output()
+        .expect("run conary ccs verify");
+    assert_success(&verify);
+
+    let test = fixture
+        .conary()
+        .arg("ccs")
+        .arg("test")
+        .arg(&package)
+        .arg("--dry-run")
+        .output()
+        .expect("run conary ccs test");
+    assert_success(&test);
+}
+
+#[test]
+fn lifecycle_authoring_is_profile_deferred_and_blocks_v2_build() {
+    let fixture = MinimalPackageFixture::new();
+    let manifest_path = fixture.project_dir().join("ccs.toml");
+    let text = std::fs::read_to_string(&manifest_path).unwrap().replace(
+        "services = []",
+        r#"services = [{ name = "hello.service", action = "restart" }]"#,
+    );
+    std::fs::write(&manifest_path, text).unwrap();
+
+    let output = fixture
+        .conary()
+        .arg("ccs")
+        .arg("build")
+        .arg(fixture.project_dir())
+        .arg("--format")
+        .arg("v2")
+        .arg("--local-dev")
+        .arg("--output")
+        .arg(fixture.output_dir())
+        .output()
+        .expect("run conary ccs build");
+
+    assert_failure_contains(&output, &["profile", "M4d"]);
+}
+
+#[test]
+fn dependency_authoring_is_profile_deferred_and_blocks_v2_build() {
+    let fixture = MinimalPackageFixture::new();
+    let manifest_path = fixture.project_dir().join("ccs.toml");
+    let text = std::fs::read_to_string(&manifest_path).unwrap().replace(
+        "packages = []",
+        r#"packages = [{ name = "openssl", version = ">=3.0" }]"#,
+    );
+    std::fs::write(&manifest_path, text).unwrap();
+
+    let output = fixture
+        .conary()
+        .arg("ccs")
+        .arg("build")
+        .arg(fixture.project_dir())
+        .arg("--format")
+        .arg("v2")
+        .arg("--local-dev")
+        .arg("--output")
+        .arg(fixture.output_dir())
+        .output()
+        .expect("run conary ccs build");
+
+    assert_failure_contains(&output, &["dependencies", "M4b"]);
+}
+
 struct MinimalPackageFixture {
     work: tempfile::TempDir,
     project: std::path::PathBuf,
