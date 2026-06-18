@@ -1512,6 +1512,7 @@ mod tests {
         let entry = RemiPackageEntry {
             name: "kernel-core".to_string(),
             version: "6.19.6-200.fc44".to_string(),
+            release: None,
             converted: false,
             architecture: Some("x86_64".to_string()),
             dependencies: Some(vec![
@@ -1555,6 +1556,7 @@ mod tests {
         let entry = RemiPackageEntry {
             name: "openssl".to_string(),
             version: "3.2.1-1.fc44".to_string(),
+            release: None,
             converted: false,
             architecture: Some("x86_64".to_string()),
             dependencies: None,

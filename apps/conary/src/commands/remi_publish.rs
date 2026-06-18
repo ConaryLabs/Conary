@@ -57,6 +57,14 @@ pub async fn publish_to_remi(options: RemiPublishOptions<'_>) -> Result<()> {
 }
 
 fn preflight_release_artifact(artifact_path: &Path) -> Result<()> {
+    let file = std::fs::File::open(artifact_path)
+        .with_context(|| format!("open Remi release artifact {}", artifact_path.display()))?;
+    let contents = conary_core::ccs::archive_reader::read_ccs_archive(file)
+        .with_context(|| format!("preflight CCS artifact {}", artifact_path.display()))?;
+    if contents.v2_authority.is_some() {
+        return Ok(());
+    }
+
     let path = artifact_path
         .to_str()
         .context("Remi release artifact path must be valid UTF-8")?;
@@ -71,6 +79,28 @@ mod tests {
     use super::*;
     use std::ffi::OsString;
     use std::sync::Mutex;
+
+    #[test]
+    fn remi_publish_preflight_accepts_v2_package_structure() {
+        let temp = tempfile::tempdir().unwrap();
+        let signer = conary_core::ccs::signing::SigningKeyPair::generate().with_key_id("local-dev");
+        let package_path = temp.path().join("native-v2.ccs");
+        let payload = b"hello world\n".to_vec();
+        let authority = minimal_v2_authority_for_preflight("hello", &payload);
+        let payloads = std::collections::BTreeMap::from([("/usr/bin/hello".to_string(), payload)]);
+        conary_core::ccs::builder::write_v2_ccs_package(
+            &authority,
+            &payloads,
+            &package_path,
+            &signer,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        preflight_release_artifact(&package_path).unwrap();
+    }
 
     #[test]
     fn resolve_remi_publish_bearer_token_uses_remi_admin_token() {
@@ -128,4 +158,65 @@ mod tests {
     }
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn minimal_v2_authority_for_preflight(
+        name: &str,
+        payload: &[u8],
+    ) -> conary_core::ccs::v2::schema::AuthorityDocumentV2 {
+        use conary_core::ccs::v2::schema::{
+            AuthorityDocumentV2, ComponentAuthorityV2, ConflictPolicyV2, FORMAT_VERSION_V2,
+            FileAuthorityV2, FileTypeV2, LifecycleAuthorityV2, PackageDataV2, PackageIdentityV2,
+            PackageKindTagV2, PackageKindV2, PackagePolicyV2, ProvenanceAuthorityV2,
+        };
+        use std::collections::BTreeMap;
+
+        AuthorityDocumentV2 {
+            format_version: FORMAT_VERSION_V2,
+            identity: PackageIdentityV2 {
+                name: name.to_string(),
+                version: "1.0.0".to_string(),
+                release: "1".to_string(),
+                architecture: Some("noarch".to_string()),
+                platform: Some("linux".to_string()),
+                kind: PackageKindTagV2::Package,
+            },
+            kind: PackageKindV2::Package(PackageDataV2 {
+                files: vec![FileAuthorityV2 {
+                    path: "/usr/bin/hello".to_string(),
+                    sha256: conary_core::hash::sha256(payload),
+                    size: payload.len() as u64,
+                    file_type: FileTypeV2::Regular,
+                    mode: 0o755,
+                    owner: "root".to_string(),
+                    group: "root".to_string(),
+                    component: "main".to_string(),
+                    symlink_target: None,
+                    config: None,
+                    conflict: ConflictPolicyV2::Error,
+                }],
+                config: Vec::new(),
+                policy: PackagePolicyV2::default(),
+            }),
+            provides: Vec::new(),
+            requires: Vec::new(),
+            components: BTreeMap::from([(
+                "main".to_string(),
+                ComponentAuthorityV2 {
+                    name: "main".to_string(),
+                    default: true,
+                    file_count: 1,
+                    total_size: payload.len() as u64,
+                },
+            )]),
+            lifecycle: LifecycleAuthorityV2::default(),
+            provenance: ProvenanceAuthorityV2 {
+                origin_class: Some("native-built".to_string()),
+                hardening_level: Some("hermetic".to_string()),
+                build_input_identity: Some("sha256:build-input".to_string()),
+                hermetic_evidence_hash: Some("sha256:evidence".to_string()),
+                foreign_conversion_boundary_hash: None,
+            },
+            debug_toml_sha256: None,
+        }
+    }
 }

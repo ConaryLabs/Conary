@@ -26,8 +26,31 @@ pub(super) fn remi_sync_row(
     distro: String,
     entry: RemiPackageEntry,
 ) -> SyncedPackageRow {
-    let download_url = format!("{endpoint}/v1/{distro}/packages/{}/download", entry.name);
     let architecture = entry.architecture.clone();
+    let package_release = entry
+        .release
+        .clone()
+        .or_else(|| {
+            entry
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.pointer("/identity/release"))
+                .and_then(|value| value.as_str())
+                .map(str::to_string)
+        })
+        .unwrap_or_default();
+    let mut query = vec![format!("version={}", urlencoding::encode(&entry.version))];
+    if !package_release.is_empty() {
+        query.push(format!("release={}", urlencoding::encode(&package_release)));
+    }
+    if let Some(architecture) = architecture.as_deref() {
+        query.push(format!("arch={}", urlencoding::encode(architecture)));
+    }
+    let download_url = format!(
+        "{endpoint}/v1/{distro}/packages/{}/download?{}",
+        urlencoding::encode(&entry.name),
+        query.join("&")
+    );
 
     let mut package = RepositoryPackage::new(
         repo_id,
@@ -37,6 +60,7 @@ pub(super) fn remi_sync_row(
         0,
         download_url,
     );
+    package.package_release = package_release;
     package.architecture = architecture;
     package.dependencies = entry
         .dependencies
@@ -338,6 +362,7 @@ mod tests {
             RemiPackageEntry {
                 name: "qemu-img".to_string(),
                 version: "2:10.1.0-7.fc44".to_string(),
+                release: None,
                 converted: false,
                 architecture: Some("x86_64".to_string()),
                 dependencies: None,
@@ -349,6 +374,30 @@ mod tests {
     }
 
     #[test]
+    fn remi_sync_row_preserves_release_and_exact_download_url() {
+        let row = remi_sync_row(
+            7,
+            "https://remi.example.test".to_string(),
+            "fedora".to_string(),
+            RemiPackageEntry {
+                name: "hello".to_string(),
+                version: "1.0.0".to_string(),
+                release: Some("2".to_string()),
+                converted: false,
+                architecture: Some("noarch".to_string()),
+                dependencies: None,
+                metadata: None,
+            },
+        );
+
+        assert_eq!(row.package.package_release, "2");
+        assert_eq!(
+            row.package.download_url,
+            "https://remi.example.test/v1/fedora/packages/hello/download?version=1.0.0&release=2&arch=noarch"
+        );
+    }
+
+    #[test]
     fn remi_sync_row_records_requested_distro_and_version_scheme() {
         let row = remi_sync_row(
             7,
@@ -357,6 +406,7 @@ mod tests {
             RemiPackageEntry {
                 name: "nano".to_string(),
                 version: "8.7.1-1".to_string(),
+                release: None,
                 converted: false,
                 architecture: Some("amd64".to_string()),
                 dependencies: None,

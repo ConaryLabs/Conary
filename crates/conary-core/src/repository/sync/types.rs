@@ -59,6 +59,7 @@ pub(super) struct RemiMetadataResponse {
 pub(super) struct RemiPackageEntry {
     pub(super) name: String,
     pub(super) version: String,
+    pub(super) release: Option<String>,
     #[allow(dead_code)] // Present in wire format; not used by sync logic
     pub(super) converted: bool,
     pub(super) architecture: Option<String>,
