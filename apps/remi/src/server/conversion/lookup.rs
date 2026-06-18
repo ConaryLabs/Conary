@@ -8,6 +8,34 @@ use conary_core::repository::download_package;
 use std::path::{Path, PathBuf};
 use tracing::info;
 
+fn repository_package_from_lookup_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<RepositoryPackage> {
+    Ok(RepositoryPackage {
+        id: row.get(0)?,
+        repository_id: row.get(1)?,
+        name: row.get(2)?,
+        version: row.get(3)?,
+        package_release: String::new(),
+        architecture: row.get(4)?,
+        description: row.get(5)?,
+        checksum: row.get(6)?,
+        size: row.get(7)?,
+        download_url: row.get(8)?,
+        dependencies: row.get(9)?,
+        metadata: row.get(10)?,
+        synced_at: row.get(11)?,
+        is_security_update: row.get(12)?,
+        severity: row.get(13)?,
+        cve_ids: row.get(14)?,
+        advisory_id: row.get(15)?,
+        advisory_url: row.get(16)?,
+        distro: None,
+        version_scheme: None,
+        canonical_id: None,
+    })
+}
+
 pub(super) struct PackageDownloadRefresh<'a> {
     pub(super) distro: &'a str,
     pub(super) package_name: &'a str,
@@ -55,44 +83,18 @@ impl ConversionService {
         version: Option<&str>,
         architecture: Option<&str>,
     ) -> Result<RepositoryPackage> {
-        use conary_core::repository::dependency_model::RepositoryDependencyFlavor;
-        use conary_core::repository::distro::{flavor_from_distro_name, flavor_to_version_scheme};
         use conary_core::repository::versioning::compare_repo_versions;
 
-        let flavor = flavor_from_distro_name(distro)
+        let route = conary_core::repository::supported_profiles::route_by_slug(distro)
             .ok_or_else(|| anyhow!("Unknown distribution: {}", distro))?;
-        let repo_pattern = match flavor {
-            RepositoryDependencyFlavor::Rpm => "fedora%",
-            RepositoryDependencyFlavor::Deb => "ubuntu%",
-            RepositoryDependencyFlavor::Arch => "arch%",
-        };
-        let scheme = flavor_to_version_scheme(flavor);
-
-        let row_mapper = |row: &rusqlite::Row| {
-            Ok(RepositoryPackage {
-                id: row.get(0)?,
-                repository_id: row.get(1)?,
-                name: row.get(2)?,
-                version: row.get(3)?,
-                package_release: String::new(),
-                architecture: row.get(4)?,
-                description: row.get(5)?,
-                checksum: row.get(6)?,
-                size: row.get(7)?,
-                download_url: row.get(8)?,
-                dependencies: row.get(9)?,
-                metadata: row.get(10)?,
-                synced_at: row.get(11)?,
-                is_security_update: row.get(12)?,
-                severity: row.get(13)?,
-                cve_ids: row.get(14)?,
-                advisory_id: row.get(15)?,
-                advisory_url: row.get(16)?,
-                distro: None,
-                version_scheme: None,
-                canonical_id: None,
-            })
-        };
+        let profile_id = route
+            .public_profile_ids()
+            .first()
+            .ok_or_else(|| anyhow!("No public profile for route: {}", distro))?;
+        let profile = conary_core::repository::supported_profiles::profile_by_public_id(profile_id)
+            .ok_or_else(|| anyhow!("Profile disappeared for route: {}", distro))?;
+        let repo_patterns = profile.repository_name_patterns();
+        let scheme = profile.version_scheme();
 
         // When a specific version is requested, use a simple exact-match query.
         if let Some(ver) = version {
@@ -109,23 +111,26 @@ impl ConversionService {
                      AND rp.version = ?3
                      AND rp.architecture = ?4
                      AND rp.size > 0
-                     LIMIT 1",
+                LIMIT 1",
                 )?;
 
-                return stmt
-                    .query_row(
+                for repo_pattern in repo_patterns {
+                    match stmt.query_row(
                         rusqlite::params![package_name, repo_pattern, ver, arch],
-                        row_mapper,
-                    )
-                    .map_err(|e| match e {
-                        rusqlite::Error::QueryReturnedNoRows => {
-                            anyhow!(
-                                "Package '{}' version '{}' arch '{}' not found in {} repositories. Run 'conary repo-sync' first.",
-                                package_name, ver, arch, distro
-                            )
-                        }
-                        _ => anyhow!("Database error: {}", e),
-                    });
+                        repository_package_from_lookup_row,
+                    ) {
+                        Ok(package) => return Ok(package),
+                        Err(rusqlite::Error::QueryReturnedNoRows) => {}
+                        Err(e) => return Err(anyhow!("Database error: {}", e)),
+                    }
+                }
+                return Err(anyhow!(
+                    "Package '{}' version '{}' arch '{}' not found in {} repositories. Run 'conary repo-sync' first.",
+                    package_name,
+                    ver,
+                    arch,
+                    distro
+                ));
             }
 
             let mut stmt = conn.prepare(
@@ -142,17 +147,22 @@ impl ConversionService {
                  LIMIT 1",
             )?;
 
-            return stmt
-                .query_row(rusqlite::params![package_name, repo_pattern, ver], row_mapper)
-                .map_err(|e| match e {
-                    rusqlite::Error::QueryReturnedNoRows => {
-                        anyhow!(
-                            "Package '{}' version '{}' not found in {} repositories. Run 'conary repo-sync' first.",
-                            package_name, ver, distro
-                        )
-                    }
-                    _ => anyhow!("Database error: {}", e),
-                });
+            for repo_pattern in repo_patterns {
+                match stmt.query_row(
+                    rusqlite::params![package_name, repo_pattern, ver],
+                    repository_package_from_lookup_row,
+                ) {
+                    Ok(package) => return Ok(package),
+                    Err(rusqlite::Error::QueryReturnedNoRows) => {}
+                    Err(e) => return Err(anyhow!("Database error: {}", e)),
+                }
+            }
+            return Err(anyhow!(
+                "Package '{}' version '{}' not found in {} repositories. Run 'conary repo-sync' first.",
+                package_name,
+                ver,
+                distro
+            ));
         }
 
         // No version specified: fetch all candidates and pick the latest using
@@ -170,13 +180,17 @@ impl ConversionService {
              AND rp.size > 0",
         )?;
 
-        let candidates: Vec<RepositoryPackage> = stmt
-            .query_map(
-                rusqlite::params![package_name, repo_pattern, architecture],
-                row_mapper,
-            )?
-            .collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(|e| anyhow!("Database error: {}", e))?;
+        let mut candidates = Vec::new();
+        for repo_pattern in repo_patterns {
+            let matched = stmt
+                .query_map(
+                    rusqlite::params![package_name, repo_pattern, architecture],
+                    repository_package_from_lookup_row,
+                )?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(|e| anyhow!("Database error: {}", e))?;
+            candidates.extend(matched);
+        }
 
         if candidates.is_empty() {
             return Err(anyhow!(

@@ -25,7 +25,7 @@ pub(super) fn remi_sync_row(
     endpoint: String,
     distro: String,
     entry: RemiPackageEntry,
-) -> SyncedPackageRow {
+) -> Result<SyncedPackageRow> {
     let architecture = entry.architecture.clone();
     let package_release = entry
         .release
@@ -103,8 +103,18 @@ pub(super) fn remi_sync_row(
         ref value => Some(value.to_string()),
     };
 
-    let scheme = crate::repository::distro::version_scheme_from_distro_name(&distro)
-        .unwrap_or(crate::repository::versioning::VersionScheme::Rpm);
+    let route = crate::repository::supported_profiles::route_by_slug(&distro)
+        .ok_or_else(|| Error::ConfigError(format!("unsupported Remi distro route: {distro}")))?;
+    let profile_id = route.public_profile_ids().first().ok_or_else(|| {
+        Error::ConfigError(format!("no public profile for Remi distro route: {distro}"))
+    })?;
+    let profile = crate::repository::supported_profiles::profile_by_public_id(profile_id)
+        .ok_or_else(|| {
+            Error::ConfigError(format!(
+                "profile disappeared for Remi distro route: {distro}"
+            ))
+        })?;
+    let scheme = profile.version_scheme();
     let scheme_str = Some(match scheme {
         crate::repository::versioning::VersionScheme::Rpm => "rpm".to_string(),
         crate::repository::versioning::VersionScheme::Debian => "debian".to_string(),
@@ -153,13 +163,13 @@ pub(super) fn remi_sync_row(
         })
         .collect();
 
-    SyncedPackageRow {
+    Ok(SyncedPackageRow {
         package,
         provides,
         requirements,
         requirement_groups: Vec::new(),
         requirement_group_clauses: Vec::new(),
-    }
+    })
 }
 
 pub(super) fn parse_raw_dependency_entry(entry: &str) -> (String, Option<String>) {
@@ -203,26 +213,24 @@ pub(super) async fn fetch_remi_sync_rows(repo: &Repository) -> Result<Vec<Synced
         .ok_or_else(|| Error::InitError("Repository has no ID".to_string()))?;
 
     let mut seen = HashSet::new();
-    let synced_packages: Vec<SyncedPackageRow> = response
-        .packages
-        .into_iter()
-        .filter_map(|entry| {
-            let key = (
-                entry.name.clone(),
-                entry.version.clone(),
-                entry.architecture.clone(),
-            );
-            if !seen.insert(key) {
-                return None;
-            }
-            Some(remi_sync_row(
-                repo_id,
-                endpoint.to_string(),
-                distro.to_string(),
-                entry,
-            ))
-        })
-        .collect();
+    let mut synced_packages = Vec::new();
+    for entry in response.packages {
+        let key = (
+            entry.name.clone(),
+            entry.version.clone(),
+            entry.release.clone(),
+            entry.architecture.clone(),
+        );
+        if !seen.insert(key) {
+            continue;
+        }
+        synced_packages.push(remi_sync_row(
+            repo_id,
+            endpoint.to_string(),
+            distro.to_string(),
+            entry,
+        )?);
+    }
 
     Ok(synced_packages)
 }
@@ -353,6 +361,18 @@ pub(super) async fn fetch_and_persist_canonical_map(
 mod tests {
     use super::*;
 
+    fn remi_entry_for_tests(name: &str, version: &str) -> RemiPackageEntry {
+        RemiPackageEntry {
+            name: name.to_string(),
+            version: version.to_string(),
+            release: None,
+            converted: false,
+            architecture: Some("x86_64".to_string()),
+            dependencies: None,
+            metadata: None,
+        }
+    }
+
     #[test]
     fn remi_sync_row_preserves_wire_architecture() {
         let row = remi_sync_row(
@@ -368,7 +388,8 @@ mod tests {
                 dependencies: None,
                 metadata: None,
             },
-        );
+        )
+        .unwrap();
 
         assert_eq!(row.package.architecture.as_deref(), Some("x86_64"));
     }
@@ -388,7 +409,8 @@ mod tests {
                 dependencies: None,
                 metadata: None,
             },
-        );
+        )
+        .unwrap();
 
         assert_eq!(row.package.package_release, "2");
         assert_eq!(
@@ -412,7 +434,37 @@ mod tests {
                 dependencies: None,
                 metadata: None,
             },
-        );
+        )
+        .unwrap();
+
+        assert_eq!(row.package.distro.as_deref(), Some("ubuntu"));
+        assert_eq!(row.package.version_scheme.as_deref(), Some("debian"));
+    }
+
+    #[test]
+    fn remi_sync_row_rejects_public_profile_id_as_route_slug() {
+        for public_id in ["fedora-44", "ubuntu-26.04"] {
+            let err = remi_sync_row(
+                1,
+                "https://remi.example.test".to_string(),
+                public_id.to_string(),
+                remi_entry_for_tests("bash", "5.2.0"),
+            )
+            .unwrap_err();
+
+            assert!(err.to_string().contains("unsupported Remi distro route"));
+        }
+    }
+
+    #[test]
+    fn remi_sync_row_accepts_route_slug_and_uses_profile_scheme() {
+        let row = remi_sync_row(
+            1,
+            "https://remi.example.test".to_string(),
+            "ubuntu".to_string(),
+            remi_entry_for_tests("bash", "5.2.0"),
+        )
+        .unwrap();
 
         assert_eq!(row.package.distro.as_deref(), Some("ubuntu"));
         assert_eq!(row.package.version_scheme.as_deref(), Some("debian"));

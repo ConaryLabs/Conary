@@ -1,7 +1,7 @@
 // apps/remi/src/server/handlers/admin/packages.rs
 //! Admin handlers for publishing custom CCS packages into Remi metadata.
 
-use super::{check_scope, validate_path_param};
+use super::{check_scope, validate_path_param, validate_supported_admin_distro_route};
 use crate::server::ServerState;
 use crate::server::auth::{Scope, TokenScopes, json_error};
 use crate::server::publication::{ReviewArtifactInput, decision_refusal, write_review_artifact};
@@ -236,7 +236,7 @@ pub async fn get_scriptlet_review_artifact(
     if let Some(err) = check_scope(&scopes, Scope::Admin) {
         return err;
     }
-    if let Some(err) = validate_path_param(&distro, "distro") {
+    if let Some(err) = validate_supported_admin_distro_route(&distro) {
         return err;
     }
     if let Some(err) = validate_path_param(&package, "package") {
@@ -352,7 +352,7 @@ pub async fn upload_package(
     if let Some(err) = check_scope(&scopes, Scope::Admin) {
         return err;
     }
-    if let Some(err) = validate_path_param(&distro, "distro") {
+    if let Some(err) = validate_supported_admin_distro_route(&distro) {
         return err;
     }
 
@@ -940,6 +940,29 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn admin_package_upload_rejects_unsupported_distro_before_cache_paths() {
+        let (app, db_path) = test_app().await;
+        let cache_dir = db_path.parent().unwrap().join("cache");
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/v1/admin/packages/debian")
+                    .header("Authorization", "Bearer test-admin-token-12345")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(
+            !cache_dir.join("packages").join("debian").exists(),
+            "unsupported distro route must not create cache/packages/debian"
+        );
     }
 
     #[tokio::test]

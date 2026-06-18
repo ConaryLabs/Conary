@@ -1532,7 +1532,8 @@ mod tests {
             "https://remi.conary.io".to_string(),
             "fedora".to_string(),
             entry,
-        );
+        )
+        .unwrap();
 
         assert!(row.provides.iter().any(|provide| {
             provide.capability == "kernel-core-uname-r"
@@ -1578,7 +1579,8 @@ mod tests {
             "https://remi.conary.io".to_string(),
             "fedora".to_string(),
             entry,
-        );
+        )
+        .unwrap();
 
         assert!(row.package.is_security_update);
         assert_eq!(row.package.severity.as_deref(), Some("critical"));

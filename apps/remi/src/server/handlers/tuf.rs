@@ -60,6 +60,10 @@ pub async fn get_root(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path(distro): Path<String>,
 ) -> Response {
+    if let Err(e) = super::validate_supported_distro_route(&distro) {
+        return e;
+    }
+
     let db_path = {
         let guard = state.read().await;
         guard.config.db_path.clone()
@@ -88,6 +92,10 @@ pub async fn get_versioned_root(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path((distro, version_str)): Path<(String, String)>,
 ) -> Response {
+    if let Err(e) = super::validate_supported_distro_route(&distro) {
+        return e;
+    }
+
     // Parse version from "{version}.root" pattern
     let version: i64 = match version_str
         .strip_suffix(".root")
@@ -134,6 +142,10 @@ pub async fn refresh_timestamp(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path(distro): Path<String>,
 ) -> Response {
+    if let Err(e) = super::validate_supported_distro_route(&distro) {
+        return e;
+    }
+
     match refresh_timestamp_for_distro(&state, &distro).await {
         Ok(result) => (StatusCode::OK, Json(result)).into_response(),
         Err(error) => {
@@ -179,6 +191,10 @@ async fn get_tuf_metadata(
     distro: String,
     role: String,
 ) -> Response {
+    if let Err(e) = super::validate_supported_distro_route(&distro) {
+        return e;
+    }
+
     let db_path = {
         let guard = state.read().await;
         guard.config.db_path.clone()
@@ -382,9 +398,11 @@ fn query_tuf_repos(db_path: &std::path::Path) -> anyhow::Result<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::extract::{Path, State};
     use conary_core::db::models::Repository;
     use conary_core::db::schema;
     use rusqlite::Connection;
+    use std::path::PathBuf;
     use tempfile::NamedTempFile;
 
     fn create_test_db() -> (NamedTempFile, Connection) {
@@ -393,6 +411,55 @@ mod tests {
         conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
         schema::migrate(&conn).unwrap();
         (temp_file, conn)
+    }
+
+    fn remi_empty_db_state() -> (tempfile::TempDir, PathBuf, Arc<RwLock<ServerState>>) {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("remi-test.db");
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
+            schema::migrate(&conn).unwrap();
+        }
+
+        let config = crate::server::ServerConfig {
+            db_path,
+            chunk_dir: temp.path().join("chunks"),
+            cache_dir: temp.path().join("cache"),
+            ..Default::default()
+        };
+        std::fs::create_dir_all(&config.chunk_dir).unwrap();
+        std::fs::create_dir_all(&config.cache_dir).unwrap();
+
+        let state = Arc::new(RwLock::new(
+            crate::server::ServerState::new(config).expect("test server state"),
+        ));
+        let cache_dir = temp.path().join("cache");
+        (temp, cache_dir, state)
+    }
+
+    #[tokio::test]
+    async fn tuf_metadata_rejects_unsupported_distro_before_db_lookup() {
+        let (_temp, _cache_dir, state) = remi_empty_db_state();
+        let response = get_timestamp(State(state), Path("debian".to_string())).await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn tuf_refresh_rejects_unsupported_distro_before_key_config_lookup() {
+        let (_temp, _cache_dir, state) = remi_empty_db_state();
+        let response = refresh_timestamp(State(state), Path("debian".to_string())).await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body = String::from_utf8_lossy(&body);
+        assert!(
+            !body.contains("repository_keys_dir"),
+            "route validation must happen before release_publish.repository_keys_dir lookup: {body}"
+        );
     }
 
     fn insert_tuf_repo(conn: &Connection, name: &str) -> i64 {
@@ -707,16 +774,16 @@ mod tests {
 
     #[tokio::test]
     async fn remi_tuf_refresh_timestamp_returns_signed_monotonic_metadata() {
-        let fixture = TimestampRefreshFixture::new("test-distro", true);
-        let first = call_refresh_timestamp_for_tests(&fixture, "test-distro").await;
+        let fixture = TimestampRefreshFixture::new("fedora", true);
+        let first = call_refresh_timestamp_for_tests(&fixture, "fedora").await;
         assert_eq!(first.status(), StatusCode::OK);
         let first_json = response_json_for_tests(first).await;
 
         assert_eq!(first_json["role"], "timestamp");
-        assert_eq!(first_json["distro"], "test-distro");
+        assert_eq!(first_json["distro"], "fedora");
         assert!(first_json["version"].as_u64().unwrap() > 0);
 
-        let second = call_refresh_timestamp_for_tests(&fixture, "test-distro").await;
+        let second = call_refresh_timestamp_for_tests(&fixture, "fedora").await;
         assert_eq!(second.status(), StatusCode::OK);
         let second_json = response_json_for_tests(second).await;
 
@@ -725,20 +792,20 @@ mod tests {
 
     #[tokio::test]
     async fn remi_tuf_refresh_timestamp_route_is_distro_scoped() {
-        let fixture = TimestampRefreshFixture::new("test-distro", true);
-        let first = call_refresh_timestamp_for_tests(&fixture, "test-distro").await;
+        let fixture = TimestampRefreshFixture::new("fedora", true);
+        let first = call_refresh_timestamp_for_tests(&fixture, "fedora").await;
         assert_eq!(first.status(), StatusCode::OK);
         let first_json = response_json_for_tests(first).await;
 
         assert_eq!(first_json["role"], "timestamp");
-        assert_eq!(first_json["distro"], "test-distro");
+        assert_eq!(first_json["distro"], "fedora");
         assert!(first_json["version"].as_u64().unwrap() > 0);
     }
 
     #[tokio::test]
     async fn remi_tuf_refresh_timestamp_fails_closed_without_role_key() {
-        let fixture = TimestampRefreshFixture::new("test-distro", false);
-        let response = call_refresh_timestamp_for_tests(&fixture, "test-distro").await;
+        let fixture = TimestampRefreshFixture::new("fedora", false);
+        let response = call_refresh_timestamp_for_tests(&fixture, "fedora").await;
 
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
