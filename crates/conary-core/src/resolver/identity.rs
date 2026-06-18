@@ -19,6 +19,7 @@ pub struct PackageIdentity {
     pub repo_package_id: Option<i64>,
     pub name: String,
     pub version: String,
+    pub package_release: Option<String>,
     pub architecture: Option<String>,
     pub version_scheme: VersionScheme,
 
@@ -43,7 +44,7 @@ impl PackageIdentity {
     /// Load all candidates for a package name across all enabled repos.
     pub fn find_all_by_name(conn: &Connection, name: &str) -> Result<Vec<Self>> {
         let mut stmt = conn.prepare(
-            "SELECT rp.id, rp.name, rp.version, rp.architecture, rp.version_scheme,
+            "SELECT rp.id, rp.name, rp.version, rp.package_release, rp.architecture, rp.version_scheme,
                     rp.repository_id, r.name, r.default_strategy_distro, r.priority,
                     rp.canonical_id, cp.name
              FROM repository_packages rp
@@ -53,22 +54,24 @@ impl PackageIdentity {
         )?;
 
         let rows = stmt.query_map(params![name], |row| {
-            let scheme_str: Option<String> = row.get(4)?;
-            let distro_str: Option<String> = row.get(7)?;
+            let scheme_str: Option<String> = row.get(5)?;
+            let distro_str: Option<String> = row.get(8)?;
             let scheme = parse_version_scheme(scheme_str.as_deref(), distro_str.as_deref());
+            let package_release: String = row.get(3)?;
 
             Ok(PackageIdentity {
                 repo_package_id: row.get(0)?,
                 name: row.get(1)?,
                 version: row.get(2)?,
-                architecture: row.get(3)?,
+                package_release: (!package_release.is_empty()).then_some(package_release),
+                architecture: row.get(4)?,
                 version_scheme: scheme,
-                repository_id: row.get(5)?,
-                repository_name: row.get(6)?,
-                repository_distro: row.get(7)?,
-                repository_priority: row.get(8)?,
-                canonical_id: row.get(9)?,
-                canonical_name: row.get(10)?,
+                repository_id: row.get(6)?,
+                repository_name: row.get(7)?,
+                repository_distro: row.get(8)?,
+                repository_priority: row.get(9)?,
+                canonical_id: row.get(10)?,
+                canonical_name: row.get(11)?,
                 installed_trove_id: None,
                 provided_capabilities: Vec::new(),
             })
@@ -168,6 +171,28 @@ mod tests {
         let results = PackageIdentity::find_all_by_name(&conn, "nginx").unwrap();
         assert_eq!(results[0].canonical_id, Some(canonical_id));
         assert_eq!(results[0].canonical_name.as_deref(), Some("nginx-web"));
+    }
+
+    #[test]
+    fn package_identity_loads_repository_package_release() {
+        let (_temp, conn) = create_test_db();
+        conn.execute(
+            "INSERT INTO repositories (name, url, enabled)
+             VALUES ('fedora', 'https://example.test', 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO repository_packages
+             (repository_id, name, version, package_release, checksum, size, download_url)
+             VALUES (1, 'hello', '1.0.0', '2', 'sha256:hello', 42, '/v1/chunks/hello')",
+            [],
+        )
+        .unwrap();
+
+        let packages = PackageIdentity::find_all_by_name(&conn, "hello").unwrap();
+
+        assert_eq!(packages[0].package_release.as_deref(), Some("2"));
     }
 
     #[test]

@@ -175,6 +175,7 @@ impl RemiClientCore {
         distro: &str,
         name: &str,
         version: Option<&str>,
+        release: Option<&str>,
         architecture: Option<&str>,
     ) -> String {
         let encoded_distro = urlencoding::encode(distro);
@@ -187,6 +188,10 @@ impl RemiClientCore {
         if let Some(v) = version {
             let encoded_version = urlencoding::encode(v);
             query.push(format!("version={encoded_version}"));
+        }
+        if let Some(release) = release {
+            let encoded_release = urlencoding::encode(release);
+            query.push(format!("release={encoded_release}"));
         }
         if let Some(arch) = architecture {
             let encoded_arch = urlencoding::encode(arch);
@@ -205,9 +210,10 @@ impl RemiClientCore {
         distro: &str,
         name: &str,
         version: Option<&str>,
+        release: Option<&str>,
         architecture: Option<&str>,
     ) -> String {
-        let package_url = self.package_url(distro, name, version, architecture);
+        let package_url = self.package_url(distro, name, version, release, architecture);
         if let Some((path, query)) = package_url.split_once('?') {
             format!("{path}/download?{query}")
         } else {
@@ -275,7 +281,9 @@ impl RemiClient {
         version: Option<&str>,
         architecture: Option<&str>,
     ) -> Result<PackageManifest> {
-        let url = self.core.package_url(distro, name, version, architecture);
+        let url = self
+            .core
+            .package_url(distro, name, version, None, architecture);
 
         info!("Requesting package from Remi: {}", url);
 
@@ -456,6 +464,7 @@ impl RemiClient {
                         &status.distro,
                         &status.package,
                         status.version.as_deref(),
+                        None,
                         status.architecture.as_deref(),
                     );
                     let response = self.client.get(&url).send().await.download_context(&url)?;
@@ -729,7 +738,9 @@ impl RemiClient {
         output_dir: &Path,
     ) -> Result<PathBuf> {
         // Use the direct download endpoint
-        let url = self.core.download_url(distro, name, version, architecture);
+        let url = self
+            .core
+            .download_url(distro, name, version, None, architecture);
 
         info!("Downloading CCS package from Remi: {}", url);
 
@@ -942,7 +953,9 @@ impl AsyncRemiClient {
         version: Option<&str>,
         architecture: Option<&str>,
     ) -> Result<PackageManifest> {
-        let url = self.core.package_url(distro, name, version, architecture);
+        let url = self
+            .core
+            .package_url(distro, name, version, None, architecture);
 
         info!("Requesting package from Remi: {}", url);
 
@@ -1195,14 +1208,14 @@ mod tests {
     #[test]
     fn test_build_package_url_without_version() {
         let core = RemiClientCore::new("http://remi:8080").unwrap();
-        let url = core.package_url("arch", "nginx", None, None);
+        let url = core.package_url("arch", "nginx", None, None, None);
         assert_eq!(url, "http://remi:8080/v1/arch/packages/nginx");
     }
 
     #[test]
     fn test_build_package_url_with_version() {
         let core = RemiClientCore::new("http://remi:8080").unwrap();
-        let url = core.package_url("arch", "nginx", Some("1.24.0"), None);
+        let url = core.package_url("arch", "nginx", Some("1.24.0"), None, None);
         assert_eq!(
             url,
             "http://remi:8080/v1/arch/packages/nginx?version=1.24.0"
@@ -1210,9 +1223,19 @@ mod tests {
     }
 
     #[test]
+    fn test_build_package_url_with_version_release_and_architecture() {
+        let core = RemiClientCore::new("https://remi.example.test").unwrap();
+        let url = core.package_url("fedora", "hello", Some("1.0.0"), Some("1"), Some("noarch"));
+        assert_eq!(
+            url,
+            "https://remi.example.test/v1/fedora/packages/hello?version=1.0.0&release=1&arch=noarch"
+        );
+    }
+
+    #[test]
     fn test_build_download_url_with_version() {
         let core = RemiClientCore::new("http://remi:8080").unwrap();
-        let url = core.download_url("arch", "nginx", Some("1.24.0"), None);
+        let url = core.download_url("arch", "nginx", Some("1.24.0"), None, None);
         assert_eq!(
             url,
             "http://remi:8080/v1/arch/packages/nginx/download?version=1.24.0"
@@ -1220,9 +1243,25 @@ mod tests {
     }
 
     #[test]
+    fn test_build_download_url_with_release() {
+        let core = RemiClientCore::new("https://remi.example.test").unwrap();
+        let url = core.download_url("fedora", "hello", Some("1.0.0"), Some("1"), Some("noarch"));
+        assert_eq!(
+            url,
+            "https://remi.example.test/v1/fedora/packages/hello/download?version=1.0.0&release=1&arch=noarch"
+        );
+    }
+
+    #[test]
     fn test_build_download_url_with_version_and_architecture() {
         let core = RemiClientCore::new("http://remi:8080").unwrap();
-        let url = core.download_url("fedora", "glib2", Some("2.86.0-2.fc44"), Some("x86_64"));
+        let url = core.download_url(
+            "fedora",
+            "glib2",
+            Some("2.86.0-2.fc44"),
+            None,
+            Some("x86_64"),
+        );
         assert_eq!(
             url,
             "http://remi:8080/v1/fedora/packages/glib2/download?version=2.86.0-2.fc44&arch=x86_64"
