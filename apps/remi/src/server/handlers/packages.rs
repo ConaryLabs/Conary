@@ -998,11 +998,7 @@ pub async fn get_delta(
     Path((distro, name)): Path<(String, String)>,
     Query(query): Query<DeltaQuery>,
 ) -> Response {
-    // Validate path parameters
-    if let Err(e) = super::validate_name(&distro) {
-        return e;
-    }
-    if let Err(e) = super::validate_name(&name) {
+    if let Err(e) = super::validate_distro_and_name(&distro, &name) {
         return e;
     }
 

@@ -37,11 +37,25 @@ pub async fn upload_release_package(
     if let Some(err) = check_scope(&scopes, Scope::Admin) {
         return err;
     }
-    if let Some(err) = validate_path_param(&distro, "distro") {
+    if let Some(err) = validate_supported_admin_distro_route(&distro) {
         return err;
     }
 
     crate::server::release_publish::handle_release_upload(state, distro, request).await
+}
+
+pub(crate) fn validate_supported_admin_distro_route(distro: &str) -> Option<Response> {
+    if let Some(err) = validate_path_param(distro, "distro") {
+        return Some(err);
+    }
+    if conary_core::repository::supported_profiles::route_by_slug(distro).is_none() {
+        return Some(json_error(
+            400,
+            "Unknown distribution",
+            "UNKNOWN_DISTRIBUTION",
+        ));
+    }
+    None
 }
 
 /// Validate a path parameter against a safe pattern.

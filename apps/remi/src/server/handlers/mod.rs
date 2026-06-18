@@ -155,8 +155,15 @@ pub(crate) fn human_bytes(bytes: u64) -> String {
     }
 }
 
-/// Supported distribution names for validation
-pub const SUPPORTED_DISTROS: &[&str] = &["arch", "fedora", "ubuntu"];
+#[allow(dead_code)]
+pub fn supported_route_slugs() -> Vec<String> {
+    conary_core::repository::supported_profiles::public_profiles()
+        .iter()
+        .map(|profile| profile.remi_route_slug().to_string())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
 
 /// Validate a package or distro name: no path traversal, no null bytes, reasonable length
 #[allow(clippy::result_large_err)]
@@ -173,15 +180,22 @@ pub fn validate_name(name: &str) -> Result<(), Response> {
     Ok(())
 }
 
+#[allow(clippy::result_large_err)]
+pub fn validate_supported_distro_route(distro: &str) -> Result<(), Response> {
+    validate_name(distro)?;
+    if conary_core::repository::supported_profiles::route_by_slug(distro).is_some() {
+        Ok(())
+    } else {
+        Err((StatusCode::BAD_REQUEST, "Unknown distribution").into_response())
+    }
+}
+
 /// Validate distro name and both path parameters (distro + name) in one call.
 /// Returns a 400 response on validation failure.
 #[allow(clippy::result_large_err)]
 pub fn validate_distro_and_name(distro: &str, name: &str) -> Result<(), Response> {
-    validate_name(distro)?;
+    validate_supported_distro_route(distro)?;
     validate_name(name)?;
-    if !SUPPORTED_DISTROS.contains(&distro) {
-        return Err((StatusCode::BAD_REQUEST, "Unknown distribution").into_response());
-    }
     Ok(())
 }
 

@@ -12,13 +12,12 @@ use conary_core::repository::static_repo::publish_gate::{
 };
 
 use crate::server::config::ReleasePublishSection;
-use crate::server::handlers::SUPPORTED_DISTROS;
 use crate::server::native_publish::{
     NativePublishError, NativePublishErrorCode, VerifiedNativeArtifact,
 };
 
 pub(crate) fn validate_supported_release_distro(distro: &str) -> Result<(), NativePublishError> {
-    if SUPPORTED_DISTROS.contains(&distro) {
+    if conary_core::repository::supported_profiles::route_by_slug(distro).is_some() {
         Ok(())
     } else {
         Err(NativePublishError::unprocessable(

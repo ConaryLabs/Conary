@@ -509,9 +509,9 @@ mod tests {
         let response = fixture
             .upload_release_to_distro("not-a-target", artifact.bytes)
             .await;
-        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         let body = response_text(response).await;
-        assert_json_code(&body, "UNSUPPORTED_DISTRO");
+        assert_json_code(&body, "UNKNOWN_DISTRIBUTION");
         assert_no_public_state(&fixture, "hello", &artifact.content_hash);
     }
 

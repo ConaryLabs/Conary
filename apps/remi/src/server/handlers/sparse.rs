@@ -66,11 +66,7 @@ pub async fn get_sparse_entry(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path((distro, name)): Path<(String, String)>,
 ) -> Response {
-    // Validate path parameters against traversal and injection
-    if let Err(e) = super::validate_name(&distro) {
-        return e;
-    }
-    if let Err(e) = super::validate_name(&name) {
+    if let Err(e) = super::validate_distro_and_name(&distro, &name) {
         return e;
     }
 
@@ -141,8 +137,7 @@ pub async fn list_packages(
     Path(distro): Path<String>,
     Query(query): Query<ListQuery>,
 ) -> Response {
-    // Validate path parameter against traversal and injection
-    if let Err(e) = super::validate_name(&distro) {
+    if let Err(e) = super::validate_supported_distro_route(&distro) {
         return e;
     }
 
@@ -384,9 +379,11 @@ use super::find_repository_for_distro;
 mod tests {
     use super::*;
     use crate::server::native_publish::test_support::seed_native_publication;
+    use axum::extract::{Path, Query, State};
     use conary_core::ccs::convert::ScriptletBundleSummary;
     use conary_core::db::models::{CONVERSION_VERSION, ConvertedPackage, Repository};
     use conary_core::db::schema;
+    use std::path::PathBuf;
     use tempfile::NamedTempFile;
 
     fn create_test_db() -> (NamedTempFile, Connection) {
@@ -395,6 +392,59 @@ mod tests {
         conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
         schema::migrate(&conn).unwrap();
         (temp_file, conn)
+    }
+
+    fn remi_empty_db_state() -> (tempfile::TempDir, PathBuf, Arc<RwLock<ServerState>>) {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("remi-test.db");
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
+            schema::migrate(&conn).unwrap();
+        }
+
+        let config = crate::server::ServerConfig {
+            db_path,
+            chunk_dir: temp.path().join("chunks"),
+            cache_dir: temp.path().join("cache"),
+            ..Default::default()
+        };
+        std::fs::create_dir_all(&config.chunk_dir).unwrap();
+        std::fs::create_dir_all(&config.cache_dir).unwrap();
+
+        let state = Arc::new(RwLock::new(
+            crate::server::ServerState::new(config).expect("test server state"),
+        ));
+        let cache_dir = temp.path().join("cache");
+        (temp, cache_dir, state)
+    }
+
+    #[tokio::test]
+    async fn sparse_index_rejects_unsupported_distro_before_db_lookup() {
+        let (_temp, _cache_dir, state) = remi_empty_db_state();
+        let response = list_packages(
+            State(state),
+            Path("debian".to_string()),
+            Query(ListQuery {
+                page: None,
+                per_page: None,
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn sparse_entry_rejects_unsupported_distro_before_db_lookup() {
+        let (_temp, _cache_dir, state) = remi_empty_db_state();
+        let response = get_sparse_entry(
+            State(state),
+            Path(("debian".to_string(), "bash".to_string())),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
     fn insert_repo(conn: &Connection, name: &str, distro: &str) -> i64 {

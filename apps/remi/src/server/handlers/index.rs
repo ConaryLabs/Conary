@@ -59,9 +59,8 @@ pub async fn get_metadata(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path(distro): Path<String>,
 ) -> Response {
-    // Validate distro
-    if !super::SUPPORTED_DISTROS.contains(&distro.as_str()) {
-        return (StatusCode::BAD_REQUEST, "Unknown distribution").into_response();
+    if let Err(e) = super::validate_supported_distro_route(&distro) {
+        return e;
     }
 
     let db_path = state.read().await.config.db_path.clone();
@@ -350,9 +349,8 @@ pub async fn get_metadata_sig(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path(distro): Path<String>,
 ) -> Response {
-    // Validate distro
-    if !super::SUPPORTED_DISTROS.contains(&distro.as_str()) {
-        return (StatusCode::BAD_REQUEST, "Unknown distribution").into_response();
+    if let Err(e) = super::validate_supported_distro_route(&distro) {
+        return e;
     }
 
     let state = state.read().await;

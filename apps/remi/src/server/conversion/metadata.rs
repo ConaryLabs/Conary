@@ -10,6 +10,7 @@ use conary_core::packages::common::PackageMetadata;
 use conary_core::packages::deb::DebPackage;
 use conary_core::packages::rpm::RpmPackage;
 use conary_core::packages::traits::{Dependency, DependencyType, ExtractedFile, PackageFormat};
+use conary_core::repository::supported_profiles::ProfilePackageFormat;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
@@ -58,9 +59,17 @@ impl ConversionService {
         distro: &str,
     ) -> Result<(PackageMetadata, Vec<ExtractedFile>, &'static str)> {
         let path_str = path.to_str().ok_or_else(|| anyhow!("Invalid path"))?;
+        let route = conary_core::repository::supported_profiles::route_by_slug(distro)
+            .ok_or_else(|| anyhow!("Unsupported distribution: {}", distro))?;
+        let profile_id = route
+            .public_profile_ids()
+            .first()
+            .ok_or_else(|| anyhow!("No public profile for route: {}", distro))?;
+        let profile = conary_core::repository::supported_profiles::profile_by_public_id(profile_id)
+            .ok_or_else(|| anyhow!("Profile disappeared for route: {}", distro))?;
 
-        match distro {
-            "arch" => {
+        match profile.package_format() {
+            ProfilePackageFormat::Arch => {
                 let pkg = ArchPackage::parse(path_str)
                     .map_err(|e| anyhow!("Failed to parse Arch package: {}", e))?;
                 let files = pkg
@@ -69,7 +78,7 @@ impl ConversionService {
                 let metadata = Self::build_metadata(&pkg);
                 Ok((metadata, files, "arch"))
             }
-            "fedora" => {
+            ProfilePackageFormat::Rpm => {
                 let pkg = RpmPackage::parse(path_str)
                     .map_err(|e| anyhow!("Failed to parse RPM package: {}", e))?;
                 let files = pkg
@@ -78,7 +87,7 @@ impl ConversionService {
                 let metadata = Self::build_metadata(&pkg);
                 Ok((metadata, files, "rpm"))
             }
-            "ubuntu" | "debian" => {
+            ProfilePackageFormat::Deb => {
                 let pkg = DebPackage::parse(path_str)
                     .map_err(|e| anyhow!("Failed to parse DEB package: {}", e))?;
                 let files = pkg
@@ -87,7 +96,6 @@ impl ConversionService {
                 let metadata = Self::build_metadata(&pkg);
                 Ok((metadata, files, "deb"))
             }
-            _ => Err(anyhow!("Unsupported distribution: {}", distro)),
         }
     }
 
