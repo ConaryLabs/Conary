@@ -28,3 +28,16 @@ pub(crate) use payload_paths::{
 };
 pub use runtime::{cmd_ccs_export, cmd_ccs_run, cmd_ccs_shell};
 pub use signing::{cmd_ccs_keygen, cmd_ccs_sign};
+
+pub async fn cmd_ccs_lint(_path: &str, _format: crate::cli::CcsOutputFormat) -> anyhow::Result<()> {
+    anyhow::bail!("conary ccs lint is wired but not implemented")
+}
+
+pub async fn cmd_ccs_test(
+    _package: &str,
+    _dry_run: bool,
+    _policy: Option<String>,
+    _keep_workspace: bool,
+) -> anyhow::Result<()> {
+    anyhow::bail!("conary ccs test is wired but not implemented")
+}

@@ -4,6 +4,18 @@
 use super::{CommonArgs, DbArgs};
 use clap::Subcommand;
 
+#[derive(Clone, Copy, Debug, clap::ValueEnum, PartialEq, Eq)]
+pub enum CcsBuildFormat {
+    V1,
+    V2,
+}
+
+#[derive(Clone, Copy, Debug, clap::ValueEnum, PartialEq, Eq)]
+pub enum CcsOutputFormat {
+    Text,
+    Json,
+}
+
 #[derive(Subcommand)]
 pub enum CcsCommands {
     /// Initialize a new CCS package manifest (ccs.toml)
@@ -60,6 +72,29 @@ pub enum CcsCommands {
         /// Show what would be built without creating packages
         #[arg(long)]
         dry_run: bool,
+
+        /// CCS archive contract version
+        #[arg(long, value_enum, default_value_t = CcsBuildFormat::V1)]
+        format: CcsBuildFormat,
+
+        /// Sign v2 output with the user-local development key
+        #[arg(long, conflicts_with = "key")]
+        local_dev: bool,
+
+        /// Private signing key for v2 output
+        #[arg(long)]
+        key: Option<String>,
+    },
+
+    /// Lint a CCS authoring manifest
+    Lint {
+        /// Path to ccs.toml or directory containing it
+        #[arg(default_value = ".")]
+        path: String,
+
+        /// Output format
+        #[arg(long, value_enum, default_value_t = CcsOutputFormat::Text)]
+        format: CcsOutputFormat,
     },
 
     /// Inspect a CCS package file
@@ -96,6 +131,24 @@ pub enum CcsCommands {
         /// Allow packages without signatures
         #[arg(long)]
         allow_unsigned: bool,
+    },
+
+    /// Verify and dry-run-test a CCS package in an isolated workspace
+    Test {
+        /// Path to .ccs package file
+        package: String,
+
+        /// Run the package-local install proof without creating live state
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Trust policy file
+        #[arg(long)]
+        policy: Option<String>,
+
+        /// Keep the isolated test workspace after completion
+        #[arg(long)]
+        keep_workspace: bool,
     },
 
     /// Sign a CCS package with an Ed25519 key

@@ -30,6 +30,9 @@ pub(super) async fn dispatch_ccs_command(
             no_classify,
             no_chunked,
             dry_run,
+            format,
+            local_dev,
+            key,
         } => {
             commands::ccs::cmd_ccs_build(
                 &path,
@@ -39,9 +42,14 @@ pub(super) async fn dispatch_ccs_command(
                 no_classify,
                 !no_chunked,
                 dry_run,
+                format,
+                local_dev,
+                key,
             )
             .await
         }
+
+        cli::CcsCommands::Lint { path, format } => commands::ccs::cmd_ccs_lint(&path, format).await,
 
         cli::CcsCommands::Inspect {
             package,
@@ -56,6 +64,13 @@ pub(super) async fn dispatch_ccs_command(
             policy,
             allow_unsigned,
         } => commands::ccs::cmd_ccs_verify(&package, policy, allow_unsigned).await,
+
+        cli::CcsCommands::Test {
+            package,
+            dry_run,
+            policy,
+            keep_workspace,
+        } => commands::ccs::cmd_ccs_test(&package, dry_run, policy, keep_workspace).await,
 
         cli::CcsCommands::Sign {
             package,
