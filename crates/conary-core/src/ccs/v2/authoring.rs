@@ -340,6 +340,35 @@ mod tests {
     }
 
     #[test]
+    fn projection_reconstructs_payload_from_chunk_blobs() {
+        let mut build = test_support::minimal_file_build_result("hello", "0.1.0", b"hello\n");
+        build.manifest.package.release = Some("1".to_string());
+        build.manifest.package.kind = Some(crate::ccs::v2::PackageKindTagV2::Package);
+
+        let chunks = [b"hel".to_vec(), b"lo\n".to_vec()];
+        let chunk_hashes = chunks
+            .iter()
+            .map(|chunk| crate::hash::sha256(chunk))
+            .collect::<Vec<_>>();
+        build.blobs.clear();
+        for (hash, bytes) in chunk_hashes.iter().zip(chunks) {
+            build.blobs.insert(hash.clone(), bytes);
+        }
+        build.files[0].chunks = Some(chunk_hashes.clone());
+        build.components.get_mut("runtime").unwrap().files[0].chunks = Some(chunk_hashes);
+        build.chunked = true;
+
+        let projected = project_build_result_to_v2(V2AuthoringInput {
+            build: &build,
+            local_dev: true,
+            debug_toml: Some(build.manifest.to_toml().unwrap()),
+        })
+        .unwrap();
+
+        assert_eq!(projected.payloads_by_path["/hello"], b"hello\n");
+    }
+
+    #[test]
     fn projection_keeps_host_hardening_for_release_key_signing_path() {
         let mut build = test_support::minimal_file_build_result("hello", "0.1.0", b"hello\n");
         build.manifest.package.release = Some("1".to_string());
