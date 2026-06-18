@@ -1,37 +1,22 @@
 // apps/remi/src/server/release_publish.rs
 //! Remi release artifact upload, gate enforcement, and public metadata commit.
 
-use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
 use axum::{
     Json,
     extract::Request,
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use conary_core::ccs::CcsPackage;
-use conary_core::ccs::convert::ScriptletBundleSummary;
-use conary_core::db::models::{ConvertedPackage, Repository, RepositoryPackage};
-use conary_core::packages::traits::PackageFormat;
-use conary_core::repository::static_repo::publish_gate::{
-    AcceptedStaticSignerSet, TrustedArtifactSigner, format_publish_gate_failures,
-    verify_static_artifact_publish_eligibility,
-};
-use conary_core::trust::{
-    MetaFile, Signed, SnapshotMetadata, TUF_SPEC_VERSION, TargetDescription, TargetsMetadata,
-    sign_tuf_metadata,
-};
 use futures::StreamExt;
-use rusqlite::{OptionalExtension, params};
 use serde::Serialize;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::RwLock;
 
 use crate::server::ServerState;
-use crate::server::handlers::tuf::{load_release_tuf_key, refresh_timestamp_for_distro_in_conn};
+use crate::server::native_publish::{self, NativePublishError};
 
 const MAX_RELEASE_UPLOAD_SIZE: u64 = 512 * 1024 * 1024;
 const RELEASE_PUBLISH_POLICY_DIGEST: &str = "m2-static-publish-policy-v1";
@@ -42,6 +27,8 @@ pub struct ReleaseUploadResponse {
     distro: String,
     package: String,
     version: String,
+    release: String,
+    architecture: String,
     path: String,
     size: u64,
     content_hash: String,
@@ -50,53 +37,40 @@ pub struct ReleaseUploadResponse {
 #[derive(Debug)]
 struct ReleaseUploadError {
     status: StatusCode,
-    code: &'static str,
+    code: String,
     message: String,
 }
 
 impl ReleaseUploadError {
-    fn bad_request(message: impl Into<String>, code: &'static str) -> Self {
+    fn bad_request(message: impl Into<String>, code: impl Into<String>) -> Self {
         Self {
             status: StatusCode::BAD_REQUEST,
-            code,
+            code: code.into(),
             message: message.into(),
         }
     }
 
-    fn unprocessable(message: impl Into<String>, code: &'static str) -> Self {
-        Self {
-            status: StatusCode::UNPROCESSABLE_ENTITY,
-            code,
-            message: message.into(),
-        }
-    }
-
-    fn internal(message: impl Into<String>, code: &'static str) -> Self {
+    fn internal(message: impl Into<String>, code: impl Into<String>) -> Self {
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
-            code,
+            code: code.into(),
             message: message.into(),
+        }
+    }
+}
+
+impl From<NativePublishError> for ReleaseUploadError {
+    fn from(error: NativePublishError) -> Self {
+        Self {
+            status: error.status,
+            code: error.code.as_str().to_string(),
+            message: error.message,
         }
     }
 }
 
 struct StagedRelease {
     path: PathBuf,
-    size: u64,
-}
-
-struct ReleaseArtifact {
-    name: String,
-    version: String,
-    architecture: Option<String>,
-    content_hash: String,
-    scriptlet_summary: ScriptletBundleSummary,
-}
-
-struct PromotedRelease {
-    package_path: PathBuf,
-    chunk_path: PathBuf,
-    target_path: String,
 }
 
 pub async fn handle_release_upload(
@@ -115,6 +89,8 @@ async fn release_upload_inner(
     distro: String,
     request: Request,
 ) -> Result<ReleaseUploadResponse, ReleaseUploadError> {
+    native_publish::verify::validate_supported_release_distro(&distro)
+        .map_err(ReleaseUploadError::from)?;
     let staged = stage_release_body(&state, request).await?;
     let result = release_upload_after_stage(&state, &distro, &staged).await;
     let _ = tokio::fs::remove_file(&staged.path).await;
@@ -126,41 +102,68 @@ async fn release_upload_after_stage(
     distro: &str,
     staged: &StagedRelease,
 ) -> Result<ReleaseUploadResponse, ReleaseUploadError> {
-    let accepted = accepted_release_signers(state).await?;
-    let lint = verify_static_artifact_publish_eligibility(
-        &staged.path,
-        &accepted,
-        RELEASE_PUBLISH_POLICY_DIGEST,
-    )
-    .map_err(|error| {
-        ReleaseUploadError::unprocessable(
-            format!("release artifact gate failed: {error}"),
-            "GATE_ERROR",
+    let (cache_dir, chunk_dir, release_publish) = {
+        let guard = state.read().await;
+        (
+            guard.config.cache_dir.clone(),
+            guard.config.chunk_dir.clone(),
+            guard.config.release_publish.clone(),
         )
-    })?;
-    if !lint.is_passed() {
-        return Err(ReleaseUploadError::unprocessable(
-            format_publish_gate_failures(&lint),
-            "PUBLISH_GATE_FAILED",
-        ));
-    }
+    };
+    let accepted = native_publish::verify::accepted_release_signers(&release_publish)
+        .map_err(ReleaseUploadError::from)?;
+    let artifact_path = staged.path.clone();
+    let artifact = tokio::task::spawn_blocking(move || {
+        native_publish::verify::verify_native_artifact(
+            &artifact_path,
+            &accepted,
+            RELEASE_PUBLISH_POLICY_DIGEST,
+        )
+    })
+    .await
+    .map_err(|error| {
+        ReleaseUploadError::internal(
+            format!("join native release verification task: {error}"),
+            "INTERNAL_ERROR",
+        )
+    })?
+    .map_err(ReleaseUploadError::from)?;
 
-    let artifact = inspect_release_artifact(staged).await?;
-    let promoted = promote_release_artifact(state, distro, staged, &artifact).await?;
-    let commit = commit_release_metadata(state, distro, &artifact, &promoted, staged.size).await;
+    let response_package = artifact.name.clone();
+    let response_version = artifact.version.clone();
+    let response_release = artifact.package_release.clone();
+    let response_architecture = artifact.architecture.clone();
+    let response_size = artifact.total_size;
+    let response_content_hash = artifact.content_hash.clone();
+    let promoted = native_publish::storage::promote_native_artifact(
+        &cache_dir,
+        &chunk_dir,
+        distro,
+        &staged.path,
+        &artifact,
+    )
+    .await
+    .map_err(ReleaseUploadError::from)?;
+    let response_path = promoted.package_path.to_string_lossy().to_string();
+    let promoted_for_cleanup = promoted.clone();
+    let commit =
+        native_publish::persistence::commit_native_publication(state, distro, artifact, promoted)
+            .await;
     if let Err(error) = commit {
-        promoted.cleanup_public_objects().await;
-        return Err(error);
+        promoted_for_cleanup.cleanup_public_objects().await;
+        return Err(ReleaseUploadError::from(error));
     }
 
     Ok(ReleaseUploadResponse {
         status: "created",
         distro: distro.to_string(),
-        package: artifact.name,
-        version: artifact.version,
-        path: promoted.package_path.to_string_lossy().to_string(),
-        size: staged.size,
-        content_hash: artifact.content_hash,
+        package: response_package,
+        version: response_version,
+        release: response_release,
+        architecture: response_architecture,
+        path: response_path,
+        size: response_size,
+        content_hash: response_content_hash,
     })
 }
 
@@ -195,7 +198,7 @@ async fn stage_release_body(
             let _ = tokio::fs::remove_file(&path).await;
             return Err(ReleaseUploadError {
                 status: StatusCode::PAYLOAD_TOO_LARGE,
-                code: "PAYLOAD_TOO_LARGE",
+                code: "PAYLOAD_TOO_LARGE".to_string(),
                 message: "Upload exceeds maximum size (512 MB)".to_string(),
             });
         }
@@ -224,505 +227,7 @@ async fn stage_release_body(
         ));
     }
 
-    Ok(StagedRelease { path, size })
-}
-
-async fn accepted_release_signers(
-    state: &Arc<RwLock<ServerState>>,
-) -> Result<AcceptedStaticSignerSet, ReleaseUploadError> {
-    let trusted: Vec<TrustedArtifactSigner> = state
-        .read()
-        .await
-        .config
-        .release_publish
-        .trusted_build_attestation_signers
-        .iter()
-        .map(|signer| TrustedArtifactSigner {
-            key_id: signer.key_id.clone(),
-            public_key: signer.public_key.clone(),
-        })
-        .collect();
-
-    AcceptedStaticSignerSet::from_trusted_artifact_signers(&trusted).map_err(|error| {
-        ReleaseUploadError::unprocessable(error.to_string(), "PUBLISH_GATE_FAILED")
-    })
-}
-
-async fn inspect_release_artifact(
-    staged: &StagedRelease,
-) -> Result<ReleaseArtifact, ReleaseUploadError> {
-    let path = staged.path.clone();
-    tokio::task::spawn_blocking(move || -> Result<ReleaseArtifact> {
-        let package = CcsPackage::parse(path.to_str().context("release path is not UTF-8")?)?;
-        let name = package.name().to_string();
-        let version = package.version().to_string();
-        let architecture = package.architecture().map(str::to_string);
-        let mut reader = std::fs::File::open(&path)?;
-        let content_hash = conary_core::hash::sha256_reader_hex(&mut reader)?;
-        let scriptlet_summary = package
-            .manifest()
-            .legacy_scriptlets
-            .as_ref()
-            .map(|bundle| {
-                ScriptletBundleSummary::from_bundle(bundle, bundle.evidence_digest.clone())
-            })
-            .unwrap_or_default();
-        Ok(ReleaseArtifact {
-            name,
-            version,
-            architecture,
-            content_hash,
-            scriptlet_summary,
-        })
-    })
-    .await
-    .map_err(|error| {
-        ReleaseUploadError::internal(
-            format!("join release inspection task: {error}"),
-            "INTERNAL_ERROR",
-        )
-    })?
-    .map_err(|error| {
-        ReleaseUploadError::bad_request(
-            format!("Uploaded file is not a valid CCS package: {error}"),
-            "INVALID_CCS",
-        )
-    })
-}
-
-async fn promote_release_artifact(
-    state: &Arc<RwLock<ServerState>>,
-    distro: &str,
-    staged: &StagedRelease,
-    artifact: &ReleaseArtifact,
-) -> Result<PromotedRelease, ReleaseUploadError> {
-    let (cache_dir, chunk_dir) = {
-        let guard = state.read().await;
-        (
-            guard.config.cache_dir.clone(),
-            guard.config.chunk_dir.clone(),
-        )
-    };
-    let packages_dir = cache_dir.join("releases").join("packages").join(distro);
-    tokio::fs::create_dir_all(&packages_dir)
-        .await
-        .map_err(|error| {
-            ReleaseUploadError::internal(
-                format!("create release package directory: {error}"),
-                "IO_ERROR",
-            )
-        })?;
-    let filename = safe_ccs_filename(&artifact.name, &artifact.version, &artifact.content_hash);
-    let package_path = packages_dir.join(&filename);
-    tokio::fs::copy(&staged.path, &package_path)
-        .await
-        .map_err(|error| {
-            ReleaseUploadError::internal(format!("promote release package: {error}"), "IO_ERROR")
-        })?;
-
-    let chunk_path = crate::server::handlers::cas_object_path(&chunk_dir, &artifact.content_hash);
-    if let Some(parent) = chunk_path.parent() {
-        tokio::fs::create_dir_all(parent).await.map_err(|error| {
-            let package_path = package_path.clone();
-            tokio::spawn(async move {
-                let _ = tokio::fs::remove_file(package_path).await;
-            });
-            ReleaseUploadError::internal(
-                format!("create release chunk directory: {error}"),
-                "IO_ERROR",
-            )
-        })?;
-    }
-    tokio::fs::copy(&package_path, &chunk_path)
-        .await
-        .map_err(|error| {
-            let package_path = package_path.clone();
-            tokio::spawn(async move {
-                let _ = tokio::fs::remove_file(package_path).await;
-            });
-            ReleaseUploadError::internal(format!("promote release chunk: {error}"), "IO_ERROR")
-        })?;
-
-    Ok(PromotedRelease {
-        package_path,
-        chunk_path,
-        target_path: format!("packages/{distro}/{filename}"),
-    })
-}
-
-async fn commit_release_metadata(
-    state: &Arc<RwLock<ServerState>>,
-    distro: &str,
-    artifact: &ReleaseArtifact,
-    promoted: &PromotedRelease,
-    size: u64,
-) -> Result<(), ReleaseUploadError> {
-    let (db_path, keys_dir) = {
-        let guard = state.read().await;
-        let keys_dir = guard
-            .config
-            .release_publish
-            .repository_keys_dir
-            .clone()
-            .ok_or_else(|| {
-                ReleaseUploadError::internal(
-                    "release_publish.repository_keys_dir is not configured",
-                    "REPOSITORY_KEYS_MISSING",
-                )
-            })?;
-        (guard.config.db_path.clone(), keys_dir)
-    };
-    let distro = distro.to_string();
-    let artifact = artifact_metadata_for_commit(artifact, promoted, size);
-
-    tokio::task::spawn_blocking(move || {
-        commit_release_metadata_blocking(&db_path, &keys_dir, &distro, artifact)
-    })
-    .await
-    .map_err(|error| {
-        ReleaseUploadError::internal(
-            format!("join release metadata task: {error}"),
-            "INTERNAL_ERROR",
-        )
-    })?
-    .map_err(|error| {
-        ReleaseUploadError::internal(
-            format!("commit release metadata: {error:#}"),
-            "METADATA_COMMIT_FAILED",
-        )
-    })
-}
-
-#[derive(Clone)]
-struct ReleaseArtifactCommit {
-    name: String,
-    version: String,
-    architecture: Option<String>,
-    content_hash: String,
-    size: u64,
-    package_path: String,
-    target_path: String,
-    scriptlet_summary: ScriptletBundleSummary,
-}
-
-fn artifact_metadata_for_commit(
-    artifact: &ReleaseArtifact,
-    promoted: &PromotedRelease,
-    size: u64,
-) -> ReleaseArtifactCommit {
-    ReleaseArtifactCommit {
-        name: artifact.name.clone(),
-        version: artifact.version.clone(),
-        architecture: artifact.architecture.clone(),
-        content_hash: artifact.content_hash.clone(),
-        size,
-        package_path: promoted.package_path.to_string_lossy().to_string(),
-        target_path: promoted.target_path.clone(),
-        scriptlet_summary: artifact.scriptlet_summary.clone(),
-    }
-}
-
-fn commit_release_metadata_blocking(
-    db_path: &Path,
-    keys_dir: &Path,
-    distro: &str,
-    artifact: ReleaseArtifactCommit,
-) -> Result<()> {
-    let mut conn = crate::server::open_runtime_db(db_path)?;
-    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-    let repo_id = ensure_release_repository(&tx, distro)?;
-    replace_repository_package(&tx, repo_id, distro, &artifact)?;
-    replace_converted_package(&tx, distro, &artifact)?;
-    refresh_release_tuf_metadata(&tx, keys_dir, distro, repo_id, &artifact)?;
-    tx.commit()?;
-    Ok(())
-}
-
-fn ensure_release_repository(conn: &rusqlite::Connection, distro: &str) -> Result<i64> {
-    if let Some((id, tuf_enabled)) = conn
-        .query_row(
-            "SELECT id, tuf_enabled FROM repositories WHERE name = ?1",
-            params![distro],
-            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i32>(1)? != 0)),
-        )
-        .optional()?
-    {
-        if !tuf_enabled {
-            conn.execute(
-                "UPDATE repositories SET tuf_enabled = 1 WHERE id = ?1",
-                params![id],
-            )?;
-        }
-        return Ok(id);
-    }
-
-    let mut repo = Repository::new(distro.to_string(), format!("remi-release://{distro}"));
-    repo.tuf_enabled = true;
-    repo.insert(conn).map_err(anyhow::Error::from)
-}
-
-fn replace_repository_package(
-    conn: &rusqlite::Connection,
-    repo_id: i64,
-    distro: &str,
-    artifact: &ReleaseArtifactCommit,
-) -> Result<()> {
-    delete_repo_package_identity(conn, repo_id, artifact)?;
-    let mut package = RepositoryPackage::new(
-        repo_id,
-        artifact.name.clone(),
-        artifact.version.clone(),
-        artifact.content_hash.clone(),
-        artifact.size as i64,
-        format!("/v1/chunks/{}", artifact.content_hash),
-    );
-    package.architecture = artifact.architecture.clone();
-    package.description = Some("Remi release artifact".to_string());
-    package.distro = Some(distro.to_string());
-    package.insert(conn).map_err(anyhow::Error::from)?;
-    Ok(())
-}
-
-fn delete_repo_package_identity(
-    conn: &rusqlite::Connection,
-    repo_id: i64,
-    artifact: &ReleaseArtifactCommit,
-) -> Result<()> {
-    if let Some(arch) = artifact.architecture.as_deref() {
-        conn.execute(
-            "DELETE FROM repository_packages
-             WHERE repository_id = ?1 AND name = ?2 AND version = ?3 AND architecture = ?4",
-            params![repo_id, artifact.name, artifact.version, arch],
-        )?;
-    } else {
-        conn.execute(
-            "DELETE FROM repository_packages
-             WHERE repository_id = ?1 AND name = ?2 AND version = ?3 AND architecture IS NULL",
-            params![repo_id, artifact.name, artifact.version],
-        )?;
-    }
-    Ok(())
-}
-
-fn replace_converted_package(
-    conn: &rusqlite::Connection,
-    distro: &str,
-    artifact: &ReleaseArtifactCommit,
-) -> Result<()> {
-    delete_converted_identity(conn, distro, artifact)?;
-    let mut converted = ConvertedPackage::new_server(
-        distro.to_string(),
-        artifact.name.clone(),
-        artifact.version.clone(),
-        "ccs".to_string(),
-        format!("release:{distro}:{}", artifact.content_hash),
-        "full".to_string(),
-        std::slice::from_ref(&artifact.content_hash),
-        artifact.size as i64,
-        artifact.content_hash.clone(),
-        artifact.package_path.clone(),
-    );
-    converted.package_architecture = artifact.architecture.clone();
-    converted
-        .set_scriptlet_metadata(&artifact.scriptlet_summary)
-        .map_err(anyhow::Error::from)?;
-    converted.insert(conn).map_err(anyhow::Error::from)?;
-    Ok(())
-}
-
-fn delete_converted_identity(
-    conn: &rusqlite::Connection,
-    distro: &str,
-    artifact: &ReleaseArtifactCommit,
-) -> Result<()> {
-    if let Some(arch) = artifact.architecture.as_deref() {
-        conn.execute(
-            "DELETE FROM converted_packages
-             WHERE distro = ?1 AND package_name = ?2 AND package_version = ?3
-               AND package_architecture = ?4",
-            params![distro, artifact.name, artifact.version, arch],
-        )?;
-    } else {
-        conn.execute(
-            "DELETE FROM converted_packages
-             WHERE distro = ?1 AND package_name = ?2 AND package_version = ?3
-               AND package_architecture IS NULL",
-            params![distro, artifact.name, artifact.version],
-        )?;
-    }
-    Ok(())
-}
-
-fn refresh_release_tuf_metadata(
-    conn: &rusqlite::Connection,
-    keys_dir: &Path,
-    distro: &str,
-    repo_id: i64,
-    artifact: &ReleaseArtifactCommit,
-) -> Result<()> {
-    let targets_key = load_release_tuf_key(keys_dir, distro, "targets")?;
-    let snapshot_key = load_release_tuf_key(keys_dir, distro, "snapshot")?;
-
-    let targets_version = next_tuf_metadata_version(conn, repo_id, "targets")?;
-    conn.execute(
-        "INSERT OR REPLACE INTO tuf_targets
-         (repository_id, target_path, sha256, length, custom_json, targets_version)
-         VALUES (?1, ?2, ?3, ?4, NULL, ?5)",
-        params![
-            repo_id,
-            artifact.target_path,
-            artifact.content_hash,
-            artifact.size as i64,
-            targets_version as i64,
-        ],
-    )?;
-    let targets = TargetsMetadata {
-        type_field: "targets".to_string(),
-        spec_version: TUF_SPEC_VERSION.to_string(),
-        version: targets_version,
-        expires: chrono::Utc::now() + chrono::Duration::days(30),
-        targets: load_tuf_targets(conn, repo_id)?,
-    };
-    let signed_targets = Signed {
-        signatures: vec![sign_tuf_metadata(&targets_key, &targets).map_err(anyhow::Error::from)?],
-        signed: targets,
-    };
-    persist_signed_targets(conn, repo_id, &signed_targets)?;
-
-    let targets_json = serde_json::to_string(&signed_targets)?;
-    let snapshot_version = next_tuf_metadata_version(conn, repo_id, "snapshot")?;
-    let mut target_hashes = BTreeMap::new();
-    target_hashes.insert(
-        "sha256".to_string(),
-        conary_core::hash::sha256(targets_json.as_bytes()),
-    );
-    let mut meta = BTreeMap::new();
-    meta.insert(
-        "targets.json".to_string(),
-        MetaFile {
-            version: targets_version,
-            length: Some(targets_json.len() as u64),
-            hashes: Some(target_hashes),
-        },
-    );
-    let snapshot = SnapshotMetadata {
-        type_field: "snapshot".to_string(),
-        spec_version: TUF_SPEC_VERSION.to_string(),
-        version: snapshot_version,
-        expires: chrono::Utc::now() + chrono::Duration::days(7),
-        meta,
-    };
-    let signed_snapshot = Signed {
-        signatures: vec![sign_tuf_metadata(&snapshot_key, &snapshot).map_err(anyhow::Error::from)?],
-        signed: snapshot,
-    };
-    persist_signed_snapshot(conn, repo_id, &signed_snapshot)?;
-
-    refresh_timestamp_for_distro_in_conn(conn, keys_dir, distro)?;
-    Ok(())
-}
-
-fn next_tuf_metadata_version(conn: &rusqlite::Connection, repo_id: i64, role: &str) -> Result<u64> {
-    let current: Option<i64> = conn
-        .query_row(
-            "SELECT version FROM tuf_metadata WHERE repository_id = ?1 AND role = ?2",
-            params![repo_id, role],
-            |row| row.get(0),
-        )
-        .optional()?;
-    Ok(current.unwrap_or(0) as u64 + 1)
-}
-
-fn load_tuf_targets(
-    conn: &rusqlite::Connection,
-    repo_id: i64,
-) -> Result<BTreeMap<String, TargetDescription>> {
-    let mut stmt = conn.prepare(
-        "SELECT target_path, sha256, length FROM tuf_targets
-         WHERE repository_id = ?1 ORDER BY target_path",
-    )?;
-    let rows = stmt.query_map(params![repo_id], |row| {
-        let path: String = row.get(0)?;
-        let sha256: String = row.get(1)?;
-        let length: i64 = row.get(2)?;
-        let mut hashes = BTreeMap::new();
-        hashes.insert("sha256".to_string(), sha256);
-        Ok((
-            path,
-            TargetDescription {
-                length: length as u64,
-                hashes,
-            },
-        ))
-    })?;
-    let mut targets = BTreeMap::new();
-    for row in rows {
-        let (path, description) = row?;
-        targets.insert(path, description);
-    }
-    Ok(targets)
-}
-
-fn persist_signed_targets(
-    conn: &rusqlite::Connection,
-    repo_id: i64,
-    signed: &Signed<TargetsMetadata>,
-) -> Result<()> {
-    persist_signed_metadata(
-        conn,
-        repo_id,
-        "targets",
-        signed.signed.version,
-        signed.signed.expires.to_rfc3339(),
-        serde_json::to_string(signed)?,
-    )
-}
-
-fn persist_signed_snapshot(
-    conn: &rusqlite::Connection,
-    repo_id: i64,
-    signed: &Signed<SnapshotMetadata>,
-) -> Result<()> {
-    persist_signed_metadata(
-        conn,
-        repo_id,
-        "snapshot",
-        signed.signed.version,
-        signed.signed.expires.to_rfc3339(),
-        serde_json::to_string(signed)?,
-    )
-}
-
-fn persist_signed_metadata(
-    conn: &rusqlite::Connection,
-    repo_id: i64,
-    role: &str,
-    version: u64,
-    expires_at: String,
-    signed_json: String,
-) -> Result<()> {
-    let metadata_hash = conary_core::hash::sha256(signed_json.as_bytes());
-    conn.execute(
-        "INSERT OR REPLACE INTO tuf_metadata
-         (repository_id, role, version, metadata_hash, signed_metadata, expires_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        params![
-            repo_id,
-            role,
-            version as i64,
-            metadata_hash,
-            signed_json,
-            expires_at,
-        ],
-    )?;
-    Ok(())
-}
-
-impl PromotedRelease {
-    async fn cleanup_public_objects(&self) {
-        let _ = tokio::fs::remove_file(&self.package_path).await;
-        let _ = tokio::fs::remove_file(&self.chunk_path).await;
-    }
+    Ok(StagedRelease { path })
 }
 
 fn release_upload_error_response(error: ReleaseUploadError) -> Response {
@@ -736,48 +241,43 @@ fn release_upload_error_response(error: ReleaseUploadError) -> Response {
         .into_response()
 }
 
-fn safe_ccs_filename(name: &str, version: &str, content_hash: &str) -> String {
-    let sanitize = |value: &str| {
-        value
-            .chars()
-            .map(|c| {
-                if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
-                    c
-                } else {
-                    '-'
-                }
-            })
-            .collect::<String>()
-    };
-    let hash_prefix = content_hash.get(..12).unwrap_or(content_hash);
-    format!("{}-{}-{hash_prefix}.ccs", sanitize(name), sanitize(version))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::server::native_publish::test_support::assert_json_code;
     use axum::body::{Body, to_bytes};
     use axum::http::{Method, Request};
     use conary_core::ccs::attestation::{
-        BUILD_ATTESTATION_SCHEMA_V1, BuildAttestationPayload, canonical_json_hash,
-        compute_build_output_identity, sign_build_attestation,
+        BUILD_ATTESTATION_SCHEMA_V1, BuildAttestationPayload, BuildOutputIdentity,
+        canonical_json_hash, compute_v2_content_identity, compute_v2_file_merkle_root,
+        sign_build_attestation,
     };
-    use conary_core::ccs::builder::{CcsBuilder, write_ccs_package, write_signed_ccs_package};
-    use conary_core::ccs::manifest_provenance::ManifestProvenance;
+    use conary_core::ccs::builder::write_v2_ccs_package;
     use conary_core::ccs::signing::SigningKeyPair;
+    use conary_core::ccs::v2::schema::{
+        AuthorityDocumentV2, ComponentAuthorityV2, ConflictPolicyV2, FORMAT_VERSION_V2,
+        FileAuthorityV2, FileTypeV2, LifecycleAuthorityV2, PackageDataV2, PackageIdentityV2,
+        PackageKindTagV2, PackageKindV2, PackagePolicyV2, ProvenanceAuthorityV2,
+    };
     use conary_core::db::schema;
     use conary_core::recipe::hermetic::{
         BuildInputIdentity, BuilderEnvironmentIdentity, BuilderEnvironmentKind, DependencyLock,
         DivergenceReport, EcosystemPolicyReport, HERMETIC_EVIDENCE_SCHEMA_V1,
         HermeticBuildEvidence, RecipeIdentity, ReproducibilityRecord, SourceIdentity,
     };
+    use rusqlite::params;
+    use std::collections::BTreeMap;
+    use std::path::Path;
     use tower::ServiceExt;
+
+    const TEST_DISTRO: &str = "fedora";
 
     struct ReleaseFixture {
         _temp: tempfile::TempDir,
         app: axum::Router,
         db_path: PathBuf,
         chunk_dir: PathBuf,
+        keys_dir: PathBuf,
     }
 
     impl ReleaseFixture {
@@ -796,7 +296,7 @@ mod tests {
             let keys_dir = temp.path().join("keys");
             std::fs::create_dir_all(&chunk_dir).unwrap();
             std::fs::create_dir_all(&cache_dir).unwrap();
-            write_tuf_role_keys(&keys_dir, "test-distro", tuf_roles);
+            write_tuf_role_keys(&keys_dir, TEST_DISTRO, tuf_roles);
 
             let conn = rusqlite::Connection::open(&db_path).unwrap();
             conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
@@ -805,7 +305,7 @@ mod tests {
             drop(conn);
 
             let release_publish = crate::server::config::ReleasePublishSection {
-                repository_keys_dir: Some(keys_dir),
+                repository_keys_dir: Some(keys_dir.clone()),
                 trusted_build_attestation_signers: trusted,
             };
             let config = crate::server::ServerConfig {
@@ -826,16 +326,21 @@ mod tests {
                 app,
                 db_path,
                 chunk_dir,
+                keys_dir,
             }
         }
 
         async fn upload_release(&self, bytes: Vec<u8>) -> Response {
+            self.upload_release_to_distro(TEST_DISTRO, bytes).await
+        }
+
+        async fn upload_release_to_distro(&self, distro: &str, bytes: Vec<u8>) -> Response {
             self.app
                 .clone()
                 .oneshot(
                     Request::builder()
                         .method(Method::POST)
-                        .uri("/v1/admin/releases/test-distro")
+                        .uri(format!("/v1/admin/releases/{distro}"))
                         .header("Authorization", "Bearer test-admin-token-12345")
                         .body(Body::from(bytes))
                         .unwrap(),
@@ -849,12 +354,37 @@ mod tests {
             let count: i64 = conn
                 .query_row(
                     "SELECT COUNT(*) FROM converted_packages
-                     WHERE distro = 'test-distro' AND package_name = ?1",
-                    params![package],
+                     WHERE distro = ?1 AND package_name = ?2",
+                    params![TEST_DISTRO, package],
                     |row| row.get(0),
                 )
                 .unwrap();
             count > 0
+        }
+
+        fn native_publication_row_exists(&self, package: &str, package_release: &str) -> bool {
+            let conn = rusqlite::Connection::open(&self.db_path).unwrap();
+            let count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM native_package_publications
+                     WHERE distro = ?1 AND name = ?2 AND package_release = ?3
+                       AND status = 'public'",
+                    params![TEST_DISTRO, package, package_release],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            count > 0
+        }
+
+        fn native_status_count(&self, package: &str, status: &str) -> i64 {
+            let conn = rusqlite::Connection::open(&self.db_path).unwrap();
+            conn.query_row(
+                "SELECT COUNT(*) FROM native_package_publications
+                 WHERE distro = ?1 AND name = ?2 AND status = ?3",
+                params![TEST_DISTRO, package, status],
+                |row| row.get(0),
+            )
+            .unwrap()
         }
 
         fn public_package_detail_exists(&self, package: &str) -> bool {
@@ -863,8 +393,8 @@ mod tests {
                 .query_row(
                     "SELECT COUNT(*) FROM repository_packages rp
                      JOIN repositories r ON rp.repository_id = r.id
-                     WHERE r.name = 'test-distro' AND rp.name = ?1",
-                    params![package],
+                     WHERE r.name = ?1 AND rp.name = ?2",
+                    params![TEST_DISTRO, package],
                     |row| row.get(0),
                 )
                 .unwrap();
@@ -886,6 +416,27 @@ mod tests {
                 )
                 .unwrap();
             count > 0
+        }
+
+        fn tuf_target_hash_exists(&self, content_hash: &str) -> bool {
+            let conn = rusqlite::Connection::open(&self.db_path).unwrap();
+            let count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM tuf_targets
+                     WHERE repository_id = (
+                         SELECT id FROM repositories WHERE name = ?1
+                     ) AND sha256 = ?2",
+                    params![TEST_DISTRO, content_hash],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            count > 0
+        }
+
+        fn remove_tuf_role_key(&self, role: &str) {
+            let distro_dir = self.keys_dir.join(TEST_DISTRO);
+            let _ = std::fs::remove_file(distro_dir.join(format!("{role}.private")));
+            let _ = std::fs::remove_file(distro_dir.join(format!("{role}.public")));
         }
     }
 
@@ -941,14 +492,82 @@ mod tests {
             "{}",
             response_text(response).await
         );
-        assert!(fixture.converted_package_row_exists("hello"));
+        assert!(!fixture.converted_package_row_exists("hello"));
+        assert!(fixture.native_publication_row_exists("hello", "1"));
         assert!(fixture.public_package_detail_exists("hello"));
         assert!(fixture.public_chunk_exists(&artifact.content_hash));
         assert!(fixture.tuf_target_exists("hello"));
     }
 
+    #[tokio::test]
+    async fn release_upload_unsupported_distro_fails_before_storage() {
+        let signer = SigningKeyPair::generate().with_key_id("publisher");
+        let artifact =
+            attested_release_artifact_with_release(&signer, "hello", "1.0.0", "1", b"payload");
+        let fixture = ReleaseFixture::new(vec![trusted_signer(&signer)]);
+
+        let response = fixture
+            .upload_release_to_distro("not-a-target", artifact.bytes)
+            .await;
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body = response_text(response).await;
+        assert_json_code(&body, "UNSUPPORTED_DISTRO");
+        assert_no_public_state(&fixture, "hello", &artifact.content_hash);
+    }
+
+    #[tokio::test]
+    async fn native_release_replacement_supersedes_old_row_and_target() {
+        let signer = SigningKeyPair::generate().with_key_id("publisher");
+        let first =
+            attested_release_artifact_with_release(&signer, "hello", "1.0.0", "1", b"first");
+        let second =
+            attested_release_artifact_with_release(&signer, "hello", "1.0.0", "1", b"second");
+        let fixture = ReleaseFixture::new(vec![trusted_signer(&signer)]);
+
+        assert_eq!(
+            fixture.upload_release(first.bytes).await.status(),
+            StatusCode::CREATED
+        );
+        assert_eq!(
+            fixture.upload_release(second.bytes).await.status(),
+            StatusCode::CREATED
+        );
+
+        assert_eq!(fixture.native_status_count("hello", "public"), 1);
+        assert_eq!(fixture.native_status_count("hello", "superseded"), 1);
+        assert!(!fixture.tuf_target_hash_exists(&first.content_hash));
+        assert!(fixture.tuf_target_hash_exists(&second.content_hash));
+    }
+
+    #[tokio::test]
+    async fn native_release_replacement_failure_keeps_last_public_row() {
+        let signer = SigningKeyPair::generate().with_key_id("publisher");
+        let first =
+            attested_release_artifact_with_release(&signer, "hello", "1.0.0", "1", b"first");
+        let second =
+            attested_release_artifact_with_release(&signer, "hello", "1.0.0", "1", b"second");
+        let fixture = ReleaseFixture::new(vec![trusted_signer(&signer)]);
+
+        assert_eq!(
+            fixture.upload_release(first.bytes).await.status(),
+            StatusCode::CREATED
+        );
+        fixture.remove_tuf_role_key("snapshot");
+        assert_eq!(
+            fixture.upload_release(second.bytes).await.status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+
+        assert_eq!(fixture.native_status_count("hello", "public"), 1);
+        assert!(fixture.tuf_target_hash_exists(&first.content_hash));
+        assert!(!fixture.tuf_target_hash_exists(&second.content_hash));
+        assert!(fixture.public_chunk_exists(&first.content_hash));
+        assert!(!fixture.public_chunk_exists(&second.content_hash));
+    }
+
     fn assert_no_public_state(fixture: &ReleaseFixture, package: &str, content_hash: &str) {
         assert!(!fixture.converted_package_row_exists(package));
+        assert!(!fixture.native_publication_row_exists(package, "1"));
         assert!(!fixture.public_package_detail_exists(package));
         assert!(!fixture.public_chunk_exists(content_hash));
         assert!(!fixture.tuf_target_exists(package));
@@ -999,24 +618,81 @@ mod tests {
         name: &str,
         version: &str,
     ) -> TestArtifact {
-        let temp = tempfile::tempdir().unwrap();
-        let source_dir = temp.path().join("source");
-        std::fs::create_dir_all(source_dir.join("usr/share")).unwrap();
-        std::fs::write(source_dir.join("usr/share/payload"), b"release payload").unwrap();
+        attested_release_artifact_with_release(signer, name, version, "1", b"release payload")
+    }
 
+    fn attested_release_artifact_with_release(
+        signer: &SigningKeyPair,
+        name: &str,
+        version: &str,
+        release: &str,
+        payload: &[u8],
+    ) -> TestArtifact {
+        let temp = tempfile::tempdir().unwrap();
         let evidence = sample_hermetic_evidence_for_tests(name, version);
-        let mut manifest = conary_core::ccs::CcsManifest::new_minimal(name, version);
-        manifest.provenance = Some(ManifestProvenance {
-            origin_class: Some("native-built".to_string()),
-            hardening_level: Some("hermetic".to_string()),
-            hermetic_evidence: Some(evidence.clone()),
-            ..Default::default()
-        });
-        let mut result = CcsBuilder::new(manifest, &source_dir).build().unwrap();
-        let identity_path = temp.path().join("identity.ccs");
-        write_ccs_package(&result, &identity_path).unwrap();
-        let identity_package = CcsPackage::parse(identity_path.to_str().unwrap()).unwrap();
-        let output_identity = compute_build_output_identity(&identity_package).unwrap();
+        let hermetic_evidence_hash = canonical_json_hash(&evidence).unwrap();
+        let payload_path = "/usr/share/payload".to_string();
+        let payload_hash = conary_core::hash::sha256(payload);
+        let payloads = BTreeMap::from([(payload_path.clone(), payload.to_vec())]);
+        let authority = AuthorityDocumentV2 {
+            format_version: FORMAT_VERSION_V2,
+            identity: PackageIdentityV2 {
+                name: name.to_string(),
+                version: version.to_string(),
+                release: release.to_string(),
+                architecture: Some("x86_64".to_string()),
+                platform: Some("linux".to_string()),
+                kind: PackageKindTagV2::Package,
+            },
+            kind: PackageKindV2::Package(PackageDataV2 {
+                files: vec![FileAuthorityV2 {
+                    path: payload_path,
+                    sha256: payload_hash,
+                    size: payload.len() as u64,
+                    file_type: FileTypeV2::Regular,
+                    mode: 0o644,
+                    owner: "root".to_string(),
+                    group: "root".to_string(),
+                    component: "main".to_string(),
+                    symlink_target: None,
+                    config: None,
+                    conflict: ConflictPolicyV2::Error,
+                }],
+                config: Vec::new(),
+                policy: PackagePolicyV2::default(),
+            }),
+            provides: Vec::new(),
+            requires: Vec::new(),
+            components: BTreeMap::from([(
+                "main".to_string(),
+                ComponentAuthorityV2 {
+                    name: "main".to_string(),
+                    default: true,
+                    file_count: 1,
+                    total_size: payload.len() as u64,
+                },
+            )]),
+            lifecycle: LifecycleAuthorityV2::default(),
+            provenance: ProvenanceAuthorityV2 {
+                origin_class: Some("native-built".to_string()),
+                hardening_level: Some("hermetic".to_string()),
+                build_input_identity: Some("sha256:build-input".to_string()),
+                hermetic_evidence_hash: Some(hermetic_evidence_hash.clone()),
+                foreign_conversion_boundary_hash: None,
+            },
+            debug_toml_sha256: None,
+        };
+        let output_identity = BuildOutputIdentity {
+            file_merkle_root: compute_v2_file_merkle_root(&authority).unwrap(),
+            package_name: name.to_string(),
+            package_version: version.to_string(),
+            package_release: release.to_string(),
+            architecture: Some("x86_64".to_string()),
+            origin_class: "native-built".to_string(),
+            hardening_level: "hermetic".to_string(),
+            hermetic_evidence_hash: hermetic_evidence_hash.clone(),
+            canonical_content_identity: compute_v2_content_identity(&authority).unwrap(),
+        };
         let payload = BuildAttestationPayload {
             schema_version: BUILD_ATTESTATION_SCHEMA_V1,
             origin_class: output_identity.origin_class.clone(),
@@ -1036,14 +712,18 @@ mod tests {
             conary_version: "test".to_string(),
             issued_at: "2026-06-14T00:00:00Z".to_string(),
         };
-        result
-            .manifest
-            .provenance
-            .as_mut()
-            .unwrap()
-            .build_attestation = Some(sign_build_attestation(payload, signer).unwrap());
+        let envelope = sign_build_attestation(payload, signer).unwrap();
         let package_path = temp.path().join("release.ccs");
-        write_signed_ccs_package(&result, &package_path, signer).unwrap();
+        write_v2_ccs_package(
+            &authority,
+            &payloads,
+            &package_path,
+            signer,
+            None,
+            Some(&envelope),
+            None,
+        )
+        .unwrap();
         let bytes = std::fs::read(package_path).unwrap();
         let content_hash = conary_core::hash::sha256(&bytes);
         TestArtifact {

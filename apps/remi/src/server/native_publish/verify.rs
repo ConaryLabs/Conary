@@ -3,6 +3,7 @@
 use std::fs::File;
 use std::path::Path;
 
+use conary_core::ccs::v2::PackageKindTagV2;
 use conary_core::db::models::normalize_native_architecture;
 use conary_core::hash;
 use conary_core::repository::static_repo::publish_gate::{
@@ -82,7 +83,12 @@ pub(crate) fn verify_native_artifact(
     let version = identity.version.clone();
     let package_release = identity.release.clone();
     let architecture = normalize_native_architecture(identity.architecture.as_deref());
-    let package_kind = format!("{:?}", identity.kind);
+    let package_kind = match identity.kind {
+        PackageKindTagV2::Package => "package",
+        PackageKindTagV2::Group => "group",
+        PackageKindTagV2::Redirect => "redirect",
+    }
+    .to_string();
     let authority_format_version = i64::from(authority.format_version);
     let total_size = std::fs::metadata(artifact_path)
         .map_err(|error| {
