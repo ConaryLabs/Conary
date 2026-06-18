@@ -6,6 +6,12 @@ Ubuntu 26.04, and Arch. It converts upstream RPM, DEB, and Arch packages into
 CCS artifacts, stores converted content in the local content-addressed store,
 and can write chunks through to R2 when configured.
 
+M4d routes every `{distro}` path parameter through supported profile route
+validation before DB queries, cache/key filesystem paths, or release-upload
+trust gates. Public Remi route slugs remain `fedora`, `ubuntu`, and `arch`;
+they are backed by profile route metadata rather than a local hard-coded
+`SUPPORTED_DISTROS` list.
+
 ## Release Uploads
 
 Remi release push is the first native CCS publication intake surface. The
@@ -101,11 +107,12 @@ Implementation ownership lives in child modules:
   metadata projection, and conversion benchmark evidence records.
 - `conversion/benchmark.rs`: benchmark sampling, scan-only scriptlet evidence,
   and benchmark conversion wrappers.
-- `conversion/lookup.rs`: repository package selection, supported distro
-  mapping, upstream download, and one-shot metadata refresh after upstream
-  404s.
-- `conversion/metadata.rs`: safe CCS filenames, package parsing, metadata
-  construction, repository identity application, and repository-provide merging.
+- `conversion/lookup.rs`: repository package selection, profile-backed
+  repository hints and version scheme, upstream download, and one-shot metadata
+  refresh after upstream 404s.
+- `conversion/metadata.rs`: safe CCS filenames, profile-backed parser dispatch,
+  metadata construction, repository identity application, and
+  repository-provide merging.
 - `conversion/safety.rs`: critical package and runtime capability refusal
   guards.
 - `conversion/storage.rs`: local CAS writes, optional R2 write-through, and

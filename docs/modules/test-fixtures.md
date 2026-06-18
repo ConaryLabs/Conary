@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-06-18
-revision: 4
-summary: Map Remi, CCS v2, and install replay fixture ownership and proof gates
+revision: 5
+summary: Map M4d supported profiles, Remi, CCS v2, and install replay proof gates
 ---
 
 # Test Fixtures And Proof Maps
@@ -36,6 +36,7 @@ Each fixture family should record:
 | `ccs-convert-golden-cases` | CCS convert | `cargo test -p conary-core golden_fixtures`; `cargo test -p conary-core support_matrix` |
 | `ccs-v2-native-authority-fixtures` | CCS v2 native authority | `cargo test -p conary-core ccs::v2`; `cargo test -p conary --test packaging_m4a` |
 | `ccs-v2-local-authoring-smoke` | CCS v2 local authoring | `cargo test -p conary --test packaging_m4b` |
+| `m4d-supported-profile-cutover` | Supported distro profiles | `cargo test -p conary-core supported_profiles`; `cargo test -p conary --test packaging_m4d`; `cargo test -p remi route` |
 | `legacy-scriptlet-bundle-fixtures` | Install replay adapter and Conary CLI tests | `cargo test -p conary --test bundle_replay synthetic_legacy_bundle_fixtures_cover_task5_matrix` |
 | `remi-native-ccs-publication` | Remi native publication | `cargo test -p remi release_upload_`; `cargo test -p conary --test packaging_m4c` |
 | `remi-scriptlet-publication-gate` | Remi server publication | `cargo test -p remi publication` |
@@ -110,6 +111,24 @@ Each fixture family should record:
 - **Safety notes:** Local-dev keys are isolated with test HOME/XDG directories.
   Local-dev v2 artifacts are for local verify/test only and must remain
   rejected by static publish and Remi release trust.
+
+### m4d-supported-profile-cutover
+
+- **Owner:** Supported target profile catalog:
+  `crates/conary-core/src/repository/supported_profiles/`; CLI smoke:
+  `apps/conary/tests/packaging_m4d.rs`; Remi route proof:
+  `apps/remi/src/server/handlers/`.
+- **Purpose:** Prove exactly three public IDs (`fedora-44`, `ubuntu-26.04`,
+  and `arch`), route/profile agreement for `fedora`, `ubuntu`, and `arch`,
+  unsupported derivative refusal, and profile-backed lifecycle diagnostics.
+- **Fast proof:** `cargo test -p conary-core supported_profiles`;
+  `cargo test -p conary --test packaging_m4d`;
+  `cargo test -p remi route`.
+- **Medium proof:** `cargo test -p conary-core ccs::v2`;
+  `cargo test -p remi conversion`;
+  `cargo test -p conary-core remi_sync`.
+- **Safety notes:** `debian` is a valid version-scheme string for Ubuntu
+  package comparison, not a public supported target or Remi route slug.
 
 ### remi-native-ccs-publication
 

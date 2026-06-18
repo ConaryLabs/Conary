@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-06-18
-revision: 17
-summary: Route CCS v2 authority, manifest provenance, and release attestations
+revision: 18
+summary: Route M4d CCS v2 lifecycle profile validation
 ---
 
 # CCS Module (conary-core/src/ccs/)
@@ -154,6 +154,11 @@ conary ccs test --dry-run
 `--local-dev` signs with a user-local development key for iteration.
 Local-dev artifacts can verify and dry-run-test locally, but static publish and
 Remi release paths still require accepted release trust and build attestation.
+
+M4d completes the CCS v2 target-profile hook. `TargetProfileQuery` now covers
+users, groups, directories, services, tmpfiles, sysctl, and alternatives.
+Profile-backed validation accepts only explicit per-entry policy and reports
+`LifecycleUnsupported` for unsupported signed lifecycle authority.
 
 ## Legacy Scriptlet Bundles And Replay
 
