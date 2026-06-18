@@ -71,6 +71,9 @@ pub async fn cmd_ccs_verify(
         TrustPolicy::from_file(Path::new(&policy_file)).context("Failed to load trust policy")?
     } else if allow_unsigned {
         TrustPolicy::permissive()
+    } else if let Some(local_policy) = super::local_dev::local_dev_trust_policy()? {
+        println!("Using local-dev CCS trust policy for verification.");
+        local_policy
     } else {
         // Default policy: reject unsigned packages (security default)
         tracing::warn!(
