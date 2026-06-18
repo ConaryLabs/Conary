@@ -41,6 +41,7 @@ mod generation_publication;
 mod installed_legacy_scriptlet_bundle;
 mod label;
 mod metadata;
+mod native_publication;
 mod provenance;
 mod provide_entry;
 mod redirect;
@@ -88,6 +89,9 @@ pub use generation_publication::{
 pub use installed_legacy_scriptlet_bundle::InstalledLegacyScriptletBundle;
 pub use label::{LabelEntry, LabelPathEntry, add_to_path, get_label_path, remove_from_path};
 pub use metadata::{MetadataTable, get_metadata, set_metadata};
+pub use native_publication::{
+    NATIVE_NOARCH, NativePackagePublication, NativePublicationStatus, normalize_native_architecture,
+};
 pub use provenance::Provenance;
 pub use provide_entry::ProvideEntry;
 pub use redirect::{Redirect, RedirectType, ResolveResult};

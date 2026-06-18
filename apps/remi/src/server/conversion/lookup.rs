@@ -74,6 +74,7 @@ impl ConversionService {
                 repository_id: row.get(1)?,
                 name: row.get(2)?,
                 version: row.get(3)?,
+                package_release: String::new(),
                 architecture: row.get(4)?,
                 description: row.get(5)?,
                 checksum: row.get(6)?,

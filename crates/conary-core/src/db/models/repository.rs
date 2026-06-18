@@ -267,6 +267,7 @@ pub struct RepositoryPackage {
     pub repository_id: i64,
     pub name: String,
     pub version: String,
+    pub package_release: String,
     pub architecture: Option<String>,
     pub description: Option<String>,
     pub checksum: String,
@@ -295,14 +296,14 @@ pub struct RepositoryPackage {
 
 impl RepositoryPackage {
     /// Column list for SELECT queries.
-    const COLUMNS: &'static str = "id, repository_id, name, version, architecture, description, \
+    const COLUMNS: &'static str = "id, repository_id, name, version, package_release, architecture, description, \
          checksum, size, download_url, dependencies, metadata, synced_at, \
          is_security_update, severity, cve_ids, advisory_id, advisory_url, \
          distro, version_scheme, canonical_id";
 
     /// Column list for SELECT queries with table alias prefix (rp.).
     const COLUMNS_PREFIXED: &'static str = "rp.id, rp.repository_id, rp.name, rp.version, \
-         rp.architecture, rp.description, rp.checksum, rp.size, rp.download_url, \
+         rp.package_release, rp.architecture, rp.description, rp.checksum, rp.size, rp.download_url, \
          rp.dependencies, rp.metadata, rp.synced_at, rp.is_security_update, \
          rp.severity, rp.cve_ids, rp.advisory_id, rp.advisory_url, rp.distro, \
          rp.version_scheme, rp.canonical_id";
@@ -310,10 +311,10 @@ impl RepositoryPackage {
     /// INSERT SQL shared by `batch_insert` and `batch_insert_with_ids`.
     const BATCH_INSERT_SQL: &'static str = "\
          INSERT INTO repository_packages \
-         (repository_id, name, version, architecture, description, checksum, size, \
+         (repository_id, name, version, package_release, architecture, description, checksum, size, \
           download_url, dependencies, metadata, is_security_update, severity, cve_ids, \
           advisory_id, advisory_url, distro, version_scheme, canonical_id) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)";
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)";
 
     /// Create a new RepositoryPackage
     pub fn new(
@@ -329,6 +330,7 @@ impl RepositoryPackage {
             repository_id,
             name,
             version,
+            package_release: String::new(),
             architecture: None,
             description: None,
             checksum,
@@ -352,13 +354,14 @@ impl RepositoryPackage {
     pub fn insert(&mut self, conn: &Connection) -> Result<i64> {
         conn.execute(
             "INSERT INTO repository_packages
-             (repository_id, name, version, architecture, description, checksum, size, download_url, dependencies, metadata,
+             (repository_id, name, version, package_release, architecture, description, checksum, size, download_url, dependencies, metadata,
               is_security_update, severity, cve_ids, advisory_id, advisory_url, distro, version_scheme, canonical_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
             params![
                 &self.repository_id,
                 &self.name,
                 &self.version,
+                &self.package_release,
                 &self.architecture,
                 &self.description,
                 &self.checksum,
@@ -567,22 +570,23 @@ impl RepositoryPackage {
             repository_id: row.get(1)?,
             name: row.get(2)?,
             version: row.get(3)?,
-            architecture: row.get(4)?,
-            description: row.get(5)?,
-            checksum: row.get(6)?,
-            size: row.get(7)?,
-            download_url: row.get(8)?,
-            dependencies: row.get(9)?,
-            metadata: row.get(10)?,
-            synced_at: row.get(11)?,
-            is_security_update: row.get::<_, i32>(12)? != 0,
-            severity: row.get(13)?,
-            cve_ids: row.get(14)?,
-            advisory_id: row.get(15)?,
-            advisory_url: row.get(16)?,
-            distro: row.get(17)?,
-            version_scheme: row.get(18)?,
-            canonical_id: row.get(19)?,
+            package_release: row.get(4)?,
+            architecture: row.get(5)?,
+            description: row.get(6)?,
+            checksum: row.get(7)?,
+            size: row.get(8)?,
+            download_url: row.get(9)?,
+            dependencies: row.get(10)?,
+            metadata: row.get(11)?,
+            synced_at: row.get(12)?,
+            is_security_update: row.get::<_, i32>(13)? != 0,
+            severity: row.get(14)?,
+            cve_ids: row.get(15)?,
+            advisory_id: row.get(16)?,
+            advisory_url: row.get(17)?,
+            distro: row.get(18)?,
+            version_scheme: row.get(19)?,
+            canonical_id: row.get(20)?,
         })
     }
 
@@ -651,6 +655,7 @@ impl RepositoryPackage {
             &pkg.repository_id,
             &pkg.name,
             &pkg.version,
+            &pkg.package_release,
             &pkg.architecture,
             &pkg.description,
             &pkg.checksum,
@@ -743,12 +748,37 @@ mod tests {
     }
 
     #[test]
+    fn repository_package_round_trips_package_release() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::db::schema::migrate(&conn).unwrap();
+
+        let mut repo = Repository::new(
+            "release-test".to_string(),
+            "https://example.test".to_string(),
+        );
+        let repo_id = repo.insert(&conn).unwrap();
+        let mut package = RepositoryPackage::new(
+            repo_id,
+            "hello".to_string(),
+            "1.0.0".to_string(),
+            "sha256:hello".to_string(),
+            42,
+            "/v1/chunks/hello".to_string(),
+        );
+        package.package_release = "2".to_string();
+        let id = package.insert(&conn).unwrap();
+        let loaded = RepositoryPackage::find_by_id(&conn, id).unwrap().unwrap();
+        assert_eq!(loaded.package_release, "2");
+    }
+
+    #[test]
     fn parse_dependency_requests_preserves_version_constraints() {
         let pkg = RepositoryPackage {
             id: None,
             repository_id: 1,
             name: "kernel".to_string(),
             version: "6.19.6-200.fc44".to_string(),
+            package_release: String::new(),
             architecture: Some("x86_64".to_string()),
             description: None,
             checksum: "sha256:deadbeef".to_string(),

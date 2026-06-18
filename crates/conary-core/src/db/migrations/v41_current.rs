@@ -1151,10 +1151,196 @@ pub fn migrate_v73(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Version 74: Native CCS publication state and release-aware repository identity
+pub fn migrate_v74(conn: &Connection) -> Result<()> {
+    debug!("Migrating to schema version 74");
+
+    conn.execute_batch(
+        "
+        ALTER TABLE repository_packages
+            ADD COLUMN package_release TEXT NOT NULL DEFAULT '';
+
+        DROP INDEX IF EXISTS idx_repo_packages_unique;
+        CREATE UNIQUE INDEX idx_repo_packages_unique
+            ON repository_packages(repository_id, name, version, package_release, architecture);
+
+        CREATE TABLE native_package_publications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+            repository_package_id INTEGER NOT NULL REFERENCES repository_packages(id) ON DELETE CASCADE,
+            distro TEXT NOT NULL,
+            name TEXT NOT NULL,
+            version TEXT NOT NULL,
+            package_release TEXT NOT NULL,
+            architecture TEXT NOT NULL,
+            package_kind TEXT NOT NULL,
+            authority_format_version INTEGER NOT NULL,
+            status TEXT NOT NULL CHECK (status IN ('public', 'superseded', 'rolled_back')),
+            content_hash TEXT NOT NULL,
+            chunk_hashes_json TEXT NOT NULL,
+            total_size INTEGER NOT NULL,
+            package_path TEXT NOT NULL,
+            target_path TEXT NOT NULL,
+            authority_hash TEXT,
+            package_signature_key_id TEXT,
+            package_signature_public_key_sha256 TEXT,
+            build_attestation_hash TEXT,
+            build_attestation_signer_key_id TEXT,
+            origin_class TEXT,
+            hardening_level TEXT,
+            provenance_json TEXT,
+            trust_status TEXT NOT NULL,
+            verification_report_json TEXT,
+            published_at TEXT,
+            superseded_at TEXT,
+            rolled_back_at TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+        );
+
+        CREATE UNIQUE INDEX idx_native_publications_active_identity
+            ON native_package_publications(distro, name, version, package_release, architecture)
+            WHERE status = 'public';
+
+        CREATE INDEX idx_native_publications_repo_package
+            ON native_package_publications(repository_package_id);
+        CREATE INDEX idx_native_publications_chunk_hash
+            ON native_package_publications(content_hash);
+        ",
+    )?;
+
+    info!("Schema version 74 applied successfully (native CCS publication)");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::db::schema::migrate;
+
+    #[test]
+    fn test_migrate_v74_adds_native_publications_and_package_release() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+
+        let version: i32 = conn
+            .query_row(
+                "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(version, crate::db::schema::SCHEMA_VERSION);
+
+        conn.execute(
+            "SELECT package_release FROM repository_packages LIMIT 0",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "SELECT package_release, architecture, status FROM native_package_publications LIMIT 0",
+            [],
+        )
+        .unwrap();
+
+        let index_sql: String = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'idx_repo_packages_unique'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(index_sql.contains("package_release"));
+    }
+
+    #[test]
+    fn test_migrate_v74_native_noarch_identity_is_unique() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+
+        conn.execute(
+            "INSERT INTO repositories (name, url) VALUES ('test-distro', 'remi-release://test-distro')",
+            [],
+        )
+        .unwrap();
+        let repo_id = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO repository_packages
+             (repository_id, name, version, package_release, checksum, size, download_url)
+             VALUES (?1, 'hello', '1.0.0', '1', 'sha256:hello', 42, '/v1/fedora/packages/hello/download')",
+            [repo_id],
+        )
+        .unwrap();
+        let repo_pkg_id = conn.last_insert_rowid();
+
+        let insert_native = || {
+            conn.execute(
+                "INSERT INTO native_package_publications (
+                    repository_id, repository_package_id, distro, name, version, package_release,
+                    architecture, package_kind, authority_format_version, status, content_hash,
+                    chunk_hashes_json, total_size, package_path, target_path, trust_status
+                ) VALUES (?1, ?2, 'test-distro', 'hello', '1.0.0', '1', 'noarch',
+                          'package', 2, 'public', 'sha256:hello', '[\"sha256:hello\"]',
+                          42, '/tmp/hello.ccs', 'packages/test-distro/hello.ccs',
+                          'verified')",
+                [repo_id, repo_pkg_id],
+            )
+        };
+
+        insert_native().unwrap();
+        let duplicate = insert_native().unwrap_err();
+        assert!(matches!(
+            duplicate,
+            rusqlite::Error::SqliteFailure(error, _)
+                if error.code == rusqlite::ErrorCode::ConstraintViolation
+        ));
+    }
+
+    #[test]
+    fn test_migrate_v74_preserves_existing_null_architecture_rows() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "
+            CREATE TABLE repositories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                url TEXT NOT NULL
+            );
+            CREATE TABLE repository_packages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+                name TEXT NOT NULL,
+                version TEXT NOT NULL,
+                architecture TEXT,
+                checksum TEXT NOT NULL,
+                size INTEGER NOT NULL,
+                download_url TEXT NOT NULL
+            );
+            CREATE UNIQUE INDEX idx_repo_packages_unique
+                ON repository_packages(repository_id, name, version, architecture);
+            INSERT INTO repositories (id, name, url)
+                VALUES (1, 'legacy', 'https://legacy.example.test');
+            INSERT INTO repository_packages
+                (repository_id, name, version, architecture, checksum, size, download_url)
+                VALUES
+                (1, 'legacy-null-arch', '1.0.0', NULL, 'sha256:first', 1, '/first'),
+                (1, 'legacy-null-arch', '1.0.0', NULL, 'sha256:second', 1, '/second');
+            ",
+        )
+        .unwrap();
+
+        migrate_v74(&conn).unwrap();
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM repository_packages
+                 WHERE name = 'legacy-null-arch' AND package_release = ''",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 2);
+    }
 
     #[test]
     fn test_migrate_v45_canonical_packages() {
