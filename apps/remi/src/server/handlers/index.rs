@@ -36,6 +36,9 @@ pub struct RepositoryMetadata {
 pub struct PackageEntry {
     pub name: String,
     pub version: String,
+    /// Native package release identity, when published by Remi native CCS.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub release: Option<String>,
     /// Native package architecture from upstream repository metadata.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub architecture: Option<String>,
@@ -130,14 +133,14 @@ fn build_metadata(
     let converted_packages = load_converted_metadata_rows(&conn, distro)?;
     let converted_set: HashSet<PackageKey> = converted_packages
         .iter()
-        .map(|pkg| package_key(&pkg.name, &pkg.version, pkg.architecture.as_deref()))
+        .map(|pkg| package_key(&pkg.name, &pkg.version, None, pkg.architecture.as_deref()))
         .collect();
     let converted_scriptlets_by_key: HashMap<PackageKey, ScriptletPackageMetadata> =
         converted_packages
             .iter()
             .map(|pkg| {
                 (
-                    package_key(&pkg.name, &pkg.version, pkg.architecture.as_deref()),
+                    package_key(&pkg.name, &pkg.version, None, pkg.architecture.as_deref()),
                     pkg.scriptlets.clone(),
                 )
             })
@@ -147,7 +150,13 @@ fn build_metadata(
     let mut packages: Vec<PackageEntry> = repo_packages
         .iter()
         .map(|pkg| {
-            let key = package_key(&pkg.name, &pkg.version, pkg.architecture.as_deref());
+            let release = non_empty_release(&pkg.package_release);
+            let key = package_key(
+                &pkg.name,
+                &pkg.version,
+                release.as_deref(),
+                pkg.architecture.as_deref(),
+            );
             let dependencies = pkg
                 .dependencies
                 .as_ref()
@@ -159,6 +168,7 @@ fn build_metadata(
             PackageEntry {
                 name: pkg.name.clone(),
                 version: pkg.version.clone(),
+                release,
                 architecture: pkg.architecture.clone(),
                 converted: converted_set.contains(&key),
                 dependencies,
@@ -169,18 +179,27 @@ fn build_metadata(
 
     let existing_keys: HashSet<PackageKey> = packages
         .iter()
-        .map(|pkg| package_key(&pkg.name, &pkg.version, pkg.architecture.as_deref()))
+        .map(|pkg| {
+            package_key(
+                &pkg.name,
+                &pkg.version,
+                pkg.release.as_deref(),
+                pkg.architecture.as_deref(),
+            )
+        })
         .collect();
     for converted in converted_packages {
         let key = package_key(
             &converted.name,
             &converted.version,
+            None,
             converted.architecture.as_deref(),
         );
         if !existing_keys.contains(&key) {
             packages.push(PackageEntry {
                 name: converted.name,
                 version: converted.version,
+                release: None,
                 architecture: converted.architecture,
                 converted: true,
                 dependencies: None,
@@ -190,7 +209,12 @@ fn build_metadata(
     }
 
     // Sort by name, then version
-    packages.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.version.cmp(&b.version)));
+    packages.sort_by(|a, b| {
+        a.name
+            .cmp(&b.name)
+            .then_with(|| a.version.cmp(&b.version))
+            .then_with(|| a.release.cmp(&b.release))
+    });
 
     let converted_count = packages.iter().filter(|p| p.converted).count();
 
@@ -207,14 +231,24 @@ fn build_metadata(
 /// Alias to shared implementation in handlers/mod.rs
 use super::find_repositories_for_distro;
 
-type PackageKey = (String, String, Option<String>);
+type PackageKey = (String, String, Option<String>, Option<String>);
 
-fn package_key(name: &str, version: &str, architecture: Option<&str>) -> PackageKey {
+fn package_key(
+    name: &str,
+    version: &str,
+    release: Option<&str>,
+    architecture: Option<&str>,
+) -> PackageKey {
     (
         name.to_string(),
         version.to_string(),
+        release.map(str::to_string),
         architecture.map(str::to_string),
     )
+}
+
+fn non_empty_release(release: &str) -> Option<String> {
+    (!release.is_empty()).then(|| release.to_string())
 }
 
 #[derive(Debug, Clone)]
@@ -236,6 +270,7 @@ fn build_converted_packages(
         .map(|row| PackageEntry {
             name: row.name,
             version: row.version,
+            release: None,
             architecture: row.architecture,
             converted: true,
             dependencies: None,
@@ -356,6 +391,7 @@ pub async fn get_metadata_sig(
 mod tests {
     use super::*;
     use crate::server::handlers::find_repository_for_distro;
+    use crate::server::native_publish::test_support::seed_native_publication;
     use conary_core::ccs::convert::ScriptletBundleSummary;
     use conary_core::db::models::{ConvertedPackage, Repository};
     use conary_core::db::schema;
@@ -429,6 +465,62 @@ mod tests {
         assert_eq!(metadata.last_sync.as_deref(), Some("2026-01-21T12:00:00Z"));
         assert_eq!(metadata.package_count, 0);
         assert_eq!(metadata.converted_count, 0);
+    }
+
+    #[test]
+    fn metadata_includes_native_only_package_as_native_not_converted() {
+        let (temp_file, conn) = create_test_db();
+        seed_native_publication(
+            &conn,
+            "fedora",
+            "hello",
+            "1.0.0",
+            "1",
+            "noarch",
+            "/tmp/hello.ccs",
+        );
+
+        let metadata = build_metadata(temp_file.path(), "fedora").unwrap();
+        let hello = metadata
+            .packages
+            .iter()
+            .find(|pkg| pkg.name == "hello")
+            .unwrap();
+
+        assert_eq!(hello.version, "1.0.0");
+        assert_eq!(hello.release.as_deref(), Some("1"));
+        assert!(!hello.converted);
+        assert_eq!(
+            hello.metadata.as_ref().unwrap()["source_kind"],
+            "native-ccs"
+        );
+    }
+
+    #[test]
+    fn native_row_not_filtered_by_conversion_publication_gate() {
+        let (temp_file, conn) = create_test_db();
+        seed_native_publication(
+            &conn,
+            "fedora",
+            "hello",
+            "1.0.0",
+            "1",
+            "noarch",
+            "/tmp/hello.ccs",
+        );
+
+        let metadata = build_metadata(temp_file.path(), "fedora").unwrap();
+        let hello = metadata
+            .packages
+            .iter()
+            .find(|pkg| pkg.name == "hello")
+            .unwrap();
+
+        assert!(!hello.converted);
+        assert_eq!(
+            hello.metadata.as_ref().unwrap()["source_kind"],
+            "native-ccs"
+        );
     }
 
     #[test]

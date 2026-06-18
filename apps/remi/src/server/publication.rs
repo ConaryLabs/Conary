@@ -10,7 +10,8 @@ use axum::{
 };
 use conary_core::ccs::convert::ScriptletBundleSummary;
 use conary_core::db::models::{
-    ChunkPublicationState, ConvertedPackage, ScriptletSummaryForPublication,
+    ChunkPublicationState, ConvertedPackage, NativePackagePublication,
+    ScriptletSummaryForPublication,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -228,6 +229,9 @@ pub fn public_metadata(summary: &ScriptletBundleSummary) -> ScriptletPackageMeta
 
 pub fn local_chunk_servable_by_public_gate(db_path: &Path, hash: &str) -> anyhow::Result<bool> {
     let conn = crate::server::open_runtime_db(db_path)?;
+    if NativePackagePublication::active_by_content_hash(&conn, hash)?.is_some() {
+        return Ok(true);
+    }
     Ok(!matches!(
         ConvertedPackage::chunk_publication_state(&conn, hash)?,
         ChunkPublicationState::NonPublicOnly
