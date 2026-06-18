@@ -14,6 +14,7 @@ pub use crate::ccs::manifest_provenance::{
     ManifestProvenance, ProvenanceDep, ProvenancePatch, ProvenanceSignature,
 };
 use crate::ccs::policy::BuildPolicyConfig;
+use crate::ccs::v2::PackageKindTagV2;
 use crate::filesystem::path::sanitize_path;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -230,6 +231,8 @@ impl CcsManifest {
                 name: name.to_string(),
                 version: version.to_string(),
                 description: format!("A new CCS package: {}", name),
+                release: None,
+                kind: None,
                 license: None,
                 homepage: None,
                 repository: None,
@@ -265,6 +268,12 @@ pub struct Package {
     pub name: String,
     pub version: String,
     pub description: String,
+
+    #[serde(default)]
+    pub release: Option<String>,
+
+    #[serde(default)]
+    pub kind: Option<PackageKindTagV2>,
 
     #[serde(default)]
     pub license: Option<String>,
@@ -1061,6 +1070,40 @@ files = ["/etc/myapp/config.toml"]
         let toml = manifest.to_toml().unwrap();
         assert!(toml.contains("name = \"test\""));
         assert!(toml.contains("version = \"0.1.0\""));
+    }
+
+    #[test]
+    fn parses_v2_authoring_identity_fields_without_guessing_release() {
+        let manifest = CcsManifest::parse(
+            r#"
+[package]
+name = "hello"
+version = "0.1.0"
+release = "1"
+kind = "package"
+description = "hello"
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(manifest.package.release.as_deref(), Some("1"));
+        assert_eq!(
+            manifest.package.kind,
+            Some(crate::ccs::v2::PackageKindTagV2::Package)
+        );
+
+        let legacy = CcsManifest::parse(
+            r#"
+[package]
+name = "legacy"
+version = "1.0.0-1"
+description = "legacy"
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(legacy.package.release, None);
+        assert_eq!(legacy.package.kind, None);
     }
 
     #[test]

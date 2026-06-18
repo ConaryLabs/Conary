@@ -15,6 +15,7 @@ pub async fn cmd_ccs_init(
     name: Option<String>,
     version: &str,
     force: bool,
+    template: Option<super::CcsInitTemplate>,
 ) -> Result<()> {
     let dir = Path::new(path);
     let manifest_path = dir.join("ccs.toml");
@@ -35,8 +36,8 @@ pub async fn cmd_ccs_init(
             .to_string()
     });
 
-    // Try to detect existing project metadata
-    let manifest = detect_project_and_create_manifest(dir, &pkg_name, version)?;
+    let manifest = super::templates::build_manifest(template, &pkg_name, version)?;
+    let manifest = detect_project_and_update_manifest(dir, manifest)?;
 
     // Write the manifest
     let toml = manifest.to_toml().context("Failed to serialize manifest")?;
@@ -56,14 +57,11 @@ pub async fn cmd_ccs_init(
     Ok(())
 }
 
-/// Detect existing project files and create an appropriate manifest
-fn detect_project_and_create_manifest(
+/// Detect existing project files and overlay discovered metadata onto a manifest.
+fn detect_project_and_update_manifest(
     dir: &Path,
-    name: &str,
-    version: &str,
+    mut manifest: CcsManifest,
 ) -> Result<CcsManifest> {
-    let mut manifest = CcsManifest::new_minimal(name, version);
-
     // Check for Cargo.toml (Rust project)
     let cargo_toml = dir.join("Cargo.toml");
     if cargo_toml.exists() {
@@ -136,4 +134,41 @@ fn detect_project_and_create_manifest(
     }
 
     Ok(manifest)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use conary_core::ccs::v2::PackageKindTagV2;
+
+    #[test]
+    fn project_detection_preserves_template_identity_fields() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            temp.path().join("Cargo.toml"),
+            r#"
+[package]
+name = "cargo-name"
+version = "0.2.0"
+description = "cargo description"
+license = "MIT"
+"#,
+        )
+        .unwrap();
+        let base = super::super::templates::build_manifest(
+            Some(super::super::CcsInitTemplate::MinimalFile),
+            "hello",
+            "0.1.0",
+        )
+        .unwrap();
+
+        let manifest = detect_project_and_update_manifest(temp.path(), base).unwrap();
+
+        assert_eq!(manifest.package.name, "cargo-name");
+        assert_eq!(manifest.package.version, "0.2.0");
+        assert_eq!(manifest.package.description, "cargo description");
+        assert_eq!(manifest.package.license.as_deref(), Some("MIT"));
+        assert_eq!(manifest.package.release.as_deref(), Some("1"));
+        assert_eq!(manifest.package.kind, Some(PackageKindTagV2::Package));
+    }
 }

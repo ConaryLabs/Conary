@@ -19,7 +19,8 @@ pub(super) async fn dispatch_ccs_command(
             name,
             version,
             force,
-        } => commands::ccs::cmd_ccs_init(&path, name, &version, force).await,
+            template,
+        } => commands::ccs::cmd_ccs_init(&path, name, &version, force, template).await,
 
         cli::CcsCommands::Build {
             path,
