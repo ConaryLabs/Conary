@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-06-18
-revision: 17
+revision: 18
 summary: Route M4 CCS v2 ownership
 ---
 
@@ -277,6 +277,7 @@ install CCS packages, and preserve/replay legacy scriptlet metadata safely.
 
 **Start here:** `crates/conary-core/src/ccs/`;
 `crates/conary-core/src/ccs/v2/`;
+`crates/conary-core/src/ccs/v2/authoring.rs`;
 `crates/conary-core/src/ccs/archive_reader.rs`;
 `crates/conary-core/src/ccs/package.rs`;
 `crates/conary-core/src/ccs/convert/`;
@@ -284,6 +285,11 @@ install CCS packages, and preserve/replay legacy scriptlet metadata safely.
 `crates/conary-core/src/ccs/convert/scriptlet_bundle/`;
 `crates/conary-core/src/ccs/legacy_replay.rs`;
 `apps/conary/src/commands/ccs/`;
+`apps/conary/src/commands/ccs/templates.rs`;
+`apps/conary/src/commands/ccs/lint.rs`;
+`apps/conary/src/commands/ccs/build.rs`;
+`apps/conary/src/commands/ccs/test.rs`;
+`apps/conary/src/commands/ccs/local_dev.rs`;
 `apps/conary/src/commands/ccs/install.rs`;
 `apps/conary/src/commands/ccs/install/command.rs`;
 `apps/conary/src/commands/ccs/install/dependency.rs`;
@@ -302,12 +308,14 @@ metadata, scriptlet sandboxing (`crates/conary-core/src/scriptlet/mod.rs`,
 `crates/conary-core/src/scriptlet/legacy.rs`), fixture maps.
 
 **Focused proof:** `cargo test -p conary-core ccs::v2`;
+`cargo test -p conary --test packaging_m4b`;
 `cargo test -p conary-core golden_fixtures`;
 `cargo test -p conary-core support_matrix`;
 `cargo test -p conary-core legacy_replay`.
 
 **Interaction gate:** `cargo test -p conary --test conversion_integration golden_conversion`;
 `cargo test -p conary --test packaging_m4a`;
+`cargo test -p conary-core repository::static_repo::publish_gate`;
 `cargo test -p conary --test bundle_replay`;
 `cargo test -p remi publication` when conversion output affects public serving.
 

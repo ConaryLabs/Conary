@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-06-18
-revision: 16
+revision: 17
 summary: Route CCS v2 authority, manifest provenance, and release attestations
 ---
 
@@ -91,6 +91,12 @@ when both manifest formats are present.
 archive reading, and content identity. Use `archive_reader.rs` and `package.rs`
 only as version-routing/adaptation surfaces.
 
+Native v2 authoring from `ccs.toml` starts in
+`apps/conary/src/commands/ccs/{templates.rs,lint.rs,build.rs,test.rs,local_dev.rs}`
+for command ergonomics and local-dev state, and
+`crates/conary-core/src/ccs/v2/authoring.rs` for projection from `BuildResult`
+into signed v2 authority.
+
 **enhancement/** -- Post-conversion enrichment via trait-based plugins.
 Adds capabilities, provenance, and subpackage relationships that the
 original format lacked. Uses EnhancementRunner with a registry pattern.
@@ -132,6 +138,22 @@ install-time authority. `MANIFEST.toml` may be present for source/debug
 visibility, but TOML-only install behavior is not native authority. The v2
 implementation lives under `crates/conary-core/src/ccs/v2/`; legacy v1
 `BinaryManifest` parsing remains a migration/fixture surface.
+
+### Native CCS v2 Local Authoring Loop
+
+The first supported native authoring loop is:
+
+```text
+conary ccs init --template minimal-file
+conary ccs lint
+conary ccs build --format v2 --local-dev
+conary ccs verify
+conary ccs test --dry-run
+```
+
+`--local-dev` signs with a user-local development key for iteration.
+Local-dev artifacts can verify and dry-run-test locally, but static publish and
+Remi release paths still require accepted release trust and build attestation.
 
 ## Legacy Scriptlet Bundles And Replay
 

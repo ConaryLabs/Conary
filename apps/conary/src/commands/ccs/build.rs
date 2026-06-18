@@ -10,31 +10,34 @@ use anyhow::{Context, Result};
 use conary_core::ccs::{CcsBuilder, CcsManifest, builder, legacy};
 use std::path::Path;
 
-/// Build a CCS package from a manifest
-pub async fn cmd_ccs_build(
-    path: &str,
-    output: &str,
-    target: &str,
-    source: Option<String>,
-    no_classify: bool,
-    chunked: bool,
-    dry_run: bool,
-    format: CcsBuildFormat,
-    local_dev: bool,
-    key: Option<String>,
-) -> Result<()> {
-    let path = Path::new(path);
+#[derive(Debug, Clone)]
+pub struct CcsBuildOptions {
+    pub path: String,
+    pub output: String,
+    pub target: String,
+    pub source: Option<String>,
+    pub no_classify: bool,
+    pub chunked: bool,
+    pub dry_run: bool,
+    pub format: CcsBuildFormat,
+    pub local_dev: bool,
+    pub key: Option<String>,
+}
 
-    if local_dev && key.is_some() {
+/// Build a CCS package from a manifest
+pub async fn cmd_ccs_build(options: CcsBuildOptions) -> Result<()> {
+    let path = Path::new(&options.path);
+
+    if options.local_dev && options.key.is_some() {
         anyhow::bail!("--local-dev and --key are mutually exclusive signing options");
     }
-    if format == CcsBuildFormat::V1 && (key.is_some() || local_dev) {
+    if options.format == CcsBuildFormat::V1 && (options.key.is_some() || options.local_dev) {
         anyhow::bail!("--key and --local-dev are only supported when building with --format v2");
     }
-    if format == CcsBuildFormat::V2 && target != "ccs" {
+    if options.format == CcsBuildFormat::V2 && options.target != "ccs" {
         anyhow::bail!("--format v2 only supports --target ccs in M4b");
     }
-    if format == CcsBuildFormat::V2 && key.is_none() && !local_dev {
+    if options.format == CcsBuildFormat::V2 && options.key.is_none() && !options.local_dev {
         anyhow::bail!("ccs build --format v2 requires --key <private-key> or --local-dev");
     }
 
@@ -59,7 +62,7 @@ pub async fn cmd_ccs_build(
     println!("Parsing manifest...");
     let manifest = CcsManifest::from_file(&manifest_path).context("Failed to parse ccs.toml")?;
 
-    if format == CcsBuildFormat::V2 {
+    if options.format == CcsBuildFormat::V2 {
         let findings = conary_core::ccs::v2::authoring::lint_manifest_for_v2_authoring(&manifest);
         if findings.iter().any(|finding| finding.blocks_build) {
             for finding in &findings {
@@ -78,7 +81,7 @@ pub async fn cmd_ccs_build(
     );
 
     // Determine source directory
-    let source_dir = match source.as_ref() {
+    let source_dir = match options.source.as_ref() {
         Some(s) => Path::new(s).to_path_buf(),
         None => manifest_path
             .parent()
@@ -88,10 +91,10 @@ pub async fn cmd_ccs_build(
 
     // Parse and validate targets
     const VALID_TARGETS: &[&str] = &["ccs", "deb", "rpm", "arch"];
-    let targets: Vec<&str> = if target == "all" {
+    let targets: Vec<&str> = if options.target == "all" {
         VALID_TARGETS.to_vec()
     } else {
-        let parsed: Vec<&str> = target.split(',').collect();
+        let parsed: Vec<&str> = options.target.split(',').collect();
         let invalid: Vec<&&str> = parsed
             .iter()
             .filter(|t| !VALID_TARGETS.contains(t))
@@ -110,13 +113,13 @@ pub async fn cmd_ccs_build(
     };
 
     // Create output directory
-    let output_dir = Path::new(output);
-    if !dry_run {
+    let output_dir = Path::new(&options.output);
+    if !options.dry_run {
         std::fs::create_dir_all(output_dir).context("Failed to create output directory")?;
     }
 
     // Build the package data (needed for all targets)
-    let build_result = if !dry_run {
+    let build_result = if !options.dry_run {
         println!("Scanning source directory: {}", source_dir.display());
 
         let file_count = walkdir::WalkDir::new(&source_dir)
@@ -127,10 +130,10 @@ pub async fn cmd_ccs_build(
         println!("Scanning {} files...", file_count);
 
         let mut builder_instance = CcsBuilder::new(manifest.clone(), &source_dir);
-        if no_classify {
+        if options.no_classify {
             builder_instance = builder_instance.no_classify();
         }
-        if chunked {
+        if options.chunked {
             builder_instance = builder_instance.with_chunking();
         } else {
             println!("CDC chunking disabled (use default for delta-efficient updates)");
@@ -147,14 +150,14 @@ pub async fn cmd_ccs_build(
         None
     };
 
-    if dry_run {
+    if options.dry_run {
         println!();
         println!("[DRY RUN] Would build:");
     }
 
     for t in &targets {
         let filename = match *t {
-            "ccs" if format == CcsBuildFormat::V2 => {
+            "ccs" if options.format == CcsBuildFormat::V2 => {
                 let release = manifest
                     .package
                     .release
@@ -186,7 +189,7 @@ pub async fn cmd_ccs_build(
 
         let output_path = output_dir.join(&filename);
 
-        if dry_run {
+        if options.dry_run {
             println!("  {} -> {}", t, output_path.display());
         } else {
             let result = build_result.as_ref().unwrap();
@@ -194,21 +197,22 @@ pub async fn cmd_ccs_build(
             match *t {
                 "ccs" => {
                     println!();
-                    if format == CcsBuildFormat::V2 {
+                    if options.format == CcsBuildFormat::V2 {
                         println!("Writing CCS v2 package...");
                         let debug_toml = manifest.to_toml().context("serialize debug ccs.toml")?;
                         let projected = conary_core::ccs::v2::project_build_result_to_v2(
                             conary_core::ccs::v2::V2AuthoringInput {
                                 build: result,
-                                local_dev,
+                                local_dev: options.local_dev,
                                 debug_toml: Some(debug_toml),
                             },
                         )
                         .context("project v2 package authority")?;
-                        let signing_key = if local_dev {
+                        let signing_key = if options.local_dev {
                             super::local_dev::load_or_create_local_dev_key()?
                         } else {
-                            let key_path = key
+                            let key_path = options
+                                .key
                                 .as_deref()
                                 .context("missing --key for v2 release signing")?;
                             conary_core::ccs::signing::SigningKeyPair::load_from_file(Path::new(
@@ -226,7 +230,7 @@ pub async fn cmd_ccs_build(
                             None,
                         )
                         .context("Failed to write CCS v2 package")?;
-                        if local_dev {
+                        if options.local_dev {
                             println!(
                                 "  Signed with local-dev CCS key; release publish will reject this artifact."
                             );
@@ -279,7 +283,7 @@ pub async fn cmd_ccs_build(
         }
     }
 
-    if !dry_run {
+    if !options.dry_run {
         println!();
         println!("Build complete!");
     }

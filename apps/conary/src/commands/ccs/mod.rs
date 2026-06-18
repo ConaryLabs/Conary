@@ -19,7 +19,7 @@ mod templates;
 mod test;
 
 // Re-export all public commands
-pub use build::cmd_ccs_build;
+pub use build::{CcsBuildOptions, cmd_ccs_build};
 pub use enhance::cmd_ccs_enhance;
 pub use init::cmd_ccs_init;
 pub use init_template::CcsInitTemplate;

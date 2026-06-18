@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-06-18
-revision: 3
+revision: 4
 summary: Map Remi, CCS v2, and install replay fixture ownership and proof gates
 ---
 
@@ -35,6 +35,7 @@ Each fixture family should record:
 |-----------|-------|------------|
 | `ccs-convert-golden-cases` | CCS convert | `cargo test -p conary-core golden_fixtures`; `cargo test -p conary-core support_matrix` |
 | `ccs-v2-native-authority-fixtures` | CCS v2 native authority | `cargo test -p conary-core ccs::v2`; `cargo test -p conary --test packaging_m4a` |
+| `ccs-v2-local-authoring-smoke` | CCS v2 local authoring | `cargo test -p conary --test packaging_m4b` |
 | `legacy-scriptlet-bundle-fixtures` | Install replay adapter and Conary CLI tests | `cargo test -p conary --test bundle_replay synthetic_legacy_bundle_fixtures_cover_task5_matrix` |
 | `remi-scriptlet-publication-gate` | Remi server publication | `cargo test -p remi publication` |
 | `remi-test-artifact-fixtures` | Remi artifact handlers | `cargo test -p remi test_upload_fixture`; `cargo test -p remi test_public_fixture_get_and_head` |
@@ -87,6 +88,27 @@ Each fixture family should record:
   TOML-debug-hash, and content-identity coverage. Legacy rejection fixtures are
   v1 `BinaryManifest` packages and CBOR-only default-reconstruction packages
   that prove fail-closed diagnostics.
+
+### ccs-v2-local-authoring-smoke
+
+- **Owner:** CCS v2 local authoring commands:
+  `apps/conary/src/commands/ccs/{templates.rs,lint.rs,build.rs,test.rs,local_dev.rs}`;
+  authority projection: `crates/conary-core/src/ccs/v2/authoring.rs`.
+- **Purpose:** Minimal-file native authoring loop from `ccs.toml` through lint,
+  local-dev or explicit-key v2 build, local-dev verify, isolated dry-run test,
+  and static publish rejection for local-dev/host-hardened artifacts.
+- **Fixture sources:** in-test project builder in
+  `apps/conary/tests/packaging_m4b.rs`.
+- **Consumes:** M4b CLI smoke, signing guardrail, lifecycle/dependency
+  profile-deferred, local-dev trust, and isolated dry-run tests.
+- **Fast proof:** `cargo test -p conary --test packaging_m4b`.
+- **Medium proof:** `cargo test -p conary-core ccs::v2`;
+  `cargo test -p conary-core repository::static_repo::publish_gate`.
+- **Slow proof:** No slow gate for M4b fixture-map-only changes.
+- **Regeneration:** Temporary source trees are generated during tests.
+- **Safety notes:** Local-dev keys are isolated with test HOME/XDG directories.
+  Local-dev v2 artifacts are for local verify/test only and must remain
+  rejected by static publish and Remi release trust.
 
 ### legacy-scriptlet-bundle-fixtures
 
