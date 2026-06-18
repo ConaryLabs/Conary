@@ -27,16 +27,20 @@ use tokio::sync::RwLock;
 pub struct PackageQuery {
     /// Specific version to fetch (optional)
     pub version: Option<String>,
+    /// Specific native package release to fetch (optional)
+    pub release: Option<String>,
     /// Specific native package architecture to fetch (optional)
     #[serde(alias = "architecture")]
     pub arch: Option<String>,
 }
 
 /// Response when package is ready
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 pub struct PackageManifest {
     pub name: String,
     pub version: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub release: Option<String>,
     pub distro: String,
     /// List of chunk hashes that make up this package
     pub chunks: Vec<ChunkRef>,
@@ -44,11 +48,16 @@ pub struct PackageManifest {
     pub total_size: u64,
     /// SHA-256 of the complete reassembled content
     pub content_hash: String,
+    pub native: bool,
+    pub converted: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_kind: Option<String>,
     /// Passive legacy scriptlet metadata summary.
-    pub scriptlets: ScriptletPackageMetadata,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scriptlets: Option<ScriptletPackageMetadata>,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 pub struct ChunkRef {
     pub hash: String,
     pub size: u64,
@@ -79,6 +88,89 @@ enum ConvertedDownloadLookup {
     Missing,
 }
 
+fn native_ambiguity_response(releases: Vec<String>) -> Response {
+    (
+        StatusCode::CONFLICT,
+        Json(serde_json::json!({
+            "code": "NATIVE_RELEASE_AMBIGUOUS",
+            "error": "multiple native releases match package request",
+            "releases": releases,
+        })),
+    )
+        .into_response()
+}
+
+fn manifest_from_native_publication(
+    native: conary_core::db::models::NativePackagePublication,
+) -> anyhow::Result<PackageManifest> {
+    let chunk_hashes: Vec<String> = serde_json::from_str(&native.chunk_hashes_json)?;
+    let chunks = chunk_hashes
+        .iter()
+        .enumerate()
+        .map(|(i, hash)| ChunkRef {
+            hash: hash.clone(),
+            size: 0,
+            offset: i as u64,
+        })
+        .collect();
+    Ok(PackageManifest {
+        name: native.name,
+        version: native.version,
+        release: Some(native.package_release),
+        distro: native.distro,
+        chunks,
+        total_size: native.total_size as u64,
+        content_hash: native.content_hash,
+        native: true,
+        converted: false,
+        source_kind: Some("native-ccs".to_string()),
+        scriptlets: None,
+    })
+}
+
+fn native_manifest_lookup(
+    db_path: &std::path::Path,
+    distro: &str,
+    name: &str,
+    version: Option<&str>,
+    release: Option<&str>,
+    architecture: Option<&str>,
+) -> anyhow::Result<crate::server::native_publish::public_lookup::NativeLookup<PackageManifest>> {
+    use crate::server::native_publish::public_lookup::{
+        NativeLookup, resolve_active_native_publication,
+    };
+
+    match resolve_active_native_publication(db_path, distro, name, version, release, architecture)?
+    {
+        NativeLookup::Ready(native) => Ok(NativeLookup::Ready(manifest_from_native_publication(
+            native,
+        )?)),
+        NativeLookup::Ambiguous(releases) => Ok(NativeLookup::Ambiguous(releases)),
+        NativeLookup::Missing => Ok(NativeLookup::Missing),
+    }
+}
+
+#[cfg(test)]
+fn native_manifest_for_package(
+    db_path: &std::path::Path,
+    distro: &str,
+    name: &str,
+    version: Option<&str>,
+    release: Option<&str>,
+    architecture: Option<&str>,
+) -> anyhow::Result<Option<PackageManifest>> {
+    use crate::server::native_publish::public_lookup::NativeLookup;
+
+    match native_manifest_lookup(db_path, distro, name, version, release, architecture)? {
+        NativeLookup::Ready(manifest) => Ok(Some(manifest)),
+        NativeLookup::Ambiguous(releases) => anyhow::bail!(
+            "multiple native releases match package request: {}",
+            releases.join(", ")
+        ),
+        NativeLookup::Missing => Ok(None),
+    }
+}
+
 /// GET /v1/:distro/packages/:name
 ///
 /// Returns package metadata and chunk list.
@@ -97,6 +189,43 @@ pub async fn get_package(
         let state_guard = state.read().await;
         state_guard.config.db_path.clone()
     };
+
+    // Check if package is already converted (use spawn_blocking to avoid blocking
+    // the async runtime with synchronous SQLite I/O)
+    let native_db = db_path.clone();
+    let native_distro = distro.clone();
+    let native_name = name.clone();
+    let native_version = query.version.clone();
+    let native_release = query.release.clone();
+    let native_arch = query.arch.clone();
+    match tokio::task::spawn_blocking(move || {
+        native_manifest_lookup(
+            &native_db,
+            &native_distro,
+            &native_name,
+            native_version.as_deref(),
+            native_release.as_deref(),
+            native_arch.as_deref(),
+        )
+    })
+    .await
+    {
+        Ok(Ok(crate::server::native_publish::public_lookup::NativeLookup::Ready(manifest))) => {
+            return Json(manifest).into_response();
+        }
+        Ok(Ok(crate::server::native_publish::public_lookup::NativeLookup::Ambiguous(releases))) => {
+            return native_ambiguity_response(releases);
+        }
+        Ok(Ok(crate::server::native_publish::public_lookup::NativeLookup::Missing)) => {}
+        Ok(Err(e)) => {
+            tracing::error!("Database error checking native publication: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response();
+        }
+        Err(e) => {
+            tracing::error!("Blocking task failed: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response();
+        }
+    }
 
     // Check if package is already converted (use spawn_blocking to avoid blocking
     // the async runtime with synchronous SQLite I/O)
@@ -148,10 +277,11 @@ pub async fn get_package(
 
     // Package not converted - check if conversion is already in progress
     let job_key = format!(
-        "{}:{}:{}:{}",
+        "{}:{}:{}:{}:{}",
         distro,
         name,
         query.version.as_deref().unwrap_or("latest"),
+        query.release.as_deref().unwrap_or("default"),
         query.arch.as_deref().unwrap_or("default")
     );
 
@@ -293,11 +423,15 @@ fn check_converted(
                         );
                         "unknown".to_string()
                     }),
+                    release: None,
                     distro: converted.distro.unwrap_or_else(|| distro.to_string()),
                     chunks,
                     total_size: converted.total_size.unwrap_or(0) as u64,
                     content_hash: converted.content_hash.unwrap_or_default(),
-                    scriptlets: ScriptletPackageMetadata::from(&scriptlet_summary),
+                    native: false,
+                    converted: true,
+                    source_kind: Some("converted".to_string()),
+                    scriptlets: Some(ScriptletPackageMetadata::from(&scriptlet_summary)),
                 };
 
                 return match decision {
@@ -447,14 +581,70 @@ pub async fn download_package(
         return e;
     }
 
+    let (native_db_path, native_analytics) = {
+        let state_guard = state.read().await;
+        (
+            state_guard.config.db_path.clone(),
+            state_guard.analytics.clone(),
+        )
+    };
+    let native_ua = headers
+        .get(header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    let native_lookup_db = native_db_path.clone();
+    let native_lookup_distro = distro.clone();
+    let native_lookup_name = name.clone();
+    let native_lookup_version = query.version.clone();
+    let native_lookup_release = query.release.clone();
+    let native_lookup_arch = query.arch.clone();
+    match tokio::task::spawn_blocking(move || {
+        crate::server::native_publish::public_lookup::resolve_active_native_publication(
+            &native_lookup_db,
+            &native_lookup_distro,
+            &native_lookup_name,
+            native_lookup_version.as_deref(),
+            native_lookup_release.as_deref(),
+            native_lookup_arch.as_deref(),
+        )
+    })
+    .await
+    {
+        Ok(Ok(crate::server::native_publish::public_lookup::NativeLookup::Ready(native))) => {
+            return stream_ccs_file(
+                std::path::PathBuf::from(native.package_path),
+                native_analytics,
+                &distro,
+                &name,
+                query.version.as_deref(),
+                query.arch.as_deref(),
+                native_ua.as_deref(),
+            )
+            .await;
+        }
+        Ok(Ok(crate::server::native_publish::public_lookup::NativeLookup::Ambiguous(releases))) => {
+            return native_ambiguity_response(releases);
+        }
+        Ok(Ok(crate::server::native_publish::public_lookup::NativeLookup::Missing)) => {}
+        Ok(Err(e)) => {
+            tracing::error!("Database error checking native publication download: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response();
+        }
+        Err(e) => {
+            tracing::error!("Blocking task failed: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response();
+        }
+    }
+
     let state_guard = state.read().await;
 
     // Check for conversion job (in-progress or completed)
     let job_key = format!(
-        "{}:{}:{}:{}",
+        "{}:{}:{}:{}:{}",
         distro,
         name,
         query.version.as_deref().unwrap_or("latest"),
+        query.release.as_deref().unwrap_or("default"),
         query.arch.as_deref().unwrap_or("default")
     );
     let job_info = state_guard
@@ -784,6 +974,7 @@ pub async fn trigger_conversion(
     // Reuse the get_package logic
     let query = PackageQuery {
         version: req.version,
+        release: None,
         arch: None,
     };
     get_package(State(state), Path((req.distro, req.package)), Query(query)).await
@@ -862,8 +1053,82 @@ pub async fn get_delta(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::server::native_publish::test_support::seed_native_publication;
     use conary_core::ccs::convert::ScriptletBundleSummary;
     use conary_core::db::models::{CONVERSION_VERSION, ConvertedPackage};
+
+    fn create_test_db() -> (tempfile::NamedTempFile, rusqlite::Connection) {
+        let temp_file = tempfile::NamedTempFile::new().unwrap();
+        let conn = rusqlite::Connection::open(temp_file.path()).unwrap();
+        conary_core::db::schema::migrate(&conn).unwrap();
+        (temp_file, conn)
+    }
+
+    #[test]
+    fn native_manifest_lookup_prefers_active_native_publication() {
+        let (temp_file, conn) = create_test_db();
+        seed_native_publication(
+            &conn,
+            "fedora",
+            "hello",
+            "1.0.0",
+            "1",
+            "noarch",
+            "/tmp/hello.ccs",
+        );
+
+        let manifest = native_manifest_for_package(
+            temp_file.path(),
+            "fedora",
+            "hello",
+            Some("1.0.0"),
+            Some("1"),
+            None,
+        )
+        .unwrap()
+        .expect("native manifest");
+
+        assert_eq!(manifest.name, "hello");
+        assert_eq!(manifest.version, "1.0.0");
+        assert_eq!(manifest.release.as_deref(), Some("1"));
+        assert!(manifest.native);
+        assert!(!manifest.converted);
+    }
+
+    #[test]
+    fn native_manifest_lookup_reports_ambiguous_releases() {
+        let (temp_file, conn) = create_test_db();
+        seed_native_publication(
+            &conn,
+            "fedora",
+            "hello",
+            "1.0.0",
+            "1",
+            "noarch",
+            "/tmp/hello-1.ccs",
+        );
+        seed_native_publication(
+            &conn,
+            "fedora",
+            "hello",
+            "1.0.0",
+            "2",
+            "noarch",
+            "/tmp/hello-2.ccs",
+        );
+
+        let error = native_manifest_for_package(
+            temp_file.path(),
+            "fedora",
+            "hello",
+            Some("1.0.0"),
+            None,
+            None,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("multiple native releases"));
+    }
 
     #[test]
     fn package_publication_manifest_includes_scriptlets_without_private_path() {
@@ -906,8 +1171,9 @@ mod tests {
         };
         let json = serde_json::to_string(&manifest).unwrap();
 
-        assert_eq!(manifest.scriptlets.scriptlet_fidelity, "native-free");
-        assert!(manifest.scriptlets.review_artifact_available);
+        let scriptlets = manifest.scriptlets.as_ref().unwrap();
+        assert_eq!(scriptlets.scriptlet_fidelity, "native-free");
+        assert!(scriptlets.review_artifact_available);
         assert!(!json.contains("review_artifact_path"));
         assert!(!json.contains("private-review-secret"));
     }
