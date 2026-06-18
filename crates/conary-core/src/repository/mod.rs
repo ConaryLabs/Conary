@@ -25,6 +25,7 @@ pub mod remi;
 pub mod resolution;
 pub mod retry;
 pub mod substituter;
+pub mod supported_profiles;
 mod sync;
 
 pub mod dependency_model;

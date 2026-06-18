@@ -285,7 +285,7 @@ const fn public_fixture(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::repository::distro::SUPPORTED_USER_DISTROS;
+    use crate::repository::distro::supported_user_distros;
 
     #[test]
     fn golden_fixtures_have_unique_ids() {
@@ -314,9 +314,9 @@ mod tests {
 
     #[test]
     fn public_ready_golden_fixtures_use_supported_exact_distro_ids() {
-        let supported = SUPPORTED_USER_DISTROS
-            .iter()
-            .copied()
+        let supported = supported_user_distros()
+            .into_iter()
+            .map(|distro| distro.id)
             .collect::<BTreeSet<_>>();
 
         for case in ALL_GOLDEN_FIXTURE_CASES
