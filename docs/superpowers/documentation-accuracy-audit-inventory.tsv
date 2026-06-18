@@ -151,6 +151,7 @@ docs/superpowers/release-security-waivers-2026-05-06.md	planning	maintainer
 docs/superpowers/specs/2026-06-17-m4-ccs-native-ecosystem-design.md	planning	maintainer
 docs/superpowers/specs/2026-06-17-m4a-ccs-v2-native-package-contract-design.md	planning	maintainer
 docs/superpowers/specs/2026-06-18-m4b-native-authoring-build-lint-test-design.md	planning	maintainer
+docs/superpowers/specs/2026-06-18-m4c-remi-native-ccs-publication-design.md	planning	maintainer
 docs/superpowers/specs/archive/2026-04-10-all-tracks-release-hardening-design.md	historical	historical
 docs/superpowers/specs/archive/2026-04-10-conaryd-forge-staging-deployment-design.md	historical	historical
 docs/superpowers/specs/archive/2026-04-16-bootstrap-self-hosting-vm-design.md	historical	historical
