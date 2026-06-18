@@ -8,14 +8,27 @@ and can write chunks through to R2 when configured.
 
 ## Release Uploads
 
-Remi release push is distinct from conversion publication. The release upload
-surface lives in `apps/remi/src/server/release_publish.rs` and is reached via
-`POST /v1/admin/releases/{distro}` with bearer-token admin auth. Uploads are
-first staged privately, then checked with the shared static publish gate against
-`release_publish.trusted_build_attestation_signers`. Public package metadata,
-CAS chunk visibility, and TUF targets are committed only after that gate passes;
-failed authorization, metadata, or TUF commits must leave no public package row,
-chunk object, or TUF target.
+Remi release push is the first native CCS publication intake surface. The
+route remains `POST /v1/admin/releases/{distro}` with bearer-token admin auth,
+but accepted CCS v2 uploads are stored in `native_package_publications` and
+projected into `repository_packages`; they are not synthetic
+`converted_packages` rows. Native uploads stage privately, run the shared static
+publish gate against `release_publish.trusted_build_attestation_signers`, and
+publish package rows, native rows, chunks, and TUF targets only after the gate
+and metadata commit pass.
+
+The route/staging wrapper lives in `apps/remi/src/server/release_publish.rs`.
+Native CCS verification, artifact promotion, metadata persistence, supersede
+behavior, and public native lookup live under
+`apps/remi/src/server/native_publish/`. Failed authorization, metadata, or TUF
+commits must leave the previous public native generation intact and must not
+write a new public package row, chunk object, `converted_packages` row, or TUF
+target for the rejected upload.
+
+Public metadata and download lookups are release-aware for native rows:
+clients should request `version`, `release`, and `arch` when selecting a native
+package. If a version-only request matches multiple native releases, Remi
+returns a conflict with the available releases instead of guessing.
 
 ## Passive Scriptlet Metadata
 
@@ -56,7 +69,14 @@ Start there before changing scriptlet publication gates, converted package
 public-ready filtering, public index metadata, review artifacts, static test
 fixture uploads, or `conary-test` manifest behavior.
 
-Fast proof for publication-gate edits:
+Fast proof for native release-publication edits:
+
+```bash
+cargo test -p remi release_upload_
+cargo test -p conary --test packaging_m4c
+```
+
+Fast proof for converted publication-gate edits:
 
 ```bash
 cargo test -p remi publication

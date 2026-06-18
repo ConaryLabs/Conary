@@ -428,7 +428,7 @@ Before Conary can manage packages, its database must be initialized:
 conary system init
 ```
 
-This creates the SQLite database at `/var/lib/conary/conary.db` and sets up all tables (currently schema v73). The database is the single source of truth for all package state -- there are no configuration files for runtime state. Recovery metadata is SQLite-native: first-wave adoption and unadoption paths write checkpoint backups under the runtime root, and generation publication writes a DB backup under `/conary/generations/<n>/state/`.
+This creates the SQLite database at `/var/lib/conary/conary.db` and sets up all tables (currently schema v74). The database is the single source of truth for all package state -- there are no configuration files for runtime state. Recovery metadata is SQLite-native: first-wave adoption and unadoption paths write checkpoint backups under the runtime root, and generation publication writes a DB backup under `/conary/generations/<n>/state/`.
 
 You can specify an alternate database path with `-d`:
 

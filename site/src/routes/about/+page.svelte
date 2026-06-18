@@ -120,7 +120,7 @@
 				</div>
 				<div class="tech-item">
 					<span class="tech-label">Database</span>
-					<span class="tech-value">SQLite (schema version 73, DB-first runtime state)</span>
+					<span class="tech-value">SQLite (schema version 74, DB-first runtime state)</span>
 				</div>
 				<div class="tech-item">
 					<span class="tech-label">Hashing</span>

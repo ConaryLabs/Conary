@@ -226,6 +226,7 @@ summary: Route M4 CCS v2 ownership
 - Remi admin, conversion, publication, artifact fixture, and MCP flows:
   `apps/remi/src/server/admin_service.rs`,
   `apps/remi/src/server/release_publish.rs`,
+  `apps/remi/src/server/native_publish/`,
   `apps/remi/src/server/conversion.rs`,
   `apps/remi/src/server/conversion/workflow.rs`,
   `apps/remi/src/server/conversion/persistence.rs`,

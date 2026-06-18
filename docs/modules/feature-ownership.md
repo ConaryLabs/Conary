@@ -474,6 +474,7 @@ switching helpers in `namespace.rs`.
 release uploads, and static test fixtures through Remi.
 
 **Start here:** `apps/remi/src/server/release_publish.rs`;
+`apps/remi/src/server/native_publish/`;
 `apps/remi/src/server/publication.rs`;
 `apps/remi/src/server/conversion.rs`;
 `apps/remi/src/server/conversion/types.rs`;
@@ -493,6 +494,7 @@ release uploads, and static test fixtures through Remi.
 federation peer state, admin audit logs, artifact path handling.
 
 **Focused proof:** `cargo test -p remi release_upload_`;
+`cargo test -p conary --test packaging_m4c`;
 `cargo test -p remi remi_release_parity`;
 `cargo test -p remi publication`;
 `cargo test -p remi test_upload_fixture`;
@@ -500,7 +502,9 @@ federation peer state, admin audit logs, artifact path handling.
 
 **Interaction gate:** `cargo test -p remi`;
 `cargo test -p conary --test conversion_integration golden_conversion` when
-serving behavior depends on conversion output.
+serving behavior depends on conversion output;
+`cargo test -p conary --test packaging_m4c` when native release intake,
+metadata, download, or client install proof changes.
 
 **Docs to update:** `docs/modules/remi.md`; `docs/modules/test-fixtures.md`;
 `docs/llms/subsystem-map.md`; operator docs when deployment behavior changes.
@@ -508,8 +512,10 @@ serving behavior depends on conversion output.
 **Safety notes:** do not expose non-public scriptlet rows, private review paths,
 or unverified native package signatures through public listings. Remi release
 uploads must stage privately, enforce trusted build-attestation signer policy,
-and publish package rows, chunks, and TUF targets only after the shared gate
-passes.
+and publish package rows, native publication rows, chunks, and TUF targets only
+after the shared gate passes. Native CCS release uploads must not create
+synthetic `converted_packages` rows; failed replacement must preserve the last
+public native generation.
 
 ## conaryd Package Jobs And Daemon Routes
 
