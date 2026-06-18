@@ -117,6 +117,12 @@ pub struct PublishGateFailure {
     pub message: String,
 }
 
+#[derive(Debug)]
+pub struct StaticArtifactPublishCandidate {
+    pub package: CcsPackage,
+    pub lint: PublishLintReport,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum PublishGateFailureCode {
@@ -174,6 +180,19 @@ pub fn verify_static_artifact_publish_eligibility(
     accepted_signers: &AcceptedStaticSignerSet,
     accepted_policy_digest: &str,
 ) -> Result<PublishLintReport> {
+    verify_static_artifact_publish_candidate(
+        artifact_path,
+        accepted_signers,
+        accepted_policy_digest,
+    )
+    .map(|candidate| candidate.lint)
+}
+
+pub fn verify_static_artifact_publish_candidate(
+    artifact_path: &Path,
+    accepted_signers: &AcceptedStaticSignerSet,
+    accepted_policy_digest: &str,
+) -> Result<StaticArtifactPublishCandidate> {
     let verification = verify_package_for_static_gate(artifact_path, accepted_signers)?;
     let artifact_path_str = artifact_path
         .to_str()
@@ -186,12 +205,13 @@ pub fn verify_static_artifact_publish_eligibility(
     } else {
         CcsPackage::parse(artifact_path_str).map_err(anyhow::Error::from)?
     };
-    verify_verified_static_artifact_publish_eligibility(
+    let lint = verify_verified_static_artifact_publish_eligibility(
         &package,
         &verification,
         accepted_signers,
         accepted_policy_digest,
-    )
+    )?;
+    Ok(StaticArtifactPublishCandidate { package, lint })
 }
 
 fn verify_package_for_static_gate(
@@ -666,6 +686,47 @@ mod tests {
         .unwrap();
 
         assert!(report.is_passed(), "{report:?}");
+    }
+
+    #[test]
+    fn artifact_gate_candidate_returns_verified_v2_package_for_native_intake() {
+        let signer = SigningKeyPair::generate().with_key_id("publish");
+        let temp = tempfile::tempdir().unwrap();
+        let package_path = temp.path().join("candidate-v2.ccs");
+        let authority =
+            crate::ccs::v2::test_support::package_authority_with_one_file("candidate-v2");
+        let payloads = crate::ccs::v2::test_support::one_file_payloads_for_tests();
+        let envelope = crate::ccs::attestation::test_support::sample_v2_envelope_for_tests(
+            &authority,
+            &signer,
+            STATIC_PUBLISH_POLICY_DIGEST_V1,
+        );
+        crate::ccs::builder::write_v2_ccs_package(
+            &authority,
+            &payloads,
+            &package_path,
+            &signer,
+            None,
+            Some(&envelope),
+            None,
+        )
+        .unwrap();
+
+        let candidate = verify_static_artifact_publish_candidate(
+            &package_path,
+            &accepted_signers_for_key(&signer),
+            STATIC_PUBLISH_POLICY_DIGEST_V1,
+        )
+        .unwrap();
+
+        assert!(candidate.lint.is_passed(), "{:?}", candidate.lint);
+        let verified_authority = candidate.package.v2_authority().unwrap();
+        assert_eq!(verified_authority.identity.name, "candidate-v2");
+        assert_eq!(verified_authority.identity.release, "1");
+        assert_eq!(
+            verified_authority.identity.architecture.as_deref(),
+            Some("x86_64")
+        );
     }
 
     #[test]

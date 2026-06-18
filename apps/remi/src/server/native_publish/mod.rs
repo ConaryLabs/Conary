@@ -4,6 +4,7 @@
 pub mod storage;
 pub mod test_support;
 pub mod types;
+pub mod verify;
 
 pub use types::{
     NativePublishError, NativePublishErrorCode, NativePublishResult, VerifiedNativeArtifact,
