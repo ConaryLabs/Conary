@@ -89,6 +89,55 @@ fn ccs_build_v2_accepts_explicit_release_key_and_policy_verify() {
     assert_success(&verify);
 }
 
+#[test]
+fn local_dev_v2_package_passes_verify_and_dry_run_test() {
+    let fixture = MinimalPackageFixture::new();
+    let package = fixture.build_v2_local_dev();
+
+    let verify = fixture
+        .conary()
+        .arg("ccs")
+        .arg("verify")
+        .arg(&package)
+        .output()
+        .expect("run conary ccs verify");
+    assert_success(&verify);
+    assert_stdout_contains(&verify, "local-dev");
+
+    let test = fixture
+        .conary()
+        .arg("ccs")
+        .arg("test")
+        .arg(&package)
+        .arg("--dry-run")
+        .arg("--keep-workspace")
+        .output()
+        .expect("run conary ccs test");
+    assert_success(&test);
+    assert_stdout_contains(&test, "dry-run");
+    assert_stdout_contains(&test, "isolated");
+
+    let kept_workspace = kept_workspace_from_stdout(&test);
+    assert!(!kept_workspace.join("root/bin/hello").exists());
+    let _ = std::fs::remove_dir_all(kept_workspace);
+}
+
+#[test]
+fn ccs_test_requires_dry_run_for_m4b() {
+    let fixture = MinimalPackageFixture::new();
+    let package = fixture.build_v2_local_dev();
+
+    let test = fixture
+        .conary()
+        .arg("ccs")
+        .arg("test")
+        .arg(&package)
+        .output()
+        .expect("run conary ccs test");
+
+    assert_failure_contains(&test, &["dry-run"]);
+}
+
 struct MinimalPackageFixture {
     work: tempfile::TempDir,
     project: std::path::PathBuf,
@@ -144,6 +193,23 @@ impl MinimalPackageFixture {
         &self.output
     }
 
+    fn build_v2_local_dev(&self) -> std::path::PathBuf {
+        let output = self
+            .conary()
+            .arg("ccs")
+            .arg("build")
+            .arg(&self.project)
+            .arg("--format")
+            .arg("v2")
+            .arg("--local-dev")
+            .arg("--output")
+            .arg(&self.output)
+            .output()
+            .expect("run conary ccs build");
+        assert_success(&output);
+        self.output.join("hello-0.1.0-1.ccs")
+    }
+
     fn conary(&self) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_conary"));
         command
@@ -152,6 +218,16 @@ impl MinimalPackageFixture {
             .env("XDG_CONFIG_HOME", &self.xdg_config);
         command
     }
+}
+
+fn kept_workspace_from_stdout(output: &Output) -> std::path::PathBuf {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let prefix = "Kept isolated CCS test workspace: ";
+    let path = stdout
+        .lines()
+        .find_map(|line| line.strip_prefix(prefix))
+        .unwrap_or_else(|| panic!("expected kept workspace line\n{}", output_text(output)));
+    std::path::PathBuf::from(path)
 }
 
 fn write_trust_policy_from_public_key(
