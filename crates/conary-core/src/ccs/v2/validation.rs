@@ -13,6 +13,10 @@ pub trait TargetProfileQuery {
     fn service_status(&self, service: &str) -> ProfileConstraintStatus;
     fn tmpfiles_status(&self, entry: &str) -> ProfileConstraintStatus;
     fn sysctl_status(&self, key: &str) -> ProfileConstraintStatus;
+    fn user_status(&self, user: &str) -> ProfileConstraintStatus;
+    fn group_status(&self, group: &str) -> ProfileConstraintStatus;
+    fn directory_status(&self, directory: &str) -> ProfileConstraintStatus;
+    fn alternative_status(&self, alternative: &str) -> ProfileConstraintStatus;
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -28,6 +32,22 @@ impl TargetProfileQuery for M4aNoProfileFacts {
     }
 
     fn sysctl_status(&self, _key: &str) -> ProfileConstraintStatus {
+        ProfileConstraintStatus::Unsupported
+    }
+
+    fn user_status(&self, _user: &str) -> ProfileConstraintStatus {
+        ProfileConstraintStatus::Unsupported
+    }
+
+    fn group_status(&self, _group: &str) -> ProfileConstraintStatus {
+        ProfileConstraintStatus::Unsupported
+    }
+
+    fn directory_status(&self, _directory: &str) -> ProfileConstraintStatus {
+        ProfileConstraintStatus::Unsupported
+    }
+
+    fn alternative_status(&self, _alternative: &str) -> ProfileConstraintStatus {
         ProfileConstraintStatus::Unsupported
     }
 }
@@ -47,31 +67,64 @@ pub fn validate_authority_with_profile(
 
     for service in &authority.lifecycle.services {
         if profile.service_status(service) == ProfileConstraintStatus::Unsupported {
-            diagnostics.push(V2Diagnostic::error(
-                V2DiagnosticCode::LifecycleUnsupported,
+            diagnostics.push(lifecycle_unsupported_diagnostic(
+                "service",
                 format!("service {service} is not supported by the target profile"),
-                Some("lifecycle.services".to_string()),
-                "remove the service declaration or wait for M4d target profile support",
+                "lifecycle.services",
             ));
         }
     }
     for entry in &authority.lifecycle.tmpfiles {
         if profile.tmpfiles_status(entry) == ProfileConstraintStatus::Unsupported {
-            diagnostics.push(V2Diagnostic::error(
-                V2DiagnosticCode::LifecycleUnsupported,
+            diagnostics.push(lifecycle_unsupported_diagnostic(
+                "tmpfiles",
                 format!("tmpfiles entry {entry} is not supported by the target profile"),
-                Some("lifecycle.tmpfiles".to_string()),
-                "remove the tmpfiles declaration or wait for M4d target profile support",
+                "lifecycle.tmpfiles",
             ));
         }
     }
     for key in &authority.lifecycle.sysctl {
         if profile.sysctl_status(key) == ProfileConstraintStatus::Unsupported {
-            diagnostics.push(V2Diagnostic::error(
-                V2DiagnosticCode::LifecycleUnsupported,
+            diagnostics.push(lifecycle_unsupported_diagnostic(
+                "sysctl",
                 format!("sysctl key {key} is not supported by the target profile"),
-                Some("lifecycle.sysctl".to_string()),
-                "remove the sysctl declaration or wait for M4d target profile support",
+                "lifecycle.sysctl",
+            ));
+        }
+    }
+    for user in &authority.lifecycle.users {
+        if profile.user_status(user) == ProfileConstraintStatus::Unsupported {
+            diagnostics.push(lifecycle_unsupported_diagnostic(
+                "user",
+                format!("user {user} is not supported by the target profile"),
+                "lifecycle.users",
+            ));
+        }
+    }
+    for group in &authority.lifecycle.groups {
+        if profile.group_status(group) == ProfileConstraintStatus::Unsupported {
+            diagnostics.push(lifecycle_unsupported_diagnostic(
+                "group",
+                format!("group {group} is not supported by the target profile"),
+                "lifecycle.groups",
+            ));
+        }
+    }
+    for directory in &authority.lifecycle.directories {
+        if profile.directory_status(directory) == ProfileConstraintStatus::Unsupported {
+            diagnostics.push(lifecycle_unsupported_diagnostic(
+                "directory",
+                format!("directory {directory} is not supported by the target profile"),
+                "lifecycle.directories",
+            ));
+        }
+    }
+    for alternative in &authority.lifecycle.alternatives {
+        if profile.alternative_status(alternative) == ProfileConstraintStatus::Unsupported {
+            diagnostics.push(lifecycle_unsupported_diagnostic(
+                "alternative",
+                format!("alternative {alternative} is not supported by the target profile"),
+                "lifecycle.alternatives",
             ));
         }
     }
@@ -81,6 +134,15 @@ pub fn validate_authority_with_profile(
     } else {
         Err(V2ValidationError { diagnostics })
     }
+}
+
+fn lifecycle_unsupported_diagnostic(kind: &str, message: String, field: &str) -> V2Diagnostic {
+    V2Diagnostic::error(
+        V2DiagnosticCode::LifecycleUnsupported,
+        message,
+        Some(field.to_string()),
+        format!("remove the {kind} declaration or choose a target profile that supports it"),
+    )
 }
 
 fn validate_authority_common(authority: &AuthorityDocumentV2) -> Result<(), V2ValidationError> {
@@ -483,6 +545,22 @@ mod tests {
             fn sysctl_status(&self, _key: &str) -> ProfileConstraintStatus {
                 ProfileConstraintStatus::Unsupported
             }
+
+            fn user_status(&self, _user: &str) -> ProfileConstraintStatus {
+                ProfileConstraintStatus::Unsupported
+            }
+
+            fn group_status(&self, _group: &str) -> ProfileConstraintStatus {
+                ProfileConstraintStatus::Unsupported
+            }
+
+            fn directory_status(&self, _directory: &str) -> ProfileConstraintStatus {
+                ProfileConstraintStatus::Unsupported
+            }
+
+            fn alternative_status(&self, _alternative: &str) -> ProfileConstraintStatus {
+                ProfileConstraintStatus::Unsupported
+            }
         }
 
         let mut authority = AuthorityDocumentV2::package_for_tests("svc");
@@ -494,5 +572,69 @@ mod tests {
                 .iter()
                 .any(|d| d.code == V2DiagnosticCode::LifecycleUnsupported)
         );
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    struct AcceptOnlyNamedService;
+
+    impl TargetProfileQuery for AcceptOnlyNamedService {
+        fn service_status(&self, service: &str) -> ProfileConstraintStatus {
+            if service == "allowed.service" {
+                ProfileConstraintStatus::Accepted
+            } else {
+                ProfileConstraintStatus::Unsupported
+            }
+        }
+
+        fn tmpfiles_status(&self, _entry: &str) -> ProfileConstraintStatus {
+            ProfileConstraintStatus::Unsupported
+        }
+
+        fn sysctl_status(&self, _key: &str) -> ProfileConstraintStatus {
+            ProfileConstraintStatus::Unsupported
+        }
+
+        fn user_status(&self, _user: &str) -> ProfileConstraintStatus {
+            ProfileConstraintStatus::Unsupported
+        }
+
+        fn group_status(&self, _group: &str) -> ProfileConstraintStatus {
+            ProfileConstraintStatus::Unsupported
+        }
+
+        fn directory_status(&self, _directory: &str) -> ProfileConstraintStatus {
+            ProfileConstraintStatus::Unsupported
+        }
+
+        fn alternative_status(&self, _alternative: &str) -> ProfileConstraintStatus {
+            ProfileConstraintStatus::Unsupported
+        }
+    }
+
+    #[test]
+    fn target_profile_rejects_all_signed_lifecycle_vectors() {
+        let mut authority = AuthorityDocumentV2::package_for_tests("lifecycle-target");
+        authority.lifecycle.services = vec!["blocked.service".to_string()];
+        authority.lifecycle.tmpfiles = vec!["blocked.conf".to_string()];
+        authority.lifecycle.sysctl = vec!["kernel.blocked".to_string()];
+        authority.lifecycle.users = vec!["blocked-user".to_string()];
+        authority.lifecycle.groups = vec!["blocked-group".to_string()];
+        authority.lifecycle.directories = vec!["/var/lib/blocked".to_string()];
+        authority.lifecycle.alternatives = vec!["blocked-alternative".to_string()];
+
+        let err = validate_authority_with_profile(&authority, &AcceptOnlyNamedService).unwrap_err();
+        let fields = err
+            .diagnostics
+            .iter()
+            .filter_map(|diagnostic| diagnostic.field.as_deref())
+            .collect::<Vec<_>>();
+
+        assert!(fields.contains(&"lifecycle.services"));
+        assert!(fields.contains(&"lifecycle.tmpfiles"));
+        assert!(fields.contains(&"lifecycle.sysctl"));
+        assert!(fields.contains(&"lifecycle.users"));
+        assert!(fields.contains(&"lifecycle.groups"));
+        assert!(fields.contains(&"lifecycle.directories"));
+        assert!(fields.contains(&"lifecycle.alternatives"));
     }
 }

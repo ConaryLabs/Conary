@@ -1,5 +1,6 @@
 // conary-core/src/repository/supported_profiles/mod.rs
 
+mod lifecycle;
 mod types;
 
 #[cfg(test)]
