@@ -1051,6 +1051,7 @@ name = "conary"
 version = "0.8.0"
 dependencies = [
  "anyhow",
+ "axum",
  "base64 0.22.1",
  "chrono",
  "clap",
@@ -1071,6 +1072,7 @@ dependencies = [
  "nix",
  "pem",
  "rayon",
+ "remi",
  "reqwest 0.13.4",
  "rmcp",
  "rusqlite",
@@ -1087,6 +1089,7 @@ dependencies = [
  "tokio",
  "toml",
  "toml_edit",
+ "tower",
  "tracing",
  "tracing-subscriber",
  "url",

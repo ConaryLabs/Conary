@@ -78,4 +78,7 @@ clap_mangen = "0.3.0"
 conary-core = { path = "../../crates/conary-core" }
 
 [dev-dependencies]
+axum.workspace = true
 ed25519-dalek.workspace = true
+remi = { path = "../remi" }
+tower.workspace = true
