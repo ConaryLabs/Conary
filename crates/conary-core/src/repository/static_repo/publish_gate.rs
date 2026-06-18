@@ -669,6 +669,41 @@ mod tests {
     }
 
     #[test]
+    fn artifact_gate_rejects_local_dev_v2_package() {
+        let signer = SigningKeyPair::generate().with_key_id("local-dev");
+        let temp = tempfile::tempdir().unwrap();
+        let package_path = temp.path().join("local-dev-v2.ccs");
+        let mut authority =
+            crate::ccs::v2::test_support::package_authority_with_one_file("local-dev");
+        authority.provenance.hardening_level = Some("host".to_string());
+        let payloads = crate::ccs::v2::test_support::one_file_payloads_for_tests();
+        crate::ccs::builder::write_v2_ccs_package(
+            &authority,
+            &payloads,
+            &package_path,
+            &signer,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        let report = verify_static_artifact_publish_eligibility(
+            &package_path,
+            &AcceptedStaticSignerSet::from_initial_key("local-dev", signer.public_key_base64()),
+            "m2-static-publish-policy-v1",
+        )
+        .unwrap();
+
+        assert!(!report.is_passed());
+        assert!(
+            report.failures.iter().any(|failure| {
+                matches!(failure.code, PublishGateFailureCode::MissingAttestation)
+            })
+        );
+    }
+
+    #[test]
     fn m4a_preserves_active_publish_gate_failure_codes() {
         let active = active_failure_codes_for_tests();
         for expected in [
