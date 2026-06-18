@@ -202,7 +202,6 @@ impl SupportedProfile {
         }
     }
 
-    #[allow(dead_code)]
     #[must_use]
     pub(super) fn lifecycle(&self) -> &LifecycleDocument {
         &self.document.lifecycle

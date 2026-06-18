@@ -87,3 +87,35 @@ fn repository_hints_are_profile_owned() {
         &["arch%"]
     );
 }
+
+#[test]
+fn profile_backed_lifecycle_query_accepts_only_explicit_entries() {
+    use crate::ccs::v2::validation::{ProfileConstraintStatus, TargetProfileQuery};
+
+    let profile = profile_by_public_id("fedora-44").unwrap();
+
+    assert_eq!(
+        profile.service_status("example.service"),
+        ProfileConstraintStatus::Accepted
+    );
+    assert_eq!(
+        profile.service_status("anything.service"),
+        ProfileConstraintStatus::Unsupported
+    );
+    assert_eq!(
+        profile.tmpfiles_status("example.conf"),
+        ProfileConstraintStatus::Accepted
+    );
+    assert_eq!(
+        profile.sysctl_status("kernel.example"),
+        ProfileConstraintStatus::Accepted
+    );
+    assert_eq!(
+        profile.user_status("example"),
+        ProfileConstraintStatus::Unsupported
+    );
+    assert_eq!(
+        profile.alternative_status("editor"),
+        ProfileConstraintStatus::Unsupported
+    );
+}
