@@ -29,6 +29,8 @@ pub struct SparseIndexEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SparseVersionEntry {
     pub version: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub release: Option<String>,
     pub dependencies: Option<String>,
     pub provides: Option<String>,
     pub architecture: Option<String>,
@@ -197,7 +199,7 @@ fn build_sparse_entry(
         .join(", ");
     let name_idx = repo_ids.len() + 1;
     let sql = format!(
-        "SELECT id, repository_id, name, version, architecture, description,
+        "SELECT id, repository_id, name, version, package_release, architecture, description,
                 checksum, size, download_url, dependencies, metadata, synced_at,
                 is_security_update, severity, cve_ids, advisory_id, advisory_url
          FROM repository_packages
@@ -220,20 +222,20 @@ fn build_sparse_entry(
                 repository_id: row.get(1)?,
                 name: row.get(2)?,
                 version: row.get(3)?,
-                package_release: String::new(),
-                architecture: row.get(4)?,
-                description: row.get(5)?,
-                checksum: row.get(6)?,
-                size: row.get(7)?,
-                download_url: row.get(8)?,
-                dependencies: row.get(9)?,
-                metadata: row.get(10)?,
-                synced_at: row.get(11)?,
-                is_security_update: row.get::<_, i32>(12)? != 0,
-                severity: row.get(13)?,
-                cve_ids: row.get(14)?,
-                advisory_id: row.get(15)?,
-                advisory_url: row.get(16)?,
+                package_release: row.get(4)?,
+                architecture: row.get(5)?,
+                description: row.get(6)?,
+                checksum: row.get(7)?,
+                size: row.get(8)?,
+                download_url: row.get(9)?,
+                dependencies: row.get(10)?,
+                metadata: row.get(11)?,
+                synced_at: row.get(12)?,
+                is_security_update: row.get::<_, i32>(13)? != 0,
+                severity: row.get(14)?,
+                cve_ids: row.get(15)?,
+                advisory_id: row.get(16)?,
+                advisory_url: row.get(17)?,
                 distro: None,
                 version_scheme: None,
                 canonical_id: None,
@@ -252,7 +254,7 @@ fn build_sparse_entry(
         }
         if let Some(version) = converted.package_version {
             converted_map.insert(
-                (version, converted.package_architecture),
+                (version, None::<String>, converted.package_architecture),
                 converted.content_hash,
             );
         }
@@ -262,16 +264,36 @@ fn build_sparse_entry(
     let versions = packages
         .into_iter()
         .map(|pkg| {
-            let converted_info =
-                converted_map.get(&(pkg.version.clone(), pkg.architecture.clone()));
+            let converted_info = converted_map.get(&(
+                pkg.version.clone(),
+                None::<String>,
+                pkg.architecture.clone(),
+            ));
+            let release = (!pkg.package_release.is_empty()).then_some(pkg.package_release);
+            let is_native = pkg
+                .metadata
+                .as_deref()
+                .and_then(|metadata| serde_json::from_str::<serde_json::Value>(metadata).ok())
+                .and_then(|metadata| {
+                    metadata
+                        .get("source_kind")
+                        .and_then(|value| value.as_str())
+                        .map(|value| value == "native-ccs")
+                })
+                .unwrap_or(false);
             SparseVersionEntry {
                 version: pkg.version,
+                release,
                 dependencies: pkg.dependencies,
                 provides: pkg.metadata,
                 architecture: pkg.architecture,
                 size: pkg.size,
                 converted: converted_info.is_some(),
-                content_hash: converted_info.and_then(Clone::clone),
+                content_hash: if is_native {
+                    Some(pkg.checksum)
+                } else {
+                    converted_info.and_then(Clone::clone)
+                },
             }
         })
         .collect();
@@ -361,6 +383,7 @@ use super::find_repository_for_distro;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::server::native_publish::test_support::seed_native_publication;
     use conary_core::ccs::convert::ScriptletBundleSummary;
     use conary_core::db::models::{CONVERSION_VERSION, ConvertedPackage, Repository};
     use conary_core::db::schema;
@@ -440,6 +463,47 @@ mod tests {
 
         let result = build_sparse_entry(temp_file.path(), "fedora", "nonexistent").unwrap();
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn sparse_index_preserves_native_sibling_releases() {
+        let (temp_file, conn) = create_test_db();
+        seed_native_publication(
+            &conn,
+            "fedora",
+            "hello",
+            "1.0.0",
+            "1",
+            "noarch",
+            "/tmp/hello-1.ccs",
+        );
+        seed_native_publication(
+            &conn,
+            "fedora",
+            "hello",
+            "1.0.0",
+            "2",
+            "noarch",
+            "/tmp/hello-2.ccs",
+        );
+
+        let entry = build_sparse_entry(temp_file.path(), "fedora", "hello")
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(entry.versions.len(), 2);
+        assert!(
+            entry
+                .versions
+                .iter()
+                .any(|version| version.release.as_deref() == Some("1"))
+        );
+        assert!(
+            entry
+                .versions
+                .iter()
+                .any(|version| version.release.as_deref() == Some("2"))
+        );
     }
 
     #[test]

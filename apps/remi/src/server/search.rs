@@ -23,11 +23,14 @@ use tantivy::{Index, IndexReader, IndexWriter, ReloadPolicy, Term, doc};
 pub struct PackageSearchDoc {
     pub name: String,
     pub version: String,
+    pub release: Option<String>,
     pub distro: String,
+    pub architecture: Option<String>,
     pub description: Option<String>,
     pub dependencies: Option<String>,
     pub size: u64,
     pub converted: bool,
+    pub source_kind: Option<String>,
 }
 
 /// Search result returned from queries
@@ -35,10 +38,12 @@ pub struct PackageSearchDoc {
 pub struct SearchResult {
     pub name: String,
     pub version: String,
+    pub release: Option<String>,
     pub distro: String,
     pub description: Option<String>,
     pub size: u64,
     pub converted: bool,
+    pub source_kind: Option<String>,
     pub score: f32,
 }
 
@@ -48,10 +53,12 @@ pub struct SearchEngine {
     reader: IndexReader,
     name_field: Field,
     name_exact_field: Field,
-    /// Composite key "name\0distro" for accurate delete-before-update
+    /// Full package identity key for accurate delete-before-update
     name_distro_field: Field,
     version_field: Field,
+    release_field: Field,
     distro_field: Field,
+    source_kind_field: Field,
     description_field: Field,
     dependencies_field: Field,
     size_field: Field,
@@ -67,7 +74,9 @@ impl SearchEngine {
         let name_exact_field = schema.get_field("name_exact").unwrap();
         let name_distro_field = schema.get_field("name_distro").unwrap();
         let version_field = schema.get_field("version").unwrap();
+        let release_field = schema.get_field("release").unwrap();
         let distro_field = schema.get_field("distro").unwrap();
+        let source_kind_field = schema.get_field("source_kind").unwrap();
         let description_field = schema.get_field("description").unwrap();
         let dependencies_field = schema.get_field("dependencies").unwrap();
         let size_field = schema.get_field("size").unwrap();
@@ -111,7 +120,9 @@ impl SearchEngine {
             name_exact_field,
             name_distro_field,
             version_field,
+            release_field,
             distro_field,
+            source_kind_field,
             description_field,
             dependencies_field,
             size_field,
@@ -134,11 +145,15 @@ impl SearchEngine {
         // Name exact: for exact match boosting
         schema_builder.add_text_field("name_exact", STRING | STORED);
 
-        // Name+distro composite key for delete-before-update (not stored, not searchable)
+        // Full identity composite key for delete-before-update.
         schema_builder.add_text_field("name_distro", STRING);
 
         // Version: stored but not tokenized for search
         schema_builder.add_text_field("version", STRING | STORED);
+
+        // Release and source kind: stored identity/projection fields
+        schema_builder.add_text_field("release", STRING | STORED);
+        schema_builder.add_text_field("source_kind", STRING | STORED);
 
         // Distro: faceted field for filtering (must be stored to retrieve in results)
         schema_builder.add_facet_field("distro", FacetOptions::default().set_stored());
@@ -186,8 +201,14 @@ impl SearchEngine {
 
     /// Write a package document to the index writer (does not commit)
     fn write_package(&self, writer: &mut IndexWriter, pkg: &PackageSearchDoc) -> Result<()> {
-        // Delete existing document with same name+distro (composite key)
-        let composite_key = format!("{}\0{}", pkg.name, pkg.distro);
+        // Delete existing document with the same full package identity.
+        let composite_key = search_document_key(
+            &pkg.distro,
+            &pkg.name,
+            &pkg.version,
+            pkg.release.as_deref(),
+            pkg.architecture.as_deref(),
+        );
         let delete_term = Term::from_field_text(self.name_distro_field, &composite_key);
         writer.delete_term(delete_term);
 
@@ -199,7 +220,9 @@ impl SearchEngine {
             self.name_exact_field => pkg.name.clone(),
             self.name_distro_field => composite_key,
             self.version_field => pkg.version.clone(),
+            self.release_field => pkg.release.clone().unwrap_or_default(),
             self.distro_field => distro_facet,
+            self.source_kind_field => pkg.source_kind.clone().unwrap_or_default(),
             self.size_field => pkg.size,
             self.converted_field => converted_val,
         );
@@ -236,9 +259,9 @@ impl SearchEngine {
         // stored in converted_packages (which may differ from the repo name).
         let public_ready = public_ready_search_keys(&conn)?;
         let mut stmt = conn.prepare(
-            "SELECT rp.name, rp.version,
+            "SELECT rp.name, rp.version, rp.package_release,
                     COALESCE(r.default_strategy_distro, r.name) as distro,
-                    rp.description, rp.dependencies, rp.size, rp.architecture
+                    rp.description, rp.dependencies, rp.size, rp.architecture, rp.metadata
              FROM repository_packages rp
              JOIN repositories r ON rp.repository_id = r.id
              WHERE r.enabled = 1
@@ -256,8 +279,13 @@ impl SearchEngine {
         let rows = stmt.query_map([], |row| {
             let name: String = row.get(0)?;
             let version: String = row.get(1)?;
-            let distro: String = row.get(2)?;
-            let architecture: Option<String> = row.get(6)?;
+            let package_release: String = row.get(2)?;
+            let distro: String = row.get(3)?;
+            let metadata: Option<String> = row.get(8)?;
+            if metadata_source_kind(metadata.as_deref()) == Some("native-ccs") {
+                return Ok(None);
+            }
+            let architecture: Option<String> = row.get(7)?;
             let converted = public_ready.contains(&SearchConversionKey {
                 distro: distro.clone(),
                 name: name.clone(),
@@ -269,19 +297,50 @@ impl SearchEngine {
                 version: version.clone(),
                 architecture: None,
             });
-            Ok(PackageSearchDoc {
+            Ok(Some(PackageSearchDoc {
                 name,
                 version,
+                release: (!package_release.is_empty()).then_some(package_release),
                 distro,
-                description: row.get(3)?,
-                dependencies: row.get(4)?,
-                size: row.get::<_, i64>(5).map(|s| s as u64)?,
+                architecture,
+                description: row.get(4)?,
+                dependencies: row.get(5)?,
+                size: row.get::<_, i64>(6).map(|s| s as u64)?,
                 converted,
-            })
+                source_kind: None,
+            }))
         })?;
 
         for row in rows {
-            let pkg = row.context("Failed to read package row")?;
+            if let Some(pkg) = row.context("Failed to read package row")? {
+                self.write_package(&mut writer, &pkg)?;
+                count += 1;
+            }
+        }
+
+        let mut native_stmt = conn.prepare(
+            "SELECT distro, name, version, package_release, architecture, total_size
+             FROM native_package_publications
+             WHERE status = 'public'
+             ORDER BY name, version, package_release, architecture",
+        )?;
+        let native_rows = native_stmt.query_map([], |row| {
+            Ok(PackageSearchDoc {
+                distro: row.get(0)?,
+                name: row.get(1)?,
+                version: row.get(2)?,
+                release: Some(row.get(3)?),
+                architecture: Some(row.get(4)?),
+                description: Some("Native CCS release artifact".to_string()),
+                dependencies: None,
+                size: row.get::<_, i64>(5).map(|size| size as u64)?,
+                converted: false,
+                source_kind: Some("native-ccs".to_string()),
+            })
+        })?;
+
+        for row in native_rows {
+            let pkg = row.context("Failed to read native package row")?;
             self.write_package(&mut writer, &pkg)?;
             count += 1;
         }
@@ -345,6 +404,12 @@ impl SearchEngine {
                 .unwrap_or("")
                 .to_string();
 
+            let release = doc
+                .get_first(self.release_field)
+                .and_then(|v| v.as_str())
+                .filter(|value| !value.is_empty())
+                .map(String::from);
+
             let distro_val = doc
                 .get_first(self.distro_field)
                 .and_then(|v| v.as_facet())
@@ -367,13 +432,21 @@ impl SearchEngine {
                 .unwrap_or(0)
                 != 0;
 
+            let source_kind = doc
+                .get_first(self.source_kind_field)
+                .and_then(|v| v.as_str())
+                .filter(|value| !value.is_empty())
+                .map(String::from);
+
             results.push(SearchResult {
                 name,
                 version,
+                release,
                 distro: distro_val,
                 description,
                 size,
                 converted,
+                source_kind,
                 score,
             });
         }
@@ -444,6 +517,38 @@ fn public_ready_search_keys(conn: &rusqlite::Connection) -> Result<HashSet<Searc
         .collect())
 }
 
+fn search_document_key(
+    distro: &str,
+    name: &str,
+    version: &str,
+    release: Option<&str>,
+    architecture: Option<&str>,
+) -> String {
+    format!(
+        "{}\0{}\0{}\0{}\0{}",
+        name,
+        distro,
+        version,
+        release.unwrap_or(""),
+        architecture.unwrap_or("")
+    )
+}
+
+fn metadata_source_kind(metadata: Option<&str>) -> Option<&str> {
+    let metadata = metadata?;
+    let value = serde_json::from_str::<serde_json::Value>(metadata).ok()?;
+    value
+        .get("source_kind")
+        .and_then(|source_kind| source_kind.as_str())
+        .map(|source_kind| {
+            if source_kind == "native-ccs" {
+                "native-ccs"
+            } else {
+                "other"
+            }
+        })
+}
+
 /// Escape regex special characters in a string
 fn regex_escape(s: &str) -> String {
     let mut escaped = String::with_capacity(s.len() * 2);
@@ -462,6 +567,7 @@ fn regex_escape(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::server::native_publish::test_support::seed_native_publication;
     use conary_core::ccs::convert::ScriptletBundleSummary;
     use conary_core::db::models::{ConvertedPackage, Repository, RepositoryPackage};
     use tempfile::TempDir;
@@ -536,22 +642,28 @@ mod tests {
         let pkg = PackageSearchDoc {
             name: "nginx".to_string(),
             version: "1.24.0".to_string(),
+            release: None,
             distro: "fedora".to_string(),
+            architecture: Some("x86_64".to_string()),
             description: Some("High performance HTTP server and reverse proxy".to_string()),
             dependencies: Some("openssl pcre2 zlib".to_string()),
             size: 1_200_000,
             converted: true,
+            source_kind: None,
         };
         engine.index_package(&pkg).unwrap();
 
         let pkg2 = PackageSearchDoc {
             name: "curl".to_string(),
             version: "8.5.0".to_string(),
+            release: None,
             distro: "fedora".to_string(),
+            architecture: Some("x86_64".to_string()),
             description: Some("Command line tool for transferring data".to_string()),
             dependencies: Some("openssl nghttp2 zlib".to_string()),
             size: 500_000,
             converted: false,
+            source_kind: None,
         };
         engine.index_package(&pkg2).unwrap();
 
@@ -576,6 +688,42 @@ mod tests {
     }
 
     #[test]
+    fn search_rebuild_preserves_native_release_identity_and_converted_false() {
+        let (_dir, engine) = create_test_engine();
+        let (db, conn) = create_test_db();
+        seed_native_publication(
+            &conn,
+            "fedora",
+            "hello",
+            "1.0.0",
+            "1",
+            "noarch",
+            "/tmp/hello-1.ccs",
+        );
+        seed_native_publication(
+            &conn,
+            "fedora",
+            "hello",
+            "1.0.0",
+            "2",
+            "noarch",
+            "/tmp/hello-2.ccs",
+        );
+
+        engine.rebuild_from_db(db.path()).unwrap();
+        let results = engine.search("hello", Some("fedora"), 10).unwrap();
+
+        assert_eq!(
+            results
+                .iter()
+                .filter(|result| result.name == "hello")
+                .count(),
+            2
+        );
+        assert!(results.iter().all(|result| !result.converted));
+    }
+
+    #[test]
     fn test_suggest() {
         let (_dir, engine) = create_test_engine();
 
@@ -583,11 +731,14 @@ mod tests {
             let pkg = PackageSearchDoc {
                 name: (*name).to_string(),
                 version: "1.0.0".to_string(),
+                release: None,
                 distro: "fedora".to_string(),
+                architecture: Some("x86_64".to_string()),
                 description: None,
                 dependencies: None,
                 size: 0,
                 converted: false,
+                source_kind: None,
             };
             engine.index_package(&pkg).unwrap();
         }
@@ -613,28 +764,34 @@ mod tests {
         let pkg = PackageSearchDoc {
             name: "vim".to_string(),
             version: "9.0".to_string(),
+            release: None,
             distro: "arch".to_string(),
+            architecture: Some("x86_64".to_string()),
             description: Some("Vi Improved".to_string()),
             dependencies: None,
             size: 2_000_000,
             converted: false,
+            source_kind: None,
         };
         engine.index_package(&pkg).unwrap();
 
-        // Update with new version
+        // Update with the same full identity
         let pkg_updated = PackageSearchDoc {
             name: "vim".to_string(),
-            version: "9.1".to_string(),
+            version: "9.0".to_string(),
+            release: None,
             distro: "arch".to_string(),
+            architecture: Some("x86_64".to_string()),
             description: Some("Vi Improved - text editor".to_string()),
             dependencies: None,
             size: 2_100_000,
             converted: true,
+            source_kind: None,
         };
         engine.index_package(&pkg_updated).unwrap();
 
         let results = engine.search("vim", None, 10).unwrap();
-        // Should have the updated version (old one deleted by name_exact match)
+        // Should have the updated document for the exact identity.
         assert!(!results.is_empty());
         assert!(results[0].converted);
     }

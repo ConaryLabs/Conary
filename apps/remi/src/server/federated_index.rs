@@ -379,6 +379,7 @@ fn build_local_sparse_entry(
                 converted_map.get(&(pkg.version.clone(), pkg.architecture.clone()));
             SparseVersionEntry {
                 version: pkg.version,
+                release: None,
                 dependencies: pkg.dependencies,
                 provides: pkg.metadata,
                 architecture: pkg.architecture,
@@ -405,6 +406,7 @@ mod tests {
     fn make_version(ver: &str, converted: bool) -> SparseVersionEntry {
         SparseVersionEntry {
             version: ver.to_string(),
+            release: None,
             dependencies: None,
             provides: None,
             architecture: Some("x86_64".to_string()),

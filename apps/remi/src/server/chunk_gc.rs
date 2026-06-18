@@ -65,6 +65,27 @@ pub fn build_referenced_set(conn: &Connection) -> Result<HashSet<String>> {
         }
     }
 
+    // Collect hashes from active native publications.
+    let mut stmt = conn
+        .prepare(
+            "SELECT chunk_hashes_json FROM native_package_publications
+             WHERE status = 'public' AND chunk_hashes_json IS NOT NULL",
+        )
+        .context("prepare native_package_publications chunk query")?;
+
+    let rows = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .context("query native_package_publications chunk hashes")?;
+
+    for row in rows {
+        let json_str = row.context("read native chunk_hashes_json row")?;
+        if let Ok(hashes) = serde_json::from_str::<Vec<String>>(&json_str) {
+            for hash in hashes {
+                referenced.insert(hash);
+            }
+        }
+    }
+
     // Collect protected chunk hashes from chunk_access
     let mut stmt = conn
         .prepare("SELECT hash FROM chunk_access WHERE protected = 1")
@@ -447,6 +468,30 @@ mod tests {
         )
         .unwrap();
 
+        conn.execute(
+            "INSERT INTO repositories (name, url) VALUES ('fedora', 'remi-release://fedora')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO repository_packages
+             (repository_id, name, version, package_release, checksum, size, download_url)
+             VALUES (1, 'hello', '1.0.0', '1', 'sha256:hello', 42, '/v1/chunks/native-content')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO native_package_publications (
+                repository_id, repository_package_id, distro, name, version, package_release,
+                architecture, package_kind, authority_format_version, status, content_hash,
+                chunk_hashes_json, total_size, package_path, target_path, trust_status
+            ) VALUES (1, 1, 'fedora', 'hello', '1.0.0', '1', 'noarch', 'package', 2,
+                      'public', 'native-content', '[\"native-chunk\"]', 42,
+                      '/tmp/hello.ccs', 'packages/fedora/hello.ccs', 'verified')",
+            [],
+        )
+        .unwrap();
+
         let referenced = build_referenced_set(&conn).unwrap();
 
         assert!(referenced.contains("hash_a"));
@@ -454,8 +499,9 @@ mod tests {
         assert!(referenced.contains("hash_c"));
         assert!(referenced.contains("hash_d"));
         assert!(referenced.contains("hash_e")); // protected
+        assert!(referenced.contains("native-chunk"));
         assert!(!referenced.contains("hash_f")); // not protected, not in any package
-        assert_eq!(referenced.len(), 5);
+        assert_eq!(referenced.len(), 6);
     }
 
     #[test]
