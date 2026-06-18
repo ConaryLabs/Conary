@@ -35,6 +35,7 @@ mod jobs;
 pub mod lite;
 pub mod mcp;
 pub mod metrics;
+pub mod native_publish;
 mod negative_cache;
 pub mod popularity;
 mod prewarm;
