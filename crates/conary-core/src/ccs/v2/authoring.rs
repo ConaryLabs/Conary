@@ -6,6 +6,107 @@ use crate::ccs::v2::PackageKindTagV2;
 use anyhow::{Context, Result, bail};
 use std::collections::BTreeMap;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AuthoringFindingBucket {
+    Contract,
+    PublicationReadiness,
+    ProfileDeferred,
+    Style,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AuthoringFindingSeverity {
+    Error,
+    Warning,
+    Info,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct AuthoringFinding {
+    pub code: &'static str,
+    pub bucket: AuthoringFindingBucket,
+    pub severity: AuthoringFindingSeverity,
+    pub field: Option<&'static str>,
+    pub message: String,
+    pub suggestion: &'static str,
+    pub blocks_build: bool,
+    pub blocks_local_test: bool,
+    pub blocks_publish: bool,
+}
+
+pub fn lint_manifest_for_v2_authoring(
+    manifest: &crate::ccs::manifest::CcsManifest,
+) -> Vec<AuthoringFinding> {
+    let mut findings = Vec::new();
+    if manifest
+        .package
+        .release
+        .as_deref()
+        .is_none_or(str::is_empty)
+    {
+        findings.push(AuthoringFinding {
+            code: "m4b-missing-release",
+            bucket: AuthoringFindingBucket::Contract,
+            severity: AuthoringFindingSeverity::Error,
+            field: Some("package.release"),
+            message: "v2 package authoring requires package.release".to_string(),
+            suggestion: "add release = \"1\" under [package]",
+            blocks_build: true,
+            blocks_local_test: true,
+            blocks_publish: true,
+        });
+    }
+    if manifest.package.kind.is_none() {
+        findings.push(AuthoringFinding {
+            code: "m4b-missing-kind",
+            bucket: AuthoringFindingBucket::Contract,
+            severity: AuthoringFindingSeverity::Error,
+            field: Some("package.kind"),
+            message: "v2 package authoring requires package.kind".to_string(),
+            suggestion: "add kind = \"package\" under [package]",
+            blocks_build: true,
+            blocks_local_test: true,
+            blocks_publish: true,
+        });
+    }
+    if manifest.hooks.has_script_hooks()
+        || manifest.hooks.has_service_hooks()
+        || manifest.hooks.has_declarative_hooks()
+    {
+        findings.push(AuthoringFinding {
+            code: "m4b-profile-deferred-lifecycle",
+            bucket: AuthoringFindingBucket::ProfileDeferred,
+            severity: AuthoringFindingSeverity::Warning,
+            field: Some("hooks"),
+            message: "lifecycle declarations need M4d target-profile facts before v2 build"
+                .to_string(),
+            suggestion: "remove lifecycle declarations for the M4b minimal-file path",
+            blocks_build: true,
+            blocks_local_test: true,
+            blocks_publish: true,
+        });
+    }
+    if !manifest.requires.packages.is_empty() || !manifest.requires.capabilities.is_empty() {
+        findings.push(AuthoringFinding {
+            code: "m4b-profile-deferred-dependencies",
+            bucket: AuthoringFindingBucket::ProfileDeferred,
+            severity: AuthoringFindingSeverity::Warning,
+            field: Some("requires"),
+            message: "dependencies need database/profile support before v2 build".to_string(),
+            suggestion: "remove [requires] entries for the M4b minimal-file path",
+            blocks_build: true,
+            blocks_local_test: true,
+            blocks_publish: true,
+        });
+    }
+    // PublicationReadiness and Style buckets are part of the stable diagnostic
+    // shape, but M4b's first implementation only emits concrete
+    // contract/profile-deferred findings.
+    findings
+}
+
 #[derive(Debug)]
 pub struct V2AuthoringInput<'a> {
     pub build: &'a BuildResult,
@@ -254,6 +355,56 @@ mod tests {
         assert_eq!(
             projected.authority.provenance.hardening_level.as_deref(),
             Some("host")
+        );
+    }
+
+    #[test]
+    fn lint_manifest_reports_missing_release_and_kind() {
+        let manifest = crate::ccs::manifest::CcsManifest::new_minimal("hello", "0.1.0");
+        let findings = lint_manifest_for_v2_authoring(&manifest);
+
+        assert!(findings.iter().any(|f| f.field == Some("package.release")));
+        assert!(findings.iter().any(|f| f.field == Some("package.kind")));
+        assert!(findings.iter().all(|f| f.blocks_build));
+    }
+
+    #[test]
+    fn lint_manifest_marks_lifecycle_as_profile_deferred() {
+        let mut manifest = crate::ccs::manifest::CcsManifest::new_minimal("hello", "0.1.0");
+        manifest.package.release = Some("1".to_string());
+        manifest.package.kind = Some(crate::ccs::v2::PackageKindTagV2::Package);
+        manifest.hooks.services.push(crate::ccs::manifest::Service {
+            name: "hello.service".to_string(),
+            action: crate::ccs::manifest::ServiceAction::Restart,
+            reversible: None,
+        });
+
+        let findings = lint_manifest_for_v2_authoring(&manifest);
+        assert!(
+            findings
+                .iter()
+                .any(|f| { f.bucket == AuthoringFindingBucket::ProfileDeferred && f.blocks_build })
+        );
+    }
+
+    #[test]
+    fn lint_manifest_blocks_unresolved_dependencies_for_m4b() {
+        let mut manifest = crate::ccs::manifest::CcsManifest::new_minimal("hello", "0.1.0");
+        manifest.package.release = Some("1".to_string());
+        manifest.package.kind = Some(crate::ccs::v2::PackageKindTagV2::Package);
+        manifest
+            .requires
+            .packages
+            .push(crate::ccs::manifest::PackageDep {
+                name: "openssl".to_string(),
+                version: Some(">=3.0".to_string()),
+            });
+
+        let findings = lint_manifest_for_v2_authoring(&manifest);
+        assert!(
+            findings
+                .iter()
+                .any(|f| { f.code == "m4b-profile-deferred-dependencies" && f.blocks_build })
         );
     }
 }
