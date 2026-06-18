@@ -105,6 +105,8 @@ pub(super) fn make_conversion_result(
         package: Package {
             name: "test".to_string(),
             version: "1.0".to_string(),
+            release: None,
+            kind: None,
             description: "test package".to_string(),
             license: None,
             homepage: None,

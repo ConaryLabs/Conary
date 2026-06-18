@@ -34,18 +34,18 @@ pub(super) async fn dispatch_ccs_command(
             local_dev,
             key,
         } => {
-            commands::ccs::cmd_ccs_build(
-                &path,
-                &output,
-                &target,
+            commands::ccs::cmd_ccs_build(commands::ccs::CcsBuildOptions {
+                path,
+                output,
+                target,
                 source,
                 no_classify,
-                !no_chunked,
+                chunked: !no_chunked,
                 dry_run,
                 format,
                 local_dev,
                 key,
-            )
+            })
             .await
         }
 

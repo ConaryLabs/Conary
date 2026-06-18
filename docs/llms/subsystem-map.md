@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-06-18
-revision: 29
+revision: 30
 summary: Route M4 CCS v2 ownership
 ---
 
@@ -181,6 +181,7 @@ summary: Route M4 CCS v2 ownership
   fixture proof:
   `crates/conary-core/src/ccs/builder.rs`,
   `crates/conary-core/src/ccs/v2/`,
+  `crates/conary-core/src/ccs/v2/authoring.rs`,
   `crates/conary-core/src/ccs/archive_reader.rs`,
   `crates/conary-core/src/ccs/package.rs`,
   `crates/conary-core/src/ccs/manifest.rs`,
@@ -193,7 +194,9 @@ summary: Route M4 CCS v2 ownership
   `apps/conary/src/commands/ccs/install/command.rs`,
   `apps/conary/src/commands/ccs/install/dependency.rs`,
   `apps/conary/src/commands/ccs/payload_paths.rs`, and
-  `docs/modules/test-fixtures.md`
+  `docs/modules/test-fixtures.md`.
+  For native v2 authoring commands, start in
+  `apps/conary/src/commands/ccs/{templates.rs,lint.rs,build.rs,test.rs,local_dev.rs}`.
   Start in `crates/conary-core/src/ccs/v2/` for v2 authority, validation,
   diagnostics, archive reading, and content identity. Use `archive_reader.rs`
   and `package.rs` only as version-routing/adaptation surfaces.
