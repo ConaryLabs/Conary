@@ -2,6 +2,7 @@
 //! Native CCS publication pipeline for Remi release uploads.
 
 pub mod persistence;
+pub mod public_lookup;
 pub mod storage;
 pub mod test_support;
 pub mod types;
