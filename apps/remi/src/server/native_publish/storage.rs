@@ -1,6 +1,10 @@
 // apps/remi/src/server/native_publish/storage.rs
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+use crate::server::native_publish::{
+    NativePublishError, NativePublishErrorCode, VerifiedNativeArtifact,
+};
 
 pub fn safe_native_ccs_filename(
     name: &str,
@@ -58,6 +62,76 @@ impl PromotedNativeArtifact {
     pub fn cleanup_package_path_blocking(package_path: &std::path::Path) {
         let _ = std::fs::remove_file(package_path);
     }
+
+    pub async fn cleanup_public_objects(&self) {
+        let _ = tokio::fs::remove_file(&self.package_path).await;
+        let _ = tokio::fs::remove_file(&self.chunk_path).await;
+    }
+}
+
+pub async fn promote_native_artifact(
+    cache_dir: &Path,
+    chunk_dir: &Path,
+    distro: &str,
+    staged_path: &Path,
+    artifact: &VerifiedNativeArtifact,
+) -> Result<PromotedNativeArtifact, NativePublishError> {
+    let packages_dir = cache_dir.join("releases").join("packages").join(distro);
+    tokio::fs::create_dir_all(&packages_dir)
+        .await
+        .map_err(|error| {
+            NativePublishError::internal(
+                NativePublishErrorCode::IoError,
+                format!("create native release package directory: {error}"),
+            )
+        })?;
+    let filename = safe_native_ccs_filename(
+        &artifact.name,
+        &artifact.version,
+        &artifact.package_release,
+        &artifact.architecture,
+        &artifact.content_hash,
+    );
+    let package_path = packages_dir.join(filename);
+    tokio::fs::copy(staged_path, &package_path)
+        .await
+        .map_err(|error| {
+            NativePublishError::internal(
+                NativePublishErrorCode::IoError,
+                format!("promote native release package: {error}"),
+            )
+        })?;
+
+    let chunk_path = crate::server::handlers::cas_object_path(chunk_dir, &artifact.content_hash);
+    if let Some(parent) = chunk_path.parent()
+        && let Err(error) = tokio::fs::create_dir_all(parent).await
+    {
+        let _ = tokio::fs::remove_file(&package_path).await;
+        return Err(NativePublishError::internal(
+            NativePublishErrorCode::IoError,
+            format!("create native release chunk directory: {error}"),
+        ));
+    }
+    if let Err(error) = tokio::fs::copy(&package_path, &chunk_path).await {
+        let _ = tokio::fs::remove_file(&package_path).await;
+        return Err(NativePublishError::internal(
+            NativePublishErrorCode::IoError,
+            format!("promote native release chunk: {error}"),
+        ));
+    }
+
+    Ok(PromotedNativeArtifact {
+        package_path,
+        chunk_path,
+        target_path: native_target_path(
+            distro,
+            &artifact.name,
+            &artifact.version,
+            &artifact.package_release,
+            &artifact.architecture,
+            &artifact.content_hash,
+        ),
+    })
 }
 
 #[cfg(test)]

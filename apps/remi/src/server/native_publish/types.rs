@@ -25,6 +25,23 @@ pub enum NativePublishErrorCode {
     IoError,
 }
 
+impl NativePublishErrorCode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::InvalidCcs => "INVALID_CCS",
+            Self::UnsupportedCcsFormat => "UNSUPPORTED_CCS_FORMAT",
+            Self::PackageSignatureFailed => "PACKAGE_SIGNATURE_FAILED",
+            Self::PublishGateFailed => "PUBLISH_GATE_FAILED",
+            Self::UntrustedBuildAttestationSigner => "UNTRUSTED_BUILD_ATTESTATION_SIGNER",
+            Self::OutputIdentityMismatch => "OUTPUT_IDENTITY_MISMATCH",
+            Self::LocalDevArtifactRefused => "LOCAL_DEV_ARTIFACT_REFUSED",
+            Self::UnsupportedDistro => "UNSUPPORTED_DISTRO",
+            Self::MetadataCommitFailed => "METADATA_COMMIT_FAILED",
+            Self::IoError => "IO_ERROR",
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct NativePublishError {
     pub status: StatusCode,
