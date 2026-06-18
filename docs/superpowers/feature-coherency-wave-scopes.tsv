@@ -2,3 +2,4 @@ wave_scope	status	notes
 1a-root-cli	completed	Root CLI help, root examples, generated root manpage, and top-level dispatch coverage closed in Wave 1a.
 1b-system-adopt	completed	System adopt help, parser constraints, dispatch, command modules, single-package dry-run deferral, and scoped daily-driver docs closed in Wave 1b.
 m4c-remi-native-publication	completed	Remi native CCS release upload, public metadata/download/index/search projection, client release identity, and local publish/fetch/install proof closed in M4c.
+m4d-supported-profile-cutover	completed	Supported target profile catalog, CLI distro validation, CCS v2 lifecycle profile checks, Remi route validation, conversion dispatch, and Remi sync route derivation closed in M4d.

@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-06-09
-revision: 4
-summary: Add model command child-module routing for source policy work
+last_updated: 2026-06-18
+revision: 5
+summary: Route supported distro policy through M4d profiles
 ---
 
 # Source Selection Module (conary-core/src/repository/ + conary-core/src/model/)
@@ -91,6 +91,13 @@ Conary persists the runtime source-policy mirror in SQLite:
 
 `load_effective_policy()` merges those tables into one `EffectiveSourcePolicy`
 and derives the primary distro flavor used for strict or guarded mixing.
+
+M4d supported-target profiles make
+`crates/conary-core/src/repository/supported_profiles/` the source of truth for
+public distro IDs, dependency flavor, version scheme, and Remi route-family
+mapping. Fedora 44, Ubuntu 26.04, and Arch are the only public targets.
+Internal route slugs such as `fedora` and `ubuntu` are not public IDs. The
+older `data/distros.toml` catalog was deleted in M4d.
 
 ## Transitional Defaults
 
@@ -267,6 +274,8 @@ affinity data.
 - [`docs/ARCHITECTURE.md`](../ARCHITECTURE.md) for the workspace-level module map
 - [`docs/llms/subsystem-map.md`](../llms/subsystem-map.md) for assistant-facing entry points
 - `crates/conary-core/src/repository/effective_policy.rs` for runtime policy loading
+- `crates/conary-core/src/repository/supported_profiles/` for supported target
+  IDs, route slugs, flavor, version-scheme, replay-target, and lifecycle policy
 - `crates/conary-core/src/model/parser.rs` for `[system]` parsing and precedence
 - `apps/conary/src/commands/install/source_policy.rs` for install request-scope
   policy construction and canonical package name resolution

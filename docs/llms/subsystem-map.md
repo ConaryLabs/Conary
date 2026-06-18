@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-06-18
-revision: 30
-summary: Route M4 CCS v2 ownership
+revision: 31
+summary: Route M4d supported profile ownership
 ---
 
 # Assistant Subsystem Map
@@ -71,6 +71,7 @@ summary: Route M4 CCS v2 ownership
   keep `apps/conary/src/commands/cook.rs` to routing plus recorded-draft
   validation helper work.
 - Source selection, runtime policy mirrors, and replatform convergence:
+  `crates/conary-core/src/repository/supported_profiles/`,
   `crates/conary-core/src/repository/effective_policy.rs`,
   `crates/conary-core/src/model/parser.rs`,
   `crates/conary-core/src/model/replatform.rs`,
@@ -232,6 +233,7 @@ summary: Route M4 CCS v2 ownership
   `apps/remi/src/server/conversion/persistence.rs`,
   `apps/remi/src/server/conversion/lookup.rs`,
   `apps/remi/src/server/conversion/metadata.rs`,
+  `crates/conary-core/src/repository/supported_profiles/`,
   `apps/remi/src/server/publication.rs`,
   `apps/remi/src/server/mcp.rs`,
   `apps/remi/src/server/handlers/artifacts.rs`,

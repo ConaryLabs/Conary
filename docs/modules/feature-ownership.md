@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-06-18
-revision: 18
-summary: Route M4 CCS v2 ownership
+revision: 19
+summary: Route M4d supported profile ownership
 ---
 
 # Feature Ownership And Interaction Gates
@@ -467,6 +467,33 @@ identity hashing, and debounce live in
 `apps/conary/src/commands/try_session/watch_source.rs`; staged generation
 refresh remains behind the try-session API in `session.rs` and namespace
 switching helpers in `namespace.rs`.
+
+## Supported Target Profiles
+
+**Capability:** own the supported distro adapter catalog for public IDs,
+dependency flavor, version scheme, Remi route slugs, repository hints, replay
+targets, and CCS v2 lifecycle policy.
+
+**Start here:** `crates/conary-core/src/repository/supported_profiles/`.
+CLI distro commands, Remi route validation, conversion lookup/parser dispatch,
+Remi sync, and CCS v2 lifecycle validation should delegate to that profile API
+instead of adding new hard-coded distro matches.
+
+**Neighbor systems:** source selection, resolver version schemes, Remi serving
+routes, conversion, native release upload, and CCS v2 validation.
+
+**Focused proof:** `cargo test -p conary-core supported_profiles`;
+`cargo test -p conary --test packaging_m4d`; `cargo test -p remi route`;
+`cargo test -p conary-core remi_sync`.
+
+**Docs to update:** `docs/modules/source-selection.md`; `docs/modules/remi.md`;
+`docs/modules/ccs.md`; `docs/modules/test-fixtures.md`;
+`docs/llms/subsystem-map.md`.
+
+**Safety notes:** public target IDs are exact and narrow:
+`fedora-44`, `ubuntu-26.04`, and `arch`. Remi route slugs are
+`fedora`, `ubuntu`, and `arch`; generic route slugs such as `fedora` and
+`ubuntu` are not public CLI distro IDs.
 
 ## Remi Publication, Serving, Admin, And Fixture Artifacts
 
