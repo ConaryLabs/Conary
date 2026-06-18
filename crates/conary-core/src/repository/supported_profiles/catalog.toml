@@ -1,0 +1,156 @@
+[[profiles]]
+id = "fedora-44"
+display_name = "Fedora 44"
+release = "44"
+release_date = "2026-04-28"
+eol = "2027-06-02"
+
+[profiles.identity]
+family_slug = "fedora"
+remi_route_slug = "fedora"
+package_format = "rpm"
+dependency_flavor = "rpm"
+version_scheme = "rpm"
+
+[profiles.replay_target]
+format = "rpm"
+distro = "fedora"
+release = "44"
+
+[profiles.repository]
+name_patterns = ["fedora%"]
+
+[profiles.lifecycle]
+service_manager = "systemd"
+default_shell = "/bin/sh"
+path_dirs = ["/usr/bin", "/bin"]
+
+# M4d uses minimal fixture-backed allow-list entries to prove the policy
+# mechanism. M4e replaces these placeholders with proof-corpus entries.
+[profiles.lifecycle.services]
+mode = "allow-list"
+entries = ["example.service"]
+
+[profiles.lifecycle.tmpfiles]
+mode = "allow-list"
+entries = ["example.conf"]
+
+[profiles.lifecycle.sysctl]
+mode = "allow-list"
+keys = ["kernel.example"]
+
+[profiles.lifecycle.users]
+mode = "unsupported"
+
+[profiles.lifecycle.groups]
+mode = "unsupported"
+
+[profiles.lifecycle.directories]
+mode = "unsupported"
+
+[profiles.lifecycle.alternatives]
+mode = "unsupported"
+
+[[profiles]]
+id = "ubuntu-26.04"
+display_name = "Ubuntu 26.04 LTS"
+release = "26.04"
+release_date = "2026-04-23"
+eol = "2031-05-31"
+
+[profiles.identity]
+family_slug = "ubuntu"
+remi_route_slug = "ubuntu"
+package_format = "deb"
+dependency_flavor = "deb"
+version_scheme = "debian"
+
+[profiles.replay_target]
+format = "deb"
+distro = "ubuntu"
+release = "26.04"
+
+[profiles.repository]
+name_patterns = ["ubuntu%"]
+
+[profiles.lifecycle]
+service_manager = "systemd"
+default_shell = "/bin/sh"
+path_dirs = ["/usr/bin", "/bin"]
+
+# M4d uses minimal fixture-backed allow-list entries to prove the policy
+# mechanism. M4e replaces these placeholders with proof-corpus entries.
+[profiles.lifecycle.services]
+mode = "allow-list"
+entries = ["example.service"]
+
+[profiles.lifecycle.tmpfiles]
+mode = "allow-list"
+entries = ["example.conf"]
+
+[profiles.lifecycle.sysctl]
+mode = "allow-list"
+keys = ["kernel.example"]
+
+[profiles.lifecycle.users]
+mode = "unsupported"
+
+[profiles.lifecycle.groups]
+mode = "unsupported"
+
+[profiles.lifecycle.directories]
+mode = "unsupported"
+
+[profiles.lifecycle.alternatives]
+mode = "unsupported"
+
+[[profiles]]
+id = "arch"
+display_name = "Arch Linux (rolling)"
+release = "rolling"
+
+[profiles.identity]
+family_slug = "arch"
+remi_route_slug = "arch"
+package_format = "arch"
+dependency_flavor = "arch"
+version_scheme = "arch"
+
+[profiles.replay_target]
+format = "arch"
+distro = "arch"
+release = "rolling"
+
+[profiles.repository]
+name_patterns = ["arch%"]
+
+[profiles.lifecycle]
+service_manager = "systemd"
+default_shell = "/bin/sh"
+path_dirs = ["/usr/bin", "/bin"]
+
+# M4d uses minimal fixture-backed allow-list entries to prove the policy
+# mechanism. M4e replaces these placeholders with proof-corpus entries.
+[profiles.lifecycle.services]
+mode = "allow-list"
+entries = ["example.service"]
+
+[profiles.lifecycle.tmpfiles]
+mode = "allow-list"
+entries = ["example.conf"]
+
+[profiles.lifecycle.sysctl]
+mode = "allow-list"
+keys = ["kernel.example"]
+
+[profiles.lifecycle.users]
+mode = "unsupported"
+
+[profiles.lifecycle.groups]
+mode = "unsupported"
+
+[profiles.lifecycle.directories]
+mode = "unsupported"
+
+[profiles.lifecycle.alternatives]
+mode = "unsupported"

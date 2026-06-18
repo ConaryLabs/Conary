@@ -8,27 +8,10 @@ use crate::repository::dependency_model::RepositoryDependencyFlavor;
 use crate::repository::registry::{RepositoryFormat, detect_repository_format};
 use crate::repository::versioning::VersionScheme;
 
-pub const SUPPORTED_USER_DISTROS: &[&str] = &["fedora-44", "ubuntu-26.04", "arch"];
-pub const SUPPORTED_USER_DISTRO_CATALOG: &[SupportedDistro] = &[
-    SupportedDistro {
-        id: "fedora-44",
-        display_name: "Fedora 44",
-    },
-    SupportedDistro {
-        id: "ubuntu-26.04",
-        display_name: "Ubuntu 26.04 LTS",
-    },
-    SupportedDistro {
-        id: "arch",
-        display_name: "Arch Linux (rolling)",
-    },
-];
-pub const INTERNAL_DISTRO_FAMILIES: &[&str] = &["fedora", "ubuntu", "arch"];
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SupportedDistro {
-    pub id: &'static str,
-    pub display_name: &'static str,
+    pub id: String,
+    pub display_name: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -73,29 +56,30 @@ impl ReplayTargetOwned {
 
 /// Return the user-facing distro catalog supported by this release.
 #[must_use]
-pub fn supported_user_distros() -> &'static [SupportedDistro] {
-    SUPPORTED_USER_DISTRO_CATALOG
+pub fn supported_user_distros() -> Vec<SupportedDistro> {
+    crate::repository::supported_profiles::public_profiles()
+        .iter()
+        .map(|profile| SupportedDistro {
+            id: profile.id().to_string(),
+            display_name: profile.display_name().to_string(),
+        })
+        .collect()
 }
 
 /// Look up a user-facing supported distro by exact ID.
 #[must_use]
-pub fn supported_distro(id: &str) -> Option<&'static SupportedDistro> {
-    let id = id.trim();
-    SUPPORTED_USER_DISTRO_CATALOG
-        .iter()
-        .find(|distro| distro.id == id)
+pub fn supported_distro(id: &str) -> Option<SupportedDistro> {
+    crate::repository::supported_profiles::profile_by_public_id(id).map(|profile| SupportedDistro {
+        id: profile.id().to_string(),
+        display_name: profile.display_name().to_string(),
+    })
 }
 
 /// Infer the dependency flavor from a supported distro name or internal family
 /// label.
 #[must_use]
 pub fn flavor_from_distro_name(name: &str) -> Option<RepositoryDependencyFlavor> {
-    match name.trim().to_ascii_lowercase().as_str() {
-        "fedora-44" | "fedora" => Some(RepositoryDependencyFlavor::Rpm),
-        "ubuntu-26.04" | "ubuntu" => Some(RepositoryDependencyFlavor::Deb),
-        "arch" => Some(RepositoryDependencyFlavor::Arch),
-        _ => None,
-    }
+    crate::repository::supported_profiles::dependency_flavor_for_name(name)
 }
 
 #[must_use]
@@ -108,40 +92,7 @@ pub fn replay_target_id(target: &ReplayTarget<'_>) -> String {
 
 #[must_use]
 pub fn replay_target_from_distro_id(distro_id: &str, arch: &str) -> Option<ReplayTargetOwned> {
-    let distro_id = distro_id.trim().to_ascii_lowercase();
-    let arch = arch.trim();
-    if distro_id.is_empty() || arch.is_empty() {
-        return None;
-    }
-
-    let (format, distro, release) = match distro_id.as_str() {
-        "arch" => ("arch", "arch", "rolling"),
-        "fedora" => ("rpm", "fedora", "unknown"),
-        "ubuntu" => ("deb", "ubuntu", "unknown"),
-        "debian" => ("deb", "debian", "unknown"),
-        value => {
-            if let Some(release) = value.strip_prefix("fedora-") {
-                ("rpm", "fedora", release)
-            } else if let Some(release) = value.strip_prefix("ubuntu-") {
-                ("deb", "ubuntu", release)
-            } else if let Some(release) = value.strip_prefix("debian-") {
-                ("deb", "debian", release)
-            } else {
-                return None;
-            }
-        }
-    };
-
-    if release.trim().is_empty() {
-        return None;
-    }
-
-    Some(ReplayTargetOwned {
-        format: format.to_string(),
-        distro: distro.to_string(),
-        release: release.to_string(),
-        arch: arch.to_string(),
-    })
+    crate::repository::supported_profiles::replay_target_for_public_id(distro_id, arch)
 }
 
 #[must_use]
@@ -219,7 +170,7 @@ pub fn flavor_from_repository_name_url(
 /// family label.
 #[must_use]
 pub fn version_scheme_from_distro_name(name: &str) -> Option<VersionScheme> {
-    flavor_from_distro_name(name).map(flavor_to_version_scheme)
+    crate::repository::supported_profiles::version_scheme_for_name(name)
 }
 
 /// Infer a version comparison scheme from repository metadata shape.
@@ -264,10 +215,10 @@ mod tests {
     #[test]
     fn supported_user_distro_names_map_to_flavors_and_schemes() {
         let catalog_ids: Vec<_> = supported_user_distros()
-            .iter()
+            .into_iter()
             .map(|distro| distro.id)
             .collect();
-        assert_eq!(catalog_ids.as_slice(), SUPPORTED_USER_DISTROS);
+        assert_eq!(catalog_ids, vec!["fedora-44", "ubuntu-26.04", "arch"]);
 
         for (name, flavor, scheme) in [
             (
@@ -297,7 +248,7 @@ mod tests {
     fn supported_distro_lookup_is_exact_and_narrow() {
         assert_eq!(
             supported_distro("fedora-44").map(|distro| distro.display_name),
-            Some("Fedora 44")
+            Some("Fedora 44".to_string())
         );
         assert_eq!(supported_distro("linux-mint"), None);
         assert_eq!(supported_distro("debian"), None);
@@ -328,7 +279,7 @@ mod tests {
     }
 
     #[test]
-    fn replay_target_ids_normalize_known_distro_pins() {
+    fn replay_target_only_accepts_public_profile_ids() {
         assert_eq!(
             replay_target_from_distro_id("fedora-44", "x86_64")
                 .expect("fedora target")
@@ -342,12 +293,6 @@ mod tests {
             "deb/ubuntu/26.04/x86_64"
         );
         assert_eq!(
-            replay_target_from_distro_id("debian-13", "aarch64")
-                .expect("debian target")
-                .to_id(),
-            "deb/debian/13/aarch64"
-        );
-        assert_eq!(
             replay_target_from_distro_id("arch", "x86_64")
                 .expect("arch target")
                 .to_id(),
@@ -356,13 +301,10 @@ mod tests {
     }
 
     #[test]
-    fn replay_target_for_generic_family_keeps_release_unknown() {
-        assert_eq!(
-            replay_target_from_distro_id("fedora", "x86_64")
-                .expect("generic fedora target")
-                .to_id(),
-            "rpm/fedora/unknown/x86_64"
-        );
+    fn replay_target_rejects_non_public_legacy_normalization() {
+        for name in ["fedora", "ubuntu", "debian", "debian-13", "linux-mint"] {
+            assert_eq!(replay_target_from_distro_id(name, "x86_64"), None, "{name}");
+        }
     }
 
     #[test]
