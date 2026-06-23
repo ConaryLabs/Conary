@@ -56,6 +56,12 @@ pub fn validate_authority(authority: &AuthorityDocumentV2) -> Result<(), V2Valid
     validate_authority_with_profile(authority, &M4aNoProfileFacts)
 }
 
+pub fn validate_authority_structure(
+    authority: &AuthorityDocumentV2,
+) -> Result<(), V2ValidationError> {
+    validate_authority_common(authority)
+}
+
 pub fn validate_authority_with_profile(
     authority: &AuthorityDocumentV2,
     profile: &(impl TargetProfileQuery + ?Sized),

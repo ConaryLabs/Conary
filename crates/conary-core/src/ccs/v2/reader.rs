@@ -1,7 +1,7 @@
 // conary-core/src/ccs/v2/reader.rs
 
 use super::schema::AuthorityDocumentV2;
-use super::validation::validate_authority;
+use super::validation::validate_authority_structure;
 use crate::ccs::verify::{
     PackageSignature, SignatureStatus, TrustPolicy, verify_manifest_signature,
 };
@@ -26,13 +26,13 @@ pub fn read_authority_document(
 ) -> Result<ReadAuthorityV2> {
     let authority =
         AuthorityDocumentV2::from_cbor(raw_manifest).context("decode CCS v2 MANIFEST")?;
-    validate_authority(&authority).map_err(|error| anyhow::anyhow!("{error}"))?;
+    validate_authority_structure(&authority).map_err(|error| anyhow::anyhow!("{error}"))?;
     let signature_raw = signature_raw.context("CCS v2 MANIFEST.sig is required")?;
     let signature: PackageSignature =
         serde_json::from_str(signature_raw).context("parse MANIFEST.sig")?;
     verify_v2_signature(raw_manifest, &signature, policy)?;
     verify_debug_toml_hash(&authority, toml_raw)?;
-    reject_install_authority_toml(toml_raw)?;
+    validate_debug_toml(&authority, toml_raw)?;
     let build_attestation = build_attestation_raw
         .map(serde_json::from_str)
         .transpose()
@@ -78,7 +78,7 @@ fn verify_debug_toml_hash(authority: &AuthorityDocumentV2, toml_raw: Option<&[u8
     Ok(())
 }
 
-fn reject_install_authority_toml(toml_raw: Option<&[u8]>) -> Result<()> {
+fn validate_debug_toml(authority: &AuthorityDocumentV2, toml_raw: Option<&[u8]>) -> Result<()> {
     let Some(toml_raw) = toml_raw else {
         return Ok(());
     };
@@ -86,21 +86,8 @@ fn reject_install_authority_toml(toml_raw: Option<&[u8]>) -> Result<()> {
         std::str::from_utf8(toml_raw).context("decode v2 MANIFEST.toml as UTF-8")?,
     )
     .context("parse v2 MANIFEST.toml debug projection")?;
-    if !toml_manifest.requires.packages.is_empty()
-        || !toml_manifest.requires.capabilities.is_empty()
-        || !toml_manifest.config.files.is_empty()
-        || toml_manifest.hooks.has_script_hooks()
-        || toml_manifest.hooks.has_service_hooks()
-        || toml_manifest.hooks.has_declarative_hooks()
-        || toml_manifest.scriptlets.has_capability_declarations()
-        || toml_manifest.legacy_scriptlets.is_some()
-        || !toml_manifest.components.overrides.is_empty()
-        || !toml_manifest.components.files.is_empty()
-    {
-        bail!(
-            "v2 MANIFEST.toml contains install-affecting fields; signed CBOR authority is required"
-        );
-    }
+    super::debug_projection::reject_unsupported_debug_toml_install_authority(&toml_manifest)?;
+    super::debug_projection::validate_debug_toml_projection(authority, &toml_manifest)?;
     Ok(())
 }
 
@@ -183,20 +170,123 @@ mod tests {
     }
 
     #[test]
-    fn v2_debug_toml_with_service_hooks_is_rejected() {
+    fn reader_accepts_debug_toml_config_when_signed_projection_matches() {
+        let toml = r#"
+[package]
+name = "demo"
+version = "0.1.0"
+description = "demo package"
+release = "1"
+kind = "package"
+
+[config]
+files = ["/etc/conary-example/config.toml"]
+noreplace = true
+"#;
+        let mut authority = crate::ccs::v2::schema::AuthorityDocumentV2::package_for_tests("demo");
+        authority.debug_toml_sha256 = Some(crate::hash::sha256(toml.as_bytes()));
+        if let crate::ccs::v2::schema::PackageKindV2::Package(package) = &mut authority.kind {
+            let file = package.files.first_mut().unwrap();
+            file.path = "/etc/conary-example/config.toml".to_string();
+            file.mode = 0o644;
+            file.config = Some(crate::ccs::v2::schema::ConfigPolicyV2::NoReplace);
+            package
+                .config
+                .push(crate::ccs::v2::schema::ConfigAuthorityV2 {
+                    path: "/etc/conary-example/config.toml".to_string(),
+                    policy: crate::ccs::v2::schema::ConfigPolicyV2::NoReplace,
+                });
+        }
+        let raw = authority.to_cbor().unwrap();
+        let key = SigningKeyPair::generate();
+        let signature = key.sign(&raw);
+        let policy = TrustPolicy::strict(vec![signature.public_key.clone()]);
+
+        read_authority_document(
+            &raw,
+            Some(&serde_json::to_string(&signature).unwrap()),
+            Some(toml.as_bytes()),
+            None,
+            None,
+            &policy,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn reader_accepts_lifecycle_authority_without_no_profile_rejection() {
+        let mut authority = crate::ccs::v2::schema::AuthorityDocumentV2::package_for_tests("svc");
+        authority.lifecycle.services = vec!["conary-example.service".to_string()];
+        let raw = authority.to_cbor().unwrap();
+        let key = SigningKeyPair::generate();
+        let signature = key.sign(&raw);
+        let policy = TrustPolicy::strict(vec![signature.public_key.clone()]);
+
+        read_authority_document(
+            &raw,
+            Some(&serde_json::to_string(&signature).unwrap()),
+            None,
+            None,
+            None,
+            &policy,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn reader_accepts_debug_toml_lifecycle_when_signed_projection_matches() {
+        let toml = r#"
+[package]
+name = "demo"
+version = "0.1.0"
+description = "demo package"
+release = "1"
+kind = "package"
+
+[[hooks.services]]
+name = "conary-example.service"
+action = "restart"
+"#;
+        let mut authority = crate::ccs::v2::schema::AuthorityDocumentV2::package_for_tests("demo");
+        authority.debug_toml_sha256 = Some(crate::hash::sha256(toml.as_bytes()));
+        authority.lifecycle.services = vec!["conary-example.service".to_string()];
+        let raw = authority.to_cbor().unwrap();
+        let key = SigningKeyPair::generate();
+        let signature = key.sign(&raw);
+        let policy = TrustPolicy::strict(vec![signature.public_key.clone()]);
+
+        read_authority_document(
+            &raw,
+            Some(&serde_json::to_string(&signature).unwrap()),
+            Some(toml.as_bytes()),
+            None,
+            None,
+            &policy,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn v2_debug_toml_with_unsupported_dependencies_is_rejected() {
         let toml = r#"
 [package]
 name = "hello"
 version = "0.1.0"
 description = "hello"
 
-[[hooks.services]]
-name = "hello.service"
-action = "restart"
+[[requires.packages]]
+name = "openssl"
+version = ">=3.0"
 "#;
 
-        let error = reject_install_authority_toml(Some(toml.as_bytes())).unwrap_err();
-        assert!(error.to_string().contains("install-affecting"));
+        let manifest = crate::ccs::manifest::CcsManifest::parse(toml).unwrap();
+        let error =
+            crate::ccs::v2::debug_projection::reject_unsupported_debug_toml_install_authority(
+                &manifest,
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains("debug TOML"));
+        assert!(error.to_string().contains("dependencies"));
     }
 
     #[test]
