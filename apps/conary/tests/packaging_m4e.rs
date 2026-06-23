@@ -3,10 +3,79 @@
 use std::process::{Command, Output};
 
 #[test]
-fn config_noreplace_template_builds_without_target_profile() {
+fn config_noreplace_template_lints_builds_verifies_and_tests_without_target_profile() {
     let fixture = M4eFixture::new("config-noreplace");
+
+    let lint = fixture
+        .conary()
+        .arg("ccs")
+        .arg("lint")
+        .arg(fixture.project_dir())
+        .output()
+        .expect("run conary ccs lint");
+    assert_success(&lint);
+
     let package = fixture.build_v2_local_dev(&[]);
-    assert!(package.exists(), "expected package {}", package.display());
+    assert!(package.exists());
+
+    let verify = fixture
+        .conary()
+        .arg("ccs")
+        .arg("verify")
+        .arg(&package)
+        .output()
+        .expect("run conary ccs verify");
+    assert_success(&verify);
+
+    let test = fixture
+        .conary()
+        .arg("ccs")
+        .arg("test")
+        .arg(&package)
+        .arg("--dry-run")
+        .output()
+        .expect("run conary ccs test");
+    assert_success(&test);
+}
+
+#[test]
+fn service_template_lints_builds_verifies_and_tests_with_supported_profile() {
+    let fixture = M4eFixture::new("service");
+
+    let lint = fixture
+        .conary()
+        .arg("ccs")
+        .arg("lint")
+        .arg(fixture.project_dir())
+        .arg("--target-profile")
+        .arg("fedora-44")
+        .output()
+        .expect("run conary ccs lint");
+    assert_success(&lint);
+
+    let package = fixture.build_v2_local_dev(&["--target-profile", "fedora-44"]);
+    assert!(package.exists());
+
+    let verify = fixture
+        .conary()
+        .arg("ccs")
+        .arg("verify")
+        .arg(&package)
+        .output()
+        .expect("run conary ccs verify");
+    assert_success(&verify);
+
+    let test = fixture
+        .conary()
+        .arg("ccs")
+        .arg("test")
+        .arg(&package)
+        .arg("--dry-run")
+        .arg("--target-profile")
+        .arg("fedora-44")
+        .output()
+        .expect("run conary ccs test");
+    assert_success(&test);
 }
 
 #[test]
@@ -47,6 +116,56 @@ fn service_template_rejects_route_slug_as_target_profile() {
         .expect("run conary ccs build");
 
     assert_failure_contains(&output, &["unsupported target profile", "fedora-44"]);
+}
+
+#[test]
+fn service_template_rejects_unsupported_target_profile_ids() {
+    for target in ["debian", "linux-mint", "fedora-45", "ubuntu-noble"] {
+        let fixture = M4eFixture::new("service");
+        let output = fixture
+            .conary()
+            .arg("ccs")
+            .arg("build")
+            .arg(fixture.project_dir())
+            .arg("--format")
+            .arg("v2")
+            .arg("--local-dev")
+            .arg("--target-profile")
+            .arg(target)
+            .arg("--output")
+            .arg(fixture.output_dir())
+            .output()
+            .expect("run conary ccs build");
+
+        assert_failure_contains(&output, &[target, "target profile"]);
+    }
+}
+
+#[test]
+fn unsupported_lifecycle_entry_fails_with_profile_diagnostic() {
+    let fixture = M4eFixture::new("service");
+    let manifest_path = fixture.project_dir().join("ccs.toml");
+    let text = std::fs::read_to_string(&manifest_path)
+        .unwrap()
+        .replace("conary-example.service", "other.service");
+    std::fs::write(&manifest_path, text).unwrap();
+
+    let output = fixture
+        .conary()
+        .arg("ccs")
+        .arg("build")
+        .arg(fixture.project_dir())
+        .arg("--format")
+        .arg("v2")
+        .arg("--local-dev")
+        .arg("--target-profile")
+        .arg("fedora-44")
+        .arg("--output")
+        .arg(fixture.output_dir())
+        .output()
+        .expect("run conary ccs build");
+
+    assert_failure_contains(&output, &["lifecycle-unsupported", "other.service"]);
 }
 
 struct M4eFixture {

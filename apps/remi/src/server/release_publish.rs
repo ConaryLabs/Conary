@@ -502,6 +502,76 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn release_upload_with_supported_lifecycle_publishes_public_metadata() {
+        let signer = SigningKeyPair::generate().with_key_id("publisher");
+        let artifact = attested_release_artifact_with_lifecycle(
+            &signer,
+            "service-ok",
+            "1.0.0",
+            "1",
+            b"service payload",
+            LifecycleAuthorityV2 {
+                services: vec!["conary-example.service".to_string()],
+                ..Default::default()
+            },
+        );
+        let fixture = ReleaseFixture::new(vec![trusted_signer(&signer)]);
+
+        let response = fixture.upload_release(artifact.bytes).await;
+        assert_eq!(
+            response.status(),
+            StatusCode::CREATED,
+            "{}",
+            response_text(response).await
+        );
+        assert!(fixture.native_publication_row_exists("service-ok", "1"));
+        assert!(fixture.public_package_detail_exists("service-ok"));
+        assert!(fixture.public_chunk_exists(&artifact.content_hash));
+        assert!(fixture.tuf_target_exists("service-ok"));
+    }
+
+    #[tokio::test]
+    async fn release_upload_rejects_unsupported_lifecycle_before_public_state() {
+        let signer = SigningKeyPair::generate().with_key_id("publisher");
+        let artifact = attested_release_artifact_with_lifecycle(
+            &signer,
+            "service-bad",
+            "1.0.0",
+            "1",
+            b"service payload",
+            LifecycleAuthorityV2 {
+                services: vec!["other.service".to_string()],
+                ..Default::default()
+            },
+        );
+        let fixture = ReleaseFixture::new(vec![trusted_signer(&signer)]);
+
+        let response = fixture.upload_release(artifact.bytes).await;
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body = response_text(response).await;
+        assert_json_code(&body, "LIFECYCLE_UNSUPPORTED");
+        assert!(body.contains("other.service"), "{body}");
+        assert_no_public_state(&fixture, "service-bad", &artifact.content_hash);
+    }
+
+    #[tokio::test]
+    async fn release_upload_rejects_local_dev_artifact_before_public_state() {
+        let local_dev = SigningKeyPair::generate().with_key_id("local-dev");
+        let artifact = local_dev_release_artifact(&local_dev, "hello", "1.0.0");
+        let fixture = ReleaseFixture::new(vec![trusted_signer(&local_dev)]);
+
+        let response = fixture.upload_release(artifact.bytes).await;
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body = response_text(response).await;
+        assert_json_code(&body, "PUBLISH_GATE_FAILED");
+        assert!(
+            body.contains("build attestation") || body.contains("local-dev"),
+            "{body}"
+        );
+        assert_no_public_state(&fixture, "hello", &artifact.content_hash);
+    }
+
+    #[tokio::test]
     async fn release_upload_unsupported_distro_fails_before_storage() {
         let signer = SigningKeyPair::generate().with_key_id("publisher");
         let artifact =
@@ -630,6 +700,24 @@ mod tests {
         release: &str,
         payload: &[u8],
     ) -> TestArtifact {
+        attested_release_artifact_with_lifecycle(
+            signer,
+            name,
+            version,
+            release,
+            payload,
+            LifecycleAuthorityV2::default(),
+        )
+    }
+
+    fn attested_release_artifact_with_lifecycle(
+        signer: &SigningKeyPair,
+        name: &str,
+        version: &str,
+        release: &str,
+        payload: &[u8],
+        lifecycle: LifecycleAuthorityV2,
+    ) -> TestArtifact {
         let temp = tempfile::tempdir().unwrap();
         let evidence = sample_hermetic_evidence_for_tests(name, version);
         let hermetic_evidence_hash = canonical_json_hash(&evidence).unwrap();
@@ -674,7 +762,7 @@ mod tests {
                     total_size: payload.len() as u64,
                 },
             )]),
-            lifecycle: LifecycleAuthorityV2::default(),
+            lifecycle,
             provenance: ProvenanceAuthorityV2 {
                 origin_class: Some("native-built".to_string()),
                 hardening_level: Some("hermetic".to_string()),
@@ -723,6 +811,85 @@ mod tests {
             signer,
             None,
             Some(&envelope),
+            None,
+        )
+        .unwrap();
+        let bytes = std::fs::read(package_path).unwrap();
+        let content_hash = conary_core::hash::sha256(&bytes);
+        TestArtifact {
+            bytes,
+            content_hash,
+        }
+    }
+
+    fn local_dev_release_artifact(
+        signer: &SigningKeyPair,
+        name: &str,
+        version: &str,
+    ) -> TestArtifact {
+        let temp = tempfile::tempdir().unwrap();
+        let evidence = sample_hermetic_evidence_for_tests(name, version);
+        let hermetic_evidence_hash = canonical_json_hash(&evidence).unwrap();
+        let payload = b"local-dev payload";
+        let payload_path = "/usr/share/payload".to_string();
+        let payload_hash = conary_core::hash::sha256(payload);
+        let payloads = BTreeMap::from([(payload_path.clone(), payload.to_vec())]);
+        let authority = AuthorityDocumentV2 {
+            format_version: FORMAT_VERSION_V2,
+            identity: PackageIdentityV2 {
+                name: name.to_string(),
+                version: version.to_string(),
+                release: "1".to_string(),
+                architecture: Some("x86_64".to_string()),
+                platform: Some("linux".to_string()),
+                kind: PackageKindTagV2::Package,
+            },
+            kind: PackageKindV2::Package(PackageDataV2 {
+                files: vec![FileAuthorityV2 {
+                    path: payload_path,
+                    sha256: payload_hash,
+                    size: payload.len() as u64,
+                    file_type: FileTypeV2::Regular,
+                    mode: 0o644,
+                    owner: "root".to_string(),
+                    group: "root".to_string(),
+                    component: "main".to_string(),
+                    symlink_target: None,
+                    config: None,
+                    conflict: ConflictPolicyV2::Error,
+                }],
+                config: Vec::new(),
+                policy: PackagePolicyV2::default(),
+            }),
+            provides: Vec::new(),
+            requires: Vec::new(),
+            components: BTreeMap::from([(
+                "main".to_string(),
+                ComponentAuthorityV2 {
+                    name: "main".to_string(),
+                    default: true,
+                    file_count: 1,
+                    total_size: payload.len() as u64,
+                },
+            )]),
+            lifecycle: LifecycleAuthorityV2::default(),
+            provenance: ProvenanceAuthorityV2 {
+                origin_class: Some("native-built".to_string()),
+                hardening_level: Some("hermetic".to_string()),
+                build_input_identity: Some("sha256:build-input".to_string()),
+                hermetic_evidence_hash: Some(hermetic_evidence_hash),
+                foreign_conversion_boundary_hash: None,
+            },
+            debug_toml_sha256: None,
+        };
+        let package_path = temp.path().join("local-dev.ccs");
+        write_v2_ccs_package(
+            &authority,
+            &payloads,
+            &package_path,
+            signer,
+            None,
+            None,
             None,
         )
         .unwrap();
