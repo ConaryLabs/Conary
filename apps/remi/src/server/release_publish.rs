@@ -113,9 +113,11 @@ async fn release_upload_after_stage(
     let accepted = native_publish::verify::accepted_release_signers(&release_publish)
         .map_err(ReleaseUploadError::from)?;
     let artifact_path = staged.path.clone();
+    let route_slug = distro.to_string();
     let artifact = tokio::task::spawn_blocking(move || {
         native_publish::verify::verify_native_artifact(
             &artifact_path,
+            &route_slug,
             &accepted,
             RELEASE_PUBLISH_POLICY_DIGEST,
         )

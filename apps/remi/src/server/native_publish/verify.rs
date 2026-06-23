@@ -27,6 +27,33 @@ pub(crate) fn validate_supported_release_distro(distro: &str) -> Result<(), Nati
     }
 }
 
+pub(crate) fn release_profile_for_route(
+    distro: &str,
+) -> Result<
+    &'static conary_core::repository::supported_profiles::SupportedProfile,
+    NativePublishError,
+> {
+    let route =
+        conary_core::repository::supported_profiles::route_by_slug(distro).ok_or_else(|| {
+            NativePublishError::unprocessable(
+                NativePublishErrorCode::UnsupportedDistro,
+                format!("unsupported release distro {distro}"),
+            )
+        })?;
+    let public_id = route.public_profile_ids().first().ok_or_else(|| {
+        NativePublishError::unprocessable(
+            NativePublishErrorCode::UnsupportedDistro,
+            format!("release distro {distro} has no public target profile"),
+        )
+    })?;
+    conary_core::repository::supported_profiles::profile_by_public_id(public_id).ok_or_else(|| {
+        NativePublishError::unprocessable(
+            NativePublishErrorCode::UnsupportedDistro,
+            format!("release distro {distro} maps to missing public target profile {public_id}"),
+        )
+    })
+}
+
 pub(crate) fn accepted_release_signers(
     release_publish: &ReleasePublishSection,
 ) -> Result<AcceptedStaticSignerSet, NativePublishError> {
@@ -49,9 +76,11 @@ pub(crate) fn accepted_release_signers(
 
 pub(crate) fn verify_native_artifact(
     artifact_path: &Path,
+    route_slug: &str,
     accepted_signers: &AcceptedStaticSignerSet,
     accepted_policy_digest: &str,
 ) -> Result<VerifiedNativeArtifact, NativePublishError> {
+    let profile = release_profile_for_route(route_slug)?;
     let candidate = verify_static_artifact_publish_candidate(
         artifact_path,
         accepted_signers,
@@ -75,6 +104,12 @@ pub(crate) fn verify_native_artifact(
         NativePublishError::unprocessable(
             NativePublishErrorCode::UnsupportedCcsFormat,
             "release upload requires a native CCS v2 authority document",
+        )
+    })?;
+    conary_core::ccs::v2::validate_authority_with_profile(authority, profile).map_err(|error| {
+        NativePublishError::unprocessable(
+            NativePublishErrorCode::LifecycleUnsupported,
+            format!("native release lifecycle validation failed: {error}"),
         )
     })?;
     let identity = &authority.identity;
@@ -135,6 +170,18 @@ mod tests {
 
         assert_eq!(error.code, NativePublishErrorCode::UnsupportedDistro);
         assert_eq!(error.status, axum::http::StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[test]
+    fn release_route_resolves_to_supported_profile() {
+        let profile = release_profile_for_route("fedora").expect("fedora route profile");
+        assert_eq!(profile.id(), "fedora-44");
+    }
+
+    #[test]
+    fn release_route_rejects_unknown_profile_before_artifact_verification() {
+        let error = release_profile_for_route("debian").unwrap_err();
+        assert_eq!(error.code, NativePublishErrorCode::UnsupportedDistro);
     }
 
     #[test]
