@@ -43,7 +43,8 @@ pub fn write_v2_ccs_package(
     use std::collections::BTreeMap;
     use tar::Builder;
 
-    crate::ccs::v2::validate_authority(authority).map_err(|error| anyhow::anyhow!("{error}"))?;
+    crate::ccs::v2::validation::validate_authority_structure(authority)
+        .map_err(|error| anyhow::anyhow!("{error}"))?;
     let temp_dir = tempfile::tempdir()?;
     let manifest_cbor = authority.to_cbor()?;
     fs::write(temp_dir.path().join("MANIFEST"), &manifest_cbor)?;
