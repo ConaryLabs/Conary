@@ -1,6 +1,8 @@
 // apps/conary/src/commands/ccs/test.rs
 
 use anyhow::{Context, Result};
+use conary_core::ccs::package::CcsPackage;
+use conary_core::ccs::verify::{self, TrustPolicy};
 use std::path::Path;
 
 pub async fn cmd_ccs_test(
@@ -8,6 +10,7 @@ pub async fn cmd_ccs_test(
     dry_run: bool,
     policy: Option<String>,
     keep_workspace: bool,
+    target_profile: Option<String>,
 ) -> Result<()> {
     if !dry_run {
         anyhow::bail!("M4b supports only conary ccs test --dry-run");
@@ -31,6 +34,7 @@ pub async fn cmd_ccs_test(
         super::local_dev::write_local_dev_policy(&policy_path, &key)?;
         policy_path.to_string_lossy().into_owned()
     };
+    validate_target_profile_for_package(package_path, &policy, target_profile.as_deref())?;
 
     println!("Testing CCS package in isolated dry-run workspace:");
     println!("  root: {}", root.display());
@@ -66,4 +70,42 @@ pub async fn cmd_ccs_test(
         println!("Kept isolated CCS test workspace: {}", kept.display());
     }
     Ok(())
+}
+
+fn validate_target_profile_for_package(
+    package_path: &Path,
+    policy: &str,
+    target_profile: Option<&str>,
+) -> Result<()> {
+    let trust_policy =
+        TrustPolicy::from_file(Path::new(policy)).context("Failed to load trust policy")?;
+    let verification = verify::verify_package(package_path, &trust_policy)
+        .context("Package verification failed")?;
+    if !verification.valid {
+        anyhow::bail!("Package verification failed");
+    }
+    let package = CcsPackage::parse_verified_v2(&package_path.to_string_lossy(), &verification)
+        .map_err(anyhow::Error::from)
+        .context("parse verified CCS package")?;
+    let Some(authority) = package.v2_authority() else {
+        return Ok(());
+    };
+    if lifecycle_is_empty(&authority.lifecycle) {
+        return Ok(());
+    }
+    let profile = super::target_profile::resolve_target_profile(target_profile)?
+        .context("m4e-target-profile-required: lifecycle authority requires --target-profile")?;
+    conary_core::ccs::v2::validate_authority_with_profile(authority, profile)
+        .map_err(|error| anyhow::anyhow!("m4e-lifecycle-unsupported: {error}"))?;
+    Ok(())
+}
+
+fn lifecycle_is_empty(lifecycle: &conary_core::ccs::v2::schema::LifecycleAuthorityV2) -> bool {
+    lifecycle.users.is_empty()
+        && lifecycle.groups.is_empty()
+        && lifecycle.directories.is_empty()
+        && lifecycle.services.is_empty()
+        && lifecycle.tmpfiles.is_empty()
+        && lifecycle.sysctl.is_empty()
+        && lifecycle.alternatives.is_empty()
 }

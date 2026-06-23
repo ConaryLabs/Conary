@@ -179,7 +179,7 @@ fn m4b_minimal_file_smoke_path_creates_lints_builds_verifies_and_tests_v2_packag
 }
 
 #[test]
-fn lifecycle_authoring_is_profile_deferred_and_blocks_v2_build() {
+fn lifecycle_authoring_now_requires_explicit_target_profile() {
     let fixture = MinimalPackageFixture::new();
     let manifest_path = fixture.project_dir().join("ccs.toml");
     let text = std::fs::read_to_string(&manifest_path).unwrap().replace(
@@ -201,11 +201,11 @@ fn lifecycle_authoring_is_profile_deferred_and_blocks_v2_build() {
         .output()
         .expect("run conary ccs build");
 
-    assert_failure_contains(&output, &["profile", "M4d"]);
+    assert_failure_contains(&output, &["target-profile"]);
 }
 
 #[test]
-fn dependency_authoring_is_profile_deferred_and_blocks_v2_build() {
+fn dependency_authoring_is_unsupported_and_blocks_v2_build() {
     let fixture = MinimalPackageFixture::new();
     let manifest_path = fixture.project_dir().join("ccs.toml");
     let text = std::fs::read_to_string(&manifest_path).unwrap().replace(
@@ -227,7 +227,7 @@ fn dependency_authoring_is_profile_deferred_and_blocks_v2_build() {
         .output()
         .expect("run conary ccs build");
 
-    assert_failure_contains(&output, &["dependencies", "M4b"]);
+    assert_failure_contains(&output, &["dependencies", "m4e-dependencies-unsupported"]);
 }
 
 struct MinimalPackageFixture {

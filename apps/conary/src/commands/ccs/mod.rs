@@ -15,6 +15,7 @@ mod local_dev;
 mod payload_paths;
 mod runtime;
 mod signing;
+mod target_profile;
 mod templates;
 mod test;
 

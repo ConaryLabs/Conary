@@ -3,6 +3,7 @@
 use super::schema::*;
 use crate::ccs::builder::{BuildResult, FileType};
 use crate::ccs::v2::PackageKindTagV2;
+use crate::ccs::v2::validation::{ProfileConstraintStatus, TargetProfileQuery};
 use anyhow::{Context, Result, bail};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -11,7 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 pub enum AuthoringFindingBucket {
     Contract,
     PublicationReadiness,
-    ProfileDeferred,
+    Profile,
     Style,
 }
 
@@ -36,8 +37,23 @@ pub struct AuthoringFinding {
     pub blocks_publish: bool,
 }
 
+#[derive(Clone, Copy)]
+pub struct V2AuthoringTargetProfile<'a> {
+    pub public_id: &'a str,
+    pub query: &'a dyn TargetProfileQuery,
+}
+
+impl std::fmt::Debug for V2AuthoringTargetProfile<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("V2AuthoringTargetProfile")
+            .field("public_id", &self.public_id)
+            .finish()
+    }
+}
+
 pub fn lint_manifest_for_v2_authoring(
     manifest: &crate::ccs::manifest::CcsManifest,
+    target_profile: Option<V2AuthoringTargetProfile<'_>>,
 ) -> Vec<AuthoringFinding> {
     let mut findings = Vec::new();
     if manifest
@@ -75,27 +91,30 @@ pub fn lint_manifest_for_v2_authoring(
         || manifest.hooks.has_service_hooks()
         || manifest.hooks.has_declarative_hooks()
     {
-        findings.push(AuthoringFinding {
-            code: "m4b-profile-deferred-lifecycle",
-            bucket: AuthoringFindingBucket::ProfileDeferred,
-            severity: AuthoringFindingSeverity::Warning,
-            field: Some("hooks"),
-            message: "lifecycle declarations need M4d target-profile facts before v2 build"
-                .to_string(),
-            suggestion: "remove lifecycle declarations for the M4b minimal-file path",
-            blocks_build: true,
-            blocks_local_test: true,
-            blocks_publish: true,
-        });
+        match target_profile {
+            Some(profile) => lint_lifecycle_with_profile(manifest, profile, &mut findings),
+            None => findings.push(AuthoringFinding {
+                code: "m4e-target-profile-required",
+                bucket: AuthoringFindingBucket::Profile,
+                severity: AuthoringFindingSeverity::Error,
+                field: Some("hooks"),
+                message: "lifecycle declarations require --target-profile for v2 authoring"
+                    .to_string(),
+                suggestion: "pass --target-profile fedora-44, --target-profile ubuntu-26.04, or --target-profile arch",
+                blocks_build: true,
+                blocks_local_test: true,
+                blocks_publish: true,
+            }),
+        }
     }
     if !manifest.requires.packages.is_empty() || !manifest.requires.capabilities.is_empty() {
         findings.push(AuthoringFinding {
-            code: "m4b-profile-deferred-dependencies",
-            bucket: AuthoringFindingBucket::ProfileDeferred,
-            severity: AuthoringFindingSeverity::Warning,
+            code: "m4e-dependencies-unsupported",
+            bucket: AuthoringFindingBucket::Profile,
+            severity: AuthoringFindingSeverity::Error,
             field: Some("requires"),
-            message: "dependencies need database/profile support before v2 build".to_string(),
-            suggestion: "remove [requires] entries for the M4b minimal-file path",
+            message: "v2 dependency authoring is not supported yet".to_string(),
+            suggestion: "remove [requires] entries until v2 dependency authoring is implemented",
             blocks_build: true,
             blocks_local_test: true,
             blocks_publish: true,
@@ -103,15 +122,28 @@ pub fn lint_manifest_for_v2_authoring(
     }
     // PublicationReadiness and Style buckets are part of the stable diagnostic
     // shape, but M4b's first implementation only emits concrete
-    // contract/profile-deferred findings.
+    // contract/profile findings.
     findings
 }
 
-#[derive(Debug)]
 pub struct V2AuthoringInput<'a> {
     pub build: &'a BuildResult,
     pub local_dev: bool,
     pub debug_toml: Option<String>,
+    pub target_profile: Option<V2AuthoringTargetProfile<'a>>,
+}
+
+impl std::fmt::Debug for V2AuthoringInput<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("V2AuthoringInput")
+            .field("local_dev", &self.local_dev)
+            .field("debug_toml", &self.debug_toml.as_ref().map(|_| "<toml>"))
+            .field(
+                "target_profile",
+                &self.target_profile.map(|profile| profile.public_id),
+            )
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug)]
@@ -249,6 +281,147 @@ pub fn project_build_result_to_v2(input: V2AuthoringInput<'_>) -> Result<Project
     })
 }
 
+fn lint_lifecycle_with_profile(
+    manifest: &crate::ccs::manifest::CcsManifest,
+    profile: V2AuthoringTargetProfile<'_>,
+    findings: &mut Vec<AuthoringFinding>,
+) {
+    if manifest.hooks.has_script_hooks() {
+        push_lifecycle_unsupported(
+            findings,
+            "hooks",
+            format!(
+                "script lifecycle hooks are not supported for target profile {}",
+                profile.public_id
+            ),
+        );
+    }
+
+    for service in &manifest.hooks.services {
+        if profile.query.service_status(&service.name) == ProfileConstraintStatus::Unsupported {
+            push_lifecycle_unsupported(
+                findings,
+                "hooks.services",
+                format!(
+                    "service {} is not supported by target profile {}",
+                    service.name, profile.public_id
+                ),
+            );
+        }
+    }
+
+    for unit in &manifest.hooks.systemd {
+        if profile.query.service_status(&unit.unit) == ProfileConstraintStatus::Unsupported {
+            push_lifecycle_unsupported(
+                findings,
+                "hooks.systemd",
+                format!(
+                    "systemd unit {} is not supported by target profile {}",
+                    unit.unit, profile.public_id
+                ),
+            );
+        }
+    }
+
+    for entry in &manifest.hooks.tmpfiles {
+        if profile.query.tmpfiles_status(&entry.path) == ProfileConstraintStatus::Unsupported {
+            push_lifecycle_unsupported(
+                findings,
+                "hooks.tmpfiles",
+                format!(
+                    "tmpfiles entry {} is not supported by target profile {}",
+                    entry.path, profile.public_id
+                ),
+            );
+        }
+    }
+
+    for entry in &manifest.hooks.sysctl {
+        if profile.query.sysctl_status(&entry.key) == ProfileConstraintStatus::Unsupported {
+            push_lifecycle_unsupported(
+                findings,
+                "hooks.sysctl",
+                format!(
+                    "sysctl key {} is not supported by target profile {}",
+                    entry.key, profile.public_id
+                ),
+            );
+        }
+    }
+
+    for user in &manifest.hooks.users {
+        if profile.query.user_status(&user.name) == ProfileConstraintStatus::Unsupported {
+            push_lifecycle_unsupported(
+                findings,
+                "hooks.users",
+                format!(
+                    "user {} is not supported by target profile {}",
+                    user.name, profile.public_id
+                ),
+            );
+        }
+    }
+
+    for group in &manifest.hooks.groups {
+        if profile.query.group_status(&group.name) == ProfileConstraintStatus::Unsupported {
+            push_lifecycle_unsupported(
+                findings,
+                "hooks.groups",
+                format!(
+                    "group {} is not supported by target profile {}",
+                    group.name, profile.public_id
+                ),
+            );
+        }
+    }
+
+    for directory in &manifest.hooks.directories {
+        if profile.query.directory_status(&directory.path) == ProfileConstraintStatus::Unsupported {
+            push_lifecycle_unsupported(
+                findings,
+                "hooks.directories",
+                format!(
+                    "directory {} is not supported by target profile {}",
+                    directory.path, profile.public_id
+                ),
+            );
+        }
+    }
+
+    for alternative in &manifest.hooks.alternatives {
+        if profile.query.alternative_status(&alternative.name)
+            == ProfileConstraintStatus::Unsupported
+        {
+            push_lifecycle_unsupported(
+                findings,
+                "hooks.alternatives",
+                format!(
+                    "alternative {} is not supported by target profile {}",
+                    alternative.name, profile.public_id
+                ),
+            );
+        }
+    }
+}
+
+fn push_lifecycle_unsupported(
+    findings: &mut Vec<AuthoringFinding>,
+    field: &'static str,
+    message: String,
+) {
+    findings.push(AuthoringFinding {
+        code: "m4e-lifecycle-unsupported",
+        bucket: AuthoringFindingBucket::Profile,
+        severity: AuthoringFindingSeverity::Error,
+        field: Some(field),
+        message,
+        suggestion: "remove the lifecycle declaration or choose a target profile that supports it",
+        blocks_build: true,
+        blocks_local_test: true,
+        blocks_publish: true,
+    });
+}
+
 fn config_policies_for_manifest(
     manifest: &crate::ccs::manifest::CcsManifest,
     build: &BuildResult,
@@ -336,6 +509,51 @@ fn payloads_by_path(build: &BuildResult) -> Result<BTreeMap<String, Vec<u8>>> {
 mod tests {
     use super::*;
     use crate::ccs::builder::test_support;
+    use crate::ccs::v2::validation::{ProfileConstraintStatus, TargetProfileQuery};
+
+    struct FakeTargetProfile {
+        accepted_services: Vec<&'static str>,
+    }
+
+    impl FakeTargetProfile {
+        fn accepting_services(accepted_services: Vec<&'static str>) -> Self {
+            Self { accepted_services }
+        }
+    }
+
+    impl TargetProfileQuery for FakeTargetProfile {
+        fn service_status(&self, service: &str) -> ProfileConstraintStatus {
+            if self.accepted_services.iter().any(|entry| entry == &service) {
+                ProfileConstraintStatus::Accepted
+            } else {
+                ProfileConstraintStatus::Unsupported
+            }
+        }
+
+        fn tmpfiles_status(&self, _entry: &str) -> ProfileConstraintStatus {
+            ProfileConstraintStatus::Unsupported
+        }
+
+        fn sysctl_status(&self, _key: &str) -> ProfileConstraintStatus {
+            ProfileConstraintStatus::Unsupported
+        }
+
+        fn user_status(&self, _user: &str) -> ProfileConstraintStatus {
+            ProfileConstraintStatus::Unsupported
+        }
+
+        fn group_status(&self, _group: &str) -> ProfileConstraintStatus {
+            ProfileConstraintStatus::Unsupported
+        }
+
+        fn directory_status(&self, _directory: &str) -> ProfileConstraintStatus {
+            ProfileConstraintStatus::Unsupported
+        }
+
+        fn alternative_status(&self, _alternative: &str) -> ProfileConstraintStatus {
+            ProfileConstraintStatus::Unsupported
+        }
+    }
 
     #[test]
     fn projection_requires_release_and_kind_for_v2_package_authoring() {
@@ -345,6 +563,7 @@ mod tests {
             build: &build,
             local_dev: true,
             debug_toml: None,
+            target_profile: None,
         })
         .unwrap_err();
 
@@ -364,6 +583,7 @@ mod tests {
             build: &build,
             local_dev: true,
             debug_toml: Some(build.manifest.to_toml().unwrap()),
+            target_profile: None,
         })
         .unwrap();
 
@@ -400,6 +620,7 @@ mod tests {
             build: &build,
             local_dev: true,
             debug_toml: Some(build.manifest.to_toml().unwrap()),
+            target_profile: None,
         })
         .unwrap();
 
@@ -416,6 +637,7 @@ mod tests {
             build: &build,
             local_dev: false,
             debug_toml: Some(build.manifest.to_toml().unwrap()),
+            target_profile: None,
         })
         .unwrap();
 
@@ -442,6 +664,7 @@ mod tests {
             build: &build,
             local_dev: true,
             debug_toml: Some(build.manifest.to_toml().unwrap()),
+            target_profile: None,
         })
         .unwrap();
 
@@ -471,6 +694,7 @@ mod tests {
             build: &build,
             local_dev: true,
             debug_toml: Some(build.manifest.to_toml().unwrap()),
+            target_profile: None,
         })
         .unwrap();
 
@@ -493,6 +717,7 @@ mod tests {
             build: &build,
             local_dev: true,
             debug_toml: Some(build.manifest.to_toml().unwrap()),
+            target_profile: None,
         })
         .unwrap_err();
 
@@ -515,6 +740,7 @@ mod tests {
             build: &build,
             local_dev: true,
             debug_toml: Some(build.manifest.to_toml().unwrap()),
+            target_profile: None,
         })
         .unwrap_err();
 
@@ -525,7 +751,7 @@ mod tests {
     #[test]
     fn lint_manifest_reports_missing_release_and_kind() {
         let manifest = crate::ccs::manifest::CcsManifest::new_minimal("hello", "0.1.0");
-        let findings = lint_manifest_for_v2_authoring(&manifest);
+        let findings = lint_manifest_for_v2_authoring(&manifest, None);
 
         assert!(findings.iter().any(|f| f.field == Some("package.release")));
         assert!(findings.iter().any(|f| f.field == Some("package.kind")));
@@ -533,7 +759,7 @@ mod tests {
     }
 
     #[test]
-    fn lint_manifest_marks_lifecycle_as_profile_deferred() {
+    fn lint_manifest_requires_target_profile_for_lifecycle() {
         let mut manifest = crate::ccs::manifest::CcsManifest::new_minimal("hello", "0.1.0");
         manifest.package.release = Some("1".to_string());
         manifest.package.kind = Some(crate::ccs::v2::PackageKindTagV2::Package);
@@ -543,12 +769,86 @@ mod tests {
             reversible: None,
         });
 
-        let findings = lint_manifest_for_v2_authoring(&manifest);
+        let findings = lint_manifest_for_v2_authoring(&manifest, None);
         assert!(
             findings
                 .iter()
-                .any(|f| { f.bucket == AuthoringFindingBucket::ProfileDeferred && f.blocks_build })
+                .any(|f| { f.code == "m4e-target-profile-required" && f.blocks_build })
         );
+    }
+
+    #[test]
+    fn lint_manifest_allows_lifecycle_with_matching_target_profile() {
+        let mut manifest = crate::ccs::manifest::CcsManifest::new_minimal("hello", "0.1.0");
+        manifest.package.release = Some("1".to_string());
+        manifest.package.kind = Some(crate::ccs::v2::PackageKindTagV2::Package);
+        manifest.hooks.services.push(crate::ccs::manifest::Service {
+            name: "hello.service".to_string(),
+            action: crate::ccs::manifest::ServiceAction::Restart,
+            reversible: None,
+        });
+        let profile = FakeTargetProfile::accepting_services(vec!["hello.service"]);
+
+        let findings = lint_manifest_for_v2_authoring(
+            &manifest,
+            Some(V2AuthoringTargetProfile {
+                public_id: "test-profile",
+                query: &profile as &dyn TargetProfileQuery,
+            }),
+        );
+
+        assert!(findings.iter().all(|finding| !finding.blocks_build));
+        assert!(
+            findings
+                .iter()
+                .all(|finding| finding.code != "m4e-target-profile-required")
+        );
+    }
+
+    #[test]
+    fn lint_manifest_reports_unsupported_lifecycle_for_target_profile() {
+        let mut manifest = crate::ccs::manifest::CcsManifest::new_minimal("hello", "0.1.0");
+        manifest.package.release = Some("1".to_string());
+        manifest.package.kind = Some(crate::ccs::v2::PackageKindTagV2::Package);
+        manifest.hooks.services.push(crate::ccs::manifest::Service {
+            name: "other.service".to_string(),
+            action: crate::ccs::manifest::ServiceAction::Restart,
+            reversible: None,
+        });
+        let profile = FakeTargetProfile::accepting_services(vec!["hello.service"]);
+
+        let findings = lint_manifest_for_v2_authoring(
+            &manifest,
+            Some(V2AuthoringTargetProfile {
+                public_id: "test-profile",
+                query: &profile as &dyn TargetProfileQuery,
+            }),
+        );
+
+        assert!(findings.iter().any(|finding| {
+            finding.code == "m4e-lifecycle-unsupported"
+                && finding.message.contains("other.service")
+                && finding.blocks_build
+        }));
+    }
+
+    #[test]
+    fn projection_input_accepts_trait_object_target_profile() {
+        let mut build = test_support::minimal_file_build_result("hello", "0.1.0", b"hello\n");
+        build.manifest.package.release = Some("1".to_string());
+        build.manifest.package.kind = Some(crate::ccs::v2::PackageKindTagV2::Package);
+        let profile = FakeTargetProfile::accepting_services(vec!["hello.service"]);
+
+        project_build_result_to_v2(V2AuthoringInput {
+            build: &build,
+            local_dev: true,
+            debug_toml: Some(build.manifest.to_toml().unwrap()),
+            target_profile: Some(V2AuthoringTargetProfile {
+                public_id: "test-profile",
+                query: &profile as &dyn TargetProfileQuery,
+            }),
+        })
+        .unwrap();
     }
 
     #[test]
@@ -564,11 +864,11 @@ mod tests {
                 version: Some(">=3.0".to_string()),
             });
 
-        let findings = lint_manifest_for_v2_authoring(&manifest);
+        let findings = lint_manifest_for_v2_authoring(&manifest, None);
         assert!(
             findings
                 .iter()
-                .any(|f| { f.code == "m4b-profile-deferred-dependencies" && f.blocks_build })
+                .any(|f| { f.code == "m4e-dependencies-unsupported" && f.blocks_build })
         );
     }
 }

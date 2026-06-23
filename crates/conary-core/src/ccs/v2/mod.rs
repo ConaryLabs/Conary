@@ -11,7 +11,9 @@ pub mod schema;
 pub(crate) mod test_support;
 pub mod validation;
 
-pub use authoring::{ProjectedV2Package, V2AuthoringInput, project_build_result_to_v2};
+pub use authoring::{
+    ProjectedV2Package, V2AuthoringInput, V2AuthoringTargetProfile, project_build_result_to_v2,
+};
 pub use diagnostics::{V2Diagnostic, V2DiagnosticCode, V2ValidationError};
 pub use identity::{
     ContentIdentityProjectionV2, compute_v2_content_identity, compute_v2_file_merkle_root,

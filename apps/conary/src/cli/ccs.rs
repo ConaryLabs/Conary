@@ -84,6 +84,10 @@ pub enum CcsCommands {
         /// Private signing key for v2 output
         #[arg(long)]
         key: Option<String>,
+
+        /// Public supported target profile for lifecycle validation
+        #[arg(long)]
+        target_profile: Option<String>,
     },
 
     /// Lint a CCS authoring manifest
@@ -95,6 +99,10 @@ pub enum CcsCommands {
         /// Output format
         #[arg(long, value_enum, default_value_t = CcsOutputFormat::Text)]
         format: CcsOutputFormat,
+
+        /// Public supported target profile for lifecycle validation
+        #[arg(long)]
+        target_profile: Option<String>,
     },
 
     /// Inspect a CCS package file
@@ -149,6 +157,10 @@ pub enum CcsCommands {
         /// Keep the isolated test workspace after completion
         #[arg(long)]
         keep_workspace: bool,
+
+        /// Public supported target profile for lifecycle validation
+        #[arg(long)]
+        target_profile: Option<String>,
     },
 
     /// Sign a CCS package with an Ed25519 key

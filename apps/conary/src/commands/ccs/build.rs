@@ -22,6 +22,7 @@ pub struct CcsBuildOptions {
     pub format: CcsBuildFormat,
     pub local_dev: bool,
     pub key: Option<String>,
+    pub target_profile: Option<String>,
 }
 
 /// Build a CCS package from a manifest
@@ -40,6 +41,15 @@ pub async fn cmd_ccs_build(options: CcsBuildOptions) -> Result<()> {
     if options.format == CcsBuildFormat::V2 && options.key.is_none() && !options.local_dev {
         anyhow::bail!("ccs build --format v2 requires --key <private-key> or --local-dev");
     }
+    let target_profile =
+        super::target_profile::resolve_target_profile(options.target_profile.as_deref())?;
+    let authoring_target_profile =
+        target_profile.map(
+            |profile| conary_core::ccs::v2::authoring::V2AuthoringTargetProfile {
+                public_id: profile.id(),
+                query: profile,
+            },
+        );
 
     // Find the manifest
     let manifest_path =
@@ -63,7 +73,10 @@ pub async fn cmd_ccs_build(options: CcsBuildOptions) -> Result<()> {
     let manifest = CcsManifest::from_file(&manifest_path).context("Failed to parse ccs.toml")?;
 
     if options.format == CcsBuildFormat::V2 {
-        let findings = conary_core::ccs::v2::authoring::lint_manifest_for_v2_authoring(&manifest);
+        let findings = conary_core::ccs::v2::authoring::lint_manifest_for_v2_authoring(
+            &manifest,
+            authoring_target_profile,
+        );
         if findings.iter().any(|finding| finding.blocks_build) {
             for finding in &findings {
                 if finding.blocks_build {
@@ -205,6 +218,7 @@ pub async fn cmd_ccs_build(options: CcsBuildOptions) -> Result<()> {
                                 build: result,
                                 local_dev: options.local_dev,
                                 debug_toml: Some(debug_toml),
+                                target_profile: authoring_target_profile,
                             },
                         )
                         .context("project v2 package authority")?;

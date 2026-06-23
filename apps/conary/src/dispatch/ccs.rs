@@ -33,6 +33,7 @@ pub(super) async fn dispatch_ccs_command(
             format,
             local_dev,
             key,
+            target_profile,
         } => {
             commands::ccs::cmd_ccs_build(commands::ccs::CcsBuildOptions {
                 path,
@@ -45,11 +46,16 @@ pub(super) async fn dispatch_ccs_command(
                 format,
                 local_dev,
                 key,
+                target_profile,
             })
             .await
         }
 
-        cli::CcsCommands::Lint { path, format } => commands::ccs::cmd_ccs_lint(&path, format).await,
+        cli::CcsCommands::Lint {
+            path,
+            format,
+            target_profile,
+        } => commands::ccs::cmd_ccs_lint(&path, format, target_profile).await,
 
         cli::CcsCommands::Inspect {
             package,
@@ -70,7 +76,11 @@ pub(super) async fn dispatch_ccs_command(
             dry_run,
             policy,
             keep_workspace,
-        } => commands::ccs::cmd_ccs_test(&package, dry_run, policy, keep_workspace).await,
+            target_profile,
+        } => {
+            commands::ccs::cmd_ccs_test(&package, dry_run, policy, keep_workspace, target_profile)
+                .await
+        }
 
         cli::CcsCommands::Sign {
             package,

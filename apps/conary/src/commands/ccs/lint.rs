@@ -3,14 +3,24 @@
 use anyhow::{Context, Result};
 use conary_core::ccs::CcsManifest;
 use conary_core::ccs::v2::authoring::{
-    AuthoringFinding, AuthoringFindingSeverity, lint_manifest_for_v2_authoring,
+    AuthoringFinding, AuthoringFindingSeverity, V2AuthoringTargetProfile,
+    lint_manifest_for_v2_authoring,
 };
 use std::path::{Path, PathBuf};
 
-pub async fn cmd_ccs_lint(path: &str, format: crate::cli::CcsOutputFormat) -> Result<()> {
+pub async fn cmd_ccs_lint(
+    path: &str,
+    format: crate::cli::CcsOutputFormat,
+    target_profile: Option<String>,
+) -> Result<()> {
     let manifest_path = manifest_path(path)?;
     let manifest = CcsManifest::from_file(&manifest_path).context("Failed to parse ccs.toml")?;
-    let findings = lint_manifest_for_v2_authoring(&manifest);
+    let profile = super::target_profile::resolve_target_profile(target_profile.as_deref())?;
+    let target_profile = profile.map(|profile| V2AuthoringTargetProfile {
+        public_id: profile.id(),
+        query: profile,
+    });
+    let findings = lint_manifest_for_v2_authoring(&manifest, target_profile);
 
     match format {
         crate::cli::CcsOutputFormat::Text => print_text(&findings),

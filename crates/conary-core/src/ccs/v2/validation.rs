@@ -58,7 +58,7 @@ pub fn validate_authority(authority: &AuthorityDocumentV2) -> Result<(), V2Valid
 
 pub fn validate_authority_with_profile(
     authority: &AuthorityDocumentV2,
-    profile: &impl TargetProfileQuery,
+    profile: &(impl TargetProfileQuery + ?Sized),
 ) -> Result<(), V2ValidationError> {
     let mut diagnostics = validate_authority_common(authority)
         .err()
