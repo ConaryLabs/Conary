@@ -5,4 +5,6 @@
 #[derive(Clone, Copy, Debug, clap::ValueEnum, PartialEq, Eq)]
 pub enum CcsInitTemplate {
     MinimalFile,
+    ConfigNoreplace,
+    Service,
 }

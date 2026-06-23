@@ -42,6 +42,7 @@ pub async fn cmd_ccs_init(
     // Write the manifest
     let toml = manifest.to_toml().context("Failed to serialize manifest")?;
     std::fs::write(&manifest_path, toml).context("Failed to write ccs.toml")?;
+    write_template_files(dir, template)?;
 
     println!("Created {}", manifest_path.display());
     println!();
@@ -55,6 +56,47 @@ pub async fn cmd_ccs_init(
     println!("  2. Run 'conary ccs build' to create the package");
 
     Ok(())
+}
+
+fn write_template_files(dir: &Path, template: Option<super::CcsInitTemplate>) -> Result<()> {
+    match template {
+        Some(super::CcsInitTemplate::ConfigNoreplace) => {
+            write_file(
+                dir.join("etc/conary-example/config.toml"),
+                b"message = \"hello from conary\"\n",
+            )?;
+        }
+        Some(super::CcsInitTemplate::Service) => {
+            write_file(
+                dir.join("usr/bin/conary-example"),
+                b"#!/bin/sh\necho conary-example\n",
+            )?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(
+                    dir.join("usr/bin/conary-example"),
+                    std::fs::Permissions::from_mode(0o755),
+                )
+                .context("Failed to chmod service example binary")?;
+            }
+            write_file(
+                dir.join("usr/lib/systemd/system/conary-example.service"),
+                b"[Unit]\nDescription=Conary example service\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/conary-example\n\n[Install]\nWantedBy=multi-user.target\n",
+            )?;
+        }
+        Some(super::CcsInitTemplate::MinimalFile) | None => {}
+    }
+    Ok(())
+}
+
+fn write_file(path: impl AsRef<Path>, bytes: &[u8]) -> Result<()> {
+    let path = path.as_ref();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create {}", parent.display()))?;
+    }
+    std::fs::write(path, bytes).with_context(|| format!("Failed to write {}", path.display()))
 }
 
 /// Detect existing project files and overlay discovered metadata onto a manifest.
@@ -170,5 +212,44 @@ license = "MIT"
         assert_eq!(manifest.package.license.as_deref(), Some("MIT"));
         assert_eq!(manifest.package.release.as_deref(), Some("1"));
         assert_eq!(manifest.package.kind, Some(PackageKindTagV2::Package));
+    }
+
+    #[tokio::test]
+    async fn config_noreplace_template_writes_example_config_file() {
+        let temp = tempfile::tempdir().unwrap();
+
+        cmd_ccs_init(
+            temp.path().to_str().unwrap(),
+            Some("demo".to_string()),
+            "0.1.0",
+            false,
+            Some(super::super::CcsInitTemplate::ConfigNoreplace),
+        )
+        .await
+        .unwrap();
+
+        assert!(temp.path().join("etc/conary-example/config.toml").exists());
+    }
+
+    #[tokio::test]
+    async fn service_template_writes_example_binary_and_unit() {
+        let temp = tempfile::tempdir().unwrap();
+
+        cmd_ccs_init(
+            temp.path().to_str().unwrap(),
+            Some("demo".to_string()),
+            "0.1.0",
+            false,
+            Some(super::super::CcsInitTemplate::Service),
+        )
+        .await
+        .unwrap();
+
+        assert!(temp.path().join("usr/bin/conary-example").exists());
+        assert!(
+            temp.path()
+                .join("usr/lib/systemd/system/conary-example.service")
+                .exists()
+        );
     }
 }

@@ -4,7 +4,7 @@ use super::schema::*;
 use crate::ccs::builder::{BuildResult, FileType};
 use crate::ccs::v2::PackageKindTagV2;
 use anyhow::{Context, Result, bail};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -136,6 +136,7 @@ pub fn project_build_result_to_v2(input: V2AuthoringInput<'_>) -> Result<Project
     }
 
     let payloads_by_path = payloads_by_path(input.build)?;
+    let config_policies = config_policies_for_manifest(&input.build.manifest, input.build)?;
     let files = input
         .build
         .files
@@ -154,8 +155,15 @@ pub fn project_build_result_to_v2(input: V2AuthoringInput<'_>) -> Result<Project
             group: "root".to_string(),
             component: file.component.clone(),
             symlink_target: file.target.clone(),
-            config: None,
+            config: config_policies.get(&file.path).copied(),
             conflict: ConflictPolicyV2::Error,
+        })
+        .collect::<Vec<_>>();
+    let config = config_policies
+        .iter()
+        .map(|(path, policy)| ConfigAuthorityV2 {
+            path: path.clone(),
+            policy: *policy,
         })
         .collect::<Vec<_>>();
 
@@ -212,7 +220,7 @@ pub fn project_build_result_to_v2(input: V2AuthoringInput<'_>) -> Result<Project
         },
         kind: PackageKindV2::Package(PackageDataV2 {
             files,
-            config: Vec::new(),
+            config,
             policy: PackagePolicyV2::default(),
         }),
         provides: Vec::new(),
@@ -239,6 +247,36 @@ pub fn project_build_result_to_v2(input: V2AuthoringInput<'_>) -> Result<Project
         payloads_by_path,
         debug_toml: input.debug_toml,
     })
+}
+
+fn config_policies_for_manifest(
+    manifest: &crate::ccs::manifest::CcsManifest,
+    build: &BuildResult,
+) -> Result<BTreeMap<String, ConfigPolicyV2>> {
+    let policy = config_policy_for_manifest(manifest);
+    let build_paths = build
+        .files
+        .iter()
+        .map(|file| file.path.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut policies = BTreeMap::new();
+
+    for path in &manifest.config.files {
+        if !path.starts_with('/') || !build_paths.contains(path.as_str()) {
+            bail!("config path {path} must be absolute and present in build output");
+        }
+        policies.insert(path.clone(), policy);
+    }
+
+    Ok(policies)
+}
+
+fn config_policy_for_manifest(manifest: &crate::ccs::manifest::CcsManifest) -> ConfigPolicyV2 {
+    if manifest.config.noreplace {
+        ConfigPolicyV2::NoReplace
+    } else {
+        ConfigPolicyV2::Replace
+    }
 }
 
 fn select_default_component(build: &BuildResult) -> Result<String> {
@@ -385,6 +423,103 @@ mod tests {
             projected.authority.provenance.hardening_level.as_deref(),
             Some("host")
         );
+    }
+
+    #[test]
+    fn projection_marks_noreplace_config_files() {
+        let mut build = test_support::single_file_build_result_at(
+            "demo",
+            "0.1.0",
+            "/etc/conary-example/config.toml",
+            b"message = \"hello\"\n",
+        );
+        build.manifest.package.release = Some("1".to_string());
+        build.manifest.package.kind = Some(crate::ccs::v2::PackageKindTagV2::Package);
+        build.manifest.config.files = vec!["/etc/conary-example/config.toml".to_string()];
+        build.manifest.config.noreplace = true;
+
+        let projected = project_build_result_to_v2(V2AuthoringInput {
+            build: &build,
+            local_dev: true,
+            debug_toml: Some(build.manifest.to_toml().unwrap()),
+        })
+        .unwrap();
+
+        let package = match &projected.authority.kind {
+            PackageKindV2::Package(package) => package,
+            other => panic!("expected package authority, got {other:?}"),
+        };
+        assert_eq!(package.files[0].config, Some(ConfigPolicyV2::NoReplace));
+        assert_eq!(package.config[0].path, "/etc/conary-example/config.toml");
+        assert_eq!(package.config[0].policy, ConfigPolicyV2::NoReplace);
+    }
+
+    #[test]
+    fn projection_marks_replace_config_when_noreplace_is_false() {
+        let mut build = test_support::single_file_build_result_at(
+            "demo",
+            "0.1.0",
+            "/etc/conary-example/config.toml",
+            b"message = \"hello\"\n",
+        );
+        build.manifest.package.release = Some("1".to_string());
+        build.manifest.package.kind = Some(crate::ccs::v2::PackageKindTagV2::Package);
+        build.manifest.config.files = vec!["/etc/conary-example/config.toml".to_string()];
+        build.manifest.config.noreplace = false;
+
+        let projected = project_build_result_to_v2(V2AuthoringInput {
+            build: &build,
+            local_dev: true,
+            debug_toml: Some(build.manifest.to_toml().unwrap()),
+        })
+        .unwrap();
+
+        let package = match &projected.authority.kind {
+            PackageKindV2::Package(package) => package,
+            other => panic!("expected package authority, got {other:?}"),
+        };
+        assert_eq!(package.files[0].config, Some(ConfigPolicyV2::Replace));
+        assert_eq!(package.config[0].policy, ConfigPolicyV2::Replace);
+    }
+
+    #[test]
+    fn projection_rejects_config_path_absent_from_payload() {
+        let mut build = test_support::minimal_file_build_result("demo", "0.1.0", b"hello\n");
+        build.manifest.package.release = Some("1".to_string());
+        build.manifest.package.kind = Some(crate::ccs::v2::PackageKindTagV2::Package);
+        build.manifest.config.files = vec!["/etc/conary-example/config.toml".to_string()];
+
+        let error = project_build_result_to_v2(V2AuthoringInput {
+            build: &build,
+            local_dev: true,
+            debug_toml: Some(build.manifest.to_toml().unwrap()),
+        })
+        .unwrap_err();
+
+        assert!(error.to_string().contains("config path"));
+    }
+
+    #[test]
+    fn projection_rejects_relative_config_paths() {
+        let mut build = test_support::single_file_build_result_at(
+            "demo",
+            "0.1.0",
+            "etc/conary-example/config.toml",
+            b"message = \"hello\"\n",
+        );
+        build.manifest.package.release = Some("1".to_string());
+        build.manifest.package.kind = Some(crate::ccs::v2::PackageKindTagV2::Package);
+        build.manifest.config.files = vec!["etc/conary-example/config.toml".to_string()];
+
+        let error = project_build_result_to_v2(V2AuthoringInput {
+            build: &build,
+            local_dev: true,
+            debug_toml: Some(build.manifest.to_toml().unwrap()),
+        })
+        .unwrap_err();
+
+        assert!(error.to_string().contains("config path"));
+        assert!(error.to_string().contains("absolute"));
     }
 
     #[test]

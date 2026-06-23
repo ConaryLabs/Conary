@@ -28,13 +28,22 @@ pub(crate) fn minimal_build_result(name: &str, version: &str) -> BuildResult {
 }
 
 pub(crate) fn minimal_file_build_result(name: &str, version: &str, bytes: &[u8]) -> BuildResult {
+    single_file_build_result_at(name, version, &format!("/{name}"), bytes)
+}
+
+pub(crate) fn single_file_build_result_at(
+    name: &str,
+    version: &str,
+    path: &str,
+    bytes: &[u8],
+) -> BuildResult {
     use super::{ComponentData, FileEntry, FileType};
     use std::collections::HashMap;
 
     let manifest = crate::ccs::manifest::CcsManifest::new_minimal(name, version);
     let hash = crate::hash::sha256(bytes);
     let entry = FileEntry {
-        path: format!("/{name}"),
+        path: path.to_string(),
         hash: hash.clone(),
         size: bytes.len() as u64,
         mode: 0o755,
