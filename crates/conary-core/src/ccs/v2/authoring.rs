@@ -234,6 +234,7 @@ pub fn project_build_result_to_v2(input: V2AuthoringInput<'_>) -> Result<Project
     // M4b uses the existing host file scan for both local-dev and explicit-key
     // signing. Do not claim hermetic hardening until a later slice routes
     // through a hermetic builder.
+    let lifecycle = project_lifecycle(&input.build.manifest);
     let authority = AuthorityDocumentV2 {
         format_version: FORMAT_VERSION_V2,
         identity: PackageIdentityV2 {
@@ -258,7 +259,7 @@ pub fn project_build_result_to_v2(input: V2AuthoringInput<'_>) -> Result<Project
         provides: Vec::new(),
         requires: Vec::new(),
         components,
-        lifecycle: LifecycleAuthorityV2::default(),
+        lifecycle,
         provenance: ProvenanceAuthorityV2 {
             origin_class: Some("native-built".to_string()),
             hardening_level: Some("host".to_string()),
@@ -272,13 +273,85 @@ pub fn project_build_result_to_v2(input: V2AuthoringInput<'_>) -> Result<Project
             .map(|toml| crate::hash::sha256(toml.as_bytes())),
     };
 
-    super::validation::validate_authority(&authority)
-        .map_err(|error| anyhow::anyhow!("{error}"))?;
+    if lifecycle_is_empty(&authority.lifecycle) {
+        super::validation::validate_authority(&authority)
+            .map_err(|error| anyhow::anyhow!("{error}"))?;
+    } else {
+        let profile = input
+            .target_profile
+            .context("m4e-target-profile-required: lifecycle authority requires target profile")?;
+        super::validation::validate_authority_with_profile(&authority, profile.query)
+            .map_err(|error| anyhow::anyhow!("{error}"))?;
+    }
     Ok(ProjectedV2Package {
         authority,
         payloads_by_path,
         debug_toml: input.debug_toml,
     })
+}
+
+fn project_lifecycle(manifest: &crate::ccs::manifest::CcsManifest) -> LifecycleAuthorityV2 {
+    LifecycleAuthorityV2 {
+        services: manifest
+            .hooks
+            .services
+            .iter()
+            .map(|service| service.name.clone())
+            .chain(
+                manifest
+                    .hooks
+                    .systemd
+                    .iter()
+                    .map(|service| service.unit.clone()),
+            )
+            .collect(),
+        tmpfiles: manifest
+            .hooks
+            .tmpfiles
+            .iter()
+            .map(|entry| entry.path.clone())
+            .collect(),
+        sysctl: manifest
+            .hooks
+            .sysctl
+            .iter()
+            .map(|entry| entry.key.clone())
+            .collect(),
+        users: manifest
+            .hooks
+            .users
+            .iter()
+            .map(|entry| entry.name.clone())
+            .collect(),
+        groups: manifest
+            .hooks
+            .groups
+            .iter()
+            .map(|entry| entry.name.clone())
+            .collect(),
+        directories: manifest
+            .hooks
+            .directories
+            .iter()
+            .map(|entry| entry.path.clone())
+            .collect(),
+        alternatives: manifest
+            .hooks
+            .alternatives
+            .iter()
+            .map(|entry| entry.name.clone())
+            .collect(),
+    }
+}
+
+fn lifecycle_is_empty(lifecycle: &LifecycleAuthorityV2) -> bool {
+    lifecycle.users.is_empty()
+        && lifecycle.groups.is_empty()
+        && lifecycle.directories.is_empty()
+        && lifecycle.services.is_empty()
+        && lifecycle.tmpfiles.is_empty()
+        && lifecycle.sysctl.is_empty()
+        && lifecycle.alternatives.is_empty()
 }
 
 fn lint_lifecycle_with_profile(
@@ -552,6 +625,38 @@ mod tests {
 
         fn alternative_status(&self, _alternative: &str) -> ProfileConstraintStatus {
             ProfileConstraintStatus::Unsupported
+        }
+    }
+
+    struct AcceptAllProfile;
+
+    impl TargetProfileQuery for AcceptAllProfile {
+        fn service_status(&self, _service: &str) -> ProfileConstraintStatus {
+            ProfileConstraintStatus::Accepted
+        }
+
+        fn tmpfiles_status(&self, _entry: &str) -> ProfileConstraintStatus {
+            ProfileConstraintStatus::Accepted
+        }
+
+        fn sysctl_status(&self, _key: &str) -> ProfileConstraintStatus {
+            ProfileConstraintStatus::Accepted
+        }
+
+        fn user_status(&self, _user: &str) -> ProfileConstraintStatus {
+            ProfileConstraintStatus::Accepted
+        }
+
+        fn group_status(&self, _group: &str) -> ProfileConstraintStatus {
+            ProfileConstraintStatus::Accepted
+        }
+
+        fn directory_status(&self, _directory: &str) -> ProfileConstraintStatus {
+            ProfileConstraintStatus::Accepted
+        }
+
+        fn alternative_status(&self, _alternative: &str) -> ProfileConstraintStatus {
+            ProfileConstraintStatus::Accepted
         }
     }
 
@@ -849,6 +954,99 @@ mod tests {
             }),
         })
         .unwrap();
+    }
+
+    #[test]
+    fn projection_maps_declarative_lifecycle_hooks_to_signed_authority() {
+        let mut build = test_support::single_file_build_result_at(
+            "conary-example",
+            "0.1.0",
+            "/usr/bin/conary-example",
+            b"#!/bin/sh\necho conary-example\n",
+        );
+        build.manifest.package.release = Some("1".to_string());
+        build.manifest.package.kind = Some(crate::ccs::v2::PackageKindTagV2::Package);
+        build
+            .manifest
+            .hooks
+            .services
+            .push(crate::ccs::manifest::Service {
+                name: "conary-example.service".to_string(),
+                action: crate::ccs::manifest::ServiceAction::Restart,
+                reversible: None,
+            });
+        build
+            .manifest
+            .hooks
+            .tmpfiles
+            .push(crate::ccs::manifest::TmpfilesHook {
+                entry_type: "d".to_string(),
+                path: "/var/lib/conary-example".to_string(),
+                mode: "0755".to_string(),
+                owner: "conary-example".to_string(),
+                group: "conary-example".to_string(),
+                reversible: None,
+            });
+        build
+            .manifest
+            .hooks
+            .users
+            .push(crate::ccs::manifest::UserHook {
+                name: "conary-example".to_string(),
+                system: true,
+                home: None,
+                shell: None,
+                group: Some("conary-example".to_string()),
+                reversible: None,
+            });
+        build
+            .manifest
+            .hooks
+            .groups
+            .push(crate::ccs::manifest::GroupHook {
+                name: "conary-example".to_string(),
+                system: true,
+                reversible: None,
+            });
+        build
+            .manifest
+            .hooks
+            .directories
+            .push(crate::ccs::manifest::DirectoryHook {
+                path: "/var/lib/conary-example".to_string(),
+                mode: "0755".to_string(),
+                owner: "conary-example".to_string(),
+                group: "conary-example".to_string(),
+                cleanup: None,
+                reversible: None,
+            });
+        let profile = AcceptAllProfile;
+
+        let projected = project_build_result_to_v2(V2AuthoringInput {
+            build: &build,
+            local_dev: true,
+            debug_toml: Some(build.manifest.to_toml().unwrap()),
+            target_profile: Some(V2AuthoringTargetProfile {
+                public_id: "accept-all",
+                query: &profile as &dyn TargetProfileQuery,
+            }),
+        })
+        .unwrap();
+
+        assert_eq!(
+            projected.authority.lifecycle.services,
+            vec!["conary-example.service"]
+        );
+        assert_eq!(
+            projected.authority.lifecycle.tmpfiles,
+            vec!["/var/lib/conary-example"]
+        );
+        assert_eq!(projected.authority.lifecycle.users, vec!["conary-example"]);
+        assert_eq!(projected.authority.lifecycle.groups, vec!["conary-example"]);
+        assert_eq!(
+            projected.authority.lifecycle.directories,
+            vec!["/var/lib/conary-example"]
+        );
     }
 
     #[test]

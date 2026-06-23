@@ -25,28 +25,29 @@ service_manager = "systemd"
 default_shell = "/bin/sh"
 path_dirs = ["/usr/bin", "/bin"]
 
-# M4d uses minimal fixture-backed allow-list entries to prove the policy
-# mechanism. M4e replaces these placeholders with proof-corpus entries.
 [profiles.lifecycle.services]
 mode = "allow-list"
-entries = ["example.service"]
+entries = ["conary-example.service"]
 
 [profiles.lifecycle.tmpfiles]
 mode = "allow-list"
-entries = ["example.conf"]
+entries = ["/var/lib/conary-example"]
 
 [profiles.lifecycle.sysctl]
 mode = "allow-list"
 keys = ["kernel.example"]
 
 [profiles.lifecycle.users]
-mode = "unsupported"
+mode = "allow-list"
+entries = ["conary-example"]
 
 [profiles.lifecycle.groups]
-mode = "unsupported"
+mode = "allow-list"
+entries = ["conary-example"]
 
 [profiles.lifecycle.directories]
-mode = "unsupported"
+mode = "allow-list"
+entries = ["/var/lib/conary-example"]
 
 [profiles.lifecycle.alternatives]
 mode = "unsupported"
@@ -78,28 +79,29 @@ service_manager = "systemd"
 default_shell = "/bin/sh"
 path_dirs = ["/usr/bin", "/bin"]
 
-# M4d uses minimal fixture-backed allow-list entries to prove the policy
-# mechanism. M4e replaces these placeholders with proof-corpus entries.
 [profiles.lifecycle.services]
 mode = "allow-list"
-entries = ["example.service"]
+entries = ["conary-example.service"]
 
 [profiles.lifecycle.tmpfiles]
 mode = "allow-list"
-entries = ["example.conf"]
+entries = ["/var/lib/conary-example"]
 
 [profiles.lifecycle.sysctl]
 mode = "allow-list"
 keys = ["kernel.example"]
 
 [profiles.lifecycle.users]
-mode = "unsupported"
+mode = "allow-list"
+entries = ["conary-example"]
 
 [profiles.lifecycle.groups]
-mode = "unsupported"
+mode = "allow-list"
+entries = ["conary-example"]
 
 [profiles.lifecycle.directories]
-mode = "unsupported"
+mode = "allow-list"
+entries = ["/var/lib/conary-example"]
 
 [profiles.lifecycle.alternatives]
 mode = "unsupported"
@@ -129,28 +131,29 @@ service_manager = "systemd"
 default_shell = "/bin/sh"
 path_dirs = ["/usr/bin", "/bin"]
 
-# M4d uses minimal fixture-backed allow-list entries to prove the policy
-# mechanism. M4e replaces these placeholders with proof-corpus entries.
 [profiles.lifecycle.services]
 mode = "allow-list"
-entries = ["example.service"]
+entries = ["conary-example.service"]
 
 [profiles.lifecycle.tmpfiles]
 mode = "allow-list"
-entries = ["example.conf"]
+entries = ["/var/lib/conary-example"]
 
 [profiles.lifecycle.sysctl]
 mode = "allow-list"
 keys = ["kernel.example"]
 
 [profiles.lifecycle.users]
-mode = "unsupported"
+mode = "allow-list"
+entries = ["conary-example"]
 
 [profiles.lifecycle.groups]
-mode = "unsupported"
+mode = "allow-list"
+entries = ["conary-example"]
 
 [profiles.lifecycle.directories]
-mode = "unsupported"
+mode = "allow-list"
+entries = ["/var/lib/conary-example"]
 
 [profiles.lifecycle.alternatives]
 mode = "unsupported"

@@ -95,7 +95,7 @@ fn profile_backed_lifecycle_query_accepts_only_explicit_entries() {
     let profile = profile_by_public_id("fedora-44").unwrap();
 
     assert_eq!(
-        profile.service_status("example.service"),
+        profile.service_status("conary-example.service"),
         ProfileConstraintStatus::Accepted
     );
     assert_eq!(
@@ -103,7 +103,7 @@ fn profile_backed_lifecycle_query_accepts_only_explicit_entries() {
         ProfileConstraintStatus::Unsupported
     );
     assert_eq!(
-        profile.tmpfiles_status("example.conf"),
+        profile.tmpfiles_status("/var/lib/conary-example"),
         ProfileConstraintStatus::Accepted
     );
     assert_eq!(
@@ -111,11 +111,57 @@ fn profile_backed_lifecycle_query_accepts_only_explicit_entries() {
         ProfileConstraintStatus::Accepted
     );
     assert_eq!(
-        profile.user_status("example"),
-        ProfileConstraintStatus::Unsupported
+        profile.user_status("conary-example"),
+        ProfileConstraintStatus::Accepted
     );
     assert_eq!(
         profile.alternative_status("editor"),
         ProfileConstraintStatus::Unsupported
     );
+}
+
+#[test]
+fn m4e_profiles_accept_exact_proof_corpus_lifecycle_entries() {
+    use crate::ccs::v2::validation::{ProfileConstraintStatus, TargetProfileQuery};
+
+    for id in ["fedora-44", "ubuntu-26.04", "arch"] {
+        let profile = profile_by_public_id(id).expect(id);
+        assert_eq!(
+            profile.service_status("conary-example.service"),
+            ProfileConstraintStatus::Accepted
+        );
+        assert_eq!(
+            profile.tmpfiles_status("/var/lib/conary-example"),
+            ProfileConstraintStatus::Accepted
+        );
+        assert_eq!(
+            profile.user_status("conary-example"),
+            ProfileConstraintStatus::Accepted
+        );
+        assert_eq!(
+            profile.group_status("conary-example"),
+            ProfileConstraintStatus::Accepted
+        );
+        assert_eq!(
+            profile.directory_status("/var/lib/conary-example"),
+            ProfileConstraintStatus::Accepted
+        );
+    }
+}
+
+#[test]
+fn m4e_profiles_reject_old_placeholder_lifecycle_entries() {
+    use crate::ccs::v2::validation::{ProfileConstraintStatus, TargetProfileQuery};
+
+    for id in ["fedora-44", "ubuntu-26.04", "arch"] {
+        let profile = profile_by_public_id(id).expect(id);
+        assert_eq!(
+            profile.service_status("example.service"),
+            ProfileConstraintStatus::Unsupported
+        );
+        assert_eq!(
+            profile.tmpfiles_status("example.conf"),
+            ProfileConstraintStatus::Unsupported
+        );
+    }
 }
