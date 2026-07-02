@@ -11,6 +11,10 @@ members = [
 ]
 resolver = "3"
 
+[patch.crates-io]
+aws-creds = { path = "third_party/aws-creds-0.39.1-patched" }
+rust-s3 = { path = "third_party/rust-s3-0.37.2-patched" }
+
 [workspace.dependencies]
 # Database
 rusqlite = { version = "0.40", features = ["bundled"] }

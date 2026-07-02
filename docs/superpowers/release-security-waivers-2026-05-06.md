@@ -11,9 +11,8 @@ readiness gate. Waivers here are not blanket approval for a wider release.
 - **Severity:** Medium, CVSS 5.9
 - **Current fix status:** No fixed `rsa` release is available.
 - **Dependency paths:**
-  - `rsa 0.9.10 -> openidconnect 4.0.1 -> sigstore 0.13.0`
-  - `rsa 0.9.10 -> sequoia-openpgp 2.2.0 -> conary-core`
-  - `rsa 0.9.10 -> sigstore 0.13.0`
+  - `rsa 0.9.10 -> openidconnect 4.0.1 -> sigstore 0.14.0`
+  - `rsa 0.9.10 -> sequoia-openpgp 2.3.0 -> conary-core`
 - **Conary reachability:** Conary uses these stacks for trust metadata,
   OpenPGP verification, Sigstore verification, and OIDC/Sigstore support.
   Conary does not expose RSA private-key decryption or signing operations to
@@ -33,10 +32,25 @@ readiness gate. Waivers here are not blanket approval for a wider release.
   Rust dependencies or expand RSA private-key operations. The release gate
   remains `bash scripts/release-cargo-audit.sh`, with this waiver as the only
   ignored RustSec vulnerability.
+- **2026-07-03 audit refresh:** The RSA paths above still have no compatible
+  fixed path. `bash scripts/release-cargo-audit.sh` remains green with this as
+  the only ignored RustSec vulnerability.
+
+## Resolved Advisory Follow-Ups
+
+### RUSTSEC-2026-0194 and RUSTSEC-2026-0195 - quick-xml
+
+Fresh RustSec data on 2026-07-03 reported two high-severity `quick-xml`
+advisories against `quick-xml 0.38.4` and `0.40.1`.
+
+- `conary-core` now depends on `quick-xml 0.41`.
+- `rust-s3 0.37.2` and `aws-creds 0.39.1` are patched locally under
+  `third_party/` to raise their `quick-xml` dependency from `0.38` to `0.41`.
+- Remove the local patches once upstream publishes compatible crates that
+  depend on `quick-xml >= 0.41`.
 
 ## Non-Blocking Warnings
 
-`cargo audit` also reports `RUSTSEC-2024-0370` for unmaintained
-`proc-macro-error 1.0.4` through `json-syntax -> sigstore`. This is an
-unmaintained warning, not a vulnerability gate failure, and is not ignored by
-`scripts/release-cargo-audit.sh`.
+`cargo audit` also reports `RUSTSEC-2026-0173` for unmaintained
+`proc-macro-error2 2.0.1`. This is an unmaintained warning, not a vulnerability
+gate failure, and is not ignored by `scripts/release-cargo-audit.sh`.
