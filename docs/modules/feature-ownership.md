@@ -296,7 +296,7 @@ building, bootstrap validation, conaryd route history.
 
 **Interaction gate:** `cargo run -p conary-test -- run --suite phase3-group-o-generation-export --distro fedora44 --phase 3`;
 `cargo run -p conary-test -- run --suite phase3-group-p-iso-export --distro fedora44 --phase 3`
-for export or boot-carrier behavior.
+when export or boot-carrier behavior changes.
 
 **Docs to update:** `docs/ARCHITECTURE.md`;
 `docs/operations/post-generation-export-follow-up-roadmap.md`;
@@ -607,7 +607,7 @@ federation peer state, admin audit logs, artifact path handling.
 
 **Interaction gate:** `cargo test -p remi`;
 `cargo test -p conary --test conversion_integration golden_conversion` when
-serving behavior depends on conversion output;
+serving behavior depends on conversion output, and
 `cargo test -p conary --test packaging_m4c` when native release intake,
 metadata, download, or client install proof changes.
 
