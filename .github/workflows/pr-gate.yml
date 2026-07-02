@@ -66,6 +66,10 @@ jobs:
         run: bash scripts/check-coherency-ledger.sh docs/superpowers/feature-coherency-ledger.tsv
       - name: Check feature coherency completed scopes
         run: bash scripts/check-coherency-wave-scopes.sh docs/superpowers/feature-coherency-ledger.tsv docs/superpowers/feature-coherency-wave-scopes.tsv
+      - name: Test agent context tool
+        run: bash scripts/test-agent-context.sh
+      - name: Validate feature ownership cards
+        run: bash scripts/agent-context.sh --validate
       - name: Check support bundle privacy
         run: bash scripts/test-support-bundle.sh
 
