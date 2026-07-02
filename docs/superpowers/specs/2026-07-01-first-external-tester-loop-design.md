@@ -87,8 +87,11 @@ The program does not optimize for:
   work: 511 commits, with `docs/` touched about as often as `apps/`, and the
   most recent batches dominated by agent-context/card/gate work.
 - `.github/ISSUE_TEMPLATE/beta_feedback.md` exists; `remi prewarm` exists;
-  the `release.sh` → GitHub Actions pipeline produces pinned, signed
-  releases; Remi cold-start latency is a documented preview risk.
+  the `release.sh` → GitHub Actions pipeline exists, but
+  `docs/operations/release-artifact-matrix.md` still marks every product row
+  source-build-only, with binary checksums, signatures, and SBOM/provenance
+  evidence pending until a preview release links concrete artifact URLs;
+  Remi cold-start latency is a documented preview risk.
 - The recipe → `.ccs` build/publish toolchain exists (`conary new`, `cook`,
   `publish`, `ccs keygen`), but no operator-facing tutorial shows a stranger
   how to run their own Remi or check host compatibility before trying the
@@ -112,7 +115,8 @@ Add a short "Meta-layer budget" paragraph to the Maintainability section of
 
 `ROADMAP.md` gets a one-line pointer to the policy. The evidence basis is the
 June 2026 commit distribution recorded above. This slice is a policy commit
-with no code and should land the same day as this design.
+with no code; it is the first child implementation slice and should be the
+first change executed after this design locks in.
 
 ### Slice 2: Preview CLI Surface Tiering
 
@@ -131,14 +135,22 @@ Hidden (advanced; exact list settled in the child plan): `cook`, `new`,
 `profile`, `provenance`, `capability`, `trust`, `verify-derivation`, `sbom`,
 `federation`, `export`, `canonical`, `registry`, `query`.
 
-Discovery path: help epilogue text such as "Advanced packaging and platform
-commands: run `conary help --advanced`", plus a docs page listing the
-advanced surface.
+Discovery path: a root-level `--help-advanced` flag whose listing is
+rendered from the same clap command tree, hidden subcommands included, so
+the advanced list cannot drift from the real surface. Clap's generated help
+and its built-in `help` subcommand do not list hidden commands, which is why
+this is a dedicated flag rather than a `help` variant. The default help
+epilogue gains one line: "Advanced packaging and platform commands: run
+`conary --help-advanced`." A docs page lists the same advanced surface.
 
 Proof:
 
 - a focused `cli_daily_ux` test asserting the default help shows exactly the
-  daily-driver set and the advanced listing shows the remainder;
+  daily-driver set and `--help-advanced` shows the remainder;
+- an intentional update to `root_help_includes_daily_workflow_examples`
+  (`apps/conary/tests/cli_daily_ux.rs`), whose epilogue assertions the new
+  help text will touch — the child plan must list every help-content test it
+  rewrites and why;
 - README and site quickstart re-checked against the docs-truth gate;
 - feature-coherency ledger rows for touched help surfaces rerun (this is a
   product-forced meta update, allowed under slice 1's policy).
@@ -151,17 +163,29 @@ The milestone slice. Three phases:
 
 **Pre-launch gate (all items complete before posting):**
 
-- a pinned release cut via `./scripts/release.sh conary` and the GitHub
-  Actions release pipeline, so testers install a fixed, signed artifact;
+- a pinned release cut via `./scripts/release.sh conary`: tag pushed,
+  `release-build.yml` green, GitHub release assets published, checksum and
+  signature verification evidence recorded, and the
+  `docs/operations/release-artifact-matrix.md` `conary` row moved off
+  source-build-only by linking the concrete artifact URLs — the tester post
+  pins this exact tag;
 - `remi prewarm` run against the tested package set on the public Remi, so
   first-install latency does not masquerade as package-manager slowness;
-- a published compatibility checklist (kernel/composefs version, systemd,
-  UEFI expectations, supported distro versions: Fedora 44, Ubuntu 26.04 LTS,
-  Arch) linked from the quickstart, so people on older stacks hit a doc, not
-  a wall;
+- a published compatibility checklist linked from the quickstart, split into
+  two tiers so it does not overstate requirements: the basic
+  adopt/unadopt/install loop (supported distro versions: Fedora 44,
+  Ubuntu 26.04 LTS, Arch, on their stock kernels) and the generation-model
+  features (composefs-capable kernel, systemd, UEFI boot stack) — only the
+  second tier carries the stricter requirements;
+- `.github/ISSUE_TEMPLATE/beta_feedback.md` narrowed or supplemented for
+  this loop: today it invites six preview lanes including generation export
+  and conaryd, which cuts against the narrow milestone; the loop needs an
+  intake that foregrounds the install → adopt → dry-run → unadopt path and
+  captures an explicit "completed the full loop: yes/no" signal the tracker
+  can count;
 - the 2026-05-19 subreddit tester post refreshed to reference the pinned
-  release, the tiered CLI, the compatibility checklist, and the
-  `beta_feedback.md` template link.
+  release tag and artifact URLs, the tiered CLI, the compatibility
+  checklist, and the feedback template link.
 
 **Launch:** posting is Peter's manual action. The child plan prepares
 everything up to "click post" and records the posting venues.
@@ -196,7 +220,8 @@ slice 2.
 
 ## Sequencing
 
-1. Slice 1 (policy) — lands with this design.
+1. Slice 1 (policy) — first child slice, executed immediately after design
+   lock-in.
 2. Slice 2 (CLI tiering) — small, must precede launch.
 3. Slice 3 (tester loop) — pre-launch gate, launch, loop to milestone.
 4. Slice 4 (Remi tutorial) — parallel after slice 2; does not block launch.
