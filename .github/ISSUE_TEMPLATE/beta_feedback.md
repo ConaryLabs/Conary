@@ -8,12 +8,20 @@ assignees: ''
 
 ## Preview Lane
 
+- [ ] First external tester loop (install -> adopt -> list/search -> update --dry-run -> unadopt)
 - [ ] Adoption/unadoption
 - [ ] Conary-owned install/remove/update
 - [ ] Selected-generation native handoff
 - [ ] Generation export
 - [ ] Remi conversion
 - [ ] conaryd local daemon
+
+## First External Tester Loop
+
+Fill this in if you ran the tester loop from the preview post.
+
+- **Completed the full loop (install -> adopt -> list/search -> update --dry-run -> unadopt)**: yes / no / partial
+- **If partial or no -- where did it stop, and what did you see?**:
 
 ## Environment
 
