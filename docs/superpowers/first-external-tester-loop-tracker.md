@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-01
-revision: 1
+last_updated: 2026-07-02
+revision: 2
 summary: Completion and friction tracker for the first external tester loop milestone
 ---
 
@@ -18,7 +18,10 @@ forces a documented pivot decision recorded at the bottom of this file.
 
 ## Launch record
 
-- Release tag: `v0.9.0`
+- Release tag: `v0.9.1`
+- Release evidence: release-build `28611665140` and deploy-and-verify
+  `28614650428` green on commit
+  `b2241038af87863f4e27cedfc9fb8600b09410cf`.
 - Post venues and dates: (filled at launch)
 
 ## Reports
