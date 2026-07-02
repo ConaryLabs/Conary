@@ -1,5 +1,10 @@
 # Limited Preview Subreddit Tester Post - 2026-05-19
 
+> Launch state: copy refreshed 2026-07-01 for the first-external-tester-loop
+> design. The two release-tag markers below MUST be replaced with the real
+> pinned tag and artifact URL during Task 9 of the 2026-07-01 plan before
+> posting.
+
 This is draft copy for a narrow public tester ask. It is not release policy and
 should be revised for the norms of whichever subreddit receives it.
 
@@ -29,17 +34,33 @@ Tested preview targets:
 - Ubuntu 26.04 LTS
 - Arch Linux
 
+Install the pinned preview release (tag `RELEASE-TAG`):
+download and checksum/signature instructions at
+https://github.com/ConaryLabs/Conary/releases/tag/RELEASE-TAG
+
+Before starting, check the compatibility checklist --
+the whole loop below runs on stock kernels:
+https://conary.io/docs/compatibility-checklist (or
+`docs/guides/compatibility-checklist.md` in the repo).
+
 What I would love people to try in a VM, snapshot, or spare system:
 
 ```bash
-conary system adopt --system --full
+conary install <small-package> --dry-run
+conary install <small-package> --yes
+conary system adopt --system --dry-run
+conary system adopt --system
 conary list
 conary search <package>
 conary update --dry-run
-conary install <small-package> --yes
-conary remove <small-package> --yes
+conary system unadopt --all --dry-run
 conary system unadopt --all --yes
 ```
+
+When you are done (or stuck), please file what happened -- good, bad, or
+confusing -- using the Beta Feedback issue template, and answer its
+"Completed the full loop" question so I can count it:
+https://github.com/ConaryLabs/Conary/issues/new?template=beta_feedback.md
 
 Please do not test this first on an irreplaceable daily driver. This is preview
 software, and package-manager work touches real system state.
