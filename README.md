@@ -197,6 +197,10 @@ Commands that mutate packages, files, generation state, or selected native autho
 ./target/debug/conary system generation switch 1 --yes
 ```
 
+The default `conary --help` shows the daily-driver commands. The full
+packaging/platform surface is listed by `conary --help-advanced` and
+described in [docs/guides/advanced-commands.md](docs/guides/advanced-commands.md).
+
 ---
 
 ## Features
