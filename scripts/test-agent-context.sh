@@ -345,4 +345,27 @@ fi
 grep -q "command failed: false" "$tmp/run-fail.out" \
     || fail "--run failure did not name the failing command"
 
+# --- real-map smoke assertions (default --map) ---
+
+"$script" --validate >/dev/null \
+    || fail "real feature-ownership map failed --validate"
+
+real_list="$("$script" --list)"
+grep -q $'^packaging\t' <<<"$real_list" || fail "real map --list missing packaging slug"
+grep -q $'^profiles\t' <<<"$real_list" || fail "real map --list missing profiles slug"
+[[ "$(wc -l <<<"$real_list")" -eq 13 ]] || fail "real map --list did not print 13 cards"
+
+"$script" --path apps/conary/src/commands/install/mod.rs > "$tmp/real-install.out"
+grep -q '^slug: install$' "$tmp/real-install.out" \
+    || fail "install path did not route to the install card"
+"$script" --path apps/remi/src/server/mcp.rs > "$tmp/real-mcp.out"
+grep -q '^slug: agent-mcp$' "$tmp/real-mcp.out" \
+    || fail "remi mcp.rs did not route to agent-mcp (specificity)"
+"$script" --path apps/conary-test/src/bootstrap.rs > "$tmp/real-bootstrap.out"
+grep -q '^slug: bootstrap$' "$tmp/real-bootstrap.out" \
+    || fail "conary-test bootstrap.rs did not route to bootstrap (specificity)"
+"$script" --path apps/remi/src/federation/mod.rs > "$tmp/real-federation.out"
+grep -q '^slug: remi$' "$tmp/real-federation.out" \
+    || fail "federation path did not fold into the remi card"
+
 echo "agent-context tests passed."
