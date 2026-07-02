@@ -173,7 +173,7 @@ jobs:
     needs: [prepare, workspace-validation]
     runs-on: ubuntu-latest
     container:
-      image: registry.fedoraproject.org/fedora:43
+      image: registry.fedoraproject.org/fedora:44
     steps:
       - name: Install build dependencies
         run: |

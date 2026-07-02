@@ -102,6 +102,7 @@ require_match "$release_build" '\./scripts/release\.sh "\$product"' 'dry-run rel
 require_match "$release_build" 'CONARY_RELEASE_LOCKFILE_MODE: online' 'dry-run release tree should allow online lockfile refreshes in CI'
 require_match "$release_build" 'git config --global --add safe\.directory "\$\(pwd\)"' 'dry-run release tree should mark the checked-out repo as a safe git directory'
 require_match "$release_build" 'git tag --points-at HEAD \| grep -Fx "\$tag_name"' 'dry-run preparation should verify the expected local tag'
+require_match "$release_build" 'image: registry\.fedoraproject\.org/fedora:44' 'release-build RPM builder must use Fedora 44'
 require_match "$release_build" 'deterministic dry-run signing key' 'dry-run signing fallback'
 require_match "$release_build" 'REHEARSAL_SIGNING_PUBLIC_KEY\.txt' 'dry-run signing public key artifact'
 require_match "$release_build" 'bundle_name: \$\{\{ steps\.meta\.outputs\.bundle_name \}\}' 'prepare bundle_name output'

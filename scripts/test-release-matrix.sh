@@ -371,6 +371,27 @@ YAML
     assert_check_release_matrix_fails "$repo" "verify-conary-test"
 }
 
+test_check_release_matrix_rejects_stale_rpm_builder_distro() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    python3 - "$repo/.github/workflows/release-build.yml" <<'PY'
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+text = path.read_text()
+path.write_text(
+    text.replace(
+        "image: registry.fedoraproject.org/fedora:44",
+        "image: registry.fedoraproject.org/fedora:43",
+        1,
+    )
+)
+PY
+
+    assert_check_release_matrix_fails "$repo" "release-build RPM builder must use Fedora 44"
+}
+
 test_check_release_matrix_rejects_missing_artifact_row() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -417,6 +438,7 @@ main() {
         test_release_dry_run_conary_test_uses_owned_manifest_baseline
         test_check_release_matrix_rejects_conaryd_deploy_jobs_when_paused
         test_check_release_matrix_rejects_conary_test_deploy_jobs
+        test_check_release_matrix_rejects_stale_rpm_builder_distro
         test_check_release_matrix_rejects_missing_artifact_row
         test_check_release_matrix_rejects_unknown_deploy_route_pair
     )
