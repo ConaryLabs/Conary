@@ -42,14 +42,14 @@ grep -q "## Rust Hotspots" <<<"$all_output" \
     || fail "hotspot section missing"
 grep -q $'lines\tpath' <<<"$all_output" \
     || fail "hotspot table missing"
-grep -q "Agent/MCP operation surfaces" <<<"$all_output" \
+grep -q "Agent/MCP Operation Surfaces" <<<"$all_output" \
     || fail "all-path report did not include Agent/MCP hint"
-grep -q "Bootstrap and self-hosting" <<<"$all_output" \
+grep -q "Bootstrap And Self-Hosting" <<<"$all_output" \
     || fail "all-path report did not include Bootstrap hint"
-grep -q "conaryd jobs/routes" <<<"$all_output" \
+grep -q "conaryd Package Jobs And Daemon Routes" <<<"$all_output" \
     || fail "all-path report did not include conaryd hint"
-grep -q "Remi federation" <<<"$all_output" \
-    || fail "all-path report did not include Remi federation hint"
+grep -A1 -- '^- apps/remi/src/federation/' <<<"$all_output" | grep -q "Remi Publication, Serving, Admin, And Fixture Artifacts" \
+    || fail "federation paths did not route to the Remi card"
 
 tmp_path="$(mktemp docs/modules/drift-report-test.XXXXXX.tmp)"
 printf 'temporary drift report test fixture\n' > "$tmp_path"
