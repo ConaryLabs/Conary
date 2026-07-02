@@ -572,6 +572,8 @@ For a detailed architecture overview, see [docs/ARCHITECTURE.md](docs/ARCHITECTU
 Conary includes an on-demand CCS conversion proxy called Remi. It converts supported legacy packages (Fedora 44 RPM, Ubuntu 26.04 DEB, and Arch packages) to CCS format on the fly, serves only public-ready converted artifacts through the public package surfaces, and provides a sparse index for efficient client sync without requiring upstream package authors to republish in CCS first.
 
 A public instance runs at **[remi.conary.io](https://remi.conary.io)**.
+For private test hosts, see
+[docs/guides/self-hosted-remi.md](docs/guides/self-hosted-remi.md).
 
 Features: Bloom filter acceleration, batch endpoints, pull-through caching, full-text search (Tantivy), repository metadata verification, and Prometheus metrics.
 
