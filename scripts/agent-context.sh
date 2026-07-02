@@ -298,7 +298,97 @@ mode_list() {
     done
 }
 
+declare -a glob_patterns=()
+declare -a glob_headings=()
+declare -a glob_specificities=()
+
+load_globs() {
+    local heading glob prefix
+    for heading in "${card_headings[@]}"; do
+        while IFS= read -r glob; do
+            if [[ -z "$glob" ]]; then
+                continue
+            fi
+            glob_patterns+=("$glob")
+            glob_headings+=("$heading")
+            prefix="${glob%%[\*\?\[]*}"
+            glob_specificities+=("${#prefix}")
+        done < <(extract_spans "${card_fields["$heading|Paths"]:-}")
+    done
+}
+
+route_heading=""
+declare -a route_tied=()
+
+route_path() {
+    local path="$1"
+    local i best=-1
+    route_heading=""
+    route_tied=()
+    for i in "${!glob_patterns[@]}"; do
+        # The glob must stay unquoted so [[ == ]] treats it as a pattern.
+        if [[ "$path" == ${glob_patterns[$i]} ]]; then
+            if (( glob_specificities[i] > best )); then
+                best="${glob_specificities[$i]}"
+                route_heading="${glob_headings[$i]}"
+                route_tied=("${glob_headings[$i]}")
+            elif (( glob_specificities[i] == best )); then
+                route_tied+=("${glob_headings[$i]}")
+            fi
+        fi
+    done
+    [[ -n "$route_heading" ]]
+}
+
+distinct_tied_count() {
+    printf '%s\n' "${route_tied[@]}" | sort -u | wc -l
+}
+
+require_unambiguous_route() {
+    local path="$1"
+    if (( $(distinct_tied_count) > 1 )); then
+        fail "ambiguous Paths routing for $path: $(printf '%s\n' "${route_tied[@]}" | sort -u | paste -sd ';' -) (run --validate and fix the map)"
+    fi
+}
+
+fallback_hint_for_path() {
+    local path="$1"
+    case "$path" in
+        AGENTS.md|CONTRIBUTING.md|.github/PULL_REQUEST_TEMPLATE.md|docs/llms/*|docs/modules/feature-ownership.md|docs/superpowers/documentation-accuracy-audit-*|scripts/maintainability-drift-report.sh|scripts/agent-context.sh)
+            printf 'Assistant/contributor guidance | focused: bash scripts/check-doc-audit-ledger.sh docs/superpowers/documentation-accuracy-audit-ledger.tsv --require-complete | gate: docs-audit inventory diff and stale-term added-line sweep'
+            ;;
+        docs/modules/*|docs/operations/*|docs/INTEGRATION-TESTING.md|docs/ARCHITECTURE.md)
+            printf 'Canonical docs | focused: docs-audit ledger and inventory checks | gate: affected feature card proof if behavior claims changed'
+            ;;
+        docs/superpowers/plans/*|docs/superpowers/specs/*)
+            printf 'Planning docs | focused: docs-audit ledger and inventory checks | gate: agentic review before lock-in'
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+no_hint_message='No feature-card hint matched. Use the owning package tests and update docs/modules/feature-ownership.md if this should be routed.'
+
+mode_path() {
+    local hint
+    if route_path "$route_path_arg"; then
+        require_unambiguous_route "$route_path_arg"
+        if [[ "$brief" -eq 1 ]]; then
+            printf '%s\n' "$(brief_line "$route_heading")"
+        else
+            print_packet "$route_heading"
+        fi
+    elif hint="$(fallback_hint_for_path "$route_path_arg")"; then
+        printf '%s\n' "$hint"
+    else
+        printf '%s\n' "$no_hint_message"
+    fi
+}
+
 load_map
+load_globs
 
 case "$mode" in
     list)
@@ -313,7 +403,10 @@ case "$mode" in
             print_packet "$heading"
         fi
         ;;
-    path|changed|validate)
+    path)
+        mode_path
+        ;;
+    changed|validate)
         fail "mode not implemented yet: $mode"
         ;;
 esac
