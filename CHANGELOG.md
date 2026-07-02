@@ -4,6 +4,517 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v0.9.0] - 2026-07-02
+
+### Added
+- add risk-tiered mutation intent
+
+### Fixed
+- align system adopt coherency
+
+### Security
+- share command risk taxonomy
+- refresh cargo advisory gate
+- fail closed on requested verity mounts
+- share critical package blocklist
+
+### Other
+- test(cli): run remaining root parser tests on larger stacks
+- feat(cli): add --help-advanced rendered from the clap tree
+- feat(cli): tier preview help to the daily-driver surface
+- fix(docs): normalize gate prose to commands-first format
+- fix(scripts): address GPT-5.5 review findings
+- feat(scripts): build plan-review prompts from feature ownership cards
+- feat(scripts): cut drift report path hints over to agent-context
+- test(scripts): prove agent-context against the real ownership map
+- feat(scripts): execute card proof commands via --run focused/gate
+- feat(scripts): validate the feature ownership map schema and routing
+- feat(scripts): collect changed and all-tracked paths for card routing
+- feat(scripts): route paths to cards by glob specificity with doc fallbacks
+- feat(scripts): parse ownership cards into task packets
+- feat(scripts): scaffold agent-context tool with mode and option contract
+- test(packaging): prove supported profile cutover
+- feat(remi): validate routes with supported profiles
+- feat(ccs): validate lifecycle authority with supported profiles
+- feat(cli): validate distro pins with supported profiles
+- feat(repository): add supported target profiles
+- test(remi): prove native ccs publication flow
+- feat(remi): carry native release identity in clients
+- feat(remi): expose verified publish gate candidates
+- feat(remi): add native publication schema
+- test(ccs): cover chunked v2 authoring payloads
+- fix(ccs): finish m4b verification cleanup
+- test(ccs): prove m4b local authoring loop
+- feat(ccs): add isolated dry-run package test
+- feat(ccs): build local-dev signed v2 packages
+- feat(ccs): add v2 authoring lint
+- feat(ccs): project authoring builds into v2 authority
+- feat(ccs): wire m4b command surface
+- feat(ccs): add minimal v2 authoring template
+- fix(ccs): clean v2 lint diagnostics
+- test(ccs): preserve v2 publish and verify gates
+- feat(ccs): route package adapter through v2 authority
+- feat(ccs): add v2 content identity projection
+- test(ccs): add signed v2 package fixture writer
+- feat(ccs): read signed v2 authority
+- feat(ccs): surface v2 validation diagnostics
+- feat(ccs): validate v2 authority contract
+- feat(ccs): add v2 authority schema
+- feat(ccs): seed v2 authority module
+- fix(record): clean watcher clippy warnings
+- test(record): cover cook record workflow
+- feat(record): orchestrate cook record mode
+- feat(record): validate recorded drafts
+- feat(record): derive draft recipe
+- feat(record): write redacted trace reports
+- feat(record): add sandbox command runner
+- feat(record): add fanotify backend selection
+- feat(record): add recursive inotify tracing
+- feat(record): add private recording workspace
+- feat(record): add recording report contract
+- feat(record): add hidden cook record route
+- fix(try): address watch review gaps
+- fix(try): keep watch implementation clippy clean
+- test(try): cover watch mode integration
+- feat(try): run watch refresh loop
+- feat(try): add staged watch refresh
+- feat(try): mark watch sessions
+- feat(try): add active generation replacement
+- feat(cook): add try watch adapter
+- feat(try): add watch source identity
+- feat(diagnostics): add try watch events
+- feat(try): add watch CLI routing foundation
+- fix(try): preserve retry state after failed keep
+- refactor(try): narrow module visibility
+- refactor(try): split session lifecycle
+- refactor(try): split namespace and executor
+- refactor(try): split validation and install
+- fix(try): restore current link after failed keep
+- fix(try): centralize launcher and boot identity
+- test(try): lock m3c0 tiny-fix regressions
+- test(try): characterize declarative hook execution
+- feat(packaging): add mcp publish plan apply
+- feat(packaging): add publish plan registry
+- refactor(publish): expose structured static artifact helper
+- feat(packaging): expose read-only mcp tools
+- feat(packaging): project m3a records into agent results
+- feat(conary): add local packaging mcp startup path
+- feat(static-repo): expose publish trust snapshot
+- test(packaging): enforce publish gate diagnostic mapping
+- test(packaging): cover m3a json operation records
+- feat(packaging): render publish json diagnostics
+- feat(packaging): render cook json diagnostics
+- feat(packaging): add json flags for cook and publish
+- feat(packaging): add cli diagnostic renderer
+- feat(packaging): add operation record store
+- security(packaging): add diagnostic redaction policy
+- feat(packaging): add diagnostic event dto
+- security(packaging): finalize m2 release surface
+- feat(remi): publish attested artifacts to release endpoint
+- security(remi): gate release uploads before visibility
+- feat(cook): emit foreign conversion boundaries
+- security(publish): enable attested artifact-form publish
+- security(publish): sign project-form build attestations
+- security(static): prepare publish context
+- security(static): add artifact publish gate
+- security(hermetic): gate ecosystem offline policy
+- security(ccs): compute attested output identity
+- security(ccs): bind attestations to manifest integrity
+- security(ccs): add build attestation envelopes
+- fix(packaging): stabilize m2a verification paths
+- feat(packaging): record host hermetic divergence evidence
+- feat(packaging): publish with hermetic build evidence
+- fix(packaging): use sysroot-only mounts for hermetic builds
+- feat(packaging): load hermetic builder config for cook
+- fix(packaging): prefetch hermetic sources from input base
+- feat(packaging): route isolated cook through hermetic builds
+- refactor(packaging): split hermetic env scanner
+- fix(packaging): reject opaque hermetic shell scripts
+- fix(packaging): reject stdin-fed hermetic shell bypasses
+- fix(packaging): reject process substitution in hermetic guards
+- fix(packaging): validate hermetic wrapper operands
+- fix(packaging): reject shell quote removal in hermetic guards
+- fix(packaging): reject glob expansion in hermetic guards
+- fix(packaging): reject command substitution in hermetic guards
+- fix(packaging): reject dynamic shell expansion in hermetic guards
+- fix(packaging): reject make include import options
+- fix(packaging): reject abbreviated make import options
+- fix(packaging): reject bundled make import options
+- fix(packaging): reject makefile import env bypasses
+- fix(packaging): reject nested make env overrides
+- fix(packaging): reject make variable env bypasses
+- fix(packaging): reject bash function env imports
+- fix(packaging): reject shell startup env in hermetic builds
+- fix(packaging): reject shell trap env bypasses
+- fix(packaging): reject shell alias env bypasses
+- fix(packaging): reject shell keyword env mutations
+- fix(packaging): reject local hermetic env mutations
+- fix(packaging): normalize shell array env targets
+- fix(packaging): reject declare nameref env mutations
+- fix(packaging): reject append and readarray env mutations
+- fix(packaging): reject shell builtin hermetic env mutations
+- fix(packaging): reject busybox shell hermetic bypasses
+- fix(packaging): validate nested env hermetic commands
+- fix(packaging): reject nested shell hermetic env bypasses
+- fix(packaging): scan shell control words for hermetic env mutations
+- fix(packaging): reject readonly hermetic env mutations
+- fix(packaging): peel shell env wrappers in hermetic builds
+- fix(packaging): reject env split-string in hermetic builds
+- fix(packaging): fail closed on env long options
+- fix(packaging): scan env assignments after options
+- fix(packaging): reject env clearing in hermetic builds
+- fix(packaging): close hermetic env mutation gaps
+- fix(packaging): require exact reproducibility remaps
+- feat(packaging): record hermetic reproducibility controls
+- fix(packaging): align hermetic patch execution roots
+- fix(packaging): harden hermetic plan trust boundaries
+- feat(packaging): assemble hermetic build plans
+- fix(packaging): preserve redirection in command risk fallback
+- fix(packaging): treat background shell op as command break
+- fix(packaging): constrain raw command risk pairing
+- fix(packaging): cover command risk review gaps
+- security(packaging): classify hermetic build command risks
+- fix(packaging): tighten cargo ecosystem policy
+- fix(packaging): hash cargo replacements from filesystem
+- fix(packaging): accept pinned cargo source caches
+- feat(packaging): add hermetic ecosystem policy
+- feat(packaging): hash and materialize hermetic local sources
+- fix(packaging): align hermetic evidence dto contract
+- feat(packaging): add unsigned hermetic evidence model
+- refactor(ccs): split manifest provenance types
+- scripts: add agentic plan review helper
+- fix(deploy): restore Remi site publishing path
+- fix(packaging): skip try preflight for DB-free commands
+- feat(packaging): graduate m1b authoring loop
+- test(packaging): cover try sessions
+- feat(packaging): add try command surface
+- test(packaging): update bundle replay hook fixtures
+- feat(packaging): build throwaway try generations
+- security(packaging): gate unsafe try hooks
+- feat(try): persist try sessions
+- test(packaging): cover inferred cook targets
+- feat(packaging): cook inferred source trees
+- feat(packaging): resolve inference targets
+- feat(packaging): add recipe materialization command
+- feat(packaging): materialize inferred recipes
+- feat(packaging): infer recipes from source trees
+- feat(packaging): add inference trace model
+- security(static-repo): fail closed on publisher state
+- test(static-repo): cover M1a publish install loop
+- feat(publish): add static repo project publish
+- feat(static-repo): publish file-based repositories
+- security(keys): create private keys with restrictive modes
+- feat(cook): align recipe builds with M1a
+- fix(recipe): reject unsafe local source cache paths
+- docs(recipe): clarify local source base dir
+- test(recipe): update gcc companion source assertions
+- test(recipe): update tier2 source policy assertions
+- feat(recipe): add local source workspaces
+- security(static-repo): verify CCS package keys on install
+- feat(repo): add static trust establishment
+- feat(static-repo): sync verified static indexes
+- feat(static-repo): persist package signing keys
+- security(tuf): handle static repo no-change syncs
+- feat(static-repo): support local file fetches
+- feat(static-repo): add v1 format validation
+- fix(deploy): verify remi release artifacts
+- ci: gate release builds with workspace validation
+- fix(conary-test): harden evidence gates
+- refactor(conary): decompose bootstrap commands
+- refactor(conary): extract remove command entrypoint
+- refactor(conary): extract autoremove planning
+- refactor(conary): extract remove transaction core
+- refactor(conary): extract remove scriptlet replay
+- refactor(conary): extract remove shared primitives
+- refactor(core): extract generation rebuild orchestration
+- refactor(core): extract generation creation orchestration
+- refactor(core): extract generation boot asset resolution
+- refactor(core): extract generation builder runtime inputs
+- refactor(core): extract generation builder primitives
+- refactor(conary): extract remaining dispatch routers
+- refactor(conary): extract system dispatch routing
+- refactor(conary): extract dispatch namespace routers
+- refactor(conary): extract top-level dispatch routing
+- refactor(conary): extract dispatch context helpers
+- refactor(core): extract scriptlet bundle builder
+- refactor(core): extract scriptlet bundle evidence digest
+- refactor(core): extract scriptlet bundle entry construction
+- refactor(core): extract scriptlet bundle metadata projection
+- refactor(core): extract scriptlet bundle classification helpers
+- refactor(core): extract scriptlet bundle public types
+- refactor(conary): move model apply orchestration
+- refactor(conary): extract model command owners
+- refactor(conary): extract model context and presentation
+- refactor(scriptlet): extract legacy contracts
+- refactor(scriptlet): extract process execution
+- refactor(scriptlet): extract sandbox policy
+- refactor(scriptlet): extract executor core
+- refactor(scriptlet): extract public types
+- refactor(install): extract install command orchestration
+- refactor(install): extract dependency flow
+- refactor(install): extract transaction execution
+- refactor(install): extract install lifecycle helpers
+- refactor(install): extract execution path helpers
+- refactor(install): extract options and source policy
+- refactor(ccs): complete install module split
+- refactor(update): extract package update execution
+- refactor(update): extract delta stats command
+- refactor(update): extract pinning commands
+- refactor(update): extract source policy preview
+- refactor(update): extract collection update orchestration
+- refactor(update): extract adopted authority policy
+- refactor(update): preserve selection callers
+- refactor(update): extract candidate selection
+- refactor(update): convert update command to module
+- refactor(ccs): move payload path helpers
+- refactor(install): extract ccs transaction adapter
+- refactor(install): add ccs transaction module
+- refactor(conary): extract install legacy replay adapter
+- test(cli): keep retired command sweep clean
+- fix(cli): prune stale public help strings
+- test(conary): serialize generation mount env guards
+- test(core): gate scriptlet adapter parity with golden evidence
+- refactor(core): keep regex scriptlet analysis advisory
+- test(cli): cover legacy scriptlet lifecycle refusals
+- test(cli): add legacy scriptlet golden conversion coverage
+- test(core): add legacy scriptlet golden classification corpus
+- test(core): cover legacy scriptlet support matrix fixtures
+- fix(core): shrink legacy replay refusal error path
+- test(cli): cover legacy replay compatibility matrix gates
+- feat(cli): audit legacy replay compatibility decisions
+- feat(cli): gate legacy replay with host compatibility policy
+- feat(core): add legacy replay compatibility matrix
+- test(ccs): add foreign replay verification
+- test(ccs): verify legacy replay audit metadata
+- test(ccs): cover no-scripts legacy replay
+- security(ccs): harden foreign legacy replay
+- security(model): guide legacy replatform refusals
+- security(remove): preflight legacy autoremove replay
+- security(update): gate legacy replay before changesets
+- security(restore): gate legacy replay before mutation
+- security(install): fail closed for batch legacy replay
+- feat(query): show installed scriptlet replay state
+- security(system): fail closed rollback legacy replay
+- security(install): replay legacy bundles on upgrade
+- security(remove): execute installed legacy replay
+- security(remove): gate installed legacy replay
+- security(install): record legacy replay audit metadata
+- security(install): skip flattened bundle scriptlets
+- security(install): persist accepted legacy bundles
+- security(install): execute accepted legacy CCS replay
+- security(install): gate legacy CCS admission
+- feat(scriptlets): add legacy replay install carriers
+- feat(scriptlets): expose legacy replay cli flags
+- feat(scriptlets): plumb legacy replay options
+- feat(scriptlets): add legacy executor contracts
+- feat(scriptlets): persist installed legacy bundles
+- feat(scriptlets): add legacy replay planner
+- feat(remi): gate chunk blobs by public reachability
+- feat(remi): hide non-public conversions from discovery
+- feat(remi): add scriptlet publication policy
+- test(scriptlets): verify passive bundle metadata flow
+- feat(scriptlets): store passive metadata on conversions
+- feat(scriptlets): embed passive bundles during conversion
+- feat(scriptlets): build passive legacy bundles
+- feat(scriptlets): add passive bundle summary types
+- test(install): isolate restore preinstall generation check
+- fix(scriptlets): align native ABI classification test
+- feat(scriptlets): guard bootstrap classification conversion
+- feat(scriptlets): add alternatives and cache refresh adapters
+- feat(scriptlets): add tmpfiles and sysusers adapters
+- feat(scriptlets): complete safe ldconfig and systemd adapters
+- feat(scriptlets): pass payload context to adapters
+- feat(scriptlets): add payload hint evidence
+- feat(scriptlets): expose conversion classification evidence
+- feat(scriptlets): add adapter support matrix
+- feat(scriptlets): add conservative adapter registry
+- feat(scriptlets): add blocked class registry
+- feat(scriptlets): add effect classification report
+- feat(scriptlets): add command evidence model
+- test(generation): track helper-based composefs publication
+- test(packages): cover native abi parser contract
+- feat(packages): extract rpm native scriptlet abi
+- feat(packages): extract deb native scriptlet abi
+- feat(packages): extract arch native scriptlet abi
+- feat(packages): add native scriptlet abi model
+- style: format legacy scriptlet bundle work
+- test(query): cover legacy scriptlet bundle output
+- feat(cli): add script bundle query flags
+- feat(query): render legacy scriptlet bundles
+- feat(ccs): preserve legacy scriptlet bundles in archives
+- feat(ccs): embed legacy scriptlet bundle in manifests
+- feat(ccs): validate legacy scriptlet bundles
+- feat(ccs): add legacy scriptlet bundle schema
+- security(scriptlets): harden live-root trust semantics
+- fix(recovery): add generation db backups
+- docs(release): add preview support loop
+- docs(preview): sharpen adoption onboarding
+- recovery(db): add adoption checkpoint backups
+- docs(core): mark conary-core internal
+- ci: add docs truth gate
+- test(docs): add docs truth checker fixtures
+- test(generation): update publication contract assertion
+- fix(fs): harden durable generation publication writes
+- fix(api): surface pending generation publication state
+- fix(recovery): honor pending generation publication debt
+- feat(cli): expose generation publication debt
+- feat(conary): record publication debt after package mutations
+- feat(generation): publish current db state through debt ledger
+- fix(generation): durably sync current generation link
+- feat(core): add generation publication debt model
+- security(adopt): harden adoption safety invariants
+- docs(agent): document operation contract slice
+- fix(agent): remove fake automation ai commands
+- docs(llms): retire Claude assistant guidance
+- feat(adopt): add native authority handoff
+- feat(cli): polish daily-driver operator UX
+- feat(generation): harden boot artifact trust
+- feat(conaryd): execute package jobs through CLI contracts
+- security(scriptlet): isolate live-root sandbox writes
+- feat(update): ingest trusted security advisories
+- test(native): expand daily-driver corpus validation
+- security(provenance): remove tough trust-root dependency
+- fix(generation): boot installed-runtime exports
+- test(matrix): harden native package manager parity evidence
+- test(matrix): add native package manager parity suite
+- test(fixtures): quote native fixture metadata
+- test(fixtures): record native fixture metadata
+- test(harness): add conary-test result gate
+- fix(resolver): require declared provider metadata
+- test(cli): prove daily driver package commands
+- feat(remove): classify autoremove authority
+- feat(query): align provider and breakage diagnostics
+- feat(cli): align remove selector
+- feat(cli): wire installed package selectors
+- feat(cli): add shared installed package selector
+- test(update): prove no-generation live-root parity
+- fix(update): box update candidate selection
+- fix(update): report partial package failures
+- fix(update): refuse unverifiable security metadata
+- feat(repo): expose security advisory support
+- feat(repo): track security advisory support
+- fix(install): preflight ownership before scriptlets
+- fix(install): materialize mutable batch installs
+- fix(restore): gate install scriptlets before restore
+- fix(install): gate dependency installs before scriptlets
+- fix(install): preflight live-root install before mutation
+- test(cli): prove no-generation live-root remove
+- feat(package): record deferred package follow-up
+- fix(remove): harden no-generation live-root removal
+- feat(remove): support no-generation live-root removal
+- fix(install): recover live-root journals with DB status
+- fix(install): neutralize live-root recovery before DB commit
+- fix(install): preserve deferred generation boundary
+- feat(install): materialize no-generation live-root installs
+- refactor(install): split CAS storage from DB writes
+- fix(package): allow live-root recovery removed dirs
+- fix(package): validate live-root backup recovery
+- fix(package): validate live-root recovery journals
+- fix(package): harden live-root transaction safety
+- feat(package): add live-root transaction helper
+- feat(history): show deferred follow-up
+- fix(history): reject unknown changeset metadata schema
+- feat(history): add changeset metadata envelope
+- feat(adopt): add unadopt escape hatch
+- fix(generation): complete composefs atomic switching
+- fix(generation): enforce composefs artifact activation
+- fix(export): harden artifact-backed OCI export
+- refactor(export): load OCI generations from artifacts
+- fix(generation): preflight snapshot rollback before db mutation
+- fix(generation): require complete recovery artifacts
+- fix(generation): honor recovery mount policy
+- fix(generation): fail closed on recovery and rollback fallbacks
+- test(generation): guard boot-time activation contract
+- fix(generation): make activation boot-time first
+- fix(boot): fail closed without generation root erofs
+- fix(generation): route remaining runtime paths
+- refactor(generation): centralize runtime root paths
+- fix(install): enforce converted capability policy before metadata writes
+- fix(install): enforce CCS capability policy on converted installs
+- test(install): align CCS tests with generation path
+- fix(install): persist CCS capability declarations
+- fix(install): strip CCS special mode bits
+- fix(install): persist CCS usrmerge paths
+- fix(install): make CCS symlink validation order-independent
+- fix(install): validate shared CCS payloads
+- fix(install): persist CCS manifest provides
+- fix(install): preserve CCS transactional edge cases
+- fix(install): preserve CCS install semantics
+- fix(install): route CCS through composefs transactions
+- fix(qemu): unblock local validation gate
+- ci: pause forge validation lanes
+- test(forge): stabilize real ops lifecycle suite
+- test(forge): bound real ops dependency checks
+- test(forge): install local fixture in real ops suite
+- test(forge): exercise self-update download failures
+- test(forge): align security boundary expectations
+- test(forge): relax corrupted native error match
+- test(forge): align scriptlet failure expectations
+- test(forge): target referenced CAS object in integrity check
+- test(forge): align data integrity manifest assertions
+- test(forge): align self-update mocks with https guard
+- test(forge): use distro package for Remi chunk install
+- test(forge): serve recipe fixture sources over http
+- test(forge): skip composefs runtime suites when unsupported
+- fix(rollback): support live-root rollback before generation activation
+- test(forge): guard rollback mutation commands
+- test(forge): disable sandbox for scripted remove
+- test(forge): require live mutation guard for removes
+- test(forge): install cmake in ubuntu validation image
+- fix(remove): support live-root removal before generation activation
+- test(forge): isolate phase1 advanced installs
+- ci(forge): clean podman build containers
+- ci(forge): reuse validation images within jobs
+- ci(forge): surface validation prerequisites
+- ci(forge): reclaim container storage before validation
+- ops(forge): restore trusted-runner preflight
+- fix(generation): boot self-contained runtime exports
+- test(generation): boot installed runtime export
+- test(generation): reject installed export with missing CAS
+- fix(takeover): promote packages only after CAS capture
+- fix(adopt): require CAS storage for full adoption
+- test(generation): cover missing runtime CAS object
+- feat(generation): share runtime input validation
+- feat(generation): classify runtime generation inputs
+- chore(test): switch active Fedora baseline to 44
+- test(conary-test): migrate Fedora fixture to 44
+- fix(generation): stabilize artifact export validation
+- fix(remi): unblock deploy access and conversion bursts
+- chore(generation): finalize export slice state
+- feat(generation): unify artifact image export
+- fix(generation): stabilize export validation tests
+- test(generation): add export qemu validation
+- feat(generation): wire disk export command
+- feat(generation): export artifacts as disk images
+- feat(generation): project export staging trees
+- refactor(image): share repart backend
+- feat(generation): emit runtime export artifacts
+- feat(bootstrap): emit run generation artifacts
+- feat(bootstrap): emit exportable generation artifacts
+- feat(generation): validate export artifacts
+- feat(generation): define export artifact manifests
+- feat(generation): record artifact manifest digest
+- refactor(bootstrap): remove legacy generation image builder
+- feat(generation): add export command surface
+- security(rust): upgrade vulnerable crates and centralize shared deps
+- docs(operations): clarify remi hostnames and access
+- fix(bootstrap): complete truthful self-host qcow2 flow
+- fix(bootstrap): add rootful self-host handoff
+- fix(bootstrap): stage gcc pass2 companion sources
+- fix(bootstrap): initialize temp-tools usr merge layout
+- fix(bootstrap): fall back from gnu ftpmirror
+- fix(bootstrap): keep kitchen legacy for lfs phases
+- fix(bootstrap): align patched recipes with kitchen
+- chore(test): format tier2 recipe policy test
+- feat(bootstrap): add self-host vm scripts
+- feat(bootstrap): add self-host guest profile
+- feat(bootstrap): implement tier2 package execution
+- fix(bootstrap): refresh tier2 recipe policy
+- fix(bootstrap): enforce strict tier2 checksums
+- fix(bootstrap): add sqlite to final system order
+- fix(ci): fall back to release assets for expired source runs
+- feat(deploy): add conaryd Forge staging deploy path
+- fix(release): checkout before publish verify-tag
 ## [Unreleased]
 
 ### Changed
