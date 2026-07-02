@@ -525,6 +525,27 @@ mode_validate() {
     printf 'Feature ownership map validation passed (%s cards).\n' "${#card_headings[@]}"
 }
 
+mode_run() {
+    local heading="$1" field cmd
+    local -a cmds=()
+
+    case "$run_kind" in
+        focused) field="Focused proof" ;;
+        gate) field="Interaction gate" ;;
+    esac
+
+    mapfile -t cmds < <(extract_spans "${card_fields["$heading|$field"]:-}")
+    if [[ "${#cmds[@]}" -eq 0 ]]; then
+        fail "card '$heading' has no $field commands to run"
+    fi
+
+    for cmd in "${cmds[@]}"; do
+        printf '+ %s\n' "$cmd"
+        bash -lc "$cmd" || fail "command failed: $cmd"
+    done
+    printf 'All %s %s command(s) passed for %s.\n' "${#cmds[@]}" "$run_kind" "$heading"
+}
+
 load_map
 load_globs
 
@@ -535,7 +556,9 @@ case "$mode" in
     feature)
         heading="$(heading_for_slug "$feature_slug")" \
             || fail "unknown feature slug: $feature_slug (list slugs with --list)"
-        if [[ "$brief" -eq 1 ]]; then
+        if [[ -n "$run_kind" ]]; then
+            mode_run "$heading"
+        elif [[ "$brief" -eq 1 ]]; then
             printf '%s\n' "$(brief_line "$heading")"
         else
             print_packet "$heading"

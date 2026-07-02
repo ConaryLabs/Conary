@@ -322,4 +322,27 @@ make_validate_repo "$vr"
 sed -i 's/^\*\*Focused proof:\*\* `true`; `echo alpha-focused`\.$/**Focused proof:** run the alpha tests by hand./' "$vr/map.md"
 run_validate_expect_fail "$vr" "Focused proof has no backticked command"
 
+# --- --run focused|gate: executes card commands, fail-fast ---
+
+run_out="$("$script" --feature alpha --run focused --map "$fixture_map")"
+grep -q '^+ true$' <<<"$run_out" || fail "--run did not echo the first command"
+grep -q '^alpha-focused$' <<<"$run_out" || fail "--run did not execute echo command"
+grep -q 'command(s) passed for Alpha Feature' <<<"$run_out" \
+    || fail "--run did not print the success footer"
+
+run_out="$("$script" --feature alpha --run gate --map "$fixture_map")"
+grep -q '^alpha-gate$' <<<"$run_out" || fail "--run gate did not execute the gate command"
+
+failing_map="$tmp/failing-map.md"
+write_fixture_map "$failing_map"
+sed -i 's/^\*\*Focused proof:\*\* `true`; `echo alpha-focused`\.$/**Focused proof:** `false`; `echo never-runs`./' "$failing_map"
+if "$script" --feature alpha --run focused --map "$failing_map" >"$tmp/run-fail.out" 2>&1; then
+    fail "--run with failing command unexpectedly succeeded"
+fi
+if grep -q "never-runs" "$tmp/run-fail.out"; then
+    fail "--run did not stop at the first failing command"
+fi
+grep -q "command failed: false" "$tmp/run-fail.out" \
+    || fail "--run failure did not name the failing command"
+
 echo "agent-context tests passed."
