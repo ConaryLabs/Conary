@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-06-18
-revision: 19
-summary: Route M4d supported profile ownership
+last_updated: 2026-07-01
+revision: 20
+summary: Add machine-readable Slug and Paths routing fields
 ---
 
 # Feature Ownership And Interaction Gates
@@ -26,10 +26,18 @@ Ubuntu 26.04, and Arch.
 
 Each ownership card uses these fields:
 
+- **Slug:** short unique kebab-case identifier; the first field of each card,
+  used by `scripts/agent-context.sh` to select cards.
 - **Capability:** what user-facing or contributor-facing job this area owns.
 - **Start here:** owner files and canonical docs to read first.
 - **Neighbor systems:** nearby systems that often need verification when
   behavior changes.
+- **Paths:** semicolon-separated, backtick-quoted glob patterns that route
+  repository paths to this card. Globs match shell-style over repo-relative
+  paths (`*` may span `/`); the most specific match wins, where specificity is
+  the length of the literal prefix before the first `*`, `?`, or `[`. Two
+  cards matching a path at equal specificity is a validation error
+  (`scripts/agent-context.sh --validate`).
 - **Focused proof:** narrow command for small edits.
 - **Interaction gate:** broader command when the change crosses a boundary.
 - **Docs to update:** docs that should move with the feature.
@@ -37,6 +45,8 @@ Each ownership card uses these fields:
   private-path, or distro-scope boundaries.
 
 ## CLI Dispatch And Command Routing
+
+**Slug:** dispatch
 
 **Capability:** route parsed CLI command variants to command implementations
 while preserving live-mutation labels, dry-run bypasses, command risk checks,
@@ -51,6 +61,10 @@ and top-level command UX.
 `apps/conary/src/commands/`, Clap command definitions under
 `apps/conary/src/cli/`, conaryd package-job compatibility, and integration
 tests that exercise CLI surfaces.
+
+**Paths:** `apps/conary/src/dispatch.rs`;
+`apps/conary/src/dispatch/*`; `apps/conary/src/cli/*`;
+`apps/conary/src/command_risk.rs`; `apps/conary/src/live_host_safety.rs`.
 
 **Focused proof:** `cargo check -p conary`;
 `cargo test -p conary --lib cli::tests`;
@@ -73,6 +87,8 @@ exactly, and do not add new command surfaces without matching CLI and dispatch
 proof.
 
 ## Native Package Install, Update, Remove, And Live-Root Mutation
+
+**Slug:** install
 
 **Capability:** install, update, remove, restore, batch, scriptlet, and live-root
 mutation flows for local package operations.
@@ -132,6 +148,11 @@ mutation flows for local package operations.
 `apps/conary/src/commands/state.rs`;
 `apps/conary/src/commands/provenance.rs`; conaryd package jobs.
 
+**Paths:** `apps/conary/src/commands/install/*`;
+`apps/conary/src/commands/update/*`;
+`apps/conary/src/commands/remove.rs`;
+`apps/conary/src/commands/remove/*`.
+
 **Focused proof:** `cargo test -p conary --lib commands::remove`;
 `cargo test -p conary --test live_host_mutation_safety`;
 `cargo test -p conary --lib legacy_replay`.
@@ -150,6 +171,8 @@ refusal-before-mutation, persisted bundle replay, private-path redaction, or
 legacy replay refusal gates.
 
 ## Adoption, Unadoption, And Native-Authority Handoff
+
+**Slug:** adopt
 
 **Capability:** preserve native package-manager authority, support explicit
 takeover, recover selected-generation handoff state, and provide non-destructive
@@ -179,6 +202,8 @@ escape hatches.
 `crates/conary-core/src/generation/`; integration manifests under
 `apps/conary/tests/integration/remi/manifests/`.
 
+**Paths:** `apps/conary/src/commands/adopt/*`.
+
 **Focused proof:** `cargo test -p conary --lib adopt::native_handoff`;
 `cargo test -p conary --lib adopt::unadopt`.
 
@@ -193,6 +218,8 @@ when selected-generation handoff behavior changes.
 package-manager authority without an explicit takeover path.
 
 ## Declarative System Models And Replatform Planning
+
+**Slug:** model
 
 **Capability:** diff, apply, check, snapshot, publish, lock, update, and
 remote-diff declarative system model files while preserving source-policy and
@@ -216,6 +243,10 @@ replatform convergence behavior.
 repository remote include cache, derived package builds, live-host mutation
 acknowledgement, and conaryd package-job request compatibility.
 
+**Paths:** `apps/conary/src/commands/model.rs`;
+`apps/conary/src/commands/model/*`;
+`crates/conary-core/src/model/*`.
+
 **Focused proof:** `cargo test -p conary --lib commands::model`.
 
 **Interaction gate:** `cargo test -p conary model`;
@@ -232,6 +263,8 @@ reproducibility, remote include cache behavior, and refusal-before-live-mutation
 gates.
 
 ## Generation Build, Switch, Recovery, And Export
+
+**Slug:** generation
 
 **Capability:** build generation artifacts, select complete generations for the
 next boot, recover publication debt, and export raw/qcow2/ISO carriers.
@@ -256,6 +289,8 @@ next boot, recover publication debt, and export raw/qcow2/ISO carriers.
 **Neighbor systems:** transaction commit, SQLite generation state, image
 building, bootstrap validation, conaryd route history.
 
+**Paths:** `crates/conary-core/src/generation/*`.
+
 **Focused proof:** `cargo test -p conary-core generation::export`;
 `cargo test -p conary-core generation::builder`.
 
@@ -271,6 +306,8 @@ for export or boot-carrier behavior.
 schema or format changes require explicit compatibility decisions.
 
 ## CCS Authoring, Conversion, Install, And Legacy Replay
+
+**Slug:** ccs
 
 **Capability:** build native CCS packages, convert legacy package formats,
 install CCS packages, and preserve/replay legacy scriptlet metadata safely.
@@ -307,6 +344,9 @@ metadata, scriptlet sandboxing (`crates/conary-core/src/scriptlet/mod.rs`,
 `crates/conary-core/src/scriptlet/process.rs`,
 `crates/conary-core/src/scriptlet/legacy.rs`), fixture maps.
 
+**Paths:** `crates/conary-core/src/ccs/*`;
+`apps/conary/src/commands/ccs/*`.
+
 **Focused proof:** `cargo test -p conary-core ccs::v2`;
 `cargo test -p conary --test packaging_m4b`;
 `cargo test -p conary-core golden_fixtures`;
@@ -330,6 +370,8 @@ by adapter/support-matrix evidence, and raw legacy replay remains local and
 fail-closed.
 
 ## Packaging, Try Sessions, And Static Repository Publishing
+
+**Slug:** packaging
 
 **Capability:** infer and materialize package recipes from source trees,
 build recipe or inferred-source CCS packages, try a built artifact with an
@@ -385,6 +427,25 @@ acquisition and static package signature policy, repository sync
 orchestration, CCS signing/verification, TUF metadata verification, and
 docs-audit truth gates.
 
+**Paths:** `docs/specs/static-repo-format-v1.md`;
+`docs/guides/first-package.md`; `crates/conary-core/src/recipe/*`;
+`crates/conary-core/src/diagnostics/*`;
+`apps/conary/src/commands/packaging_mcp/*`;
+`crates/conary-core/src/db/models/try_session.rs`;
+`apps/conary/src/commands/new.rs`; `apps/conary/src/commands/publish.rs`;
+`apps/conary/src/commands/cook.rs`; `apps/conary/src/commands/record_mode/*`;
+`apps/conary/src/commands/diagnostics.rs`;
+`apps/conary/src/commands/operation_records.rs`;
+`apps/conary/src/commands/hermetic_config.rs`;
+`apps/conary/src/commands/hermetic_state.rs`;
+`apps/conary/src/commands/try_session/*`;
+`apps/conary/src/commands/repo_static.rs`;
+`apps/conary/tests/packaging_m*.rs`;
+`crates/conary-core/src/ccs/attestation.rs`;
+`crates/conary-core/src/ccs/signing.rs`;
+`crates/conary-core/src/repository/static_repo/*`;
+`crates/conary-core/src/trust/*`; `crates/conary-core/src/container/*`.
+
 **Focused proof:** `cargo test -p conary-core repository::static_repo`;
 `cargo test -p conary-core recipe::hermetic`;
 `cargo test -p conary-core recipe::kitchen`;
@@ -435,6 +496,9 @@ do not allow `--allow-unsigned` to bypass static repository package signature
 checks; keep static repo GPG and TUF trust surfaces separate; retired package
 keys are audit/history only unless a later compatibility task explicitly
 changes that policy.
+Recorded-draft recipes must keep refusing publication until validated —
+`publish_context.rs` and `publish_gate.rs` enforce that refusal — and Remi
+release uploads stay behind the trusted build-attestation signer policy.
 
 - Record-mode spike: start in `apps/conary/src/commands/record_mode/`, keep
   `apps/conary/src/commands/cook.rs` as a thin router/validator helper, and put
@@ -470,6 +534,8 @@ switching helpers in `namespace.rs`.
 
 ## Supported Target Profiles
 
+**Slug:** profiles
+
 **Capability:** own the supported distro adapter catalog for public IDs,
 dependency flavor, version scheme, Remi route slugs, repository hints, replay
 targets, and CCS v2 lifecycle policy.
@@ -482,9 +548,17 @@ instead of adding new hard-coded distro matches.
 **Neighbor systems:** source selection, resolver version schemes, Remi serving
 routes, conversion, native release upload, and CCS v2 validation.
 
+**Paths:** `crates/conary-core/src/repository/supported_profiles/*`.
+
 **Focused proof:** `cargo test -p conary-core supported_profiles`;
 `cargo test -p conary --test packaging_m4d`; `cargo test -p remi route`;
 `cargo test -p conary-core remi_sync`.
+
+**Interaction gate:** `cargo test -p remi`;
+`cargo test -p conary --test packaging_m4c`;
+`cargo test -p conary --test conversion_integration golden_conversion` when
+profile changes cross Remi serving routes, conversion lookup or parser
+dispatch, native release upload, or CCS v2 lifecycle policy.
 
 **Docs to update:** `docs/modules/source-selection.md`; `docs/modules/remi.md`;
 `docs/modules/ccs.md`; `docs/modules/test-fixtures.md`;
@@ -496,6 +570,8 @@ routes, conversion, native release upload, and CCS v2 validation.
 `ubuntu` are not public CLI distro IDs.
 
 ## Remi Publication, Serving, Admin, And Fixture Artifacts
+
+**Slug:** remi
 
 **Capability:** ingest, convert, publish, index, search, and serve CCS artifacts,
 release uploads, and static test fixtures through Remi.
@@ -519,6 +595,8 @@ release uploads, and static test fixtures through Remi.
 
 **Neighbor systems:** CCS conversion metadata, repository client behavior,
 federation peer state, admin audit logs, artifact path handling.
+
+**Paths:** `apps/remi/*`.
 
 **Focused proof:** `cargo test -p remi release_upload_`;
 `cargo test -p conary --test packaging_m4c`;
@@ -546,6 +624,8 @@ public native generation.
 
 ## conaryd Package Jobs And Daemon Routes
 
+**Slug:** conaryd
+
 **Capability:** accept local daemon requests, authenticate socket access, queue
 package jobs, expose job state, and stream route lifecycle events.
 
@@ -568,6 +648,8 @@ package jobs, expose job state, and stream route lifecycle events.
 operation vocabulary in `crates/conary-core/src/operations.rs`, live-host
 mutation acknowledgement.
 
+**Paths:** `apps/conaryd/*`.
+
 **Focused proof:** `cargo test -p conaryd daemon::routes` for route behavior;
 `cargo test -p conaryd daemon` for broader daemon behavior including auth, jobs,
 and route lifecycle.
@@ -583,6 +665,8 @@ workflow changes.
 SSE lifecycle, socket auth, and live-host mutation boundaries.
 
 ## Bootstrap And Self-Hosting
+
+**Slug:** bootstrap
 
 **Capability:** validate bootstrap prerequisites, build self-hosting images,
 run dry-run smoke checks, and support local QEMU validation.
@@ -607,6 +691,13 @@ run dry-run smoke checks, and support local QEMU validation.
 **Neighbor systems:** recipe versions, image generation, QEMU validation,
 container runtime availability, ignored local artifact paths.
 
+**Paths:** `apps/conary/src/commands/bootstrap/*`;
+`apps/conary-test/src/bootstrap.rs`;
+`crates/conary-bootstrap/*`;
+`docs/modules/bootstrap.md`;
+`docs/operations/bootstrap-selfhosting-vm.md`;
+`docs/operations/bootstrap-follow-up-investigations.md`.
+
 **Focused proof:** `cargo test -p conary --lib commands::bootstrap`;
 `cargo test -p conary --test bootstrap_workflow`;
 `cargo run -p conary-test -- bootstrap check --json`;
@@ -627,6 +718,8 @@ task explicitly needs live image proof.
 
 ## conary-test Integration Execution
 
+**Slug:** conary-test
+
 **Capability:** list, validate, and execute declarative integration suites,
 including slow QEMU/KVM proof when release evidence needs it.
 
@@ -637,6 +730,9 @@ including slow QEMU/KVM proof when release evidence needs it.
 
 **Neighbor systems:** package-manager CLI behavior, Remi fixture publication,
 QEMU images, integration manifests, result JSON.
+
+**Paths:** `apps/conary-test/*`;
+`apps/conary/tests/integration/remi/manifests/*`.
 
 **Focused proof:** `cargo run -p conary-test -- list`;
 `cargo test -p conary-test suite_inventory`.
@@ -659,6 +755,8 @@ need parser proof and migration or defaulting decisions. Suite names in
 
 ## Agent/MCP Operation Surfaces
 
+**Slug:** agent-mcp
+
 **Capability:** expose transport-neutral operation vocabulary and MCP adapters
 for Conary, Remi, and `conary-test` automation.
 
@@ -668,6 +766,10 @@ for Conary, Remi, and `conary-test` automation.
 
 **Neighbor systems:** HTTP handlers, service-layer methods, operation risk
 labels, resource references, and authentication.
+
+**Paths:** `crates/conary-agent-contract/*`;
+`crates/conary-mcp/*`; `apps/remi/src/server/mcp.rs`;
+`apps/conary-test/src/server/mcp.rs`.
 
 **Focused proof:** `cargo test -p conary-agent-contract`;
 `cargo test -p conary-mcp`.
