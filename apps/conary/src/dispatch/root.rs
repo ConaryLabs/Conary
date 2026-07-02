@@ -1241,6 +1241,25 @@ mod tests {
     use conary_core::db::models::{CreateTrySession, TrySession, TrySessionMode, TrySessionStatus};
     use std::ffi::OsString;
 
+    fn parse_cli<I, S>(args: I) -> Cli
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let args = args
+            .into_iter()
+            .map(|arg| arg.as_ref().to_string())
+            .collect::<Vec<_>>();
+
+        std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(move || Cli::try_parse_from(args))
+            .expect("parser thread should spawn")
+            .join()
+            .expect("parser thread should not panic")
+            .unwrap()
+    }
+
     struct TryPreflightFixture {
         _temp: tempfile::TempDir,
         db_path: std::path::PathBuf,
@@ -1265,9 +1284,13 @@ mod tests {
         }
 
         fn parse_with_db(&self, args: &[&str]) -> Cli {
-            let mut full = args.to_vec();
-            full.extend(["--db-path", &self.db_path_string]);
-            Cli::try_parse_from(full).unwrap()
+            let mut full = args
+                .iter()
+                .map(|arg| (*arg).to_string())
+                .collect::<Vec<_>>();
+            full.push("--db-path".to_string());
+            full.push(self.db_path_string.clone());
+            parse_cli(full)
         }
 
         fn create_session(&self, id: &str, mode: TrySessionMode) -> TrySession {
@@ -1729,7 +1752,7 @@ mod tests {
 
     #[test]
     fn preflight_uses_default_db_path_for_commands_without_db_args() {
-        let cli = Cli::try_parse_from(["conary", "cook", "."]).unwrap();
+        let cli = parse_cli(["conary", "cook", "."]);
 
         let command = cli.command.as_ref().expect("parsed command");
         assert_eq!(super::selected_db_path(command), super::DEFAULT_DB_PATH);
@@ -1792,23 +1815,23 @@ mod tests {
             ["conary", "query", "scripts", "/tmp/pkg.ccs"].as_slice(),
             ["conary", "query", "scripts", "/tmp/pkg.rpm"].as_slice(),
         ] {
-            let cli = Cli::try_parse_from(args).unwrap();
+            let cli = parse_cli(args);
             let command = cli.command.as_ref().expect("parsed command");
             assert!(!super::command_uses_try_session_preflight_db(command));
         }
 
-        let cli = Cli::try_parse_from(["conary", "pin", "demo"]).unwrap();
+        let cli = parse_cli(["conary", "pin", "demo"]);
         let command = cli.command.as_ref().expect("parsed command");
         assert!(super::command_uses_try_session_preflight_db(command));
 
-        let cli = Cli::try_parse_from(["conary", "query", "scripts", "bash"]).unwrap();
+        let cli = parse_cli(["conary", "query", "scripts", "bash"]);
         let command = cli.command.as_ref().expect("parsed command");
         assert!(super::command_uses_try_session_preflight_db(command));
     }
 
     #[tokio::test]
     async fn artifact_form_publish_reaches_artifact_reader_without_preflight_db() {
-        let cli = Cli::try_parse_from(["conary", "publish", "dist/pkg.ccs", "./repo"]).unwrap();
+        let cli = parse_cli(["conary", "publish", "dist/pkg.ccs", "./repo"]);
 
         let err = crate::dispatch::dispatch(cli)
             .await
@@ -1866,7 +1889,12 @@ mod tests {
             .join("missing")
             .join("conary.db");
         let db_path = missing_db.to_string_lossy();
-        let cli = Cli::try_parse_from(["conary", "list", "--db-path", &db_path]).unwrap();
+        let cli = parse_cli(vec![
+            "conary".to_string(),
+            "list".to_string(),
+            "--db-path".to_string(),
+            db_path.into_owned(),
+        ]);
 
         run_try_session_preflight_for_test(&cli, true).unwrap();
     }

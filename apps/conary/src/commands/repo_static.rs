@@ -488,6 +488,17 @@ mod tests {
     const OTHER_VALID_KEY_ID: &str =
         "1111111111111111111111111111111111111111111111111111111111111111";
 
+    fn parse_cli<const N: usize>(args: [&str; N]) -> Result<Cli, clap::Error> {
+        let args = args.into_iter().map(str::to_string).collect::<Vec<_>>();
+
+        std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(move || <Cli as Parser>::try_parse_from(args))
+            .expect("parser thread should spawn")
+            .join()
+            .expect("parser thread should not panic")
+    }
+
     struct TestDb {
         _tempdir: tempfile::TempDir,
         db_path: String,
@@ -871,7 +882,7 @@ mod tests {
     #[test]
     fn manual_default_strategy_static_remains_rejected_at_parse_time() {
         assert!(
-            Cli::try_parse_from([
+            parse_cli([
                 "conary",
                 "repo",
                 "add",
@@ -1157,7 +1168,7 @@ mod tests {
 
     #[test]
     fn repo_reset_trust_parse_shape_stays_routed_to_repo_command() {
-        let cli = Cli::try_parse_from(["conary", "repo", "reset-trust", "acme"]).unwrap();
+        let cli = parse_cli(["conary", "repo", "reset-trust", "acme"]).unwrap();
 
         assert!(matches!(
             cli.command,

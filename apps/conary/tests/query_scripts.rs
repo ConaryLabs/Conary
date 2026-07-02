@@ -23,7 +23,17 @@ use std::process::{Command, Output};
 use tempfile::TempDir;
 
 fn parse_query_scripts(args: &[&str]) -> QueryCommands {
-    let cli = Cli::try_parse_from(args).expect("parse CLI");
+    let args = args
+        .iter()
+        .map(|arg| (*arg).to_string())
+        .collect::<Vec<_>>();
+    let cli = std::thread::Builder::new()
+        .stack_size(8 * 1024 * 1024)
+        .spawn(move || Cli::try_parse_from(args))
+        .expect("parser thread should spawn")
+        .join()
+        .expect("parser thread should not panic")
+        .expect("parse CLI");
     match cli.command.expect("command") {
         Commands::Query(command @ QueryCommands::Scripts { .. }) => command,
         _ => panic!("expected query scripts command"),
