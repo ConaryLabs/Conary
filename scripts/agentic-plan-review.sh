@@ -16,6 +16,10 @@ Options:
   --review-kind <auto|design|plan|implementation>
                                   Select the review rubric. Defaults to auto.
   --context <path>                Add an extra local context path to the prompt. Repeatable.
+  --feature <slug>               Feature ownership card whose Start here,
+                                 Docs to update, Paths, and Safety notes feed
+                                 the prompt. Repeatable; at least one required.
+                                 Example: --feature packaging --feature ccs --feature remi
   --deepseek-model <name>        Reasonix model alias. Defaults to deepseek-pro.
   --gemini-model <name>          Antigravity model name. Defaults to Gemini 3.5 Flash (High).
   --print-timeout <duration>     agy print timeout. Defaults to 90m.
@@ -37,6 +41,7 @@ only="all"
 out_dir="docs/superpowers/reviews"
 review_kind="auto"
 extra_context=()
+features=()
 deepseek_model="deepseek-pro"
 gemini_model="Gemini 3.5 Flash (High)"
 print_timeout="90m"
@@ -74,6 +79,14 @@ while [[ $# -gt 0 ]]; do
                 exit 2
             }
             extra_context+=("$2")
+            shift 2
+            ;;
+        --feature)
+            [[ $# -ge 2 ]] || {
+                usage
+                exit 2
+            }
+            features+=("$2")
             shift 2
             ;;
         --deepseek-model)
@@ -150,6 +163,38 @@ esac
 for context_path in "${extra_context[@]}"; do
     [[ -e "$context_path" ]] || fail "extra context path not found: $context_path"
 done
+
+[[ "${#features[@]}" -ge 1 ]] \
+    || fail "at least one --feature <slug> is required (list slugs with: bash scripts/agent-context.sh --list)"
+
+feature_context_file="$(mktemp)"
+feature_pressure_file="$(mktemp)"
+trap 'rm -f "$feature_context_file" "$feature_pressure_file"' EXIT
+
+packet_section() {
+    local section_heading="$1"
+    awk -v want="## $section_heading" '
+        $0 == want { on = 1; next }
+        /^## /     { on = 0 }
+        on && NF   { print }
+    '
+}
+
+resolve_features() {
+    local slug packet heading
+    for slug in "${features[@]}"; do
+        packet="$(bash scripts/agent-context.sh --feature "$slug")" \
+            || fail "unknown feature slug: $slug (list slugs with: bash scripts/agent-context.sh --list)"
+        heading="$(sed -n 's/^# Task Packet: //p' <<<"$packet")"
+        {
+            packet_section "Read first" <<<"$packet"
+            packet_section "Docs to update" <<<"$packet"
+            packet_section "Paths owned" <<<"$packet"
+        } | tr -d '`' >> "$feature_context_file"
+        printf -- '- %s: %s\n' "$heading" "$(packet_section "Safety invariants" <<<"$packet")" \
+            >> "$feature_pressure_file"
+    done
+}
 
 slug_from_path() {
     local path="$1"
@@ -230,33 +275,10 @@ Required local context to inspect before judging:
 - docs/llms/README.md
 - docs/ARCHITECTURE.md
 - docs/INTEGRATION-TESTING.md
-- docs/superpowers/plans/2026-06-05-ccs-native-ecosystem-roadmap.md
-- docs/modules/recipe.md
-- docs/modules/ccs.md
-- docs/modules/remi.md
-- docs/modules/source-selection.md
 - docs/modules/feature-ownership.md
-- docs/specs/ccs-format-v1.md
-- docs/superpowers/specs/archive/2026-06-10-packaging-toolchain-design.md
-- docs/superpowers/specs/archive/2026-06-13-m2-publish-hardening-remi-design.md
-- docs/superpowers/specs/archive/2026-06-15-m3-packaging-differentiators-design.md
-- apps/conary/src/commands/publish.rs
-- apps/conary/src/commands/cook.rs
-- apps/conary/src/commands/ccs/
-- apps/conary/src/command_risk.rs
-- crates/conary-core/src/recipe/kitchen/config.rs
-- crates/conary-core/src/recipe/kitchen/cook.rs
-- crates/conary-core/src/recipe/kitchen/provenance_capture.rs
-- crates/conary-core/src/recipe/pkgbuild.rs
-- crates/conary-core/src/ccs/manifest.rs
-- crates/conary-core/src/ccs/binary_manifest.rs
-- crates/conary-core/src/ccs/package.rs
-- crates/conary-core/src/ccs/archive_reader.rs
-- crates/conary-core/src/ccs/builder.rs
-- crates/conary-core/src/ccs/convert/command_evidence.rs
-- crates/conary-core/src/container/analysis.rs
-- apps/remi/src/server/
 EOF
+
+    LC_ALL=C sort -u "$feature_context_file" | sed 's/^/- /'
 
     if [[ "${#extra_context[@]}" -gt 0 ]]; then
         printf '\nAdditional local context requested by caller:\n'
@@ -272,9 +294,14 @@ Shared review goals:
 2. Find security, provenance, trust, migration, and failure-behavior gaps.
 3. Find task ordering problems, underspecified ownership boundaries, or missing regression tests.
 4. Check whether it respects parent design boundaries and does not pull later slices forward without a deliberate gate.
-5. Identify file-size/refactor hazards, especially around ccs::manifest, CCS archive/package ownership, Remi publication ownership, and kitchen cook ownership.
-6. Check whether supported target language stays limited to Fedora 44, Ubuntu 26.04, and Arch unless the target explicitly scopes otherwise.
-7. Check whether M2 hardening gates, attestation requirements, static publish trust, Remi upload trust, and recorded-draft refusal remain intact.
+5. Check whether supported target language stays limited to Fedora 44, Ubuntu 26.04, and Arch unless the target explicitly scopes otherwise.
+
+Review pressure points from feature ownership:
+EOF
+
+    cat "$feature_pressure_file"
+
+    cat <<'EOF'
 
 Evidence rules:
 - Cite the target section and repository file/line when available.
@@ -351,6 +378,7 @@ write_header() {
 target_slug="$(slug_from_path "$review_target")"
 timestamp_prefix="$(date +%Y-%m-%d-%H%M%S)"
 resolved_review_kind="$(infer_review_kind "$review_target")"
+resolve_features
 deepseek_out="$out_dir/$timestamp_prefix-$target_slug-$(model_slug deepseek "$deepseek_model").md"
 gemini_out="$out_dir/$timestamp_prefix-$target_slug-$(model_slug gemini "$gemini_model").md"
 
@@ -372,6 +400,11 @@ if [[ "$dry_run" -eq 1 ]]; then
         printf 'Gemini output: %s\n' "$gemini_out"
         printf "Gemini command: agy --model '%s' --print-timeout %s --print <prompt>\n" "$gemini_model" "$print_timeout"
     fi
+    printf 'features:'
+    printf ' %s' "${features[@]}"
+    printf '\n'
+    printf -- '--- prompt ---\n'
+    build_prompt
     exit 0
 fi
 

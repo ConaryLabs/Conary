@@ -39,7 +39,7 @@ grep -q 'Review kind: plan' <<<"$prompt" && printf 'yes\n'
 printf 'reasonix prompt contains deep passes: '
 grep -q 'perform separate passes' <<<"$prompt" && printf 'yes\n'
 printf 'reasonix prompt contains extra context: '
-grep -q 'docs/modules/remi.md' <<<"$prompt" && printf 'yes\n'
+grep -q 'docs/modules/remi.md' <<<"$prompt" && printf 'yes\n' || printf 'no\n'
 STUB
 chmod +x "$bin_dir/reasonix"
 
@@ -57,7 +57,7 @@ grep -q 'Review kind: plan' <<<"$prompt" && printf 'yes\n'
 printf 'agy prompt contains deep passes: '
 grep -q 'perform separate passes' <<<"$prompt" && printf 'yes\n'
 printf 'agy prompt contains extra context: '
-grep -q 'docs/modules/remi.md' <<<"$prompt" && printf 'yes\n'
+grep -q 'docs/modules/remi.md' <<<"$prompt" && printf 'yes\n' || printf 'no\n'
 STUB
 chmod +x "$bin_dir/agy"
 
@@ -72,6 +72,8 @@ grep -q -- "--review-kind <auto|design|plan|implementation>" <<<"$help_output" \
     || fail "help output did not name review-kind"
 grep -q -- "--context <path>" <<<"$help_output" \
     || fail "help output did not name extra context"
+grep -q -- "--feature <slug>" <<<"$help_output" \
+    || fail "help output did not name --feature"
 
 if "$script" "does-not-exist.md" --out-dir "$out_dir" >"$tmp/missing.out" 2>&1; then
     fail "missing review target unexpectedly succeeded"
@@ -91,7 +93,19 @@ fi
 grep -q "extra context path not found" "$tmp/bad-context.out" \
     || fail "missing extra context did not produce a clear error"
 
-PATH="$bin_dir:$PATH" "$script" "$target" --context docs/modules/remi.md --out-dir "$out_dir" >"$tmp/run.out"
+if "$script" "$target" --out-dir "$out_dir" --dry-run >"$tmp/no-feature.out" 2>&1; then
+    fail "missing --feature unexpectedly succeeded"
+fi
+grep -q "at least one --feature" "$tmp/no-feature.out" \
+    || fail "missing --feature did not produce a clear error"
+
+if "$script" "$target" --feature not-a-real-slug --out-dir "$out_dir" --dry-run >"$tmp/bad-feature.out" 2>&1; then
+    fail "unknown feature slug unexpectedly succeeded"
+fi
+grep -q "unknown feature slug" "$tmp/bad-feature.out" \
+    || fail "unknown feature slug did not produce a clear error"
+
+PATH="$bin_dir:$PATH" "$script" "$target" --feature packaging --context docs/modules/remi.md --out-dir "$out_dir" >"$tmp/run.out"
 
 grep -q "DeepSeek review:" "$tmp/run.out" \
     || fail "script did not report the DeepSeek output path"
@@ -138,7 +152,7 @@ grep -q "agy prompt contains deep passes: yes" "$gemini_review" \
 grep -q "agy prompt contains extra context: yes" "$gemini_review" \
     || fail "Gemini prompt did not include extra context"
 
-PATH="$bin_dir:$PATH" "$script" "$target" --out-dir "$out_dir" --only deepseek >"$tmp/deepseek-only.out"
+PATH="$bin_dir:$PATH" "$script" "$target" --feature packaging --out-dir "$out_dir" --only deepseek >"$tmp/deepseek-only.out"
 grep -q "DeepSeek review:" "$tmp/deepseek-only.out" \
     || fail "deepseek-only mode did not run DeepSeek"
 if grep -q "Gemini review:" "$tmp/deepseek-only.out"; then
@@ -146,7 +160,7 @@ if grep -q "Gemini review:" "$tmp/deepseek-only.out"; then
 fi
 
 dry_out_dir="$tmp/dry-reviews"
-PATH="$bin_dir:$PATH" "$script" "$target" --out-dir "$dry_out_dir" --dry-run >"$tmp/dry-run.out"
+PATH="$bin_dir:$PATH" "$script" "$target" --feature packaging --out-dir "$dry_out_dir" --dry-run >"$tmp/dry-run.out"
 grep -q "DRY RUN" "$tmp/dry-run.out" \
     || fail "dry-run output did not identify itself"
 grep -q "review kind: plan" "$tmp/dry-run.out" \
@@ -158,8 +172,27 @@ grep -q "agy --model 'Gemini 3.5 Flash (High)' --print-timeout 90m --print" "$tm
 if [[ -d "$dry_out_dir" ]] && find "$dry_out_dir" -type f | grep -q .; then
     fail "dry-run unexpectedly wrote review files"
 fi
+grep -q -- "--- prompt ---" "$tmp/dry-run.out" \
+    || fail "dry-run did not print the planned prompt"
+grep -q "apps/conary/src/commands/publish.rs" "$tmp/dry-run.out" \
+    || fail "dry-run prompt missing packaging card Start here file"
+grep -q "Review pressure points from feature ownership" "$tmp/dry-run.out" \
+    || fail "dry-run prompt missing safety-note pressure points"
+grep -q "docs/modules/feature-ownership.md" "$tmp/dry-run.out" \
+    || fail "dry-run prompt missing stable preamble docs"
+grep -qi "recorded-draft" "$tmp/dry-run.out" \
+    || fail "dry-run prompt lost the recorded-draft refusal pressure point"
+if grep -q "crates/conary-core/src/ccs/binary_manifest.rs" "$tmp/dry-run.out"; then
+    fail "dry-run prompt still contains the old hardcoded context list"
+fi
+if grep -q "M2 hardening gates" "$tmp/dry-run.out"; then
+    fail "dry-run prompt still contains packaging-specific goal 7"
+fi
+if grep -q "file-size/refactor hazards" "$tmp/dry-run.out"; then
+    fail "dry-run prompt still contains packaging-specific goal 5"
+fi
 
-PATH="$bin_dir:$PATH" "$script" "$design_target" --review-kind design --only deepseek --out-dir "$out_dir" >"$tmp/design.out"
+PATH="$bin_dir:$PATH" "$script" "$design_target" --feature packaging --review-kind design --only deepseek --out-dir "$out_dir" >"$tmp/design.out"
 design_review="$(find "$out_dir" -type f -name '*m4-wrapper-design-deepseek-pro.md' -print -quit)"
 [[ -n "$design_review" ]] || fail "design review file was not created"
 grep -q "review_kind: design" "$design_review" \
