@@ -23,6 +23,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install shell policy tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ripgrep
       - name: Check GitHub Actions runtime policy
         run: bash scripts/check-github-action-runtimes.sh
       - name: Test GitHub Actions runtime policy checker
@@ -33,6 +37,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install shell policy tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ripgrep
       - name: Check release matrix workflow alignment
         run: bash scripts/check-release-matrix.sh
       - name: Test release matrix policy
@@ -49,6 +57,10 @@ jobs:
       LC_ALL: C
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install shell policy tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ripgrep
       - name: Check required shell tools
         run: command -v rg >/dev/null
       - name: Check docs audit ledger
