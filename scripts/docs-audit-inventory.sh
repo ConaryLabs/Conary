@@ -25,6 +25,12 @@ classify_family() {
         site/README.md|web/README.md)
             echo "frontend"
             ;;
+        third_party/README.md)
+            echo "canonical"
+            ;;
+        third_party/*/README.md)
+            echo "app-local"
+            ;;
         docs/llms/archive/*|docs/superpowers/archive/*|docs/superpowers/plans/archive/*|docs/superpowers/specs/archive/*|recipes/archive/*)
             echo "historical"
             ;;

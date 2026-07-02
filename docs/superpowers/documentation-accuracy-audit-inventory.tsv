@@ -227,4 +227,7 @@ recipes/archive/core/sys/README.md	historical	historical
 recipes/archive/core/text/README.md	historical	historical
 recipes/archive/core/vcs/README.md	historical	historical
 site/README.md	frontend	contributor
+third_party/README.md	canonical	contributor
+third_party/aws-creds-0.39.1-patched/README.md	app-local	contributor
+third_party/rust-s3-0.37.2-patched/README.md	app-local	contributor
 web/README.md	frontend	contributor

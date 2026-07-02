@@ -30,9 +30,9 @@ Tested preview targets:
 - Ubuntu 26.04 LTS
 - Arch Linux
 
-Install the pinned preview release (tag `v0.9.1`):
+Install the pinned preview release (tag `v0.9.2`):
 download and checksum/signature instructions at
-https://github.com/ConaryLabs/Conary/releases/tag/v0.9.1
+https://github.com/ConaryLabs/Conary/releases/tag/v0.9.2
 
 Before starting, check the compatibility checklist --
 the whole loop below runs on stock kernels:
@@ -49,7 +49,7 @@ Prompt shape:
 Help me run the Conary first external tester loop on this disposable VM.
 Read the agent-assisted tester guide first. Confirm distro, architecture,
 kernel, sudo, and VM/snapshot/non-critical-host status before installing
-anything. Use only the pinned v0.9.1 release, verify SHA256SUMS, ask before
+anything. Use only the pinned v0.9.2 release, verify SHA256SUMS, ask before
 every non-dry-run mutation, keep a command transcript, and draft a beta
 feedback issue from the GitHub template.
 ```
