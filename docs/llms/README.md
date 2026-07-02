@@ -142,9 +142,10 @@ other non-UTC context.
   name the owning subsystem, the current large-file or stale-surface pressure,
   the intended new boundary, persisted-state impact, focused verification, and
   docs or subsystem-map updates.
-- For feature-scoped work, use `docs/modules/feature-ownership.md` to find the
-  start-here files, neighboring systems, focused proof, and broader interaction
-  gate before editing.
+- For feature-scoped work, run `bash scripts/agent-context.sh --feature <slug>`
+  (or `--path <file>` to route a path) to print the owning card's start-here
+  files, safety invariants, focused proof, and interaction gate before editing.
+  `docs/modules/feature-ownership.md` stays the canonical map behind the tool.
 - Use `scripts/line-count-report.sh` when a planning or review pass needs a
   fresh Rust hotspot snapshot. Treat the report as a prioritization aid, not a
   CI failure condition.

@@ -8,6 +8,8 @@ Brief description of what this PR does.
 
 ## Ownership / Boundary
 
+<!-- bash scripts/agent-context.sh --path <changed-file> prints the owning card and its verification commands -->
+
 - Owning subsystem:
 - Boundary changed or preserved:
 - Persisted state or public surface impact:

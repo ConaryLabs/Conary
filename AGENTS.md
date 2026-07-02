@@ -14,6 +14,13 @@ Conary is a virtual Rust workspace. The package-manager CLI lives in `apps/conar
 - `cargo clippy --workspace --all-targets -- -D warnings`: enforce zero-warning linting across the workspace.
 - `cargo fmt --check`: verify formatting before you push.
 
+When starting a feature-scoped slice, run
+`bash scripts/agent-context.sh --feature <slug>` (or `--path <file>` to route a
+path) first: it prints the owning card's read-first files, safety invariants,
+focused proof, and interaction gate from `docs/modules/feature-ownership.md`.
+`--list` shows the slugs; `--run focused` / `--run gate` execute the card's own
+proof commands.
+
 ## Coding Style, Safety, and Commits
 Use standard Rust formatting (`cargo fmt`) and keep Clippy clean. Indentation is 4 spaces. Follow Rust naming conventions: `snake_case` for functions/modules, `CamelCase` for types, `SCREAMING_SNAKE_CASE` for constants. Keep modules focused by subsystem. This repository expects each Rust source file to begin with a path comment such as `// conary-core/src/...`.
 
