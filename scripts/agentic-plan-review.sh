@@ -261,7 +261,7 @@ infer_review_kind() {
 
 build_prompt() {
     cat <<EOF
-You are conducting a senior security/packaging review for the Conary repository. This is review only: do not modify files, do not create files, do not run writes, and do not make commits.
+You are conducting a senior implementation/security review for the Conary repository. This is review only: do not modify files, do not create files, do not run writes, and do not make commits.
 
 Do not rush. Treat this as a deep pre-lock review. Before producing findings, perform separate passes for repository-context fit, scope and milestone boundaries, failure/security/trust behavior, migration and compatibility hazards, implementation-plan readiness, and missing tests.
 

@@ -125,10 +125,10 @@ capability: own alpha things.
 
 ## Read first
 `a/alpha.rs`
-`docs/alpha.md`.
+`docs/alpha.md`
 
 ## Paths owned
-`a/*`.
+`a/*`
 
 ## Neighbor systems
 beta runtime.
@@ -142,7 +142,7 @@ beta runtime.
 when: alpha crosses beta.
 
 ## Docs to update
-`docs/alpha.md`.
+`docs/alpha.md`
 
 ## Safety invariants
 never break alpha invariants.
