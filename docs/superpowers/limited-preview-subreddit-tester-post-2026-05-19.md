@@ -41,12 +41,12 @@ https://conary.io/docs/compatibility-checklist (or
 What I would love people to try in a VM, snapshot, or spare system:
 
 ```bash
-conary install <small-package> --dry-run
-conary install <small-package> --yes
+conary install jq --dry-run
+conary install jq --yes
 conary system adopt --system --dry-run
 conary system adopt --system
 conary list
-conary search <package>
+conary search jq
 conary update --dry-run
 conary system unadopt --all --dry-run
 conary system unadopt --all --yes
