@@ -53,4 +53,114 @@ fi
 grep -q "invalid --run kind" "$tmp/bad-run.out" \
     || fail "invalid --run kind did not produce a clear error"
 
+# --- fixture map: parsing, --list, --feature, --brief ---
+
+write_fixture_map() {
+    cat > "$1" <<'EOF'
+# Fixture Ownership Map
+
+## How To Use This Map
+
+Ignore me.
+
+## Card Schema
+
+Fields are described here; this section must not parse as a card.
+
+## Alpha Feature
+
+**Slug:** alpha
+
+**Capability:** own alpha things.
+
+**Start here:** `a/alpha.rs`;
+`docs/alpha.md`.
+
+**Neighbor systems:** beta runtime.
+
+**Paths:** `a/*`.
+
+**Focused proof:** `true`; `echo alpha-focused`.
+
+**Interaction gate:** `echo alpha-gate` when alpha crosses beta.
+
+**Docs to update:** `docs/alpha.md`.
+
+**Safety notes:** never break alpha invariants.
+
+## Beta Feature
+
+**Slug:** beta
+
+**Capability:** own beta things.
+
+**Start here:** `a/b.rs`.
+
+**Neighbor systems:** alpha runtime.
+
+**Paths:** `a/b.rs`; `b/*`.
+
+**Focused proof:** `echo beta-focused`.
+
+**Interaction gate:** `echo beta-gate`.
+
+**Docs to update:** `docs/beta.md`.
+
+**Safety notes:** never break beta invariants.
+EOF
+}
+
+fixture_map="$tmp/map.md"
+write_fixture_map "$fixture_map"
+
+list_out="$("$script" --list --map "$fixture_map")"
+expected_list="$(printf 'alpha\town alpha things.\nbeta\town beta things.')"
+[[ "$list_out" == "$expected_list" ]] \
+    || fail "--list output mismatch; got: $list_out"
+
+cat > "$tmp/alpha-packet.expected" <<'EOF'
+# Task Packet: Alpha Feature
+slug: alpha
+capability: own alpha things.
+
+## Read first
+`a/alpha.rs`
+`docs/alpha.md`.
+
+## Paths owned
+`a/*`.
+
+## Neighbor systems
+beta runtime.
+
+## Focused proof
+`true`
+`echo alpha-focused`
+
+## Interaction gate
+`echo alpha-gate`
+when: alpha crosses beta.
+
+## Docs to update
+`docs/alpha.md`.
+
+## Safety invariants
+never break alpha invariants.
+EOF
+
+"$script" --feature alpha --map "$fixture_map" > "$tmp/alpha-packet.out"
+diff -u "$tmp/alpha-packet.expected" "$tmp/alpha-packet.out" \
+    || fail "alpha task packet did not match expected format"
+
+brief_out="$("$script" --feature alpha --brief --map "$fixture_map")"
+expected_brief='Alpha Feature | focused: true; echo alpha-focused. | gate: echo alpha-gate when alpha crosses beta.'
+[[ "$brief_out" == "$expected_brief" ]] \
+    || fail "--brief output mismatch; got: $brief_out"
+
+if "$script" --feature no-such-card --map "$fixture_map" >"$tmp/bad-slug.out" 2>&1; then
+    fail "unknown slug unexpectedly succeeded"
+fi
+grep -q "unknown feature slug" "$tmp/bad-slug.out" \
+    || fail "unknown slug did not produce a clear error"
+
 echo "agent-context tests passed."
