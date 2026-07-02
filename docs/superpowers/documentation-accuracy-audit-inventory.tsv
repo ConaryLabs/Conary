@@ -6,9 +6,11 @@ path	family	audience
 .github/copilot-instructions.md	template	contributor
 AGENTS.md	root	contributor
 CHANGELOG.md	root	contributor
+CLAUDE.md	root	contributor
 CONTRIBUTING.md	root	contributor
 GEMINI.md	root	contributor
 README.md	root	user
+REASONIX.md	root	contributor
 ROADMAP.md	root	user
 SECURITY.md	root	contributor
 apps/conary-test/README.md	app-local	contributor
@@ -26,6 +28,7 @@ docs/conaryopedia-v2.md	canonical	contributor
 docs/guides/first-package.md	canonical	contributor
 docs/llms/README.md	canonical	contributor
 docs/llms/archive/claude-era-notes.md	historical	historical
+docs/llms/openai-codex.md	canonical	contributor
 docs/llms/subsystem-map.md	canonical	contributor
 docs/modules/bootstrap.md	canonical	contributor
 docs/modules/ccs.md	canonical	contributor

@@ -13,7 +13,7 @@ classify_family() {
     local path="$1"
 
     case "$path" in
-        README.md|ROADMAP.md|CONTRIBUTING.md|SECURITY.md|CHANGELOG.md|AGENTS.md|GEMINI.md)
+        README.md|ROADMAP.md|CONTRIBUTING.md|SECURITY.md|CHANGELOG.md|AGENTS.md|CLAUDE.md|GEMINI.md|REASONIX.md)
             echo "root"
             ;;
         .github/*|*.example.md)

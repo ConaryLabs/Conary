@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-06-18
-revision: 31
-summary: Route M4d supported profile ownership
+last_updated: 2026-07-02
+revision: 32
+summary: Add feature-card slug bridge for subsystem routing
 ---
 
 # Assistant Subsystem Map
@@ -18,6 +18,26 @@ summary: Route M4d supported profile ownership
 - `crates/conary-mcp/`: shared MCP adapter helpers used by workspace apps
 
 ## Look Here First
+
+Feature-card bridge: `docs/modules/feature-ownership.md` is the canonical slug,
+path, proof, and interaction-gate map. When you start from a file below, run
+`bash scripts/agent-context.sh --path <path>` for the exact owner; when you
+start from a theme, use the owner hints below and then run
+`bash scripts/agent-context.sh --feature <slug>`.
+
+- `dispatch`: CLI command routing, namespace dispatch, and command risk labels
+- `install`: install, update, remove, restore, scriptlet, and live-root mutation
+- `adopt`: adoption, unadoption, takeover, and native-authority handoff
+- `model`: declarative system model diff/apply/check/snapshot/publish/lock
+- `generation`: generation build, switch, recovery, GC, and export
+- `ccs`: CCS authoring, conversion, install, v2, and legacy replay
+- `packaging`: source inference, recipes, try sessions, static repositories, trust, and sync
+- `profiles`: supported distro adapter catalog and Remi route slugs
+- `remi`: Remi ingest, conversion, publication, admin, MCP, and fixture serving
+- `conaryd`: local daemon auth, package jobs, routes, and lifecycle events
+- `bootstrap`: bootstrap prerequisite, image, seed, run, and local QEMU validation
+- `conary-test`: declarative integration suites, HTTP, MCP, and QEMU proof
+- `agent-mcp`: transport-neutral operation vocabulary and MCP adapters
 
 - Repository sync, remote metadata, chunk retrieval, and Remi client behavior:
   `crates/conary-core/src/repository/`
