@@ -786,8 +786,22 @@ mod tests {
     use crate::cli::{self, Cli, Commands};
     use clap::Parser;
 
+    fn parse_cli(args: &[&str]) -> Result<Cli, String> {
+        let args = args
+            .iter()
+            .map(|arg| (*arg).to_string())
+            .collect::<Vec<_>>();
+
+        std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(move || Cli::try_parse_from(args).map_err(|err| err.to_string()))
+            .expect("parser thread should spawn")
+            .join()
+            .expect("parser thread should not panic")
+    }
+
     fn policy(args: &[&str]) -> super::CommandRiskPolicy {
-        let cli = Cli::try_parse_from(args).unwrap();
+        let cli = parse_cli(args).unwrap();
         classify_cli(&cli).expect("command should be classified")
     }
 
@@ -802,6 +816,7 @@ mod tests {
     fn mcp_packaging_startup_is_read_only() {
         let cli = Cli {
             seccomp_warn: false,
+            help_advanced: false,
             allow_live_system_mutation: false,
             command: Some(Commands::Mcp(cli::McpCommands::Packaging)),
         };
@@ -878,12 +893,11 @@ mod tests {
     #[test]
     fn from_sync_hook_requires_quiet_refresh_and_rejects_full_capture() {
         assert!(
-            Cli::try_parse_from(["conary", "system", "adopt", "--refresh", "--from-sync-hook"])
-                .is_err()
+            parse_cli(&["conary", "system", "adopt", "--refresh", "--from-sync-hook"]).is_err()
         );
 
         assert!(
-            Cli::try_parse_from([
+            parse_cli(&[
                 "conary",
                 "system",
                 "adopt",

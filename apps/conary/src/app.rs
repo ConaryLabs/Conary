@@ -11,6 +11,10 @@ pub async fn run() -> Result<()> {
     conary_bootstrap::init_tracing();
 
     let cli = Cli::parse();
+    if cli.help_advanced {
+        print!("{}", crate::cli::render_advanced_help());
+        return Ok(());
+    }
     conary_core::scriptlet::set_seccomp_warn_override(cli.seccomp_warn);
 
     dispatch::dispatch(cli).await

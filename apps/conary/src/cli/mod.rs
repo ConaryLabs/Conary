@@ -141,6 +141,10 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub seccomp_warn: bool,
 
+    /// List advanced packaging and platform commands
+    #[arg(long = "help-advanced")]
+    pub help_advanced: bool,
+
     /// Deprecated compatibility alias for old persisted retry commands.
     #[arg(long, global = true, hide = true)]
     pub allow_live_system_mutation: bool,
@@ -903,6 +907,36 @@ pub enum McpCommands {
     Packaging,
 }
 
+/// Render the advanced-command listing from the live clap command tree so it
+/// cannot drift from the real surface. Everything marked `hide = true` on the
+/// root command is, by definition, the advanced tier (this includes `mcp`,
+/// which is intentionally part of the truthful surface).
+pub fn render_advanced_help() -> String {
+    use clap::CommandFactory;
+
+    let cmd = Cli::command();
+    let mut rows: Vec<(String, String)> = cmd
+        .get_subcommands()
+        .filter(|sub| sub.is_hide_set())
+        .map(|sub| {
+            (
+                sub.get_name().to_string(),
+                sub.get_about().map(|a| a.to_string()).unwrap_or_default(),
+            )
+        })
+        .collect();
+    rows.sort();
+    let width = rows.iter().map(|(name, _)| name.len()).max().unwrap_or(0);
+
+    let mut out =
+        String::from("Advanced packaging and platform commands (hidden from default help):\n");
+    for (name, about) in rows {
+        out.push_str(&format!("  {name:<width$}  {about}\n"));
+    }
+    out.push_str("\nRun 'conary <command> --help' for details on any command.\n");
+    out
+}
+
 impl std::fmt::Debug for Commands {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("Commands")
@@ -917,23 +951,64 @@ mod tests {
     };
     use clap::{CommandFactory, Parser};
 
+    fn parse_cli<const N: usize>(args: [&str; N]) -> Result<Cli, clap::Error> {
+        let args = args.into_iter().map(str::to_string).collect::<Vec<_>>();
+
+        std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(move || <Cli as Parser>::try_parse_from(args))
+            .expect("parser thread should spawn")
+            .join()
+            .expect("parser thread should not panic")
+    }
+
+    fn render_help_with_stack<F>(render: F) -> String
+    where
+        F: FnOnce() -> String + Send + 'static,
+    {
+        std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(render)
+            .expect("help-render thread should spawn")
+            .join()
+            .expect("help-render thread should not panic")
+    }
+
     #[test]
     fn cli_accepts_seccomp_warn_flag() {
-        Cli::try_parse_from(["conary", "--seccomp-warn", "list"])
+        parse_cli(["conary", "--seccomp-warn", "list"])
             .expect("--seccomp-warn should parse as a global CLI flag");
     }
 
     fn root_help() -> String {
-        Cli::command().render_long_help().to_string()
+        render_help_with_stack(|| Cli::command().render_long_help().to_string())
     }
 
     fn subcommand_help(name: &str) -> String {
-        let mut command = Cli::command();
-        command
-            .find_subcommand_mut(name)
-            .unwrap_or_else(|| panic!("{name} subcommand should exist"))
-            .render_long_help()
-            .to_string()
+        let name = name.to_string();
+        render_help_with_stack(move || {
+            let mut command = Cli::command();
+            command
+                .find_subcommand_mut(&name)
+                .unwrap_or_else(|| panic!("{name} subcommand should exist"))
+                .render_long_help()
+                .to_string()
+        })
+    }
+
+    fn nested_subcommand_help(parent: &str, child: &str) -> String {
+        let parent = parent.to_string();
+        let child = child.to_string();
+        render_help_with_stack(move || {
+            let mut command = Cli::command();
+            command
+                .find_subcommand_mut(&parent)
+                .unwrap_or_else(|| panic!("{parent} subcommand should exist"))
+                .find_subcommand_mut(&child)
+                .unwrap_or_else(|| panic!("{parent} {child} subcommand should exist"))
+                .render_long_help()
+                .to_string()
+        })
     }
 
     #[test]
@@ -984,20 +1059,20 @@ mod tests {
 
     #[test]
     fn cook_accepts_optional_target_and_recipe_flag() {
-        assert!(Cli::try_parse_from(["conary", "cook"]).is_ok());
-        assert!(Cli::try_parse_from(["conary", "cook", "--recipe", "recipe.toml"]).is_ok());
-        assert!(Cli::try_parse_from(["conary", "cook", "recipe.toml", "--isolated"]).is_ok());
+        assert!(parse_cli(["conary", "cook"]).is_ok());
+        assert!(parse_cli(["conary", "cook", "--recipe", "recipe.toml"]).is_ok());
+        assert!(parse_cli(["conary", "cook", "recipe.toml", "--isolated"]).is_ok());
     }
 
     #[test]
     fn cook_accepts_hidden_m1a_compatibility_flags() {
-        assert!(Cli::try_parse_from(["conary", "cook", "--hermetic", "recipe.toml"]).is_ok());
-        assert!(Cli::try_parse_from(["conary", "cook", "--no-isolation", "recipe.toml"]).is_ok());
+        assert!(parse_cli(["conary", "cook", "--hermetic", "recipe.toml"]).is_ok());
+        assert!(parse_cli(["conary", "cook", "--no-isolation", "recipe.toml"]).is_ok());
     }
 
     #[test]
     fn cook_record_hidden_flags_parse_after_separator() {
-        let cli = Cli::try_parse_from([
+        let cli = parse_cli([
             "conary",
             "cook",
             "--record",
@@ -1057,7 +1132,7 @@ mod tests {
 
     #[test]
     fn cook_accepts_explain() {
-        let cli = Cli::try_parse_from(["conary", "cook", ".", "--explain"]).unwrap();
+        let cli = parse_cli(["conary", "cook", ".", "--explain"]).unwrap();
         match cli.command {
             Some(Commands::Cook { explain, .. }) => assert!(explain),
             other => panic!("unexpected command: {other:?}"),
@@ -1066,20 +1141,19 @@ mod tests {
 
     #[test]
     fn cook_publish_and_watch_accept_json_flags() {
-        let cook = Cli::try_parse_from(["conary", "cook", ".", "--json"]).unwrap();
+        let cook = parse_cli(["conary", "cook", ".", "--json"]).unwrap();
         match cook.command {
             Some(Commands::Cook { json, .. }) => assert!(json),
             other => panic!("unexpected command: {other:?}"),
         }
 
-        let publish =
-            Cli::try_parse_from(["conary", "publish", "dist/pkg.ccs", "./repo", "--json"]).unwrap();
+        let publish = parse_cli(["conary", "publish", "dist/pkg.ccs", "./repo", "--json"]).unwrap();
         match publish.command {
             Some(Commands::Publish { json, .. }) => assert!(json),
             other => panic!("unexpected command: {other:?}"),
         }
 
-        let watch = Cli::try_parse_from(["conary", "try", "--watch", "--json"]).unwrap();
+        let watch = parse_cli(["conary", "try", "--watch", "--json"]).unwrap();
         match watch.command {
             Some(Commands::Try { watch, json, .. }) => {
                 assert!(watch);
@@ -1091,7 +1165,7 @@ mod tests {
 
     #[test]
     fn new_from_current_dir_parses_with_explain() {
-        let cli = Cli::try_parse_from(["conary", "new", "--from", ".", "--explain"]).unwrap();
+        let cli = parse_cli(["conary", "new", "--from", ".", "--explain"]).unwrap();
         match cli.command {
             Some(Commands::New { from, explain, .. }) => {
                 assert_eq!(from.as_deref(), Some("."));
@@ -1103,8 +1177,7 @@ mod tests {
 
     #[test]
     fn publish_project_form_parses() {
-        let cli = Cli::try_parse_from(["conary", "publish", "./repo", "--recipe", "recipe.toml"])
-            .unwrap();
+        let cli = parse_cli(["conary", "publish", "./repo", "--recipe", "recipe.toml"]).unwrap();
         let Some(Commands::Publish {
             what,
             target,
@@ -1124,7 +1197,7 @@ mod tests {
 
     #[test]
     fn publish_artifact_form_parses() {
-        let cli = Cli::try_parse_from(["conary", "publish", "dist/pkg.ccs", "./repo"]).unwrap();
+        let cli = parse_cli(["conary", "publish", "dist/pkg.ccs", "./repo"]).unwrap();
         let Some(Commands::Publish {
             what,
             target,
@@ -1142,7 +1215,7 @@ mod tests {
 
     #[test]
     fn parses_hidden_mcp_packaging_command() {
-        let cli = Cli::try_parse_from(["conary", "mcp", "packaging"]).unwrap();
+        let cli = parse_cli(["conary", "mcp", "packaging"]).unwrap();
         assert!(matches!(
             cli.command,
             Some(Commands::Mcp(McpCommands::Packaging))
@@ -1152,7 +1225,7 @@ mod tests {
     #[test]
     fn repo_add_rejects_fingerprint_with_gpg_flags_at_parse_time() {
         assert!(
-            Cli::try_parse_from([
+            parse_cli([
                 "conary",
                 "repo",
                 "add",
@@ -1168,7 +1241,7 @@ mod tests {
 
     #[test]
     fn repo_reset_trust_parses() {
-        let cli = Cli::try_parse_from(["conary", "repo", "reset-trust", "acme"]).unwrap();
+        let cli = parse_cli(["conary", "repo", "reset-trust", "acme"]).unwrap();
         assert!(matches!(
             cli.command,
             Some(Commands::Repo(RepoCommands::ResetTrust { .. }))
@@ -1177,7 +1250,7 @@ mod tests {
 
     #[test]
     fn repo_add_replace_parses_for_static_repin() {
-        let cli = Cli::try_parse_from([
+        let cli = parse_cli([
             "conary",
             "repo",
             "add",
@@ -1197,7 +1270,7 @@ mod tests {
     #[test]
     fn repo_add_rejects_static_default_strategy_at_parse_time() {
         assert!(
-            Cli::try_parse_from([
+            parse_cli([
                 "conary",
                 "repo",
                 "add",
@@ -1212,7 +1285,7 @@ mod tests {
 
     #[test]
     fn install_defaults_to_always_sandbox() {
-        let cli = Cli::try_parse_from(["conary", "install", "bash"]).unwrap();
+        let cli = parse_cli(["conary", "install", "bash"]).unwrap();
         match cli.command {
             Some(Commands::Install { sandbox, .. }) => {
                 assert_eq!(sandbox, CliSandboxMode::Always);
@@ -1223,7 +1296,7 @@ mod tests {
 
     #[test]
     fn install_accepts_legacy_replay_flags_defaulting_false() {
-        let cli = Cli::try_parse_from(["conary", "install", "bash"]).unwrap();
+        let cli = parse_cli(["conary", "install", "bash"]).unwrap();
         match cli.command {
             Some(Commands::Install {
                 allow_legacy_replay,
@@ -1236,7 +1309,7 @@ mod tests {
             _ => panic!("expected install command"),
         }
 
-        let cli = Cli::try_parse_from([
+        let cli = parse_cli([
             "conary",
             "install",
             "bash",
@@ -1259,7 +1332,7 @@ mod tests {
 
     #[test]
     fn update_defaults_to_always_sandbox() {
-        let cli = Cli::try_parse_from(["conary", "update"]).unwrap();
+        let cli = parse_cli(["conary", "update"]).unwrap();
         match cli.command {
             Some(Commands::Update { sandbox, .. }) => {
                 assert_eq!(sandbox, CliSandboxMode::Always);
@@ -1270,7 +1343,7 @@ mod tests {
 
     #[test]
     fn update_accepts_legacy_replay_flags_and_no_scripts_defaulting_false() {
-        let cli = Cli::try_parse_from(["conary", "update"]).unwrap();
+        let cli = parse_cli(["conary", "update"]).unwrap();
         match cli.command {
             Some(Commands::Update {
                 no_scripts,
@@ -1285,7 +1358,7 @@ mod tests {
             _ => panic!("expected update command"),
         }
 
-        let cli = Cli::try_parse_from([
+        let cli = parse_cli([
             "conary",
             "update",
             "bash",
@@ -1311,7 +1384,7 @@ mod tests {
 
     #[test]
     fn remove_accepts_legacy_replay_flags_defaulting_false() {
-        let cli = Cli::try_parse_from(["conary", "remove", "bash"]).unwrap();
+        let cli = parse_cli(["conary", "remove", "bash"]).unwrap();
         match cli.command {
             Some(Commands::Remove {
                 allow_legacy_replay,
@@ -1324,7 +1397,7 @@ mod tests {
             _ => panic!("expected remove command"),
         }
 
-        let cli = Cli::try_parse_from([
+        let cli = parse_cli([
             "conary",
             "remove",
             "bash",
@@ -1347,7 +1420,7 @@ mod tests {
 
     #[test]
     fn autoremove_accepts_legacy_replay_flags_defaulting_false() {
-        let cli = Cli::try_parse_from(["conary", "autoremove"]).unwrap();
+        let cli = parse_cli(["conary", "autoremove"]).unwrap();
         match cli.command {
             Some(Commands::Autoremove {
                 allow_legacy_replay,
@@ -1360,7 +1433,7 @@ mod tests {
             _ => panic!("expected autoremove command"),
         }
 
-        let cli = Cli::try_parse_from([
+        let cli = parse_cli([
             "conary",
             "autoremove",
             "--allow-legacy-replay",
@@ -1382,7 +1455,7 @@ mod tests {
 
     #[test]
     fn ccs_install_accepts_legacy_replay_flags_and_no_scripts_defaulting_false() {
-        let cli = Cli::try_parse_from(["conary", "ccs", "install", "fixture.ccs"]).unwrap();
+        let cli = parse_cli(["conary", "ccs", "install", "fixture.ccs"]).unwrap();
         match cli.command {
             Some(Commands::Ccs(CcsCommands::Install {
                 no_scripts,
@@ -1397,7 +1470,7 @@ mod tests {
             _ => panic!("expected ccs install command"),
         }
 
-        let cli = Cli::try_parse_from([
+        let cli = parse_cli([
             "conary",
             "ccs",
             "install",
@@ -1424,7 +1497,7 @@ mod tests {
 
     #[test]
     fn update_dep_mode_omission_is_model_derived() {
-        let cli = Cli::try_parse_from(["conary", "update"]).unwrap();
+        let cli = parse_cli(["conary", "update"]).unwrap();
         match cli.command {
             Some(Commands::Update { dep_mode, .. }) => {
                 assert_eq!(dep_mode, None);
@@ -1435,12 +1508,7 @@ mod tests {
 
     #[test]
     fn update_dep_mode_help_is_model_derived() {
-        let mut command = Cli::command();
-        let help = command
-            .find_subcommand_mut("update")
-            .expect("update subcommand should exist")
-            .render_long_help()
-            .to_string();
+        let help = subcommand_help("update");
         let hard_coded_default = ["[default: ", "satisfy]"].concat();
 
         assert!(
@@ -1450,12 +1518,7 @@ mod tests {
     }
 
     fn command_help(command_name: &str) -> String {
-        let mut command = Cli::command();
-        command
-            .find_subcommand_mut(command_name)
-            .unwrap_or_else(|| panic!("{command_name} subcommand should exist"))
-            .render_long_help()
-            .to_string()
+        subcommand_help(command_name)
     }
 
     #[test]
@@ -1482,14 +1545,7 @@ mod tests {
 
     #[test]
     fn system_adopt_full_help_only_names_consuming_modes() {
-        let mut command = Cli::command();
-        let help = command
-            .find_subcommand_mut("system")
-            .expect("system subcommand should exist")
-            .find_subcommand_mut("adopt")
-            .expect("system adopt subcommand should exist")
-            .render_long_help()
-            .to_string();
+        let help = nested_subcommand_help("system", "adopt");
 
         assert!(
             help.contains("Used by: default (package adopt), --system"),
@@ -1503,9 +1559,7 @@ mod tests {
 
     #[test]
     fn export_rejects_legacy_db_argument() {
-        let err = match Cli::try_parse_from([
-            "conary", "export", "--output", "oci-out", "--db", "old.db",
-        ]) {
+        let err = match parse_cli(["conary", "export", "--output", "oci-out", "--db", "old.db"]) {
             Ok(_) => panic!("legacy export --db argument should be rejected"),
             Err(err) => err,
         };
@@ -1518,7 +1572,7 @@ mod tests {
 
     #[test]
     fn cli_accepts_allow_live_system_mutation_as_global_flag() {
-        let cli = Cli::try_parse_from([
+        let cli = parse_cli([
             "conary",
             "--allow-live-system-mutation",
             "system",
@@ -1533,19 +1587,19 @@ mod tests {
 
     #[test]
     fn cli_accepts_yes_for_remove_autoremove_and_ccs_install() {
-        let remove = Cli::try_parse_from(["conary", "remove", "nginx", "--yes"]).unwrap();
+        let remove = parse_cli(["conary", "remove", "nginx", "--yes"]).unwrap();
         assert!(matches!(
             remove.command,
             Some(Commands::Remove { yes: true, .. })
         ));
 
-        let autoremove = Cli::try_parse_from(["conary", "autoremove", "--yes"]).unwrap();
+        let autoremove = parse_cli(["conary", "autoremove", "--yes"]).unwrap();
         assert!(matches!(
             autoremove.command,
             Some(Commands::Autoremove { yes: true, .. })
         ));
 
-        let ccs = Cli::try_parse_from(["conary", "ccs", "install", "pkg.ccs", "--yes"]).unwrap();
+        let ccs = parse_cli(["conary", "ccs", "install", "pkg.ccs", "--yes"]).unwrap();
         assert!(matches!(
             ccs.command,
             Some(Commands::Ccs(crate::cli::CcsCommands::Install {
@@ -1557,8 +1611,7 @@ mod tests {
 
     #[test]
     fn cli_accepts_yes_for_state_and_generation_apply_commands() {
-        let revert =
-            Cli::try_parse_from(["conary", "system", "state", "revert", "1", "--yes"]).unwrap();
+        let revert = parse_cli(["conary", "system", "state", "revert", "1", "--yes"]).unwrap();
         assert!(matches!(
             revert.command,
             Some(Commands::System(crate::cli::SystemCommands::State(
@@ -1566,7 +1619,7 @@ mod tests {
             )))
         ));
 
-        let build = Cli::try_parse_from([
+        let build = parse_cli([
             "conary",
             "system",
             "generation",
@@ -1586,7 +1639,7 @@ mod tests {
 
     #[test]
     fn parses_system_unadopt_all() {
-        let cli = Cli::try_parse_from(["conary", "system", "unadopt", "--all"])
+        let cli = parse_cli(["conary", "system", "unadopt", "--all"])
             .expect("system unadopt --all should parse");
 
         match cli.command {
@@ -1608,7 +1661,7 @@ mod tests {
 
     #[test]
     fn parses_system_unadopt_package_dry_run() {
-        let cli = Cli::try_parse_from([
+        let cli = parse_cli([
             "conary",
             "system",
             "unadopt",
@@ -1637,7 +1690,7 @@ mod tests {
 
     #[test]
     fn rejects_system_unadopt_without_scope() {
-        let err = match Cli::try_parse_from(["conary", "system", "unadopt"]) {
+        let err = match parse_cli(["conary", "system", "unadopt"]) {
             Ok(_) => panic!("system unadopt must require --all or package names"),
             Err(err) => err,
         };
@@ -1647,7 +1700,7 @@ mod tests {
 
     #[test]
     fn rejects_system_unadopt_all_with_packages() {
-        let err = match Cli::try_parse_from(["conary", "system", "unadopt", "--all", "curl"]) {
+        let err = match parse_cli(["conary", "system", "unadopt", "--all", "curl"]) {
             Ok(_) => panic!("system unadopt --all must reject package names"),
             Err(err) => err,
         };
@@ -1657,7 +1710,7 @@ mod tests {
 
     #[test]
     fn parses_system_adopt_system_dry_run_filters() {
-        let cli = Cli::try_parse_from([
+        let cli = parse_cli([
             "conary",
             "system",
             "adopt",
@@ -1704,7 +1757,7 @@ mod tests {
 
     #[test]
     fn parses_system_adopt_refresh_quiet_from_sync_hook() {
-        let cli = Cli::try_parse_from([
+        let cli = parse_cli([
             "conary",
             "system",
             "adopt",
@@ -1745,7 +1798,7 @@ mod tests {
 
     #[test]
     fn rejects_system_adopt_from_sync_hook_with_full() {
-        let err = match Cli::try_parse_from([
+        let err = match parse_cli([
             "conary",
             "system",
             "adopt",
@@ -1763,7 +1816,7 @@ mod tests {
 
     #[test]
     fn parses_system_adopt_convert_dry_run_jobs() {
-        let cli = Cli::try_parse_from([
+        let cli = parse_cli([
             "conary",
             "system",
             "adopt",
@@ -1804,9 +1857,8 @@ mod tests {
 
     #[test]
     fn parses_system_adopt_sync_hook_remove_hook() {
-        let cli =
-            Cli::try_parse_from(["conary", "system", "adopt", "--sync-hook", "--remove-hook"])
-                .expect("system adopt --sync-hook --remove-hook should parse");
+        let cli = parse_cli(["conary", "system", "adopt", "--sync-hook", "--remove-hook"])
+            .expect("system adopt --sync-hook --remove-hook should parse");
 
         match cli.command {
             Some(Commands::System(SystemCommands::Adopt {
@@ -1833,7 +1885,7 @@ mod tests {
 
     #[test]
     fn parses_system_adopt_package_dry_run_refusal_surface() {
-        let cli = Cli::try_parse_from(["conary", "system", "adopt", "curl", "--dry-run"])
+        let cli = parse_cli(["conary", "system", "adopt", "curl", "--dry-run"])
             .expect("single-package dry-run should parse before runtime refuses it");
 
         match cli.command {
@@ -1863,7 +1915,7 @@ mod tests {
 
     #[test]
     fn rejects_system_adopt_package_with_refresh_mode() {
-        let err = match Cli::try_parse_from(["conary", "system", "adopt", "curl", "--refresh"]) {
+        let err = match parse_cli(["conary", "system", "adopt", "curl", "--refresh"]) {
             Ok(_) => panic!("package adopt must conflict with --refresh mode"),
             Err(err) => err,
         };
@@ -1873,7 +1925,7 @@ mod tests {
 
     #[test]
     fn rejects_system_adopt_quiet_without_refresh() {
-        let err = match Cli::try_parse_from(["conary", "system", "adopt", "--quiet"]) {
+        let err = match parse_cli(["conary", "system", "adopt", "--quiet"]) {
             Ok(_) => panic!("--quiet must remain scoped to --refresh"),
             Err(err) => err,
         };
@@ -1887,7 +1939,7 @@ mod tests {
 
     #[test]
     fn cli_rejects_bootstrap_image_from_generation() {
-        let err = match Cli::try_parse_from([
+        let err = match parse_cli([
             "conary",
             "bootstrap",
             "image",
@@ -1903,7 +1955,7 @@ mod tests {
 
     #[test]
     fn cli_accepts_generation_export_from_explicit_path() {
-        let cli = Cli::try_parse_from([
+        let cli = parse_cli([
             "conary",
             "system",
             "generation",
@@ -1937,7 +1989,7 @@ mod tests {
 
     #[test]
     fn cli_accepts_generation_db_backup_verification_and_recovery() {
-        let verify = Cli::try_parse_from([
+        let verify = parse_cli([
             "conary",
             "system",
             "generation",
@@ -1959,7 +2011,7 @@ mod tests {
             _ => panic!("expected generation verify-db-backup command"),
         }
 
-        let recover = Cli::try_parse_from([
+        let recover = parse_cli([
             "conary",
             "system",
             "generation",
@@ -1986,7 +2038,7 @@ mod tests {
 
     #[test]
     fn cli_rejects_generation_export_path_and_number_together() {
-        let err = match Cli::try_parse_from([
+        let err = match parse_cli([
             "conary",
             "system",
             "generation",
@@ -2008,8 +2060,8 @@ mod tests {
 
     #[test]
     fn try_package_parses() {
-        let cli = Cli::try_parse_from(["conary", "try", "pkg.ccs"])
-            .expect("try package command should parse");
+        let cli =
+            parse_cli(["conary", "try", "pkg.ccs"]).expect("try package command should parse");
         match cli.command {
             Some(Commands::Try {
                 target,
@@ -2026,7 +2078,7 @@ mod tests {
             _ => panic!("expected try package command"),
         }
 
-        let with_run = Cli::try_parse_from(["conary", "try", "pkg.ccs", "--", "/usr/bin/hello"])
+        let with_run = parse_cli(["conary", "try", "pkg.ccs", "--", "/usr/bin/hello"])
             .expect("try package run command should parse");
         match with_run.command {
             Some(Commands::Try { target, run, .. }) => {
@@ -2036,7 +2088,7 @@ mod tests {
             _ => panic!("expected try package command with runner"),
         }
 
-        let activated = Cli::try_parse_from(["conary", "try", "pkg.ccs", "--activate"])
+        let activated = parse_cli(["conary", "try", "pkg.ccs", "--activate"])
             .expect("activated try package command should parse");
         match activated.command {
             Some(Commands::Try {
@@ -2048,7 +2100,7 @@ mod tests {
             _ => panic!("expected activated try package command"),
         }
 
-        let irreversible = Cli::try_parse_from([
+        let irreversible = parse_cli([
             "conary",
             "try",
             "pkg.ccs",
@@ -2073,7 +2125,7 @@ mod tests {
 
     #[test]
     fn try_watch_parses_project_recipe_and_json_forms() {
-        let default_target = Cli::try_parse_from(["conary", "try", "--watch"]).unwrap();
+        let default_target = parse_cli(["conary", "try", "--watch"]).unwrap();
         match default_target.command {
             Some(Commands::Try {
                 target,
@@ -2098,7 +2150,7 @@ mod tests {
             other => panic!("unexpected command: {other:?}"),
         }
 
-        let recipe = Cli::try_parse_from([
+        let recipe = parse_cli([
             "conary",
             "try",
             "--watch",
@@ -2131,8 +2183,7 @@ mod tests {
     #[test]
     fn try_action_words_parse() {
         for action in ["status", "rollback", "keep"] {
-            let cli = Cli::try_parse_from(["conary", "try", action])
-                .expect("try action word should parse");
+            let cli = parse_cli(["conary", "try", action]).expect("try action word should parse");
             match cli.command {
                 Some(Commands::Try {
                     target,
@@ -2153,7 +2204,7 @@ mod tests {
 
     #[test]
     fn self_update_accepts_offline_signature_verification_flags() {
-        let cli = Cli::try_parse_from([
+        let cli = parse_cli([
             "conary",
             "self-update",
             "--verify-sha256",

@@ -155,6 +155,50 @@ fn preview_tiering_hidden_commands_still_execute() {
 }
 
 #[test]
+fn preview_tiering_help_advanced_lists_hidden_surface() {
+    let output = run_conary(&["--help-advanced"]);
+    assert!(output.status.success(), "{}", output_text(&output));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for cmd in [
+        "cook",
+        "new",
+        "publish",
+        "convert-pkgbuild",
+        "recipe-audit",
+        "canonical",
+        "groups",
+        "registry",
+        "query",
+        "ccs",
+        "derive",
+        "derivation",
+        "model",
+        "collection",
+        "automation",
+        "bootstrap",
+        "cache",
+        "profile",
+        "provenance",
+        "capability",
+        "trust",
+        "verify-derivation",
+        "sbom",
+        "federation",
+        "export",
+        "mcp",
+    ] {
+        assert!(
+            stdout.contains(&format!("\n  {cmd}")),
+            "missing advanced command {cmd} in:\n{stdout}"
+        );
+    }
+    assert!(
+        !stdout.contains("\n  install"),
+        "daily-driver command leaked into advanced help:\n{stdout}"
+    );
+}
+
+#[test]
 fn phase2_pruning_repo_add_help_lists_only_supported_remi_distro_examples() {
     let output = run_conary(&["repo", "add", "--help"]);
 
