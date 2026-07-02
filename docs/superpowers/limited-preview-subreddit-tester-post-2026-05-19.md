@@ -8,6 +8,7 @@ should be revised for the norms of whichever subreddit receives it.
 - Looking for a few Linux package-manager testers for Conary
 - Conary: a reversible package-manager preview for Fedora, Ubuntu, and Arch VMs
 - I am building a Rust package manager that can adopt/unadopt existing Linux systems
+- Claude Code/Codex users: try a bounded Linux package-manager tester loop in a VM
 
 ## Draft
 
@@ -37,6 +38,21 @@ Before starting, check the compatibility checklist --
 the whole loop below runs on stock kernels:
 https://conary.io/docs/compatibility-checklist (or
 `docs/guides/compatibility-checklist.md` in the repo).
+
+If you use Claude Code, Codex, or another coding agent, there is an
+agent-assisted version of the loop:
+https://github.com/ConaryLabs/Conary/blob/main/docs/guides/agent-assisted-tester-loop.md
+
+Prompt shape:
+
+```text
+Help me run the Conary first external tester loop on this disposable VM.
+Read the agent-assisted tester guide first. Confirm distro, architecture,
+kernel, sudo, and VM/snapshot/non-critical-host status before installing
+anything. Use only the pinned v0.9.0 release, verify SHA256SUMS, ask before
+every non-dry-run mutation, keep a command transcript, and draft a beta
+feedback issue from the GitHub template.
+```
 
 What I would love people to try in a VM, snapshot, or spare system:
 
