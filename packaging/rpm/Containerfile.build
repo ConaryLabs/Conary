@@ -1,6 +1,8 @@
 # packaging/rpm/Containerfile.build
 #
 # Fedora 44 build container for Conary RPMs.
+# Keep this aligned with .github/workflows/release-build.yml so RPM %{?dist}
+# suffixes match the supported Fedora preview baseline.
 # Uses rustup for a current toolchain (distro Rust may lag behind MSRV).
 
 FROM registry.fedoraproject.org/fedora:44
