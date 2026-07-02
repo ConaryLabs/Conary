@@ -193,4 +193,50 @@ nohint_out="$("$script" --path zzz/nowhere.c --map "$fixture_map")"
 grep -q '^No feature-card hint matched' <<<"$nohint_out" \
     || fail "unmatched path did not print the no-hint message"
 
+# --- --changed and --changed --all collection (fixture git repo) ---
+
+changed_repo="$tmp/changed-repo"
+mkdir -p "$changed_repo/a"
+git -C "$changed_repo" init -q
+git -C "$changed_repo" config user.email "test@example.com"
+git -C "$changed_repo" config user.name "test"
+write_fixture_map "$changed_repo/map.md"
+printf 'tracked one\n' > "$changed_repo/t1.rs"
+printf 'alpha\n' > "$changed_repo/a/alpha.rs"
+git -C "$changed_repo" add -A
+git -C "$changed_repo" commit -qm init
+
+printf 'tracked one modified\n' > "$changed_repo/t1.rs"
+printf 'staged\n' > "$changed_repo/staged.rs"
+git -C "$changed_repo" add staged.rs
+printf 'untracked\n' > "$changed_repo/untracked.rs"
+
+changed_out="$( (cd "$changed_repo" && bash "$script" --changed --map map.md) )"
+grep -q '^changed_paths: 3$' <<<"$changed_out" \
+    || fail "--changed did not count modified+staged+untracked; got: $changed_out"
+grep -q -- '^- t1.rs$' <<<"$changed_out" || fail "--changed missed modified path"
+grep -q -- '^- staged.rs$' <<<"$changed_out" || fail "--changed missed staged path"
+grep -q -- '^- untracked.rs$' <<<"$changed_out" || fail "--changed missed untracked path"
+if grep -q -- '^- a/alpha.rs$' <<<"$changed_out"; then
+    fail "--changed included an unchanged tracked path"
+fi
+
+all_out="$( (cd "$changed_repo" && bash "$script" --changed --all --map map.md) )"
+grep -q -- '^- a/alpha.rs$' <<<"$all_out" \
+    || fail "--changed --all missed a tracked path"
+grep -A1 -- '^- a/alpha.rs$' <<<"$all_out" | grep -q 'Alpha Feature |' \
+    || fail "--changed --all did not route a/alpha.rs to Alpha"
+grep -A1 -- '^- t1.rs$' <<<"$all_out" | grep -q 'No feature-card hint matched' \
+    || fail "--changed --all did not print no-hint for unrouted path"
+
+if (cd "$changed_repo" && bash "$script" --changed --base definitely-not-a-ref --map map.md) >"$tmp/bad-base.out" 2>&1; then
+    fail "invalid base ref unexpectedly succeeded"
+fi
+grep -q "base ref not found" "$tmp/bad-base.out" \
+    || fail "invalid base ref did not print a clear error"
+
+clean_out="$( (cd "$changed_repo" && git stash -q --include-untracked && bash "$script" --changed --map map.md) )"
+grep -q '^\[ok\] no changed paths detected$' <<<"$clean_out" \
+    || fail "clean tree did not report no changed paths"
+
 echo "agent-context tests passed."

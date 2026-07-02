@@ -387,6 +387,42 @@ mode_path() {
     fi
 }
 
+collect_paths() {
+    if [[ "$scan_all" -eq 1 ]]; then
+        git ls-files
+        return
+    fi
+
+    {
+        git diff --name-only "$base_ref" --
+        git diff --cached --name-only --
+        git ls-files --others --exclude-standard
+    } | awk 'NF' | sort -u
+}
+
+mode_changed() {
+    local p hint
+    local -a changed=()
+    mapfile -t changed < <(collect_paths)
+
+    if [[ "${#changed[@]}" -eq 0 ]]; then
+        printf '[ok] no changed paths detected\n'
+        return
+    fi
+
+    printf 'changed_paths: %s\n' "${#changed[@]}"
+    for p in "${changed[@]}"; do
+        if route_path "$p"; then
+            require_unambiguous_route "$p"
+            printf -- '- %s\n  %s\n' "$p" "$(brief_line "$route_heading")"
+        elif hint="$(fallback_hint_for_path "$p")"; then
+            printf -- '- %s\n  %s\n' "$p" "$hint"
+        else
+            printf -- '- %s\n  %s\n' "$p" "$no_hint_message"
+        fi
+    done
+}
+
 load_map
 load_globs
 
@@ -406,7 +442,15 @@ case "$mode" in
     path)
         mode_path
         ;;
-    changed|validate)
+    changed)
+        if [[ "$scan_all" -eq 0 ]] \
+            && ! git rev-parse --verify --quiet "$base_ref^{commit}" >/dev/null; then
+            echo "ERROR: base ref not found: $base_ref" >&2
+            exit 2
+        fi
+        mode_changed
+        ;;
+    validate)
         fail "mode not implemented yet: $mode"
         ;;
 esac
