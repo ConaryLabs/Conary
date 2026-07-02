@@ -41,6 +41,14 @@ split files mechanically, keep command and route handlers thin, and update
 `docs/llms/subsystem-map.md` or the relevant `docs/modules/*.md` file when the
 "look here first" path changes.
 
+Meta-layer budget: ledger, ownership-card, gate, and agent-tooling changes are
+allowed only when product work forces them -- a touched path, a failing gate,
+or a factual drift. Discretionary meta-layer improvement is capped at one meta
+slice per four product slices. This budget holds at least until the first
+external tester milestone in
+`docs/superpowers/specs/2026-07-01-first-external-tester-loop-design.md` is
+met.
+
 ## Testing and Documentation Guidance
 Prefer small unit tests near the code they cover and integration tests in `apps/conary/tests/` for end-to-end CLI flows. Name tests descriptively, for example `test_prepare_discovered_peer_rejects_https_without_pinned_fingerprint`. When touching service code, rerun the owning packages directly with `cargo test -p remi` and `cargo test -p conaryd`. Security and transaction changes should include regression coverage.
 

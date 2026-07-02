@@ -133,6 +133,10 @@ Strategic follow-up after the preview queue:
 
 ## Near-Term Priorities
 
+Process note: meta-layer (ledger/card/gate/tooling) work is budget-capped per
+the meta-layer budget rule in `AGENTS.md` until the first external tester
+milestone is met.
+
 1. Keep the five-minute preview path, release artifact matrix, support bundle,
    beta feedback template, and docs-truth gates current as tester copy changes.
 2. Keep adoption-lane DB checkpoints, non-generation recovery, and
