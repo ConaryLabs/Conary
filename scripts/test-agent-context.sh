@@ -189,6 +189,14 @@ fallback_out="$("$script" --path AGENTS.md --map "$fixture_map")"
 grep -q '^Assistant/contributor guidance |' <<<"$fallback_out" \
     || fail "AGENTS.md did not use the guidance fallback"
 
+fallback_out="$("$script" --path CLAUDE.md --map "$fixture_map")"
+grep -q '^Assistant/contributor guidance |' <<<"$fallback_out" \
+    || fail "CLAUDE.md did not use the guidance fallback"
+
+fallback_out="$("$script" --path REASONIX.md --map "$fixture_map")"
+grep -q '^Assistant/contributor guidance |' <<<"$fallback_out" \
+    || fail "REASONIX.md did not use the guidance fallback"
+
 nohint_out="$("$script" --path zzz/nowhere.c --map "$fixture_map")"
 grep -q '^No feature-card hint matched' <<<"$nohint_out" \
     || fail "unmatched path did not print the no-hint message"

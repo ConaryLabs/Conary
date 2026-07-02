@@ -56,8 +56,8 @@ Assistant doc model:
 
 - `AGENTS.md` is the canonical repo-wide assistant contract.
 - `docs/llms/README.md` is the vendor-neutral routing layer into canonical docs.
-- Tool-specific entrypoints such as `GEMINI.md` or `.github/copilot-instructions.md` should point back here instead of restating repo-wide rules.
-- Claude-specific tracked guidance and `.claude/` harness files are retired; do not add new active Claude entrypoints unless the repository starts using Claude again.
+- Tool-specific entrypoints such as `CLAUDE.md`, `GEMINI.md`, `REASONIX.md`, or `.github/copilot-instructions.md` should point back here instead of restating repo-wide rules.
+- Keep `CLAUDE.md` as a thin compatibility shim for Claude setups, and keep old `.claude/` harness files retired unless the repository adopts a shared Claude-specific harness again.
 - The documentation accuracy ledger tracks per-file doc audit coverage; the feature coherency ledger tracks per-claim implementation truth. Before editing a public claim, command help, route, or agent-facing surface, grep `docs/superpowers/feature-coherency-ledger.tsv` for the touched path and rerun the coherency checks when rows point at it.
 - Add nested `AGENTS.md` files only when a subtree genuinely needs durable instructions that differ from the repo root.
 - Keep host-local, credential-bearing, or personal notes in ignored local files such as `docs/operations/LOCAL_ACCESS.md`, not in tracked assistant guidance.

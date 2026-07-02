@@ -363,7 +363,7 @@ require_unambiguous_route() {
 fallback_hint_for_path() {
     local path="$1"
     case "$path" in
-        AGENTS.md|CONTRIBUTING.md|.github/PULL_REQUEST_TEMPLATE.md|docs/llms/*|docs/modules/feature-ownership.md|docs/superpowers/documentation-accuracy-audit-*|scripts/maintainability-drift-report.sh|scripts/agent-context.sh)
+        AGENTS.md|CONTRIBUTING.md|CLAUDE.md|GEMINI.md|REASONIX.md|.github/PULL_REQUEST_TEMPLATE.md|.github/copilot-instructions.md|docs/llms/*|docs/modules/feature-ownership.md|docs/superpowers/documentation-accuracy-audit-*|scripts/maintainability-drift-report.sh|scripts/agent-context.sh)
             printf 'Assistant/contributor guidance | focused: bash scripts/check-doc-audit-ledger.sh docs/superpowers/documentation-accuracy-audit-ledger.tsv --require-complete | gate: docs-audit inventory diff and stale-term added-line sweep'
             ;;
         docs/modules/*|docs/operations/*|docs/INTEGRATION-TESTING.md|docs/ARCHITECTURE.md)

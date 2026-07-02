@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-05-22
-revision: 2
-summary: Historical notes about the retired Claude-era assistant harness, its migration, and the later removal of tracked Claude active artifacts
+last_updated: 2026-07-02
+revision: 3
+summary: Historical notes about the retired Claude-era assistant harness and the active thin Claude shim
 ---
 
 # Claude-Era Harness Notes
@@ -42,11 +42,11 @@ The durable pieces moved into:
 - [`docs/operations/infrastructure.md`](../../operations/infrastructure.md) for non-secret operations notes
 - [`docs/operations/LOCAL_ACCESS.example.md`](../../operations/LOCAL_ACCESS.example.md) as the tracked template for the ignored `docs/operations/LOCAL_ACCESS.md` local note
 
-The tracked Claude-specific active artifacts were later removed because this
-workspace no longer uses Claude. That includes the `CLAUDE.md` compatibility
-shim, `.claude/settings.json`, and the Claude hook helper scripts under
-`scripts/dev/`.
+`CLAUDE.md` is active again as a thin compatibility shim that points back to
+`AGENTS.md` and the vendor-neutral assistant map. The older `.claude/` harness,
+`.claude/settings.json`, named-agent roster, and Claude hook helper scripts
+under `scripts/dev/` remain retired.
 
 If old local `.claude/` files still exist in a checkout, they are ignored local
-leftovers and are not repository guidance. Do not restore tracked Claude
-entrypoints or harness files unless the active toolchain changes.
+leftovers and are not repository guidance. Do not restore tracked Claude harness
+files unless the active toolchain needs shared versioned Claude configuration.
