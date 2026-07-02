@@ -222,6 +222,8 @@ print_entries() {
     for entry in "${entries[@]}"; do
         entry="${entry#"${entry%%[![:space:]]*}"}"
         entry="${entry%"${entry##*[![:space:]]}"}"
+        # Strip trailing sentence punctuation that is not part of the path.
+        entry="${entry%.}"
         if [[ -n "$entry" ]]; then
             printf '%s\n' "$entry"
         fi
@@ -239,8 +241,11 @@ print_commands_backticked() {
 
 gate_when_prose() {
     local prose
-    prose="$(sed 's/`[^`]*`//g; s/;/ /g' <<< "$1" | tr -s ' ' | sed 's/^ //; s/ $//')"
-    prose="${prose#when }"
+    # Remove backtick spans, normalise semicolons to spaces so
+    # command-separator punctuation collapses, then collapse whitespace
+    # and trim.  The caller (print_packet) adds its own "when:" prefix
+    # and deduplicates if the prose already starts with "when".
+    prose="$(sed 's/`[^`]*`//g; s/;/ /g' <<< "$1" | tr -s '[:space:]' | sed 's/^ //; s/ $//')"
     printf '%s\n' "$prose"
 }
 
@@ -273,7 +278,11 @@ print_packet() {
     print_commands_backticked "$gate"
     when="$(gate_when_prose "$gate")"
     if [[ -n "$when" ]]; then
-        printf 'when: %s\n' "$when"
+        if [[ "$when" == when\ * ]]; then
+            printf 'when: %s\n' "${when#when }"
+        else
+            printf 'when: %s\n' "$when"
+        fi
     fi
     printf '\n## Docs to update\n'
     print_entries "${card_fields["$heading|Docs to update"]:-}"
