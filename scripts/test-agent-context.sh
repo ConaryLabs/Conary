@@ -163,4 +163,34 @@ fi
 grep -q "unknown feature slug" "$tmp/bad-slug.out" \
     || fail "unknown slug did not produce a clear error"
 
+# --- routing: most-specific wins, fallback table, no-hint ---
+
+path_brief_out="$("$script" --path a/b.rs --brief --map "$fixture_map")"
+grep -q '^Beta Feature |' <<<"$path_brief_out" \
+    || fail "a/b.rs did not route to the more specific Beta card; got: $path_brief_out"
+
+path_brief_out="$("$script" --path a/alpha.rs --brief --map "$fixture_map")"
+grep -q '^Alpha Feature |' <<<"$path_brief_out" \
+    || fail "a/alpha.rs did not route to Alpha; got: $path_brief_out"
+
+"$script" --path a/alpha.rs --map "$fixture_map" > "$tmp/path-full.out"
+grep -q '^# Task Packet: Alpha Feature$' "$tmp/path-full.out" \
+    || fail "--path without --brief did not print the full packet"
+
+fallback_out="$("$script" --path docs/superpowers/specs/2099-01-01-example-design.md --map "$fixture_map")"
+grep -q '^Planning docs |' <<<"$fallback_out" \
+    || fail "specs path did not use the planning fallback; got: $fallback_out"
+
+fallback_out="$("$script" --path docs/modules/anything-at-all.md --map "$fixture_map")"
+grep -q '^Canonical docs |' <<<"$fallback_out" \
+    || fail "docs/modules path did not use the canonical docs fallback"
+
+fallback_out="$("$script" --path AGENTS.md --map "$fixture_map")"
+grep -q '^Assistant/contributor guidance |' <<<"$fallback_out" \
+    || fail "AGENTS.md did not use the guidance fallback"
+
+nohint_out="$("$script" --path zzz/nowhere.c --map "$fixture_map")"
+grep -q '^No feature-card hint matched' <<<"$nohint_out" \
+    || fail "unmatched path did not print the no-hint message"
+
 echo "agent-context tests passed."
