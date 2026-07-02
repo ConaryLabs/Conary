@@ -52,6 +52,8 @@ repo gate scripts (`scripts/check-doc-truth.sh`,
 **Files:**
 - Modify: `AGENTS.md` (the "Maintainability & Refactor Discipline" section)
 - Modify: `ROADMAP.md` (the "Near-Term Priorities" section intro)
+- Modify: `docs/superpowers/documentation-accuracy-audit-ledger.tsv`
+  (existing rows for `AGENTS.md` and `ROADMAP.md`)
 
 **Interfaces:**
 - Produces: the policy text later tasks may cite; no code.
@@ -82,21 +84,26 @@ the meta-layer budget rule in `AGENTS.md` until the first external tester
 milestone is met.
 ```
 
-- [ ] **Step 3: Run the doc gates**
+- [ ] **Step 3: Refresh the existing ledger rows and run the doc gates**
+
+In `docs/superpowers/documentation-accuracy-audit-ledger.tsv`, update the
+existing `AGENTS.md` row notes/evidence to mention the meta-layer budget
+policy and update the existing `ROADMAP.md` row notes/evidence to mention the
+near-term-priorities pointer. Do not add duplicate rows for either file.
 
 Run:
 ```bash
 bash scripts/check-doc-truth.sh
 bash scripts/check-doc-audit-ledger.sh docs/superpowers/documentation-accuracy-audit-ledger.tsv --allow-pending
 ```
-Expected: both pass. (No new doc files were created, so no ledger rows are
+Expected: both pass. (No new doc files were created, so no inventory rows are
 needed; if `check-doc-truth.sh` flags the AGENTS/ROADMAP edits, fix the
 flagged wording rather than the gate.)
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add AGENTS.md ROADMAP.md
+git add AGENTS.md ROADMAP.md docs/superpowers/documentation-accuracy-audit-ledger.tsv
 git commit -m "docs: add meta-layer budget policy per tester-loop design"
 ```
 
@@ -521,14 +528,14 @@ Add to `docs/superpowers/documentation-accuracy-audit-inventory.tsv`
 (alphabetical position among the `docs/guides/` rows; tab-separated):
 
 ```text
-docs/guides/advanced-commands.md	guide	user
+docs/guides/advanced-commands.md	canonical	contributor
 ```
 
 Append to `docs/superpowers/documentation-accuracy-audit-ledger.tsv`
 (one tab-separated line):
 
 ```text
-docs/guides/advanced-commands.md	docs/guides/advanced-commands.md	guide	user	cli-tiering; advanced-help	apps/conary/src/cli/mod.rs; apps/conary/tests/cli_daily_ux.rs	verified	verified-no-change	Documents the preview CLI tiering split and the --help-advanced discovery path added by the 2026-07-01 tester-loop design.
+docs/guides/advanced-commands.md	docs/guides/advanced-commands.md	canonical	contributor	cli-tiering; advanced-help	apps/conary/src/cli/mod.rs; apps/conary/tests/cli_daily_ux.rs	verified	verified-no-change	Documents the preview CLI tiering split and the --help-advanced discovery path added by the 2026-07-01 tester-loop design.
 ```
 
 - [ ] **Step 4: Run the gates**
@@ -630,13 +637,13 @@ Before starting, skim the [compatibility checklist](docs/guides/compatibility-ch
 Inventory row:
 
 ```text
-docs/guides/compatibility-checklist.md	guide	user
+docs/guides/compatibility-checklist.md	canonical	contributor
 ```
 
 Ledger row:
 
 ```text
-docs/guides/compatibility-checklist.md	docs/guides/compatibility-checklist.md	guide	user	compatibility-tiers; preview-requirements	docs/ARCHITECTURE.md; README.md	verified	verified-no-change	Two-tier host requirements for the limited preview per the 2026-07-01 tester-loop design; tier 1 basic loop on stock kernels, tier 2 generation-model requirements.
+docs/guides/compatibility-checklist.md	docs/guides/compatibility-checklist.md	canonical	contributor	compatibility-tiers; preview-requirements	docs/ARCHITECTURE.md; README.md	verified	verified-no-change	Two-tier host requirements for the limited preview per the 2026-07-01 tester-loop design; tier 1 basic loop on stock kernels, tier 2 generation-model requirements.
 ```
 
 Run:
@@ -820,8 +827,7 @@ Edit `docs/superpowers/limited-preview-subreddit-tester-post-2026-05-19.md`:
 ```markdown
 Install the pinned preview release (tag `RELEASE-TAG`):
 download and checksum/signature instructions at
-https://github.com/conary/conary/releases/tag/RELEASE-TAG
-(adjust the URL to the canonical repo slug when filling in the tag).
+https://github.com/ConaryLabs/Conary/releases/tag/RELEASE-TAG
 
 Before starting, check the compatibility checklist —
 the whole loop below runs on stock kernels:
@@ -835,7 +841,7 @@ https://conary.io/docs/compatibility-checklist (or
 When you are done (or stuck), please file what happened — good, bad, or
 confusing — using the Beta Feedback issue template, and answer its
 "Completed the full loop" question so I can count it:
-https://github.com/conary/conary/issues/new?template=beta_feedback.md
+https://github.com/ConaryLabs/Conary/issues/new?template=beta_feedback.md
 ```
 
 4. In the command-loop code block, confirm the sequence matches the milestone
@@ -920,12 +926,16 @@ On the Remi host (see `docs/operations/infrastructure.md` for access):
 
 ```bash
 remi prewarm --help   # confirm current flags
-# then run prewarm for each supported distro against the package set named
-# in the tester post's command loop (at minimum: the <small-package>
-# examples the post suggests, e.g. nginx and the post's named packages)
+# then run prewarm for each supported Remi route slug against the package set
+# named in the tester post's command loop (at minimum: the <small-package>
+# examples the post suggests, e.g. nginx and the post's named packages).
+# Current route slugs are fedora, ubuntu, and arch; do not pass public profile
+# IDs such as fedora-44 or ubuntu-26.04 unless Remi prewarm has been changed
+# to normalize them first.
 ```
-Expected: prewarm completes for fedora-44, ubuntu-26.04, and arch; spot-check
-one conversion via `bash scripts/remi-health.sh --smoke`.
+Expected: prewarm completes for fedora, ubuntu, and arch; spot-check one
+conversion via `bash scripts/remi-health.sh --full` or a direct package
+metadata/conversion endpoint probe.
 
 - [ ] **Step 6 (MAINTAINER): Post, then record the launch**
 
@@ -954,11 +964,12 @@ Run:
 ```bash
 sed -n '1,80p' deploy/remi.toml.example
 cat deploy/systemd/remi.service
-bash scripts/remi-health.sh --help 2>&1 | head -20
+sed -n '1,30p' scripts/remi-health.sh
 grep -n "admin_bind\|bind\|root =" deploy/remi.toml.example
 ```
 Expected: the config keys (`[server] bind/admin_bind/workers`,
-`[storage] root/max_cache_size`, `[upstream.*]` blocks) and the unit's
+`[storage] root/max_cache_size`, `[upstream.*]` blocks), the health script's
+documented `--smoke`, `--full`, and `--endpoint` flags, and the unit's
 `ExecStart=/usr/local/bin/remi --config /etc/conary/remi.toml`. The tutorial
 must only state what these files actually contain.
 
@@ -1019,13 +1030,13 @@ deviations that were folded back into the steps above.)
 Inventory row:
 
 ```text
-docs/guides/self-hosted-remi.md	guide	operator
+docs/guides/self-hosted-remi.md	canonical	contributor
 ```
 
 Ledger row:
 
 ```text
-docs/guides/self-hosted-remi.md	docs/guides/self-hosted-remi.md	guide	operator	remi-self-host; operator-onboarding	deploy/remi.toml.example; deploy/systemd/remi.service; scripts/remi-health.sh; apps/remi/src/bin/remi.rs	pending	pending	Self-hosted Remi tutorial per the 2026-07-01 tester-loop design; status flips to verified after the fresh-VM run in the companion verification task.
+docs/guides/self-hosted-remi.md	docs/guides/self-hosted-remi.md	canonical	contributor	remi-self-host; operator-onboarding	deploy/remi.toml.example; deploy/systemd/remi.service; scripts/remi-health.sh; apps/remi/src/bin/remi.rs	pending		Self-hosted Remi tutorial per the 2026-07-01 tester-loop design; status flips to verified after the fresh-VM run in the companion verification task.
 ```
 
 Run:
@@ -1066,9 +1077,9 @@ guide, not the VM.
 
 Fill the guide's "Verified run" section (date, host OS, elapsed time,
 deviations folded back). In the audit ledger row for
-`docs/guides/self-hosted-remi.md`, change `pending	pending` to
-`verified	corrected` (or `verified	verified-no-change` if no edits were
-needed) and extend the notes with the run date. Run:
+`docs/guides/self-hosted-remi.md`, change the `pending` status and empty
+disposition to `verified	corrected` (or `verified	verified-no-change` if no
+edits were needed) and extend the notes with the run date. Run:
 
 ```bash
 bash scripts/check-doc-audit-ledger.sh docs/superpowers/documentation-accuracy-audit-ledger.tsv --allow-pending
