@@ -1,7 +1,7 @@
 %global crate conary
 
 Name:           conary
-Version:        0.9.0
+Version:        0.9.1
 Release:        1%{?dist}
 Summary:        Modern package manager with atomic operations, rollback, and delta updates
 
