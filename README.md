@@ -100,6 +100,8 @@ The honest gap: ecosystem maturity. apt and dnf have decades of packages and int
 
 ### Five-Minute Preview
 
+Before starting, skim the [compatibility checklist](docs/guides/compatibility-checklist.md) -- the basic package loop runs on stock kernels; only generation-model features need more.
+
 Use this path on a VM or non-critical host first. Release binaries are not
 linked for this preview tag yet, so the commands below assume the developer
 build path in the next subsection and use `./target/debug/conary`.
