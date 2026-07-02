@@ -134,7 +134,7 @@ pub struct CommonArgs {
 #[command(version)]
 #[command(about = "A next-generation package manager with atomic transactions", long_about = None)]
 #[command(
-    after_help = "Daily workflow examples:\n  conary install nginx --dry-run\n  conary install nginx --yes\n  conary update --dry-run\n  conary system adopt --refresh\n  conary system completions bash > /tmp/conary-completion.bash\n  conary system generation export --path /conary/generations/1 --format qcow2 --output gen1.qcow2\n  conaryd handles durable package jobs with the same apply-intent boundary"
+    after_help = "Daily workflow examples:\n  conary install nginx --dry-run\n  conary install nginx --yes\n  conary update --dry-run\n  conary system adopt --refresh\n  conary system completions bash > /tmp/conary-completion.bash\n  conary system generation export --path /conary/generations/1 --format qcow2 --output gen1.qcow2\n  conaryd handles durable package jobs with the same apply-intent boundary\n\nAdvanced packaging and platform commands: run 'conary --help-advanced'"
 )]
 pub struct Cli {
     /// Use seccomp warn mode for scriptlets instead of enforcing blocked syscalls
@@ -453,6 +453,7 @@ pub enum Commands {
     },
 
     /// Cook a package from a recipe (build from source)
+    #[command(hide = true)]
     Cook {
         /// Recipe file or directory containing recipe.toml
         target: Option<String>,
@@ -552,6 +553,7 @@ pub enum Commands {
     },
 
     /// Create or infer a package recipe
+    #[command(hide = true)]
     New {
         /// Package project name for scaffold mode
         name: Option<String>,
@@ -611,6 +613,7 @@ pub enum Commands {
     },
 
     /// Publish a recipe project or attested CCS artifact
+    #[command(hide = true)]
     Publish {
         /// Project-form destination, or artifact path when TARGET is present
         what: String,
@@ -662,6 +665,7 @@ pub enum Commands {
     /// Convert an Arch Linux PKGBUILD to a Conary recipe
     ///
     /// Reads a PKGBUILD file and outputs the equivalent recipe in TOML format.
+    #[command(hide = true)]
     ConvertPkgbuild {
         /// Path to PKGBUILD file
         pkgbuild: String,
@@ -672,7 +676,7 @@ pub enum Commands {
     },
 
     /// Audit a recipe for missing build dependencies
-    #[command(name = "recipe-audit")]
+    #[command(name = "recipe-audit", hide = true)]
     RecipeAudit {
         /// Path to recipe file
         recipe: Option<String>,
@@ -706,15 +710,15 @@ pub enum Commands {
     Distro(DistroCommands),
 
     /// Canonical package identity
-    #[command(subcommand)]
+    #[command(subcommand, hide = true)]
     Canonical(CanonicalCommands),
 
     /// Package group management
-    #[command(subcommand)]
+    #[command(subcommand, hide = true)]
     Groups(GroupsCommands),
 
     /// Canonical registry management
-    #[command(subcommand)]
+    #[command(subcommand, hide = true)]
     Registry(RegistryCommands),
 
     // =========================================================================
@@ -725,55 +729,55 @@ pub enum Commands {
     Mcp(McpCommands),
 
     /// Dependency analysis and advanced queries
-    #[command(subcommand)]
+    #[command(subcommand, hide = true)]
     Query(QueryCommands),
 
     /// Native CCS package format
-    #[command(subcommand)]
+    #[command(subcommand, hide = true)]
     Ccs(CcsCommands),
 
     /// Derived package management
-    #[command(subcommand)]
+    #[command(subcommand, hide = true)]
     Derive(DeriveCommands),
 
     /// System model management
-    #[command(subcommand)]
+    #[command(subcommand, hide = true)]
     Model(ModelCommands),
 
     /// Collection management (create, delete, membership)
-    #[command(subcommand)]
+    #[command(subcommand, hide = true)]
     Collection(CollectionCommands),
 
     /// Automation maintenance operations
     ///
     /// Manage automated system maintenance including security updates,
     /// orphan cleanup, updates, and integrity repair.
-    #[command(subcommand)]
+    #[command(subcommand, hide = true)]
     Automation(AutomationCommands),
 
     // =========================================================================
     // Bootstrap
     // =========================================================================
     /// Bootstrap a complete Conary system from scratch
-    #[command(subcommand)]
+    #[command(subcommand, hide = true)]
     Bootstrap(BootstrapCommands),
 
     // =========================================================================
     // Cache
     // =========================================================================
     /// Cache management for derivation outputs
-    #[command(subcommand)]
+    #[command(subcommand, hide = true)]
     Cache(CacheCommands),
 
     // =========================================================================
     // Derivation Engine
     // =========================================================================
     /// Derivation engine operations
-    #[command(subcommand)]
+    #[command(subcommand, hide = true)]
     Derivation(DerivationCommands),
 
     /// Build profile operations
-    #[command(subcommand)]
+    #[command(subcommand, hide = true)]
     Profile(ProfileCommands),
 
     // =========================================================================
@@ -823,29 +827,29 @@ pub enum Commands {
     /// Query complete package lineage: source origin, build environment,
     /// signatures, and content hashes. Enables trust verification and
     /// security audits.
-    #[command(subcommand)]
+    #[command(subcommand, hide = true)]
     Provenance(ProvenanceCommands),
 
     /// Package capability declarations
     ///
     /// View and validate capability declarations that define what system
     /// resources a package needs (network, filesystem, syscalls).
-    #[command(subcommand)]
+    #[command(subcommand, hide = true)]
     Capability(CapabilityCommands),
 
     /// TUF trust management
     ///
     /// Manage TUF (The Update Framework) supply chain trust for repositories.
     /// Protects against rollback, freeze, replay, and mix-and-match attacks.
-    #[command(subcommand)]
+    #[command(subcommand, hide = true)]
     Trust(TrustCommands),
 
     /// Derivation verification (chain, rebuild, diverse)
-    #[command(subcommand, name = "verify-derivation")]
+    #[command(subcommand, name = "verify-derivation", hide = true)]
     VerifyDerivation(VerifyCommands),
 
     /// Generate SBOM from derivation data
-    #[command(name = "sbom")]
+    #[command(name = "sbom", hide = true)]
     Sbom {
         /// Generate from a profile
         #[arg(long)]
@@ -868,7 +872,7 @@ pub enum Commands {
     /// Manage CAS federation for chunk sharing across machines.
     /// Federation enables bandwidth savings by fetching chunks from
     /// nearby peers instead of the origin server.
-    #[command(subcommand)]
+    #[command(subcommand, hide = true)]
     Federation(FederationCommands),
 
     /// Export a generation as an OCI container image
@@ -876,6 +880,7 @@ pub enum Commands {
     /// Packages a generation's EROFS image and CAS objects into a
     /// standards-compliant OCI Image Layout directory that can be
     /// loaded by podman/docker via skopeo.
+    #[command(hide = true)]
     Export {
         /// Generation number to export (default: current active generation)
         #[arg(short, long)]
@@ -932,11 +937,12 @@ mod tests {
     }
 
     #[test]
-    fn help_exposes_graduated_m1b_authoring_surfaces() {
+    fn hidden_authoring_surfaces_keep_command_help() {
         let root = root_help();
-        assert!(root.contains("new"));
         assert!(root.contains("try"));
-        assert!(root.contains("Create or infer a package recipe"));
+        assert!(!root.contains("\n  cook "));
+        assert!(!root.contains("\n  new "));
+        assert!(!root.contains("Create or infer a package recipe"));
         assert!(root.contains("Try a package artifact"));
 
         let cook = subcommand_help("cook");

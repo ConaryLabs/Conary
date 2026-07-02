@@ -74,6 +74,84 @@ fn root_help_includes_daily_workflow_examples() {
         "{stdout}"
     );
     assert!(stdout.contains("conaryd"), "{stdout}");
+    assert!(stdout.contains("conary --help-advanced"), "{stdout}");
+}
+
+#[test]
+fn preview_tiering_default_help_shows_only_daily_driver_commands() {
+    let output = run_conary(&["--help"]);
+    assert!(output.status.success(), "{}", output_text(&output));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for cmd in [
+        "install",
+        "remove",
+        "update",
+        "search",
+        "list",
+        "autoremove",
+        "pin",
+        "unpin",
+        "try",
+        "system",
+        "repo",
+        "config",
+        "distro",
+        "self-update",
+    ] {
+        assert!(
+            stdout.contains(&format!("\n  {cmd} ")),
+            "missing daily-driver command {cmd} in:\n{stdout}"
+        );
+    }
+    for cmd in [
+        "cook",
+        "new",
+        "publish",
+        "convert-pkgbuild",
+        "recipe-audit",
+        "canonical",
+        "groups",
+        "registry",
+        "query",
+        "ccs",
+        "derive",
+        "derivation",
+        "model",
+        "collection",
+        "automation",
+        "bootstrap",
+        "cache",
+        "profile",
+        "provenance",
+        "capability",
+        "trust",
+        "verify-derivation",
+        "sbom",
+        "federation",
+        "export",
+        "mcp",
+    ] {
+        assert!(
+            !stdout.contains(&format!("\n  {cmd} ")),
+            "advanced command {cmd} leaked into default help:\n{stdout}"
+        );
+    }
+    assert!(
+        stdout.contains("conary --help-advanced"),
+        "missing advanced-help pointer in:\n{stdout}"
+    );
+}
+
+#[test]
+fn preview_tiering_hidden_commands_still_execute() {
+    for args in [
+        &["cook", "--help"][..],
+        &["ccs", "--help"][..],
+        &["bootstrap", "--help"][..],
+    ] {
+        let output = run_conary(args);
+        assert!(output.status.success(), "{}", output_text(&output));
+    }
 }
 
 #[test]
