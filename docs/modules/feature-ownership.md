@@ -703,8 +703,8 @@ container runtime availability, ignored local artifact paths.
 `cargo run -p conary-test -- bootstrap check --json`;
 `cargo run -p conary-test -- bootstrap smoke --dry-run --json`.
 
-**Interaction gate:** `cargo run -p conary-test -- bootstrap smoke --json` only
-when the local environment is intended to build or run the image.
+**Interaction gate:** `cargo run -p conary-test -- bootstrap smoke --json` when
+the local environment is intended to build or run the image.
 
 **Docs to update:** `docs/modules/bootstrap.md`;
 `docs/operations/bootstrap-selfhosting-vm.md`;
@@ -737,12 +737,9 @@ QEMU images, integration manifests, result JSON.
 **Focused proof:** `cargo run -p conary-test -- list`;
 `cargo test -p conary-test suite_inventory`.
 
-**Interaction gate:** the suite command named by the touched manifest or
-feature card, such as
-`cargo run -p conary-test -- run --suite phase4-native-pm-parity --distro fedora44 --phase 4`
-for native package-manager parity manifests or
+**Interaction gate:** `cargo run -p conary-test -- run --suite phase4-native-pm-parity --distro fedora44 --phase 4`;
 `cargo run -p conary-test -- run --suite phase3-active-generation-handoff --distro fedora44 --phase 3`
-for selected-generation handoff manifests.
+when the touched manifest or feature-card suite selection changes.
 
 **Docs to update:** `docs/INTEGRATION-TESTING.md`;
 `docs/modules/test-fixtures.md`; affected feature cards.
@@ -774,7 +771,7 @@ labels, resource references, and authentication.
 **Focused proof:** `cargo test -p conary-agent-contract`;
 `cargo test -p conary-mcp`.
 
-**Interaction gate:** owning service tests such as `cargo test -p remi` or
+**Interaction gate:** `cargo test -p remi`;
 `cargo test -p conary-test` when adapter changes call service behavior.
 
 **Docs to update:** `docs/operations/infrastructure.md`;

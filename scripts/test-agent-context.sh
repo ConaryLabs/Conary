@@ -368,4 +368,15 @@ grep -q '^slug: bootstrap$' "$tmp/real-bootstrap.out" \
 grep -q '^slug: remi$' "$tmp/real-federation.out" \
     || fail "federation path did not fold into the remi card"
 
+# --- real-map gate prose: no mangled output ---
+agent_mcp_gate="$("$script" --feature agent-mcp)"
+grep -q '^when: adapter changes call service behavior\.$' <<<"$agent_mcp_gate" \
+    || fail "agent-mcp gate when-prose was mangled"
+bootstrap_gate="$("$script" --feature bootstrap)"
+grep -q '^when: the local environment is intended to build or run the image\.$' <<<"$bootstrap_gate" \
+    || fail "bootstrap gate when-prose was mangled"
+conary_test_gate="$("$script" --feature conary-test)"
+grep -q '^when: the touched manifest or feature-card suite selection changes\.$' <<<"$conary_test_gate" \
+    || fail "conary-test gate when-prose was mangled"
+
 echo "agent-context tests passed."
