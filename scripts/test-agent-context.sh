@@ -239,4 +239,87 @@ clean_out="$( (cd "$changed_repo" && git stash -q --include-untracked && bash "$
 grep -q '^\[ok\] no changed paths detected$' <<<"$clean_out" \
     || fail "clean tree did not report no changed paths"
 
+# --- --validate: good map passes; six distinct violations fail ---
+
+make_validate_repo() {
+    local dir="$1"
+    mkdir -p "$dir/a" "$dir/b" "$dir/docs"
+    git -C "$dir" init -q
+    git -C "$dir" config user.email "test@example.com"
+    git -C "$dir" config user.name "test"
+    printf 'alpha\n' > "$dir/a/alpha.rs"
+    printf 'b\n' > "$dir/a/b.rs"
+    printf 'x\n' > "$dir/b/x.rs"
+    printf 'alpha docs\n' > "$dir/docs/alpha.md"
+    printf 'beta docs\n' > "$dir/docs/beta.md"
+    git -C "$dir" add a b docs
+    write_fixture_map "$dir/map.md"
+}
+
+run_validate_expect_fail() {
+    local dir="$1" expect="$2" out
+    if out="$( (cd "$dir" && bash "$script" --map map.md --validate) 2>&1 )"; then
+        fail "validate unexpectedly passed; wanted error: $expect"
+    fi
+    grep -q "$expect" <<<"$out" \
+        || fail "validate error missing '$expect'; got: $out"
+}
+
+good_repo="$tmp/validate-good"
+make_validate_repo "$good_repo"
+good_out="$( (cd "$good_repo" && bash "$script" --map map.md --validate) )"
+grep -q "validation passed" <<<"$good_out" \
+    || fail "well-formed fixture map did not validate; got: $good_out"
+
+vr="$tmp/validate-missing-field"
+make_validate_repo "$vr"
+sed -i '/^\*\*Safety notes:\*\* never break beta invariants\.$/d' "$vr/map.md"
+run_validate_expect_fail "$vr" "card 'Beta Feature' is missing field: Safety notes"
+
+vr="$tmp/validate-dup-slug"
+make_validate_repo "$vr"
+sed -i 's/^\*\*Slug:\*\* beta$/**Slug:** alpha/' "$vr/map.md"
+run_validate_expect_fail "$vr" "duplicates slug: alpha"
+
+vr="$tmp/validate-dead-glob"
+make_validate_repo "$vr"
+sed -i 's|`b/\*`|`c/*`|' "$vr/map.md"
+run_validate_expect_fail "$vr" "dead Paths glob: c/\*"
+
+vr="$tmp/validate-overlap"
+make_validate_repo "$vr"
+cat >> "$vr/map.md" <<'EOF'
+
+## Gamma Feature
+
+**Slug:** gamma
+
+**Capability:** own gamma things.
+
+**Start here:** `a/alpha.rs`.
+
+**Neighbor systems:** alpha runtime.
+
+**Paths:** `a/*`.
+
+**Focused proof:** `echo gamma-focused`.
+
+**Interaction gate:** `echo gamma-gate`.
+
+**Docs to update:** `docs/alpha.md`.
+
+**Safety notes:** never break gamma invariants.
+EOF
+run_validate_expect_fail "$vr" "equal-specificity Paths overlap for a/alpha.rs"
+
+vr="$tmp/validate-missing-start"
+make_validate_repo "$vr"
+sed -i 's|`a/alpha.rs`;|`a/missing.rs`;|' "$vr/map.md"
+run_validate_expect_fail "$vr" "references untracked path: a/missing.rs"
+
+vr="$tmp/validate-no-proof-command"
+make_validate_repo "$vr"
+sed -i 's/^\*\*Focused proof:\*\* `true`; `echo alpha-focused`\.$/**Focused proof:** run the alpha tests by hand./' "$vr/map.md"
+run_validate_expect_fail "$vr" "Focused proof has no backticked command"
+
 echo "agent-context tests passed."

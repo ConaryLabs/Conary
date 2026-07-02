@@ -423,6 +423,108 @@ mode_changed() {
     done
 }
 
+required_fields=("Slug" "Capability" "Start here" "Neighbor systems" "Paths" "Focused proof" "Interaction gate" "Docs to update" "Safety notes")
+
+validation_errors=0
+
+validate_err() {
+    printf 'INVALID: %s\n' "$*" >&2
+    validation_errors=$((validation_errors + 1))
+}
+
+is_repo_path_span() {
+    local span="$1"
+    [[ "$span" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] || return 1
+    if [[ "$span" == */* ]]; then
+        return 0
+    fi
+    [[ "$span" == *.md ]]
+}
+
+span_exists_tracked() {
+    local span="${1%/}"
+    if git ls-files --error-unmatch -- "$span" >/dev/null 2>&1; then
+        return 0
+    fi
+    [[ -n "$(git ls-files -- "$span/" | head -n 1)" ]]
+}
+
+mode_validate() {
+    local heading field slug span i t matched
+    local -a tracked_files=()
+    declare -A seen_slugs=()
+
+    if [[ "${#card_headings[@]}" -eq 0 ]]; then
+        fail "no ownership cards parsed from $map_file"
+    fi
+
+    for heading in "${card_headings[@]}"; do
+        for field in "${required_fields[@]}"; do
+            if [[ -z "${card_fields["$heading|$field"]:-}" ]]; then
+                validate_err "card '$heading' is missing field: $field"
+            fi
+        done
+
+        slug="${card_fields["$heading|Slug"]:-}"
+        if [[ -n "$slug" ]]; then
+            if [[ ! "$slug" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]]; then
+                validate_err "card '$heading' slug is not kebab-case: $slug"
+            fi
+            if [[ -n "${seen_slugs["$slug"]:-}" ]]; then
+                validate_err "card '$heading' duplicates slug: $slug"
+            fi
+            seen_slugs["$slug"]=1
+        fi
+
+        if [[ -n "${card_fields["$heading|Focused proof"]:-}" ]] \
+            && [[ -z "$(extract_spans "${card_fields["$heading|Focused proof"]}")" ]]; then
+            validate_err "card '$heading' Focused proof has no backticked command"
+        fi
+
+        if [[ -n "${card_fields["$heading|Paths"]:-}" ]] \
+            && [[ -z "$(extract_spans "${card_fields["$heading|Paths"]}")" ]]; then
+            validate_err "card '$heading' Paths has no backticked glob"
+        fi
+
+        for field in "Start here" "Docs to update"; do
+            while IFS= read -r span; do
+                if [[ -n "$span" ]] && is_repo_path_span "$span" && ! span_exists_tracked "$span"; then
+                    validate_err "card '$heading' $field references untracked path: $span"
+                fi
+            done < <(extract_spans "${card_fields["$heading|$field"]:-}")
+        done
+    done
+
+    mapfile -t tracked_files < <(git ls-files)
+
+    for i in "${!glob_patterns[@]}"; do
+        matched=0
+        for t in "${tracked_files[@]}"; do
+            # The glob must stay unquoted so [[ == ]] treats it as a pattern.
+            if [[ "$t" == ${glob_patterns[$i]} ]]; then
+                matched=1
+                break
+            fi
+        done
+        if [[ "$matched" -eq 0 ]]; then
+            validate_err "card '${glob_headings[$i]}' has dead Paths glob: ${glob_patterns[$i]}"
+        fi
+    done
+
+    for t in "${tracked_files[@]}"; do
+        if route_path "$t"; then
+            if (( $(distinct_tied_count) > 1 )); then
+                validate_err "equal-specificity Paths overlap for $t: $(printf '%s\n' "${route_tied[@]}" | sort -u | paste -sd ';' -)"
+            fi
+        fi
+    done
+
+    if (( validation_errors > 0 )); then
+        fail "feature ownership map validation failed with $validation_errors problem(s): $map_file"
+    fi
+    printf 'Feature ownership map validation passed (%s cards).\n' "${#card_headings[@]}"
+}
+
 load_map
 load_globs
 
@@ -451,6 +553,6 @@ case "$mode" in
         mode_changed
         ;;
     validate)
-        fail "mode not implemented yet: $mode"
+        mode_validate
         ;;
 esac
