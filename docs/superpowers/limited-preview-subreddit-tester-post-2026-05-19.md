@@ -1,10 +1,5 @@
 # Limited Preview Subreddit Tester Post - 2026-05-19
 
-> Launch state: copy refreshed 2026-07-01 for the first-external-tester-loop
-> design. The two release-tag markers below MUST be replaced with the real
-> pinned tag and artifact URL during Task 9 of the 2026-07-01 plan before
-> posting.
-
 This is draft copy for a narrow public tester ask. It is not release policy and
 should be revised for the norms of whichever subreddit receives it.
 
@@ -34,9 +29,9 @@ Tested preview targets:
 - Ubuntu 26.04 LTS
 - Arch Linux
 
-Install the pinned preview release (tag `RELEASE-TAG`):
+Install the pinned preview release (tag `v0.9.0`):
 download and checksum/signature instructions at
-https://github.com/ConaryLabs/Conary/releases/tag/RELEASE-TAG
+https://github.com/ConaryLabs/Conary/releases/tag/v0.9.0
 
 Before starting, check the compatibility checklist --
 the whole loop below runs on stock kernels:

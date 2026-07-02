@@ -18,7 +18,7 @@ forces a documented pivot decision recorded at the bottom of this file.
 
 ## Launch record
 
-- Release tag: (filled at launch)
+- Release tag: `v0.9.0`
 - Post venues and dates: (filled at launch)
 
 ## Reports
