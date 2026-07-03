@@ -1,8 +1,10 @@
 # M4e Lifecycle Authoring And Native Proof Corpus Design
 
 **Date:** 2026-06-18
-**Status:** Locked design for implementation planning after DeepSeek, Gemini,
-and local agentic review.
+**Status:** Refresh required before implementation. The original design was
+locked on 2026-06-18 after DeepSeek, Gemini, and local agentic review, but a
+2026-07-03 repo rebaseline verified that M4e has not landed in the current
+checkout.
 **Parent umbrella:** `docs/superpowers/specs/2026-06-17-m4-ccs-native-ecosystem-design.md`
 **Prerequisites:** M4a CCS v2 native package contract, M4b native authoring
 workflow, M4c Remi native CCS publication, and M4d supported target profiles
@@ -25,6 +27,36 @@ configuration files, systemd-style services, users, groups, directories,
 tmpfiles, sysctl declarations, and alternatives. The lifecycle work remains
 declarative, signed, and profile-validated. M4e does not activate services,
 create users, write sysctl state, or mutate a live host.
+
+## 2026-07-03 Refresh Baseline
+
+This design remains directionally correct, but it is not an implementation
+record. A current-checkout rebaseline on 2026-07-03 found:
+
+- `apps/conary/tests/packaging_m4e.rs` is absent, and
+  `cargo test -p conary --test packaging_m4e` fails because no such test target
+  exists.
+- `apps/conary/src/commands/ccs/init_template.rs` still exposes only
+  `MinimalFile`; `config-noreplace` and `service` templates are not present.
+- `apps/conary/src/cli/ccs.rs` has no `--target-profile` option for
+  `ccs build`, `ccs lint`, or `ccs test`.
+- `crates/conary-core/src/ccs/v2/authoring.rs` still emits
+  `ProfileDeferred` findings for lifecycle declarations.
+- `crates/conary-core/src/repository/supported_profiles/catalog.toml` still
+  carries M4d placeholder lifecycle entries such as `example.service`,
+  `example.conf`, and `kernel.example`; user, group, directory, and alternatives
+  lifecycle categories remain unsupported.
+- `crates/conary-core/src/ccs/v2/debug_projection.rs` is not present. Debug
+  TOML drift checks currently live in the v2 reader surface.
+- Remi release upload validates supported route slugs and the static publish
+  gate, but it does not yet validate lifecycle authority against a route-derived
+  supported profile.
+
+The same rebaseline confirmed the prerequisite slices are healthy:
+`packaging_m4a`, `packaging_m4b`, `packaging_m4c`, `packaging_m4d`,
+`conary-core ccs::v2`, `conary-core supported_profiles`, and
+`remi release_upload_` all pass. M4e should therefore be treated as an
+unimplemented but still viable follow-on slice, not as completed work.
 
 ## Core Decision
 

@@ -2,7 +2,10 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Status:** Locked implementation plan after DeepSeek, Gemini, and local agentic review.
+**Status:** Refresh required before implementation. The original plan was
+locked after DeepSeek, Gemini, and local agentic review, but a 2026-07-03
+current-checkout rebaseline verified that M4e has not landed and this plan must
+start with Task 0 before any implementation task is executed.
 
 **Goal:** Implement lifecycle-aware native CCS v2 authoring, config/noreplace authority, target-profile validation, reader/debug-projection consistency, Remi lifecycle publication proof, and the M4 closeout corpus.
 
@@ -11,6 +14,45 @@
 **Tech Stack:** Rust 2024, clap, serde/toml, existing CCS v2 CBOR/signature reader, existing CCS builder/package writer, existing supported-profile catalog, Axum/Tokio Remi release upload, Cargo integration tests, docs-audit/coherency scripts.
 
 ---
+
+## 2026-07-03 Refresh Baseline
+
+This plan remains the right implementation direction, but it is not evidence
+that M4e has already shipped. A repo rebaseline on 2026-07-03 found:
+
+- `apps/conary/tests/packaging_m4e.rs` does not exist, and
+  `cargo test -p conary --test packaging_m4e` fails with no matching test
+  target.
+- `apps/conary/src/commands/ccs/init_template.rs` still has only
+  `CcsInitTemplate::MinimalFile`.
+- `apps/conary/src/cli/ccs.rs` still lacks `--target-profile` on `Build`,
+  `Lint`, and `Test`.
+- `crates/conary-core/src/ccs/v2/authoring.rs` still uses
+  `AuthoringFindingBucket::ProfileDeferred` and blocks lifecycle declarations
+  before v2 build.
+- `crates/conary-core/src/repository/supported_profiles/catalog.toml` still
+  contains M4d placeholder lifecycle entries (`example.service`,
+  `example.conf`, `kernel.example`) and leaves users, groups, directories, and
+  alternatives unsupported.
+- `crates/conary-core/src/ccs/v2/debug_projection.rs` does not exist. Current
+  debug TOML hash and drift checks live in the v2 reader tests.
+- `apps/remi/src/server/native_publish/verify.rs` verifies the static publish
+  gate but does not receive the release route/profile for lifecycle validation.
+
+The prerequisite baselines passed on the same checkout:
+
+```bash
+cargo test -p conary --test packaging_m4a
+cargo test -p conary --test packaging_m4b
+cargo test -p conary --test packaging_m4c
+cargo test -p conary --test packaging_m4d
+cargo test -p conary-core ccs::v2
+cargo test -p conary-core supported_profiles
+cargo test -p remi release_upload_
+```
+
+Do not mark this plan complete from memory or from ledger notes. M4e completion
+requires a real `packaging_m4e` corpus and the final gates listed in Task 7.
 
 ## Design Inputs
 
@@ -116,6 +158,8 @@ Maintainability boundaries:
 
 ## Checkpoints
 
+- Checkpoint 0 after Task 0: stale status is recorded and current baselines
+  prove M4a-M4d remain green while M4e is still absent.
 - Checkpoint 1 after Task 1: template and config projection tests pass.
 - Checkpoint 2 after Task 2: target-profile CLI/lint/build tests pass.
 - Checkpoint 3 after Task 3: lifecycle projection and supported-profile tests pass.
@@ -143,6 +187,86 @@ Maintainability boundaries:
 | M4 exit and post-M4 backlog docs | Task 7 |
 
 ---
+
+### Task 0: Rebaseline The Current Checkout Before Implementation
+
+**Files:**
+- Read: `docs/superpowers/specs/2026-06-18-m4e-lifecycle-authoring-native-proof-corpus-design.md`
+- Read: `docs/superpowers/plans/2026-06-18-m4e-lifecycle-authoring-native-proof-corpus-implementation-plan.md`
+- Read: `apps/conary/src/commands/ccs/init_template.rs`
+- Read: `apps/conary/src/cli/ccs.rs`
+- Read: `crates/conary-core/src/ccs/v2/authoring.rs`
+- Read: `crates/conary-core/src/repository/supported_profiles/catalog.toml`
+- Read: `apps/remi/src/server/native_publish/verify.rs`
+- Test: `cargo test -p conary --test packaging_m4a`
+- Test: `cargo test -p conary --test packaging_m4b`
+- Test: `cargo test -p conary --test packaging_m4c`
+- Test: `cargo test -p conary --test packaging_m4d`
+- Test: `cargo test -p conary-core ccs::v2`
+- Test: `cargo test -p conary-core supported_profiles`
+- Test: `cargo test -p remi release_upload_`
+
+- [ ] **Step 1: Confirm M4e is absent before starting implementation**
+
+Run:
+
+```bash
+test ! -f apps/conary/tests/packaging_m4e.rs
+cargo test -p conary --test packaging_m4e
+```
+
+Expected: the first command exits successfully; the second command fails with
+`no test target named packaging_m4e`.
+
+- [ ] **Step 2: Confirm the current implementation still matches the
+pre-M4e baseline**
+
+Run:
+
+```bash
+rg -n "CcsInitTemplate::MinimalFile|enum CcsInitTemplate|target_profile|target-profile|ProfileDeferred|example.service|debug_projection|verify_native_artifact" \
+  apps/conary/src/commands/ccs/init_template.rs \
+  apps/conary/src/cli/ccs.rs \
+  crates/conary-core/src/ccs/v2/authoring.rs \
+  crates/conary-core/src/repository/supported_profiles/catalog.toml \
+  apps/remi/src/server/native_publish/verify.rs \
+  crates/conary-core/src/ccs/v2
+```
+
+Expected: the output shows `MinimalFile`, `ProfileDeferred`, M4d placeholder
+catalog entries, and no real `target-profile` CLI plumbing or
+`debug_projection.rs` module.
+
+- [ ] **Step 3: Re-run prerequisite gates**
+
+Run:
+
+```bash
+cargo test -p conary --test packaging_m4a
+cargo test -p conary --test packaging_m4b
+cargo test -p conary --test packaging_m4c
+cargo test -p conary --test packaging_m4d
+cargo test -p conary-core ccs::v2
+cargo test -p conary-core supported_profiles
+cargo test -p remi release_upload_
+```
+
+Expected: all commands pass. If one fails, stop and fix the prerequisite slice
+before starting M4e.
+
+- [ ] **Step 4: Commit any docs-only rebaseline changes**
+
+Run:
+
+```bash
+git add docs/superpowers/specs/2026-06-18-m4e-lifecycle-authoring-native-proof-corpus-design.md \
+  docs/superpowers/plans/2026-06-18-m4e-lifecycle-authoring-native-proof-corpus-implementation-plan.md \
+  docs/superpowers/documentation-accuracy-audit-ledger.tsv
+git commit -m "docs(ccs): rebaseline m4e lifecycle plan"
+```
+
+Expected: one docs-only commit if the rebaseline text or ledger changed. If no
+docs changed because this task was already completed, skip the commit.
 
 ### Task 1: Add Config/Noreplace Template And Config Authority Projection
 
