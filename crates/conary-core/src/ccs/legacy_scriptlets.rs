@@ -261,6 +261,19 @@ pub struct LegacyScriptletBundle {
     pub extra: BTreeMap<String, toml::Value>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct BootSecurityIntentEvidence {
+    pub class_id: String,
+    pub reason_code: String,
+    pub command: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub argv: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phase: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lifecycle_paths: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LegacyScriptletEntry {
     pub id: String,
@@ -295,6 +308,8 @@ pub struct LegacyScriptletEntry {
     pub unknown_commands: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub blocked_classes: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub boot_security_intents: Vec<BootSecurityIntentEvidence>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rpm_trigger: Option<RpmTriggerMetadata>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -757,6 +772,7 @@ mod tests {
             effects: vec![sample_effect()],
             unknown_commands: vec![],
             blocked_classes: vec![],
+            boot_security_intents: Vec::new(),
             rpm_trigger: None,
             deb_maintainer: None,
             arch_install: None,

@@ -15,7 +15,7 @@
 
 use crate::error::{Error, Result};
 use crate::filesystem::path::sanitize_filename;
-use crate::repository::error_helpers::ResultExt;
+use crate::repository::error_helpers::{ResultExt, http_client_builder_error_message};
 use indicatif::{ProgressBar, ProgressStyle};
 use reqwest::{Client, header};
 use serde::{Deserialize, Serialize};
@@ -130,6 +130,51 @@ pub struct JobStatus {
     pub progress: Option<u8>,
     pub error: Option<String>,
     pub manifest: Option<PackageManifest>,
+    pub publication: Option<PublicationGateReport>,
+}
+
+/// Scriptlet publication report returned by Remi when a conversion cannot be
+/// served publicly.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct PublicationGateReport {
+    #[serde(default)]
+    pub publication_status: String,
+    #[serde(default)]
+    pub scriptlet_fidelity: String,
+    #[serde(default)]
+    pub target_compatibility: String,
+    #[serde(default)]
+    pub summary_valid: bool,
+    #[serde(default)]
+    pub message: String,
+    #[serde(default)]
+    pub reason_codes: Vec<String>,
+    #[serde(default)]
+    pub blocked_reason_codes: Vec<String>,
+    #[serde(default)]
+    pub review_reason_codes: Vec<String>,
+    #[serde(default)]
+    pub unknown_commands: Vec<String>,
+    #[serde(default)]
+    pub blocked_classes: Vec<String>,
+    #[serde(default)]
+    pub boot_security_intents: Vec<crate::ccs::legacy_scriptlets::BootSecurityIntentEvidence>,
+    #[serde(default)]
+    pub evidence_digest: Option<String>,
+    #[serde(default)]
+    pub curation_evidence_digest: Option<String>,
+    #[serde(default)]
+    pub review_artifact_available: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct PublicationRefusalResponse {
+    status: String,
+    message: String,
+    distro: String,
+    package: String,
+    version: Option<String>,
+    scriptlets: PublicationGateReport,
 }
 
 /// Package manifest with chunk list
@@ -246,9 +291,134 @@ impl RemiClientCore {
             503 => {
                 Error::DownloadError("Remi conversion queue is full, try again later".to_string())
             }
+            403 | 409 => {
+                if let Ok(refusal) = serde_json::from_str::<PublicationRefusalResponse>(&body) {
+                    Error::DownloadError(format_publication_refusal_response(&refusal))
+                } else {
+                    Error::DownloadError(format!("Remi returned HTTP {}: {}", status, body))
+                }
+            }
             _ => Error::DownloadError(format!("Remi returned HTTP {}: {}", status, body)),
         }
     }
+}
+
+fn terminal_publication_status_error(status: &JobStatus) -> Option<Error> {
+    match status.status.as_str() {
+        "review-required" | "blocked" => Some(Error::DownloadError(format_publication_refusal(
+            &status.status,
+            &status.distro,
+            &status.package,
+            status.version.as_deref(),
+            status.publication.as_ref(),
+            None,
+        ))),
+        _ => None,
+    }
+}
+
+fn format_publication_refusal_response(refusal: &PublicationRefusalResponse) -> String {
+    format_publication_refusal(
+        &refusal.status,
+        &refusal.distro,
+        &refusal.package,
+        refusal.version.as_deref(),
+        Some(&refusal.scriptlets),
+        Some(refusal.message.as_str()),
+    )
+}
+
+fn format_publication_refusal(
+    status: &str,
+    distro: &str,
+    package: &str,
+    version: Option<&str>,
+    report: Option<&PublicationGateReport>,
+    server_message: Option<&str>,
+) -> String {
+    let package_ref = match version {
+        Some(version) => format!("{distro}/{package} {version}"),
+        None => format!("{distro}/{package}"),
+    };
+    let status_summary = match status {
+        "blocked" => "blocked by Remi's legacy scriptlet publication policy",
+        "review-required" => "held for scriptlet review before public serving",
+        other => {
+            return format!("Remi returned terminal conversion status {other} for {package_ref}");
+        }
+    };
+
+    let mut message = format!("Remi refused to serve {package_ref}: {status_summary}.");
+    if let Some(server_message) = server_message.filter(|message| !message.trim().is_empty()) {
+        message.push(' ');
+        message.push_str(server_message.trim());
+    } else if let Some(report_message) = report
+        .map(|report| report.message.trim())
+        .filter(|message| !message.is_empty())
+    {
+        message.push(' ');
+        message.push_str(report_message);
+    }
+
+    if let Some(report) = report {
+        if !report.blocked_classes.is_empty() {
+            message.push_str(" blocked classes: ");
+            message.push_str(&report.blocked_classes.join(", "));
+            message.push('.');
+        }
+        if !report.reason_codes.is_empty() {
+            message.push_str(" reason codes: ");
+            message.push_str(&report.reason_codes.join(", "));
+            message.push('.');
+        }
+        if !report.unknown_commands.is_empty() {
+            message.push_str(" unknown commands: ");
+            message.push_str(&report.unknown_commands.join(", "));
+            message.push('.');
+        }
+        if report_contains_boot_security_class(report) {
+            message.push_str(
+                " kernel/initramfs/SELinux scriptlets are boot- or security-critical and are not supported by the Remi public preview yet; Conary will not bypass them with --no-scripts or raw legacy replay.",
+            );
+        }
+        if !report.boot_security_intents.is_empty() {
+            message.push_str(" Boot/security scriptlet evidence:");
+            for intent in &report.boot_security_intents {
+                let args = if intent.argv.is_empty() {
+                    String::new()
+                } else {
+                    format!(" {}", intent.argv.join(" "))
+                };
+                message.push_str(&format!(
+                    " {}: {}{}.",
+                    intent.class_id, intent.command, args
+                ));
+            }
+        }
+    } else {
+        message.push_str(" Remi did not include a scriptlet publication report.");
+    }
+
+    message
+}
+
+fn report_contains_boot_security_class(report: &PublicationGateReport) -> bool {
+    report
+        .blocked_classes
+        .iter()
+        .chain(report.reason_codes.iter())
+        .chain(report.blocked_reason_codes.iter())
+        .any(|value| {
+            matches!(
+                value.as_str(),
+                "selinux"
+                    | "initramfs"
+                    | "kernel-module"
+                    | "blocked-class-selinux"
+                    | "blocked-class-initramfs"
+                    | "blocked-class-kernel-module"
+            )
+        })
 }
 
 /// Client for interacting with a Remi server
@@ -265,7 +435,7 @@ impl RemiClient {
         let client = Client::builder()
             .timeout(REQUEST_TIMEOUT)
             .build()
-            .map_err(|e| Error::InitError(format!("Failed to create HTTP client: {e}")))?;
+            .map_err(|e| Error::InitError(http_client_builder_error_message(e)))?;
 
         Ok(Self { client, core })
     }
@@ -484,6 +654,17 @@ impl RemiClient {
                         "Conversion failed: {}",
                         error_msg
                     )));
+                }
+                "review-required" | "blocked" => {
+                    spinner.finish_with_message("Conversion refused by publication policy");
+                    return Err(
+                        terminal_publication_status_error(&status).unwrap_or_else(|| {
+                            Error::DownloadError(format!(
+                                "Remi returned terminal conversion status {} for {}/{}",
+                                status.status, status.distro, status.package
+                            ))
+                        }),
+                    );
                 }
                 "converting" | "queued" => {
                     // Still in progress - update spinner and continue polling
@@ -909,7 +1090,7 @@ impl AsyncRemiClient {
         let http_client = reqwest::Client::builder()
             .timeout(REQUEST_TIMEOUT)
             .build()
-            .map_err(|e| Error::InitError(format!("Failed to create HTTP client: {e}")))?;
+            .map_err(|e| Error::InitError(http_client_builder_error_message(e)))?;
 
         // Build chunk fetcher: local cache -> HTTP
         let chunk_fetcher = ChunkFetcherBuilder::new()
@@ -933,7 +1114,7 @@ impl AsyncRemiClient {
         let http_client = reqwest::Client::builder()
             .timeout(REQUEST_TIMEOUT)
             .build()
-            .map_err(|e| Error::InitError(format!("Failed to create HTTP client: {e}")))?;
+            .map_err(|e| Error::InitError(http_client_builder_error_message(e)))?;
 
         Ok(Self {
             http_client,
@@ -1043,6 +1224,16 @@ impl AsyncRemiClient {
                         "Conversion failed: {}",
                         error_msg
                     )));
+                }
+                "review-required" | "blocked" => {
+                    return Err(
+                        terminal_publication_status_error(&status).unwrap_or_else(|| {
+                            Error::DownloadError(format!(
+                                "Remi returned terminal conversion status {} for {}/{}",
+                                status.status, status.distro, status.package
+                            ))
+                        }),
+                    );
                 }
                 "converting" | "queued" => {
                     if let Some(progress) = status.progress {
@@ -1203,6 +1394,139 @@ mod tests {
         let status: JobStatus = serde_json::from_str(json).unwrap();
         assert_eq!(status.status, "ready");
         assert_eq!(status.package, "gzip");
+    }
+
+    #[test]
+    fn job_status_parses_publication_refusal_report() {
+        let json = r#"{
+            "job_id": "35",
+            "status": "blocked",
+            "distro": "fedora",
+            "package": "kernel-core",
+            "version": "6.19.10-300.fc44",
+            "architecture": "x86_64",
+            "progress": null,
+            "error": null,
+            "manifest": null,
+            "publication": {
+                "publication_status": "blocked",
+                "scriptlet_fidelity": "blocked",
+                "target_compatibility": "blocked",
+                "summary_valid": true,
+                "message": "Converted package is blocked by legacy scriptlet policy",
+                "reason_codes": ["blocked-class-selinux", "unknown-command:kernel-install", "selinux"],
+                "blocked_reason_codes": ["blocked-class-selinux"],
+                "review_reason_codes": [],
+                "unknown_commands": ["kernel-install"],
+                "blocked_classes": ["selinux"],
+                "evidence_digest": "sha256:abc",
+                "curation_evidence_digest": null,
+                "review_artifact_available": true
+            }
+        }"#;
+
+        let status: JobStatus = serde_json::from_str(json).unwrap();
+
+        let publication = status.publication.expect("publication report");
+        assert_eq!(publication.blocked_classes, vec!["selinux"]);
+        assert_eq!(
+            publication.blocked_reason_codes,
+            vec!["blocked-class-selinux"]
+        );
+    }
+
+    #[test]
+    fn terminal_publication_status_becomes_actionable_error() {
+        let status = JobStatus {
+            job_id: "35".to_string(),
+            status: "blocked".to_string(),
+            distro: "fedora".to_string(),
+            package: "kernel-core".to_string(),
+            version: Some("6.19.10-300.fc44".to_string()),
+            architecture: Some("x86_64".to_string()),
+            progress: None,
+            error: None,
+            manifest: None,
+            publication: Some(PublicationGateReport {
+                publication_status: "blocked".to_string(),
+                scriptlet_fidelity: "blocked".to_string(),
+                target_compatibility: "blocked".to_string(),
+                summary_valid: true,
+                message: "Converted package is blocked by legacy scriptlet policy".to_string(),
+                reason_codes: vec![
+                    "blocked-class-initramfs".to_string(),
+                    "blocked-class-kernel-module".to_string(),
+                    "kernel-module".to_string(),
+                    "initramfs".to_string(),
+                ],
+                blocked_reason_codes: vec![
+                    "blocked-class-initramfs".to_string(),
+                    "blocked-class-kernel-module".to_string(),
+                ],
+                review_reason_codes: vec![],
+                unknown_commands: vec!["dracut".to_string()],
+                blocked_classes: vec!["initramfs".to_string(), "kernel-module".to_string()],
+                boot_security_intents: Vec::new(),
+                evidence_digest: Some("sha256:def".to_string()),
+                curation_evidence_digest: None,
+                review_artifact_available: true,
+            }),
+        };
+
+        let err = terminal_publication_status_error(&status).expect("terminal error");
+        let message = err.to_string();
+
+        assert!(message.contains("Remi refused to serve fedora/kernel-core"));
+        assert!(message.contains("blocked classes: initramfs, kernel-module"));
+        assert!(message.contains("kernel/initramfs/SELinux scriptlets"));
+        assert!(message.contains("public preview"));
+        assert!(!message.contains("\"publication_status\""));
+    }
+
+    #[test]
+    fn direct_publication_refusal_http_error_is_pretty_printed() {
+        let core = RemiClientCore::new("https://remi.example.test").unwrap();
+        let body = r#"{
+            "status": "blocked",
+            "message": "Converted package is blocked by legacy scriptlet policy",
+            "distro": "fedora",
+            "package": "kernel-core",
+            "version": "6.19.10-300.fc44",
+            "scriptlets": {
+                "publication_status": "blocked",
+                "scriptlet_fidelity": "blocked",
+                "target_compatibility": "blocked",
+                "summary_valid": true,
+                "message": "Converted package is blocked by legacy scriptlet policy",
+                "reason_codes": ["blocked-class-selinux", "selinux"],
+                "blocked_reason_codes": ["blocked-class-selinux"],
+                "review_reason_codes": [],
+                "unknown_commands": [],
+                "blocked_classes": ["selinux"],
+                "evidence_digest": "sha256:abc",
+                "curation_evidence_digest": null,
+                "review_artifact_available": true
+            }
+        }"#;
+
+        let err = core.map_http_error(403, body.to_string(), "kernel-core", "fedora");
+        let message = err.to_string();
+
+        assert!(message.contains("Remi refused to serve fedora/kernel-core"));
+        assert!(message.contains("blocked classes: selinux"));
+        assert!(message.contains("kernel/initramfs/SELinux scriptlets"));
+        assert!(!message.contains("\"scriptlets\""));
+    }
+
+    #[test]
+    fn http_client_builder_error_mentions_minimal_chroot_runtime() {
+        let message = http_client_builder_error_message("builder error");
+
+        assert!(message.contains("Failed to create HTTP client: builder error"));
+        assert!(message.contains("minimal chroot"));
+        assert!(message.contains("/etc/resolv.conf"));
+        assert!(message.contains("/etc/ssl/certs"));
+        assert!(message.contains("ca-certificates"));
     }
 
     #[test]
@@ -1405,6 +1729,73 @@ mod tests {
             request.contains("accept-encoding: identity"),
             "package download request did not force identity encoding:\n{request}"
         );
+    }
+
+    #[tokio::test]
+    async fn get_package_stops_on_blocked_job_status() {
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+
+        tokio::spawn(async move {
+            let accepted =
+                r#"{"status":"queued","job_id":"35","poll_url":"/v1/jobs/35","eta_seconds":1}"#;
+            write_json_response(&listener, "202 Accepted", accepted).await;
+
+            let blocked = r#"{
+                "job_id": "35",
+                "status": "blocked",
+                "distro": "fedora",
+                "package": "kernel-core",
+                "version": "6.19.10-300.fc44",
+                "architecture": "x86_64",
+                "progress": null,
+                "error": null,
+                "manifest": null,
+                "publication": {
+                    "publication_status": "blocked",
+                    "scriptlet_fidelity": "blocked",
+                    "target_compatibility": "blocked",
+                    "summary_valid": true,
+                    "message": "Converted package uses unsupported legacy scriptlet classes for the Remi public preview: selinux",
+                    "reason_codes": ["blocked-class-selinux", "selinux"],
+                    "blocked_reason_codes": ["blocked-class-selinux"],
+                    "review_reason_codes": [],
+                    "unknown_commands": [],
+                    "blocked_classes": ["selinux"],
+                    "evidence_digest": "sha256:abc",
+                    "curation_evidence_digest": null,
+                    "review_artifact_available": true
+                }
+            }"#;
+            write_json_response(&listener, "200 OK", blocked).await;
+        });
+
+        let client = RemiClient::new(&base_url).unwrap();
+        let err = client
+            .get_package("fedora", "kernel-core", None, Some("x86_64"))
+            .await
+            .unwrap_err();
+        let message = err.to_string();
+
+        assert!(message.contains("Remi refused to serve fedora/kernel-core"));
+        assert!(message.contains("blocked classes: selinux"));
+        assert!(!message.contains("Unknown job status"));
+    }
+
+    async fn write_json_response(listener: &tokio::net::TcpListener, status: &str, body: &str) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = [0_u8; 1024];
+        let _ = socket.read(&mut request).await.unwrap();
+        let response = format!(
+            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        socket.write_all(response.as_bytes()).await.unwrap();
     }
 
     #[tokio::test]

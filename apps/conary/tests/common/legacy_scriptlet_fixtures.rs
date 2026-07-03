@@ -467,6 +467,7 @@ fn entry_fixture(
         effects: vec![],
         unknown_commands: vec![],
         blocked_classes: vec![],
+        boot_security_intents: Vec::new(),
         rpm_trigger: None,
         deb_maintainer: None,
         arch_install: None,

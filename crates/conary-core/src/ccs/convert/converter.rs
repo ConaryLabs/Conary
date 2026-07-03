@@ -938,12 +938,14 @@ fn classify_native_support(entry: &NativeScriptletEntry) -> Option<ScriptletClas
             Some(ScriptletClassification::Review {
                 reason_code: reason_code.clone(),
                 class_id: native_review_class_id(entry),
+                command: None,
             })
         }
         NativeScriptletSupport::Unpreservable { reason_code } => {
             Some(ScriptletClassification::Blocked {
                 reason_code: reason_code.clone(),
                 class_id: "native-abi-unpreservable".to_string(),
+                command: None,
             })
         }
     }
@@ -1614,6 +1616,7 @@ update-mime-database /usr/share/mime
                     ScriptletClassification::Review {
                         reason_code,
                         class_id,
+                        ..
                     } if reason_code == "review-class-deb-systemd-helper"
                         && class_id.as_deref() == Some("deb-systemd-helper")
                 ))
@@ -1628,6 +1631,7 @@ update-mime-database /usr/share/mime
                     ScriptletClassification::Review {
                         reason_code,
                         class_id,
+                        ..
                     } if reason_code == "review-class-debconf"
                         && class_id.as_deref() == Some("debconf")
                 ))
@@ -1688,6 +1692,7 @@ update-mime-database /usr/share/mime
                     crate::ccs::convert::effects::ScriptletClassification::Review {
                         reason_code,
                         class_id,
+                        ..
                     } if reason_code == "rpm-verify-scriptlet-deferred"
                         && class_id.as_deref() == Some("rpm-verify")
                 ))
@@ -1702,6 +1707,7 @@ update-mime-database /usr/share/mime
                     crate::ccs::convert::effects::ScriptletClassification::Blocked {
                         reason_code,
                         class_id,
+                        ..
                     } if reason_code == "native-abi-parser-limitation"
                         && class_id == "native-abi-unpreservable"
                 ))
@@ -1774,6 +1780,7 @@ update-mime-database /usr/share/mime
                     crate::ccs::convert::effects::ScriptletClassification::Review {
                         reason_code,
                         class_id,
+                        ..
                     } if reason_code == "arch-alpm-hook-semantics-deferred"
                         && class_id.as_deref() == Some("arch-alpm-hook")
                 ))

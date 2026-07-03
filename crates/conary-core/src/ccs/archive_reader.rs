@@ -542,6 +542,7 @@ license = "MIT"
                 }],
                 unknown_commands: vec![],
                 blocked_classes: vec![],
+                boot_security_intents: Vec::new(),
                 rpm_trigger: Some(RpmTriggerMetadata {
                     kind: "file-trigger".to_string(),
                     condition: Some("in".to_string()),

@@ -1,7 +1,7 @@
 // conary-core/src/ccs/convert/scriptlet_bundle/types.rs
 
 use crate::ccs::convert::effects::ScriptletClassificationReport;
-use crate::ccs::legacy_scriptlets::LegacyScriptletBundle;
+use crate::ccs::legacy_scriptlets::{BootSecurityIntentEvidence, LegacyScriptletBundle};
 use crate::packages::common::PackageMetadata;
 use crate::packages::traits::ExtractedFile;
 use serde::{Deserialize, Serialize};
@@ -41,6 +41,8 @@ pub struct ScriptletBundleSummary {
     pub review_reason_codes: Vec<String>,
     pub unknown_commands: Vec<String>,
     pub blocked_classes: Vec<String>,
+    #[serde(default)]
+    pub boot_security_intents: Vec<BootSecurityIntentEvidence>,
     #[serde(default, skip_serializing)]
     pub review_artifact_path: Option<String>,
 }
@@ -58,6 +60,7 @@ impl Default for ScriptletBundleSummary {
             review_reason_codes: Vec::new(),
             unknown_commands: Vec::new(),
             blocked_classes: Vec::new(),
+            boot_security_intents: Vec::new(),
             review_artifact_path: None,
         }
     }

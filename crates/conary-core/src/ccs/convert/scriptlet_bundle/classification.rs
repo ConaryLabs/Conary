@@ -2,9 +2,11 @@
 
 use crate::ccs::convert::effects::{
     EntryClassification, ScriptletClassification, ScriptletClassificationReport,
-    ScriptletEffectEvidence,
+    ScriptletCommandEvidence, ScriptletEffectEvidence,
 };
-use crate::ccs::legacy_scriptlets::{EffectReplacement, ScriptletDecision, ScriptletEffect};
+use crate::ccs::legacy_scriptlets::{
+    BootSecurityIntentEvidence, EffectReplacement, ScriptletDecision, ScriptletEffect,
+};
 use crate::packages::native_abi::NativeScriptletSupport;
 use std::collections::BTreeSet;
 
@@ -14,6 +16,7 @@ pub(super) struct EntryOutcome {
     pub(super) effects: Vec<ScriptletEffect>,
     pub(super) unknown_commands: Vec<String>,
     pub(super) blocked_classes: Vec<String>,
+    pub(super) boot_security_intents: Vec<BootSecurityIntentEvidence>,
 }
 
 pub(super) fn classify_entry(
@@ -48,6 +51,10 @@ pub(super) fn classify_entry(
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect::<Vec<_>>();
+    let boot_security_intents = classifications
+        .iter()
+        .filter_map(|entry| boot_security_intent_from_classification(&entry.classification))
+        .collect::<Vec<_>>();
 
     if let Some(reason_code) =
         classifications
@@ -63,6 +70,7 @@ pub(super) fn classify_entry(
             effects,
             unknown_commands,
             blocked_classes,
+            boot_security_intents,
         };
     }
 
@@ -73,6 +81,7 @@ pub(super) fn classify_entry(
             effects,
             unknown_commands,
             blocked_classes,
+            boot_security_intents,
         };
     }
 
@@ -90,6 +99,7 @@ pub(super) fn classify_entry(
             effects,
             unknown_commands,
             blocked_classes,
+            boot_security_intents,
         };
     }
 
@@ -100,6 +110,7 @@ pub(super) fn classify_entry(
             effects,
             unknown_commands,
             blocked_classes,
+            boot_security_intents,
         };
     }
 
@@ -117,6 +128,7 @@ pub(super) fn classify_entry(
             effects,
             unknown_commands,
             blocked_classes,
+            boot_security_intents,
         };
     }
 
@@ -141,6 +153,7 @@ pub(super) fn classify_entry(
             effects,
             unknown_commands,
             blocked_classes,
+            boot_security_intents,
         };
     }
 
@@ -153,7 +166,50 @@ pub(super) fn classify_entry(
         effects,
         unknown_commands,
         blocked_classes,
+        boot_security_intents,
     }
+}
+
+fn boot_security_intent_from_classification(
+    classification: &ScriptletClassification,
+) -> Option<BootSecurityIntentEvidence> {
+    match classification {
+        ScriptletClassification::Blocked {
+            reason_code,
+            class_id,
+            command: Some(command),
+        }
+        | ScriptletClassification::Review {
+            reason_code,
+            class_id: Some(class_id),
+            command: Some(command),
+        } if is_boot_security_class(class_id) => {
+            Some(intent_from_command(class_id, reason_code, command))
+        }
+        _ => None,
+    }
+}
+
+fn intent_from_command(
+    class_id: &str,
+    reason_code: &str,
+    command: &ScriptletCommandEvidence,
+) -> BootSecurityIntentEvidence {
+    BootSecurityIntentEvidence {
+        class_id: class_id.to_string(),
+        reason_code: reason_code.to_string(),
+        command: command.command.clone(),
+        argv: command.argv.clone(),
+        phase: command.phase.clone(),
+        lifecycle_paths: command.lifecycle_paths.clone(),
+    }
+}
+
+fn is_boot_security_class(class_id: &str) -> bool {
+    matches!(
+        class_id,
+        "kernel-module" | "initramfs" | "bootloader" | "selinux"
+    )
 }
 
 pub(super) fn classification_entries_for<'a>(

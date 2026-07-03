@@ -16,6 +16,18 @@
 
 use crate::error::{Error, Result};
 
+/// Builds an actionable diagnostic for HTTP client construction failures.
+///
+/// Reqwest builder failures are terse in minimal roots (`builder error`), but
+/// testers need to know which host files are expected before networking starts.
+pub(crate) fn http_client_builder_error_message(error: impl std::fmt::Display) -> String {
+    format!(
+        "Failed to create HTTP client: {error}. In a minimal chroot or BusyBox-style root, \
+         check that resolver files such as /etc/resolv.conf are present and that TLS trust \
+         roots exist under /etc/ssl/certs, usually from the ca-certificates package."
+    )
+}
+
 /// Extension trait for adding download/parse/sync context to errors.
 ///
 /// Implemented on `Result<T, E>` where `E: Display`, so it works with
@@ -107,5 +119,16 @@ mod tests {
         let ok: std::result::Result<i32, &str> = Ok(42);
         let result: Result<i32> = ok.download_context("https://example.com");
         assert_eq!(result.unwrap(), 42);
+    }
+
+    #[test]
+    fn http_client_builder_error_message_mentions_minimal_runtime_inputs() {
+        let message = http_client_builder_error_message("builder error");
+
+        assert!(message.contains("Failed to create HTTP client: builder error"));
+        assert!(message.contains("minimal chroot"));
+        assert!(message.contains("/etc/resolv.conf"));
+        assert!(message.contains("/etc/ssl/certs"));
+        assert!(message.contains("ca-certificates"));
     }
 }

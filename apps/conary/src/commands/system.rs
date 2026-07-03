@@ -1474,6 +1474,7 @@ mod tests {
             effects: Vec::new(),
             unknown_commands: Vec::new(),
             blocked_classes: Vec::new(),
+            boot_security_intents: Vec::new(),
             rpm_trigger: None,
             deb_maintainer: None,
             arch_install: None,

@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-05-26
-revision: 5
-summary: Record protected live-root seccomp/root-transition assurance and structured scriptlet degradation metadata
+last_updated: 2026-07-03
+revision: 6
+summary: Record classified-but-blocked boot/security scriptlet evidence for Remi refusal diagnostics
 ---
 
 # Scriptlet Security Model
@@ -147,6 +147,20 @@ This mode runs the scriptlet in a strict, ephemeral sandbox with **mocked system
 5.  **Discard:** The original imperative script is discarded.
 
 This transforms unsafe runtime scripts into safe, atomic build-time declarations.
+
+### Boot And Security Scriptlet Evidence
+
+Kernel-module, initramfs, bootloader, and SELinux scriptlet effects are
+boot/security critical. Conary classifies these commands and preserves
+sanitized command evidence in legacy scriptlet summaries, but public Remi
+serving remains blocked until a future native adapter and target-profile fact
+set proves complete replacement. Raw replay, `--no-scripts`, or malformed
+summary metadata must not make these packages public-ready.
+
+This evidence is harvested from package-authored metadata and static command
+signals during conversion. It is an advisory trace for refusal diagnostics, not
+runtime execution and not permission to mutate the host boot or security state.
+Environment values are not surfaced in public boot/security evidence.
 
 ### 5. Basic Protections (Always Active)
 

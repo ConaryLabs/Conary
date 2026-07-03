@@ -10,6 +10,7 @@
 
 use crate::error::{Error, Result};
 use crate::hash::verify_sha256;
+use crate::repository::error_helpers::http_client_builder_error_message;
 use async_trait::async_trait;
 use reqwest::header;
 use std::collections::HashMap;
@@ -150,7 +151,7 @@ impl HttpChunkFetcherBuilder {
 
         let client = builder
             .build()
-            .map_err(|e| Error::InitError(format!("Failed to create HTTP client: {e}")))?;
+            .map_err(|e| Error::InitError(http_client_builder_error_message(e)))?;
 
         Ok(HttpChunkFetcher {
             client,

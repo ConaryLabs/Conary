@@ -420,6 +420,7 @@ mod tests {
                 ScriptletClassification::Review {
                     reason_code: reason_code.to_string(),
                     class_id: Some(class_id.to_string()),
+                    command: None,
                 },
             );
         }

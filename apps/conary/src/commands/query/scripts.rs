@@ -867,6 +867,7 @@ mod query_scripts {
             }],
             unknown_commands: vec!["systemctl".to_string()],
             blocked_classes: vec![],
+            boot_security_intents: Vec::new(),
             rpm_trigger: None,
             deb_maintainer: None,
             arch_install: None,

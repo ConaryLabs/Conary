@@ -214,6 +214,7 @@ fn entry_fixture(
         }],
         unknown_commands: vec!["systemctl".to_string()],
         blocked_classes: vec![],
+        boot_security_intents: Vec::new(),
         rpm_trigger: with_reserved_metadata.then(|| RpmTriggerMetadata {
             kind: "file-trigger".to_string(),
             condition: Some("in".to_string()),

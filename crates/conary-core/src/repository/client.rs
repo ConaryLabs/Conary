@@ -11,6 +11,7 @@ use crate::compression::{
 };
 use crate::error::{Error, Result};
 use crate::repository::error_helpers::ResultExt;
+use crate::repository::error_helpers::http_client_builder_error_message;
 use indicatif::ProgressBar;
 use reqwest::Client;
 use reqwest::header;
@@ -385,7 +386,7 @@ impl RepositoryClient {
         let client = Client::builder()
             .connect_timeout(timeouts.connect)
             .build()
-            .map_err(|e| Error::InitError(format!("Failed to create HTTP client: {e}")))?;
+            .map_err(|e| Error::InitError(http_client_builder_error_message(e)))?;
 
         Ok(Self {
             client,

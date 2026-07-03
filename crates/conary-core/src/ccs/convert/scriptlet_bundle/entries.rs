@@ -74,6 +74,7 @@ fn build_flat_entry(
         effects: outcome.effects,
         unknown_commands: outcome.unknown_commands,
         blocked_classes: outcome.blocked_classes,
+        boot_security_intents: outcome.boot_security_intents,
         rpm_trigger: None,
         deb_maintainer: None,
         arch_install: None,
@@ -123,6 +124,7 @@ fn build_native_entry(
         effects: outcome.effects,
         unknown_commands: outcome.unknown_commands,
         blocked_classes: outcome.blocked_classes,
+        boot_security_intents: outcome.boot_security_intents,
         rpm_trigger,
         deb_maintainer,
         arch_install,
@@ -262,6 +264,7 @@ mod tests {
             ScriptletClassification::Review {
                 reason_code: "review-class-systemd-runtime-action".to_string(),
                 class_id: Some("systemd-runtime-action".to_string()),
+                command: None,
             },
         );
 
@@ -304,6 +307,7 @@ mod tests {
             ScriptletClassification::Blocked {
                 reason_code: "blocked-class-network".to_string(),
                 class_id: "network".to_string(),
+                command: None,
             },
         );
 
@@ -319,6 +323,73 @@ mod tests {
         );
         assert_eq!(build.summary.blocked_classes, vec!["network"]);
         assert_eq!(build.summary.publication_status, "blocked");
+    }
+
+    #[test]
+    fn blocked_boot_security_evidence_is_stored_on_bundle_entry() {
+        let mut metadata = package_metadata("kernelish", "1.0");
+        metadata.scriptlets.push(Scriptlet {
+            phase: ScriptletPhase::PostInstall,
+            interpreter: "/bin/sh".to_string(),
+            content: "dracut --force /boot/initramfs.img\n".to_string(),
+            flags: None,
+        });
+        let mut classification = ScriptletClassificationReport::default();
+        classification.push(
+            "scriptlet:0:post-install",
+            ScriptletClassification::Blocked {
+                reason_code: "blocked-class-initramfs".to_string(),
+                class_id: "initramfs".to_string(),
+                command: Some(crate::ccs::convert::effects::ScriptletCommandEvidence {
+                    command: "dracut".to_string(),
+                    argv: vec!["--force".to_string(), "<boot>/initramfs.img".to_string()],
+                    phase: Some("post-install".to_string()),
+                    lifecycle_paths: vec!["post-install".to_string()],
+                    raw_line: Some("dracut --force /boot/initramfs.img".to_string()),
+                    source: "static-signal".to_string(),
+                    environment: Vec::new(),
+                }),
+            },
+        );
+
+        let build = bundle_for_metadata(&metadata, &[], &classification).unwrap();
+        assert_eq!(build.summary.boot_security_intents.len(), 1);
+        assert_eq!(build.summary.boot_security_intents[0].class_id, "initramfs");
+        assert_eq!(build.summary.boot_security_intents[0].command, "dracut");
+        let entry = &build.bundle.entries[0];
+
+        assert_eq!(entry.boot_security_intents.len(), 1);
+        assert_eq!(entry.boot_security_intents[0].class_id, "initramfs");
+        assert_eq!(entry.boot_security_intents[0].command, "dracut");
+        assert_eq!(
+            entry.boot_security_intents[0].argv,
+            vec!["--force", "<boot>/initramfs.img"]
+        );
+    }
+
+    #[test]
+    fn blocked_boot_security_class_without_command_evidence_is_safe() {
+        let mut metadata = package_metadata("synthetic-block", "1.0");
+        metadata.scriptlets.push(Scriptlet {
+            phase: ScriptletPhase::PostInstall,
+            interpreter: "/bin/sh".to_string(),
+            content: "echo synthetic\n".to_string(),
+            flags: None,
+        });
+        let mut classification = ScriptletClassificationReport::default();
+        classification.push(
+            "scriptlet:0:post-install",
+            ScriptletClassification::Blocked {
+                reason_code: "blocked-class-initramfs".to_string(),
+                class_id: "initramfs".to_string(),
+                command: None,
+            },
+        );
+
+        let build = bundle_for_metadata(&metadata, &[], &classification).unwrap();
+
+        assert_eq!(build.bundle.entries[0].decision, ScriptletDecision::Blocked);
+        assert!(build.bundle.entries[0].boot_security_intents.is_empty());
     }
 
     #[test]

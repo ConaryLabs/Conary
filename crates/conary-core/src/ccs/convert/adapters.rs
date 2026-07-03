@@ -2,7 +2,9 @@
 
 use crate::ccs::convert::blocked_classes::{BlockedClassOutcome, BlockedClassRegistry};
 use crate::ccs::convert::command_evidence::{CommandEvidenceSource, CommandInvocation};
-use crate::ccs::convert::effects::{ScriptletClassification, ScriptletEffectEvidence};
+use crate::ccs::convert::effects::{
+    ScriptletClassification, ScriptletCommandEvidence, ScriptletEffectEvidence,
+};
 use crate::ccs::convert::payload_hints::PayloadHints;
 use crate::ccs::legacy_scriptlets::{EffectConfidence, EffectReplacement, EffectSource};
 use std::collections::{BTreeMap, BTreeSet};
@@ -154,14 +156,17 @@ impl AdapterRegistry {
         input: AdapterInput<'_>,
     ) -> ScriptletClassification {
         if let Some(class) = self.blocked_classes.match_invocation(input.invocation) {
+            let command = Some(ScriptletCommandEvidence::from_invocation(input.invocation));
             return match class.default_outcome {
                 BlockedClassOutcome::Blocked => ScriptletClassification::Blocked {
                     reason_code: class.reason_code.to_string(),
                     class_id: class.id.to_string(),
+                    command,
                 },
                 BlockedClassOutcome::Review => ScriptletClassification::Review {
                     reason_code: class.reason_code.to_string(),
                     class_id: Some(class.id.to_string()),
+                    command,
                 },
             };
         }
@@ -911,6 +916,7 @@ fn review_classification(reason_code: &str, class_id: &str) -> ScriptletClassifi
     ScriptletClassification::Review {
         reason_code: reason_code.to_string(),
         class_id: Some(class_id.to_string()),
+        command: None,
     }
 }
 
@@ -1005,6 +1011,49 @@ mod tests {
     }
 
     #[test]
+    fn blocked_boot_security_classes_carry_command_evidence() {
+        let registry = AdapterRegistry::default();
+
+        for (command, args, class_id, expected_argv) in [
+            ("depmod", vec!["6.10.0"], "kernel-module", vec!["<kver>"]),
+            (
+                "kernel-install",
+                vec!["add", "6.10.0", "/lib/modules/6.10.0/vmlinuz"],
+                "kernel-module",
+                vec!["add", "<kver>", "/lib/modules/<kver>/vmlinuz"],
+            ),
+            (
+                "dracut",
+                vec!["--force", "/boot/6.10.0/initramfs.img"],
+                "initramfs",
+                vec!["--force", "<boot>/<kver>/initramfs.img"],
+            ),
+            (
+                "restorecon",
+                vec!["-R", "/usr/lib/modules"],
+                "selinux",
+                vec!["-R", "/usr/lib/modules"],
+            ),
+        ] {
+            let classification = registry.classify_invocation(&invocation(command, &args));
+            match classification {
+                ScriptletClassification::Blocked {
+                    class_id: actual_class,
+                    command: Some(evidence),
+                    ..
+                } => {
+                    assert_eq!(actual_class, class_id);
+                    assert_eq!(evidence.command, command);
+                    assert_eq!(evidence.argv, expected_argv);
+                    assert_eq!(evidence.source, "static-signal");
+                    assert!(evidence.environment.is_empty());
+                }
+                other => panic!("expected blocked evidence for {command}, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
     fn adapter_registry_lets_blocked_class_win_before_adapter_matching() {
         let registry = AdapterRegistry::default();
 
@@ -1013,7 +1062,11 @@ mod tests {
 
         assert!(matches!(
             classification,
-            ScriptletClassification::Blocked { reason_code, class_id }
+            ScriptletClassification::Blocked {
+                reason_code,
+                class_id,
+                ..
+            }
                 if reason_code == "blocked-class-network" && class_id == "network"
         ));
     }
@@ -1210,7 +1263,11 @@ mod tests {
         });
         assert!(matches!(
             review,
-            ScriptletClassification::Review { reason_code, class_id }
+            ScriptletClassification::Review {
+                reason_code,
+                class_id,
+                ..
+            }
                 if reason_code == "review-class-ldconfig-nonstandard"
                     && class_id.as_deref() == Some("ldconfig-nonstandard")
         ));
@@ -1251,7 +1308,11 @@ mod tests {
         });
         assert!(matches!(
             restart,
-            ScriptletClassification::Review { reason_code, class_id }
+            ScriptletClassification::Review {
+                reason_code,
+                class_id,
+                ..
+            }
                 if reason_code == "review-class-systemd-runtime-action"
                     && class_id.as_deref() == Some("systemd-runtime-action")
         ));
@@ -1338,7 +1399,11 @@ mod tests {
             });
             assert!(matches!(
                 classification,
-                ScriptletClassification::Review { reason_code, class_id }
+                ScriptletClassification::Review {
+                    reason_code,
+                    class_id,
+                    ..
+                }
                     if reason_code == "review-class-tmpfiles-noncreate"
                         && class_id.as_deref() == Some("tmpfiles-noncreate")
             ));
@@ -1386,7 +1451,11 @@ mod tests {
             });
             assert!(matches!(
                 classification,
-                ScriptletClassification::Review { reason_code, class_id }
+                ScriptletClassification::Review {
+                    reason_code,
+                    class_id,
+                    ..
+                }
                     if reason_code == "review-class-sysusers-nonstandard"
                         && class_id.as_deref() == Some("sysusers-nonstandard")
             ));
@@ -1461,7 +1530,11 @@ mod tests {
             });
             assert!(matches!(
                 classification,
-                ScriptletClassification::Review { reason_code, class_id }
+                ScriptletClassification::Review {
+                    reason_code,
+                    class_id,
+                    ..
+                }
                     if reason_code == "review-class-alternatives-interactive-or-broad"
                         && class_id.as_deref() == Some("alternatives-interactive-or-broad")
             ));
@@ -1612,7 +1685,11 @@ mod tests {
             });
             assert!(matches!(
                 classification,
-                ScriptletClassification::Review { reason_code, class_id }
+                ScriptletClassification::Review {
+                    reason_code,
+                    class_id,
+                    ..
+                }
                     if reason_code == "review-class-cache-refresh-nonstandard"
                         && class_id.as_deref() == Some("cache-refresh-nonstandard")
             ));

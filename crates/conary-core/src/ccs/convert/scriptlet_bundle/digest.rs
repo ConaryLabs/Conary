@@ -133,6 +133,7 @@ fn sorted_classification_evidence(
             ScriptletClassification::Review {
                 class_id,
                 reason_code,
+                ..
             } => serde_json::json!({
                 "entry_id": &entry.entry_id,
                 "outcome": "review",
@@ -142,6 +143,7 @@ fn sorted_classification_evidence(
             ScriptletClassification::Blocked {
                 class_id,
                 reason_code,
+                ..
             } => serde_json::json!({
                 "entry_id": &entry.entry_id,
                 "outcome": "blocked",
@@ -299,6 +301,7 @@ mod tests {
             ScriptletClassification::Blocked {
                 reason_code: "blocked-class-network".to_string(),
                 class_id: "network".to_string(),
+                command: None,
             },
         );
         let blocked_digest = bundle_for_metadata(&metadata, &files, &blocked)

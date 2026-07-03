@@ -29,6 +29,18 @@ pub enum CommandEvidenceSource {
     CuratedRule,
 }
 
+impl CommandEvidenceSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::StaticSignal => "static-signal",
+            Self::CaptureLog => "capture-log",
+            Self::NativeMetadata => "native-metadata",
+            Self::PayloadHeuristic => "payload-heuristic",
+            Self::CuratedRule => "curated-rule",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandEnvironmentFact {
     pub name: String,

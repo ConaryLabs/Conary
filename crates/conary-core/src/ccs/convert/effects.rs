@@ -1,5 +1,6 @@
 // conary-core/src/ccs/convert/effects.rs
 
+use crate::ccs::convert::command_evidence::CommandInvocation;
 use crate::ccs::legacy_scriptlets::{EffectConfidence, EffectReplacement, EffectSource};
 use std::collections::BTreeMap;
 
@@ -18,6 +19,71 @@ pub struct ScriptletEffectEvidence {
     pub extra: BTreeMap<String, toml::Value>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScriptletCommandEvidence {
+    pub command: String,
+    pub argv: Vec<String>,
+    pub phase: Option<String>,
+    pub lifecycle_paths: Vec<String>,
+    pub raw_line: Option<String>,
+    pub source: String,
+    pub environment: Vec<String>,
+}
+
+impl ScriptletCommandEvidence {
+    pub fn from_invocation(invocation: &CommandInvocation) -> Self {
+        Self {
+            command: invocation.command.clone(),
+            argv: sanitize_command_argv(&invocation.argv),
+            phase: invocation.phase.clone(),
+            lifecycle_paths: invocation.lifecycle_paths.clone(),
+            raw_line: invocation.raw_line.clone(),
+            source: invocation.source.as_str().to_string(),
+            environment: invocation
+                .environment
+                .iter()
+                .map(|fact| fact.name.clone())
+                .collect(),
+        }
+    }
+}
+
+fn sanitize_command_argv(argv: &[String]) -> Vec<String> {
+    argv.iter().map(|arg| sanitize_command_arg(arg)).collect()
+}
+
+fn sanitize_command_arg(arg: &str) -> String {
+    if let Some(rest) = arg.strip_prefix("/boot/") {
+        return format!("<boot>/{}", sanitize_path_segments(rest));
+    }
+
+    sanitize_path_segments(arg)
+}
+
+fn sanitize_path_segments(path: &str) -> String {
+    path.split('/')
+        .map(|segment| {
+            if looks_like_kernel_version(segment) {
+                "<kver>"
+            } else {
+                segment
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+fn looks_like_kernel_version(segment: &str) -> bool {
+    let mut parts = segment.split('.');
+    matches!(
+        (parts.next(), parts.next(), parts.next()),
+        (Some(major), Some(minor), Some(patch))
+            if major.chars().all(|ch| ch.is_ascii_digit())
+                && minor.chars().all(|ch| ch.is_ascii_digit())
+                && patch.chars().next().is_some_and(|ch| ch.is_ascii_digit())
+    )
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum ScriptletClassification {
     Known {
@@ -31,10 +97,12 @@ pub enum ScriptletClassification {
     Review {
         reason_code: String,
         class_id: Option<String>,
+        command: Option<ScriptletCommandEvidence>,
     },
     Blocked {
         reason_code: String,
         class_id: String,
+        command: Option<ScriptletCommandEvidence>,
     },
 }
 
@@ -129,6 +197,7 @@ mod tests {
             ScriptletClassification::Review {
                 reason_code: "review-class-debconf".to_string(),
                 class_id: Some("debconf".to_string()),
+                command: None,
             },
         );
         report.push(
@@ -136,6 +205,7 @@ mod tests {
             ScriptletClassification::Blocked {
                 reason_code: "blocked-class-network".to_string(),
                 class_id: "network".to_string(),
+                command: None,
             },
         );
 

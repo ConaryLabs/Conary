@@ -42,6 +42,8 @@ pub struct PublicationGateReport {
     pub review_reason_codes: Vec<String>,
     pub unknown_commands: Vec<String>,
     pub blocked_classes: Vec<String>,
+    #[serde(default)]
+    pub boot_security_intents: Vec<conary_core::ccs::legacy_scriptlets::BootSecurityIntentEvidence>,
     pub evidence_digest: Option<String>,
     pub curation_evidence_digest: Option<String>,
     pub review_artifact_available: bool,
@@ -211,12 +213,13 @@ pub fn report_from_summary(
         scriptlet_fidelity: summary.scriptlet_fidelity.clone(),
         target_compatibility: summary.target_compatibility.clone(),
         summary_valid,
-        message: message_for_status(&summary.publication_status, summary_valid).to_string(),
+        message: message_for_summary(summary, summary_valid),
         reason_codes,
         blocked_reason_codes: summary.blocked_reason_codes.clone(),
         review_reason_codes: summary.review_reason_codes.clone(),
         unknown_commands: sorted(&summary.unknown_commands),
         blocked_classes: sorted(&summary.blocked_classes),
+        boot_security_intents: summary.boot_security_intents.clone(),
         evidence_digest: summary.evidence_digest.clone(),
         curation_evidence_digest: summary.curation_evidence_digest.clone(),
         review_artifact_available: summary.review_artifact_path.is_some(),
@@ -301,15 +304,28 @@ fn sorted(values: &[String]) -> Vec<String> {
         .collect()
 }
 
-fn message_for_status(status: &str, valid: bool) -> &'static str {
+fn message_for_summary(summary: &ScriptletBundleSummary, valid: bool) -> String {
     if !valid {
-        return "Converted package has malformed scriptlet publication metadata";
+        return "Converted package has malformed scriptlet publication metadata".to_string();
     }
-    match status {
-        "blocked" => "Converted package is blocked by legacy scriptlet policy",
-        "local-only" => "Converted package is local-only and cannot be served publicly",
-        "private-review" => "Converted package requires scriptlet review before public serving",
-        _ => "Converted package is not public-ready",
+    match summary.publication_status.as_str() {
+        "blocked" => {
+            if summary.blocked_classes.is_empty() {
+                "Converted package uses unsupported legacy scriptlets and cannot be served by the Remi public preview".to_string()
+            } else {
+                let mut classes = summary.blocked_classes.clone();
+                classes.sort();
+                format!(
+                    "Converted package uses unsupported legacy scriptlet classes for the Remi public preview: {}",
+                    classes.join(", ")
+                )
+            }
+        }
+        "local-only" => "Converted package is local-only and cannot be served publicly".to_string(),
+        "private-review" => {
+            "Converted package requires scriptlet review before public serving".to_string()
+        }
+        _ => "Converted package is not public-ready".to_string(),
     }
 }
 
@@ -536,6 +552,33 @@ mod tests {
     }
 
     #[test]
+    fn boot_security_intent_does_not_make_blocked_summary_public() {
+        let summary = ScriptletBundleSummary {
+            publication_status: "blocked".to_string(),
+            blocked_classes: vec!["kernel-module".to_string()],
+            boot_security_intents: vec![
+                conary_core::ccs::legacy_scriptlets::BootSecurityIntentEvidence {
+                    class_id: "kernel-module".to_string(),
+                    reason_code: "blocked-class-kernel-module".to_string(),
+                    command: "depmod".to_string(),
+                    argv: vec!["6.10.0".to_string()],
+                    phase: Some("post-install".to_string()),
+                    lifecycle_paths: vec!["post-install".to_string()],
+                },
+            ],
+            ..ScriptletBundleSummary::default()
+        };
+
+        assert!(matches!(
+            classify_summary(ScriptletSummaryForPublication {
+                summary,
+                valid: true,
+            }),
+            PublicationDecision::Blocked(_)
+        ));
+    }
+
+    #[test]
     fn publication_report_reasons_are_deterministic_and_deduplicated() {
         let summary = ScriptletBundleSummary {
             publication_status: "private-review".to_string(),
@@ -564,5 +607,45 @@ mod tests {
                 "class-b",
             ]
         );
+    }
+
+    #[test]
+    fn publication_report_message_names_blocked_classes() {
+        let summary = ScriptletBundleSummary {
+            publication_status: "blocked".to_string(),
+            blocked_classes: vec!["kernel-module".to_string(), "initramfs".to_string()],
+            ..ScriptletBundleSummary::default()
+        };
+
+        let report = report_from_summary(&summary, true);
+
+        assert!(report.message.contains("Remi public preview"));
+        assert!(report.message.contains("initramfs, kernel-module"));
+        assert!(!report.message.contains("legacy scriptlet policy"));
+    }
+
+    #[test]
+    fn publication_report_includes_boot_security_intents() {
+        let summary = ScriptletBundleSummary {
+            publication_status: "blocked".to_string(),
+            blocked_classes: vec!["initramfs".to_string()],
+            boot_security_intents: vec![
+                conary_core::ccs::legacy_scriptlets::BootSecurityIntentEvidence {
+                    class_id: "initramfs".to_string(),
+                    reason_code: "blocked-class-initramfs".to_string(),
+                    command: "dracut".to_string(),
+                    argv: vec!["--force".to_string()],
+                    phase: Some("post-install".to_string()),
+                    lifecycle_paths: vec!["post-install".to_string()],
+                },
+            ],
+            ..ScriptletBundleSummary::default()
+        };
+
+        let report = report_from_summary(&summary, true);
+
+        assert_eq!(report.boot_security_intents.len(), 1);
+        assert_eq!(report.boot_security_intents[0].class_id, "initramfs");
+        assert_eq!(report.boot_security_intents[0].command, "dracut");
     }
 }

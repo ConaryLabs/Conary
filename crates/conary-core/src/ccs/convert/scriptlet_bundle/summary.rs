@@ -33,6 +33,11 @@ pub(super) fn summary_from_bundle(
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();
+    let boot_security_intents = bundle
+        .entries
+        .iter()
+        .flat_map(|entry| entry.boot_security_intents.iter().cloned())
+        .collect::<Vec<_>>();
 
     ScriptletBundleSummary {
         scriptlet_fidelity: bundle.scriptlet_fidelity.as_str().to_string(),
@@ -50,6 +55,7 @@ pub(super) fn summary_from_bundle(
         review_reason_codes,
         unknown_commands,
         blocked_classes,
+        boot_security_intents,
         review_artifact_path: None,
     }
 }
@@ -151,6 +157,7 @@ mod tests {
         assert!(summary.review_reason_codes.is_empty());
         assert!(summary.unknown_commands.is_empty());
         assert!(summary.blocked_classes.is_empty());
+        assert!(summary.boot_security_intents.is_empty());
         assert_eq!(summary.review_artifact_path, None);
     }
 

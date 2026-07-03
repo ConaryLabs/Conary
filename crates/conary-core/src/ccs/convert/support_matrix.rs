@@ -394,6 +394,21 @@ mod tests {
     }
 
     #[test]
+    fn boot_security_classes_remain_blocked_without_native_adapters() {
+        let matrix = SupportMatrix::default();
+
+        for class_id in ["kernel-module", "initramfs", "bootloader", "selinux"] {
+            let row = matrix
+                .entries()
+                .iter()
+                .find(|entry| entry.class_id == Some(class_id))
+                .unwrap_or_else(|| panic!("missing support row for {class_id}"));
+            assert_eq!(row.outcome, SupportOutcome::Blocked);
+            assert!(row.adapter_id.is_none());
+        }
+    }
+
+    #[test]
     fn goal8_required_corpus_rows_are_declared() {
         let fixtures: std::collections::BTreeMap<_, _> = golden_fixtures::required_goal8_cases()
             .iter()

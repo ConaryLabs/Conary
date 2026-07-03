@@ -833,6 +833,7 @@ impl ScriptletPublicationColumns<'_> {
             "review_reason_codes",
             "unknown_commands",
             "blocked_classes",
+            "boot_security_intents",
         ]
         .iter()
         .all(|key| object.contains_key(*key))

@@ -58,7 +58,13 @@ impl Default for BlockedClassRegistry {
                 "selinux",
                 "SELinux policy and label mutation is not yet modeled.",
                 "blocked-class-selinux",
-                &["restorecon", "semanage", "setsebool"],
+                &[
+                    "restorecon",
+                    "fixfiles",
+                    "semanage",
+                    "semodule",
+                    "setsebool",
+                ],
                 &[],
                 "Add a native SELinux policy adapter and label reconciliation plan.",
             ),
@@ -74,7 +80,7 @@ impl Default for BlockedClassRegistry {
                 "kernel-module",
                 "Kernel module mutation is not replay-safe without kernel compatibility policy.",
                 "blocked-class-kernel-module",
-                &["modprobe", "depmod", "dkms"],
+                &["modprobe", "depmod", "dkms", "kernel-install"],
                 &[],
                 "Add a native kernel-module policy adapter and target-kernel compatibility checks.",
             ),
@@ -577,6 +583,27 @@ mod tests {
                 .match_invocation(&invocation("udevadm", &["info"]))
                 .is_none()
         );
+    }
+
+    #[test]
+    fn blocked_classes_cover_kernel_install_selinux_module_and_label_tools() {
+        let registry = BlockedClassRegistry::default();
+
+        for (command, argv, class_id) in [
+            (
+                "kernel-install",
+                vec!["add", "6.10.0", "/lib/modules/6.10.0/vmlinuz"],
+                "kernel-module",
+            ),
+            ("semodule", vec!["-i", "/tmp/demo.pp"], "selinux"),
+            ("fixfiles", vec!["restore"], "selinux"),
+        ] {
+            let class = registry
+                .match_invocation(&invocation(command, &argv))
+                .unwrap_or_else(|| panic!("missing blocked class for {command}"));
+            assert_eq!(class.id, class_id);
+            assert_eq!(class.default_outcome, BlockedClassOutcome::Blocked);
+        }
     }
 
     #[test]
