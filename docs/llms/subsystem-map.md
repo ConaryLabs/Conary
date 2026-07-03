@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-07-02
-revision: 32
-summary: Add feature-card slug bridge for subsystem routing
+last_updated: 2026-07-03
+revision: 33
+summary: Route M4e lifecycle authoring and native proof ownership
 ---
 
 # Assistant Subsystem Map
@@ -203,6 +203,8 @@ start from a theme, use the owner hints below and then run
   `crates/conary-core/src/ccs/builder.rs`,
   `crates/conary-core/src/ccs/v2/`,
   `crates/conary-core/src/ccs/v2/authoring.rs`,
+  `crates/conary-core/src/ccs/v2/debug_projection.rs`,
+  `crates/conary-core/src/repository/supported_profiles/`,
   `crates/conary-core/src/ccs/archive_reader.rs`,
   `crates/conary-core/src/ccs/package.rs`,
   `crates/conary-core/src/ccs/manifest.rs`,
@@ -218,9 +220,13 @@ start from a theme, use the owner hints below and then run
   `docs/modules/test-fixtures.md`.
   For native v2 authoring commands, start in
   `apps/conary/src/commands/ccs/{templates.rs,lint.rs,build.rs,test.rs,local_dev.rs}`.
+  Use `apps/conary/tests/packaging_m4b.rs` for the `minimal-file` proof and
+  `apps/conary/tests/packaging_m4e.rs` for the M4e
+  `config-noreplace`/`service` proof corpus.
   Start in `crates/conary-core/src/ccs/v2/` for v2 authority, validation,
-  diagnostics, archive reading, and content identity. Use `archive_reader.rs`
-  and `package.rs` only as version-routing/adaptation surfaces.
+  diagnostics, debug projection, archive reading, and content identity. Use
+  `archive_reader.rs` and `package.rs` only as version-routing/adaptation
+  surfaces.
 - TUF trust and signature verification:
   `crates/conary-core/src/trust/verify.rs`,
   `crates/conary-core/src/trust/client.rs`, and
@@ -248,6 +254,7 @@ start from a theme, use the owner hints below and then run
   `apps/remi/src/server/admin_service.rs`,
   `apps/remi/src/server/release_publish.rs`,
   `apps/remi/src/server/native_publish/`,
+  `apps/remi/src/server/native_publish/verify.rs`,
   `apps/remi/src/server/conversion.rs`,
   `apps/remi/src/server/conversion/workflow.rs`,
   `apps/remi/src/server/conversion/persistence.rs`,

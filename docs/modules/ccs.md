@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-06-18
-revision: 18
-summary: Route M4d CCS v2 lifecycle profile validation
+last_updated: 2026-07-03
+revision: 19
+summary: Document M4e CCS v2 lifecycle authoring proof
 ---
 
 # CCS Module (conary-core/src/ccs/)
@@ -88,14 +88,17 @@ when both manifest formats are present.
 
 **v2/** -- CCS v2 native package authority. Start in
 `crates/conary-core/src/ccs/v2/` for v2 authority, validation, diagnostics,
-archive reading, and content identity. Use `archive_reader.rs` and `package.rs`
-only as version-routing/adaptation surfaces.
+debug projection, archive reading, and content identity. Use
+`archive_reader.rs` and `package.rs` only as version-routing/adaptation
+surfaces.
 
 Native v2 authoring from `ccs.toml` starts in
 `apps/conary/src/commands/ccs/{templates.rs,lint.rs,build.rs,test.rs,local_dev.rs}`
 for command ergonomics and local-dev state, and
 `crates/conary-core/src/ccs/v2/authoring.rs` for projection from `BuildResult`
-into signed v2 authority.
+into signed v2 authority. Debug TOML consistency checks live in
+`crates/conary-core/src/ccs/v2/debug_projection.rs`; debug TOML is verified
+against signed authority and never becomes install-time authority.
 
 **enhancement/** -- Post-conversion enrichment via trait-based plugins.
 Adds capabilities, provenance, and subpackage relationships that the
@@ -141,24 +144,51 @@ implementation lives under `crates/conary-core/src/ccs/v2/`; legacy v1
 
 ### Native CCS v2 Local Authoring Loop
 
-The first supported native authoring loop is:
+The minimal native authoring loop is:
 
 ```text
 conary ccs init --template minimal-file
 conary ccs lint
 conary ccs build --format v2 --local-dev
-conary ccs verify
-conary ccs test --dry-run
+conary ccs verify package.ccs
+conary ccs test package.ccs --dry-run
+```
+
+Config-only packages can be authored and contract-tested without a target
+profile:
+
+```text
+conary ccs init --template config-noreplace
+conary ccs lint
+conary ccs build --format v2 --local-dev
+conary ccs verify package.ccs
+conary ccs test package.ccs --dry-run
+```
+
+Lifecycle-bearing packages require an explicit supported target profile during
+lint, build, and dry-run test. Supported public profile IDs are `fedora-44`,
+`ubuntu-26.04`, and `arch`; Remi route slugs such as `fedora` are not accepted
+as CLI target profile IDs.
+
+```text
+conary ccs init --template service
+conary ccs lint --target-profile fedora-44
+conary ccs build --format v2 --local-dev --target-profile fedora-44
+conary ccs verify package.ccs
+conary ccs test package.ccs --dry-run --target-profile fedora-44
 ```
 
 `--local-dev` signs with a user-local development key for iteration.
 Local-dev artifacts can verify and dry-run-test locally, but static publish and
 Remi release paths still require accepted release trust and build attestation.
 
-M4d completes the CCS v2 target-profile hook. `TargetProfileQuery` now covers
-users, groups, directories, services, tmpfiles, sysctl, and alternatives.
-Profile-backed validation accepts only explicit per-entry policy and reports
-`LifecycleUnsupported` for unsupported signed lifecycle authority.
+`TargetProfileQuery` covers users, groups, directories, services, tmpfiles,
+sysctl, and alternatives. Profile-backed validation accepts only explicit
+per-entry policy and reports `LifecycleUnsupported` for unsupported signed
+lifecycle authority. M4e's proof corpus covers the `config-noreplace` and
+`service` templates, unsupported target-profile IDs, unsupported lifecycle
+entries, debug TOML projection drift, and Remi lifecycle-bearing native release
+upload.
 
 ## Legacy Scriptlet Bundles And Replay
 

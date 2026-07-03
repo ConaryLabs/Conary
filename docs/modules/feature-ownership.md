@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-07-01
-revision: 20
-summary: Add machine-readable Slug and Paths routing fields
+last_updated: 2026-07-03
+revision: 21
+summary: Route M4e lifecycle authoring and native proof ownership
 ---
 
 # Feature Ownership And Interaction Gates
@@ -315,6 +315,8 @@ install CCS packages, and preserve/replay legacy scriptlet metadata safely.
 **Start here:** `crates/conary-core/src/ccs/`;
 `crates/conary-core/src/ccs/v2/`;
 `crates/conary-core/src/ccs/v2/authoring.rs`;
+`crates/conary-core/src/ccs/v2/debug_projection.rs`;
+`crates/conary-core/src/repository/supported_profiles/`;
 `crates/conary-core/src/ccs/archive_reader.rs`;
 `crates/conary-core/src/ccs/package.rs`;
 `crates/conary-core/src/ccs/convert/`;
@@ -349,23 +351,31 @@ metadata, scriptlet sandboxing (`crates/conary-core/src/scriptlet/mod.rs`,
 
 **Focused proof:** `cargo test -p conary-core ccs::v2`;
 `cargo test -p conary --test packaging_m4b`;
+`cargo test -p conary --test packaging_m4e`;
+`cargo test -p conary-core supported_profiles`;
 `cargo test -p conary-core golden_fixtures`;
 `cargo test -p conary-core support_matrix`;
 `cargo test -p conary-core legacy_replay`.
 
 **Interaction gate:** `cargo test -p conary --test conversion_integration golden_conversion`;
 `cargo test -p conary --test packaging_m4a`;
+`cargo test -p conary --test packaging_m4d`;
 `cargo test -p conary-core repository::static_repo::publish_gate`;
 `cargo test -p conary --test bundle_replay`;
+`cargo test -p remi release_upload_` when lifecycle-bearing native authority
+crosses Remi publication;
 `cargo test -p remi publication` when conversion output affects public serving.
 
 **Docs to update:** `docs/modules/ccs.md`; `docs/modules/test-fixtures.md`;
 `docs/llms/subsystem-map.md`; CCS roadmap child specs when active.
 
 **Safety notes:** start in `crates/conary-core/src/ccs/v2/` for v2 authority,
-validation, diagnostics, archive reading, and content identity. Use
-`archive_reader.rs` and `package.rs` only as version-routing/adaptation
-surfaces. Text-pattern detections are advisory, public-ready serving is gated
+validation, diagnostics, archive reading, debug projection, and content
+identity. Use `archive_reader.rs` and `package.rs` only as
+version-routing/adaptation surfaces. Config-only v2 packages do not require a
+target profile; lifecycle-bearing authoring must use exact public profile IDs
+(`fedora-44`, `ubuntu-26.04`, or `arch`). Debug TOML is never install
+authority. Text-pattern detections are advisory, public-ready serving is gated
 by adapter/support-matrix evidence, and raw legacy replay remains local and
 fail-closed.
 
@@ -551,8 +561,9 @@ routes, conversion, native release upload, and CCS v2 validation.
 **Paths:** `crates/conary-core/src/repository/supported_profiles/*`.
 
 **Focused proof:** `cargo test -p conary-core supported_profiles`;
-`cargo test -p conary --test packaging_m4d`; `cargo test -p remi route`;
-`cargo test -p conary-core remi_sync`.
+`cargo test -p conary --test packaging_m4d`;
+`cargo test -p conary --test packaging_m4e`; `cargo test -p remi route`;
+`cargo test -p remi release_upload_`; `cargo test -p conary-core remi_sync`.
 
 **Interaction gate:** `cargo test -p remi`;
 `cargo test -p conary --test packaging_m4c`;
@@ -567,7 +578,9 @@ dispatch, native release upload, or CCS v2 lifecycle policy.
 **Safety notes:** public target IDs are exact and narrow:
 `fedora-44`, `ubuntu-26.04`, and `arch`. Remi route slugs are
 `fedora`, `ubuntu`, and `arch`; generic route slugs such as `fedora` and
-`ubuntu` are not public CLI distro IDs.
+`ubuntu` are not public CLI distro IDs. M4e lifecycle proof uses profile
+allow-list entries backed by the `config-noreplace` and `service` authoring
+corpus.
 
 ## Remi Publication, Serving, Admin, And Fixture Artifacts
 
@@ -578,6 +591,7 @@ release uploads, and static test fixtures through Remi.
 
 **Start here:** `apps/remi/src/server/release_publish.rs`;
 `apps/remi/src/server/native_publish/`;
+`apps/remi/src/server/native_publish/verify.rs`;
 `apps/remi/src/server/publication.rs`;
 `apps/remi/src/server/conversion.rs`;
 `apps/remi/src/server/conversion/types.rs`;
@@ -594,11 +608,13 @@ release uploads, and static test fixtures through Remi.
 `docs/modules/remi.md`; `docs/modules/test-fixtures.md`.
 
 **Neighbor systems:** CCS conversion metadata, repository client behavior,
-federation peer state, admin audit logs, artifact path handling.
+federation peer state, admin audit logs, artifact path handling, and supported
+target profiles.
 
 **Paths:** `apps/remi/*`.
 
 **Focused proof:** `cargo test -p remi release_upload_`;
+`cargo test -p remi native_publish`;
 `cargo test -p conary --test packaging_m4c`;
 `cargo test -p remi remi_release_parity`;
 `cargo test -p remi publication`;
@@ -609,7 +625,8 @@ federation peer state, admin audit logs, artifact path handling.
 `cargo test -p conary --test conversion_integration golden_conversion` when
 serving behavior depends on conversion output, and
 `cargo test -p conary --test packaging_m4c` when native release intake,
-metadata, download, or client install proof changes.
+metadata, download, route-derived lifecycle validation, or client install proof
+changes.
 
 **Docs to update:** `docs/modules/remi.md`; `docs/modules/test-fixtures.md`;
 `docs/llms/subsystem-map.md`; operator docs when deployment behavior changes.
@@ -617,10 +634,11 @@ metadata, download, or client install proof changes.
 **Safety notes:** do not expose non-public scriptlet rows, private review paths,
 or unverified native package signatures through public listings. Remi release
 uploads must stage privately, enforce trusted build-attestation signer policy,
-and publish package rows, native publication rows, chunks, and TUF targets only
-after the shared gate passes. Native CCS release uploads must not create
-synthetic `converted_packages` rows; failed replacement must preserve the last
-public native generation.
+derive lifecycle policy from the release route's supported profile, and publish
+package rows, native publication rows, chunks, and TUF targets only after the
+shared gate and lifecycle validation pass. Native CCS release uploads must not
+create synthetic `converted_packages` rows; failed replacement must preserve
+the last public native generation.
 
 ## conaryd Package Jobs And Daemon Routes
 

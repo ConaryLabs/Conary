@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-06-18
-revision: 5
-summary: Map M4d supported profiles, Remi, CCS v2, and install replay proof gates
+last_updated: 2026-07-03
+revision: 6
+summary: Map M4e lifecycle authoring and Remi native proof gates
 ---
 
 # Test Fixtures And Proof Maps
@@ -36,6 +36,7 @@ Each fixture family should record:
 | `ccs-convert-golden-cases` | CCS convert | `cargo test -p conary-core golden_fixtures`; `cargo test -p conary-core support_matrix` |
 | `ccs-v2-native-authority-fixtures` | CCS v2 native authority | `cargo test -p conary-core ccs::v2`; `cargo test -p conary --test packaging_m4a` |
 | `ccs-v2-local-authoring-smoke` | CCS v2 local authoring | `cargo test -p conary --test packaging_m4b` |
+| `ccs-v2-lifecycle-authoring-proof` | CCS v2 lifecycle authoring | `cargo test -p conary --test packaging_m4e`; `cargo test -p conary-core ccs::v2` |
 | `m4d-supported-profile-cutover` | Supported distro profiles | `cargo test -p conary-core supported_profiles`; `cargo test -p conary --test packaging_m4d`; `cargo test -p remi route` |
 | `legacy-scriptlet-bundle-fixtures` | Install replay adapter and Conary CLI tests | `cargo test -p conary --test bundle_replay synthetic_legacy_bundle_fixtures_cover_task5_matrix` |
 | `remi-native-ccs-publication` | Remi native publication | `cargo test -p remi release_upload_`; `cargo test -p conary --test packaging_m4c` |
@@ -101,8 +102,9 @@ Each fixture family should record:
   and static publish rejection for local-dev/host-hardened artifacts.
 - **Fixture sources:** in-test project builder in
   `apps/conary/tests/packaging_m4b.rs`.
-- **Consumes:** M4b CLI smoke, signing guardrail, lifecycle/dependency
-  profile-deferred, local-dev trust, and isolated dry-run tests.
+- **Consumes:** M4b CLI smoke, signing guardrail, lifecycle target-profile
+  refusal, unsupported dependency authoring, local-dev trust, and isolated
+  dry-run tests.
 - **Fast proof:** `cargo test -p conary --test packaging_m4b`.
 - **Medium proof:** `cargo test -p conary-core ccs::v2`;
   `cargo test -p conary-core repository::static_repo::publish_gate`.
@@ -111,6 +113,39 @@ Each fixture family should record:
 - **Safety notes:** Local-dev keys are isolated with test HOME/XDG directories.
   Local-dev v2 artifacts are for local verify/test only and must remain
   rejected by static publish and Remi release trust.
+
+### ccs-v2-lifecycle-authoring-proof
+
+- **Owner:** CCS v2 native authoring commands:
+  `apps/conary/src/commands/ccs/`; v2 projection/validation:
+  `crates/conary-core/src/ccs/v2/authoring.rs`;
+  debug projection: `crates/conary-core/src/ccs/v2/debug_projection.rs`;
+  supported profiles:
+  `crates/conary-core/src/repository/supported_profiles/`.
+- **Purpose:** M4e proof that config-only native packages build without a
+  target profile, lifecycle-bearing native packages require and honor explicit
+  supported profile IDs, debug TOML remains a checked projection of signed
+  authority, and unsupported lifecycle authority fails closed.
+- **Fixture sources:** generated `minimal-file`, `config-noreplace`, and
+  `service` projects in `apps/conary/tests/packaging_m4b.rs` and
+  `apps/conary/tests/packaging_m4e.rs`; debug projection unit fixtures in
+  `crates/conary-core/src/ccs/v2/debug_projection.rs`.
+- **Consumes:** M4e CLI lint/build/verify/test corpus, target-profile negative
+  cases, unsupported lifecycle diagnostics, and v2 reader/debug-projection
+  consistency tests.
+- **Fast proof:** `cargo test -p conary --test packaging_m4e`;
+  `cargo test -p conary-core ccs::v2::debug_projection`.
+- **Medium proof:** `cargo test -p conary-core ccs::v2`;
+  `cargo test -p conary-core supported_profiles`;
+  `cargo test -p conary --test packaging_m4a`;
+  `cargo test -p conary --test packaging_m4b`;
+  `cargo test -p conary --test packaging_m4d`.
+- **Slow proof:** No slow gate for M4e fixture-map-only changes.
+- **Regeneration:** Temporary source projects are generated during tests.
+- **Safety notes:** CLI target profiles are exact public IDs:
+  `fedora-44`, `ubuntu-26.04`, and `arch`. Route slugs such as `fedora` are
+  Remi-only. Debug TOML is never authoritative; it must match signed CBOR
+  config and lifecycle authority exactly for supported M4e fields.
 
 ### m4d-supported-profile-cutover
 
@@ -136,12 +171,15 @@ Each fixture family should record:
   `apps/remi/src/server/native_publish/`; release upload route/staging:
   `apps/remi/src/server/release_publish.rs`.
 - **Purpose:** Release-eligible CCS v2 artifacts published through local Remi
-  without conversion-shaped storage.
+  without conversion-shaped storage, including lifecycle-bearing native
+  authority validated by the release route's supported profile.
 - **Fixture sources:** in-test release-eligible v2 builders in
   `apps/remi/src/server/release_publish.rs` and
   `apps/conary/tests/packaging_m4c.rs`.
-- **Consumes:** native release upload, replacement, public metadata/download,
-  client dry-run install, sparse/search/index, and chunk-GC tests.
+- **Consumes:** native release upload, lifecycle-supported and
+  lifecycle-unsupported release upload, local-dev publish-gate refusal,
+  replacement, public metadata/download, client dry-run install,
+  sparse/search/index, and chunk-GC tests.
 - **Fast proof:** `cargo test -p remi release_upload_`;
   `cargo test -p conary --test packaging_m4c`.
 - **Medium proof:** `cargo test -p remi native_publish`;
@@ -157,6 +195,8 @@ Each fixture family should record:
   local-dev or otherwise publish-gate-rejected artifacts write no public state,
   failed replacement preserves the last public native row, and active native
   chunks remain protected from serving and garbage collection regressions.
+  Unsupported lifecycle authority on a supported route must fail with
+  `LIFECYCLE_UNSUPPORTED` before public state is written.
 
 ### legacy-scriptlet-bundle-fixtures
 

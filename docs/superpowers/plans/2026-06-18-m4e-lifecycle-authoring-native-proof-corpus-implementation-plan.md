@@ -2,10 +2,10 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Status:** Refresh required before implementation. The original plan was
-locked after DeepSeek, Gemini, and local agentic review, but a 2026-07-03
-current-checkout rebaseline verified that M4e has not landed and this plan must
-start with Task 0 before any implementation task is executed.
+**Status:** Implemented in the M4e lifecycle authoring proof changeset after a
+2026-07-03 current-checkout rebaseline. The original plan was locked after
+DeepSeek, Gemini, and local agentic review; Task 0 is retained below as the
+historical pre-implementation baseline that this changeset closes.
 
 **Goal:** Implement lifecycle-aware native CCS v2 authoring, config/noreplace authority, target-profile validation, reader/debug-projection consistency, Remi lifecycle publication proof, and the M4 closeout corpus.
 
@@ -15,10 +15,10 @@ start with Task 0 before any implementation task is executed.
 
 ---
 
-## 2026-07-03 Refresh Baseline
+## 2026-07-03 Pre-Implementation Refresh Baseline
 
-This plan remains the right implementation direction, but it is not evidence
-that M4e has already shipped. A repo rebaseline on 2026-07-03 found:
+This historical rebaseline captured the main-branch state before M4e was
+implemented. A repo rebaseline on 2026-07-03 found:
 
 - `apps/conary/tests/packaging_m4e.rs` does not exist, and
   `cargo test -p conary --test packaging_m4e` fails with no matching test
@@ -51,8 +51,30 @@ cargo test -p conary-core supported_profiles
 cargo test -p remi release_upload_
 ```
 
-Do not mark this plan complete from memory or from ledger notes. M4e completion
-requires a real `packaging_m4e` corpus and the final gates listed in Task 7.
+M4e completion requires a real `packaging_m4e` corpus and the final gates listed
+in Task 7.
+
+## 2026-07-03 Implementation Proof
+
+This changeset implements the planned `config-noreplace` and `service`
+templates, target-profile-aware authoring diagnostics and CLI plumbing,
+config/lifecycle v2 authority projection, structural reader validation, debug
+TOML projection consistency, supported-profile proof allow-lists, Remi
+route-derived lifecycle validation, M4e positive/negative proof corpus, and
+Task 7 docs/coherency updates.
+
+Focused proof already run during implementation:
+
+```bash
+cargo test -p conary-core ccs::v2
+cargo test -p conary-core supported_profiles
+cargo test -p conary commands::ccs::templates
+cargo test -p conary commands::ccs::init
+cargo test -p conary --test packaging_m4e
+cargo test -p conary --test packaging_m4a --test packaging_m4b --test packaging_m4c --test packaging_m4d
+cargo test -p remi native_publish
+cargo test -p remi release_upload_
+```
 
 ## Design Inputs
 

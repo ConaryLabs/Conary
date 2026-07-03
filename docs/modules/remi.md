@@ -19,9 +19,15 @@ route remains `POST /v1/admin/releases/{distro}` with bearer-token admin auth,
 but accepted CCS v2 uploads are stored in `native_package_publications` and
 projected into `repository_packages`; they are not synthetic
 `converted_packages` rows. Native uploads stage privately, run the shared static
-publish gate against `release_publish.trusted_build_attestation_signers`, and
-publish package rows, native rows, chunks, and TUF targets only after the gate
-and metadata commit pass.
+publish gate against `release_publish.trusted_build_attestation_signers`.
+After structural parsing, signature/trust verification, and the shared static
+publish gate pass, Remi derives the supported target profile from the release
+route slug and validates any signed CCS v2 lifecycle authority against that
+profile. Unsupported route slugs fail before storage or artifact verification;
+supported routes with unsupported lifecycle entries fail with
+`LIFECYCLE_UNSUPPORTED` before public rows, chunks, or TUF targets are written.
+Package rows, native rows, chunks, and TUF targets are published only after the
+gate, route-derived lifecycle validation, and metadata commit pass.
 
 The route/staging wrapper lives in `apps/remi/src/server/release_publish.rs`.
 Native CCS verification, artifact promotion, metadata persistence, supersede

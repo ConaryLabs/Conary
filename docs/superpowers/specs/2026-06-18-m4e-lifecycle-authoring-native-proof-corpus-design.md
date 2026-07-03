@@ -1,10 +1,10 @@
 # M4e Lifecycle Authoring And Native Proof Corpus Design
 
 **Date:** 2026-06-18
-**Status:** Refresh required before implementation. The original design was
-locked on 2026-06-18 after DeepSeek, Gemini, and local agentic review, but a
-2026-07-03 repo rebaseline verified that M4e has not landed in the current
-checkout.
+**Status:** Implemented in the M4e lifecycle authoring proof changeset after a
+2026-07-03 repo rebaseline. The original design was locked on 2026-06-18 after
+DeepSeek, Gemini, and local agentic review; the refresh baseline below records
+the pre-implementation state that this branch closes.
 **Parent umbrella:** `docs/superpowers/specs/2026-06-17-m4-ccs-native-ecosystem-design.md`
 **Prerequisites:** M4a CCS v2 native package contract, M4b native authoring
 workflow, M4c Remi native CCS publication, and M4d supported target profiles
@@ -28,10 +28,10 @@ tmpfiles, sysctl declarations, and alternatives. The lifecycle work remains
 declarative, signed, and profile-validated. M4e does not activate services,
 create users, write sysctl state, or mutate a live host.
 
-## 2026-07-03 Refresh Baseline
+## 2026-07-03 Pre-Implementation Refresh Baseline
 
-This design remains directionally correct, but it is not an implementation
-record. A current-checkout rebaseline on 2026-07-03 found:
+This historical rebaseline captured the main-branch state before M4e was
+implemented. A current-checkout rebaseline on 2026-07-03 found:
 
 - `apps/conary/tests/packaging_m4e.rs` is absent, and
   `cargo test -p conary --test packaging_m4e` fails because no such test target
@@ -52,11 +52,29 @@ record. A current-checkout rebaseline on 2026-07-03 found:
   gate, but it does not yet validate lifecycle authority against a route-derived
   supported profile.
 
-The same rebaseline confirmed the prerequisite slices are healthy:
+The same rebaseline confirmed the prerequisite slices were healthy:
 `packaging_m4a`, `packaging_m4b`, `packaging_m4c`, `packaging_m4d`,
 `conary-core ccs::v2`, `conary-core supported_profiles`, and
-`remi release_upload_` all pass. M4e should therefore be treated as an
-unimplemented but still viable follow-on slice, not as completed work.
+`remi release_upload_` all passed.
+
+## 2026-07-03 Implementation Proof
+
+The M4e changeset adds the `config-noreplace` and `service` templates,
+target-profile-aware lifecycle authoring, config and lifecycle signed authority
+projection, debug TOML projection checks, exact supported-profile lifecycle
+allow-lists, Remi route-derived lifecycle validation, and
+`apps/conary/tests/packaging_m4e.rs`.
+
+Focused implementation proof:
+
+```bash
+cargo test -p conary-core ccs::v2
+cargo test -p conary-core supported_profiles
+cargo test -p conary --test packaging_m4e
+cargo test -p conary --test packaging_m4a --test packaging_m4b --test packaging_m4c --test packaging_m4d
+cargo test -p remi native_publish
+cargo test -p remi release_upload_
+```
 
 ## Core Decision
 
