@@ -204,6 +204,10 @@ pub enum Commands {
         #[arg(long)]
         allow_downgrade: bool,
 
+        /// Allow packages with capabilities that would normally require confirmation
+        #[arg(long)]
+        allow_capabilities: bool,
+
         /// Convert legacy packages (RPM/DEB/Arch) to CCS format during install
         ///
         /// Scriptlets are automatically captured and converted to declarative hooks
@@ -1325,6 +1329,19 @@ mod tests {
             }) => {
                 assert!(allow_legacy_replay);
                 assert!(allow_foreign_legacy_replay);
+            }
+            _ => panic!("expected install command"),
+        }
+    }
+
+    #[test]
+    fn install_accepts_capability_approval_flag() {
+        let cli = parse_cli(["conary", "install", "htop", "--allow-capabilities"]).unwrap();
+        match cli.command {
+            Some(Commands::Install {
+                allow_capabilities, ..
+            }) => {
+                assert!(allow_capabilities);
             }
             _ => panic!("expected install command"),
         }

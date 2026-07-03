@@ -303,6 +303,7 @@ pub struct ConvertedCcsInstallOptions<'a> {
     pub no_deps: bool,
     pub no_scripts: bool,
     pub allow_downgrade: bool,
+    pub allow_capabilities: bool,
     pub dep_mode: Option<DepMode>,
     pub yes: bool,
     pub dependency_passes_remaining: usize,
@@ -321,6 +322,7 @@ pub async fn try_convert_to_ccs(
     format: PackageFormatType,
     db_path: &str,
     capture_scriptlets: bool,
+    allow_capabilities: bool,
 ) -> Result<ConversionResult> {
     info!("Converting {} to CCS format...", pkg.name());
 
@@ -427,7 +429,11 @@ pub async fn try_convert_to_ccs(
         .ok_or_else(|| anyhow::anyhow!("Converted CCS path is not valid UTF-8"))?;
     let converted_ccs_pkg = CcsPackage::parse(converted_ccs_path)
         .context("Failed to parse converted CCS package for capability policy")?;
-    crate::commands::ccs::enforce_ccs_capability_policy(&converted_ccs_pkg, false, None)?;
+    crate::commands::ccs::enforce_ccs_capability_policy(
+        &converted_ccs_pkg,
+        allow_capabilities,
+        None,
+    )?;
 
     info!(
         "Converted {} to CCS format: {} (fidelity: {})",
@@ -497,6 +503,7 @@ async fn install_converted_ccs_with_pending(
         no_deps,
         no_scripts,
         allow_downgrade,
+        allow_capabilities,
         dep_mode,
         yes,
         dependency_passes_remaining,
@@ -511,7 +518,7 @@ async fn install_converted_ccs_with_pending(
     )?;
 
     let ccs_pkg = CcsPackage::parse(ccs_path).context("Failed to parse converted CCS package")?;
-    crate::commands::ccs::enforce_ccs_capability_policy(&ccs_pkg, false, None)?;
+    crate::commands::ccs::enforce_ccs_capability_policy(&ccs_pkg, allow_capabilities, None)?;
 
     if !no_deps {
         let conn = open_db(db_path)?;
@@ -673,6 +680,7 @@ async fn install_converted_ccs_with_pending(
                                         no_deps: dependency_passes_remaining == 0,
                                         no_scripts,
                                         allow_downgrade,
+                                        allow_capabilities,
                                         dep_mode,
                                         yes,
                                         dependency_passes_remaining: nested_dependency_passes,
@@ -1080,6 +1088,7 @@ mod tests {
             no_deps: true,
             no_scripts: true,
             allow_downgrade: false,
+            allow_capabilities: false,
             dep_mode: None,
             yes: true,
             dependency_passes_remaining: 0,
@@ -1104,6 +1113,7 @@ mod tests {
             &legacy_path,
             PackageFormatType::Rpm,
             db_path_str,
+            false,
             false,
         )
         .await
@@ -1170,6 +1180,7 @@ mod tests {
             no_deps: true,
             no_scripts: false,
             allow_downgrade: false,
+            allow_capabilities: false,
             dep_mode: None,
             yes: true,
             dependency_passes_remaining: 0,
@@ -1410,6 +1421,7 @@ mod tests {
             no_deps: true,
             no_scripts: false,
             allow_downgrade: false,
+            allow_capabilities: false,
             dep_mode: None,
             yes: true,
             dependency_passes_remaining: 0,
@@ -1514,6 +1526,7 @@ mod tests {
             no_deps: true,
             no_scripts: true,
             allow_downgrade: false,
+            allow_capabilities: false,
             dep_mode: None,
             yes: true,
             dependency_passes_remaining: 0,
@@ -1622,6 +1635,7 @@ mod tests {
             no_deps: true,
             no_scripts: true,
             allow_downgrade: false,
+            allow_capabilities: false,
             dep_mode: None,
             yes: true,
             dependency_passes_remaining: 0,
@@ -1682,6 +1696,7 @@ mod tests {
             no_deps: true,
             no_scripts: true,
             allow_downgrade: false,
+            allow_capabilities: false,
             dep_mode: None,
             yes: true,
             dependency_passes_remaining: 0,
@@ -1713,6 +1728,63 @@ mod tests {
             std::fs::read_link(temp_dir.path().join("current")).is_err(),
             "capability rejection must happen before generation activation"
         );
+    }
+
+    #[tokio::test]
+    async fn converted_ccs_install_accepts_prompted_capabilities_when_allowed() {
+        let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let install_root = temp_dir.path().join("root");
+        let db_path = temp_dir.path().join("conary.db");
+        let db_path_str = db_path.to_str().unwrap();
+
+        std::fs::create_dir_all(&install_root).unwrap();
+        conary_core::db::init(db_path_str).unwrap();
+        stage_test_boot_assets(temp_dir.path());
+
+        let mut manifest = CcsManifest::new_minimal("converted-allowed-capability", "1.0.0");
+        manifest.capabilities = Some(CapabilityDeclaration {
+            version: 1,
+            rationale: Some("binds a privileged test port".to_string()),
+            network: NetworkCapabilities {
+                outbound: Vec::new(),
+                listen: vec!["80".to_string()],
+                none: false,
+            },
+            filesystem: FilesystemCapabilities::default(),
+            syscalls: SyscallCapabilities::default(),
+        });
+        let package_path =
+            write_runtime_ccs_package(temp_dir.path(), "converted-allowed-capability", manifest);
+
+        install_converted_ccs(ConvertedCcsInstallOptions {
+            ccs_path: package_path.to_str().unwrap(),
+            db_path: db_path_str,
+            root: install_root.to_str().unwrap(),
+            dry_run: false,
+            sandbox_mode: SandboxMode::None,
+            no_deps: true,
+            no_scripts: true,
+            allow_downgrade: false,
+            allow_capabilities: true,
+            dep_mode: None,
+            yes: true,
+            dependency_passes_remaining: 0,
+            repository_provenance: None,
+            legacy_replay: LegacyReplayOptions::default(),
+        })
+        .await
+        .unwrap();
+
+        let conn = conary_core::db::open(db_path_str).unwrap();
+        let trove_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM troves WHERE name = 'converted-allowed-capability'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(trove_count, 1);
     }
 
     #[test]

@@ -34,6 +34,8 @@ pub struct InstallOptions<'a> {
     pub sandbox_mode: SandboxMode,
     /// Allow installing older versions
     pub allow_downgrade: bool,
+    /// Allow packages with capability declarations that require confirmation
+    pub allow_capabilities: bool,
     /// Convert legacy packages to CCS format
     pub convert_to_ccs: bool,
     /// Skip the automatic state snapshot that is normally captured after

@@ -614,6 +614,7 @@ mod tests {
             no_deps: true,
             no_scripts: false,
             allow_downgrade: false,
+            allow_capabilities: false,
             dep_mode: None,
             yes: true,
             dependency_passes_remaining: 0,

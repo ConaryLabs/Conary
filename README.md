@@ -487,6 +487,7 @@ CCS packages declaring capabilities are evaluated against a three-tier policy:
 | **Denied** | Always rejected | `cap-sys-admin`, `cap-sys-rawio` |
 
 ```bash
+conary install htop --dry-run --allow-capabilities          # Approve prompted caps in normal install
 conary ccs install package.ccs --allow-capabilities --yes # Approve prompted caps
 conary ccs install package.ccs --capability-policy /path/to/policy.toml --yes
 ```

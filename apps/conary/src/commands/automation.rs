@@ -122,6 +122,7 @@ async fn execute_planned_op(
                     selection_reason: None,
                     sandbox_mode: super::SandboxMode::Always,
                     allow_downgrade: false,
+                    allow_capabilities: false,
                     convert_to_ccs: false,
                     no_capture: false,
                     force: false,

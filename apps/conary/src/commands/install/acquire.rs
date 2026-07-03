@@ -30,6 +30,7 @@ pub(super) struct CcsInstallParams<'a> {
     pub(super) no_deps: bool,
     pub(super) no_scripts: bool,
     pub(super) allow_downgrade: bool,
+    pub(super) allow_capabilities: bool,
     pub(super) dep_mode: Option<DepMode>,
     pub(super) yes: bool,
     pub(super) repository_provenance: Option<RepositoryInstallProvenance>,
@@ -123,6 +124,7 @@ pub(super) async fn resolve_and_parse_package(
             no_deps: ccs_opts.no_deps,
             no_scripts: ccs_opts.no_scripts,
             allow_downgrade: ccs_opts.allow_downgrade,
+            allow_capabilities: ccs_opts.allow_capabilities,
             dep_mode: ccs_opts.dep_mode,
             yes: ccs_opts.yes,
             dependency_passes_remaining: DEFAULT_CCS_DEPENDENCY_PASSES,
@@ -151,6 +153,7 @@ pub(super) async fn resolve_and_parse_package(
             no_deps: ccs_opts.no_deps,
             no_scripts: ccs_opts.no_scripts,
             allow_downgrade: ccs_opts.allow_downgrade,
+            allow_capabilities: ccs_opts.allow_capabilities,
             dep_mode: ccs_opts.dep_mode,
             yes: ccs_opts.yes,
             dependency_passes_remaining: DEFAULT_CCS_DEPENDENCY_PASSES,
@@ -177,7 +180,15 @@ pub(super) async fn resolve_and_parse_package(
     if convert_to_ccs {
         progress.set_status(&format!("Converting {} to CCS format...", pkg.name()));
 
-        match try_convert_to_ccs(pkg.as_ref(), &resolved.path, format, db_path, !no_capture).await?
+        match try_convert_to_ccs(
+            pkg.as_ref(),
+            &resolved.path,
+            format,
+            db_path,
+            !no_capture,
+            ccs_opts.allow_capabilities,
+        )
+        .await?
         {
             ConversionResult::Converted {
                 ccs_path,
@@ -193,6 +204,7 @@ pub(super) async fn resolve_and_parse_package(
                     no_deps: ccs_opts.no_deps,
                     no_scripts: ccs_opts.no_scripts,
                     allow_downgrade: ccs_opts.allow_downgrade,
+                    allow_capabilities: ccs_opts.allow_capabilities,
                     dep_mode: ccs_opts.dep_mode,
                     yes: ccs_opts.yes,
                     dependency_passes_remaining: DEFAULT_CCS_DEPENDENCY_PASSES,
