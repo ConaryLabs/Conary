@@ -7,7 +7,7 @@
 	<div class="container">
 		<h1 class="page-title animate-in" style="--stagger: 0">Features</h1>
 		<p class="page-desc animate-in" style="--stagger: 1">
-			Everything Conary can do, with examples.
+			Current package-manager and generation features, with examples.
 		</p>
 	</div>
 </section>
@@ -35,7 +35,7 @@
 					<code>conary system generation gc --keep 3</code>
 					<code>conary system generation info 2</code>
 				</div>
-				<p class="feature-note">Requires Linux 6.2+ with composefs support.</p>
+				<p class="feature-note">Only generation-model features require Linux 6.2+ with composefs support.</p>
 			</div>
 
 			<div class="feature-card">
@@ -79,11 +79,12 @@
 			</div>
 
 			<div class="feature-card">
-				<h3>Instant Rollback</h3>
+				<h3>Generation Rollback</h3>
 				<p>
-					Every generation is an immutable EROFS image. Rolling back remounts a
-					previous generation -- no file copying, no rebuilding. The kernel verifies
-					integrity via fs-verity on every file read.
+					Every generation is an immutable EROFS image. Rolling back selects a
+					previous generation instead of copying package files back into place.
+					fs-verity and composefs belong to this generation-model path, not the
+					basic package-loop preview.
 				</p>
 				<div class="feature-code">
 					<code>conary system generation rollback</code>
@@ -239,11 +240,11 @@
 			</div>
 
 			<div class="feature-card">
-				<h3>EROFS Binary Deltas</h3>
+				<h3>Generation Delta Follow-up</h3>
 				<p>
-					Upgrade generations by downloading EROFS binary deltas instead of full images.
-					Combined with CAS-level deduplication, updates transfer only the blocks
-					that actually changed.
+					Generation delta and chunk-reuse work remain part of the broader
+					artifact roadmap. Treat the current public release evidence as package-loop
+					and generation-export evidence, not a public delta-size claim.
 				</p>
 			</div>
 
@@ -295,15 +296,12 @@
 			</div>
 
 			<div class="feature-card">
-				<h3>Package Provenance (DNA)</h3>
+				<h3>Release Provenance</h3>
 				<p>
-					Full provenance chain from source to deployment with SLSA attestation support.
-					Sigstore integration for signing and verification.
+					The preview release publishes checksums and a detached CCS signature.
+					Complete SBOM/provenance sidecars for every release artifact remain
+					follow-up work.
 				</p>
-				<div class="feature-code">
-					<code>conary provenance show nginx</code>
-					<code>conary provenance export nginx --format spdx</code>
-				</div>
 			</div>
 
 			<div class="feature-card">

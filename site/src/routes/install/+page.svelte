@@ -22,6 +22,12 @@
 				dnf, apt, or pacman remains authoritative. First Remi-backed package use may be
 				slower while RPM/DEB/Arch metadata is converted into CCS.
 			</p>
+			<p class="install-note">
+				Use the pinned
+				<a href="https://github.com/ConaryLabs/Conary/releases/tag/v0.9.2" target="_blank" rel="noopener noreferrer">v0.9.2 release</a>
+				on a VM or non-critical host. Verify SHA256SUMS before installing the
+				Fedora 44 RPM, Ubuntu 26.04 LTS DEB, or Arch package.
+			</p>
 			<div class="terminal">
 				<div class="terminal-header">
 					<span class="terminal-dot" aria-hidden="true"></span>
@@ -53,16 +59,16 @@
 					<div class="terminal-line t-blank"></div>
 					<div class="terminal-line">
 						<span class="t-prompt">$</span>
-						<span class="t-cmd">conary system adopt --system</span>
+						<span class="t-cmd">conary system adopt --system --yes</span>
 					</div>
-						<div class="terminal-line t-output">Use --dry-run first, then --yes when applying active-host changes.</div>
+					<div class="terminal-line t-output">Use --dry-run first, then --yes when applying active-host changes.</div>
 					<div class="terminal-line">
 						<span class="t-prompt">$</span>
 						<span class="t-cmd">conary system unadopt --all --dry-run</span>
 					</div>
 					<div class="terminal-line">
 						<span class="t-prompt">$</span>
-							<span class="t-cmd">conary system unadopt --all --yes</span>
+						<span class="t-cmd">conary system unadopt --all --yes</span>
 					</div>
 				</div>
 			</div>
@@ -76,12 +82,11 @@
 		<div class="install-block animate-in" style="--stagger: 5">
 			<h2>Developer Build</h2>
 			<p class="install-note">
-				Release binaries are not linked for this preview tag yet, so source builds are
-				the current developer path.
-				Requires Rust 1.96+, SQLite development headers, and Linux 6.2+ with
-				composefs and EROFS support. Conary uses Linux-specific kernel APIs
-				(composefs, fs-verity, namespaces, landlock, seccomp) and does not
-				currently build on macOS or Windows.
+				Source builds remain available for contributors. Requires Rust 1.96+,
+				SQLite development headers, and Linux. The basic package loop does not
+				require composefs; generation-model features need Linux 6.2+ with
+				composefs and EROFS support. Conary uses Linux-specific kernel APIs and
+				does not currently build on macOS or Windows.
 			</p>
 			<div class="terminal">
 				<div class="terminal-header">
@@ -127,7 +132,7 @@
 						<span class="t-prompt">$</span>
 						<span class="t-cmd">conary --version</span>
 					</div>
-					<div class="terminal-line t-output">conary 0.8.0</div>
+					<div class="terminal-line t-output">conary 0.9.2</div>
 					<div class="terminal-line t-blank"></div>
 					<div class="terminal-line">
 						<span class="t-prompt">$</span>
@@ -140,7 +145,7 @@
 						<span class="t-cmd">conary repo sync</span>
 					</div>
 					<div class="terminal-line t-output">Syncing metadata from 1 repository...</div>
-					<div class="terminal-line t-output t-success">Sync complete. Tens of thousands of packages available.</div>
+					<div class="terminal-line t-output t-success">Sync complete. Supported upstream metadata is ready.</div>
 					<div class="terminal-line t-blank"></div>
 					<div class="terminal-line">
 						<span class="t-prompt">$</span>
@@ -155,9 +160,11 @@
 		<div class="install-block animate-in" style="--stagger: 11">
 			<h2>Distribution Packages</h2>
 			<p class="install-note">
-				The preview release matrix will link native RPM, DEB, and Arch artifacts
-				when they are published. Until that artifact/provenance matrix is ready,
-				use the developer build above.
+				Native packages are published on the
+				<a href="https://github.com/ConaryLabs/Conary/releases/tag/v0.9.2" target="_blank" rel="noopener noreferrer">v0.9.2 release</a>.
+				Use <code>conary-0.9.2-1.fc44.x86_64.rpm</code>,
+				<code>conary_0.9.2-1_amd64.deb</code>, or
+				<code>conary-0.9.2-1-x86_64.pkg.tar.zst</code> for the matching test VM.
 			</p>
 			<div class="distro-cards">
 				<div class="distro-card distro-fedora">

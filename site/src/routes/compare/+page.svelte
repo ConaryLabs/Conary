@@ -47,7 +47,7 @@
 						</tr>
 						<tr>
 							<td class="feature-name">Binary delta updates</td>
-							<td class="highlight"><span class="check yes" aria-label="Yes"></span></td>
+							<td class="highlight"><span class="check partial" aria-label="Partial"></span></td>
 							<td><span class="check no" aria-label="No"></span></td>
 							<td><span class="check partial" aria-label="Partial"></span></td>
 							<td><span class="check partial" aria-label="Partial"></span></td>
@@ -79,7 +79,7 @@
 						</tr>
 						<tr>
 							<td class="feature-name">Kernel-enforced integrity (fs-verity)</td>
-							<td class="highlight"><span class="check yes" aria-label="Yes"></span></td>
+							<td class="highlight"><span class="check partial" aria-label="Partial"></span></td>
 							<td><span class="check no" aria-label="No"></span></td>
 							<td><span class="check no" aria-label="No"></span></td>
 							<td><span class="check no" aria-label="No"></span></td>
@@ -143,7 +143,7 @@
 						</tr>
 						<tr>
 							<td class="feature-name">Explicit system takeover</td>
-							<td class="highlight"><span class="check yes" aria-label="Yes"></span></td>
+							<td class="highlight"><span class="check partial" aria-label="Partial"></span></td>
 							<td><span class="check no" aria-label="No"></span></td>
 							<td><span class="check no" aria-label="No"></span></td>
 							<td><span class="check no" aria-label="No"></span></td>
@@ -151,7 +151,7 @@
 						</tr>
 						<tr>
 							<td class="feature-name">Bootstrap from scratch</td>
-							<td class="highlight"><span class="check yes" aria-label="Yes"></span></td>
+							<td class="highlight"><span class="check partial" aria-label="Partial"></span></td>
 							<td><span class="check no" aria-label="No"></span></td>
 							<td><span class="check no" aria-label="No"></span></td>
 							<td><span class="check no" aria-label="No"></span></td>
@@ -174,16 +174,14 @@
 				<p>
 					apt is the workhorse of the DEB ecosystem -- battle-tested and reliable. Conary
 					doesn't replace apt on Ubuntu LTS systems; it sits alongside it. The key differences:
-					Conary builds immutable EROFS generations with kernel-enforced integrity (fs-verity),
-					adds content-addressable storage for deduplication, binary delta updates to
-					reduce bandwidth, and the ability to manage Fedora or Arch packages on the same machine.
-					Its preview starts with adoption and unadoption, then lets you select bootable
-					generations only when you explicitly choose that authority boundary.
+					Conary adds reversible adoption/unadoption, content-addressable storage for
+					deduplication, Remi conversion, and optional immutable EROFS generations when
+					you explicitly choose that authority boundary.
 				</p>
 				<p>
 					If you only run Ubuntu and don't need cross-distro support, apt works great. Conary
 					becomes valuable when you want immutable system generations, unified management,
-					disk savings from CAS, or kernel-verified integrity.
+					disk savings from CAS, or a safer path toward Conary-owned package state.
 				</p>
 			</div>
 
@@ -193,8 +191,8 @@
 					dnf is a capable package manager with delta RPM support and a SAT solver. Conary
 					shares the SAT-based approach (via resolvo) and adds CAS deduplication, immutable
 					EROFS generations with composefs mounts, and cross-distro package management.
-					dnf's delta RPM support is partial -- it depends on upstream providing
-					delta files. Conary generates EROFS binary deltas on-demand from any two versions.
+					dnf's delta RPM support is mature but depends on upstream providing delta files.
+					Conary's generation-delta work remains part of the broader artifact roadmap.
 					dnf transactions mutate the filesystem in place; Conary adds changeset-backed
 					package state plus optional bootable generations for complete-system rollback.
 				</p>
@@ -205,8 +203,8 @@
 				<p>
 					pacman is fast, minimal, and trusts the user. Conary respects that philosophy while
 					adding features pacman lacks: reversible adoption, immutable EROFS
-					generation artifacts, kernel-enforced integrity via
-					fs-verity, content-addressable storage, dependency resolution through SAT solving,
+					generation artifacts, generation integrity work through composefs/fs-verity,
+					content-addressable storage, dependency resolution through SAT solving,
 					and the ability to install packages from Fedora or Ubuntu repos alongside Arch packages.
 				</p>
 			</div>
@@ -234,7 +232,7 @@
 					Both Conary and NixOS support immutable system generations, but the
 					approach differs. NixOS builds generations from Nix expressions in a
 					custom functional language. Conary builds generations from the actual
-					installed package set -- EROFS images verified by composefs and backed
+					installed package set -- EROFS images mounted with composefs and backed
 					by content-addressable storage. Conary generations work with existing
 					RPM/DEB/Arch packages; NixOS requires packages to be rewritten as Nix
 					derivations.
@@ -254,9 +252,9 @@
 			<div class="detail-card animate-in" style="--stagger: 11">
 				<h2>Where Conary Is Still Early</h2>
 				<p>
-					Conary is a 0.8.0 release. apt, dnf, and pacman have decades of battle-testing,
-					ecosystem integration, and institutional trust. Nix has a large and active community
-					building custom packages.
+					Conary is a 0.9.2 limited preview release. apt, dnf, and pacman have decades
+					of battle-testing, ecosystem integration, and institutional trust. Nix has
+					a large and active community building custom packages.
 				</p>
 				<p>
 					Conary bridges the package gap through Remi (on-demand conversion of upstream

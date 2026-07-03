@@ -15,6 +15,16 @@ should be revised for the norms of whichever subreddit receives it.
 I am looking for a small number of testers for Conary, a Rust package manager and
 Linux system manager I have been building.
 
+Name note: this is an independent project, not a resurrection or continuation
+of the old rPath Conary codebase. It is not affiliated with, endorsed by, or
+maintained by rPath, SAS, or the original Conary developers.
+
+Conary is broader than this test loop: it also has generation-style system
+management, CCS packages, Remi/repository work, and tooling for more ambitious
+system transitions. I am intentionally not asking people to evaluate all of
+that here. This post is only about the existing-system package-manager loop:
+install, adopt, list/search, dry-run update, and unadopt.
+
 The part I want feedback on right now is deliberately narrow: can Conary feel
 safe and unsurprising as a package manager on an existing Fedora, Ubuntu, or Arch
 system?
@@ -36,8 +46,7 @@ https://github.com/ConaryLabs/Conary/releases/tag/v0.9.2
 
 Before starting, check the compatibility checklist --
 the whole loop below runs on stock kernels:
-https://conary.io/docs/compatibility-checklist (or
-`docs/guides/compatibility-checklist.md` in the repo).
+https://github.com/ConaryLabs/Conary/blob/main/docs/guides/compatibility-checklist.md
 
 If you use Claude Code, Codex, or another coding agent, there is an
 agent-assisted version of the loop:
@@ -60,7 +69,7 @@ What I would love people to try in a VM, snapshot, or spare system:
 conary install jq --dry-run
 conary install jq --yes
 conary system adopt --system --dry-run
-conary system adopt --system
+conary system adopt --system --yes
 conary list
 conary search jq
 conary update --dry-run

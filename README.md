@@ -2,7 +2,7 @@
 
 [![PR Gate](https://github.com/ConaryLabs/Conary/actions/workflows/pr-gate.yml/badge.svg)](https://github.com/ConaryLabs/Conary/actions/workflows/pr-gate.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![v0.8.0](https://img.shields.io/badge/version-0.8.0-orange.svg)](CHANGELOG.md)
+[![v0.9.2](https://img.shields.io/badge/version-0.9.2-orange.svg)](CHANGELOG.md)
 
 **Website:** [conary.io](https://conary.io) | **Packages:** [remi.conary.io](https://remi.conary.io) | **Discussions:** [GitHub Discussions](https://github.com/ConaryLabs/Conary/discussions)
 
@@ -10,7 +10,11 @@ A cross-distribution Linux system manager with immutable generations, atomic tra
 
 Inspired by the [original Conary](https://en.wikipedia.org/wiki/Conary_(package_manager)) from rPath, which pioneered concepts like troves, changesets, flavors, and components that were ahead of their time. This project carries those ideas forward with a modern implementation.
 
-**Release status:** Conary is being prepared as an adoption-led limited public preview for Fedora 44, Ubuntu 26.04 LTS, and Arch Linux. The package-manager preview surface is the CLI install/remove/update path, native-package adoption/unadoption, selected-generation native-authority handoff, Remi conversion, and local validation for those flows. Immutable generations and raw/qcow2 generation export remain core capabilities, and the refreshed 2026-05-21 Group O QEMU run passed installed-runtime and bootstrap-run generation export boot proof. The codebase now also has x86_64 UEFI ISO generation-carrier export with output provenance sidecars, and the focused 2026-05-21 Group P QEMU run passed ISO export, host copy-back, provenance, readonly-carrier boot, and writable `/etc` overlay proof. The public ask is still intentionally package-manager focused: in adoption mode, dnf, apt, and pacman remain authoritative for packages they already own; `conary system unadopt --all --yes` is the non-destructive escape hatch on hosts without a selected Conary generation, and `conary system native-handoff --yes` is the staged handoff path after a Conary generation has been selected. Conary-owned updates work without requiring a selected generation, adopted packages are skipped unless takeover is explicit, and `update --security` refuses before mutation when a requested Conary-owned source cannot prove advisory metadata support. Repositories marked `--security-advisories supported` can now drive security-only updates from trusted JSON advisory metadata with persisted advisory ID, CVE, severity, fixed-version, and source-trust data. Takeover remains explicit, native transaction-history import remains out of scope, and non-x86_64 generation boot assets remain reserved.
+This is an independent project, not a resurrection or continuation of the
+original rPath Conary codebase. It is not affiliated with, endorsed by, or
+maintained by rPath, SAS, or the original Conary developers.
+
+**Release status:** `v0.9.2` is the pinned adoption-led limited public preview for Fedora 44, Ubuntu 26.04 LTS, and Arch Linux. The package-manager preview surface is the CLI install/remove/update path, native-package adoption/unadoption, selected-generation native-authority handoff, Remi conversion, and local validation for those flows. Immutable generations and raw/qcow2 generation export remain core capabilities, and the refreshed 2026-05-21 Group O QEMU run passed installed-runtime and bootstrap-run generation export boot proof. The codebase now also has x86_64 UEFI ISO generation-carrier export with output provenance sidecars, and the focused 2026-05-21 Group P QEMU run passed ISO export, host copy-back, provenance, readonly-carrier boot, and writable `/etc` overlay proof. The public ask is still intentionally package-manager focused: in adoption mode, dnf, apt, and pacman remain authoritative for packages they already own; `conary system unadopt --all --yes` is the non-destructive escape hatch on hosts without a selected Conary generation, and `conary system native-handoff --yes` is the staged handoff path after a Conary generation has been selected. Conary-owned updates work without requiring a selected generation, adopted packages are skipped unless takeover is explicit, and `update --security` refuses before mutation when a requested Conary-owned source cannot prove advisory metadata support. Repositories marked `--security-advisories supported` can now drive security-only updates from trusted JSON advisory metadata with persisted advisory ID, CVE, severity, fixed-version, and source-trust data. Takeover remains explicit, native transaction-history import remains out of scope, and non-x86_64 generation boot assets remain reserved.
 
 Release artifact and provenance expectations for the limited preview are tracked in [docs/operations/release-artifact-matrix.md](docs/operations/release-artifact-matrix.md).
 
@@ -102,16 +106,21 @@ The honest gap: ecosystem maturity. apt and dnf have decades of packages and int
 
 Before starting, skim the [compatibility checklist](docs/guides/compatibility-checklist.md) -- the basic package loop runs on stock kernels; only generation-model features need more.
 
-Use this path on a VM or non-critical host first. Release binaries are not
-linked for this preview tag yet, so the commands below assume the developer
-build path in the next subsection and use `./target/debug/conary`.
+Use this path on a VM or non-critical host first. Download the matching
+`v0.9.2` package from the
+[GitHub release](https://github.com/ConaryLabs/Conary/releases/tag/v0.9.2),
+verify `SHA256SUMS`, and install it with the native package tool for that VM.
+The preview publishes a Fedora 44 RPM, Ubuntu 26.04 LTS DEB, Arch package, CCS
+package, checksum file, and detached CCS signature. The
+[agent-assisted tester loop](docs/guides/agent-assisted-tester-loop.md) has the
+distro-specific install and transcript-capture commands.
 
 ```bash
-./target/debug/conary system init
-./target/debug/conary repo add remi https://remi.conary.io
-./target/debug/conary repo sync
-./target/debug/conary system adopt --system --dry-run
-./target/debug/conary system adopt --status
+conary system init
+conary repo add remi https://remi.conary.io
+conary repo sync
+conary system adopt --system --dry-run
+conary system adopt --status
 ```
 
 If `system init` fails, the error names the database parent and runtime root to
@@ -132,10 +141,10 @@ than advertised as ordinary ready-to-install packages.
 When you are ready to test the reversible adoption apply path on that host:
 
 ```bash
-./target/debug/conary system adopt --system
-./target/debug/conary system adopt --status
-./target/debug/conary system unadopt --all --dry-run
-./target/debug/conary system unadopt --all --yes
+conary system adopt --system --yes
+conary system adopt --status
+conary system unadopt --all --dry-run
+conary system unadopt --all --yes
 ```
 
 Commands that change packages, files, generation state, or selected native
@@ -667,7 +676,7 @@ cargo build --profile fast-release   # Faster compile, still optimized
 
 ## Project Status
 
-**Version 0.8.0** -- The project has a working end-to-end stack: multi-format installs, atomic changesets, adoption/unadoption, selected-generation native-authority handoff, immutable generations, explicit takeover/bootstrap flows, Remi conversion and serving, federation, conaryd package execution, and capability-restricted runtime execution. The current release-readiness pass is narrowing the public preview to an adoption-led Fedora 44, Ubuntu 26.04 LTS, and Arch Linux package-manager slice; keeping the installed-runtime and bootstrap-run generation-export QEMU gates green; adding x86_64 ISO generation-carrier export and provenance sidecars; reducing the `tough`/Sigstore advisory path while carrying the dated `rsa` waiver; and documenting remaining gaps such as portable bundle signing, native transaction-history import, and non-x86_64 generation boot assets.
+**Version 0.9.2** -- The project has a working end-to-end stack: multi-format installs, atomic changesets, adoption/unadoption, selected-generation native-authority handoff, immutable generations, explicit takeover/bootstrap flows, Remi conversion and serving, federation, conaryd package execution, and capability-restricted runtime execution. The current public preview is deliberately narrower: a Fedora 44, Ubuntu 26.04 LTS, and Arch Linux package-manager slice with `v0.9.2` release packages, checksums, and a detached CCS signature. Generation export, x86_64 ISO carrier work, Remi publication, and provenance sidecars remain part of the larger Conary system, but first-wave external feedback should focus on reversible adoption, package listing/search, dry-run update behavior, Conary-owned install dry-runs, and non-destructive unadoption. Remaining gaps include signed portable generation bundles, SBOM/provenance sidecars for every release artifact, native transaction-history import, and non-x86_64 generation boot assets.
 
 See [ROADMAP.md](ROADMAP.md) for what we're building next.
 
@@ -678,9 +687,9 @@ See [ROADMAP.md](ROADMAP.md) for what we're building next.
 The next milestone is the current **adoption-led preview and validation** push -- see [ROADMAP.md](ROADMAP.md) for the full plan. Near-term priorities:
 
 - Keep Fedora 44, Ubuntu 26.04 LTS, and Arch adoption/unadoption proof in regular rotation
-- Keep QEMU generation-export validation green in regular rotation, and unblock the ISO Group P gate with a refreshed source fixture
+- Keep raw/qcow2/ISO generation-export validation green in regular rotation
 - Keep the selected-generation native-authority handoff suite green across Fedora 44, Ubuntu 26.04 LTS, and Arch
-- Introduce signed portable generation bundles and boot-artifact provenance
+- Finish signed portable generation bundles and release-artifact SBOM/provenance sidecars
 - Keep self-host VM validation freshness checks green and finish snapshot/overlay rerun hygiene
 - Keep the Goal 7 daily-driver UX matrix, shell completion rendering checks, and operator diagnostics current
 - Continue hardening trust, federation, release, and rollback behavior

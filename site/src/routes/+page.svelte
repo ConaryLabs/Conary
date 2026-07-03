@@ -58,9 +58,9 @@
 			<div class="feature-card animate-in" style="--stagger: 10">
 				<h3>Immutable Generations</h3>
 				<p>
-					EROFS images + composefs overlays. Build, switch, and rollback
-					entire system states without rebooting. Every generation is
-					verified by fs-verity.
+					EROFS images + composefs overlays. Build, select for next boot,
+					roll back, or export complete system states when you explicitly
+					move into the generation-model path.
 				</p>
 			</div>
 			<div class="feature-card animate-in" style="--stagger: 11">
@@ -94,25 +94,27 @@
 				</p>
 			</div>
 			<div class="feature-card animate-in" style="--stagger: 15">
-				<h3>Binary Deltas</h3>
+				<h3>Preview Release</h3>
 				<p>
-					Upgrade packages by downloading only what changed. Zstd-compressed binary
-					diffs between versions cut update sizes by 60-90%.
+					v0.9.2 publishes Fedora 44 RPM, Ubuntu 26.04 LTS DEB, Arch package,
+					CCS package, checksums, and a detached CCS signature for the first
+					external tester loop.
 				</p>
 			</div>
 			<div class="feature-card animate-in" style="--stagger: 16">
-				<h3>Kernel-Enforced Integrity</h3>
+				<h3>Generation Integrity</h3>
 				<p>
-					fs-verity on every file in every generation. The kernel verifies
-					content hashes on each read -- tampered files cause I/O errors,
-					not silent corruption.
+					Generation integrity work uses EROFS, composefs, and fs-verity
+					where that path is selected. The basic package loop stays on stock
+					host package flows.
 				</p>
 			</div>
 			<div class="feature-card animate-in" style="--stagger: 17">
 				<h3>Declarative System Model</h3>
 				<p>
 					Declare the packages your system should have. Conary computes the difference,
-					builds a new EROFS generation, and switches to it atomically.
+					then applies package changes or builds a generation when you choose that
+					authority boundary.
 				</p>
 			</div>
 			<div class="feature-card animate-in" style="--stagger: 18">
@@ -125,8 +127,9 @@
 			<div class="feature-card animate-in" style="--stagger: 19">
 				<h3>OCI Export</h3>
 				<p>
-					Export any generation or package set as an OCI container image,
-					compatible with podman and docker. Ship your exact system state.
+					Export CCS packages as OCI artifacts. Generation-to-OCI export shares
+					the generation artifact roadmap instead of being part of the first
+					tester loop.
 				</p>
 			</div>
 		</div>
@@ -213,7 +216,7 @@
 					</tr>
 					<tr>
 						<td class="feature-name">Binary deltas</td>
-						<td class="highlight"><span class="check yes" aria-label="Yes"></span></td>
+						<td class="highlight"><span class="check partial" aria-label="Partial"></span></td>
 						<td><span class="check no" aria-label="No"></span></td>
 						<td><span class="check partial" aria-label="Partial"></span></td>
 						<td><span class="check partial" aria-label="Partial"></span></td>
@@ -225,11 +228,11 @@
 						<td><span class="check no" aria-label="No"></span></td>
 						<td><span class="check no" aria-label="No"></span></td>
 						<td><span class="check no" aria-label="No"></span></td>
-						<td><span class="check no" aria-label="No"></span></td>
+						<td><span class="check yes" aria-label="Yes"></span></td>
 					</tr>
 					<tr>
 						<td class="feature-name">Kernel-enforced integrity</td>
-						<td class="highlight"><span class="check yes" aria-label="Yes"></span></td>
+						<td class="highlight"><span class="check partial" aria-label="Partial"></span></td>
 						<td><span class="check no" aria-label="No"></span></td>
 						<td><span class="check no" aria-label="No"></span></td>
 						<td><span class="check no" aria-label="No"></span></td>

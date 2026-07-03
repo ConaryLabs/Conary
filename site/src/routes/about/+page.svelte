@@ -36,6 +36,11 @@
 				dependencies correctly the first time. We carry the name forward as a tribute to the
 				engineering that got there first.
 			</p>
+			<p>
+				This is an independent project, not a resurrection or continuation of the original
+				rPath Conary codebase. It is not affiliated with, endorsed by, or maintained by
+				rPath, SAS, or the original Conary developers.
+			</p>
 		</div>
 
 		<div class="about-block animate-in" style="--stagger: 3">
@@ -55,17 +60,18 @@
 			<p>
 				Conary doesn't ask upstream maintainers to change anything. It works with existing
 				RPM, DEB, and Arch packages through <strong>Remi</strong>, a conversion proxy that
-				transparently converts upstream packages into Conary's native CCS format. This means
-				immediate access to tens of thousands of packages across three major distributions,
-				with no upstream changes required.
+				converts supported upstream packages into Conary's native CCS format. This means
+				access to upstream package metadata across three major distributions, while public
+				serving stays limited to conversion-safe artifacts.
 			</p>
 			<p>
 				Under the hood, package operations commit DB and file state through changesets,
 				while generation builds produce EROFS images that can be selected for complete-system
 				rollback. Content-addressable storage (SHA-256 + XXH128) handles file-level
 				deduplication, a SAT-based dependency resolver (via resolvo) solves dependencies,
-				and EROFS binary deltas keep updates small. The kernel enforces integrity via
-				fs-verity on every file read -- tampered files cause I/O errors, not silent corruption.
+				and generation integrity work uses composefs and fs-verity where that path is
+				selected. The first public tester loop is intentionally narrower: package-manager
+				install, adoption, listing/search, dry-run updates, and unadoption.
 			</p>
 		</div>
 
@@ -90,7 +96,7 @@
 				</div>
 				<div class="arch-item">
 					<h3>Delta Engine</h3>
-					<p>On-demand binary deltas between any two versions. Zstd dictionary compression. 60-90% smaller updates.</p>
+					<p>CAS chunking and generation-delta work are part of the broader roadmap, not a size-reduction promise for the first tester loop.</p>
 				</div>
 				<div class="arch-item">
 					<h3>System Model</h3>
@@ -98,7 +104,7 @@
 				</div>
 				<div class="arch-item">
 					<h3>Generations</h3>
-					<p>Immutable EROFS filesystem images with composefs overlay. Live-switch between verified system states.</p>
+					<p>Immutable EROFS filesystem images with composefs overlay. Select, roll back, or export complete system states when generation mode is enabled.</p>
 				</div>
 				<div class="arch-item">
 					<h3>Bootstrap</h3>
