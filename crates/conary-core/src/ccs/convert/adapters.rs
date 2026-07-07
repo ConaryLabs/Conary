@@ -2,6 +2,7 @@
 
 use crate::ccs::convert::blocked_classes::{BlockedClassOutcome, BlockedClassRegistry};
 use crate::ccs::convert::command_evidence::{CommandEvidenceSource, CommandInvocation};
+use crate::ccs::convert::debian_adapters::DebSystemdHelperAdapter;
 use crate::ccs::convert::effects::{
     ScriptletClassification, ScriptletCommandEvidence, ScriptletEffectEvidence,
 };
@@ -49,6 +50,17 @@ pub fn bootstrap_adapter_evidence() -> &'static [BootstrapAdapterEvidence] {
             package_count: 1,
             invocation_count: 3,
             coverage_ids: &["systemd-daemon-reload/v2", "systemd-unit-state/v1"],
+        },
+        BootstrapAdapterEvidence {
+            command: "deb-systemd-helper",
+            forms: &[
+                "deb-systemd-helper enable",
+                "deb-systemd-helper disable",
+                "deb-systemd-helper purge|mask|unmask|is-enabled|was-enabled|debian-installed|update-state|reenable",
+            ],
+            package_count: 1,
+            invocation_count: 1,
+            coverage_ids: &["deb-systemd-helper/v1"],
         },
         BootstrapAdapterEvidence {
             command: "systemd-tmpfiles",
@@ -124,6 +136,7 @@ impl Default for AdapterRegistry {
             Box::new(LdconfigAdapter),
             Box::new(SystemdDaemonReloadAdapter),
             Box::new(SystemdUnitStateAdapter),
+            Box::new(DebSystemdHelperAdapter),
             Box::new(SystemdTmpfilesCreateAdapter),
             Box::new(SystemdSysusersAdapter),
             Box::new(AlternativesRegistrationAdapter),
@@ -155,32 +168,46 @@ impl AdapterRegistry {
         &self,
         input: AdapterInput<'_>,
     ) -> ScriptletClassification {
-        if let Some(class) = self.blocked_classes.match_invocation(input.invocation) {
-            let command = Some(ScriptletCommandEvidence::from_invocation(input.invocation));
-            return match class.default_outcome {
-                BlockedClassOutcome::Blocked => ScriptletClassification::Blocked {
-                    reason_code: class.reason_code.to_string(),
-                    class_id: class.id.to_string(),
-                    command,
-                },
-                BlockedClassOutcome::Review => ScriptletClassification::Review {
-                    reason_code: class.reason_code.to_string(),
-                    class_id: Some(class.id.to_string()),
-                    command,
-                },
+        let review_fallback =
+            if let Some(class) = self.blocked_classes.match_invocation(input.invocation) {
+                let command = Some(ScriptletCommandEvidence::from_invocation(input.invocation));
+                match class.default_outcome {
+                    BlockedClassOutcome::Blocked => {
+                        return ScriptletClassification::Blocked {
+                            reason_code: class.reason_code.to_string(),
+                            class_id: class.id.to_string(),
+                            command,
+                        };
+                    }
+                    BlockedClassOutcome::Review => Some(ScriptletClassification::Review {
+                        reason_code: class.reason_code.to_string(),
+                        class_id: Some(class.id.to_string()),
+                        command,
+                    }),
+                }
+            } else {
+                None
             };
-        }
 
-        self.adapters
+        let adapter_classification = self
+            .adapters
             .iter()
             .find(|adapter| adapter.matches(input))
-            .map_or_else(
-                || ScriptletClassification::Unknown {
-                    reason_code: "unknown-command".to_string(),
-                    command: input.invocation.command.clone(),
-                },
-                |adapter| adapter.classify(input),
-            )
+            .map(|adapter| adapter.classify(input));
+
+        match (review_fallback, adapter_classification) {
+            (Some(_), Some(classification))
+                if classification_has_adapter_effects(&classification) =>
+            {
+                classification
+            }
+            (Some(review), _) => review,
+            (None, Some(classification)) => classification,
+            (None, None) => ScriptletClassification::Unknown {
+                reason_code: "unknown-command".to_string(),
+                command: input.invocation.command.clone(),
+            },
+        }
     }
 
     pub fn classify_invocation(&self, invocation: &CommandInvocation) -> ScriptletClassification {
@@ -947,6 +974,20 @@ fn known_effect_classification(
     }
 }
 
+fn classification_has_adapter_effects(classification: &ScriptletClassification) -> bool {
+    let ScriptletClassification::Known { effects, .. } = classification else {
+        return false;
+    };
+
+    !effects.is_empty()
+        && effects.iter().all(|effect| {
+            effect
+                .adapter_id
+                .as_deref()
+                .is_some_and(|id| !id.is_empty())
+        })
+}
+
 fn effect_source(source: CommandEvidenceSource) -> EffectSource {
     match source {
         CommandEvidenceSource::StaticSignal => EffectSource::StaticSignal,
@@ -990,6 +1031,26 @@ mod tests {
             cwd: None,
             environment: vec![],
         }
+    }
+
+    fn extra_str<'a>(effect: &'a ScriptletEffectEvidence, key: &str) -> Option<&'a str> {
+        effect.extra.get(key).and_then(toml::Value::as_str)
+    }
+
+    fn extra_bool(effect: &ScriptletEffectEvidence, key: &str) -> Option<bool> {
+        effect.extra.get(key).and_then(toml::Value::as_bool)
+    }
+
+    fn extra_string_array(effect: &ScriptletEffectEvidence, key: &str) -> Vec<String> {
+        effect
+            .extra
+            .get(key)
+            .and_then(toml::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(toml::Value::as_str)
+            .map(str::to_string)
+            .collect()
     }
 
     #[test]
@@ -1097,6 +1158,7 @@ mod tests {
                 "ldconfig/v2",
                 "systemd-daemon-reload/v2",
                 "systemd-unit-state/v1",
+                "deb-systemd-helper/v1",
                 "systemd-tmpfiles-create/v1",
                 "systemd-sysusers/v1",
                 "alternatives-registration/v1",
@@ -1130,6 +1192,7 @@ mod tests {
             "systemd-tmpfiles",
             "systemd-sysusers",
             "update-alternatives",
+            "deb-systemd-helper",
             "update-mime-database",
             "install-info",
             "gconftool-2",
@@ -1173,6 +1236,13 @@ mod tests {
                 argv: &["enable", "demo.service"],
                 adapter_id: "systemd-unit-state/v1",
                 reason_code: "helper-complete-systemd-unit-state",
+            },
+            GoldenAdapterCase {
+                fixture_id: "adapter-deb-systemd-helper-unit-state",
+                command: "deb-systemd-helper",
+                argv: &["enable", "demo.service"],
+                adapter_id: "deb-systemd-helper/v1",
+                reason_code: "helper-complete-deb-systemd-helper-unit-state",
             },
             GoldenAdapterCase {
                 fixture_id: "adapter-tmpfiles-create",
@@ -1353,6 +1423,151 @@ mod tests {
         assert_eq!(reason_code, "helper-complete-systemd-unit-state");
         assert_eq!(effects[0].replacement, EffectReplacement::Complete);
         assert_eq!(effects[0].path.as_deref(), Some("demo.service"));
+    }
+
+    #[test]
+    fn deb_systemd_helper_enable_disable_are_complete_with_state_model_for_packaged_units() {
+        let registry = AdapterRegistry::default();
+        let mut payload = PayloadHints::default();
+        payload.systemd_units.insert("demo.service".to_string());
+
+        for (action, state_model) in [
+            ("enable", "first-enable-state-file"),
+            ("disable", "enablement-state-update"),
+        ] {
+            let classification = registry.classify_invocation_with_context(AdapterInput {
+                invocation: &invocation("deb-systemd-helper", &[action, "demo.service"]),
+                payload: &payload,
+            });
+
+            let ScriptletClassification::Known {
+                reason_code,
+                effects,
+            } = classification
+            else {
+                panic!("deb-systemd-helper {action} should be modeled as known evidence");
+            };
+            assert_eq!(reason_code, "helper-complete-deb-systemd-helper-unit-state");
+            assert_eq!(effects.len(), 1);
+            let effect = &effects[0];
+            assert_eq!(effect.adapter_id.as_deref(), Some("deb-systemd-helper/v1"));
+            assert_eq!(effect.kind, "debian-systemd-helper-state");
+            assert_eq!(effect.replacement, EffectReplacement::Complete);
+            assert_eq!(effect.path.as_deref(), Some("demo.service"));
+            assert_eq!(extra_str(effect, "debian_helper_action"), Some(action));
+            assert_eq!(extra_str(effect, "state_model"), Some(state_model));
+            assert_eq!(extra_bool(effect, "payload_backed"), Some(true));
+            assert_eq!(extra_bool(effect, "documented_action"), Some(true));
+            assert_eq!(extra_bool(effect, "maintscript_only"), Some(true));
+            assert_eq!(extra_bool(effect, "dpkg_root_aware"), Some(true));
+            assert_eq!(
+                extra_string_array(effect, "units"),
+                vec!["demo.service".to_string()]
+            );
+        }
+    }
+
+    #[test]
+    fn deb_systemd_helper_documented_review_actions_are_typed_partial_evidence() {
+        let registry = AdapterRegistry::default();
+        let mut payload = PayloadHints::default();
+        payload.systemd_units.insert("demo.service".to_string());
+
+        for (action, state_model) in [
+            ("purge", "state-file-purge"),
+            ("mask", "mask-state-save"),
+            ("unmask", "mask-state-restore"),
+            ("is-enabled", "enablement-query"),
+            ("was-enabled", "previous-enablement-query"),
+            ("debian-installed", "state-file-presence-query"),
+            ("update-state", "state-file-reconcile"),
+            ("reenable", "reenable-from-recorded-state"),
+        ] {
+            let classification = registry.classify_invocation_with_context(AdapterInput {
+                invocation: &invocation("deb-systemd-helper", &[action, "demo.service"]),
+                payload: &payload,
+            });
+
+            let ScriptletClassification::Known {
+                reason_code,
+                effects,
+            } = classification
+            else {
+                panic!("deb-systemd-helper {action} should be modeled as known partial evidence");
+            };
+            assert_eq!(reason_code, "helper-review-deb-systemd-helper-state");
+            assert_eq!(effects.len(), 1);
+            let effect = &effects[0];
+            assert_eq!(effect.adapter_id.as_deref(), Some("deb-systemd-helper/v1"));
+            assert_eq!(effect.kind, "debian-systemd-helper-state");
+            assert_eq!(effect.replacement, EffectReplacement::Partial);
+            assert_eq!(effect.path.as_deref(), Some("demo.service"));
+            assert_eq!(extra_str(effect, "debian_helper_action"), Some(action));
+            assert_eq!(extra_str(effect, "state_model"), Some(state_model));
+            assert_eq!(extra_bool(effect, "payload_backed"), Some(true));
+            assert_eq!(extra_bool(effect, "documented_action"), Some(true));
+            assert_eq!(extra_bool(effect, "review_required"), Some(true));
+        }
+    }
+
+    #[test]
+    fn deb_systemd_helper_unbacked_documented_action_is_typed_partial_evidence() {
+        let registry = AdapterRegistry::default();
+        let payload = PayloadHints::default();
+
+        let classification = registry.classify_invocation_with_context(AdapterInput {
+            invocation: &invocation("deb-systemd-helper", &["enable", "demo.service"]),
+            payload: &payload,
+        });
+
+        let ScriptletClassification::Known {
+            reason_code,
+            effects,
+        } = classification
+        else {
+            panic!("unbacked documented deb-systemd-helper action should be typed evidence");
+        };
+        assert_eq!(reason_code, "helper-review-deb-systemd-helper-state");
+        assert_eq!(effects[0].replacement, EffectReplacement::Partial);
+        assert_eq!(extra_bool(&effects[0], "payload_backed"), Some(false));
+        assert_eq!(extra_bool(&effects[0], "review_required"), Some(true));
+    }
+
+    #[test]
+    fn deb_systemd_invoke_and_undocumented_helper_forms_stay_review() {
+        let registry = AdapterRegistry::default();
+        let empty_payload = PayloadHints::default();
+        let invoke = registry.classify_invocation_with_context(AdapterInput {
+            invocation: &invocation("deb-systemd-invoke", &["restart", "demo.service"]),
+            payload: &empty_payload,
+        });
+        assert!(matches!(
+            invoke,
+            ScriptletClassification::Review {
+                reason_code,
+                class_id,
+                command: Some(_),
+            }
+                if reason_code == "review-class-deb-systemd-helper"
+                    && class_id.as_deref() == Some("deb-systemd-helper")
+        ));
+
+        let mut payload = PayloadHints::default();
+        payload.systemd_units.insert("demo.service".to_string());
+        let flagged = registry.classify_invocation_with_context(AdapterInput {
+            invocation: &invocation("deb-systemd-helper", &["enable", "--quiet", "demo.service"]),
+            payload: &payload,
+        });
+        assert!(matches!(
+            flagged,
+            ScriptletClassification::Review {
+                reason_code,
+                class_id,
+                command: Some(_),
+            }
+                if reason_code == "review-class-deb-systemd-helper"
+                    && class_id.as_deref() == Some("deb-systemd-helper")
+        ));
     }
 
     #[test]

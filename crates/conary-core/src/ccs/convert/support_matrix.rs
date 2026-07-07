@@ -60,10 +60,11 @@ impl SupportMatrix {
 }
 
 fn adapter_entry(adapter_id: &'static str) -> SupportMatrixEntry {
-    let (command, reason_code, lifecycle_notes, fixture_names): (
+    let (command, reason_code, lifecycle_notes, fixture_names, source_families): (
         Option<&'static str>,
         &'static str,
         &'static str,
+        &'static [&'static str],
         &'static [&'static str],
     ) = match adapter_id {
         "native-free/v1" => (
@@ -71,48 +72,63 @@ fn adapter_entry(adapter_id: &'static str) -> SupportMatrixEntry {
             "native-free-no-scriptlets",
             "Package-level evidence for packages with no scriptlet entries.",
             &["adapter-registry-native-free"] as &'static [&'static str],
+            &["rpm", "deb", "arch"],
         ),
         "ldconfig/v2" => (
             Some("ldconfig"),
             "helper-complete-ldconfig",
             "Simple dynamic linker cache refresh forms are complete passive replacement evidence.",
             &["adapter-registry-ldconfig"],
+            &["rpm", "deb", "arch"],
         ),
         "systemd-daemon-reload/v2" => (
             Some("systemctl daemon-reload"),
             "helper-complete-systemd-daemon-reload",
             "systemd daemon-reload reloads unit definitions without changing service state.",
             &["adapter-registry-systemd-daemon-reload"],
+            &["rpm", "deb", "arch"],
         ),
         "systemd-unit-state/v1" => (
             Some("systemctl enable|disable|preset"),
             "helper-complete-systemd-unit-state",
             "systemd unit enable/disable/preset is complete only when package payload ships every referenced unit.",
             &["adapter-registry-systemd-unit-state"],
+            &["rpm", "deb", "arch"],
+        ),
+        "deb-systemd-helper/v1" => (
+            Some("deb-systemd-helper documented actions"),
+            "helper-complete-deb-systemd-helper-unit-state",
+            "Debian deb-systemd-helper enable/disable is complete only when every referenced unit is payload-backed; other documented actions are typed private-review evidence.",
+            &["adapter-deb-systemd-helper-unit-state"],
+            &["deb"],
         ),
         "systemd-tmpfiles-create/v1" => (
             Some("systemd-tmpfiles --create"),
             "helper-complete-tmpfiles-create",
             "systemd tmpfiles create is complete only when every explicit config path is shipped by the package.",
             &["adapter-tmpfiles-create"],
+            &["rpm", "deb", "arch"],
         ),
         "systemd-sysusers/v1" => (
             Some("systemd-sysusers"),
             "helper-complete-sysusers",
             "systemd sysusers is complete only when every explicit config path is shipped by the package.",
             &["adapter-sysusers"],
+            &["rpm", "deb", "arch"],
         ),
         "alternatives-registration/v1" => (
             Some("update-alternatives|alternatives"),
             "helper-complete-alternatives-registration",
             "Alternatives install/remove registration is complete when the command shape is parseable and non-interactive.",
             &["adapter-alternatives-registration"],
+            &["rpm", "deb", "arch"],
         ),
         "cache-refresh/v1" => (
             Some("cache refresh helpers"),
             "helper-complete-cache-refresh",
             "Known cache refresh helpers are complete only with payload-backed cache input evidence.",
             &["adapter-cache-refresh"],
+            &["rpm", "deb", "arch"],
         ),
         _ => panic!("missing support matrix adapter row definition for {adapter_id}"),
     };
@@ -124,7 +140,7 @@ fn adapter_entry(adapter_id: &'static str) -> SupportMatrixEntry {
         adapter_id: Some(adapter_id),
         outcome: SupportOutcome::Known,
         reason_code,
-        source_families: &["rpm", "deb", "arch"],
+        source_families,
         lifecycle_notes,
         fixture_names,
     }
@@ -430,6 +446,10 @@ mod tests {
             ),
             (
                 "adapter-registry-systemd-unit-state",
+                golden_fixtures::GoldenFixtureOutcome::FullyReplaced,
+            ),
+            (
+                "adapter-deb-systemd-helper-unit-state",
                 golden_fixtures::GoldenFixtureOutcome::FullyReplaced,
             ),
             (

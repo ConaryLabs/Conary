@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-07-03
-revision: 21
-summary: Route M4e lifecycle authoring and native proof ownership
+last_updated: 2026-07-07
+revision: 22
+summary: Route native scriptlet support matrix ownership
 ---
 
 # Feature Ownership And Interaction Gates
@@ -323,6 +323,9 @@ install CCS packages, and preserve/replay legacy scriptlet metadata safely.
 `crates/conary-core/src/ccs/convert/scriptlet_bundle.rs`;
 `crates/conary-core/src/ccs/convert/scriptlet_bundle/`;
 `crates/conary-core/src/ccs/legacy_replay.rs`;
+`crates/conary-core/src/packages/native_abi.rs`;
+`crates/conary-core/src/packages/native_scriptlet_support.rs`;
+`crates/conary-core/tests/native_abi.rs`;
 `apps/conary/src/commands/ccs/`;
 `apps/conary/src/commands/ccs/templates.rs`;
 `apps/conary/src/commands/ccs/lint.rs`;
@@ -347,6 +350,9 @@ metadata, scriptlet sandboxing (`crates/conary-core/src/scriptlet/mod.rs`,
 `crates/conary-core/src/scriptlet/legacy.rs`), fixture maps.
 
 **Paths:** `crates/conary-core/src/ccs/*`;
+`crates/conary-core/src/packages/native_abi.rs`;
+`crates/conary-core/src/packages/native_scriptlet_support.rs`;
+`crates/conary-core/tests/native_abi.rs`;
 `apps/conary/src/commands/ccs/*`.
 
 **Focused proof:** `cargo test -p conary-core ccs::v2`;

@@ -12,6 +12,8 @@ pub mod cpio;
 pub mod deb;
 pub mod dpkg_query;
 pub mod native_abi;
+#[doc(hidden)]
+pub mod native_scriptlet_support;
 pub mod pacman_query;
 pub mod query_common;
 pub mod registry;

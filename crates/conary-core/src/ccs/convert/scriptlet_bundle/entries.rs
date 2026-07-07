@@ -8,7 +8,10 @@ use super::native_contracts::{
     phase_from_native_lifecycle, phase_from_scriptlet_phase,
 };
 use super::types::ScriptletBundleInput;
-use crate::ccs::convert::effects::ScriptletClassificationReport;
+use crate::ccs::convert::effects::{
+    EntryClassification, ScriptletClassificationReport,
+    classification_is_complete_adapter_coverage, native_deferred_support_can_be_adapter_covered,
+};
 use crate::ccs::legacy_scriptlets::{LegacyScriptletEntry, NativeInvocation};
 use crate::packages::native_abi::{NativeScriptletEntry, NativeScriptletSupport};
 use crate::packages::traits::Scriptlet;
@@ -88,7 +91,13 @@ fn build_native_entry(
     report: &ScriptletClassificationReport,
 ) -> anyhow::Result<LegacyScriptletEntry> {
     let classifications = classification_entries_for(report, &native.id);
-    let outcome = classify_entry(&classifications, &native.support);
+    let effective_support =
+        if deferred_native_support_is_fully_adapter_covered(native, &classifications) {
+            NativeScriptletSupport::Parsed
+        } else {
+            native.support.clone()
+        };
+    let outcome = classify_entry(&classifications, &effective_support);
     let phase = phase_from_native_lifecycle(native.primary_lifecycle);
     let lifecycle_paths = native_lifecycle_paths(native);
     let (body, body_encoding) = encoded_native_body(&native.body);
@@ -131,6 +140,19 @@ fn build_native_entry(
         residual_replay: None,
         extra,
     })
+}
+
+fn deferred_native_support_is_fully_adapter_covered(
+    entry: &NativeScriptletEntry,
+    classifications: &[&EntryClassification],
+) -> bool {
+    if !native_deferred_support_can_be_adapter_covered(entry) || classifications.is_empty() {
+        return false;
+    }
+
+    classifications
+        .iter()
+        .all(|entry| classification_is_complete_adapter_coverage(&entry.classification))
 }
 
 #[cfg(test)]

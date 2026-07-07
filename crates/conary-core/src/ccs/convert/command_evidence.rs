@@ -1,7 +1,8 @@
 // conary-core/src/ccs/convert/command_evidence.rs
 
 use crate::packages::native_abi::{
-    NativeLifecyclePath, NativeScriptletEntry, NativeScriptletKind, NativeScriptletSupport,
+    ArchNativeScriptletMetadata, NativeLifecyclePath, NativeScriptletEntry, NativeScriptletKind,
+    NativeScriptletMetadata, NativeScriptletSupport,
 };
 use crate::packages::traits::Scriptlet;
 
@@ -69,11 +70,14 @@ pub fn extract_native_entry_invocations(entry: &NativeScriptletEntry) -> Vec<Com
     if entry.kind != NativeScriptletKind::Executable {
         return Vec::new();
     }
-    if entry.support != NativeScriptletSupport::Parsed {
+    if !matches!(
+        entry.support,
+        NativeScriptletSupport::Parsed | NativeScriptletSupport::DeferredReview { .. }
+    ) {
         return Vec::new();
     }
 
-    let Some(content) = entry.body.text.as_deref() else {
+    let Some(content) = native_entry_invocation_text(entry) else {
         return Vec::new();
     };
 
@@ -99,6 +103,15 @@ pub fn extract_native_entry_invocations(entry: &NativeScriptletEntry) -> Vec<Com
             .collect(),
         interpreter: entry.interpreter.clone(),
     })
+}
+
+fn native_entry_invocation_text(entry: &NativeScriptletEntry) -> Option<&str> {
+    match &entry.metadata {
+        NativeScriptletMetadata::Arch(ArchNativeScriptletMetadata::Install(metadata)) => {
+            metadata.function_body.as_deref()
+        }
+        _ => entry.body.text.as_deref(),
+    }
 }
 
 pub fn extract_invocations_from_shell_text(
@@ -437,6 +450,39 @@ mod tests {
         }
     }
 
+    fn arch_install_entry(
+        install_source: &str,
+        function_name: &str,
+        function_body: &str,
+    ) -> NativeScriptletEntry {
+        NativeScriptletEntry {
+            id: format!("arch:{function_name}"),
+            format: NativeScriptletFormat::Arch,
+            kind: NativeScriptletKind::Executable,
+            native_slot: function_name.to_string(),
+            primary_lifecycle: NativeLifecyclePath::PostInstall,
+            compatibility_phase: Some(ScriptletPhase::PostInstall),
+            lifecycle_paths: vec![NativeLifecyclePath::PostInstall],
+            interpreter: Some("/bin/sh".to_string()),
+            interpreter_args: vec![],
+            body: NativeScriptletBody::from_bytes(install_source.as_bytes().to_vec()),
+            invocation: NativeInvocationContract::none(),
+            order: NativeTransactionOrder::new(NativeTransactionPosition::AfterPayload),
+            support: NativeScriptletSupport::Parsed,
+            metadata: NativeScriptletMetadata::Arch(ArchNativeScriptletMetadata::Install(
+                ArchInstallScriptletMetadata {
+                    install_source_sha256: crate::hash::sha256_prefixed(install_source.as_bytes()),
+                    function_name: function_name.to_string(),
+                    function_body: Some(function_body.to_string()),
+                    function_body_sha256: Some(crate::hash::sha256_prefixed(
+                        function_body.as_bytes(),
+                    )),
+                    extraction_status: ArchFunctionExtractionStatus::Parsed,
+                },
+            )),
+        }
+    }
+
     #[test]
     fn command_evidence_splits_control_operators_with_stable_ids() {
         let invocations = extract_scriptlet_invocations(
@@ -515,15 +561,35 @@ mod tests {
         assert_eq!(invocations[0].lifecycle_paths, vec!["post-install"]);
         assert_eq!(invocations[0].command, "ldconfig");
 
-        assert!(
-            extract_native_entry_invocations(&native_entry(
-                "/sbin/ldconfig\n",
-                NativeScriptletSupport::DeferredReview {
-                    reason_code: "rpm-trigger-semantics-deferred".to_string(),
-                },
-            ))
-            .is_empty()
-        );
+        let deferred = extract_native_entry_invocations(&native_entry(
+            "/sbin/ldconfig\n",
+            NativeScriptletSupport::DeferredReview {
+                reason_code: "rpm-trigger-semantics-deferred".to_string(),
+            },
+        ));
+        assert_eq!(deferred.len(), 1);
+        assert_eq!(deferred[0].command, "ldconfig");
+    }
+
+    #[test]
+    fn native_command_evidence_uses_arch_install_function_body() {
+        let install_source = "\
+pre_install() {
+    custom-pre-helper --mutate
+}
+
+post_install() {
+    /sbin/ldconfig
+}
+";
+        let entry = arch_install_entry(install_source, "post_install", "/sbin/ldconfig\n");
+
+        let invocations = extract_native_entry_invocations(&entry);
+
+        assert_eq!(invocations.len(), 1);
+        assert_eq!(invocations[0].entry_id, "arch:post_install");
+        assert_eq!(invocations[0].command, "ldconfig");
+        assert!(invocations[0].argv.is_empty());
     }
 
     #[test]

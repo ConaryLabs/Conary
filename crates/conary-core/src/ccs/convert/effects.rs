@@ -2,6 +2,7 @@
 
 use crate::ccs::convert::command_evidence::CommandInvocation;
 use crate::ccs::legacy_scriptlets::{EffectConfidence, EffectReplacement, EffectSource};
+use crate::packages::native_abi::NativeScriptletEntry;
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -152,6 +153,27 @@ pub struct EntryClassification {
 
 fn increment_class_count(counts: &mut BTreeMap<String, u32>, class_id: &str) {
     *counts.entry(class_id.to_string()).or_default() += 1;
+}
+
+pub(crate) fn native_deferred_support_can_be_adapter_covered(
+    _entry: &NativeScriptletEntry,
+) -> bool {
+    // Command adapters can replace individual shell effects, but deferred
+    // native package-manager semantics need explicit format/lifecycle coverage.
+    false
+}
+
+pub(crate) fn classification_is_complete_adapter_coverage(
+    classification: &ScriptletClassification,
+) -> bool {
+    let ScriptletClassification::Known { effects, .. } = classification else {
+        return false;
+    };
+
+    !effects.is_empty()
+        && effects.iter().all(|effect| {
+            effect.adapter_id.is_some() && effect.replacement == EffectReplacement::Complete
+        })
 }
 
 #[cfg(test)]

@@ -355,8 +355,8 @@ impl ArchPackage {
 
     fn arch_invocation_for_function(function_name: &str) -> NativeInvocationContract {
         let args = match function_name {
-            // alpm-install-scriptlet(5) reverses upgrade arguments between
-            // pre_upgrade and post_upgrade.
+            // alpm-install-scriptlet(5) passes upgrade arguments as
+            // new-version, old-version for both upgrade hooks.
             "pre_upgrade" => vec![
                 NativeArgumentContract {
                     index: 1,
@@ -374,14 +374,14 @@ impl ArchPackage {
             "post_upgrade" => vec![
                 NativeArgumentContract {
                     index: 1,
-                    name: "old-version".to_string(),
-                    value: NativeArgumentValue::OldVersion,
+                    name: "new-version".to_string(),
+                    value: NativeArgumentValue::NewVersion,
                     required: true,
                 },
                 NativeArgumentContract {
                     index: 2,
-                    name: "new-version".to_string(),
-                    value: NativeArgumentValue::NewVersion,
+                    name: "old-version".to_string(),
+                    value: NativeArgumentValue::OldVersion,
                     required: true,
                 },
             ],

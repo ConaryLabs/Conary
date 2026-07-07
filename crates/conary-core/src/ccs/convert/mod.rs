@@ -28,6 +28,7 @@ pub mod blocked_classes;
 pub mod capture;
 pub mod command_evidence;
 mod converter;
+mod debian_adapters;
 pub mod effects;
 mod fidelity;
 #[cfg(test)]

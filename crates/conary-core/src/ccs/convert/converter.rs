@@ -19,7 +19,10 @@ use crate::ccs::convert::capture::ScriptletCapturer;
 use crate::ccs::convert::command_evidence::{
     extract_native_entry_invocations, extract_scriptlet_invocations,
 };
-use crate::ccs::convert::effects::{ScriptletClassification, ScriptletClassificationReport};
+use crate::ccs::convert::effects::{
+    ScriptletClassification, ScriptletClassificationReport,
+    classification_is_complete_adapter_coverage, native_deferred_support_can_be_adapter_covered,
+};
 use crate::ccs::convert::fidelity::{FidelityLevel, FidelityReport};
 use crate::ccs::convert::legacy_provenance::LegacyProvenance;
 use crate::ccs::convert::mock::CapturedIntent;
@@ -901,17 +904,24 @@ fn classify_scriptlets(
     }
 
     for entry in &metadata.native_scriptlet_abi {
-        if let Some(classification) = classify_native_support(entry) {
-            report.push(entry.id.clone(), classification);
-        }
-        for invocation in extract_native_entry_invocations(entry) {
-            report.push(
-                entry.id.clone(),
+        let classifications = extract_native_entry_invocations(entry)
+            .into_iter()
+            .map(|invocation| {
                 registry.classify_invocation_with_context(AdapterInput {
                     invocation: &invocation,
                     payload: &payload,
-                }),
-            );
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let support_fully_covered =
+            deferred_native_support_is_fully_adapter_covered(entry, &classifications);
+
+        for classification in classifications {
+            report.push(entry.id.clone(), classification);
+        }
+        if !support_fully_covered && let Some(classification) = classify_native_support(entry) {
+            report.push(entry.id.clone(), classification);
         }
     }
 
@@ -929,6 +939,19 @@ fn classify_scriptlets(
     }
 
     report
+}
+
+fn deferred_native_support_is_fully_adapter_covered(
+    entry: &NativeScriptletEntry,
+    classifications: &[ScriptletClassification],
+) -> bool {
+    if !native_deferred_support_can_be_adapter_covered(entry) || classifications.is_empty() {
+        return false;
+    }
+
+    classifications
+        .iter()
+        .all(classification_is_complete_adapter_coverage)
 }
 
 fn classify_native_support(entry: &NativeScriptletEntry) -> Option<ScriptletClassification> {
@@ -1095,6 +1118,47 @@ mod tests {
         }]
     }
 
+    fn make_test_files_with_demo_unit() -> Vec<ExtractedFile> {
+        let mut files = make_test_files();
+        files.push(ExtractedFile {
+            path: "/usr/lib/systemd/system/demo.service".to_string(),
+            content: b"[Service]\nExecStart=/usr/bin/demo\n".to_vec(),
+            size: 32,
+            mode: 0o644,
+            sha256: None,
+            symlink_target: None,
+        });
+        files
+    }
+
+    fn effect_extra_str<'a>(
+        effect: &'a crate::ccs::legacy_scriptlets::ScriptletEffect,
+        key: &str,
+    ) -> Option<&'a str> {
+        effect.extra.get(key).and_then(toml::Value::as_str)
+    }
+
+    fn effect_extra_bool(
+        effect: &crate::ccs::legacy_scriptlets::ScriptletEffect,
+        key: &str,
+    ) -> Option<bool> {
+        effect.extra.get(key).and_then(toml::Value::as_bool)
+    }
+
+    fn classification_extra_str<'a>(
+        effect: &'a crate::ccs::convert::effects::ScriptletEffectEvidence,
+        key: &str,
+    ) -> Option<&'a str> {
+        effect.extra.get(key).and_then(toml::Value::as_str)
+    }
+
+    fn classification_extra_bool(
+        effect: &crate::ccs::convert::effects::ScriptletEffectEvidence,
+        key: &str,
+    ) -> Option<bool> {
+        effect.extra.get(key).and_then(toml::Value::as_bool)
+    }
+
     fn rpm_native_entry(
         id: &str,
         slot_name: &str,
@@ -1149,6 +1213,39 @@ mod tests {
                     hook_path: "/usr/share/libalpm/hooks/demo.hook".to_string(),
                     triggers: vec![],
                     action: None,
+                },
+            )),
+        }
+    }
+
+    fn arch_install_function_entry(
+        function_name: &str,
+        install_source: &str,
+        function_body: &str,
+    ) -> NativeScriptletEntry {
+        NativeScriptletEntry {
+            id: format!("arch:{function_name}"),
+            format: NativeScriptletFormat::Arch,
+            kind: NativeScriptletKind::Executable,
+            native_slot: function_name.to_string(),
+            primary_lifecycle: NativeLifecyclePath::PostInstall,
+            compatibility_phase: Some(ScriptletPhase::PostInstall),
+            lifecycle_paths: vec![NativeLifecyclePath::PostInstall],
+            interpreter: Some("/bin/sh".to_string()),
+            interpreter_args: vec![],
+            body: NativeScriptletBody::from_bytes(install_source.as_bytes().to_vec()),
+            invocation: NativeInvocationContract::none(),
+            order: NativeTransactionOrder::new(NativeTransactionPosition::AfterPayload),
+            support: NativeScriptletSupport::Parsed,
+            metadata: NativeScriptletMetadata::Arch(ArchNativeScriptletMetadata::Install(
+                ArchInstallScriptletMetadata {
+                    install_source_sha256: crate::hash::sha256_prefixed(install_source.as_bytes()),
+                    function_name: function_name.to_string(),
+                    function_body: Some(function_body.to_string()),
+                    function_body_sha256: Some(crate::hash::sha256_prefixed(
+                        function_body.as_bytes(),
+                    )),
+                    extraction_status: ArchFunctionExtractionStatus::Parsed,
                 },
             )),
         }
@@ -1606,8 +1703,33 @@ update-mime-database /usr/share/mime
             .convert(&metadata, &files, "deb", "sha256:test")
             .expect("conversion succeeds");
 
+        let helper_effect = result
+            .scriptlet_classification
+            .entries
+            .iter()
+            .find_map(|entry| match &entry.classification {
+                ScriptletClassification::Known {
+                    reason_code,
+                    effects,
+                } if reason_code == "helper-review-deb-systemd-helper-state" => effects.first(),
+                _ => None,
+            })
+            .expect("unbacked deb-systemd-helper should produce typed partial evidence");
+        assert_eq!(
+            helper_effect.adapter_id.as_deref(),
+            Some("deb-systemd-helper/v1")
+        );
+        assert_eq!(helper_effect.replacement, EffectReplacement::Partial);
+        assert_eq!(
+            classification_extra_str(helper_effect, "debian_helper_action"),
+            Some("enable")
+        );
+        assert_eq!(
+            classification_extra_bool(helper_effect, "payload_backed"),
+            Some(false)
+        );
         assert!(
-            result
+            !result
                 .scriptlet_classification
                 .entries
                 .iter()
@@ -1643,6 +1765,135 @@ update-mime-database /usr/share/mime
             .as_ref()
             .expect("conversion should embed passive scriptlet bundle");
         assert_eq!(bundle.scriptlet_fidelity.as_str(), "review-required");
+        bundle.validate().unwrap();
+    }
+
+    #[test]
+    fn conversion_integration_deb_systemd_helper_enable_records_state_model_and_is_public() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut metadata = make_test_metadata();
+        metadata.scriptlets = vec![Scriptlet {
+            phase: ScriptletPhase::PostInstall,
+            interpreter: "/bin/sh".to_string(),
+            content: "deb-systemd-helper enable demo.service\n".to_string(),
+            flags: None,
+        }];
+        let files = make_test_files_with_demo_unit();
+        let converter = passive_test_converter(temp_dir.path());
+
+        let result = converter
+            .convert(&metadata, &files, "deb", "sha256:test")
+            .expect("conversion succeeds");
+
+        let complete_effect = result
+            .scriptlet_classification
+            .entries
+            .iter()
+            .find_map(|entry| match &entry.classification {
+                ScriptletClassification::Known {
+                    reason_code,
+                    effects,
+                } if reason_code == "helper-complete-deb-systemd-helper-unit-state" => {
+                    effects.first()
+                }
+                _ => None,
+            })
+            .expect("payload-backed deb-systemd-helper enable should be complete evidence");
+        assert_eq!(
+            complete_effect.adapter_id.as_deref(),
+            Some("deb-systemd-helper/v1")
+        );
+        assert_eq!(complete_effect.replacement, EffectReplacement::Complete);
+        assert_eq!(
+            classification_extra_str(complete_effect, "debian_helper_action"),
+            Some("enable")
+        );
+        assert_eq!(
+            classification_extra_str(complete_effect, "state_model"),
+            Some("first-enable-state-file")
+        );
+        assert_eq!(
+            classification_extra_bool(complete_effect, "payload_backed"),
+            Some(true)
+        );
+        assert_eq!(result.scriptlet_classification.review_count, 0);
+        let bundle = result
+            .build_result
+            .manifest
+            .legacy_scriptlets
+            .as_ref()
+            .expect("conversion should embed passive scriptlet bundle");
+        assert_eq!(bundle.scriptlet_fidelity.as_str(), "fully-replaced");
+        assert_eq!(bundle.publication_status.as_str(), "public");
+        assert_eq!(bundle.decision_counts.replaced, 1);
+        assert_eq!(bundle.entries[0].effects.len(), 1);
+        bundle.validate().unwrap();
+    }
+
+    #[test]
+    fn conversion_integration_deb_systemd_helper_documented_review_actions_emit_ccs_effects() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut metadata = make_test_metadata();
+        metadata.scriptlets = vec![Scriptlet {
+            phase: ScriptletPhase::PostInstall,
+            interpreter: "/bin/sh".to_string(),
+            content: "\
+deb-systemd-helper purge demo.service
+deb-systemd-helper mask demo.service
+deb-systemd-helper unmask demo.service
+deb-systemd-helper is-enabled demo.service
+deb-systemd-helper was-enabled demo.service
+deb-systemd-helper debian-installed demo.service
+deb-systemd-helper update-state demo.service
+deb-systemd-helper reenable demo.service
+"
+            .to_string(),
+            flags: None,
+        }];
+        let files = make_test_files_with_demo_unit();
+        let converter = passive_test_converter(temp_dir.path());
+
+        let result = converter
+            .convert(&metadata, &files, "deb", "sha256:test")
+            .expect("conversion succeeds");
+
+        assert_eq!(result.scriptlet_classification.unknown_count, 0);
+        assert_eq!(result.scriptlet_classification.review_count, 0);
+        let bundle = result
+            .build_result
+            .manifest
+            .legacy_scriptlets
+            .as_ref()
+            .expect("conversion should embed passive scriptlet bundle");
+        assert_eq!(bundle.scriptlet_fidelity.as_str(), "review-required");
+        assert_eq!(bundle.publication_status.as_str(), "private-review");
+        assert_eq!(bundle.decision_counts.review, 1);
+        assert_eq!(bundle.entries[0].effects.len(), 8);
+        let actions = bundle.entries[0]
+            .effects
+            .iter()
+            .map(|effect| {
+                assert_eq!(effect.adapter_id.as_deref(), Some("deb-systemd-helper/v1"));
+                assert_eq!(effect.replacement, EffectReplacement::Partial);
+                assert_eq!(effect_extra_bool(effect, "review_required"), Some(true));
+                effect_extra_str(effect, "debian_helper_action")
+                    .expect("helper effect records documented action")
+                    .to_string()
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            actions,
+            std::collections::BTreeSet::from([
+                "debian-installed".to_string(),
+                "is-enabled".to_string(),
+                "mask".to_string(),
+                "purge".to_string(),
+                "reenable".to_string(),
+                "unmask".to_string(),
+                "update-state".to_string(),
+                "was-enabled".to_string(),
+            ])
+        );
         bundle.validate().unwrap();
     }
 
@@ -1750,6 +2001,170 @@ update-mime-database /usr/share/mime
                         })
                 )
         }));
+    }
+
+    #[test]
+    fn deferred_native_trigger_with_complete_adapter_evidence_stays_private_review() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut metadata = make_test_metadata();
+        metadata.scriptlets.clear();
+        metadata.native_scriptlet_abi = vec![rpm_native_entry(
+            "rpm:%filetriggerin:0",
+            "%filetriggerin",
+            "/sbin/ldconfig\n",
+            RpmScriptletSlot::Trigger,
+            NativeLifecyclePath::FileTrigger,
+            NativeTransactionPosition::Trigger,
+            NativeScriptletSupport::DeferredReview {
+                reason_code: "rpm-file-trigger-semantics-deferred".to_string(),
+            },
+        )];
+        let files = make_test_files();
+        let converter = passive_test_converter(temp_dir.path());
+
+        let result = converter
+            .convert(&metadata, &files, "rpm", "sha256:test")
+            .expect("conversion succeeds");
+
+        assert!(result.scriptlet_classification.entries.iter().any(|entry| {
+            entry.entry_id == "rpm:%filetriggerin:0"
+                && matches!(
+                    &entry.classification,
+                    crate::ccs::convert::effects::ScriptletClassification::Known {
+                        reason_code,
+                        effects,
+                        ..
+                    } if reason_code == "helper-complete-ldconfig"
+                        && effects.iter().any(|effect| {
+                            effect.adapter_id.as_deref() == Some("ldconfig/v2")
+                                && effect.replacement == EffectReplacement::Complete
+                        })
+                )
+        }));
+        assert!(
+            result
+                .scriptlet_classification
+                .unsupported_class_counts
+                .contains_key("rpm-trigger")
+        );
+        let bundle = result
+            .build_result
+            .manifest
+            .legacy_scriptlets
+            .as_ref()
+            .expect("conversion should embed passive scriptlet bundle");
+        assert_eq!(bundle.entries[0].decision.as_str(), "review");
+        assert_eq!(
+            bundle.entries[0].reason_code,
+            "rpm-file-trigger-semantics-deferred"
+        );
+        assert_eq!(bundle.decision_counts.review, 1);
+        assert_eq!(bundle.publication_status.as_str(), "private-review");
+        assert!(
+            result
+                .scriptlet_metadata
+                .review_reason_codes
+                .contains(&"rpm-file-trigger-semantics-deferred".to_string())
+        );
+        assert_eq!(
+            result.scriptlet_metadata.publication_status,
+            "private-review"
+        );
+    }
+
+    #[test]
+    fn deferred_native_trigger_with_runtime_action_stays_private_review() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut metadata = make_test_metadata();
+        metadata.scriptlets.clear();
+        metadata.native_scriptlet_abi = vec![rpm_native_entry(
+            "rpm:%triggerin:0",
+            "%triggerin",
+            "systemctl restart demo.service\n",
+            RpmScriptletSlot::Trigger,
+            NativeLifecyclePath::Trigger,
+            NativeTransactionPosition::Trigger,
+            NativeScriptletSupport::DeferredReview {
+                reason_code: "rpm-trigger-semantics-deferred".to_string(),
+            },
+        )];
+        let files = make_test_files();
+        let converter = passive_test_converter(temp_dir.path());
+
+        let result = converter
+            .convert(&metadata, &files, "rpm", "sha256:test")
+            .expect("conversion succeeds");
+
+        let bundle = result
+            .build_result
+            .manifest
+            .legacy_scriptlets
+            .as_ref()
+            .expect("conversion should embed passive scriptlet bundle");
+        assert_eq!(bundle.entries[0].decision.as_str(), "review");
+        assert_eq!(bundle.publication_status.as_str(), "private-review");
+        assert_ne!(result.scriptlet_metadata.publication_status, "public");
+        assert!(result.scriptlet_classification.entries.iter().any(|entry| {
+            matches!(
+                &entry.classification,
+                crate::ccs::convert::effects::ScriptletClassification::Review {
+                    reason_code,
+                    class_id,
+                    ..
+                } if reason_code == "review-class-systemd-runtime-action"
+                    && class_id.as_deref() == Some("systemd-runtime-action")
+            )
+        }));
+    }
+
+    #[test]
+    fn arch_install_function_body_uses_adapter_evidence_without_wrapper_noise() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut metadata = make_test_metadata();
+        metadata.scriptlets.clear();
+        let install_source = "\
+post_install() {
+    /sbin/ldconfig
+}
+";
+        metadata.native_scriptlet_abi = vec![arch_install_function_entry(
+            "post_install",
+            install_source,
+            "/sbin/ldconfig\n",
+        )];
+        let files = make_test_files();
+        let converter = passive_test_converter(temp_dir.path());
+
+        let result = converter
+            .convert(&metadata, &files, "arch", "sha256:test")
+            .expect("conversion succeeds");
+
+        assert!(result.scriptlet_classification.entries.iter().any(|entry| {
+            entry.entry_id == "arch:post_install"
+                && matches!(
+                    &entry.classification,
+                    crate::ccs::convert::effects::ScriptletClassification::Known {
+                        reason_code,
+                        effects,
+                        ..
+                    } if reason_code == "helper-complete-ldconfig"
+                        && effects.iter().any(|effect| {
+                            effect.adapter_id.as_deref() == Some("ldconfig/v2")
+                                && effect.replacement == EffectReplacement::Complete
+                        })
+                )
+        }));
+        assert_eq!(result.scriptlet_classification.unknown_count, 0);
+        assert_eq!(result.scriptlet_classification.review_count, 0);
+        let bundle = result
+            .build_result
+            .manifest
+            .legacy_scriptlets
+            .as_ref()
+            .expect("conversion should embed passive scriptlet bundle");
+        assert_eq!(bundle.entries[0].decision.as_str(), "replaced");
+        assert_eq!(bundle.publication_status.as_str(), "public");
+        assert_eq!(result.scriptlet_metadata.publication_status, "public");
     }
 
     #[test]

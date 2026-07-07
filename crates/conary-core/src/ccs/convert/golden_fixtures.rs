@@ -67,6 +67,12 @@ const REQUIRED_GOAL8_CASES: &[GoldenFixtureCase] = &[
         "fedora-44",
     ),
     public_fixture(
+        "adapter-deb-systemd-helper-unit-state",
+        GoldenFixtureOutcome::FullyReplaced,
+        "ubuntu-26.04",
+        "ubuntu-26.04",
+    ),
+    public_fixture(
         "adapter-tmpfiles-create",
         GoldenFixtureOutcome::FullyReplaced,
         "fedora-44",
@@ -140,6 +146,12 @@ const ALL_GOLDEN_FIXTURE_CASES: &[GoldenFixtureCase] = &[
         GoldenFixtureOutcome::FullyReplaced,
         "fedora-44",
         "fedora-44",
+    ),
+    public_fixture(
+        "adapter-deb-systemd-helper-unit-state",
+        GoldenFixtureOutcome::FullyReplaced,
+        "ubuntu-26.04",
+        "ubuntu-26.04",
     ),
     public_fixture(
         "adapter-tmpfiles-create",
