@@ -33,6 +33,10 @@ pub async fn openapi_spec() -> Response {
                         "code": { "type": "string", "description": "Machine-readable error code: UNAUTHORIZED, INSUFFICIENT_SCOPE, NOT_FOUND, UPSTREAM_ERROR, INTERNAL_ERROR" }
                     },
                     "required": ["error", "code"]
+                },
+                "ScriptletEvidenceState": {
+                    "type": "string",
+                    "enum": ["needs-triage", "adapter-candidate", "in-design", "in-implementation", "covered-partial", "covered-public-ready", "wont-support"]
                 }
             }
         },
@@ -153,6 +157,108 @@ pub async fn openapi_spec() -> Response {
                         { "name": "package", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Package identifier" }
                     ],
                     "responses": { "200": { "description": "Scriptlet review artifact" }, "401": { "description": "Invalid or missing token" }, "404": { "description": "Artifact not found" } }
+                }
+            },
+            "/v1/admin/scriptlet-evidence/backfill": {
+                "post": {
+                    "operationId": "backfillScriptletEvidence",
+                    "summary": "Backfill scriptlet evidence queue",
+                    "description": "Runs one admin-only batch over existing non-public or malformed converted-package scriptlet metadata and materializes adapter-planning queue samples. This does not publish packages or change publication authority.",
+                    "tags": ["scriptlet-evidence"],
+                    "security": [{ "bearerAuth": [] }],
+                    "requestBody": {
+                        "required": false,
+                        "content": { "application/json": { "schema": {
+                            "type": "object",
+                            "properties": { "limit": { "type": "integer", "minimum": 1, "maximum": 5000, "default": 500 } }
+                        }}}
+                    },
+                    "responses": { "200": { "description": "Backfill batch result" }, "401": { "description": "Invalid or missing token" }, "403": { "description": "Insufficient scope" } }
+                }
+            },
+            "/v1/admin/scriptlet-evidence/clusters": {
+                "get": {
+                    "operationId": "listScriptletEvidenceClusters",
+                    "summary": "List scriptlet evidence clusters",
+                    "description": "Lists admin-only adapter-planning clusters created from blocked, review-required, or malformed scriptlet conversion evidence. Responses include counts and staleness summaries, not raw scriptlet bodies or private local review paths.",
+                    "tags": ["scriptlet-evidence"],
+                    "security": [{ "bearerAuth": [] }],
+                    "parameters": [
+                        { "name": "state", "in": "query", "required": false, "schema": { "$ref": "#/components/schemas/ScriptletEvidenceState" } },
+                        { "name": "distro", "in": "query", "required": false, "schema": { "type": "string" } },
+                        { "name": "blocked_class", "in": "query", "required": false, "schema": { "type": "string" } },
+                        { "name": "command", "in": "query", "required": false, "schema": { "type": "string" } },
+                        { "name": "package", "in": "query", "required": false, "schema": { "type": "string" } },
+                        { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "maximum": 1000 } },
+                        { "name": "offset", "in": "query", "required": false, "schema": { "type": "integer", "minimum": 0 } }
+                    ],
+                    "responses": { "200": { "description": "Scriptlet evidence cluster list" }, "400": { "description": "Invalid state filter" }, "401": { "description": "Invalid or missing token" }, "403": { "description": "Insufficient scope" } }
+                }
+            },
+            "/v1/admin/scriptlet-evidence/clusters/{cluster_key}": {
+                "get": {
+                    "operationId": "getScriptletEvidenceCluster",
+                    "summary": "Get scriptlet evidence cluster detail",
+                    "description": "Returns admin-only cluster detail, sample summaries, state events, and maintainer notes. Sample data exposes review-artifact availability and staleness but never raw local artifact paths.",
+                    "tags": ["scriptlet-evidence"],
+                    "security": [{ "bearerAuth": [] }],
+                    "parameters": [{ "name": "cluster_key", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Stable s1-prefixed scriptlet evidence cluster key" }],
+                    "responses": { "200": { "description": "Scriptlet evidence cluster detail" }, "400": { "description": "Invalid cluster key" }, "401": { "description": "Invalid or missing token" }, "403": { "description": "Insufficient scope" }, "404": { "description": "Cluster not found" } }
+                }
+            },
+            "/v1/admin/scriptlet-evidence/clusters/{cluster_key}/state": {
+                "put": {
+                    "operationId": "updateScriptletEvidenceClusterState",
+                    "summary": "Update scriptlet evidence cluster state",
+                    "description": "Moves an admin-only scriptlet evidence cluster through triage states and records a state-event audit row. This does not publish converted packages.",
+                    "tags": ["scriptlet-evidence"],
+                    "security": [{ "bearerAuth": [] }],
+                    "parameters": [{ "name": "cluster_key", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Stable s1-prefixed scriptlet evidence cluster key" }],
+                    "requestBody": {
+                        "required": true,
+                        "content": { "application/json": { "schema": {
+                            "type": "object",
+                            "required": ["state"],
+                            "properties": {
+                                "state": { "$ref": "#/components/schemas/ScriptletEvidenceState" },
+                                "reason": { "type": "string" }
+                            }
+                        }}}
+                    },
+                    "responses": { "200": { "description": "Updated cluster detail" }, "400": { "description": "Invalid state or cluster key" }, "401": { "description": "Invalid or missing token" }, "403": { "description": "Insufficient scope" }, "404": { "description": "Cluster not found" } }
+                }
+            },
+            "/v1/admin/scriptlet-evidence/clusters/{cluster_key}/notes": {
+                "post": {
+                    "operationId": "addScriptletEvidenceClusterNote",
+                    "summary": "Add scriptlet evidence cluster note",
+                    "description": "Adds an admin-only maintainer note to a scriptlet evidence cluster. Notes are private by default and are excluded from public-sanitized packets.",
+                    "tags": ["scriptlet-evidence"],
+                    "security": [{ "bearerAuth": [] }],
+                    "parameters": [{ "name": "cluster_key", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Stable s1-prefixed scriptlet evidence cluster key" }],
+                    "requestBody": {
+                        "required": true,
+                        "content": { "application/json": { "schema": {
+                            "type": "object",
+                            "required": ["body"],
+                            "properties": { "body": { "type": "string", "maxLength": 4096 } }
+                        }}}
+                    },
+                    "responses": { "200": { "description": "Created note" }, "400": { "description": "Invalid note body or cluster key" }, "401": { "description": "Invalid or missing token" }, "403": { "description": "Insufficient scope" }, "404": { "description": "Cluster not found" } }
+                }
+            },
+            "/v1/admin/scriptlet-evidence/clusters/{cluster_key}/packet": {
+                "get": {
+                    "operationId": "getScriptletEvidencePacket",
+                    "summary": "Export scriptlet evidence packet",
+                    "description": "Builds a review packet for adapter planning. The default private packet includes maintainer notes and sanitized artifact references; visibility=public-sanitized omits private notes, raw paths, and review artifacts.",
+                    "tags": ["scriptlet-evidence"],
+                    "security": [{ "bearerAuth": [] }],
+                    "parameters": [
+                        { "name": "cluster_key", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Stable s1-prefixed scriptlet evidence cluster key" },
+                        { "name": "visibility", "in": "query", "required": false, "schema": { "type": "string", "enum": ["private", "public-sanitized"], "default": "private" } }
+                    ],
+                    "responses": { "200": { "description": "Scriptlet evidence packet" }, "400": { "description": "Invalid cluster key or visibility" }, "401": { "description": "Invalid or missing token" }, "403": { "description": "Insufficient scope" }, "404": { "description": "Cluster not found" } }
                 }
             },
             "/v1/admin/events": {
@@ -606,6 +712,24 @@ mod tests {
                 "/v1/admin/packages/{distro}/{package}/scriptlet-review",
                 &["get"][..],
             ),
+            ("/v1/admin/scriptlet-evidence/backfill", &["post"][..]),
+            ("/v1/admin/scriptlet-evidence/clusters", &["get"][..]),
+            (
+                "/v1/admin/scriptlet-evidence/clusters/{cluster_key}",
+                &["get"][..],
+            ),
+            (
+                "/v1/admin/scriptlet-evidence/clusters/{cluster_key}/state",
+                &["put"][..],
+            ),
+            (
+                "/v1/admin/scriptlet-evidence/clusters/{cluster_key}/notes",
+                &["post"][..],
+            ),
+            (
+                "/v1/admin/scriptlet-evidence/clusters/{cluster_key}/packet",
+                &["get"][..],
+            ),
             ("/v1/admin/repos", &["get", "post"][..]),
             ("/v1/admin/repos/{name}", &["get", "put", "delete"][..]),
             ("/v1/admin/repos/{name}/sync", &["post"][..]),
@@ -677,6 +801,44 @@ mod tests {
         assert!(
             description.contains("native_package_publications")
                 && description.contains("converted_packages")
+        );
+    }
+
+    #[tokio::test]
+    async fn openapi_spec_documents_scriptlet_evidence_body_and_state_contract() {
+        let resp = openapi_spec().await;
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let spec: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let backfill = &spec["paths"]["/v1/admin/scriptlet-evidence/backfill"]["post"];
+        assert_eq!(backfill["requestBody"]["required"], false);
+
+        let list = &spec["paths"]["/v1/admin/scriptlet-evidence/clusters"]["get"];
+        assert!(
+            list["responses"].get("400").is_some(),
+            "list endpoint should document invalid state as a 400 response"
+        );
+        let list_state_schema = &list["parameters"][0]["schema"];
+        let state_path =
+            &spec["paths"]["/v1/admin/scriptlet-evidence/clusters/{cluster_key}/state"]["put"];
+        let update_state_schema = state_path
+            .pointer("/requestBody/content/application~1json/schema/properties/state")
+            .expect("state update schema should document the state property");
+        assert_eq!(list_state_schema, update_state_schema);
+        assert_eq!(
+            spec["components"]["schemas"]["ScriptletEvidenceState"]["enum"],
+            serde_json::json!([
+                "needs-triage",
+                "adapter-candidate",
+                "in-design",
+                "in-implementation",
+                "covered-partial",
+                "covered-public-ready",
+                "wont-support"
+            ])
         );
     }
 }

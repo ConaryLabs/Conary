@@ -1213,6 +1213,115 @@ pub fn migrate_v74(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Version 75: Remi scriptlet evidence queue state
+pub fn migrate_v75(conn: &Connection) -> Result<()> {
+    debug!("Migrating to schema version 75");
+
+    conn.execute_batch(
+        "
+        CREATE TABLE scriptlet_evidence_clusters (
+            cluster_key TEXT PRIMARY KEY,
+            schema_version INTEGER NOT NULL,
+            distro TEXT NOT NULL,
+            target_profile TEXT NOT NULL,
+            blocked_class TEXT NOT NULL,
+            command TEXT NOT NULL,
+            normalized_command_shape TEXT NOT NULL,
+            normalized_command_shape_hash TEXT NOT NULL,
+            lifecycle_phase TEXT NOT NULL,
+            state TEXT NOT NULL DEFAULT 'needs-triage'
+                CHECK (state IN (
+                    'needs-triage',
+                    'adapter-candidate',
+                    'in-design',
+                    'in-implementation',
+                    'covered-partial',
+                    'covered-public-ready',
+                    'wont-support'
+                )),
+            first_seen TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+            last_seen TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+        );
+
+        CREATE TABLE scriptlet_evidence_cluster_samples (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            cluster_key TEXT NOT NULL REFERENCES scriptlet_evidence_clusters(cluster_key) ON DELETE CASCADE,
+            converted_package_id INTEGER REFERENCES converted_packages(id) ON DELETE SET NULL,
+            original_checksum TEXT NOT NULL,
+            distro TEXT NOT NULL,
+            package_name TEXT NOT NULL,
+            package_version TEXT NOT NULL,
+            package_architecture TEXT,
+            publication_status TEXT NOT NULL,
+            scriptlet_fidelity TEXT NOT NULL,
+            target_compatibility TEXT NOT NULL,
+            reason_codes_json TEXT NOT NULL,
+            blocked_classes_json TEXT NOT NULL,
+            boot_security_intents_json TEXT NOT NULL,
+            review_artifact_path TEXT,
+            review_artifact_stale INTEGER NOT NULL DEFAULT 0,
+            evidence_digest TEXT,
+            curation_evidence_digest TEXT,
+            observed_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+        );
+
+        CREATE TABLE scriptlet_evidence_state_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            cluster_key TEXT NOT NULL REFERENCES scriptlet_evidence_clusters(cluster_key) ON DELETE CASCADE,
+            from_state TEXT,
+            to_state TEXT NOT NULL,
+            actor TEXT NOT NULL,
+            reason TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+        );
+
+        CREATE TABLE scriptlet_evidence_notes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            cluster_key TEXT NOT NULL REFERENCES scriptlet_evidence_clusters(cluster_key) ON DELETE CASCADE,
+            actor TEXT NOT NULL,
+            body TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+        );
+
+        CREATE TABLE scriptlet_evidence_backfill_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            status TEXT NOT NULL CHECK (status IN ('running', 'complete', 'failed')),
+            started_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+            completed_at TEXT,
+            last_converted_package_id INTEGER NOT NULL DEFAULT 0,
+            scanned_count INTEGER NOT NULL DEFAULT 0,
+            clustered_count INTEGER NOT NULL DEFAULT 0,
+            error_message TEXT
+        );
+
+        CREATE INDEX idx_scriptlet_evidence_clusters_state_last_seen
+            ON scriptlet_evidence_clusters(state, last_seen DESC);
+        CREATE INDEX idx_scriptlet_evidence_clusters_class
+            ON scriptlet_evidence_clusters(blocked_class, command);
+        CREATE INDEX idx_scriptlet_evidence_samples_cluster
+            ON scriptlet_evidence_cluster_samples(cluster_key, observed_at DESC);
+        CREATE INDEX idx_scriptlet_evidence_samples_package
+            ON scriptlet_evidence_cluster_samples(distro, package_name, package_version, package_architecture);
+        CREATE UNIQUE INDEX idx_scriptlet_evidence_samples_unique_observation
+            ON scriptlet_evidence_cluster_samples(
+                cluster_key,
+                original_checksum,
+                package_name,
+                package_version,
+                COALESCE(package_architecture, '')
+            );
+        CREATE INDEX idx_scriptlet_evidence_backfill_status
+            ON scriptlet_evidence_backfill_runs(status, updated_at DESC);
+        ",
+    )?;
+
+    info!("Schema version 75 applied successfully (scriptlet evidence queue)");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1340,6 +1449,62 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn test_migrate_v75_adds_scriptlet_evidence_queue_tables() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+
+        for table in [
+            "scriptlet_evidence_clusters",
+            "scriptlet_evidence_cluster_samples",
+            "scriptlet_evidence_state_events",
+            "scriptlet_evidence_notes",
+            "scriptlet_evidence_backfill_runs",
+        ] {
+            let count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                    [table],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(count, 1, "missing table {table}");
+        }
+    }
+
+    #[test]
+    fn test_scriptlet_evidence_cluster_state_is_constrained() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+
+        conn.execute(
+            "INSERT INTO scriptlet_evidence_clusters (
+                cluster_key, schema_version, distro, target_profile, blocked_class,
+                command, normalized_command_shape, normalized_command_shape_hash,
+                lifecycle_phase, state
+            ) VALUES (
+                's1-good', 1, 'fedora', 'fedora-44', 'initramfs',
+                'dracut', 'dracut --force <boot>/initramfs.img', 'abc',
+                'postinstall', 'needs-triage'
+            )",
+            [],
+        )
+        .unwrap();
+
+        let bad = conn.execute(
+            "INSERT INTO scriptlet_evidence_clusters (
+                cluster_key, schema_version, distro, target_profile, blocked_class,
+                command, normalized_command_shape, normalized_command_shape_hash,
+                lifecycle_phase, state
+            ) VALUES (
+                's1-bad', 1, 'fedora', 'fedora-44', 'initramfs',
+                'dracut', 'dracut', 'def', 'postinstall', 'public-ready'
+            )",
+            [],
+        );
+        assert!(bad.is_err());
     }
 
     #[test]

@@ -13,7 +13,10 @@ use crate::error::{Error, Result};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use ed25519_dalek::{Signature, VerifyingKey};
 use rusqlite::Connection;
+use serde::Deserialize;
+use std::collections::HashMap;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use tracing::warn;
@@ -99,6 +102,38 @@ pub const DEFAULT_UPDATE_CHANNEL: &str = "https://remi.conary.io/v1/ccs/conary";
 /// Settings key for the update channel override
 const SETTINGS_KEY_UPDATE_CHANNEL: &str = "update-channel";
 
+/// A conary binary should never exceed 256 MB.
+const MAX_SELF_UPDATE_BINARY_SIZE: u64 = 256 * 1024 * 1024;
+
+/// Component manifests can be larger than package metadata but should remain bounded.
+const MAX_COMPONENT_MANIFEST_SIZE: u64 = 8 * 1024 * 1024;
+
+/// Total component metadata retained while reconstructing a self-update binary.
+const MAX_COMPONENT_MANIFEST_TOTAL_SIZE: u64 = MAX_COMPONENT_MANIFEST_SIZE;
+
+/// Total object payload retained while reconstructing a self-update binary.
+const MAX_SELF_UPDATE_OBJECT_TOTAL_SIZE: u64 = MAX_SELF_UPDATE_BINARY_SIZE;
+
+/// A chunked 256 MB binary should not need more than 8192 32 KiB chunks.
+const MAX_SELF_UPDATE_OBJECT_COUNT: usize = 8192;
+
+#[derive(Debug, Deserialize)]
+struct SelfUpdateComponentManifest {
+    files: Vec<SelfUpdateComponentFile>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SelfUpdateComponentFile {
+    path: String,
+    hash: String,
+    size: u64,
+    mode: Option<u32>,
+    #[serde(default)]
+    chunks: Vec<String>,
+    #[serde(rename = "type")]
+    file_type: Option<String>,
+}
+
 /// Get the update channel URL from settings or fall back to default
 pub fn get_update_channel(conn: &Connection) -> Result<String> {
     match settings::get(conn, SETTINGS_KEY_UPDATE_CHANNEL)? {
@@ -112,6 +147,206 @@ pub fn set_update_channel(conn: &Connection, url: &str) -> Result<()> {
     settings::set(conn, SETTINGS_KEY_UPDATE_CHANNEL, url)
 }
 
+fn archive_path_string(path: &Path) -> String {
+    path.to_string_lossy().trim_start_matches("./").to_string()
+}
+
+fn archive_object_hash(path: &str) -> Option<String> {
+    let parts: Vec<&str> = path.split('/').collect();
+    if parts.len() == 3 && parts[0] == "objects" && parts[1].len() == 2 && !parts[2].is_empty() {
+        return Some(format!("{}{}", parts[1], parts[2]));
+    }
+    None
+}
+
+fn checked_binary_size(size: u64) -> Result<usize> {
+    if size > MAX_SELF_UPDATE_BINARY_SIZE {
+        return Err(Error::IoError(format!(
+            "Binary entry too large ({size} bytes, max {MAX_SELF_UPDATE_BINARY_SIZE})"
+        )));
+    }
+
+    usize::try_from(size).map_err(|_| {
+        Error::IoError(format!(
+            "Binary entry too large ({size} bytes, max {MAX_SELF_UPDATE_BINARY_SIZE})"
+        ))
+    })
+}
+
+fn reserve_vec(vec: &mut Vec<u8>, capacity: usize, description: &str) -> Result<()> {
+    vec.try_reserve_exact(capacity).map_err(|e| {
+        Error::IoError(format!(
+            "Failed to reserve {description} buffer ({capacity} bytes): {e}"
+        ))
+    })
+}
+
+fn read_entry_to_vec<R: Read>(
+    entry: &mut R,
+    declared_size: u64,
+    description: &str,
+) -> Result<Vec<u8>> {
+    let capacity = usize::try_from(declared_size).map_err(|_| {
+        Error::IoError(format!(
+            "{description} entry too large ({declared_size} bytes)"
+        ))
+    })?;
+    let mut content = Vec::new();
+    reserve_vec(&mut content, capacity, description)?;
+    entry.read_to_end(&mut content)?;
+    Ok(content)
+}
+
+fn add_limited_payload(
+    total: &mut u64,
+    entry_size: u64,
+    max_size: u64,
+    description: &str,
+) -> Result<()> {
+    let new_total = total.checked_add(entry_size).ok_or_else(|| {
+        Error::IoError(format!(
+            "{description} too large (overflow, max {max_size} bytes)"
+        ))
+    })?;
+
+    if new_total > max_size {
+        return Err(Error::IoError(format!(
+            "{description} too large ({new_total} bytes, max {max_size})"
+        )));
+    }
+
+    *total = new_total;
+    Ok(())
+}
+
+fn verify_object_hash(expected: &str, content: &[u8]) -> Result<()> {
+    let actual = crate::hash::sha256(content);
+    if actual != expected {
+        return Err(Error::ChecksumMismatch {
+            expected: expected.to_string(),
+            actual,
+        });
+    }
+    Ok(())
+}
+
+fn persist_extracted_binary(content: &[u8], target_dir: &Path, mode: u32) -> Result<PathBuf> {
+    if content.len() as u64 > MAX_SELF_UPDATE_BINARY_SIZE {
+        return Err(Error::IoError(format!(
+            "Binary entry too large ({} bytes, max {MAX_SELF_UPDATE_BINARY_SIZE})",
+            content.len()
+        )));
+    }
+
+    let tmp = tempfile::Builder::new()
+        .prefix(".conary-update-")
+        .tempfile_in(target_dir)
+        .map_err(|e| Error::IoError(format!("Failed to create temp file: {e}")))?;
+    {
+        use std::io::Write as _;
+        tmp.as_file()
+            .write_all(content)
+            .map_err(|e| Error::IoError(format!("Failed to write binary: {e}")))?;
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let executable_mode = mode & 0o777;
+        let executable_mode = if executable_mode == 0 {
+            0o755
+        } else {
+            executable_mode
+        };
+        fs::set_permissions(tmp.path(), fs::Permissions::from_mode(executable_mode))?;
+    }
+
+    let dest = tmp
+        .keep()
+        .map_err(|e| Error::IoError(format!("Failed to persist temp file: {e}")))?
+        .1;
+    Ok(dest)
+}
+
+fn reconstructed_conary_binary(
+    component_manifests: &[Vec<u8>],
+    objects: &HashMap<String, Vec<u8>>,
+) -> Result<Option<(Vec<u8>, u32)>> {
+    for manifest_bytes in component_manifests {
+        let manifest: SelfUpdateComponentManifest = serde_json::from_slice(manifest_bytes)
+            .map_err(|e| Error::ParseError(format!("Invalid component manifest: {e}")))?;
+
+        for file in manifest.files {
+            if file.path != "/usr/bin/conary" && file.path != "usr/bin/conary" {
+                continue;
+            }
+            if file
+                .file_type
+                .as_deref()
+                .is_some_and(|kind| kind != "regular")
+            {
+                return Err(Error::ParseError(
+                    "CCS package conary entry is not a regular file".to_string(),
+                ));
+            }
+            let expected_size = checked_binary_size(file.size)?;
+
+            let content = if file.chunks.is_empty() {
+                objects.get(&file.hash).cloned().ok_or_else(|| {
+                    Error::ParseError(format!(
+                        "CCS package is missing object {} for /usr/bin/conary",
+                        file.hash
+                    ))
+                })?
+            } else {
+                let mut content = Vec::new();
+                reserve_vec(&mut content, expected_size, "/usr/bin/conary")?;
+                for chunk_hash in &file.chunks {
+                    let chunk = objects.get(chunk_hash).ok_or_else(|| {
+                        Error::ParseError(format!(
+                            "CCS package is missing chunk object {chunk_hash} for /usr/bin/conary"
+                        ))
+                    })?;
+                    verify_object_hash(chunk_hash, chunk)?;
+                    let new_len = content.len().checked_add(chunk.len()).ok_or_else(|| {
+                        Error::IoError(format!(
+                            "Binary entry too large (overflow, max {MAX_SELF_UPDATE_BINARY_SIZE})"
+                        ))
+                    })?;
+                    if new_len > expected_size {
+                        return Err(Error::ParseError(format!(
+                            "CCS package conary size mismatch: expected {} bytes, got at least {new_len}",
+                            file.size
+                        )));
+                    }
+                    content.extend_from_slice(chunk);
+                }
+                content
+            };
+
+            if content.len() as u64 != file.size {
+                return Err(Error::ParseError(format!(
+                    "CCS package conary size mismatch: expected {} bytes, got {}",
+                    file.size,
+                    content.len()
+                )));
+            }
+
+            let actual_hash = crate::hash::sha256(&content);
+            if actual_hash != file.hash {
+                return Err(Error::ChecksumMismatch {
+                    expected: file.hash,
+                    actual: actual_hash,
+                });
+            }
+
+            return Ok(Some((content, file.mode.unwrap_or(0o100755))));
+        }
+    }
+
+    Ok(None)
+}
+
 /// Extract the conary binary from a CCS package to a temp file
 ///
 /// Returns the path to the extracted binary. The binary is placed in
@@ -120,58 +355,84 @@ pub fn set_update_channel(conn: &Connection, url: &str) -> Result<()> {
 /// so the partial file is automatically removed on failure.
 pub fn extract_binary(ccs_path: &Path, target_dir: &Path) -> Result<PathBuf> {
     use flate2::read::GzDecoder;
-    use std::io::{Read, Write as _};
     use tar::Archive;
 
     let file = fs::File::open(ccs_path)
         .map_err(|e| Error::IoError(format!("Failed to open CCS package: {e}")))?;
     let decoder = GzDecoder::new(file);
     let mut archive = Archive::new(decoder);
+    let mut component_manifests = Vec::new();
+    let mut objects = HashMap::new();
+    let mut component_manifest_bytes = 0u64;
+    let mut object_bytes = 0u64;
+    let mut object_count = 0usize;
 
     for entry in archive.entries()? {
         let mut entry = entry?;
         let path = entry.path()?;
-        let path_str = path.to_string_lossy();
+        let path_str = archive_path_string(&path);
 
         // Look for the conary binary in the CCS package
         if path_str.ends_with("usr/bin/conary") || path_str == "conary" {
-            // Guard against malicious/corrupted packages with oversized entries.
-            // A conary binary should never exceed 256 MB.
-            const MAX_BINARY_SIZE: u64 = 256 * 1024 * 1024;
             let entry_size = entry.header().size()?;
-            if entry_size > MAX_BINARY_SIZE {
+            if entry_size > MAX_SELF_UPDATE_BINARY_SIZE {
                 return Err(Error::IoError(format!(
-                    "Binary entry too large ({entry_size} bytes, max {MAX_BINARY_SIZE})"
+                    "Binary entry too large ({entry_size} bytes, max {MAX_SELF_UPDATE_BINARY_SIZE})"
                 )));
             }
 
-            let mut content = Vec::new();
-            entry.read_to_end(&mut content)?;
-
-            // Use a NamedTempFile in target_dir (same filesystem as the install
-            // target) so the file is cleaned up automatically on failure. On
-            // success the caller will rename() it into place atomically.
-            let tmp = tempfile::Builder::new()
-                .prefix(".conary-update-")
-                .tempfile_in(target_dir)
-                .map_err(|e| Error::IoError(format!("Failed to create temp file: {e}")))?;
-            tmp.as_file()
-                .write_all(&content)
-                .map_err(|e| Error::IoError(format!("Failed to write binary: {e}")))?;
-
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                fs::set_permissions(tmp.path(), fs::Permissions::from_mode(0o755))?;
-            }
-
-            // Persist the temp file so the caller can rename() it.
-            let dest = tmp
-                .keep()
-                .map_err(|e| Error::IoError(format!("Failed to persist temp file: {e}")))?
-                .1;
-            return Ok(dest);
+            let content = read_entry_to_vec(&mut entry, entry_size, "direct conary binary")?;
+            return persist_extracted_binary(&content, target_dir, 0o755);
         }
+
+        if path_str.starts_with("components/") && path_str.ends_with(".json") {
+            let entry_size = entry.header().size()?;
+            if entry_size > MAX_COMPONENT_MANIFEST_SIZE {
+                return Err(Error::ParseError(format!(
+                    "Component manifest too large ({entry_size} bytes, max {MAX_COMPONENT_MANIFEST_SIZE})"
+                )));
+            }
+            add_limited_payload(
+                &mut component_manifest_bytes,
+                entry_size,
+                MAX_COMPONENT_MANIFEST_TOTAL_SIZE,
+                "Component manifest payload",
+            )?;
+            let content = read_entry_to_vec(&mut entry, entry_size, "component manifest")?;
+            component_manifests.push(content);
+            continue;
+        }
+
+        if let Some(hash) = archive_object_hash(&path_str) {
+            let entry_size = entry.header().size()?;
+            if entry_size > MAX_SELF_UPDATE_BINARY_SIZE {
+                return Err(Error::IoError(format!(
+                    "CCS object too large ({entry_size} bytes, max {MAX_SELF_UPDATE_BINARY_SIZE})"
+                )));
+            }
+            object_count = object_count.checked_add(1).ok_or_else(|| {
+                Error::IoError(format!(
+                    "Too many CCS objects (overflow, max {MAX_SELF_UPDATE_OBJECT_COUNT})"
+                ))
+            })?;
+            if object_count > MAX_SELF_UPDATE_OBJECT_COUNT {
+                return Err(Error::IoError(format!(
+                    "Too many CCS objects ({object_count}, max {MAX_SELF_UPDATE_OBJECT_COUNT})"
+                )));
+            }
+            add_limited_payload(
+                &mut object_bytes,
+                entry_size,
+                MAX_SELF_UPDATE_OBJECT_TOTAL_SIZE,
+                "CCS object payload",
+            )?;
+            let content = read_entry_to_vec(&mut entry, entry_size, "CCS object")?;
+            objects.insert(hash, content);
+        }
+    }
+
+    if let Some((content, mode)) = reconstructed_conary_binary(&component_manifests, &objects)? {
+        return persist_extracted_binary(&content, target_dir, mode);
     }
 
     Err(Error::ParseError(
@@ -252,12 +513,26 @@ pub fn verify_binary(binary_path: &Path, expected_version: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
 
     fn create_test_db() -> rusqlite::Connection {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
         crate::db::schema::migrate(&conn).unwrap();
         conn
+    }
+
+    fn append_test_tar_entry<W: Write>(builder: &mut tar::Builder<W>, path: &str, content: &[u8]) {
+        let mut header = tar::Header::new_gnu();
+        header.set_size(content.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        builder.append_data(&mut header, path, content).unwrap();
+    }
+
+    fn append_test_object<W: Write>(builder: &mut tar::Builder<W>, hash: &str, content: &[u8]) {
+        let path = format!("objects/{}/{}", &hash[..2], &hash[2..]);
+        append_test_tar_entry(builder, &path, content);
     }
 
     #[test]
@@ -377,6 +652,201 @@ mod tests {
             std::fs::read(&binary_path).unwrap(),
             b"#!/bin/sh\necho test"
         );
+    }
+
+    #[test]
+    fn test_extract_binary_reconstructs_conary_from_component_chunks() {
+        let dir = tempfile::tempdir().unwrap();
+        let ccs_path = dir.path().join("chunked.ccs");
+
+        {
+            use flate2::Compression;
+            use flate2::write::GzEncoder;
+            let file = std::fs::File::create(&ccs_path).unwrap();
+            let encoder = GzEncoder::new(file, Compression::default());
+            let mut builder = tar::Builder::new(encoder);
+
+            let first = b"#!/bin/sh\n";
+            let second = b"echo cas\n";
+            let content = [first.as_slice(), second.as_slice()].concat();
+            let first_hash = crate::hash::sha256(first);
+            let second_hash = crate::hash::sha256(second);
+            let file_hash = crate::hash::sha256(&content);
+
+            for (hash, bytes) in [
+                (&first_hash, first.as_slice()),
+                (&second_hash, second.as_slice()),
+            ] {
+                let path = format!("objects/{}/{}", &hash[..2], &hash[2..]);
+                let mut header = tar::Header::new_gnu();
+                header.set_size(bytes.len() as u64);
+                header.set_mode(0o644);
+                header.set_cksum();
+                builder.append_data(&mut header, path, bytes).unwrap();
+            }
+
+            let runtime_manifest = serde_json::json!({
+                "name": "runtime",
+                "files": [{
+                    "path": "/usr/bin/conary",
+                    "hash": file_hash,
+                    "size": content.len(),
+                    "mode": 0o100755,
+                    "component": "runtime",
+                    "type": "regular",
+                    "chunks": [first_hash, second_hash]
+                }]
+            })
+            .to_string();
+            let mut header = tar::Header::new_gnu();
+            header.set_size(runtime_manifest.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            builder
+                .append_data(
+                    &mut header,
+                    "components/runtime.json",
+                    runtime_manifest.as_bytes(),
+                )
+                .unwrap();
+            builder.finish().unwrap();
+        }
+
+        let binary_path = extract_binary(&ccs_path, dir.path()).unwrap();
+        assert_eq!(
+            std::fs::read(&binary_path).unwrap(),
+            b"#!/bin/sh\necho cas\n"
+        );
+    }
+
+    #[test]
+    fn test_reconstructed_conary_binary_rejects_oversized_manifest_size_without_panic() {
+        let chunk = b"#!/bin/sh\n";
+        let chunk_hash = crate::hash::sha256(chunk);
+        let file_hash = crate::hash::sha256(chunk);
+        let manifest = serde_json::json!({
+            "files": [{
+                "path": "/usr/bin/conary",
+                "hash": file_hash,
+                "size": u64::MAX,
+                "mode": 0o100755,
+                "type": "regular",
+                "chunks": [chunk_hash]
+            }]
+        })
+        .to_string()
+        .into_bytes();
+        let objects = HashMap::from([(chunk_hash, chunk.to_vec())]);
+
+        let result =
+            std::panic::catch_unwind(|| reconstructed_conary_binary(&[manifest], &objects))
+                .expect("oversized manifest size should return a clean error, not panic");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("Binary entry too large"),
+            "Error was: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn test_extract_binary_rejects_excessive_component_manifest_payload() {
+        let dir = tempfile::tempdir().unwrap();
+        let ccs_path = dir.path().join("too-many-components.ccs");
+
+        {
+            use flate2::Compression;
+            use flate2::write::GzEncoder;
+            let file = std::fs::File::create(&ccs_path).unwrap();
+            let encoder = GzEncoder::new(file, Compression::default());
+            let mut builder = tar::Builder::new(encoder);
+
+            let manifest_payload = vec![b' '; (MAX_COMPONENT_MANIFEST_SIZE / 2 + 1) as usize];
+            append_test_tar_entry(&mut builder, "components/runtime-a.json", &manifest_payload);
+            append_test_tar_entry(&mut builder, "components/runtime-b.json", &manifest_payload);
+            builder.finish().unwrap();
+        }
+
+        let result = extract_binary(&ccs_path, dir.path());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("Component manifest payload too large"),
+            "Error was: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn test_extract_binary_rejects_too_many_object_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let ccs_path = dir.path().join("too-many-objects.ccs");
+
+        {
+            use flate2::Compression;
+            use flate2::write::GzEncoder;
+            let file = std::fs::File::create(&ccs_path).unwrap();
+            let encoder = GzEncoder::new(file, Compression::default());
+            let mut builder = tar::Builder::new(encoder);
+
+            for index in 0..8193 {
+                let hash = format!("{index:064x}");
+                append_test_object(&mut builder, &hash, b"x");
+            }
+            builder.finish().unwrap();
+        }
+
+        let result = extract_binary(&ccs_path, dir.path());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("Too many CCS objects"),
+            "Error was: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn test_extract_binary_rejects_chunk_object_hash_mismatch() {
+        let dir = tempfile::tempdir().unwrap();
+        let ccs_path = dir.path().join("bad-chunk-hash.ccs");
+
+        {
+            use flate2::Compression;
+            use flate2::write::GzEncoder;
+            let file = std::fs::File::create(&ccs_path).unwrap();
+            let encoder = GzEncoder::new(file, Compression::default());
+            let mut builder = tar::Builder::new(encoder);
+
+            let expected_chunk = b"#!/bin/sh\n";
+            let tampered_chunk = b"#!/bin/bash\n";
+            let expected_chunk_hash = crate::hash::sha256(expected_chunk);
+            let tampered_chunk_hash = crate::hash::sha256(tampered_chunk);
+
+            append_test_object(&mut builder, &expected_chunk_hash, tampered_chunk);
+
+            let runtime_manifest = serde_json::json!({
+                "name": "runtime",
+                "files": [{
+                    "path": "/usr/bin/conary",
+                    "hash": tampered_chunk_hash,
+                    "size": tampered_chunk.len(),
+                    "mode": 0o100755,
+                    "component": "runtime",
+                    "type": "regular",
+                    "chunks": [expected_chunk_hash]
+                }]
+            })
+            .to_string();
+            append_test_tar_entry(
+                &mut builder,
+                "components/runtime.json",
+                runtime_manifest.as_bytes(),
+            );
+            builder.finish().unwrap();
+        }
+
+        let result = extract_binary(&ccs_path, dir.path());
+        let Err(Error::ChecksumMismatch { expected, actual }) = result else {
+            panic!("expected chunk checksum mismatch, got {result:?}");
+        };
+        assert_eq!(expected, crate::hash::sha256(b"#!/bin/sh\n"));
+        assert_eq!(actual, crate::hash::sha256(b"#!/bin/bash\n"));
     }
 
     #[test]

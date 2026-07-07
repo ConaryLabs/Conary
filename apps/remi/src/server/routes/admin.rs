@@ -88,6 +88,30 @@ pub fn create_external_admin_router(
             get(admin_handlers::get_scriptlet_review_artifact),
         )
         .route(
+            "/v1/admin/scriptlet-evidence/backfill",
+            post(admin_handlers::scriptlet_evidence_backfill),
+        )
+        .route(
+            "/v1/admin/scriptlet-evidence/clusters",
+            get(admin_handlers::list_scriptlet_evidence_clusters),
+        )
+        .route(
+            "/v1/admin/scriptlet-evidence/clusters/{cluster_key}",
+            get(admin_handlers::get_scriptlet_evidence_cluster),
+        )
+        .route(
+            "/v1/admin/scriptlet-evidence/clusters/{cluster_key}/state",
+            put(admin_handlers::update_scriptlet_evidence_cluster_state),
+        )
+        .route(
+            "/v1/admin/scriptlet-evidence/clusters/{cluster_key}/notes",
+            post(admin_handlers::add_scriptlet_evidence_cluster_note),
+        )
+        .route(
+            "/v1/admin/scriptlet-evidence/clusters/{cluster_key}/packet",
+            get(admin_handlers::get_scriptlet_evidence_packet),
+        )
+        .route(
             "/v1/admin/tuf/{distro}/refresh-timestamp",
             post(tuf::refresh_timestamp),
         )

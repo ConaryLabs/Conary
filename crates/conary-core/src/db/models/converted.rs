@@ -508,6 +508,23 @@ impl ConvertedPackage {
         Ok(results)
     }
 
+    /// List converted packages after a checkpoint id, bounded in SQL.
+    pub fn list_after_id(conn: &Connection, after_id: i64, limit: usize) -> Result<Vec<Self>> {
+        let sql_limit = i64::try_from(limit).unwrap_or(i64::MAX).max(1);
+        let sql = format!(
+            "SELECT {} FROM converted_packages
+             WHERE id > ?1
+             ORDER BY id ASC
+             LIMIT ?2",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let results = stmt
+            .query_map(params![after_id, sql_limit], Self::from_row)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(results)
+    }
+
     /// Find current converted package candidates for publication filtering.
     ///
     /// This intentionally returns full rows so callers can apply the

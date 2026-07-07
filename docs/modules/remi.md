@@ -55,6 +55,33 @@ rows through a sanitized `scriptlets` object. Local `review_artifact_path`
 values remain private server state and are represented publicly only as
 `review_artifact_available`.
 
+### Scriptlet Evidence Queue
+
+Remi maintains an admin/operator-only scriptlet evidence queue for adapter
+planning. Schema v75 adds `scriptlet_evidence_*` tables that cluster blocked,
+review-required, and malformed conversion evidence by stable command shape,
+blocked class, distro, target profile, and lifecycle phase. Conary-core owns the
+database schema and model helpers; Remi owns the normalization, aggregation,
+backfill, admin routes, and packet export modules under
+`apps/remi/src/server/scriptlet_evidence_queue/` and
+`apps/remi/src/server/handlers/admin/scriptlet_evidence.rs`.
+
+Incremental conversion persistence records queue samples best-effort after a
+converted row is stored. Existing rows can be materialized with
+`POST /v1/admin/scriptlet-evidence/backfill`, which processes a bounded batch
+without startup backfill. Admins can list clusters, inspect detail, update
+triage state, add private maintainer notes, and export private or
+`public-sanitized` packets through the `/v1/admin/scriptlet-evidence/*` route
+family. Detail responses expose review-artifact availability and staleness,
+never raw local review artifact paths. Private packets include sanitized
+artifact references for maintainer follow-up; `public-sanitized` packets omit
+review artifacts and private notes.
+
+The queue is not publication authority. Moving a cluster to
+`covered-public-ready` records maintainer workflow state only; it does not
+rewrite `converted_packages.publication_status`, make blocked rows public, call
+LLM services, or create a public issue tracker.
+
 ### Legacy Scriptlet Publication Gate
 
 Remi treats legacy scriptlet metadata embedded during conversion as an active

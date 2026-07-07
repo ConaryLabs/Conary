@@ -11,7 +11,7 @@ use conary_core::ccs::convert::ConversionResult;
 use conary_core::db::models::{CONVERSION_VERSION, ConvertedPackage, RepositoryPackage};
 use conary_core::packages::common::PackageMetadata;
 use std::path::PathBuf;
-use tracing::info;
+use tracing::{info, warn};
 
 pub(super) struct PersistConversionInput {
     pub(super) distro: String,
@@ -150,6 +150,16 @@ impl ConversionService {
             converted.set_scriptlet_metadata(&summary)?;
         }
         converted.insert(&conn)?;
+        if let Err(error) = crate::server::scriptlet_evidence_queue::record_converted_package(
+            &conn,
+            &self.cache_dir,
+            &converted,
+        ) {
+            warn!(
+                "failed to record scriptlet evidence queue sample for {} {}: {error}",
+                metadata.name, metadata.version
+            );
+        }
 
         info!(
             "Recorded conversion in database (distro={}, name={}, version={})",
@@ -618,5 +628,64 @@ mod tests {
             "review-required"
         );
         assert!(hot.result().scriptlets.review_artifact_available);
+    }
+
+    #[test]
+    fn persist_conversion_records_scriptlet_evidence() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let db_path = temp.path().join("remi.db");
+        conary_core::db::init(&db_path).unwrap();
+        let chunk_dir = temp.path().join("chunks");
+        let cache_dir = temp.path().join("cache");
+        let output_ccs = temp.path().join("out/blocked.ccs");
+        std::fs::create_dir_all(output_ccs.parent().unwrap()).unwrap();
+        std::fs::write(&output_ccs, b"blocked ccs payload").unwrap();
+
+        let service = ConversionService::new(chunk_dir, cache_dir, db_path.clone(), None);
+        let metadata = PackageMetadata::new(
+            PathBuf::from("/tmp/blocked.rpm"),
+            "blocked".to_string(),
+            "1.0".to_string(),
+        );
+        let mut result = make_conversion_result(Default::default());
+        result.package_path = Some(output_ccs);
+        let mut summary = goal8a_scriptlet_summary("blocked", "blocked", "blocked");
+        summary
+            .blocked_reason_codes
+            .push("blocked-class-network".to_string());
+        summary.blocked_classes.push("network".to_string());
+        result.scriptlet_metadata = summary;
+
+        let mut repo_pkg = RepositoryPackage::new(
+            1,
+            "blocked".to_string(),
+            "1.0".to_string(),
+            "sha256:repo".to_string(),
+            11,
+            "https://example.invalid/blocked.rpm".to_string(),
+        );
+        repo_pkg.architecture = Some("x86_64".to_string());
+
+        service
+            .persist_conversion_result(PersistConversionInput {
+                distro: "fedora".to_string(),
+                metadata,
+                format: "rpm",
+                original_checksum: "sha256:blocked-source".to_string(),
+                conversion_result: result,
+                repo_pkg,
+                chunk_hashes: vec!["sha256:blocked-chunk".to_string()],
+            })
+            .unwrap();
+
+        let conn = conary_core::db::open(&db_path).unwrap();
+        let sample_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM scriptlet_evidence_cluster_samples",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(sample_count, 1);
     }
 }

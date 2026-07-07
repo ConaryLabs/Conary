@@ -53,6 +53,7 @@ mod repository_package_key;
 mod repository_requirement;
 mod resolution;
 mod scriptlet_entry;
+mod scriptlet_evidence;
 mod state;
 mod subpackage;
 mod trigger;
@@ -103,6 +104,12 @@ pub use repository_package_key::{RepositoryPackageKey, RepositoryPackageKeyStatu
 pub use repository_requirement::{RepositoryRequirement, RepositoryRequirementGroup};
 pub use resolution::{CacheTier, PackageResolution, PrimaryStrategy, ResolutionStrategy};
 pub use scriptlet_entry::ScriptletEntry;
+pub use scriptlet_evidence::{
+    BackfillStatus, CLUSTER_KEY_PREFIX, NewScriptletEvidenceCluster, NewScriptletEvidenceSample,
+    ScriptletEvidenceBackfillRun, ScriptletEvidenceCluster, ScriptletEvidenceClusterDetail,
+    ScriptletEvidenceClusterListFilter, ScriptletEvidenceClusterSummary, ScriptletEvidenceNote,
+    ScriptletEvidenceSample, ScriptletEvidenceState, ScriptletEvidenceStateEvent,
+};
 pub use state::{RestorePlan, StateDiff, StateEngine, StateMember, SystemState};
 pub use subpackage::{RelatedPackages, SubpackageRelationship, show_subpackage_guidance};
 pub use trigger::{ChangesetTrigger, Trigger, TriggerDependency, TriggerStatus};

@@ -7,6 +7,7 @@ mod events;
 mod federation;
 mod packages;
 mod repos;
+mod scriptlet_evidence;
 pub mod test_data;
 mod tokens;
 
@@ -16,6 +17,7 @@ pub use events::*;
 pub use federation::*;
 pub use packages::*;
 pub use repos::*;
+pub use scriptlet_evidence::*;
 pub use tokens::*;
 
 use axum::{
