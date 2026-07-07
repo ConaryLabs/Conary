@@ -44,6 +44,8 @@ pub struct PublicationGateReport {
     pub blocked_classes: Vec<String>,
     #[serde(default)]
     pub boot_security_intents: Vec<conary_core::ccs::legacy_scriptlets::BootSecurityIntentEvidence>,
+    #[serde(default)]
+    pub security_policy_intents: Vec<conary_core::ccs::security_policy::SecurityPolicyIntent>,
     pub evidence_digest: Option<String>,
     pub curation_evidence_digest: Option<String>,
     pub review_artifact_available: bool,
@@ -220,6 +222,7 @@ pub fn report_from_summary(
         unknown_commands: sorted(&summary.unknown_commands),
         blocked_classes: sorted(&summary.blocked_classes),
         boot_security_intents: summary.boot_security_intents.clone(),
+        security_policy_intents: summary.security_policy_intents.clone(),
         evidence_digest: summary.evidence_digest.clone(),
         curation_evidence_digest: summary.curation_evidence_digest.clone(),
         review_artifact_available: summary.review_artifact_path.is_some(),
@@ -346,9 +349,16 @@ fn sanitize_component(value: &str) -> String {
 mod tests {
     use super::*;
     use conary_core::ccs::convert::{ScriptletBundleSummary, ScriptletDecisionCountsSummary};
+    use conary_core::ccs::security_policy::{
+        SECURITY_POLICY_INTENT_SCHEMA_V1, SecurityPolicyFallback, SecurityPolicyIntent,
+        SecurityPolicyPayloadEvidence, SecurityPolicyProvider, SecurityPolicyReconciliation,
+        SecurityPolicyReconciliationState, SecurityPolicyRequirements, SecurityPolicyScope,
+        SecurityPolicySource,
+    };
     use conary_core::db::models::{
         ChunkPublicationState, ConvertedPackage, ScriptletSummaryForPublication,
     };
+    use std::collections::BTreeMap;
 
     fn summary(status: &str) -> ScriptletBundleSummary {
         ScriptletBundleSummary {
@@ -579,6 +589,49 @@ mod tests {
     }
 
     #[test]
+    fn blocked_apparmor_report_stays_private_and_carries_security_policy_intent() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let db_path = temp.path().join("remi.db");
+        conary_core::db::init(&db_path).unwrap();
+        let conn = conary_core::db::open(&db_path).unwrap();
+        let mut summary = golden_summary("blocked", "blocked", "blocked");
+        summary.decision_counts = ScriptletDecisionCountsSummary {
+            blocked: 1,
+            ..ScriptletDecisionCountsSummary::default()
+        };
+        summary
+            .blocked_reason_codes
+            .push("blocked-class-apparmor".to_string());
+        summary.blocked_classes.push("apparmor".to_string());
+        summary.security_policy_intents = vec![apparmor_policy_intent()];
+        insert_golden_converted(&conn, "apparmor-private", "apparmor-chunk", &summary);
+
+        let converted = ConvertedPackage::find_publication_candidates(&conn, "fedora", None)
+            .unwrap()
+            .into_iter()
+            .find(|converted| converted.package_name.as_deref() == Some("apparmor-private"))
+            .expect("private converted AppArmor row should remain queryable as server state");
+        assert!(!converted.is_scriptlet_public_ready());
+        assert_eq!(
+            ConvertedPackage::chunk_publication_state(&conn, "apparmor-chunk").unwrap(),
+            ChunkPublicationState::NonPublicOnly
+        );
+
+        let report = match classify_converted_package(&converted) {
+            PublicationDecision::Blocked(report) => report,
+            other => panic!("expected blocked AppArmor report, got {other:?}"),
+        };
+        assert_eq!(report.publication_status, "blocked");
+        assert_eq!(report.blocked_classes, vec!["apparmor"]);
+        assert_eq!(report.security_policy_intents.len(), 1);
+        let intent = &report.security_policy_intents[0];
+        assert_eq!(intent.provider.as_str(), "apparmor");
+        assert_eq!(intent.operation, "profile-reload");
+        assert_eq!(intent.reconciliation.state.as_str(), "review");
+        assert_eq!(intent.scope.paths, vec!["/etc/apparmor.d/usr.bin.demo"]);
+    }
+
+    #[test]
     fn publication_report_reasons_are_deterministic_and_deduplicated() {
         let summary = ScriptletBundleSummary {
             publication_status: "private-review".to_string(),
@@ -647,5 +700,49 @@ mod tests {
         assert_eq!(report.boot_security_intents.len(), 1);
         assert_eq!(report.boot_security_intents[0].class_id, "initramfs");
         assert_eq!(report.boot_security_intents[0].command, "dracut");
+    }
+
+    fn apparmor_policy_intent() -> SecurityPolicyIntent {
+        SecurityPolicyIntent {
+            schema: SECURITY_POLICY_INTENT_SCHEMA_V1.to_string(),
+            id: "scriptlet:0:post-install:apparmor:apparmor_parser".to_string(),
+            source: SecurityPolicySource {
+                source_format: Some("deb".to_string()),
+                source_distro: Some("ubuntu".to_string()),
+                entry_id: Some("scriptlet:0:post-install".to_string()),
+                command: Some("apparmor_parser".to_string()),
+                argv: vec!["-r".to_string(), "/etc/apparmor.d/usr.bin.demo".to_string()],
+                adapter_id: None,
+            },
+            provider: SecurityPolicyProvider::Apparmor,
+            operation: "profile-reload".to_string(),
+            scope: SecurityPolicyScope {
+                kind: "profile".to_string(),
+                name: Some("/etc/apparmor.d/usr.bin.demo".to_string()),
+                paths: vec!["/etc/apparmor.d/usr.bin.demo".to_string()],
+                service: None,
+                port: None,
+                extra: BTreeMap::new(),
+            },
+            desired_state: BTreeMap::new(),
+            requirements: SecurityPolicyRequirements {
+                required_on_active_provider: false,
+                provider_mode: None,
+                tools: vec!["apparmor_parser".to_string()],
+                modules: Vec::new(),
+            },
+            fallback: SecurityPolicyFallback::Dormant,
+            payload_evidence: SecurityPolicyPayloadEvidence {
+                payload_backed: true,
+                paths: vec!["/etc/apparmor.d/usr.bin.demo".to_string()],
+                digest: None,
+            },
+            reconciliation: SecurityPolicyReconciliation {
+                state: SecurityPolicyReconciliationState::Review,
+                reason: Some("blocked-class-apparmor".to_string()),
+                target_provider: None,
+            },
+            extra: BTreeMap::new(),
+        }
     }
 }

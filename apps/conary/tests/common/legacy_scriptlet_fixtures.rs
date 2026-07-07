@@ -416,6 +416,7 @@ fn bundle_fixture(
         scriptlet_fidelity,
         decision_counts: decision_counts(&entries),
         unsupported_class_counts: BTreeMap::new(),
+        security_policy_intents: Vec::new(),
         entries,
         extra: BTreeMap::new(),
     }
@@ -468,6 +469,7 @@ fn entry_fixture(
         unknown_commands: vec![],
         blocked_classes: vec![],
         boot_security_intents: Vec::new(),
+        security_policy_intents: Vec::new(),
         rpm_trigger: None,
         deb_maintainer: None,
         arch_install: None,

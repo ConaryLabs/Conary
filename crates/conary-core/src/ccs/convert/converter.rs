@@ -1686,6 +1686,124 @@ update-mime-database /usr/share/mime
     }
 
     #[test]
+    fn selinux_adapter_records_four_generic_policy_intents_in_bundle_and_summary() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut metadata = make_test_metadata();
+        metadata.scriptlets = vec![Scriptlet {
+            phase: ScriptletPhase::PostInstall,
+            interpreter: "/bin/sh".to_string(),
+            content: "\
+restorecon -R /usr/bin/test
+semanage fcontext -a -t demo_exec_t /usr/bin/test
+semodule -i /usr/share/selinux/packages/demo.pp
+setsebool -P demo_can_network on
+"
+            .to_string(),
+            flags: None,
+        }];
+        let mut files = make_test_files();
+        files.push(ExtractedFile {
+            path: "/usr/share/selinux/packages/demo.pp".to_string(),
+            content: b"selinux policy module placeholder".to_vec(),
+            size: 33,
+            mode: 0o644,
+            sha256: None,
+            symlink_target: None,
+        });
+        let converter = passive_test_converter(temp_dir.path());
+
+        let result = converter
+            .convert(&metadata, &files, "rpm", "sha256:test")
+            .expect("conversion succeeds");
+        let package =
+            crate::ccs::CcsPackage::parse(result.package_path.as_ref().unwrap().to_str().unwrap())
+                .expect("converted CCS package should parse");
+        let bundle = package
+            .manifest()
+            .legacy_scriptlets
+            .as_ref()
+            .expect("written CCS archive should carry passive scriptlet bundle");
+
+        assert_eq!(bundle.publication_status.as_str(), "public");
+        assert_eq!(bundle.security_policy_intents.len(), 4);
+        assert_eq!(result.scriptlet_metadata.security_policy_intents.len(), 4);
+        let label_refresh = bundle
+            .security_policy_intents
+            .iter()
+            .find(|intent| {
+                intent.provider.as_str() == "selinux" && intent.operation == "label-refresh"
+            })
+            .expect("SELinux label refresh intent should be recorded");
+        assert_eq!(label_refresh.fallback.as_str(), "dormant");
+        assert_eq!(label_refresh.scope.paths, vec!["/usr/bin/test"]);
+        assert!(
+            result
+                .scriptlet_metadata
+                .security_policy_intents
+                .iter()
+                .any(|intent| intent == label_refresh)
+        );
+    }
+
+    #[test]
+    fn apparmor_helper_is_typed_review_intent_not_public_ready() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut metadata = make_test_metadata();
+        metadata.scriptlets = vec![Scriptlet {
+            phase: ScriptletPhase::PostInstall,
+            interpreter: "/bin/sh".to_string(),
+            content: "apparmor_parser -r /etc/apparmor.d/usr.bin.demo\n".to_string(),
+            flags: None,
+        }];
+        let mut files = make_test_files();
+        files.push(ExtractedFile {
+            path: "/etc/apparmor.d/usr.bin.demo".to_string(),
+            content: b"profile usr.bin.demo /usr/bin/demo { }\n".to_vec(),
+            size: 38,
+            mode: 0o644,
+            sha256: None,
+            symlink_target: None,
+        });
+        let converter = passive_test_converter(temp_dir.path());
+
+        let result = converter
+            .convert(&metadata, &files, "deb", "sha256:test")
+            .expect("conversion succeeds");
+        let package =
+            crate::ccs::CcsPackage::parse(result.package_path.as_ref().unwrap().to_str().unwrap())
+                .expect("converted CCS package should parse");
+        let bundle = package
+            .manifest()
+            .legacy_scriptlets
+            .as_ref()
+            .expect("written CCS archive should carry passive scriptlet bundle");
+
+        assert_eq!(bundle.publication_status.as_str(), "blocked");
+        assert_eq!(bundle.decision_counts.blocked, 1);
+        assert_eq!(bundle.entries.len(), 1);
+        let entry = &bundle.entries[0];
+        assert_eq!(entry.decision.as_str(), "blocked");
+        assert_eq!(entry.reason_code, "blocked-class-apparmor");
+        assert_eq!(entry.blocked_classes, vec!["apparmor"]);
+        assert_eq!(entry.security_policy_intents.len(), 1);
+        let intent = &entry.security_policy_intents[0];
+        assert_eq!(intent.provider.as_str(), "apparmor");
+        assert_eq!(intent.operation, "profile-reload");
+        assert_eq!(
+            intent.scope.name.as_deref(),
+            Some("/etc/apparmor.d/usr.bin.demo")
+        );
+        assert_eq!(intent.scope.paths, vec!["/etc/apparmor.d/usr.bin.demo"]);
+        assert_eq!(intent.reconciliation.state.as_str(), "review");
+        assert_eq!(bundle.security_policy_intents, vec![intent.clone()]);
+        assert_eq!(result.scriptlet_metadata.publication_status, "blocked");
+        assert_eq!(
+            result.scriptlet_metadata.security_policy_intents,
+            vec![intent.clone()]
+        );
+    }
+
+    #[test]
     fn conversion_integration_reviews_deb_private_helpers_without_manifest_changes() {
         let temp_dir = tempfile::tempdir().unwrap();
         let mut metadata = make_test_metadata();
