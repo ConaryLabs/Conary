@@ -12,8 +12,8 @@ use conary_core::db::models::{
 use crate::server::publication;
 
 use super::normalization::{
-    normalize_command_shape, sanitize_boot_security_intents, stable_cluster_key,
-    target_profile_for_distro,
+    normalize_command_shape, sanitize_boot_security_intents, sanitize_security_policy_intents,
+    stable_cluster_key, target_profile_for_distro,
 };
 use super::types::{ClusterKeyInput, PendingEvidenceSample};
 
@@ -159,6 +159,9 @@ fn build_pending_sample(
             boot_security_intents_json: serde_json::to_string(&sanitize_boot_security_intents(
                 &summary.boot_security_intents,
             ))?,
+            security_policy_intents_json: serde_json::to_string(
+                &sanitize_security_policy_intents(&summary.security_policy_intents),
+            )?,
             review_artifact_path: summary.review_artifact_path.clone(),
             review_artifact_stale: review_artifact_is_stale(
                 cache_dir,
@@ -209,9 +212,14 @@ mod tests {
     use super::*;
     use conary_core::ccs::convert::ScriptletBundleSummary;
     use conary_core::ccs::legacy_scriptlets::BootSecurityIntentEvidence;
+    use conary_core::ccs::security_policy::{
+        SECURITY_POLICY_INTENT_SCHEMA_V1, SecurityPolicyIntent, SecurityPolicyPayloadEvidence,
+        SecurityPolicyProvider, SecurityPolicyScope, SecurityPolicySource,
+    };
     use conary_core::db::models::ConvertedPackage;
     use conary_core::db::schema::migrate;
     use rusqlite::Connection;
+    use std::collections::BTreeMap;
     use std::path::Path;
 
     fn test_conn() -> Connection {
@@ -314,6 +322,66 @@ mod tests {
         assert!(intents.contains("--module=<path>"));
         assert!(intents.contains("--install=<path>"));
         assert!(intents.contains("<env-assignment>"));
+        assert!(!intents.contains("/tmp/foo.pp"));
+        assert!(!intents.contains("/home/remi"));
+        assert!(!intents.contains("SECRET=/home"));
+    }
+
+    #[test]
+    fn security_policy_intents_are_sanitized_before_storage() {
+        let summary = ScriptletBundleSummary {
+            scriptlet_fidelity: "blocked".to_string(),
+            target_compatibility: "blocked".to_string(),
+            publication_status: "blocked".to_string(),
+            blocked_reason_codes: vec!["security-policy-selinux".to_string()],
+            blocked_classes: vec!["selinux-module".to_string()],
+            security_policy_intents: vec![SecurityPolicyIntent {
+                schema: SECURITY_POLICY_INTENT_SCHEMA_V1.to_string(),
+                id: "selinux-policy-install".to_string(),
+                source: SecurityPolicySource {
+                    command: Some("semodule".to_string()),
+                    argv: vec![
+                        "--module=/tmp/foo.pp".to_string(),
+                        "--install=/home/remi/private.pp".to_string(),
+                        "SECRET=/home/remi/token".to_string(),
+                    ],
+                    ..SecurityPolicySource::default()
+                },
+                provider: SecurityPolicyProvider::Selinux,
+                operation: "install-module".to_string(),
+                scope: SecurityPolicyScope {
+                    kind: "path".to_string(),
+                    paths: vec!["/home/remi/private.pp".to_string()],
+                    ..SecurityPolicyScope::default()
+                },
+                desired_state: BTreeMap::new(),
+                requirements: Default::default(),
+                fallback: Default::default(),
+                payload_evidence: SecurityPolicyPayloadEvidence {
+                    payload_backed: true,
+                    paths: vec![
+                        "/tmp/foo.pp".to_string(),
+                        "/usr/share/selinux/packages/public.pp".to_string(),
+                    ],
+                    digest: Some("sha256:payload".to_string()),
+                },
+                reconciliation: Default::default(),
+                extra: BTreeMap::new(),
+            }],
+            ..ScriptletBundleSummary::default()
+        };
+        let converted = converted_package_with_summary(summary);
+
+        let samples = evidence_samples_from_converted(&converted, Path::new("/tmp/cache")).unwrap();
+        assert_eq!(samples.len(), 1);
+        let intents = &samples[0].sample.security_policy_intents_json;
+        assert!(intents.contains("\"provider\":\"selinux\""));
+        assert!(intents.contains("--module=<path>"));
+        assert!(intents.contains("--install=<path>"));
+        assert!(intents.contains("<env-assignment>"));
+        assert!(
+            intents.contains("\"paths\":[\"<path>\",\"/usr/share/selinux/packages/public.pp\"]")
+        );
         assert!(!intents.contains("/tmp/foo.pp"));
         assert!(!intents.contains("/home/remi"));
         assert!(!intents.contains("SECRET=/home"));

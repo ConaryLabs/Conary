@@ -3,6 +3,7 @@
 use std::sync::LazyLock;
 
 use conary_core::ccs::legacy_scriptlets::BootSecurityIntentEvidence;
+use conary_core::ccs::security_policy::SecurityPolicyIntent;
 use conary_core::db::models::CLUSTER_KEY_PREFIX;
 use conary_core::repository::supported_profiles;
 use regex::Regex;
@@ -103,6 +104,22 @@ pub fn sanitize_boot_security_intents_value(value: &str) -> Value {
     value
 }
 
+pub fn sanitize_security_policy_intents(
+    intents: &[SecurityPolicyIntent],
+) -> Vec<SecurityPolicyIntent> {
+    let mut value = serde_json::to_value(intents).unwrap_or_else(|_| Value::Array(Vec::new()));
+    sanitize_security_policy_intents_value_inner(&mut value);
+    serde_json::from_value(value).unwrap_or_default()
+}
+
+pub fn sanitize_security_policy_intents_value(value: &str) -> Value {
+    let Ok(mut value) = serde_json::from_str::<Value>(value) else {
+        return Value::Array(Vec::new());
+    };
+    sanitize_security_policy_intents_value_inner(&mut value);
+    value
+}
+
 pub fn target_profile_for_distro(distro: &str) -> String {
     supported_profiles::route_by_slug(distro)
         .and_then(|route| {
@@ -180,6 +197,27 @@ fn sanitize_boot_security_intent_value(value: &mut Value) {
         Value::Array(values) => {
             for value in values {
                 sanitize_boot_security_intent_value(value);
+            }
+        }
+        Value::String(value) => {
+            if let Some(normalized) = normalize_token(value) {
+                *value = normalized;
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
+    }
+}
+
+fn sanitize_security_policy_intents_value_inner(value: &mut Value) {
+    match value {
+        Value::Object(fields) => {
+            for field in fields.values_mut() {
+                sanitize_security_policy_intents_value_inner(field);
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                sanitize_security_policy_intents_value_inner(value);
             }
         }
         Value::String(value) => {

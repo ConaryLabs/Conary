@@ -1149,6 +1149,7 @@ mod tests {
             scriptlet_fidelity: ScriptletFidelity::Blocked,
             decision_counts: DecisionCounts::default(),
             unsupported_class_counts: std::collections::BTreeMap::new(),
+            security_policy_intents: Vec::new(),
             entries: Vec::new(),
             extra: std::collections::BTreeMap::new(),
         });

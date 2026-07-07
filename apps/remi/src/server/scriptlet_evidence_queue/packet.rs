@@ -4,7 +4,9 @@ use conary_core::ccs::convert::support_matrix::{SupportMatrix, SupportOutcome};
 use conary_core::db::models::ScriptletEvidenceClusterDetail;
 use serde_json::{Value, json};
 
-use super::normalization::sanitize_boot_security_intents_value;
+use super::normalization::{
+    sanitize_boot_security_intents_value, sanitize_security_policy_intents_value,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PacketVisibility {
@@ -37,6 +39,7 @@ pub fn build_packet(detail: ScriptletEvidenceClusterDetail, visibility: PacketVi
                 "reason_codes": parse_json(&sample.reason_codes_json),
                 "blocked_classes": parse_json(&sample.blocked_classes_json),
                 "boot_security_intents": sanitize_boot_security_intents_value(&sample.boot_security_intents_json),
+                "security_policy_intents": sanitize_security_policy_intents_value(&sample.security_policy_intents_json),
                 "review_artifact_available": sample.review_artifact_path.is_some(),
                 "review_artifact_stale": sample.review_artifact_stale,
                 "evidence_digest": sample.evidence_digest,

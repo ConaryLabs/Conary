@@ -326,6 +326,7 @@ pub struct NewScriptletEvidenceSample {
     pub reason_codes_json: String,
     pub blocked_classes_json: String,
     pub boot_security_intents_json: String,
+    pub security_policy_intents_json: String,
     pub review_artifact_path: Option<String>,
     pub review_artifact_stale: bool,
     pub evidence_digest: Option<String>,
@@ -348,6 +349,7 @@ pub struct ScriptletEvidenceSample {
     pub reason_codes_json: String,
     pub blocked_classes_json: String,
     pub boot_security_intents_json: String,
+    pub security_policy_intents_json: String,
     pub review_artifact_path: Option<String>,
     pub review_artifact_stale: bool,
     pub evidence_digest: Option<String>,
@@ -359,8 +361,8 @@ impl ScriptletEvidenceSample {
     const COLUMNS: &'static str = "id, cluster_key, converted_package_id, original_checksum, \
          distro, package_name, package_version, package_architecture, publication_status, \
          scriptlet_fidelity, target_compatibility, reason_codes_json, blocked_classes_json, \
-         boot_security_intents_json, review_artifact_path, review_artifact_stale, \
-         evidence_digest, curation_evidence_digest, observed_at";
+         boot_security_intents_json, security_policy_intents_json, review_artifact_path, \
+         review_artifact_stale, evidence_digest, curation_evidence_digest, observed_at";
 
     pub fn upsert(conn: &Connection, sample: &NewScriptletEvidenceSample) -> Result<i64> {
         let review_artifact_stale = i64::from(sample.review_artifact_stale);
@@ -369,9 +371,9 @@ impl ScriptletEvidenceSample {
                 cluster_key, converted_package_id, original_checksum, distro, package_name,
                 package_version, package_architecture, publication_status, scriptlet_fidelity,
                 target_compatibility, reason_codes_json, blocked_classes_json,
-                boot_security_intents_json, review_artifact_path, review_artifact_stale,
-                evidence_digest, curation_evidence_digest
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+                boot_security_intents_json, security_policy_intents_json, review_artifact_path,
+                review_artifact_stale, evidence_digest, curation_evidence_digest
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
             params![
                 &sample.cluster_key,
                 sample.converted_package_id,
@@ -386,6 +388,7 @@ impl ScriptletEvidenceSample {
                 &sample.reason_codes_json,
                 &sample.blocked_classes_json,
                 &sample.boot_security_intents_json,
+                &sample.security_policy_intents_json,
                 &sample.review_artifact_path,
                 review_artifact_stale,
                 &sample.evidence_digest,
@@ -403,10 +406,11 @@ impl ScriptletEvidenceSample {
                  reason_codes_json = ?11,
                  blocked_classes_json = ?12,
                  boot_security_intents_json = ?13,
-                 review_artifact_path = ?14,
-                 review_artifact_stale = ?15,
-                 evidence_digest = ?16,
-                 curation_evidence_digest = ?17,
+                 security_policy_intents_json = ?14,
+                 review_artifact_path = ?15,
+                 review_artifact_stale = ?16,
+                 evidence_digest = ?17,
+                 curation_evidence_digest = ?18,
                  observed_at = (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
              WHERE cluster_key = ?1
                AND original_checksum = ?2
@@ -427,6 +431,7 @@ impl ScriptletEvidenceSample {
                 &sample.reason_codes_json,
                 &sample.blocked_classes_json,
                 &sample.boot_security_intents_json,
+                &sample.security_policy_intents_json,
                 &sample.review_artifact_path,
                 review_artifact_stale,
                 &sample.evidence_digest,
@@ -471,7 +476,7 @@ impl ScriptletEvidenceSample {
     }
 
     fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
-        let stale: i64 = row.get(15)?;
+        let stale: i64 = row.get(16)?;
         Ok(Self {
             id: row.get(0)?,
             cluster_key: row.get(1)?,
@@ -487,11 +492,12 @@ impl ScriptletEvidenceSample {
             reason_codes_json: row.get(11)?,
             blocked_classes_json: row.get(12)?,
             boot_security_intents_json: row.get(13)?,
-            review_artifact_path: row.get(14)?,
+            security_policy_intents_json: row.get(14)?,
+            review_artifact_path: row.get(15)?,
             review_artifact_stale: stale != 0,
-            evidence_digest: row.get(16)?,
-            curation_evidence_digest: row.get(17)?,
-            observed_at: row.get(18)?,
+            evidence_digest: row.get(17)?,
+            curation_evidence_digest: row.get(18)?,
+            observed_at: row.get(19)?,
         })
     }
 }
@@ -792,6 +798,7 @@ mod tests {
             reason_codes_json: r#"["boot-security-initramfs"]"#.to_string(),
             blocked_classes_json: r#"["initramfs"]"#.to_string(),
             boot_security_intents_json: r#"[{"command":"dracut"}]"#.to_string(),
+            security_policy_intents_json: r#"[{"provider":"selinux"}]"#.to_string(),
             review_artifact_path: Some("/cache/scriptlet-review/fedora/pkg.json".to_string()),
             review_artifact_stale: false,
             evidence_digest: Some("evidence-digest".to_string()),
@@ -836,6 +843,35 @@ mod tests {
         assert_eq!(clusters[0].unique_package_count, 2);
         assert_eq!(clusters[0].architectures, vec!["x86_64".to_string()]);
         assert_eq!(clusters[0].stale_sample_count, 0);
+    }
+
+    #[test]
+    fn scriptlet_evidence_sample_upsert_updates_existing_observation() {
+        let conn = test_conn();
+        let mut cluster = new_cluster();
+        cluster.cluster_key = "s1-test".to_string();
+        ScriptletEvidenceCluster::upsert(&conn, &cluster).unwrap();
+
+        let mut initial = new_sample("kernel");
+        initial.cluster_key = "s1-test".to_string();
+        initial.review_artifact_stale = true;
+        initial.review_artifact_path = None;
+        initial.evidence_digest = Some("before".to_string());
+        ScriptletEvidenceSample::upsert(&conn, &initial).unwrap();
+
+        let mut updated = new_sample("kernel");
+        updated.cluster_key = "s1-test".to_string();
+        updated.review_artifact_stale = false;
+        updated.review_artifact_path =
+            Some("/cache/scriptlet-review/fedora/pkg-new.json".to_string());
+        updated.evidence_digest = Some("after".to_string());
+        ScriptletEvidenceSample::upsert(&conn, &updated).unwrap();
+
+        let loaded = ScriptletEvidenceSample::list_for_cluster(&conn, "s1-test").unwrap();
+        assert_eq!(
+            loaded[0].security_policy_intents_json,
+            r#"[{"provider":"selinux"}]"#
+        );
     }
 
     #[test]

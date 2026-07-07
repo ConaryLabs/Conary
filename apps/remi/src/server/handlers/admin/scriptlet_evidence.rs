@@ -761,6 +761,7 @@ mod tests {
                 reason_codes_json: r#"["boot-security-initramfs"]"#.to_string(),
                 blocked_classes_json: r#"["initramfs"]"#.to_string(),
                 boot_security_intents_json: r#"[{"command":"semodule","argv":["--module=/tmp/foo.pp","--install=/home/remi/private.pp","SECRET=/home/remi/token"],"lifecycle_paths":["/home/remi/private.pp"]}]"#.to_string(),
+                security_policy_intents_json: r#"[{"provider":"selinux","source":{"command":"semodule","argv":["--module=/tmp/foo.pp","--install=/home/remi/private.pp","SECRET=/home/remi/token"]},"scope":{"kind":"path","paths":["/home/remi/private.pp"]},"payload_evidence":{"payload_backed":true,"paths":["/tmp/foo.pp","/usr/share/selinux/packages/public.pp"]}}]"#.to_string(),
                 review_artifact_path: Some("/tmp/private-review-secret.json".to_string()),
                 review_artifact_stale: true,
                 evidence_digest: Some("sha256:evidence".to_string()),
@@ -1033,6 +1034,12 @@ mod tests {
         assert!(private_body.contains("conary.remi.scriptlet-evidence-packet.v1"));
         assert!(private_body.contains("Private maintainer note"));
         assert!(private_body.contains("blocked-class-initramfs"));
+        assert!(private_body.contains("\"security_policy_intents\":[{"));
+        assert!(private_body.contains("\"provider\":\"selinux\""));
+        assert!(private_body.contains("--module=<path>"));
+        assert!(private_body.contains("--install=<path>"));
+        assert!(private_body.contains("<env-assignment>"));
+        assert!(private_body.contains("/usr/share/selinux/packages/public.pp"));
         assert!(!private_body.contains("/tmp/private-review-secret"));
         assert!(!private_body.contains("/tmp/foo.pp"));
         assert!(!private_body.contains("/home/remi"));
@@ -1052,6 +1059,12 @@ mod tests {
         assert_eq!(public.status(), StatusCode::OK);
         let public_body = response_body(public).await;
         assert!(public_body.contains("\"visibility\":\"public-sanitized\""));
+        assert!(public_body.contains("\"security_policy_intents\":[{"));
+        assert!(public_body.contains("\"provider\":\"selinux\""));
+        assert!(public_body.contains("--module=<path>"));
+        assert!(public_body.contains("--install=<path>"));
+        assert!(public_body.contains("<env-assignment>"));
+        assert!(public_body.contains("/usr/share/selinux/packages/public.pp"));
         assert!(!public_body.contains("Private maintainer note"));
         assert!(!public_body.contains("maintainer_notes"));
         assert!(!public_body.contains("review_artifacts"));

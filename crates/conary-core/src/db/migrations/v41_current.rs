@@ -1322,10 +1322,31 @@ pub fn migrate_v75(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Version 76: Generic LSM policy intent evidence queue projection
+pub fn migrate_v76(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "
+        ALTER TABLE scriptlet_evidence_cluster_samples
+            ADD COLUMN security_policy_intents_json TEXT NOT NULL DEFAULT '[]';
+        ",
+    )?;
+    info!("Schema version 76 applied successfully (generic LSM policy intent queue projection)");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::db::schema::migrate;
+
+    fn table_columns(conn: &Connection, table: &str) -> Vec<String> {
+        let sql = format!("PRAGMA table_info('{table}')");
+        let mut stmt = conn.prepare(&sql).unwrap();
+        stmt.query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap()
+    }
 
     #[test]
     fn test_migrate_v74_adds_native_publications_and_package_release() {
@@ -1472,6 +1493,25 @@ mod tests {
                 .unwrap();
             assert_eq!(count, 1, "missing table {table}");
         }
+    }
+
+    #[test]
+    fn test_migrate_v76_adds_security_policy_intents_to_queue_samples() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::db::schema::migrate(&conn).unwrap();
+
+        let columns = table_columns(&conn, "scriptlet_evidence_cluster_samples");
+        assert!(columns.contains(&"security_policy_intents_json".to_string()));
+
+        let default_value: String = conn
+            .query_row(
+                "SELECT dflt_value FROM pragma_table_info('scriptlet_evidence_cluster_samples')
+             WHERE name = 'security_policy_intents_json'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(default_value, "'[]'");
     }
 
     #[test]
