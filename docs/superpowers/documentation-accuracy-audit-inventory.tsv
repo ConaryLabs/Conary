@@ -177,6 +177,7 @@ docs/superpowers/specs/2026-07-03-kernel-initramfs-selinux-scriptlet-handling-de
 docs/superpowers/specs/2026-07-03-remi-scriptlet-evidence-queue-design.md	planning	maintainer
 docs/superpowers/specs/2026-07-07-conary-cli-output-ux-design.md	planning	maintainer
 docs/superpowers/specs/2026-07-07-generic-lsm-security-policy-intent-design.md	planning	maintainer
+docs/superpowers/specs/2026-07-08-agent-docs-routing-ergonomics-refresh-design.md	planning	maintainer
 docs/superpowers/specs/archive/2026-04-10-all-tracks-release-hardening-design.md	historical	historical
 docs/superpowers/specs/archive/2026-04-10-conaryd-forge-staging-deployment-design.md	historical	historical
 docs/superpowers/specs/archive/2026-04-16-bootstrap-self-hosting-vm-design.md	historical	historical
