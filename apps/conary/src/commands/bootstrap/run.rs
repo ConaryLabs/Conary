@@ -191,7 +191,8 @@ pub async fn cmd_bootstrap_run(opts: BootstrapRunOptions<'_>) -> Result<()> {
                     println!("  [built] {name} in {duration_secs}s");
                 }
                 PipelineEvent::PackageFailed { name, error } => {
-                    println!("  [FAILED] {name}: {error}");
+                    let message = format!("{name}: {error}");
+                    crate::ui::row(crate::ui::Status::Fail, &[&message]);
                 }
                 PipelineEvent::SubstituterHit {
                     name,
@@ -211,8 +212,11 @@ pub async fn cmd_bootstrap_run(opts: BootstrapRunOptions<'_>) -> Result<()> {
                     cached,
                     built,
                 } => {
-                    println!(
-                        "[COMPLETE] {total_packages} packages processed ({built} built, {cached} cached)"
+                    crate::ui::status(
+                        "Complete",
+                        &format!(
+                            "{total_packages} packages processed ({built} built, {cached} cached)"
+                        ),
                     );
                 }
             })

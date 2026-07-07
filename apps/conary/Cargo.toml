@@ -40,6 +40,7 @@ schemars.workspace = true
 chrono.workspace = true
 rayon.workspace = true
 indicatif.workspace = true
+console = "0.16"
 tempfile.workspace = true
 uuid.workspace = true
 base64.workspace = true

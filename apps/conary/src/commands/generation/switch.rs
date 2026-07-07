@@ -100,7 +100,7 @@ pub fn switch_live(gen_number: i64) -> Result<()> {
     };
     if let Some(message) = verity_downgrade_warning(requested_verity, mount_outcome, &erofs_img) {
         warn!("{message}");
-        eprintln!("Warning: {message}");
+        crate::ui::warn(&message);
     }
 
     // Step 2: Bind-mount /usr from composefs tree (read-only)

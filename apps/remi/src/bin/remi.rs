@@ -252,7 +252,7 @@ struct TrustRotateKeyArgs {
 }
 
 fn main() {
-    conary_bootstrap::init_tracing();
+    conary_bootstrap::init_server_tracing();
 
     let cli = Cli::parse();
     let result = match cli.command {

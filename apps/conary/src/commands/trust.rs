@@ -114,7 +114,7 @@ pub async fn cmd_trust_disable(repo_name: &str, force: bool, db_path: &str) -> R
         params![repo_id],
     )?;
 
-    println!("[WARNING] TUF verification disabled for: {repo_name}");
+    crate::ui::warn(&format!("TUF verification disabled for: {repo_name}"));
     println!("This repository is now vulnerable to supply chain attacks.");
 
     Ok(())
@@ -200,19 +200,31 @@ pub async fn cmd_trust_verify(repo_name: &str, db_path: &str) -> Result<()> {
     let client = TufClient::new(repo_id, &repo.url, repo.tuf_root_url.as_deref())?;
     match client.update(&conn).await {
         Ok(state) => {
-            println!("[OK] Root:      v{}", state.root_version);
-            println!(
-                "[OK] Targets:   v{} ({} targets)",
-                state.targets_version,
-                state.targets.len()
+            crate::ui::row(
+                crate::ui::Status::Ok,
+                &[&format!("Root      v{}", state.root_version)],
             );
-            println!("[OK] Snapshot:  v{}", state.snapshot_version);
-            println!("[OK] Timestamp: v{}", state.timestamp_version);
+            crate::ui::row(
+                crate::ui::Status::Ok,
+                &[&format!(
+                    "Targets   v{} ({} targets)",
+                    state.targets_version,
+                    state.targets.len()
+                )],
+            );
+            crate::ui::row(
+                crate::ui::Status::Ok,
+                &[&format!("Snapshot  v{}", state.snapshot_version)],
+            );
+            crate::ui::row(
+                crate::ui::Status::Ok,
+                &[&format!("Timestamp v{}", state.timestamp_version)],
+            );
             println!();
             println!("All TUF metadata verified successfully.");
         }
         Err(e) => {
-            println!("[FAILED] TUF verification error: {e}");
+            crate::ui::error(&format!("TUF verification error: {e}"));
             anyhow::bail!("TUF verification failed: {e}");
         }
     }

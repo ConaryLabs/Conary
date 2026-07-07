@@ -213,11 +213,11 @@ fn print_native_scriptlets(
     let scriptlets = package.scriptlets();
 
     if scriptlets.is_empty() {
-        println!(
-            "[INFO] {} v{} has no scriptlets",
+        crate::ui::note(&format!(
+            "{} v{} has no scriptlets",
             package.name(),
             package.version()
-        );
+        ));
         return Ok(());
     }
 

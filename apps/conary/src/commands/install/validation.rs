@@ -58,10 +58,9 @@ pub(super) fn parse_component_and_validate(
         && existing.install_source.is_adopted()
     {
         if dep_mode == DepMode::Takeover {
-            println!(
-                "[INFO] Package '{}' is adopted -- proceeding with explicit --dep-mode takeover",
-                package_name
-            );
+            crate::ui::note(&format!(
+                "Package '{package_name}' is adopted -- proceeding with explicit --dep-mode takeover"
+            ));
         } else {
             let pkg_mgr = SystemPackageManager::detect();
             let force_note = if force {

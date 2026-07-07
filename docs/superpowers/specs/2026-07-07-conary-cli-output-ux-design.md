@@ -61,7 +61,7 @@ These premises were checked against source and a fresh debug build:
   user opts in.
 - One canonical visual vocabulary for status, messages, and detail lines, owned
   by a single module.
-- Verbosity is user-controllable with a familiar, global flag.
+- Verbosity is user-controllable with familiar top-level flags.
 - Consistency is enforced automatically so it cannot silently regress.
 
 ## Non-goals
@@ -126,16 +126,22 @@ requirement.
 
 ### Verbosity flags
 
-Add two `global = true` flags to the top-level `Cli`:
+Add two top-level logging flags to `Cli`. They are intentionally **not**
+`global = true`: existing subcommands already own local `--verbose` and
+`--quiet` flags for command-specific detail/refresh behavior, and Clap
+propagated globals cannot share those long option names. The accepted logging
+forms are `conary --verbose ...` and `conary -q ...`; command-local
+`conary query scripts --verbose` keeps its existing meaning.
 
-- `-v, --verbose` — repeatable count: `-v` → `info`, `-vv` → `debug`,
-  `-vvv` → `trace`.
-- `-q, --quiet` — `error`-only. Conflicts with `--verbose`.
+- `--verbose` — repeatable count: one use → `info`, two → `debug`,
+  three or more → `trace`. No `-v` short because subcommands already use
+  `-v` for `--version`/local verbosity.
+- `-q, --quiet` — `error`-only. Conflicts with top-level `--verbose`.
 
 **Level precedence** (highest wins):
 
 1. `RUST_LOG` environment variable, if set (unchanged escape hatch).
-2. `-q` / `-v` flags.
+2. Top-level `-q` / `--verbose` flags.
 3. Default: `warn`.
 
 ### app.rs reordering
@@ -155,9 +161,8 @@ the current code, so the reorder has negligible cost.
 
 ### Optional cleanup
 
-Retire the per-subcommand `verbose` bools in favor of the global flag. This is
-opportunistic and must not block the phase; where a subcommand's `verbose` means
-something distinct from log level, leave it and note why.
+Keep per-subcommand `verbose` / `quiet` bools where they mean command detail or
+workflow behavior rather than log level.
 
 ## Pillar B — The `ui` module + unified vocabulary
 
@@ -296,8 +301,8 @@ daily-driver commands:
 - **Unit** — `ui` module: each helper renders the exact expected string; color
   is present when forced and absent under `NO_COLOR`; tag widths align.
 - **Behavioral** — the log-flood fix: `conary list` on an initialized db emits
-  no `INFO` lines by default; `-v` restores `info`; `-q` suppresses `warn`;
-  `RUST_LOG` overrides flags.
+  no `INFO` lines by default; top-level `--verbose` restores `info`;
+  top-level `-q` suppresses `warn`; `RUST_LOG` overrides flags.
 - **Snapshot** — daily-driver command output matches golden files.
 - **Guardrail** — the vocabulary scan passes after migration and fails when a
   raw tag is reintroduced (verified with a deliberate temporary violation).
@@ -307,7 +312,7 @@ daily-driver commands:
 Independently shippable, in this order:
 
 1. **P0 logging.** `init_server_tracing`/`init_cli_tracing` split, `warn`
-   default, compact formatter, global `-v`/`-q`, `app.rs` reorder. Highest
+   default, compact formatter, top-level `--verbose`/`-q`, `app.rs` reorder. Highest
    perceived-quality win per unit of effort.
 2. **`ui` module.** API, `console`-backed color/TTY handling, unit tests. No
    output change yet — the module simply exists.
@@ -329,7 +334,8 @@ Independently shippable, in this order:
 ## Success criteria
 
 - `conary list` on a healthy system prints only its answer — no `INFO` chatter —
-  by default; `-v`/`-q`/`RUST_LOG` control verbosity as specified.
+  by default; top-level `--verbose`/`-q` plus `RUST_LOG` control verbosity as
+  specified.
 - Every status/message/detail line in the daily-driver commands and the
   status-tag sites goes through `ui`, using the one canonical vocabulary.
 - The guardrail and snapshot tests pass in CI and fail on regression.

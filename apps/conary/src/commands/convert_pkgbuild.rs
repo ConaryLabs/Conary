@@ -25,7 +25,7 @@ pub async fn cmd_convert_pkgbuild(pkgbuild_path: &str, output: Option<&str>) -> 
 
     // Print warnings
     for warning in &result.warnings {
-        eprintln!("Warning: {}", warning);
+        crate::ui::warn(warning);
     }
 
     // Convert to TOML

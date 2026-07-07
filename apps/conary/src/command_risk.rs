@@ -817,6 +817,8 @@ mod tests {
             seccomp_warn: false,
             help_advanced: false,
             allow_live_system_mutation: false,
+            log_verbose: 0,
+            quiet: false,
             command: Some(Commands::Mcp(cli::McpCommands::Packaging)),
         };
 

@@ -195,7 +195,11 @@ pub async fn cmd_federation_peers(
     println!("{}", "-".repeat(100));
 
     for peer in &peers {
-        let status = if peer.enabled { "[OK]" } else { "[OFF]" };
+        let status = crate::ui::tag(if peer.enabled {
+            crate::ui::Status::Ok
+        } else {
+            crate::ui::Status::Off
+        });
         let total = peer.successes + peer.failures;
         let success_rate = if total > 0 {
             format!("{:.1}%", (peer.successes as f64 / total as f64) * 100.0)
@@ -252,7 +256,7 @@ pub async fn cmd_federation_add_peer(
     )?;
 
     info!("Added federation peer: {} [{}]", url, tier_lower);
-    println!("[OK] Added peer: {}", url);
+    crate::ui::status("Added", &format!("peer: {url}"));
     println!("     Tier: {}", tier_lower);
     if let Some(n) = name {
         println!("     Name: {}", n);
@@ -276,7 +280,7 @@ pub async fn cmd_federation_remove_peer(peer: &str, db_path: &str) -> Result<()>
     }
 
     info!("Removed federation peer: {}", peer);
-    println!("[OK] Removed peer: {}", peer);
+    crate::ui::status("Removed", &format!("peer: {peer}"));
 
     Ok(())
 }
@@ -380,7 +384,7 @@ pub async fn cmd_federation_enable_peer(peer: &str, db_path: &str, enable: bool)
 
     let action = if enable { "enabled" } else { "disabled" };
     info!("Federation peer {}: {}", action, peer);
-    println!("[OK] Peer {}: {}", action, peer);
+    crate::ui::status("Updated", &format!("peer {action}: {peer}"));
 
     Ok(())
 }
@@ -420,7 +424,8 @@ pub async fn cmd_federation_test(db_path: &str, peer: Option<&str>, timeout: u64
         match client.get(&health_url).send().await {
             Ok(response) if response.status().is_success() => {
                 let elapsed = start.elapsed().as_millis();
-                println!("[OK] {} - {}ms", endpoint, elapsed);
+                let row = format!("{endpoint} - {elapsed}ms");
+                crate::ui::row(crate::ui::Status::Ok, &[&row]);
                 success_count += 1;
 
                 // Update latency in database
@@ -431,11 +436,13 @@ pub async fn cmd_federation_test(db_path: &str, peer: Option<&str>, timeout: u64
                 );
             }
             Ok(response) => {
-                println!("[FAIL] {} - HTTP {}", endpoint, response.status());
+                let row = format!("{} - HTTP {}", endpoint, response.status());
+                crate::ui::row(crate::ui::Status::Fail, &[&row]);
                 failure_count += 1;
             }
             Err(e) => {
-                println!("[FAIL] {} - {}", endpoint, e);
+                let row = format!("{endpoint} - {e}");
+                crate::ui::row(crate::ui::Status::Fail, &[&row]);
                 failure_count += 1;
             }
         }
@@ -520,7 +527,7 @@ pub async fn cmd_federation_scan(db_path: &str, duration_secs: u64, add_peers: b
                         ],
                     )?;
 
-                    println!("[OK] Added peer: {}", endpoint);
+                    crate::ui::status("Added", &format!("peer: {endpoint}"));
                     added += 1;
                 }
             }

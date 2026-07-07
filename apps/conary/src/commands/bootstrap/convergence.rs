@@ -100,7 +100,7 @@ pub async fn cmd_bootstrap_verify_convergence(
         );
     }
 
-    println!("[COMPLETE] All compared packages converged.");
+    crate::ui::status("Complete", "all compared packages converged.");
     Ok(())
 }
 
@@ -135,7 +135,10 @@ pub async fn cmd_bootstrap_diff_seeds(path_a: &str, path_b: &str) -> Result<()> 
         && report.artifact_differences.is_empty()
         && report.erofs_hash_a == report.erofs_hash_b
     {
-        println!("[COMPLETE] No metadata, artifact, or hash differences found.");
+        crate::ui::status(
+            "Complete",
+            "no metadata, artifact, or hash differences found.",
+        );
         return Ok(());
     }
 

@@ -212,7 +212,8 @@ async fn execute_actions(
             Err(e) => {
                 let message = e.to_string();
                 insert_history_row(conn, action, "failed", Some(&message))?;
-                println!("  [FAILED] {}: {}", action.summary, message);
+                let row = format!("{}: {}", action.summary, message);
+                crate::ui::row(crate::ui::Status::Fail, &[&row]);
                 failed += 1;
                 continue;
             }
@@ -243,7 +244,7 @@ async fn execute_actions(
 
         match error_message {
             Some(message) => println!("  [{}] {}", status.to_uppercase(), message),
-            None => println!("  [OK] {}", action.summary),
+            None => crate::ui::row(crate::ui::Status::Ok, &[&action.summary]),
         }
     }
 

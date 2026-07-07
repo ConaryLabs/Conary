@@ -63,7 +63,8 @@ pub async fn cmd_bootstrap_clean(
         }
     }
 
-    println!("\n[OK] Clean complete.");
+    println!();
+    crate::ui::status("Clean", "complete.");
 
     Ok(())
 }

@@ -220,7 +220,8 @@ pub async fn cmd_adopt_convert(
                     }
                 }
                 PackageConversionResult::Failed { name, error } => {
-                    eprintln!("  [FAILED] {}: {}", name, error);
+                    let row = format!("{name}: {error}");
+                    eprintln!("{}", crate::ui::row_line(crate::ui::Status::Fail, &[&row]));
                     failed_names.push(name);
                     failed_count += 1;
                 }

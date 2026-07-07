@@ -645,7 +645,7 @@ pub(super) async fn apply_package_changes(
                             }
                             None => format!("Remove '{}' {}: {}", package, current_version, e),
                         };
-                        eprintln!("  [FAILED] {}", msg);
+                        eprintln!("{}", crate::ui::row_line(crate::ui::Status::Fail, &[&msg]));
                         if strict {
                             anyhow::bail!(msg);
                         }
@@ -697,7 +697,7 @@ pub(super) async fn apply_package_changes(
                     }
                     Err(e) => {
                         let msg = format!("Install '{}': {}", package, e);
-                        eprintln!("  [FAILED] {}", msg);
+                        eprintln!("{}", crate::ui::row_line(crate::ui::Status::Fail, &[&msg]));
                         if strict {
                             anyhow::bail!(msg);
                         }
@@ -750,7 +750,7 @@ pub(super) async fn apply_package_changes(
                             "Update '{}' {} -> {}: {}",
                             package, current_version, target_version, e
                         );
-                        eprintln!("  [FAILED] {}", msg);
+                        eprintln!("{}", crate::ui::row_line(crate::ui::Status::Fail, &[&msg]));
                         if strict {
                             anyhow::bail!(msg);
                         }

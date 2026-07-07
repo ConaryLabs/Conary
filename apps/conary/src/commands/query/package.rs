@@ -74,11 +74,13 @@ pub async fn cmd_query(pattern: Option<&str>, db_path: &str, options: QueryOptio
 }
 
 fn print_installed_packages(troves: &[conary_core::db::models::Trove]) {
-    println!("Installed packages:");
+    crate::ui::heading("Installed packages:");
     for trove in troves {
         print!(
-            "  {} {} ({:?})",
-            trove.name, trove.version, trove.trove_type
+            "  {} {} ({})",
+            trove.name,
+            trove.version,
+            trove_type_label(&trove.trove_type)
         );
         if let Some(arch) = &trove.architecture {
             print!(" [{}]", arch);
@@ -86,6 +88,14 @@ fn print_installed_packages(troves: &[conary_core::db::models::Trove]) {
         println!();
     }
     println!("\nTotal: {} package(s)", troves.len());
+}
+
+fn trove_type_label(trove_type: &conary_core::db::models::TroveType) -> &'static str {
+    match trove_type {
+        conary_core::db::models::TroveType::Package => "Package",
+        conary_core::db::models::TroveType::Component => "Component",
+        conary_core::db::models::TroveType::Collection => "Collection",
+    }
 }
 
 /// Query package by file path

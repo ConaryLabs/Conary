@@ -160,7 +160,7 @@ conary = "provenance diff ${FIXTURE_PKG_NAME} ${FIXTURE_PKG_NAME}"
 
 [test.step.assert]
 exit_code = 0
-stdout_contains = "[OK] No provenance differences found."
+stdout_contains = "No provenance differences found."
 stdout_not_contains = "panic"
 
 # ==========================================================================
@@ -795,7 +795,7 @@ conary = "federation add-peer https://example.com:7891 --name test-peer --tls-fi
 
 [test.step.assert]
 exit_code = 0
-stdout_contains = "[OK] Added peer: https://example.com:7891"
+stdout_contains = "Added peer: https://example.com:7891"
 
 [[test.step]]
 conary = "federation peers"
@@ -816,7 +816,7 @@ conary = "federation remove-peer https://example.com:7891"
 
 [test.step.assert]
 exit_code = 0
-stdout_contains = "[OK] Removed peer: https://example.com:7891"
+stdout_contains = "Removed peer: https://example.com:7891"
 
 # Verify the peer is gone
 [[test.step]]

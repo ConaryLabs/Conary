@@ -108,8 +108,8 @@ impl InstallProgress {
             InstallPhase::PostScript => format!("Running post-install script for {}...", package),
             InstallPhase::Triggers => format!("Running triggers for {}...", package),
             InstallPhase::Verifying => format!("Verifying {}...", package),
-            InstallPhase::Complete => format!("{} [done]", package),
-            InstallPhase::Failed(ref err) => format!("{} [FAILED: {}]", package, err),
+            InstallPhase::Complete => format!("{package} done"),
+            InstallPhase::Failed(ref err) => format!("{package} failed: {err}"),
         };
         self.status.set_message(msg);
     }
@@ -315,8 +315,8 @@ impl UpdateProgress {
             UpdatePhase::ApplyingDelta => format!("Applying delta for {}...", package),
             UpdatePhase::DownloadingFull => format!("Downloading {}...", package),
             UpdatePhase::Installing => format!("Installing {}...", package),
-            UpdatePhase::Complete => format!("{} [done]", package),
-            UpdatePhase::Failed(ref err) => format!("{} [FAILED: {}]", package, err),
+            UpdatePhase::Complete => format!("{package} done"),
+            UpdatePhase::Failed(ref err) => format!("{package} failed: {err}"),
         };
         self.status.set_message(msg);
     }
@@ -448,8 +448,8 @@ impl AdoptProgress {
             AdoptPhase::Inserting => format!("Recording {}...", package),
             AdoptPhase::CasStorage => format!("Storing files for {}...", package),
             AdoptPhase::Converting => format!("Converting {} to CCS...", package),
-            AdoptPhase::Complete => format!("{} [done]", package),
-            AdoptPhase::Failed(ref err) => format!("{} [FAILED: {}]", package, err),
+            AdoptPhase::Complete => format!("{package} done"),
+            AdoptPhase::Failed(ref err) => format!("{package} failed: {err}"),
         };
         self.status.set_message(msg);
     }

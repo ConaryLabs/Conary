@@ -373,7 +373,7 @@ async fn handle_dep_installs(
                 for (name, _) in &dep_requests {
                     println!("    {} (resolution pending)", name);
                 }
-                println!("  [WARN] Dependency resolution check failed: {}", e);
+                crate::ui::warn(&format!("Dependency resolution check failed: {e}"));
             }
         }
         return Ok(());
@@ -450,7 +450,10 @@ async fn handle_dep_installs(
                     )
                     .with_preflighted_execution_path(ctx.execution_path);
                     installer.install_batch(prepared_packages)?;
-                    println!("  [OK] Installed {} dependencies", downloaded.len());
+                    crate::ui::row(
+                        crate::ui::Status::Ok,
+                        &[&format!("Installed {} dependencies", downloaded.len())],
+                    );
                 }
             }
         }

@@ -44,7 +44,8 @@ pub async fn cmd_bootstrap_cross_tools(
 
     let toolchain = bootstrap.build_cross_tools()?;
 
-    println!("\n[OK] Phase 1 cross-toolchain built successfully!");
+    println!();
+    crate::ui::status("Built", "Phase 1 cross-toolchain successfully.");
     println!("  Path: {}", toolchain.path.display());
     println!("  Target: {}", toolchain.target);
 
@@ -83,7 +84,8 @@ pub async fn cmd_bootstrap_temp_tools(
 
     bootstrap.build_temp_tools()?;
 
-    println!("\n[OK] Phase 2 temporary tools built successfully!");
+    println!();
+    crate::ui::status("Built", "Phase 2 temporary tools successfully.");
 
     println!("\nNext steps:");
     println!("  Run 'conary bootstrap system' to build Phase 3 final system");
@@ -120,7 +122,8 @@ pub async fn cmd_bootstrap_system(
 
     bootstrap.build_final_system()?;
 
-    println!("\n[OK] Phase 3 final system built successfully!");
+    println!();
+    crate::ui::status("Built", "Phase 3 final system successfully.");
 
     println!("\nNext steps:");
     println!("  Run 'conary bootstrap config' to configure the system for booting");
@@ -149,7 +152,8 @@ pub async fn cmd_bootstrap_config(
 
     bootstrap.configure_system()?;
 
-    println!("\n[OK] Phase 4 system configuration complete!");
+    println!();
+    crate::ui::status("Configured", "Phase 4 system.");
 
     println!("\nNext steps:");
     println!("  Run 'conary bootstrap image' to generate a bootable image");
@@ -177,7 +181,8 @@ pub async fn cmd_bootstrap_guest_profile(
     let bootstrap = Bootstrap::with_config(work_dir, config)?;
     bootstrap.apply_guest_profile(Path::new(public_key))?;
 
-    println!("\n[OK] Self-host guest profile applied successfully!");
+    println!();
+    crate::ui::status("Applied", "self-host guest profile successfully.");
     println!("  The sysroot now has SSH-ready test posture for VM validation.");
 
     Ok(())
@@ -213,7 +218,8 @@ pub async fn cmd_bootstrap_tier2(
 
     bootstrap.build_tier2()?;
 
-    println!("\n[OK] Phase 6 Tier-2 packages built successfully!");
+    println!();
+    crate::ui::status("Built", "Phase 6 Tier-2 packages successfully.");
     println!("  The system is now self-hosting.");
 
     Ok(())

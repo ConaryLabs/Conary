@@ -173,7 +173,7 @@ async fn prefetch_remote_outputs(
                         stats.total_bytes += report.bytes_transferred;
                     }
                     Err(e) => {
-                        eprintln!("\n  [WARN] Failed to fetch objects for {short_id}: {e}");
+                        crate::ui::warn(&format!("Failed to fetch objects for {short_id}: {e}"));
                     }
                 }
             }
@@ -232,7 +232,7 @@ pub async fn cmd_cache_populate(
             }
         }
         Err(err) if full => {
-            eprintln!("[WARN] Failed to prefetch derivation outputs: {err}");
+            crate::ui::warn(&format!("Failed to prefetch derivation outputs: {err}"));
         }
         Err(err) => return Err(err),
     }

@@ -326,10 +326,10 @@ pub async fn cmd_system_takeover(
             .cloned()
             .collect();
         if !failed_adoptions.is_empty() {
-            println!(
-                "  [WARN] {} packages failed adoption and will not be removed from system PM",
+            crate::ui::warn(&format!(
+                "{} packages failed adoption and will not be removed from system PM",
                 failed_adoptions.len()
-            );
+            ));
             record.record_adoption_failures(failed_adoptions);
         }
         plan.needs_pm_removal.extend(newly_adopted);
@@ -356,7 +356,7 @@ pub async fn cmd_system_takeover(
         record.mark_incomplete("Takeover stopped at the requested CAS phase.");
         record.save(db_path)?;
         println!();
-        println!("[COMPLETE] Phase 1 (CAS) finished.");
+        crate::ui::status("Finished", "Phase 1 (CAS).");
         println!("All system packages are now adopted and CAS-backed.");
         println!("System PM databases are untouched.");
         println!();
@@ -392,7 +392,7 @@ pub async fn cmd_system_takeover(
         record.mark_incomplete("Takeover stopped at the requested ownership phase.");
         record.save(db_path)?;
         println!();
-        println!("[COMPLETE] Phase 2 (Owned) finished.");
+        crate::ui::status("Finished", "Phase 2 (Owned).");
         println!("Conary now owns all non-blocked packages. System PM records removed.");
         println!();
         println!("Owned is an internal/debug stop-point, not the supported release path.");
@@ -425,7 +425,7 @@ pub async fn cmd_system_takeover(
         Ok(()) => BootEntryOutcome::Written,
         Err(error) => {
             warn!("Failed to write boot entry: {error}");
-            println!("[WARN] Could not write boot entry: {error}");
+            crate::ui::warn(&format!("Could not write boot entry: {error}"));
             println!("       You may need to configure your bootloader manually.");
             BootEntryOutcome::Failed(error.to_string())
         }
@@ -436,31 +436,33 @@ pub async fn cmd_system_takeover(
     println!();
     match record.status {
         TakeoverStatus::ReadyToActivate => {
-            println!(
-                "[COMPLETE] System takeover built generation {gen_number} and is ready to activate."
+            crate::ui::status(
+                "Complete",
+                &format!("system takeover built generation {gen_number} and is ready to activate."),
             );
             println!("Next step:");
             println!("  conary system generation switch {gen_number}");
         }
         TakeoverStatus::CompletedWithWarnings => {
-            println!(
-                "[WARN] System takeover built generation {gen_number}, but boot integration needs manual follow-up."
-            );
+            crate::ui::warn(&format!(
+                "System takeover built generation {gen_number}, but boot integration needs manual follow-up."
+            ));
             println!("After bootloader follow-up, activate with:");
             println!("  conary system generation switch {gen_number}");
         }
         TakeoverStatus::Incomplete => {
-            println!(
-                "[WARN] System takeover built generation {gen_number}, but the operation is incomplete."
-            );
+            crate::ui::warn(&format!(
+                "System takeover built generation {gen_number}, but the operation is incomplete."
+            ));
             println!(
                 "Inspect the recorded failures, then rerun takeover or activate manually if appropriate:"
             );
             println!("  conary system generation switch {gen_number}");
         }
         _ => {
-            println!(
-                "[COMPLETE] System takeover finished generation preparation for {gen_number}."
+            crate::ui::status(
+                "Complete",
+                &format!("system takeover finished generation preparation for {gen_number}."),
             );
         }
     }
@@ -673,11 +675,11 @@ fn take_ownership(
     }
 
     if !failed.is_empty() {
-        println!(
-            "[WARN] {} packages could not be removed from {} (Conary owns files; PM has ghost records):",
+        crate::ui::warn(&format!(
+            "{} packages could not be removed from {} (Conary owns files; PM has ghost records):",
             failed.len(),
             pm.display_name()
-        );
+        ));
         for name in &failed {
             println!("  - {name}");
         }

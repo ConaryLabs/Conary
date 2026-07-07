@@ -30,7 +30,7 @@ struct NoVerifyAuditEvent {
 fn check_update_signature(sha256: &str, signature: &Option<String>, no_verify: bool) -> Result<()> {
     // --no-verify explicitly bypasses all signature checks
     if no_verify {
-        eprintln!("Warning: --no-verify specified, skipping signature verification.");
+        crate::ui::warn("--no-verify specified, skipping signature verification.");
         return Ok(());
     }
 
@@ -103,10 +103,10 @@ fn record_no_verify_audit_event(
     }
 
     settings::set(conn, NO_VERIFY_AUDIT_KEY, &serde_json::to_string(&events)?)?;
-    eprintln!(
-        "Warning: --no-verify bypassed update signature verification even though trusted keys are configured. Event recorded in {}.",
+    crate::ui::warn(&format!(
+        "--no-verify bypassed update signature verification even though trusted keys are configured. Event recorded in {}.",
         NO_VERIFY_AUDIT_KEY
-    );
+    ));
     Ok(())
 }
 

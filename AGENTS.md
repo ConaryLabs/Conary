@@ -72,6 +72,23 @@ Assistant doc model:
 
 Keep this file map-like. If a detail changes often or needs more than a short paragraph to explain, move it into a linked canonical doc instead of expanding this file.
 
+## CLI Output Conventions
+For `apps/conary`, all user-facing status output goes through `apps/conary/src/ui/`.
+Do not print raw status tags; `apps/conary/tests/output_vocabulary_guard.rs`
+enforces the guarded vocabulary.
+
+`Status { Ok, Fail, Warn, Skip, Info, Off, Missing, Pending }` renders lowercase
+bracketed tags (`[ok]`, `[fail]`, `[warn]`, `[skip]`, `[info]`, `[off]`,
+`[missing]`, `[pending]`), and `ui::row` aligns the following columns. Use
+`ui::warn`, `ui::error`, `ui::note`, `ui::status`, `ui::row`, `ui::heading`, and
+`ui::field` instead of hand-rolled prefixes. Tags stay ASCII-only; color comes
+from `console` and respects non-TTY output plus `NO_COLOR`.
+
+CLI logging defaults to `warn`. Top-level `--verbose` is repeatable for
+info/debug/trace, top-level `-q`/`--quiet` leaves errors only, and `RUST_LOG`
+overrides both. Command-local `--verbose`/`--quiet` flags keep their
+command-specific meanings. Internal `tracing` logs are not primary user output.
+
 ## Security & Contributor Notes
 Do not weaken trust defaults casually. HTTPS federation peers should use pinned fingerprints, and service changes should be verified with `cargo test -p remi` and `cargo test -p conaryd`. Avoid destructive Git commands in shared worktrees, and do not add schema migrations unless the task explicitly calls for one.
 Historical review prompts and finished design docs belong under archive subdirectories, not in the active doc tree.

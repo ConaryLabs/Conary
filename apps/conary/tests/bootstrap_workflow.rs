@@ -131,7 +131,7 @@ fn bootstrap_verify_convergence_reports_success_for_completed_runs() {
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Compared 1 packages"));
-    assert!(stdout.contains("[COMPLETE] All compared packages converged."));
+    assert!(stdout.contains("Complete all compared packages converged."));
 }
 
 #[test]

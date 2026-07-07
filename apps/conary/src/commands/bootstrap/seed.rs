@@ -126,7 +126,8 @@ pub async fn cmd_bootstrap_seed(from: &str, output: &str, target: &str) -> Resul
         toml::to_string_pretty(&seed_metadata).context("Failed to serialize seed metadata")?;
     std::fs::write(output_path.join("seed.toml"), &toml_str)?;
 
-    println!("\n[OK] Seed created successfully!");
+    println!();
+    crate::ui::status("Created", "seed successfully.");
     println!(
         "  EROFS image: {} ({} bytes)",
         seed_erofs.display(),
@@ -155,6 +156,6 @@ pub async fn cmd_bootstrap_seed_adopted(
 
     let meta = adopt_seed::build_adopted_seed(std::path::Path::new(output), distro_name, version)?;
 
-    println!("[COMPLETE] Seed built: {}", meta.seed_id);
+    crate::ui::status("Built", &format!("seed {}", meta.seed_id));
     Ok(())
 }

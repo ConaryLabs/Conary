@@ -36,7 +36,7 @@ pub async fn cmd_init(db_path: &str) -> Result<()> {
 
     // Collect messages inside the transaction; print after commit to avoid
     // interleaving output with a potential rollback log.
-    let mut messages: Vec<String> = Vec::new();
+    let mut messages: Vec<(bool, String)> = Vec::new();
 
     conary_core::db::transaction(&mut conn, |tx| {
         let mut remi_repo = conary_core::db::models::Repository::new(
@@ -48,8 +48,8 @@ pub async fn cmd_init(db_path: &str) -> Result<()> {
         remi_repo.default_strategy_endpoint = Some("https://remi.conary.io".to_string());
         remi_repo.default_strategy_distro = Some("fedora".to_string());
         match remi_repo.insert(tx) {
-            Ok(_) => messages.push("  Added: remi (Conary Remi (CCS))".to_string()),
-            Err(e) => messages.push(format!("  Warning: Could not add remi: {e}")),
+            Ok(_) => messages.push((false, "  Added: remi (Conary Remi (CCS))".to_string())),
+            Err(e) => messages.push((true, format!("Could not add remi: {e}"))),
         }
 
         let default_repos = [
@@ -93,17 +93,17 @@ pub async fn cmd_init(db_path: &str) -> Result<()> {
                 true,
                 priority,
             ) {
-                Ok(_) => messages.push(format!("  Added: {name} ({desc})")),
-                Err(e) => messages.push(format!("  Warning: Could not add {name}: {e}")),
+                Ok(_) => messages.push((false, format!("  Added: {name} ({desc})"))),
+                Err(e) => messages.push((true, format!("Could not add {name}: {e}"))),
             }
         }
 
         Ok(())
     })?;
 
-    for msg in &messages {
-        if msg.contains("Warning:") {
-            eprintln!("{msg}");
+    for (is_warning, msg) in &messages {
+        if *is_warning {
+            crate::ui::warn(msg);
         } else {
             println!("{msg}");
         }

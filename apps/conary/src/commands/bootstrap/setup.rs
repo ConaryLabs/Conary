@@ -48,7 +48,13 @@ pub async fn cmd_bootstrap_check(verbose: bool) -> Result<()> {
 
     let prereqs = Prerequisites::check()?;
 
-    let status = |present: bool| if present { "[OK]" } else { "[MISSING]" };
+    let status = |present: bool| {
+        crate::ui::tag(if present {
+            crate::ui::Status::Ok
+        } else {
+            crate::ui::Status::Missing
+        })
+    };
 
     println!(
         "  {} make: {}",
@@ -69,12 +75,12 @@ pub async fn cmd_bootstrap_check(verbose: bool) -> Result<()> {
     println!();
 
     if prereqs.all_present() {
-        println!("[OK] All prerequisites are satisfied.");
+        crate::ui::status("Satisfied", "all prerequisites.");
         println!(
             "\nYou can proceed with 'conary bootstrap cross-tools' to build the cross-toolchain."
         );
     } else {
-        println!("[MISSING] Some prerequisites are not installed:");
+        crate::ui::error("Some prerequisites are not installed:");
         for missing in prereqs.missing() {
             println!("  - {}", missing);
         }
@@ -105,7 +111,11 @@ pub async fn cmd_bootstrap_status(work_dir: &str, verbose: bool) -> Result<()> {
     println!("Work directory: {}\n", bootstrap.work_dir().display());
 
     for (stage, complete, status) in bootstrap.stages().summary() {
-        let marker = if complete { "[COMPLETE]" } else { "[PENDING]" };
+        let marker = crate::ui::tag(if complete {
+            crate::ui::Status::Ok
+        } else {
+            crate::ui::Status::Pending
+        });
         print!("  {} {}", marker, stage);
         if verbose && let Some(ref s) = status {
             print!(" - {}", s);
@@ -168,28 +178,28 @@ pub async fn cmd_bootstrap_dry_run(work_dir: &str, recipe_dir: &str, verbose: bo
     println!("Graph resolved:      {}", report.graph_resolved);
 
     if report.placeholder_count > 0 {
-        println!(
-            "[WARNING] Placeholder checksums: {}",
+        crate::ui::warn(&format!(
+            "Placeholder checksums: {}",
             report.placeholder_count
-        );
+        ));
     }
 
     for warning in &report.warnings {
-        println!("[WARNING] {warning}");
+        crate::ui::warn(warning);
     }
 
     for error in &report.errors {
-        println!("[ERROR] {error}");
+        crate::ui::error(error);
     }
 
     if report.is_ok() {
-        println!("[COMPLETE] Pipeline validation passed");
+        crate::ui::status("Passed", "pipeline validation.");
         Ok(())
     } else {
-        println!(
-            "[FAILED] Pipeline validation failed ({} errors)",
+        crate::ui::error(&format!(
+            "Pipeline validation failed ({} errors)",
             report.errors.len()
-        );
+        ));
         Err(anyhow::anyhow!(
             "Pipeline validation failed with {} errors",
             report.errors.len()

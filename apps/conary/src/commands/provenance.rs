@@ -148,32 +148,35 @@ pub async fn cmd_provenance_verify(
                 let report = verify_rekor_entry(&entry, dna_hash)?;
 
                 if report.hash_match {
-                    println!("[OK] DNA hash matches Rekor entry");
+                    crate::ui::row(crate::ui::Status::Ok, &["DNA hash matches Rekor entry"]);
                 } else {
-                    println!("[FAIL] DNA hash does not match Rekor entry");
+                    crate::ui::error("DNA hash does not match Rekor entry");
                 }
 
                 if report.signature_valid {
-                    println!("[OK] Rekor signature verified");
+                    crate::ui::row(crate::ui::Status::Ok, &["Rekor signature verified"]);
                 } else {
-                    println!("[FAIL] Rekor signature verification failed");
+                    crate::ui::error("Rekor signature verification failed");
                 }
 
                 if report.cert_chain_valid {
-                    println!("[OK] Fulcio certificate chain verified");
+                    crate::ui::row(
+                        crate::ui::Status::Ok,
+                        &["Fulcio certificate chain verified"],
+                    );
                 } else if report.signer_kind == "key" {
-                    println!("[WARN] Fulcio certificate chain not present (key-based signature)");
+                    crate::ui::warn("Fulcio certificate chain not present (key-based signature)");
                 } else {
-                    println!("[FAIL] Fulcio certificate chain verification failed");
+                    crate::ui::error("Fulcio certificate chain verification failed");
                 }
 
-                println!(
-                    "[INFO] Rekor entry: uuid={}, log_index={}",
+                crate::ui::note(&format!(
+                    "Rekor entry: uuid={}, log_index={}",
                     report.entry_uuid, report.entry_index
-                );
+                ));
                 println!();
             } else {
-                println!("[WARN] No Rekor transparency log entry found");
+                crate::ui::warn("No Rekor transparency log entry found");
                 println!(
                     "       Run 'conary provenance register {}' to register",
                     package
@@ -200,12 +203,12 @@ pub async fn cmd_provenance_verify(
                     })
                     .unwrap_or(0);
                 if all_signatures {
-                    println!("[INFO] Recorded {} signature(s) in provenance", count);
+                    crate::ui::note(&format!("Recorded {count} signature(s) in provenance"));
                 } else {
-                    println!("[INFO] Recorded builder signature in provenance");
+                    crate::ui::note("Recorded builder signature in provenance");
                 }
             } else {
-                println!("[WARN] No signatures found in provenance");
+                crate::ui::warn("No signatures found in provenance");
             }
         }
         None => {
@@ -274,7 +277,10 @@ pub async fn cmd_provenance_diff(
                     }
 
                     if !found_difference {
-                        println!("[OK] No provenance differences found.");
+                        crate::ui::row(
+                            crate::ui::Status::Ok,
+                            &["No provenance differences found."],
+                        );
                     }
                 }
             }
@@ -648,9 +654,12 @@ pub async fn cmd_provenance_register(
                     .uuid
                     .as_deref()
                     .ok_or(SigstoreCommandError::MissingRekorUuid)?;
-                println!(
-                    "[OK] Rekor entry created: uuid={}, log_index={}",
-                    entry_uuid, entry.log_index
+                crate::ui::status(
+                    "Created",
+                    &format!(
+                        "Rekor entry: uuid={}, log_index={}",
+                        entry_uuid, entry.log_index
+                    ),
                 );
 
                 conn.execute(

@@ -294,13 +294,12 @@ pub async fn cmd_repo_sync(name: Option<String>, db_path: &str, force: bool) -> 
                 let gpg_note = gpg_key
                     .map(|fp| format!(" (GPG key imported: {})", &fp[..16]))
                     .unwrap_or_default();
-                println!(
-                    "  [OK] Synchronized {} packages from {}{}",
-                    count, name, gpg_note
-                );
+                let row = format!("Synchronized {count} packages from {name}{gpg_note}");
+                crate::ui::row(crate::ui::Status::Ok, &[&row]);
             }
             Err(e) => {
-                println!("  [FAILED] Failed to sync {}: {}", name, e);
+                let row = format!("Failed to sync {name}: {e}");
+                crate::ui::row(crate::ui::Status::Fail, &[&row]);
                 failures.push((name, e.to_string()));
             }
         }

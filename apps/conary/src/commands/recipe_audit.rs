@@ -32,13 +32,15 @@ pub async fn cmd_recipe_audit(recipe_path: Option<&str>, all: bool, trace: bool)
             for finding in &report.findings {
                 match finding.kind {
                     FindingKind::Missing => {
-                        println!(
-                            "  [WARN] '{}' used in {} but not in makedepends",
+                        let message = format!(
+                            "'{}' used in {} but not in makedepends",
                             finding.tool, finding.context
                         );
+                        crate::ui::row(crate::ui::Status::Warn, &[&message]);
                     }
                     FindingKind::Verified => {
-                        println!("  [OK]   '{}' declared and used", finding.tool);
+                        let message = format!("'{}' declared and used", finding.tool);
+                        crate::ui::row(crate::ui::Status::Ok, &[&message]);
                     }
                     FindingKind::Ignored => {}
                 }
@@ -76,7 +78,7 @@ fn audit_all_recipes() -> Result<()> {
         let recipe = match conary_core::recipe::parse_recipe_file(path) {
             Ok(r) => r,
             Err(e) => {
-                eprintln!("[WARN] skipping {}: {e}", path.display());
+                crate::ui::warn(&format!("skipping {}: {e}", path.display()));
                 continue;
             }
         };
@@ -88,7 +90,8 @@ fn audit_all_recipes() -> Result<()> {
                     println!("\n{} ({}):", report.package_name, path.display());
                     for f in &report.findings {
                         if f.kind == FindingKind::Missing {
-                            println!("  [WARN] '{}' used but not in makedepends", f.tool);
+                            let message = format!("'{}' used but not in makedepends", f.tool);
+                            crate::ui::row(crate::ui::Status::Warn, &[&message]);
                         }
                     }
                     total_missing += missing;

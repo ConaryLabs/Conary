@@ -126,8 +126,8 @@ pub async fn cmd_ccs_install_with_replay_options(
         }
         if !result.valid {
             if trust_policy.allow_unsigned {
-                println!(
-                    "Warning: Package signature verification failed, but continuing (allow_unsigned policy)"
+                crate::ui::warn(
+                    "Package signature verification failed, but continuing (allow_unsigned policy)",
                 );
                 for warning in &result.warnings {
                     println!("  - {}", warning);
@@ -144,7 +144,7 @@ pub async fn cmd_ccs_install_with_replay_options(
         }
         verification_result = Some(result);
     } else {
-        println!("Warning: Skipping signature verification (--allow-unsigned)");
+        crate::ui::warn("Skipping signature verification (--allow-unsigned)");
     }
 
     // Step 2: Parse the package

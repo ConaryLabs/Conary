@@ -9,3 +9,5 @@ pub mod command_risk;
 pub mod commands;
 pub mod dispatch;
 pub mod live_host_safety;
+pub mod logging;
+pub mod ui;

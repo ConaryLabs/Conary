@@ -74,6 +74,7 @@ docs/superpowers/plans/2026-07-01-feature-card-context-tooling-plan.md	planning	
 docs/superpowers/plans/2026-07-01-first-external-tester-loop-plan.md	planning	maintainer
 docs/superpowers/plans/2026-07-03-kernel-initramfs-selinux-scriptlet-handling-plan.md	planning	maintainer
 docs/superpowers/plans/2026-07-04-remi-scriptlet-evidence-queue-plan.md	planning	maintainer
+docs/superpowers/plans/2026-07-07-conary-cli-output-ux.md	planning	maintainer
 docs/superpowers/plans/2026-07-07-generic-lsm-security-policy-intent-plan.md	planning	maintainer
 docs/superpowers/plans/archive/2026-04-10-all-tracks-release-hardening-plan.md	historical	historical
 docs/superpowers/plans/archive/2026-04-16-conaryd-forge-staging-deployment-plan.md	historical	historical
@@ -174,6 +175,7 @@ docs/superpowers/specs/2026-07-01-feature-card-context-tooling-design.md	plannin
 docs/superpowers/specs/2026-07-01-first-external-tester-loop-design.md	planning	maintainer
 docs/superpowers/specs/2026-07-03-kernel-initramfs-selinux-scriptlet-handling-design.md	planning	maintainer
 docs/superpowers/specs/2026-07-03-remi-scriptlet-evidence-queue-design.md	planning	maintainer
+docs/superpowers/specs/2026-07-07-conary-cli-output-ux-design.md	planning	maintainer
 docs/superpowers/specs/2026-07-07-generic-lsm-security-policy-intent-design.md	planning	maintainer
 docs/superpowers/specs/archive/2026-04-10-all-tracks-release-hardening-design.md	historical	historical
 docs/superpowers/specs/archive/2026-04-10-conaryd-forge-staging-deployment-design.md	historical	historical

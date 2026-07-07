@@ -184,7 +184,7 @@ async fn run_project_form_publish(
     let warnings = validate_recipe(&recipe).with_context(|| "Recipe validation failed")?;
     if !options.json {
         for warning in &warnings {
-            writeln!(writer, "Warning: {}", warning)?;
+            writeln!(writer, "{}", crate::ui::warn_line(warning))?;
         }
     }
 
@@ -501,7 +501,10 @@ fn print_divergence_summary(
     if evidence.divergence.status == DivergenceStatus::DiffersFromHost {
         writeln!(
             writer,
-            "Warning: hermetic output differs from the latest host build record; this is diagnostic-only in M2a."
+            "{}",
+            crate::ui::warn_line(
+                "hermetic output differs from the latest host build record; this is diagnostic-only in M2a."
+            )
         )?;
     }
     Ok(())

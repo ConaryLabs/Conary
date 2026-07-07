@@ -225,10 +225,10 @@ pub async fn cmd_capability_validate(path: &str, verbose: bool) -> Result<()> {
                 );
             }
 
-            println!("[VALID] Capability declaration in '{}' is valid.", path);
+            crate::ui::status("Valid", &format!("capability declaration in '{path}'."));
         }
         None => {
-            println!("[INFO] No [capabilities] section found in '{}'.", path);
+            crate::ui::note(&format!("No [capabilities] section found in '{path}'."));
             if verbose {
                 println!();
                 println!("To add capability declarations, include a section like:");
@@ -292,7 +292,11 @@ pub async fn cmd_capability_list(db_path: &str, missing_only: bool, format: &str
             let max_name_len = packages.iter().map(|(n, _, _)| n.len()).max().unwrap_or(20);
 
             for (name, version, has_caps) in &packages {
-                let status = if *has_caps { "[DECLARED]" } else { "[MISSING]" };
+                let status = if *has_caps {
+                    "[DECLARED]".to_string()
+                } else {
+                    crate::ui::tag(crate::ui::Status::Missing)
+                };
                 println!(
                     "  {:<width$} {:12} {}",
                     name,
@@ -385,10 +389,11 @@ pub async fn cmd_capability_audit(
         println!("  Write rules:   {}", info.write_rules);
         println!("  Execute rules: {}", info.execute_rules);
         if info.deny_conflicts > 0 {
-            println!(
-                "  [WARNING] {} deny paths conflict with allowed parents",
+            let message = format!(
+                "{} deny paths conflict with allowed parents",
                 info.deny_conflicts
             );
+            crate::ui::row(crate::ui::Status::Warn, &[&message]);
         }
         if !info.skipped_paths.is_empty() {
             println!("  Skipped (non-existent):");

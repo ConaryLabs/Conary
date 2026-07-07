@@ -24,12 +24,12 @@ pub(crate) fn render_diagnostics_human(
     output: &mut impl Write,
 ) -> Result<()> {
     for diagnostic in diagnostics {
-        let label = match diagnostic.severity {
-            PackagingSeverity::Info => "Info",
-            PackagingSeverity::Warning => "Warning",
-            PackagingSeverity::Error => "Error",
+        let line = match diagnostic.severity {
+            PackagingSeverity::Info => crate::ui::note_line(&diagnostic.message),
+            PackagingSeverity::Warning => crate::ui::warn_line(&diagnostic.message),
+            PackagingSeverity::Error => crate::ui::error_line(&diagnostic.message),
         };
-        writeln!(output, "{label}: {}", diagnostic.message)?;
+        writeln!(output, "{line}")?;
         for evidence in &diagnostic.evidence {
             writeln!(
                 output,
@@ -277,7 +277,7 @@ mod tests {
         let mut output = Vec::new();
         render_diagnostics_human(&[diagnostic], &mut output).unwrap();
         let text = String::from_utf8(output).unwrap();
-        assert!(text.contains("Warning: unused field"));
+        assert!(text.contains("warning: unused field"));
         assert!(text.contains("validator"));
     }
 

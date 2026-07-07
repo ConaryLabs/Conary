@@ -22,12 +22,12 @@ pub async fn cmd_registry_update(db_path: &str) -> Result<()> {
         match conary_core::canonical::client::fetch_canonical_map(&conn, endpoint).await {
             Ok(Some(count)) => {
                 println!("Fetched {count} canonical mappings from {name} ({endpoint})");
-                println!("[COMPLETE] Registry updated");
+                crate::ui::status("Updated", "registry.");
                 return Ok(());
             }
             Ok(None) => {
                 println!("Canonical map is current (server returned 304)");
-                println!("[COMPLETE] Registry updated");
+                crate::ui::status("Updated", "registry.");
                 return Ok(());
             }
             Err(e) => {
@@ -105,7 +105,7 @@ pub async fn cmd_registry_update(db_path: &str) -> Result<()> {
     } else {
         println!("No canonical rules found at {}", dir.display());
     }
-    println!("[COMPLETE] Registry updated");
+    crate::ui::status("Updated", "registry.");
     Ok(())
 }
 

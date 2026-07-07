@@ -2,12 +2,24 @@
 
 use std::future::Future;
 
-pub fn init_tracing() {
+pub fn init_server_tracing() {
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
+}
+
+pub fn init_cli_tracing(default_directive: &str) {
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .without_time()
+        .with_target(false)
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(default_directive)),
         )
         .init();
 }

@@ -32,7 +32,7 @@ pub async fn cmd_bootstrap_image(
     let tools = ImageTools::check()?;
 
     if let Err(e) = tools.check_for_format(image_format) {
-        println!("[ERROR] {}", e);
+        crate::ui::error(&e.to_string());
         println!("\nRequired tools for {} format:", image_format);
         match image_format {
             ImageFormat::Raw | ImageFormat::Qcow2 => {
@@ -51,12 +51,12 @@ pub async fn cmd_bootstrap_image(
         }
         return Err(e.into());
     }
-    println!("[OK] All required tools found.");
+    crate::ui::status("Found", "all required tools.");
 
     // Check if base system exists
     let bootstrap = Bootstrap::new(work_dir)?;
     let Some(sysroot) = bootstrap.get_sysroot() else {
-        println!("[ERROR] Base system not found.");
+        crate::ui::error("Base system not found.");
         println!("Run 'conary bootstrap system' first to build the base system.");
         return Err(anyhow::anyhow!("Base system not complete"));
     };
@@ -87,7 +87,8 @@ pub async fn cmd_bootstrap_image(
 
     let result = builder.build()?;
 
-    println!("\n[OK] Image generated successfully!");
+    println!();
+    crate::ui::status("Generated", "image successfully.");
     println!("  Path: {}", result.path.display());
     println!("  Format: {}", result.format);
     println!(

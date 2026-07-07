@@ -149,6 +149,14 @@ pub struct Cli {
     #[arg(long, global = true, hide = true)]
     pub allow_live_system_mutation: bool,
 
+    /// Increase log verbosity (repeat for more: info, debug, trace)
+    #[arg(long = "verbose", action = clap::ArgAction::Count)]
+    pub log_verbose: u8,
+
+    /// Silence all logs except errors
+    #[arg(short = 'q', long, conflicts_with = "log_verbose")]
+    pub quiet: bool,
+
     #[command(subcommand)]
     pub command: Option<Commands>,
 }
@@ -950,8 +958,8 @@ impl std::fmt::Debug for Commands {
 #[cfg(test)]
 mod tests {
     use super::{
-        CcsCommands, Cli, CliSandboxMode, Commands, GenerationCommands, McpCommands, RepoCommands,
-        SystemCommands,
+        CcsCommands, Cli, CliSandboxMode, Commands, GenerationCommands, McpCommands, QueryCommands,
+        RepoCommands, SystemCommands,
     };
     use clap::{CommandFactory, Parser};
 
@@ -1600,6 +1608,29 @@ mod tests {
         .expect("global live-mutation flag should parse before nested commands");
 
         assert!(cli.allow_live_system_mutation);
+    }
+
+    #[test]
+    fn global_log_verbose_does_not_collide_with_command_verbose_flags() {
+        let local = parse_cli(["conary", "query", "scripts", "pkg.ccs", "--verbose"])
+            .expect("query scripts --verbose should parse as command verbosity");
+        assert_eq!(local.log_verbose, 0);
+        match local.command {
+            Some(Commands::Query(QueryCommands::Scripts { verbose, .. })) => {
+                assert!(verbose);
+            }
+            _ => panic!("expected query scripts command"),
+        }
+
+        let global = parse_cli(["conary", "--verbose", "query", "scripts", "pkg.ccs"])
+            .expect("top-level --verbose should parse as log verbosity");
+        assert_eq!(global.log_verbose, 1);
+        match global.command {
+            Some(Commands::Query(QueryCommands::Scripts { verbose, .. })) => {
+                assert!(!verbose);
+            }
+            _ => panic!("expected query scripts command"),
+        }
     }
 
     #[test]

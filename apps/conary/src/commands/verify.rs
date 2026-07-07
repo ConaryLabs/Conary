@@ -45,7 +45,8 @@ pub async fn cmd_verify_chain(
         for drv in &stage.derivations {
             total += 1;
             if drv.derivation_id == "pending" {
-                println!("  {}-{}    [pending]", drv.package, drv.version);
+                let package = format!("{}-{}", drv.package, drv.version);
+                crate::ui::row(crate::ui::Status::Pending, &[&package]);
                 continue;
             }
 
@@ -104,7 +105,7 @@ pub async fn cmd_verify_chain(
     println!("  {above_2}/{total} at trust level >= 2");
 
     for w in &warnings {
-        println!("  [WARN] {w}");
+        crate::ui::warn(w);
     }
 
     if chain_broken {

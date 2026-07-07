@@ -4,7 +4,7 @@
 
 **Goal:** Make what a person running `conary` sees quiet by default and visually consistent, and keep it that way with automated enforcement.
 
-**Architecture:** Two independent pillars plus enforcement. Pillar A gives the CLI its own quiet-by-default `tracing` init (leaving the `remi` server untouched) with a global `--verbose`/`--quiet` control. Pillar B adds a single `ui` module that owns one status vocabulary, backed by `console` for TTY/`NO_COLOR`-aware color. A CI guardrail plus exact-output tests stop regressions.
+**Architecture:** Two independent pillars plus enforcement. Pillar A gives the CLI its own quiet-by-default `tracing` init (leaving the `remi` server untouched) with top-level `--verbose`/`--quiet` controls. Pillar B adds a single `ui` module that owns one status vocabulary, backed by `console` for TTY/`NO_COLOR`-aware color. A CI guardrail plus exact-output tests stop regressions.
 
 **Tech Stack:** Rust (edition 2024), `clap` (workspace), `tracing-subscriber` (workspace), `console` 0.16 (new direct dep for `apps/conary`, already transitive via `indicatif`), `std::process::Command` integration tests using `CARGO_BIN_EXE_conary`.
 
@@ -16,8 +16,8 @@
 - Do **not** migrate the ~2,000-site general `println!` long tail. Migration is bounded to the guarded status vocabulary.
 - The **guarded status vocabulary** is exactly this word-list: `[OK] [COMPLETE] [DONE] [VALID] [FAIL] [FAILED] [ERROR] [WARN] [WARNING] [INFO] [OFF] [MISSING] [PENDING]` (case-insensitive) plus any printed string beginning `Warning:`. The top-level `Error:` prose reporter in `app.rs` is **not** in this set and is left as-is.
 - The `ui` `Status` enum is `{ Ok, Fail, Warn, Skip, Info, Off, Missing, Pending }`. Tags are lowercase, bracketed, no inner padding: `[ok] [fail] [warn] [skip] [info] [off] [missing] [pending]`. `row` right-pads the tag by **visible** width to the widest tag so columns align.
-- Level precedence (highest wins): `RUST_LOG` env var → `-q`/`--verbose` flags → default `warn`.
-- Global verbose flag is `--verbose` (long only, repeatable count). It has **no `-v` short** because `-v` is already `--version` on `install`/`update`/`list` and 11 other subcommands. `-q`/`--quiet` is free and keeps its short.
+- Level precedence (highest wins): `RUST_LOG` env var → top-level `-q`/`--verbose` flags → default `warn`.
+- Log verbosity flags are top-level `Cli` options (`conary --verbose ...`, `conary -q ...`), not Clap `global = true` propagated args, because existing subcommands already own local `--verbose`/`--quiet` meanings. The log verbose flag has **no `-v` short** because `-v` is already `--version` on `install`/`update`/`list` and 11 other subcommands.
 - `conary-bootstrap` is edition 2024, `rust-version = "1.96"`.
 - Every `git commit` in this plan ends with the trailer line:
   `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`
@@ -44,7 +44,7 @@ Create `apps/conary/src/logging.rs`:
 ```rust
 //! CLI logging helpers.
 
-/// Map the global `--quiet` / `--verbose` flags to a `tracing` EnvFilter
+/// Map the top-level `--quiet` / `--verbose` flags to a `tracing` EnvFilter
 /// directive. `RUST_LOG`, when set, overrides this at init time.
 pub fn verbosity_directive(quiet: bool, verbose: u8) -> &'static str {
     todo!()
@@ -177,7 +177,7 @@ git commit -m "refactor(bootstrap): split server and cli tracing init"
 
 ---
 
-## Task 3: Wire global verbosity flags and quiet-by-default
+## Task 3: Wire top-level verbosity flags and quiet-by-default
 
 Add `--verbose`/`--quiet` to the top-level CLI, reorder `app.rs` to parse before initializing tracing, and prove the log flood is gone by default.
 
@@ -187,7 +187,7 @@ Add `--verbose`/`--quiet` to the top-level CLI, reorder `app.rs` to parse before
 - Test: `apps/conary/tests/logging_verbosity.rs`
 
 **Interfaces:**
-- Consumes: `crate::logging::verbosity_directive` (Task 1), `conary_bootstrap::init_cli_tracing` (Task 2), `Cli.quiet: bool`, `Cli.verbose: u8`
+- Consumes: `crate::logging::verbosity_directive` (Task 1), `conary_bootstrap::init_cli_tracing` (Task 2), `Cli.quiet: bool`, `Cli.log_verbose: u8`
 
 - [ ] **Step 1: Write the failing integration test**
 
@@ -241,11 +241,11 @@ In `apps/conary/src/cli/mod.rs`, inside `pub struct Cli { ... }` (after the `all
 
 ```rust
     /// Increase log verbosity (repeat for more: info, debug, trace)
-    #[arg(long, global = true, action = clap::ArgAction::Count)]
-    pub verbose: u8,
+    #[arg(long = "verbose", action = clap::ArgAction::Count)]
+    pub log_verbose: u8,
 
     /// Silence all logs except errors
-    #[arg(short = 'q', long, global = true, conflicts_with = "verbose")]
+    #[arg(short = 'q', long, conflicts_with = "log_verbose")]
     pub quiet: bool,
 ```
 
@@ -258,7 +258,7 @@ pub async fn run() -> Result<()> {
     let cli = Cli::parse();
     conary_bootstrap::init_cli_tracing(crate::logging::verbosity_directive(
         cli.quiet,
-        cli.verbose,
+        cli.log_verbose,
     ));
 
     if cli.help_advanced {
@@ -865,9 +865,10 @@ lowercase and bracketed (`[ok]`, `[fail]`, `[warn]`, `[skip]`, `[info]`,
 Tags are ASCII-only; color is applied by `console` and disabled automatically
 off-TTY or under `NO_COLOR`.
 
-Logging: the CLI defaults to `warn` and is quiet. `--verbose` (repeatable) raises
-to info/debug/trace; `-q`/`--quiet` drops to errors only; `RUST_LOG` overrides
-both. Internal `tracing` logs must not be relied on as primary user output.
+Logging: the CLI defaults to `warn` and is quiet. Top-level `--verbose`
+(repeatable) raises to info/debug/trace; top-level `-q`/`--quiet` drops to
+errors only; `RUST_LOG` overrides both. Internal `tracing` logs must not be
+relied on as primary user output.
 ```
 
 - [ ] **Step 3: Commit**
@@ -886,7 +887,7 @@ git commit -m "docs(cli): document output vocabulary and verbosity conventions"
 - Pillar A quiet logging + `init_server_tracing`/`init_cli_tracing` split → Tasks 1–3.
 - `RUST_LOG` > flags > `warn` precedence → Task 1 (directive) + Task 2 (`try_from_default_env` fallback) + Task 3 (wiring), asserted in `logging_verbosity.rs`.
 - `remi` unchanged → Task 2 keeps `init_server_tracing` byte-for-byte and only renames the call site.
-- Global `--verbose`/`-q` with the `-v` collision documented → Task 3 + Global Constraints.
+- Top-level `--verbose`/`-q` with the `-v` and command-local flag collisions documented → Task 3 + Global Constraints.
 - Pillar B `ui` module, 8-state `Status`, column-aligned tags, `console` backend → Task 4.
 - Bounded migration of the full guarded vocabulary, by family → Tasks 6 (warnings), 7 (errors), 8 (success/info/state + `progress.rs`); entangled indicators explicitly enumerated in Task 8.
 - Enforcement: guardrail introduced in Task 6 and grown in Tasks 7–8 (each ends green); color-stripped exact-output tests for `list`/`search` → Task 5.

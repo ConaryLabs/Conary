@@ -530,7 +530,7 @@ fn run_cook_operation(
 
     if !options.json {
         for warning in &warnings {
-            writeln!(output, "Warning: {}", warning)?;
+            writeln!(output, "{}", crate::ui::warn_line(warning))?;
         }
     }
 
@@ -583,9 +583,17 @@ fn run_cook_operation(
         if !options.json {
             writeln!(output, "Recipe validation passed")?;
             if warnings.is_empty() {
-                writeln!(output, "[OK] No issues found")?;
+                writeln!(
+                    output,
+                    "{}",
+                    crate::ui::status_line("OK", "No issues found")
+                )?;
             } else {
-                writeln!(output, "[OK] {} warning(s)", warnings.len())?;
+                writeln!(
+                    output,
+                    "{}",
+                    crate::ui::status_line("OK", &format!("{} warning(s)", warnings.len()))
+                )?;
             }
         }
         return Ok(report);
@@ -673,8 +681,8 @@ fn run_cook_operation(
         if !options.json {
             writeln!(
                 output,
-                "\n[COMPLETE] Fetched {} source file(s):",
-                sources.len()
+                "\n{}",
+                crate::ui::status_line("Fetched", &format!("{} source file(s):", sources.len()))
             )?;
             for source in &sources {
                 writeln!(output, "  - {}", source.display())?;
@@ -683,7 +691,8 @@ fn run_cook_operation(
             if kitchen.sources_cached(&recipe) {
                 writeln!(
                     output,
-                    "\n[OK] All sources are cached. Ready for offline build."
+                    "\n{}",
+                    crate::ui::status_line("Cached", "all sources. Ready for offline build.")
                 )?;
             }
         }
@@ -799,8 +808,8 @@ fn run_cook_operation(
 
         writeln!(
             output,
-            "\n[COMPLETE] Cooked: {}",
-            result.package_path.display()
+            "\n{}",
+            crate::ui::status_line("Cooked", &result.package_path.display().to_string())
         )?;
 
         if !result.warnings.is_empty() {
@@ -990,7 +999,10 @@ fn write_host_record_after_host_cook(
         Err(error) => {
             writeln!(
                 output,
-                "Warning: could not write hermetic host build record: {error}"
+                "{}",
+                crate::ui::warn_line(&format!(
+                    "could not write hermetic host build record: {error}"
+                ))
             )?;
         }
     }
@@ -1012,7 +1024,10 @@ fn print_divergence_summary(
     if evidence.divergence.status == DivergenceStatus::DiffersFromHost {
         writeln!(
             output,
-            "Warning: hermetic output differs from the latest host build record; this is diagnostic-only in M2a."
+            "{}",
+            crate::ui::warn_line(
+                "hermetic output differs from the latest host build record; this is diagnostic-only in M2a."
+            )
         )?;
     }
     Ok(())

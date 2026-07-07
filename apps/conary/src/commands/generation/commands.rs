@@ -87,13 +87,13 @@ pub async fn cmd_generation_list() -> Result<()> {
         if let Ok(number) = name_str.parse::<i64>() {
             let gen_dir = entry.path();
             if is_generation_pending(&gen_dir) {
-                eprintln!("Warning: skipping incomplete generation {number}");
+                crate::ui::warn(&format!("skipping incomplete generation {number}"));
                 continue;
             }
             match GenerationMetadata::read_from(&gen_dir) {
                 Ok(meta) => generations.push((number, meta)),
                 Err(e) => {
-                    eprintln!("Warning: skipping generation {number}: {e}");
+                    crate::ui::warn(&format!("skipping generation {number}: {e}"));
                 }
             }
         }
@@ -286,13 +286,15 @@ fn cmd_generation_gc_locked(
                 removed_count += 1;
                 freed_bytes += size;
                 if let Err(error) = remove_generation_etc_state(runtime_root.root(), *gen_number) {
-                    eprintln!(
-                        "Warning: failed to remove etc-state directories for incomplete generation {gen_number}: {error}"
-                    );
+                    crate::ui::warn(&format!(
+                        "failed to remove etc-state directories for incomplete generation {gen_number}: {error}"
+                    ));
                 }
             }
             Err(e) => {
-                eprintln!("Warning: failed to remove incomplete generation {gen_number}: {e}");
+                crate::ui::warn(&format!(
+                    "failed to remove incomplete generation {gen_number}: {e}"
+                ));
             }
         }
     }
@@ -307,13 +309,13 @@ fn cmd_generation_gc_locked(
                 removed_count += 1;
                 freed_bytes += size;
                 if let Err(error) = remove_generation_etc_state(runtime_root.root(), *gen_number) {
-                    eprintln!(
-                        "Warning: failed to remove etc-state directories for generation {gen_number}: {error}"
-                    );
+                    crate::ui::warn(&format!(
+                        "failed to remove etc-state directories for generation {gen_number}: {error}"
+                    ));
                 }
             }
             Err(e) => {
-                eprintln!("Warning: failed to remove generation {gen_number}: {e}");
+                crate::ui::warn(&format!("failed to remove generation {gen_number}: {e}"));
             }
         }
 
@@ -322,10 +324,10 @@ fn cmd_generation_gc_locked(
             std::path::PathBuf::from(format!("/boot/loader/entries/conary-gen-{gen_number}.conf"));
         if bls_path.exists() {
             if let Err(e) = std::fs::remove_file(&bls_path) {
-                eprintln!(
-                    "Warning: failed to remove BLS entry {}: {e}",
+                crate::ui::warn(&format!(
+                    "failed to remove BLS entry {}: {e}",
                     bls_path.display()
-                );
+                ));
             } else {
                 info!("Removed BLS entry for generation {gen_number}");
             }

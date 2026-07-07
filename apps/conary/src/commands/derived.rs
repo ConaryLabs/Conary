@@ -30,10 +30,10 @@ pub async fn cmd_derive_list(db_path: &str, verbose: bool) -> Result<()> {
     println!("Derived packages ({}):", derived.len());
     for pkg in &derived {
         let status_str = match pkg.status {
-            DerivedStatus::Pending => "[PENDING]",
-            DerivedStatus::Built => "[BUILT]",
-            DerivedStatus::Stale => "[STALE]",
-            DerivedStatus::Error => "[ERROR]",
+            DerivedStatus::Pending => crate::ui::tag(crate::ui::Status::Pending),
+            DerivedStatus::Built => "[BUILT]".to_string(),
+            DerivedStatus::Stale => "[STALE]".to_string(),
+            DerivedStatus::Error => crate::ui::tag(crate::ui::Status::Fail),
         };
 
         if verbose {

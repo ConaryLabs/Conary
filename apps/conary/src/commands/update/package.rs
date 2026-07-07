@@ -659,7 +659,7 @@ pub async fn cmd_update(
                         &delta_info.to_hash,
                     ) {
                         Ok(new_hash) => {
-                            println!("  [OK] Delta applied to CAS");
+                            crate::ui::row(crate::ui::Status::Ok, &["Delta applied to CAS"]);
                             let delta_saved = (repo_pkg.size - delta_info.delta_size).max(0);
                             // Delta reconstructed the new package in CAS. Retrieve
                             // it and feed through the normal install pipeline so all
@@ -701,10 +701,11 @@ pub async fn cmd_update(
                                         {
                                             Ok(()) => {
                                                 delta_installed = true;
-                                                println!(
-                                                    "  [OK] {} {} -> {}",
+                                                let row = format!(
+                                                    "{} {} -> {}",
                                                     trove.name, trove.version, repo_pkg.version
                                                 );
+                                                crate::ui::row(crate::ui::Status::Ok, &[&row]);
                                             }
                                             Err(e) => {
                                                 warn!(

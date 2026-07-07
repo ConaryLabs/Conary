@@ -176,7 +176,7 @@ pub fn write_boot_entry(gen_number: i64) -> Result<()> {
         }
         BootLoader::None => {
             warn!("No recognized boot loader found; skipping boot entry");
-            println!("Warning: no recognized boot loader found, skipping boot entry");
+            crate::ui::warn("no recognized boot loader found, skipping boot entry");
         }
     }
 
