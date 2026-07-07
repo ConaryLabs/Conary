@@ -62,7 +62,9 @@ Each fixture family should record:
 - **Regeneration:** Hand-maintained Rust tables guarded by uniqueness,
   supported-target, and support-matrix alignment tests.
 - **Safety notes:** Public-ready fixtures must use exact supported target IDs:
-  `fedora-44`, `ubuntu-26.04`, or `arch`.
+  `fedora-44`, `ubuntu-26.04`, or `arch`. The `adapter-selinux-policy`
+  fixture intentionally uses a Fedora source and Arch target to prove supported
+  SELinux intent remains portable when the target does not require SELinux.
 
 ### ccs-v2-native-authority-fixtures
 

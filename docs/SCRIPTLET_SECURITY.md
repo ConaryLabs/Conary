@@ -150,12 +150,21 @@ This transforms unsafe runtime scripts into safe, atomic build-time declarations
 
 ### Boot And Security Scriptlet Evidence
 
-Kernel-module, initramfs, bootloader, and SELinux scriptlet effects are
-boot/security critical. Conary classifies these commands and preserves
-sanitized command evidence in legacy scriptlet summaries, but public Remi
-serving remains blocked until a future native adapter and target-profile fact
-set proves complete replacement. Raw replay, `--no-scripts`, or malformed
-summary metadata must not make these packages public-ready.
+Kernel-module, initramfs, bootloader, and unsupported SELinux scriptlet effects
+are boot/security critical. Conary classifies these commands and preserves
+sanitized command evidence in legacy scriptlet summaries. Public Remi serving
+remains blocked for kernel, initramfs, bootloader, and unsupported SELinux
+classes until native adapter and target-profile evidence proves complete
+replacement. Raw replay, `--no-scripts`, or malformed summary metadata must not
+make these packages public-ready.
+
+Supported SELinux forms are different: `selinux-policy/v1` records
+payload-scoped label refresh, payload-backed file-context rules, persistent boolean
+declarations, and payload-backed policy-module installs as optional policy
+intent. That evidence is safe on Arch or Debian because it is dormant when
+SELinux is absent and applies only through native policy handling when SELinux
+is present. Conversion never runs `restorecon`, `semanage`, `setsebool`, or
+`semodule` against the host policy store.
 
 This evidence is harvested from package-authored metadata and static command
 signals during conversion. It is an advisory trace for refusal diagnostics, not

@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Implement the MVP from the 2026-07-03 design: preserve and surface boot/security scriptlet intent evidence while keeping kernel/initramfs/SELinux packages blocked for public Remi.
+**Goal:** Implement the MVP from the 2026-07-03 design: preserve and surface boot/security scriptlet intent evidence while keeping kernel/initramfs/bootloader and unsupported SELinux packages blocked for public Remi.
 
-**Architecture:** Keep classification ownership in `crates/conary-core/src/ccs/convert/adapters.rs`, project sanitized command evidence through the passive legacy bundle, and expose it in Remi publication refusal reports. Do not add new CCS v2 lifecycle authority fields in this MVP; later native handling should extend `TargetProfileQuery` and supported-profile facts in a separate plan.
+**Architecture:** Keep classification ownership in `crates/conary-core/src/ccs/convert/adapters.rs`, project sanitized command evidence through the passive legacy bundle, and expose it in Remi publication refusal reports. Do not add new CCS v2 lifecycle authority fields in this MVP; later native handling should extend `TargetProfileQuery` and supported-profile facts in a separate plan. The 2026-07-07 follow-up adds `crates/conary-core/src/ccs/convert/selinux_adapters.rs` for supported SELinux forms as optional policy intent while retaining the blocked SELinux fallback for unsupported mutation.
 
 **Tech Stack:** Rust, serde, TOML/JSON DTOs, cargo test, Remi publication tests.
 
@@ -21,6 +21,17 @@ The current `issue35-remi-diagnostics` branch already improves Remi/client diagn
 
 Do not reimplement those diagnostics in this MVP. This plan builds on them by carrying better boot/security intent evidence through conversion and publication reports.
 
+## 2026-07-07 SELinux Adapter Follow-Up
+
+Supported SELinux scriptlet forms now have a public-ready adapter lane instead of being blanket-blocked:
+
+- payload-scoped `restorecon` label refresh;
+- payload-backed `semanage fcontext` add/modify/delete declarations;
+- persistent `setsebool -P` boolean declarations that apply only when the target policy exposes the boolean;
+- payload-backed `semodule -i` policy modules.
+
+These effects use `selinux-policy/v1` and record `target_security_policy = "selinux-optional"` plus `host_policy_behavior = "apply-when-selinux-present-dormant-when-absent"`. This is still conversion evidence, not conversion-time host policy-store mutation. Broad/unbacked forms such as `fixfiles`, root-wide `restorecon`, unbacked `semodule`, `semodule -r`, and unmodeled `semanage` subcommands stay blocked as `blocked-class-selinux`.
+
 ## File Structure
 
 - Modify `crates/conary-core/src/ccs/convert/effects.rs`
@@ -33,6 +44,12 @@ Do not reimplement those diagnostics in this MVP. This plan builds on them by ca
   - Keep the existing adapter registry boundary. This file is over 1500 lines; do not split it in this MVP.
 - Modify `crates/conary-core/src/ccs/convert/blocked_classes.rs`
   - Add missing boot/security tool coverage for `kernel-install`, `semodule`, and `fixfiles`.
+- Modify `crates/conary-core/src/ccs/convert/payload_hints.rs`
+  - Keep a payload path index so adapters can distinguish package-scoped intent from live-system mutation.
+- Add `crates/conary-core/src/ccs/convert/selinux_adapters.rs`
+  - Model supported SELinux label, fcontext, boolean, and module-install forms as optional policy effects.
+- Modify `crates/conary-core/src/ccs/convert/golden_fixtures.rs` and `support_matrix.rs`
+  - Add `adapter-selinux-policy` evidence while retaining `blocked-class-selinux`.
 - Modify `crates/conary-core/src/ccs/convert/converter.rs`
   - Update synthetic review/blocked classification constructors and match patterns.
 - Modify `crates/conary-core/src/ccs/convert/scriptlet_bundle/digest.rs`
@@ -904,12 +921,19 @@ Add a short subsection under the legacy capture/publication discussion:
 ```markdown
 ### Boot And Security Scriptlet Evidence
 
-Kernel-module, initramfs, bootloader, and SELinux scriptlet effects are
-boot/security critical. Conary classifies these commands and preserves
-sanitized command evidence in legacy scriptlet summaries, but public Remi
-serving remains blocked until a future native adapter and target-profile fact
-set proves complete replacement. Raw replay, `--no-scripts`, or malformed
-summary metadata must not make these packages public-ready.
+Kernel-module, initramfs, bootloader, and unsupported SELinux scriptlet effects
+are boot/security critical. Conary classifies these commands and preserves
+sanitized command evidence in legacy scriptlet summaries. Public Remi serving
+remains blocked for kernel, initramfs, bootloader, and unsupported SELinux
+classes until native adapter and target-profile evidence proves complete
+replacement. Raw replay, `--no-scripts`, or malformed summary metadata must not
+make these packages public-ready.
+
+Supported SELinux forms are different: `selinux-policy/v1` records
+payload-scoped label refresh, payload-backed file-context rules, persistent
+boolean declarations, and payload-backed policy-module installs as optional
+policy intent. That evidence is dormant when SELinux is absent and does not run
+SELinux tools against the conversion host.
 
 This evidence is harvested from package-authored metadata and static command
 signals during conversion. It is an advisory trace for refusal diagnostics, not

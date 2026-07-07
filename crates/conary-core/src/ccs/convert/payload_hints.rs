@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PayloadHints {
+    pub payload_paths: BTreeSet<String>,
     pub systemd_units: BTreeSet<String>,
     pub tmpfiles_configs: BTreeSet<String>,
     pub sysusers_configs: BTreeSet<String>,
@@ -18,6 +19,7 @@ impl PayloadHints {
 
         for file in files {
             let path = file.path.as_str();
+            hints.payload_paths.insert(path.to_string());
             if let Some(unit) = systemd_unit_name(path) {
                 hints.systemd_units.insert(unit.to_string());
             }
@@ -147,6 +149,12 @@ mod tests {
                 .contains("/usr/lib/sysusers.d/demo.conf")
         );
         assert!(hints.shared_libraries.contains("/usr/lib64/libdemo.so.1"));
+        assert!(
+            hints
+                .payload_paths
+                .contains("/usr/lib/systemd/system/demo.service")
+        );
+        assert!(hints.payload_paths.contains("/usr/lib64/libdemo.so.1"));
     }
 
     #[test]

@@ -76,7 +76,10 @@ replay policy, and target compatibility checks. Declarative manifest hooks are
 emitted only from adapter-backed or curated evidence; text-pattern detections
 remain advisory metadata for review diagnostics. Remaining scripts are
 preserved for guarded local replay or review when they cannot be safely
-captured. Tracks conversion fidelity (High/Medium/Low) via `FidelityReport`.
+captured. Supported SELinux scriptlet forms are modeled as optional policy
+intent through `selinux-policy/v1`, so Fedora-origin policy declarations can be
+portable to Arch or Debian targets without requiring SELinux on those targets.
+Tracks conversion fidelity (High/Medium/Low) via `FidelityReport`.
 
 **legacy_scriptlets.rs** -- Versioned metadata for converted package scriptlet
 semantics and local replay planning. The v1 bundle lives in the TOML manifest as
@@ -133,6 +136,10 @@ If conversion output changes, also run:
 ```bash
 cargo test -p conary --test conversion_integration golden_conversion
 ```
+
+The golden conversion corpus includes a Fedora-to-Arch `adapter-selinux-policy`
+case proving supported SELinux intent is fully replaced while unsupported
+SELinux mutation remains covered by the `blocked-class-selinux` fixture.
 
 ## CCS v2 Native Authority
 

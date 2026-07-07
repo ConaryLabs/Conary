@@ -132,6 +132,14 @@ fn golden_payload_files(name: &str) -> Vec<ExtractedFile> {
             sha256: None,
             symlink_target: None,
         },
+        ExtractedFile {
+            path: "/usr/share/selinux/packages/demo.pp".to_string(),
+            content: b"selinux policy module placeholder".to_vec(),
+            size: 33,
+            mode: 0o644,
+            sha256: None,
+            symlink_target: None,
+        },
     ]);
     files
 }
@@ -562,6 +570,10 @@ systemctl enable demo.service
 systemd-tmpfiles --create /usr/lib/tmpfiles.d/demo.conf
 systemd-sysusers /usr/lib/sysusers.d/demo.conf
 update-mime-database /usr/share/mime
+restorecon -R /usr/bin/adapter-registry-fully-replaced
+semanage fcontext -a -t demo_exec_t /usr/bin/adapter-registry-fully-replaced
+semodule -i /usr/share/selinux/packages/demo.pp
+setsebool -P demo_can_network on
 update-alternatives --install /usr/bin/editor editor /usr/bin/demo-editor 50
 "
         .to_string(),
@@ -597,6 +609,16 @@ update-alternatives --install /usr/bin/editor editor /usr/bin/demo-editor 50
             effect.adapter_id.is_some()
                 && effect.replacement
                     == conary_core::ccs::legacy_scriptlets::EffectReplacement::Complete
+        })
+    }));
+    assert!(bundle.entries.iter().any(|entry| {
+        entry.effects.iter().any(|effect| {
+            effect.adapter_id.as_deref() == Some("selinux-policy/v1")
+                && effect
+                    .extra
+                    .get("target_security_policy")
+                    .and_then(toml::Value::as_str)
+                    == Some("selinux-optional")
         })
     }));
     assert!(

@@ -116,6 +116,13 @@ fn adapter_entry(adapter_id: &'static str) -> SupportMatrixEntry {
             &["adapter-sysusers"],
             &["rpm", "deb", "arch"],
         ),
+        "selinux-policy/v1" => (
+            Some("restorecon|semanage fcontext|setsebool -P|semodule -i"),
+            "helper-complete-selinux-policy",
+            "Supported SELinux label, file-context, boolean, and module-install intent is recorded as optional policy that applies when SELinux is present and remains dormant when absent.",
+            &["adapter-selinux-policy"],
+            &["rpm", "deb", "arch"],
+        ),
         "alternatives-registration/v1" => (
             Some("update-alternatives|alternatives"),
             "helper-complete-alternatives-registration",
@@ -413,7 +420,7 @@ mod tests {
     fn boot_security_classes_remain_blocked_without_native_adapters() {
         let matrix = SupportMatrix::default();
 
-        for class_id in ["kernel-module", "initramfs", "bootloader", "selinux"] {
+        for class_id in ["kernel-module", "initramfs", "bootloader"] {
             let row = matrix
                 .entries()
                 .iter()
@@ -422,6 +429,29 @@ mod tests {
             assert_eq!(row.outcome, SupportOutcome::Blocked);
             assert!(row.adapter_id.is_none());
         }
+    }
+
+    #[test]
+    fn selinux_has_supported_adapter_row_and_blocked_fallback_row() {
+        let matrix = SupportMatrix::default();
+
+        let adapter_row = matrix
+            .entries()
+            .iter()
+            .find(|entry| entry.adapter_id == Some("selinux-policy/v1"))
+            .expect("SELinux supported forms should have a native adapter row");
+        assert_eq!(adapter_row.outcome, SupportOutcome::Known);
+        assert_eq!(adapter_row.reason_code, "helper-complete-selinux-policy");
+        assert_eq!(adapter_row.fixture_names, &["adapter-selinux-policy"]);
+
+        let blocked_row = matrix
+            .entries()
+            .iter()
+            .find(|entry| entry.class_id == Some("selinux"))
+            .expect("unsupported SELinux forms should retain a blocked fallback row");
+        assert_eq!(blocked_row.outcome, SupportOutcome::Blocked);
+        assert!(blocked_row.adapter_id.is_none());
+        assert_eq!(blocked_row.fixture_names, &["blocked-class-selinux"]);
     }
 
     #[test]
@@ -462,6 +492,10 @@ mod tests {
             ),
             (
                 "adapter-cache-refresh",
+                golden_fixtures::GoldenFixtureOutcome::FullyReplaced,
+            ),
+            (
+                "adapter-selinux-policy",
                 golden_fixtures::GoldenFixtureOutcome::FullyReplaced,
             ),
             (

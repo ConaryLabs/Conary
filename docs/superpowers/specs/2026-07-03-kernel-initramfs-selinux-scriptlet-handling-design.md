@@ -21,16 +21,18 @@ The short-term goal is not to make Fedora kernel packages public-ready. It is to
 - Raw legacy scriptlet replay is not public-serving authority.
 - `--no-scripts` must not bypass boot or security policy for operations that require scriptlet effects.
 - Remi public serving stays stricter than local experimental workflows.
-- Boot and SELinux actions fail closed unless a target profile explicitly supports the exact operation.
+- Boot actions and unsupported SELinux actions fail closed unless a target profile explicitly supports the exact operation.
+- Supported SELinux scriptlet forms are converted to optional policy intent that is dormant on targets without SELinux.
 - Text-pattern detection is advisory until converted into typed adapter evidence.
 - Bootloader mutation remains out of scope for public-ready conversion in this design.
 - Minimal roots and chroots must not accidentally run host boot or SELinux tools.
 
 ## Current Repo Facts
 
-- `crates/conary-core/src/ccs/convert/blocked_classes.rs` blocks `kernel-module`, `initramfs`, `bootloader`, and `selinux` classes.
-- `crates/conary-core/src/ccs/convert/support_matrix.rs` projects those blocked classes into the support matrix with blocked fixture rows.
+- `crates/conary-core/src/ccs/convert/blocked_classes.rs` blocks `kernel-module`, `initramfs`, `bootloader`, and unsupported `selinux` forms.
+- `crates/conary-core/src/ccs/convert/support_matrix.rs` projects boot/security blocked classes into the support matrix and includes `selinux-policy/v1` as the supported adapter row for modeled SELinux forms.
 - `crates/conary-core/src/ccs/convert/adapters.rs` owns conversion-time adapter classification. It is already over 1500 lines, so feature work should preserve the existing classification boundary and avoid unrelated decomposition.
+- `crates/conary-core/src/ccs/convert/selinux_adapters.rs` models payload-scoped SELinux label, file-context, boolean, and module-install intent as optional policy effects.
 - `crates/conary-core/src/ccs/convert/scriptlet_bundle/` builds passive legacy bundles, summary fields, and publication metadata from classification reports.
 - `apps/remi/src/server/publication.rs` turns scriptlet summary fields into public, review-required, or blocked publication decisions.
 - `crates/conary-core/src/ccs/v2/validation.rs` defines `TargetProfileQuery`, whose default implementation rejects all profile facts.
@@ -74,26 +76,34 @@ Candidate future lane:
 
 ### SELinux Intents
 
-Classify, but keep blocked until native authority exists:
+Supported forms are converted to optional policy intent rather than raw host mutation:
 
-- `restorecon` and `fixfiles`
-- `semanage fcontext`, `semanage boolean`, `semanage port`, and related policy-store edits
-- `setsebool`, especially persistent booleans
-- `semodule -i`, `semodule -r`, and package-shipped policy modules
+- payload-scoped `restorecon` label refresh
+- payload-backed `semanage fcontext` add/modify/delete rules
+- persistent `setsebool -P` boolean declarations that apply only when the target policy exposes the boolean
+- payload-backed `semodule -i` policy modules
+
+Unsupported forms remain blocked:
+
+- `fixfiles` broad relabeling
+- root-wide or broad shared-root `restorecon`
+- unbacked `semodule` module paths
+- `semanage` subcommands such as `permissive`, `port`, or other policy-store edits that are not yet modeled
+- `semodule -r` removal and other destructive module operations
 
 Candidate future lane:
 
-- Static policy module installation can become private-review first, then public-ready only with profile-backed policy-store facts and signed module evidence.
-- A narrow allow-list of SELinux booleans can reuse the supported-profile allow-list pattern from users/groups/directories.
-- Label reconciliation can become adapter-backed only when the target path set is payload-backed and the profile declares SELinux mode and policy-store semantics.
+- Broaden SELinux adapter coverage only when the command can be reduced to explicit policy intent with safe absent-policy behavior.
+- A target-profile allow-list can later tighten boolean/module application on SELinux-enabled systems without making Arch or Debian targets require SELinux.
+- Label reconciliation beyond payload-backed paths needs a reviewed path ownership model.
 
 ## Lane Policy
 
 | Lane | Meaning | Examples |
 | --- | --- | --- |
-| Public-ready | Fully native-free or fully replaced by adapter evidence and accepted by the target profile. | Future exact `depmod` for package-shipped modules under a known kernel ABI. |
-| Private-review | Evidence is structured, but the operation has host, distro, or ordering ambiguity. | `weak-modules`, exact SELinux policy module install, exact initramfs refresh without enough profile proof. |
-| Blocked | Unsafe for public Remi and unsafe to bypass with raw replay. | `dkms`, `modprobe`, bootloader mutation, broad initramfs regeneration, persistent SELinux policy mutation without allow-list evidence. |
+| Public-ready | Fully native-free or fully replaced by adapter evidence and accepted by the target profile. | `selinux-policy/v1` optional policy effects; future exact `depmod` for package-shipped modules under a known kernel ABI. |
+| Private-review | Evidence is structured, but the operation has host, distro, or ordering ambiguity. | `weak-modules`, exact initramfs refresh without enough profile proof, future SELinux forms before adapter proof. |
+| Blocked | Unsafe for public Remi and unsafe to bypass with raw replay. | `dkms`, `modprobe`, bootloader mutation, broad initramfs regeneration, unsupported SELinux policy mutation. |
 
 ## Architecture
 
@@ -107,7 +117,7 @@ This preserves the current publication decision while making the refusal explain
 
 ### 2. Remi Publication
 
-Remi should surface boot/security intent evidence in refusal reports and review artifacts. It should not promote any of these classes to public readiness in the MVP. Public serving remains driven by the existing `publication_status == "public"` rule and support-matrix adapter evidence.
+Remi should surface boot/security intent evidence in refusal reports and review artifacts. Kernel, initramfs, bootloader, and unsupported SELinux classes stay blocked; supported SELinux forms may become public-ready only when every scriptlet effect is fully replaced by `selinux-policy/v1` adapter evidence. Public serving remains driven by the existing `publication_status == "public"` rule and support-matrix adapter evidence.
 
 ### 3. Target Profile Facts
 
@@ -124,7 +134,7 @@ Required profile facts:
 
 ### 4. Native Authority And Adapters
 
-Later CCS v2 work should add typed native authority only after evidence and profile facts are stable. Candidate authority categories are:
+Later CCS v2 work should add typed native authority only after evidence and profile facts are stable. The current SELinux adapter records optional policy intent in legacy conversion evidence; it does not mutate a host policy store during conversion and does not add CCS v2 authority fields. Candidate authority categories are:
 
 - kernel module cache refresh
 - generation initramfs refresh
@@ -136,7 +146,7 @@ Adapters must prove complete replacement before `SupportOutcome::Known` and publ
 
 ### 5. Local Install And Bootstrap
 
-Local install should continue to refuse raw replay for blocked boot/security classes unless a future experimental flag is deliberately introduced with a clear non-public scope. Minimal roots and chroots should prefer explanatory diagnostics: missing `/etc/resolv.conf` or trust roots are HTTP setup problems, while missing `dracut`, `semodule`, `restorecon`, kernel ABI facts, or SELinux policy stores are native handling blockers.
+Local install should continue to refuse raw replay for blocked boot/security classes unless a future experimental flag is deliberately introduced with a clear non-public scope. Minimal roots and chroots should prefer explanatory diagnostics: missing `/etc/resolv.conf` or trust roots are HTTP setup problems, while missing `dracut`, unsupported `semodule`/`restorecon` forms, kernel ABI facts, or required policy-store facts are native handling blockers.
 
 ## MVP
 
@@ -146,7 +156,7 @@ The first implementation slice should:
 2. Add missing command coverage for obvious boot/security tools such as `kernel-install`, SELinux module tools such as `semodule`, and label tools such as `fixfiles`.
 3. Project boot/security intent evidence into legacy bundle summaries.
 4. Include that evidence in Remi publication refusal reports and client diagnostics.
-5. Keep all boot/security classes blocked for public Remi.
+5. Keep kernel, initramfs, bootloader, and unsupported SELinux classes blocked for public Remi.
 6. Add regression tests proving no `--no-scripts`, raw replay, or malformed summary path can turn these packages public-ready.
 
 This MVP helps issue #35 by making the Fedora kernel refusal specific and actionable without pretending Conary can safely serve kernel packages publicly yet.
@@ -154,18 +164,18 @@ This MVP helps issue #35 by making the Fedora kernel refusal specific and action
 ## Later Phases
 
 1. Add fail-closed boot/security profile facts to `TargetProfileQuery` and `supported_profiles`.
-2. Add private-review native adapter evidence for exact `depmod`, exact initramfs refresh, and SELinux policy-module detection.
+2. Add private-review native adapter evidence for exact `depmod`, exact initramfs refresh, and SELinux forms not covered by `selinux-policy/v1`.
 3. Add CCS v2 native authority fields only after the adapter evidence shape is stable.
 4. Extend Remi release validation to reject unsupported boot/security authority using the existing route-derived profile hook.
 5. Promote only proof-corpus-backed adapter cases to `SupportOutcome::Known`.
 
-Promoting a currently blocked command to adapter-backed status requires changing the blocked-class registry or dispatch order. Today `classify_invocation_with_context()` checks blocked classes before adapters, so adding a new adapter alone cannot make a `depmod`, `dracut`, `restorecon`, or similar blocked command public-ready.
+Promoting a currently blocked command to adapter-backed status requires changing the blocked-class registry or dispatch order. `classify_invocation_with_context()` still lets hard-blocked classes win by default; the only current exception is `selinux`, where complete `selinux-policy/v1` evidence may override the blocked fallback. Adding a `depmod`, `dracut`, or similar adapter still cannot make those blocked classes public-ready without an explicit dispatch-policy change.
 
 ## Required Tests
 
 - Blocked-class tests for `depmod`, `kernel-install`, `dracut`, `mkinitcpio`, `update-initramfs`, `restorecon`, `fixfiles`, `semanage`, `setsebool`, and `semodule`.
 - Bundle tests proving boot/security intent evidence is present in entries and summaries.
-- Support-matrix tests proving boot/security rows remain blocked until an adapter row is added with golden fixture evidence.
+- Support-matrix tests proving kernel/initramfs/bootloader rows remain blocked, unsupported SELinux keeps a blocked fallback row, and `selinux-policy/v1` has golden fixture evidence.
 - Remi publication tests proving refusal reports include blocked classes and sanitized intent evidence.
 - Client tests proving Remi blocked/review-required jobs become terminal actionable errors.
 - CCS v2 validation tests proving new boot/security profile facts default to unsupported in later phases.
@@ -177,6 +187,6 @@ Promoting a currently blocked command to adapter-backed status requires changing
 - No raw scriptlet replay bypass for boot/security classes.
 - No bootloader mutation model in the MVP.
 - No DKMS build execution in Remi.
-- No SELinux host policy-store mutation from conversion-time scriptlets.
+- No SELinux host policy-store mutation from conversion-time scriptlets; supported forms are recorded as optional policy intent.
 - No AppArmor adapter or AppArmor-specific evidence promotion in this MVP. Existing AppArmor scriptlet classes remain blocked and can get their own design if issue-driven evidence says they need the same detailed reporting path.
 - No broad file split of `adapters.rs` as part of the MVP.

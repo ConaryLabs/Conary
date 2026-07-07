@@ -91,6 +91,12 @@ const REQUIRED_GOAL8_CASES: &[GoldenFixtureCase] = &[
         "arch",
     ),
     public_fixture(
+        "adapter-selinux-policy",
+        GoldenFixtureOutcome::FullyReplaced,
+        "fedora-44",
+        "arch",
+    ),
+    public_fixture(
         "adapter-alternatives-registration",
         GoldenFixtureOutcome::FullyReplaced,
         "ubuntu-26.04",
@@ -175,6 +181,12 @@ const ALL_GOLDEN_FIXTURE_CASES: &[GoldenFixtureCase] = &[
         "adapter-cache-refresh",
         GoldenFixtureOutcome::FullyReplaced,
         "arch",
+        "arch",
+    ),
+    public_fixture(
+        "adapter-selinux-policy",
+        GoldenFixtureOutcome::FullyReplaced,
+        "fedora-44",
         "arch",
     ),
     fixture("blocked-class-network", GoldenFixtureOutcome::Blocked),

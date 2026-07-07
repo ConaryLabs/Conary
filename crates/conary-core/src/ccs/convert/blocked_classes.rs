@@ -56,7 +56,7 @@ impl Default for BlockedClassRegistry {
             ),
             blocked_class(
                 "selinux",
-                "SELinux policy and label mutation is not yet modeled.",
+                "Unsupported SELinux policy and label mutation is not replay-safe.",
                 "blocked-class-selinux",
                 &[
                     "restorecon",
@@ -66,7 +66,7 @@ impl Default for BlockedClassRegistry {
                     "setsebool",
                 ],
                 &[],
-                "Add a native SELinux policy adapter and label reconciliation plan.",
+                "Use selinux-policy/v1 for supported declarative forms, or add adapter coverage for the specific unsupported mutation.",
             ),
             blocked_class(
                 "apparmor",

@@ -7,6 +7,7 @@ use crate::ccs::convert::effects::{
     ScriptletClassification, ScriptletCommandEvidence, ScriptletEffectEvidence,
 };
 use crate::ccs::convert::payload_hints::PayloadHints;
+use crate::ccs::convert::selinux_adapters::SelinuxPolicyAdapter;
 use crate::ccs::legacy_scriptlets::{EffectConfidence, EffectReplacement, EffectSource};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -94,6 +95,18 @@ pub fn bootstrap_adapter_evidence() -> &'static [BootstrapAdapterEvidence] {
             coverage_ids: &["cache-refresh/v1"],
         },
         BootstrapAdapterEvidence {
+            command: "restorecon",
+            forms: &[
+                "restorecon -R <payload-path>",
+                "semanage fcontext -a|-m|-d",
+                "setsebool -P <boolean> on|off",
+                "semodule -i <payload-module>",
+            ],
+            package_count: 1,
+            invocation_count: 4,
+            coverage_ids: &["selinux-policy/v1"],
+        },
+        BootstrapAdapterEvidence {
             command: "install-info",
             forms: &["install-info"],
             package_count: 1,
@@ -139,6 +152,7 @@ impl Default for AdapterRegistry {
             Box::new(DebSystemdHelperAdapter),
             Box::new(SystemdTmpfilesCreateAdapter),
             Box::new(SystemdSysusersAdapter),
+            Box::new(SelinuxPolicyAdapter),
             Box::new(AlternativesRegistrationAdapter),
             Box::new(CacheRefreshAdapter),
         ];
@@ -168,21 +182,27 @@ impl AdapterRegistry {
         &self,
         input: AdapterInput<'_>,
     ) -> ScriptletClassification {
-        let review_fallback =
+        let class_fallback =
             if let Some(class) = self.blocked_classes.match_invocation(input.invocation) {
                 let command = Some(ScriptletCommandEvidence::from_invocation(input.invocation));
                 match class.default_outcome {
-                    BlockedClassOutcome::Blocked => {
-                        return ScriptletClassification::Blocked {
+                    BlockedClassOutcome::Blocked => Some(ClassFallback {
+                        class_id: class.id,
+                        outcome: class.default_outcome,
+                        classification: ScriptletClassification::Blocked {
                             reason_code: class.reason_code.to_string(),
                             class_id: class.id.to_string(),
                             command,
-                        };
-                    }
-                    BlockedClassOutcome::Review => Some(ScriptletClassification::Review {
-                        reason_code: class.reason_code.to_string(),
-                        class_id: Some(class.id.to_string()),
-                        command,
+                        },
+                    }),
+                    BlockedClassOutcome::Review => Some(ClassFallback {
+                        class_id: class.id,
+                        outcome: class.default_outcome,
+                        classification: ScriptletClassification::Review {
+                            reason_code: class.reason_code.to_string(),
+                            class_id: Some(class.id.to_string()),
+                            command,
+                        },
                     }),
                 }
             } else {
@@ -195,13 +215,21 @@ impl AdapterRegistry {
             .find(|adapter| adapter.matches(input))
             .map(|adapter| adapter.classify(input));
 
-        match (review_fallback, adapter_classification) {
-            (Some(_), Some(classification))
-                if classification_has_adapter_effects(&classification) =>
+        match (class_fallback, adapter_classification) {
+            (Some(fallback), Some(classification))
+                if fallback.outcome == BlockedClassOutcome::Review
+                    && classification_has_adapter_effects(&classification) =>
             {
                 classification
             }
-            (Some(review), _) => review,
+            (Some(fallback), Some(classification))
+                if fallback.outcome == BlockedClassOutcome::Blocked
+                    && blocked_class_can_be_adapter_modeled(fallback.class_id)
+                    && classification_has_complete_adapter_replacement(&classification) =>
+            {
+                classification
+            }
+            (Some(fallback), _) => fallback.classification,
             (None, Some(classification)) => classification,
             (None, None) => ScriptletClassification::Unknown {
                 reason_code: "unknown-command".to_string(),
@@ -245,6 +273,12 @@ impl AdapterRegistry {
             }],
         }
     }
+}
+
+struct ClassFallback {
+    class_id: &'static str,
+    outcome: BlockedClassOutcome,
+    classification: ScriptletClassification,
 }
 
 struct NativeFreeAdapter;
@@ -988,6 +1022,27 @@ fn classification_has_adapter_effects(classification: &ScriptletClassification) 
         })
 }
 
+fn classification_has_complete_adapter_replacement(
+    classification: &ScriptletClassification,
+) -> bool {
+    let ScriptletClassification::Known { effects, .. } = classification else {
+        return false;
+    };
+
+    !effects.is_empty()
+        && effects.iter().all(|effect| {
+            effect
+                .adapter_id
+                .as_deref()
+                .is_some_and(|id| !id.is_empty())
+                && effect.replacement == EffectReplacement::Complete
+        })
+}
+
+fn blocked_class_can_be_adapter_modeled(class_id: &str) -> bool {
+    matches!(class_id, "selinux")
+}
+
 fn effect_source(source: CommandEvidenceSource) -> EffectSource {
     match source {
         CommandEvidenceSource::StaticSignal => EffectSource::StaticSignal,
@@ -1016,6 +1071,7 @@ mod tests {
     use crate::ccs::convert::effects::ScriptletClassification;
     use crate::ccs::convert::payload_hints::PayloadHints;
     use crate::ccs::legacy_scriptlets::EffectReplacement;
+    use crate::packages::traits::ExtractedFile;
 
     fn invocation(command: &str, argv: &[&str]) -> CommandInvocation {
         CommandInvocation {
@@ -1051,6 +1107,17 @@ mod tests {
             .filter_map(toml::Value::as_str)
             .map(str::to_string)
             .collect()
+    }
+
+    fn file(path: &str) -> ExtractedFile {
+        ExtractedFile {
+            path: path.to_string(),
+            content: Vec::new(),
+            size: 0,
+            mode: 0o644,
+            sha256: None,
+            symlink_target: None,
+        }
     }
 
     #[test]
@@ -1161,6 +1228,7 @@ mod tests {
                 "deb-systemd-helper/v1",
                 "systemd-tmpfiles-create/v1",
                 "systemd-sysusers/v1",
+                "selinux-policy/v1",
                 "alternatives-registration/v1",
                 "cache-refresh/v1",
             ]
@@ -1194,6 +1262,7 @@ mod tests {
             "update-alternatives",
             "deb-systemd-helper",
             "update-mime-database",
+            "restorecon",
             "install-info",
             "gconftool-2",
         ] {
@@ -1259,6 +1328,13 @@ mod tests {
                 reason_code: "helper-complete-cache-refresh",
             },
             GoldenAdapterCase {
+                fixture_id: "adapter-selinux-policy",
+                command: "restorecon",
+                argv: &["-R", "/usr/bin/demo"],
+                adapter_id: "selinux-policy/v1",
+                reason_code: "helper-complete-selinux-policy",
+            },
+            GoldenAdapterCase {
                 fixture_id: "adapter-alternatives-registration",
                 command: "update-alternatives",
                 argv: &[
@@ -1286,6 +1362,103 @@ mod tests {
                 case.adapter_id,
                 case.reason_code,
             );
+        }
+    }
+
+    #[test]
+    fn selinux_adapter_models_payload_backed_policy_and_label_intent_as_portable_effects() {
+        let registry = AdapterRegistry::default();
+        let payload = PayloadHints::from_files(&[
+            file("/usr/bin/demo"),
+            file("/usr/share/selinux/packages/demo.pp"),
+        ]);
+
+        for (command, argv, kind, path, operation) in [
+            (
+                "restorecon",
+                vec!["-R", "/usr/bin/demo"],
+                "selinux-label-refresh",
+                "/usr/bin/demo",
+                "label-refresh",
+            ),
+            (
+                "semanage",
+                vec!["fcontext", "-a", "-t", "demo_exec_t", "/usr/bin/demo"],
+                "selinux-file-context",
+                "/usr/bin/demo",
+                "file-context-add",
+            ),
+            (
+                "setsebool",
+                vec!["-P", "demo_can_network", "on"],
+                "selinux-boolean",
+                "demo_can_network",
+                "boolean-set",
+            ),
+            (
+                "semodule",
+                vec!["-i", "/usr/share/selinux/packages/demo.pp"],
+                "selinux-policy-module",
+                "/usr/share/selinux/packages/demo.pp",
+                "module-install",
+            ),
+        ] {
+            let classification = registry.classify_invocation_with_context(AdapterInput {
+                invocation: &invocation(command, &argv),
+                payload: &payload,
+            });
+
+            let ScriptletClassification::Known {
+                reason_code,
+                effects,
+            } = classification
+            else {
+                panic!("{command} should be modeled as SELinux policy intent");
+            };
+
+            assert_eq!(reason_code, "helper-complete-selinux-policy");
+            assert_eq!(effects.len(), 1);
+            let effect = &effects[0];
+            assert_eq!(effect.kind, kind);
+            assert_eq!(effect.adapter_id.as_deref(), Some("selinux-policy/v1"));
+            assert_eq!(effect.replacement, EffectReplacement::Complete);
+            assert_eq!(effect.path.as_deref(), Some(path));
+            assert_eq!(extra_str(effect, "selinux_operation"), Some(operation));
+            assert_eq!(
+                extra_str(effect, "target_security_policy"),
+                Some("selinux-optional")
+            );
+            assert_eq!(
+                extra_str(effect, "host_policy_behavior"),
+                Some("apply-when-selinux-present-dormant-when-absent")
+            );
+        }
+    }
+
+    #[test]
+    fn selinux_adapter_leaves_broad_or_unbacked_mutation_blocked() {
+        let registry = AdapterRegistry::default();
+        let payload = PayloadHints::from_files(&[file("/usr/bin/demo")]);
+
+        for (command, argv) in [
+            ("restorecon", vec!["-R", "/"]),
+            ("semodule", vec!["-i", "/tmp/demo.pp"]),
+            ("semanage", vec!["permissive", "-a", "demo_t"]),
+            ("fixfiles", vec!["restore"]),
+        ] {
+            let classification = registry.classify_invocation_with_context(AdapterInput {
+                invocation: &invocation(command, &argv),
+                payload: &payload,
+            });
+
+            assert!(matches!(
+                classification,
+                ScriptletClassification::Blocked {
+                    reason_code,
+                    class_id,
+                    command: Some(_),
+                } if reason_code == "blocked-class-selinux" && class_id == "selinux"
+            ));
         }
     }
 
@@ -1921,6 +2094,10 @@ mod tests {
 
     fn golden_adapter_payload() -> PayloadHints {
         let mut payload = PayloadHints::default();
+        payload.payload_paths.insert("/usr/bin/demo".to_string());
+        payload
+            .payload_paths
+            .insert("/usr/share/selinux/packages/demo.pp".to_string());
         payload.systemd_units.insert("demo.service".to_string());
         payload
             .tmpfiles_configs
