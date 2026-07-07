@@ -44,7 +44,7 @@ impl Default for SupportMatrix {
                 outcome: outcome_for_class(class.default_outcome),
                 reason_code: class.reason_code,
                 source_families: class.affected_formats,
-                lifecycle_notes: class.description,
+                lifecycle_notes: lifecycle_notes_for_class(class.id, class.description),
                 fixture_names: fixture_names_for_class(class.id),
             });
         }
@@ -193,6 +193,18 @@ fn fixture_names_for_class(class_id: &str) -> &'static [&'static str] {
         "arch-alpm-hook" => &["review-class-arch-alpm-hook"],
         "arch-install-function" => &["review-class-arch-install-function"],
         _ => panic!("missing support matrix fixture definition for {class_id}"),
+    }
+}
+
+fn lifecycle_notes_for_class(
+    class_id: &'static str,
+    default_description: &'static str,
+) -> &'static str {
+    match class_id {
+        "apparmor" => {
+            "AppArmor helper calls are captured as generic security-policy review intent, but no AppArmor command is public-ready until a payload-backed adapter proves profile install/reload/mode semantics."
+        }
+        _ => default_description,
     }
 }
 

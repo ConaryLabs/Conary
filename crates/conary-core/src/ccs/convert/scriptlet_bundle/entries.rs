@@ -49,7 +49,8 @@ fn build_flat_entry(
     let lifecycle_paths = vec![phase.as_str().to_string()];
     let classifications = classification_entries_for(report, &id);
     let outcome = classify_entry(&classifications, &NativeScriptletSupport::Parsed);
-    let security_policy_intents = policy_intents_from_effects(&id, &outcome.effects);
+    let mut security_policy_intents = outcome.security_policy_intents.clone();
+    security_policy_intents.extend(policy_intents_from_effects(&id, &outcome.effects));
     let body_bytes = scriptlet.content.as_bytes();
 
     Ok(LegacyScriptletEntry {
@@ -101,7 +102,8 @@ fn build_native_entry(
             native.support.clone()
         };
     let outcome = classify_entry(&classifications, &effective_support);
-    let security_policy_intents = policy_intents_from_effects(&native.id, &outcome.effects);
+    let mut security_policy_intents = outcome.security_policy_intents.clone();
+    security_policy_intents.extend(policy_intents_from_effects(&native.id, &outcome.effects));
     let phase = phase_from_native_lifecycle(native.primary_lifecycle);
     let lifecycle_paths = native_lifecycle_paths(native);
     let (body, body_encoding) = encoded_native_body(&native.body);
