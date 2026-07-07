@@ -254,7 +254,7 @@ mod tests {
                 .and_then(toml::Value::as_str),
             Some("demo_exec_t")
         );
-        assert_eq!(intent.payload_evidence.payload_backed, true);
+        assert!(intent.payload_evidence.payload_backed);
         assert_eq!(intent.payload_evidence.paths, vec!["/usr/bin/demo"]);
         assert_eq!(intent.fallback.as_str(), "dormant");
         assert_eq!(intent.reconciliation.state.as_str(), "pending");
@@ -300,7 +300,7 @@ mod tests {
                 .and_then(toml::Value::as_str),
             Some("on")
         );
-        assert_eq!(intent.payload_evidence.payload_backed, false);
+        assert!(!intent.payload_evidence.payload_backed);
         assert_eq!(intent.fallback.as_str(), "dormant");
         assert_eq!(intent.reconciliation.state.as_str(), "pending");
     }
@@ -357,7 +357,7 @@ mod tests {
                 .and_then(toml::Value::as_str),
             Some("pp")
         );
-        assert_eq!(intent.payload_evidence.payload_backed, true);
+        assert!(intent.payload_evidence.payload_backed);
         assert_eq!(
             intent.payload_evidence.paths,
             vec!["/usr/share/selinux/packages/demo.pp"]

@@ -1475,6 +1475,7 @@ mod tests {
             unknown_commands: Vec::new(),
             blocked_classes: Vec::new(),
             boot_security_intents: Vec::new(),
+            security_policy_intents: Vec::new(),
             rpm_trigger: None,
             deb_maintainer: None,
             arch_install: None,
@@ -1516,6 +1517,7 @@ mod tests {
                 extra: BTreeMap::new(),
             },
             unsupported_class_counts: BTreeMap::new(),
+            security_policy_intents: Vec::new(),
             entries: vec![rollback_legacy_entry()],
             extra: BTreeMap::new(),
         }

@@ -500,7 +500,7 @@ mod tests {
         assert_eq!(intent.operation, "label-refresh");
         assert_eq!(intent.scope.kind, "path");
         assert_eq!(intent.scope.paths, vec!["/usr/share/demo"]);
-        assert_eq!(intent.payload_evidence.payload_backed, true);
+        assert!(intent.payload_evidence.payload_backed);
         assert_eq!(intent.fallback.as_str(), "dormant");
         assert_eq!(intent.reconciliation.state.as_str(), "pending");
 

@@ -11,13 +11,13 @@ macro_rules! string_enum {
     (
         $(#[$meta:meta])*
         pub enum $name:ident {
-            $($variant:ident => $value:literal),+ $(,)?
+            $($(#[$variant_meta:meta])* $variant:ident => $value:literal),+ $(,)?
         }
     ) => {
         $(#[$meta])*
-        #[derive(Debug, Clone, PartialEq, Eq)]
+        #[derive(Debug, Clone, PartialEq, Eq, Default)]
         pub enum $name {
-            $($variant,)+
+            $($(#[$variant_meta])* $variant,)+
             Unknown(String),
         }
 
@@ -81,18 +81,14 @@ string_enum! {
         Tomoyo => "tomoyo",
         Smack => "smack",
         Landlock => "landlock",
+        #[default]
         Any => "any",
-    }
-}
-
-impl Default for SecurityPolicyProvider {
-    fn default() -> Self {
-        Self::Any
     }
 }
 
 string_enum! {
     pub enum SecurityPolicyFallback {
+        #[default]
         Dormant => "dormant",
         Warning => "warning",
         Degraded => "degraded",
@@ -100,26 +96,15 @@ string_enum! {
     }
 }
 
-impl Default for SecurityPolicyFallback {
-    fn default() -> Self {
-        Self::Dormant
-    }
-}
-
 string_enum! {
     pub enum SecurityPolicyReconciliationState {
         Applied => "applied",
         Dormant => "dormant",
+        #[default]
         Pending => "pending",
         Degraded => "degraded",
         Blocked => "blocked",
         Review => "review",
-    }
-}
-
-impl Default for SecurityPolicyReconciliationState {
-    fn default() -> Self {
-        Self::Pending
     }
 }
 

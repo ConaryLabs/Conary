@@ -844,6 +844,7 @@ mod tests {
             scriptlet_fidelity: ScriptletFidelity::LegacyReplay,
             decision_counts,
             unsupported_class_counts: BTreeMap::new(),
+            security_policy_intents: Vec::new(),
             entries,
             extra: BTreeMap::new(),
         }
@@ -892,6 +893,7 @@ mod tests {
             unknown_commands: vec![],
             blocked_classes: vec![],
             boot_security_intents: Vec::new(),
+            security_policy_intents: Vec::new(),
             rpm_trigger: None,
             deb_maintainer: None,
             arch_install: None,

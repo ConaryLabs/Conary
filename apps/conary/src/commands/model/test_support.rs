@@ -123,6 +123,7 @@ pub(super) fn legacy_replatform_upgrade_bundle(
             extra: BTreeMap::new(),
         },
         unsupported_class_counts: BTreeMap::new(),
+        security_policy_intents: Vec::new(),
         entries: vec![entry],
         extra: BTreeMap::new(),
     }
@@ -161,6 +162,7 @@ fn legacy_replatform_upgrade_entry() -> LegacyScriptletEntry {
         unknown_commands: Vec::new(),
         blocked_classes: Vec::new(),
         boot_security_intents: Vec::new(),
+        security_policy_intents: Vec::new(),
         rpm_trigger: None,
         deb_maintainer: None,
         arch_install: None,

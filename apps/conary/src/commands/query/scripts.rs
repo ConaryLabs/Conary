@@ -802,6 +802,7 @@ mod query_scripts {
                 extra: BTreeMap::new(),
             },
             unsupported_class_counts: BTreeMap::new(),
+            security_policy_intents: Vec::new(),
             entries: vec![
                 entry_fixture("rpm:%preun", ScriptletDecision::Replaced, replaced_body),
                 entry_fixture("rpm:%post", ScriptletDecision::Legacy, legacy_body),
@@ -868,6 +869,7 @@ mod query_scripts {
             unknown_commands: vec!["systemctl".to_string()],
             blocked_classes: vec![],
             boot_security_intents: Vec::new(),
+            security_policy_intents: Vec::new(),
             rpm_trigger: None,
             deb_maintainer: None,
             arch_install: None,
