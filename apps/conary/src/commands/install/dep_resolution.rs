@@ -179,12 +179,15 @@ where
                 }
             }
             DepMode::Adopt => {
-                if system_pm::is_system_package_installed(&dep.name) {
+                if is_system_package_installed(&dep.name) {
                     debug!(
                         "Dependency '{}' found in system PM, scheduling auto-adopt",
                         dep.name
                     );
                     plan.to_adopt.push(dep.name.clone());
+                } else if is_live_runtime_dependency_present(&dep.name) {
+                    plan.satisfied
+                        .push((dep.name.clone(), "live runtime".into()));
                 } else {
                     // Not on system either -- need to install from Remi
                     debug!(
@@ -404,6 +407,28 @@ mod tests {
         assert_eq!(plan.blocked.len(), 2, "glibc and openssl should be blocked");
         assert_eq!(plan.to_install.len(), 1, "pcre2 should be to_install");
         assert_eq!(plan.to_install[0].name, "pcre2");
+    }
+
+    #[test]
+    fn adopt_mode_treats_live_runtime_soname_dependencies_as_satisfied() {
+        let conn = test_db();
+        let missing = vec![make_dep("libcap.so.2()(64bit)", &["htop"])];
+
+        let plan = resolve_missing_deps_with_probes(
+            &conn,
+            &missing,
+            DepMode::Adopt,
+            |_| false,
+            |name| name == "libcap.so.2()(64bit)",
+        );
+
+        assert!(plan.to_install.is_empty());
+        assert!(plan.to_adopt.is_empty());
+        assert!(plan.unresolvable.is_empty());
+        assert_eq!(
+            plan.satisfied,
+            vec![("libcap.so.2()(64bit)".to_string(), "live runtime".into())]
+        );
     }
 
     #[test]

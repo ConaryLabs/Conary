@@ -83,7 +83,9 @@ pub fn is_live_runtime_dependency_present(name: &str) -> bool {
     }
 
     if let Some(soname) = live_runtime_soname(name) {
-        return soname_present(soname) || candidate_paths(live_runtime_soname_probe_paths(soname));
+        return soname_present(soname)
+            || candidate_paths(live_runtime_soname_probe_paths(soname))
+            || candidate_soname_paths(soname);
     }
 
     false
@@ -92,14 +94,7 @@ pub fn is_live_runtime_dependency_present(name: &str) -> bool {
 fn live_runtime_soname(name: &str) -> Option<&str> {
     let soname = name.split('(').next().unwrap_or(name);
     let lower = soname.to_ascii_lowercase();
-    if lower.starts_with("libcrypto.so.")
-        || lower.starts_with("libssl.so.")
-        || lower.starts_with("libgcc_s.so.")
-        || lower.starts_with("libpam.so.")
-        || lower.starts_with("libudev.so.")
-        || lower.starts_with("libpcre2-8.so.")
-        || lower.starts_with("libm.so.6")
-    {
+    if lower.starts_with("lib") && (lower.contains(".so.") || lower.ends_with(".so")) {
         Some(soname)
     } else {
         None
@@ -166,6 +161,23 @@ fn live_runtime_soname_probe_paths(soname: &str) -> &'static [&'static str] {
     } else {
         &[]
     }
+}
+
+fn candidate_soname_paths(soname: &str) -> bool {
+    [
+        "/usr/lib64",
+        "/lib64",
+        "/usr/lib",
+        "/lib",
+        "/usr/lib/x86_64-linux-gnu",
+        "/lib/x86_64-linux-gnu",
+        "/usr/lib/aarch64-linux-gnu",
+        "/lib/aarch64-linux-gnu",
+        "/usr/lib/riscv64-linux-gnu",
+        "/lib/riscv64-linux-gnu",
+    ]
+    .iter()
+    .any(|dir| Path::new(dir).join(soname).exists())
 }
 
 fn live_runtime_package_probe_paths(name: &str) -> Option<&'static [&'static str]> {
@@ -294,6 +306,24 @@ mod tests {
     }
 
     #[test]
+    fn live_runtime_soname_extracts_generic_rpm_soname_dependencies() {
+        assert_eq!(
+            live_runtime_soname("libcap.so.2()(64bit)"),
+            Some("libcap.so.2")
+        );
+        assert_eq!(
+            live_runtime_soname("libhwloc.so.15()(64bit)"),
+            Some("libhwloc.so.15")
+        );
+        assert_eq!(
+            live_runtime_soname("libstdc++.so.6(GLIBCXX_3.4.20)(64bit)"),
+            Some("libstdc++.so.6")
+        );
+        assert_eq!(live_runtime_soname("application()"), None);
+        assert_eq!(live_runtime_soname("htop"), None);
+    }
+
+    #[test]
     fn live_runtime_package_probe_covers_bootstrap_core_tools() {
         assert_eq!(
             live_runtime_package_probe_paths("bash"),
@@ -402,7 +432,11 @@ mod tests {
             live_runtime_soname("libm.so.6(GLIBC_2.2.5)(64bit)"),
             Some("libm.so.6")
         );
-        assert_eq!(live_runtime_soname("libfoo.so.1()(64bit)"), None);
+        assert_eq!(
+            live_runtime_soname("libfoo.so.1()(64bit)"),
+            Some("libfoo.so.1")
+        );
+        assert_eq!(live_runtime_soname("libfoo"), None);
         assert!(!live_runtime_soname_probe_paths("libcrypto.so.3").is_empty());
         assert!(!live_runtime_soname_probe_paths("libgcc_s.so.1").is_empty());
         assert!(!live_runtime_soname_probe_paths("libpam.so.0").is_empty());
