@@ -5,6 +5,7 @@ use crate::ccs::legacy_scriptlets::{
     DecisionCounts, LegacyScriptletBundle, LegacyScriptletEntry, PublicationPolicy,
     PublicationStatus, ScriptletDecision, ScriptletFidelity, TargetCompatibility,
 };
+use crate::ccs::security_policy::SecurityPolicyIntent;
 use std::collections::BTreeSet;
 
 impl ScriptletBundleSummary {
@@ -38,17 +39,7 @@ pub(super) fn summary_from_bundle(
         .iter()
         .flat_map(|entry| entry.boot_security_intents.iter().cloned())
         .collect::<Vec<_>>();
-    let security_policy_intents = bundle
-        .security_policy_intents
-        .iter()
-        .chain(
-            bundle
-                .entries
-                .iter()
-                .flat_map(|entry| entry.security_policy_intents.iter()),
-        )
-        .cloned()
-        .collect::<Vec<_>>();
+    let security_policy_intents = merged_security_policy_intents(bundle);
 
     ScriptletBundleSummary {
         scriptlet_fidelity: bundle.scriptlet_fidelity.as_str().to_string(),
@@ -70,6 +61,20 @@ pub(super) fn summary_from_bundle(
         security_policy_intents,
         review_artifact_path: None,
     }
+}
+
+fn merged_security_policy_intents(bundle: &LegacyScriptletBundle) -> Vec<SecurityPolicyIntent> {
+    let mut intents = bundle.security_policy_intents.clone();
+    for intent in bundle
+        .entries
+        .iter()
+        .flat_map(|entry| entry.security_policy_intents.iter())
+    {
+        if !intents.contains(intent) {
+            intents.push(intent.clone());
+        }
+    }
+    intents
 }
 
 fn sorted_entry_reason_codes(bundle: &LegacyScriptletBundle, decision: &str) -> Vec<String> {
@@ -151,6 +156,35 @@ mod tests {
     use super::super::test_support::{bundle_for_metadata, package_metadata};
     use super::super::{ScriptletBundleSummary, ScriptletDecisionCountsSummary};
     use crate::ccs::convert::effects::ScriptletClassificationReport;
+    use crate::ccs::security_policy::{
+        SECURITY_POLICY_INTENT_SCHEMA_V1, SecurityPolicyFallback, SecurityPolicyIntent,
+        SecurityPolicyPayloadEvidence, SecurityPolicyProvider, SecurityPolicyReconciliation,
+        SecurityPolicyReconciliationState, SecurityPolicyRequirements, SecurityPolicyScope,
+        SecurityPolicySource,
+    };
+    use crate::packages::traits::{Scriptlet, ScriptletPhase};
+    use std::collections::BTreeMap;
+
+    fn test_intent(id: &str, operation: &str) -> SecurityPolicyIntent {
+        SecurityPolicyIntent {
+            schema: SECURITY_POLICY_INTENT_SCHEMA_V1.to_string(),
+            id: id.to_string(),
+            source: SecurityPolicySource::default(),
+            provider: SecurityPolicyProvider::Selinux,
+            operation: operation.to_string(),
+            scope: SecurityPolicyScope::default(),
+            desired_state: BTreeMap::new(),
+            requirements: SecurityPolicyRequirements::default(),
+            fallback: SecurityPolicyFallback::Dormant,
+            payload_evidence: SecurityPolicyPayloadEvidence::default(),
+            reconciliation: SecurityPolicyReconciliation {
+                state: SecurityPolicyReconciliationState::Pending,
+                reason: None,
+                target_provider: None,
+            },
+            extra: BTreeMap::new(),
+        }
+    }
 
     #[test]
     fn scriptlet_bundle_summary_defaults_match_legacy_rows() {
@@ -214,5 +248,48 @@ mod tests {
             Some(crate::hash::sha256_prefixed(b"x"))
         );
         assert_eq!(summary.review_artifact_path, None);
+    }
+
+    #[test]
+    fn scriptlet_bundle_summary_preserves_entry_only_intents_alongside_bundle_mirrors() {
+        let mut metadata = package_metadata("security-policy-summary", "1.0");
+        metadata.scriptlets.push(Scriptlet {
+            phase: ScriptletPhase::PostInstall,
+            interpreter: "/bin/sh".to_string(),
+            content: "echo summary\n".to_string(),
+            flags: None,
+        });
+        let classification = ScriptletClassificationReport::default();
+        let mut build = bundle_for_metadata(&metadata, &[], &classification).unwrap();
+
+        let mirrored_intent = test_intent(
+            "scriptlet:0:post-install:selinux-label-refresh",
+            "label-refresh",
+        );
+        let entry_only_intent =
+            test_intent("scriptlet:0:post-install:selinux-boolean", "boolean-set");
+
+        build.bundle.security_policy_intents = vec![mirrored_intent.clone()];
+        build.bundle.entries[0].security_policy_intents =
+            vec![mirrored_intent, entry_only_intent.clone()];
+
+        let summary = ScriptletBundleSummary::from_bundle(
+            &build.bundle,
+            build.bundle.evidence_digest.clone(),
+        );
+
+        assert_eq!(summary.security_policy_intents.len(), 2);
+        assert!(
+            summary
+                .security_policy_intents
+                .iter()
+                .any(|intent| intent.id == "scriptlet:0:post-install:selinux-label-refresh")
+        );
+        assert!(
+            summary
+                .security_policy_intents
+                .iter()
+                .any(|intent| intent == &entry_only_intent)
+        );
     }
 }

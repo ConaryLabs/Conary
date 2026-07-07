@@ -37,6 +37,7 @@ pub mod legacy_provenance;
 pub mod mock;
 pub mod payload_hints;
 pub mod scriptlet_bundle;
+mod security_policy;
 mod selinux_adapters;
 pub mod support_matrix;
 

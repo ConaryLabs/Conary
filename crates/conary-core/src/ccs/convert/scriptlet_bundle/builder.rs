@@ -27,6 +27,10 @@ pub fn build_legacy_scriptlet_bundle(
         .map(str::to_string);
 
     let entries = build_entries(&input)?;
+    let security_policy_intents = entries
+        .iter()
+        .flat_map(|entry| entry.security_policy_intents.iter().cloned())
+        .collect::<Vec<_>>();
     let decision_counts = decision_counts(&entries);
     let (scriptlet_fidelity, target_compatibility, publication_policy, publication_status) =
         aggregate_status(&entries, &decision_counts);
@@ -57,7 +61,7 @@ pub fn build_legacy_scriptlet_bundle(
         scriptlet_fidelity,
         decision_counts,
         unsupported_class_counts: input.classification.unsupported_class_counts.clone(),
-        security_policy_intents: Vec::new(),
+        security_policy_intents,
         entries,
         extra: BTreeMap::new(),
     };

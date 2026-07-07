@@ -1,5 +1,6 @@
 // conary-core/src/ccs/convert/scriptlet_bundle/entries.rs
 
+use super::super::security_policy::policy_intents_from_effects;
 use super::classification::{classification_entries_for, classify_entry};
 use super::format_metadata::project_format_metadata;
 use super::native_contracts::{
@@ -48,6 +49,7 @@ fn build_flat_entry(
     let lifecycle_paths = vec![phase.as_str().to_string()];
     let classifications = classification_entries_for(report, &id);
     let outcome = classify_entry(&classifications, &NativeScriptletSupport::Parsed);
+    let security_policy_intents = policy_intents_from_effects(&id, &outcome.effects);
     let body_bytes = scriptlet.content.as_bytes();
 
     Ok(LegacyScriptletEntry {
@@ -78,7 +80,7 @@ fn build_flat_entry(
         unknown_commands: outcome.unknown_commands,
         blocked_classes: outcome.blocked_classes,
         boot_security_intents: outcome.boot_security_intents,
-        security_policy_intents: Vec::new(),
+        security_policy_intents,
         rpm_trigger: None,
         deb_maintainer: None,
         arch_install: None,
@@ -99,6 +101,7 @@ fn build_native_entry(
             native.support.clone()
         };
     let outcome = classify_entry(&classifications, &effective_support);
+    let security_policy_intents = policy_intents_from_effects(&native.id, &outcome.effects);
     let phase = phase_from_native_lifecycle(native.primary_lifecycle);
     let lifecycle_paths = native_lifecycle_paths(native);
     let (body, body_encoding) = encoded_native_body(&native.body);
@@ -135,7 +138,7 @@ fn build_native_entry(
         unknown_commands: outcome.unknown_commands,
         blocked_classes: outcome.blocked_classes,
         boot_security_intents: outcome.boot_security_intents,
-        security_policy_intents: Vec::new(),
+        security_policy_intents,
         rpm_trigger,
         deb_maintainer,
         arch_install,
@@ -159,8 +162,10 @@ fn deferred_native_support_is_fully_adapter_covered(
 
 #[cfg(test)]
 mod tests {
+    use super::super::ScriptletBundleSummary;
     use super::super::test_support::{
-        bundle_for_metadata, complete_effect, native_entry_with_body, package_metadata,
+        bundle_for_metadata, complete_effect, known_report_with_effect, native_entry_with_body,
+        package_metadata,
     };
     use crate::ccs::convert::effects::{ScriptletClassification, ScriptletClassificationReport};
     use crate::ccs::legacy_scriptlets::{
@@ -452,5 +457,55 @@ mod tests {
         assert_eq!(deferred.reason_code, "rpm-verify-scriptlet-deferred");
         assert_eq!(unpreservable.decision, ScriptletDecision::Blocked);
         assert_eq!(unpreservable.reason_code, "native-abi-parser-limitation");
+    }
+
+    #[test]
+    fn selinux_policy_effects_project_generic_policy_intent() {
+        let mut metadata = package_metadata("selinux-generic-intent", "1.0");
+        metadata.scriptlets.push(Scriptlet {
+            phase: ScriptletPhase::PostInstall,
+            interpreter: "/bin/sh".to_string(),
+            content: "restorecon -R /usr/share/demo\n".to_string(),
+            flags: None,
+        });
+
+        let mut effect = complete_effect("selinux-label-refresh", "restorecon");
+        effect.adapter_id = Some("selinux-policy/v1".to_string());
+        effect.args = vec!["-R".to_string(), "/usr/share/demo".to_string()];
+        effect.path = Some("/usr/share/demo".to_string());
+        effect.extra.insert(
+            "selinux_operation".to_string(),
+            toml::Value::String("label-refresh".to_string()),
+        );
+        effect
+            .extra
+            .insert("recursive".to_string(), toml::Value::Boolean(true));
+        effect
+            .extra
+            .insert("payload_backed".to_string(), toml::Value::Boolean(true));
+        effect.extra.insert(
+            "paths".to_string(),
+            toml::Value::Array(vec![toml::Value::String("/usr/share/demo".to_string())]),
+        );
+
+        let classification = known_report_with_effect(effect);
+        let build = bundle_for_metadata(&metadata, &[], &classification).unwrap();
+        let entry = &build.bundle.entries[0];
+
+        assert_eq!(entry.security_policy_intents.len(), 1);
+        let intent = &entry.security_policy_intents[0];
+        assert_eq!(intent.provider.as_str(), "selinux");
+        assert_eq!(intent.operation, "label-refresh");
+        assert_eq!(intent.scope.kind, "path");
+        assert_eq!(intent.scope.paths, vec!["/usr/share/demo"]);
+        assert_eq!(intent.payload_evidence.payload_backed, true);
+        assert_eq!(intent.fallback.as_str(), "dormant");
+        assert_eq!(intent.reconciliation.state.as_str(), "pending");
+
+        let summary = ScriptletBundleSummary::from_bundle(
+            &build.bundle,
+            build.bundle.evidence_digest.clone(),
+        );
+        assert_eq!(summary.security_policy_intents.len(), 1);
     }
 }

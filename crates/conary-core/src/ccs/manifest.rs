@@ -1520,8 +1520,14 @@ state = "pending"
         let bundle = manifest.legacy_scriptlets.as_ref().unwrap();
 
         assert_eq!(bundle.security_policy_intents.len(), 1);
-        assert_eq!(bundle.security_policy_intents[0].provider.as_str(), "selinux");
-        assert_eq!(bundle.security_policy_intents[0].fallback.as_str(), "dormant");
+        assert_eq!(
+            bundle.security_policy_intents[0].provider.as_str(),
+            "selinux"
+        );
+        assert_eq!(
+            bundle.security_policy_intents[0].fallback.as_str(),
+            "dormant"
+        );
         assert_eq!(bundle.entries[0].security_policy_intents.len(), 1);
 
         let encoded = manifest.to_toml().expect("serialize manifest");
