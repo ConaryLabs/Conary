@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v0.10.0] - 2026-07-07
+
+### Other
+- fix(install): satisfy live soname deps in adopt mode
+- feat(remi): add scriptlet evidence queue
+- fix(scriptlets): surface boot security refusals
+- test(ccs): add m4e lifecycle proof corpus
+- fix(ccs): validate v2 writer structurally
+- fix(ccs): validate v2 debug projection structurally
+- feat(ccs): project lifecycle authority for profiles
+- feat(ccs): validate lifecycle authoring by target profile
+- feat(ccs): add config native authoring projection
+- fix(install): accept capability approval flag
+- docs(release): refresh tester loop for v0.9.2
 ## [v0.9.2] - 2026-07-03
 
 ### Security
