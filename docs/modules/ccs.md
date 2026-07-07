@@ -76,10 +76,15 @@ replay policy, and target compatibility checks. Declarative manifest hooks are
 emitted only from adapter-backed or curated evidence; text-pattern detections
 remain advisory metadata for review diagnostics. Remaining scripts are
 preserved for guarded local replay or review when they cannot be safely
-captured. Supported SELinux scriptlet forms are modeled as optional policy
-intent through `selinux-policy/v1`, so Fedora-origin policy declarations can be
-portable to Arch or Debian targets without requiring SELinux on those targets.
-Tracks conversion fidelity (High/Medium/Low) via `FidelityReport`.
+captured. Supported SELinux scriptlet forms are modeled as
+`selinux-policy/v1` effects and bridged into generic `SecurityPolicyIntent`
+metadata, so Fedora-origin policy declarations can be portable to Arch or
+Debian targets without requiring SELinux on those targets. Generic intent
+records provider, operation, scope, fallback, payload evidence, and
+reconciliation state while preserving provider-specific effect evidence.
+AppArmor helper calls are review-only generic policy intent until a
+payload-backed AppArmor adapter proves profile install, reload, and mode
+semantics. Tracks conversion fidelity (High/Medium/Low) via `FidelityReport`.
 
 **legacy_scriptlets.rs** -- Versioned metadata for converted package scriptlet
 semantics and local replay planning. The v1 bundle lives in the TOML manifest as

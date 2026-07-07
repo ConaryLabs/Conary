@@ -72,15 +72,19 @@ converted row is stored. Existing rows can be materialized with
 without startup backfill. Admins can list clusters, inspect detail, update
 triage state, add private maintainer notes, and export private or
 `public-sanitized` packets through the `/v1/admin/scriptlet-evidence/*` route
-family. Detail responses expose review-artifact availability and staleness,
-never raw local review artifact paths. Private packets include sanitized
-artifact references for maintainer follow-up; `public-sanitized` packets omit
-review artifacts and private notes.
+family. Queue samples include sanitized generic LSM `security_policy_intents`
+when conversion can type SELinux or AppArmor helper behavior, and the queue
+uses those records for adapter planning and public/private packet export.
+Detail responses expose review-artifact availability and staleness, never raw
+local review artifact paths. Private packets include sanitized artifact
+references for maintainer follow-up; `public-sanitized` packets omit review
+artifacts and private notes.
 
 The queue is not publication authority. Moving a cluster to
 `covered-public-ready` records maintainer workflow state only; it does not
 rewrite `converted_packages.publication_status`, make blocked rows public, call
-LLM services, or create a public issue tracker.
+LLM services, create a public issue tracker, or otherwise make a package
+public.
 
 ### Legacy Scriptlet Publication Gate
 
