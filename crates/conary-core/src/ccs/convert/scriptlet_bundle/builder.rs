@@ -57,6 +57,7 @@ pub fn build_legacy_scriptlet_bundle(
         scriptlet_fidelity,
         decision_counts,
         unsupported_class_counts: input.classification.unsupported_class_counts.clone(),
+        security_policy_intents: Vec::new(),
         entries,
         extra: BTreeMap::new(),
     };

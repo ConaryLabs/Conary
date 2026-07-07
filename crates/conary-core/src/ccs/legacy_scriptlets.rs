@@ -1,6 +1,7 @@
 // conary-core/src/ccs/legacy_scriptlets.rs
 //! Passive Legacy Scriptlet Semantics Bundle metadata for CCS packages.
 
+use crate::ccs::security_policy::SecurityPolicyIntent;
 use anyhow::{anyhow, bail};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::{BTreeMap, BTreeSet};
@@ -256,6 +257,8 @@ pub struct LegacyScriptletBundle {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub unsupported_class_counts: BTreeMap<String, u32>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub security_policy_intents: Vec<SecurityPolicyIntent>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub entries: Vec<LegacyScriptletEntry>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, toml::Value>,
@@ -310,6 +313,8 @@ pub struct LegacyScriptletEntry {
     pub blocked_classes: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub boot_security_intents: Vec<BootSecurityIntentEvidence>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub security_policy_intents: Vec<SecurityPolicyIntent>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rpm_trigger: Option<RpmTriggerMetadata>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -773,6 +778,7 @@ mod tests {
             unknown_commands: vec![],
             blocked_classes: vec![],
             boot_security_intents: Vec::new(),
+            security_policy_intents: Vec::new(),
             rpm_trigger: None,
             deb_maintainer: None,
             arch_install: None,
@@ -826,6 +832,7 @@ mod tests {
                 extra: BTreeMap::new(),
             },
             unsupported_class_counts: BTreeMap::new(),
+            security_policy_intents: Vec::new(),
             entries: vec![
                 sample_entry("rpm:%preun", ScriptletDecision::Replaced, "ldconfig\n"),
                 sample_entry(

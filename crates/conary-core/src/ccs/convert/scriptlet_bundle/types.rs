@@ -2,6 +2,7 @@
 
 use crate::ccs::convert::effects::ScriptletClassificationReport;
 use crate::ccs::legacy_scriptlets::{BootSecurityIntentEvidence, LegacyScriptletBundle};
+use crate::ccs::security_policy::SecurityPolicyIntent;
 use crate::packages::common::PackageMetadata;
 use crate::packages::traits::ExtractedFile;
 use serde::{Deserialize, Serialize};
@@ -43,6 +44,8 @@ pub struct ScriptletBundleSummary {
     pub blocked_classes: Vec<String>,
     #[serde(default)]
     pub boot_security_intents: Vec<BootSecurityIntentEvidence>,
+    #[serde(default)]
+    pub security_policy_intents: Vec<SecurityPolicyIntent>,
     #[serde(default, skip_serializing)]
     pub review_artifact_path: Option<String>,
 }
@@ -61,6 +64,7 @@ impl Default for ScriptletBundleSummary {
             unknown_commands: Vec::new(),
             blocked_classes: Vec::new(),
             boot_security_intents: Vec::new(),
+            security_policy_intents: Vec::new(),
             review_artifact_path: None,
         }
     }

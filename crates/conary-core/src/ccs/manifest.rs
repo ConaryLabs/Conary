@@ -1402,6 +1402,144 @@ replacement = "complete"
     }
 
     #[test]
+    fn manifest_toml_round_trips_generic_security_policy_intent() {
+        let body_sha256 = crate::hash::sha256_prefixed(b"restorecon /usr/share/demo\n");
+        let toml = format!(
+            r#"
+[package]
+name = "demo-policy"
+version = "1.0.0"
+description = "policy fixture"
+
+[legacy_scriptlets]
+schema = "conary.legacy-scriptlets.v1"
+schema_revision = 1
+source_format = "rpm"
+source_family = "rpm"
+source_distro = "fedora"
+source_release = "44"
+source_arch = "x86_64"
+source_package = "demo-policy"
+source_version = "1.0.0-1.fc44"
+version_scheme = "rpm"
+conversion_tool = "remi"
+conversion_tool_version = "0.10.1"
+conversion_policy = "passive-scriptlet-bundle-goal4"
+target_compatibility = "conary-portable"
+foreign_replay_policy = "deny"
+publication_policy = "public-if-no-blocked"
+publication_status = "public"
+scriptlet_fidelity = "fully-replaced"
+
+[legacy_scriptlets.decision_counts]
+replaced = 1
+
+[[legacy_scriptlets.security_policy_intents]]
+schema = "conary.security-policy-intent.v1"
+id = "rpm:%post:selinux-label-refresh"
+provider = "selinux"
+operation = "label-refresh"
+fallback = "dormant"
+
+[legacy_scriptlets.security_policy_intents.source]
+source_format = "rpm"
+source_distro = "fedora"
+entry_id = "rpm:%post"
+command = "restorecon"
+argv = ["-R", "/usr/share/demo"]
+adapter_id = "selinux-policy/v1"
+
+[legacy_scriptlets.security_policy_intents.scope]
+kind = "path"
+paths = ["/usr/share/demo"]
+
+[legacy_scriptlets.security_policy_intents.desired_state]
+recursive = true
+
+[legacy_scriptlets.security_policy_intents.requirements]
+required_on_active_provider = false
+tools = ["restorecon"]
+
+[legacy_scriptlets.security_policy_intents.payload_evidence]
+payload_backed = true
+paths = ["/usr/share/demo"]
+
+[legacy_scriptlets.security_policy_intents.reconciliation]
+state = "pending"
+
+[[legacy_scriptlets.entries]]
+id = "rpm:%post"
+native_slot = "%post"
+phase = "post-install"
+lifecycle_paths = ["post-install"]
+interpreter = "/bin/sh"
+body_sha256 = "{body_sha256}"
+body = "restorecon /usr/share/demo\n"
+native_invocation = {{ args = [], environment = [] }}
+transaction_order = {{ position = "after-payload" }}
+timeout_ms = 30000
+decision = "replaced"
+reason_code = "helper-complete-selinux-policy"
+
+[[legacy_scriptlets.entries.security_policy_intents]]
+schema = "conary.security-policy-intent.v1"
+id = "rpm:%post:selinux-label-refresh"
+provider = "selinux"
+operation = "label-refresh"
+fallback = "dormant"
+
+[legacy_scriptlets.entries.security_policy_intents.source]
+source_format = "rpm"
+source_distro = "fedora"
+entry_id = "rpm:%post"
+command = "restorecon"
+argv = ["-R", "/usr/share/demo"]
+adapter_id = "selinux-policy/v1"
+
+[legacy_scriptlets.entries.security_policy_intents.scope]
+kind = "path"
+paths = ["/usr/share/demo"]
+
+[legacy_scriptlets.entries.security_policy_intents.desired_state]
+recursive = true
+
+[legacy_scriptlets.entries.security_policy_intents.requirements]
+required_on_active_provider = false
+tools = ["restorecon"]
+
+[legacy_scriptlets.entries.security_policy_intents.payload_evidence]
+payload_backed = true
+paths = ["/usr/share/demo"]
+
+[legacy_scriptlets.entries.security_policy_intents.reconciliation]
+state = "pending"
+"#
+        );
+
+        let manifest = CcsManifest::parse(&toml).expect("parse manifest");
+        let bundle = manifest.legacy_scriptlets.as_ref().unwrap();
+
+        assert_eq!(bundle.security_policy_intents.len(), 1);
+        assert_eq!(bundle.security_policy_intents[0].provider.as_str(), "selinux");
+        assert_eq!(bundle.security_policy_intents[0].fallback.as_str(), "dormant");
+        assert_eq!(bundle.entries[0].security_policy_intents.len(), 1);
+
+        let encoded = manifest.to_toml().expect("serialize manifest");
+        assert!(encoded.contains("[[legacy_scriptlets.security_policy_intents]]"));
+        assert!(encoded.contains("[[legacy_scriptlets.entries.security_policy_intents]]"));
+
+        let decoded = CcsManifest::parse(&encoded).expect("parse serialized manifest");
+        let decoded_bundle = decoded.legacy_scriptlets.as_ref().unwrap();
+        assert_eq!(
+            decoded_bundle.security_policy_intents[0]
+                .reconciliation
+                .state
+                .as_str(),
+            "pending"
+        );
+    }
+
+    #[test]
     fn manifest_validation_rejects_invalid_legacy_scriptlet_bundle() {
         let body_sha256 = crate::hash::sha256_prefixed(b"ldconfig");
         let toml = manifest_with_legacy_scriptlet_bundle("ldconfig && echo tampered", &body_sha256);

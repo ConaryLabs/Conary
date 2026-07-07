@@ -496,6 +496,7 @@ license = "MIT"
                 extra: BTreeMap::new(),
             },
             unsupported_class_counts: BTreeMap::new(),
+            security_policy_intents: Vec::new(),
             entries: vec![LegacyScriptletEntry {
                 id: "rpm:%post".to_string(),
                 native_slot: "%post".to_string(),
@@ -543,6 +544,7 @@ license = "MIT"
                 unknown_commands: vec![],
                 blocked_classes: vec![],
                 boot_security_intents: Vec::new(),
+                security_policy_intents: Vec::new(),
                 rpm_trigger: Some(RpmTriggerMetadata {
                     kind: "file-trigger".to_string(),
                     condition: Some("in".to_string()),

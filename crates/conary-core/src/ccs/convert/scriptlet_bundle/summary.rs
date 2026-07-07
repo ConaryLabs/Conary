@@ -38,6 +38,17 @@ pub(super) fn summary_from_bundle(
         .iter()
         .flat_map(|entry| entry.boot_security_intents.iter().cloned())
         .collect::<Vec<_>>();
+    let security_policy_intents = bundle
+        .security_policy_intents
+        .iter()
+        .chain(
+            bundle
+                .entries
+                .iter()
+                .flat_map(|entry| entry.security_policy_intents.iter()),
+        )
+        .cloned()
+        .collect::<Vec<_>>();
 
     ScriptletBundleSummary {
         scriptlet_fidelity: bundle.scriptlet_fidelity.as_str().to_string(),
@@ -56,6 +67,7 @@ pub(super) fn summary_from_bundle(
         unknown_commands,
         blocked_classes,
         boot_security_intents,
+        security_policy_intents,
         review_artifact_path: None,
     }
 }
@@ -158,7 +170,15 @@ mod tests {
         assert!(summary.unknown_commands.is_empty());
         assert!(summary.blocked_classes.is_empty());
         assert!(summary.boot_security_intents.is_empty());
+        assert!(summary.security_policy_intents.is_empty());
         assert_eq!(summary.review_artifact_path, None);
+    }
+
+    #[test]
+    fn scriptlet_bundle_summary_defaults_include_empty_security_policy_intents() {
+        let summary = ScriptletBundleSummary::default();
+
+        assert!(summary.security_policy_intents.is_empty());
     }
 
     #[test]

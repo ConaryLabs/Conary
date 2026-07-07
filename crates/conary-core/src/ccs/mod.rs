@@ -27,6 +27,7 @@ pub mod manifest;
 pub mod manifest_provenance;
 pub mod package;
 pub mod policy;
+pub mod security_policy;
 pub mod signing;
 pub mod target_compatibility;
 pub mod v2;
