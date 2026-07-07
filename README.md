@@ -2,145 +2,70 @@
 
 [![PR Gate](https://github.com/ConaryLabs/Conary/actions/workflows/pr-gate.yml/badge.svg)](https://github.com/ConaryLabs/Conary/actions/workflows/pr-gate.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![v0.9.2](https://img.shields.io/badge/version-0.9.2-orange.svg)](CHANGELOG.md)
+[![v0.10.1](https://img.shields.io/badge/version-0.10.1-orange.svg)](CHANGELOG.md)
 
 **Website:** [conary.io](https://conary.io) | **Packages:** [remi.conary.io](https://remi.conary.io) | **Discussions:** [GitHub Discussions](https://github.com/ConaryLabs/Conary/discussions)
 
-A cross-distribution Linux system manager with immutable generations, atomic transactions, content-addressable storage, and a declarative system model. Conary installs native RPM/DEB/Arch packages, builds and installs CCS packages, and layers a declarative system workflow on top.
+Conary is an early Linux system manager written in Rust. It can install
+native RPM, DEB, Arch, and CCS packages, record package transactions as
+changesets, adopt packages that already exist on a Fedora, Ubuntu, or Arch
+host, and build immutable system generations for rollback and image export.
 
-Inspired by the [original Conary](https://en.wikipedia.org/wiki/Conary_(package_manager)) from rPath, which pioneered concepts like troves, changesets, flavors, and components that were ahead of their time. This project carries those ideas forward with a modern implementation.
+The short-term goal is not to replace mature distro package managers. It is to
+make a safer path for trying Conary on an existing Linux system: observe or
+adopt native packages first, keep the native package manager authoritative
+until the user explicitly crosses that boundary, and collect real failure data
+from package installs that do not work yet.
 
-This is an independent project, not a resurrection or continuation of the
-original rPath Conary codebase. It is not affiliated with, endorsed by, or
-maintained by rPath, SAS, or the original Conary developers.
+Inspired by the [original Conary](https://en.wikipedia.org/wiki/Conary_(package_manager))
+from rPath, but this is an independent project. It is not affiliated with,
+endorsed by, or maintained by rPath, SAS, or the original Conary developers.
 
-**Release status:** `v0.9.2` is the pinned adoption-led limited public preview for Fedora 44, Ubuntu 26.04 LTS, and Arch Linux. The package-manager preview surface is the CLI install/remove/update path, native-package adoption/unadoption, selected-generation native-authority handoff, Remi conversion, and local validation for those flows. Immutable generations and raw/qcow2 generation export remain core capabilities, and the refreshed 2026-05-21 Group O QEMU run passed installed-runtime and bootstrap-run generation export boot proof. The codebase now also has x86_64 UEFI ISO generation-carrier export with output provenance sidecars, and the focused 2026-05-21 Group P QEMU run passed ISO export, host copy-back, provenance, readonly-carrier boot, and writable `/etc` overlay proof. The public ask is still intentionally package-manager focused: in adoption mode, dnf, apt, and pacman remain authoritative for packages they already own; `conary system unadopt --all --yes` is the non-destructive escape hatch on hosts without a selected Conary generation, and `conary system native-handoff --yes` is the staged handoff path after a Conary generation has been selected. Conary-owned updates work without requiring a selected generation, adopted packages are skipped unless takeover is explicit, and `update --security` refuses before mutation when a requested Conary-owned source cannot prove advisory metadata support. Repositories marked `--security-advisories supported` can now drive security-only updates from trusted JSON advisory metadata with persisted advisory ID, CVE, severity, fixed-version, and source-trust data. Takeover remains explicit, native transaction-history import remains out of scope, and non-x86_64 generation boot assets remain reserved.
+## Early Preview Warning
 
-Release artifact and provenance expectations for the limited preview are tracked in [docs/operations/release-artifact-matrix.md](docs/operations/release-artifact-matrix.md).
+Conary is still early. Expect failures.
 
----
+Use a VM or disposable host first. The current public preview is useful for
+testing adoption, Remi package conversion, simple installs such as `htop`,
+transaction history, and self-update. It is not ready to run a critical system
+unattended.
 
-## Why Conary
+The most important failure class right now is package scriptlets. Remi converts
+packages from upstream Fedora, Ubuntu, and Arch repositories into CCS, but many
+real packages run maintainer scripts for systemd, triggers, users/groups,
+SELinux, alternatives, caches, and other host integration. Some of those paths
+are native-free and install cleanly. Others are queued for scriptlet review,
+blocked by conservative policy, or still expose bugs. That is expected during
+the preview, and those failures are the data we need.
 
-**Immutable system generations.** Build read-only EROFS images of your entire system and mount them via composefs. Select complete system states for the next boot or export them as bootable raw/qcow2 artifacts or x86_64 UEFI ISO generation carriers. Exportable runtime generations are self-contained CAS-backed snapshots -- rollback means switching a generation, not undoing thousands of file operations.
+If you hit a failure, capture the command, distro, package name, Conary
+version, and any refusal text. For first-wave testing, use the
+[agent-assisted tester loop](docs/guides/agent-assisted-tester-loop.md) and
+attach only a reviewed support bundle.
 
-```bash
-conary system generation build --summary "After nginx setup" --yes
-conary system generation list
-conary system generation switch 2 --yes
-conary system generation rollback --yes
-```
+## Try It
 
-**Atomic package state and generation selection.** Install, remove, and update operations commit package DB/file state as changesets, and generation rollback switches complete system states. Legacy RPM/DEB/Arch post-scriptlets can still fail after package files are installed or removed only when protected setup succeeded and the script process itself exited nonzero; Conary records those cases as `scriptlet_warning` metadata and marks them in history rather than treating scriptlet side effects as part of the same rollback boundary.
+Download the pinned preview release from
+[v0.10.1](https://github.com/ConaryLabs/Conary/releases/tag/v0.10.1), verify
+`SHA256SUMS`, and install the package for your test VM. Release artifact
+expectations are tracked in
+[docs/operations/release-artifact-matrix.md](docs/operations/release-artifact-matrix.md).
 
-```bash
-conary install nginx postgresql redis --yes
-conary system state list
-conary system state revert 5 --yes
-```
-
-**Format-agnostic.** RPM, DEB, Arch packages, and Conary's native CCS format are all first-class. One tool handles them all.
-
-```bash
-conary install ./package.rpm --yes
-conary install ./package.deb --yes
-conary install ./package.pkg.tar.zst --yes
-```
-
-**Declarative state.** Define your system in TOML and let Conary compute the diff. Drift detection, state snapshots, and full rollback come built in.
-
-```bash
-conary model diff     # What needs to change?
-conary model apply --yes # Make it so
-conary model check    # Drift detection (CI/CD friendly, uses exit codes)
-```
-
-**Cross-distro package access on day one.** Remi, the on-demand conversion proxy at [remi.conary.io](https://remi.conary.io), converts supported Fedora 44, Ubuntu 26.04 LTS, and Arch upstream packages into CCS format. Public serving is limited to converted artifacts whose scriptlets are native-free or fully replaced by adapter-backed evidence. No upstream changes are required to start using Conary against the supported upstream repositories.
-
-```bash
-conary repo add remi https://remi.conary.io
-conary repo sync
-conary install nginx --yes
-```
-
-**Current focus: limited public preview readiness.** The core install, rollback, generation, bootstrap, and server paths are in place. The preview path is now adopt-first: users can let Conary observe existing RPM/DEB/Arch packages while the native package manager remains the authority, optionally CAS-back them with full adoption, then unadopt without deleting package files if they decide not to continue. Remote Forge validation is paused pending a new KVM-capable runner; QEMU release evidence should come from `scripts/local-qemu-validation.sh` on a local machine with `/dev/kvm`.
-
-For first-wave feedback, collect an allowlist-only local support bundle with `bash scripts/conary-support-bundle.sh target/conary-support-bundle`, review it, and attach only the reviewed output to the beta feedback or bug template.
-
----
-
-## How It Compares
-
-| Capability | apt/dnf | pacman | Nix | Conary |
-|---|---|---|---|---|
-| Immutable generations | No | No | Yes (generations) | Yes (EROFS + composefs) |
-| Package-state transaction boundary | No | No | Yes | Yes |
-| Bootable generation rollback | No | No | Yes | Yes |
-| Native distro adoption/unadoption | No | No | No | Yes |
-| Rollback to any state | No | No | Yes (generations) | Yes (snapshots + generations) |
-| Explicit system takeover | No | No | No | Yes (partial) |
-| Bootstrap from scratch | No | No | Yes | Yes (partial) |
-| Multi-format (RPM + DEB + Arch) | No | No | No | Yes |
-| Derived packages | No | No | Yes (overlays) | Yes |
-| Component model (install :devel only) | No | Split packages | No | Automatic |
-| Declarative system state | No | No | Yes (flake.nix) | Yes (system.toml) |
-| Content-addressable storage | No | No | Yes | Yes |
-| Hermetic builds | No | No | Yes | Partial (experimental) |
-| Dev shells | No | No | Yes | Yes |
-| CCS package OCI export | No | No | Yes | Yes (experimental) |
-| Capability enforcement (landlock/seccomp) | No | No | No | Yes |
-| Scriptlet sandboxing | No | No | N/A | Yes |
-| Single binary, no daemon required | Yes | Yes | No | Yes |
-| Mature ecosystem | Yes | Yes | Yes | No (early) |
-| Package count | 60K+ | 15K+ | 100K+ | Via conversion |
-
-If you already run NixOS and like it, Conary is probably not trying to pull you away. Conary's near-term bet is different: keep Fedora, Ubuntu, or Arch as the base system, let Conary adopt and CAS-back what is already installed, and move into Conary-owned generations only when the user explicitly chooses that authority boundary. The trade-off is maturity and package count; Nix wins there today. Conary wins only if the migration path is safer and easier to try.
-
-The honest gap: ecosystem maturity. apt and dnf have decades of packages and integration. Conary bridges this through format conversion (install .rpm/.deb/.pkg.tar.zst directly) and the Remi server (which converts upstream repos to CCS on the fly), but native CCS packages are still early. Immutable generations and raw/qcow2/ISO export are working on x86_64 generation artifacts, OCI export uses the same generation artifact source, and signed portable bundles remain active follow-up work.
-
----
-
-## Quick Start
-
-### Five-Minute Preview
-
-Before starting, skim the [compatibility checklist](docs/guides/compatibility-checklist.md) -- the basic package loop runs on stock kernels; only generation-model features need more.
-
-Use this path on a VM or non-critical host first. Download the matching
-`v0.9.2` package from the
-[GitHub release](https://github.com/ConaryLabs/Conary/releases/tag/v0.9.2),
-verify `SHA256SUMS`, and install it with the native package tool for that VM.
-The preview publishes a Fedora 44 RPM, Ubuntu 26.04 LTS DEB, Arch package, CCS
-package, checksum file, and detached CCS signature. The
-[agent-assisted tester loop](docs/guides/agent-assisted-tester-loop.md) has the
-distro-specific install and transcript-capture commands.
+Then try the smallest package loop:
 
 ```bash
 conary system init
 conary repo add remi https://remi.conary.io
 conary repo sync
-conary system adopt --system --dry-run
-conary system adopt --status
+conary install htop --dry-run
+conary install htop --yes
+conary list htop --info
 ```
 
-If `system init` fails, the error names the database parent and runtime root to
-check before retrying. The safe first move is to choose a writable `--db-path`
-for tests or fix the named directory; do not remove an existing `/conary` tree
-unless you have confirmed it is disposable. `system init` does not build a
-generation, so composefs/kernel prerequisites are checked by the generation and
-takeover commands that need them. Budget disk space before full adoption or
-generation work, especially when copying package files into CAS.
-
-The first install or dry-run that needs a package not already publicly
-converted by Remi may spend extra time converting upstream RPM/DEB/Arch metadata
-into CCS. That cold-start latency is expected during the limited preview; reruns
-should be faster once the conversion cache is warm. Conversions that require
-legacy replay, review, or blocking are retained as private server state rather
-than advertised as ordinary ready-to-install packages.
-
-When you are ready to test the reversible adoption apply path on that host:
+To test reversible adoption without handing package ownership to Conary:
 
 ```bash
+conary system adopt --system --dry-run
 conary system adopt --system --yes
 conary system adopt --status
 conary system unadopt --all --dry-run
@@ -148,595 +73,143 @@ conary system unadopt --all --yes
 ```
 
 Commands that change packages, files, generation state, or selected native
-authority use command-local apply intent. Preview with `--dry-run` when
-available, then rerun the specific apply command with `--yes` once you are
-ready to change the active host. Before selecting a Conary generation,
-`conary system unadopt --all --yes` removes Conary tracking without deleting
-native package files.
+authority require command-local apply intent with `--yes`. Use `--dry-run`
+first when the command supports it.
 
-### Developer Build
+## What Works Today
+
+- Package-manager preview on Fedora 44, Ubuntu 26.04 LTS, and Arch Linux.
+- Native package adoption and non-destructive unadoption.
+- Installing CCS packages and converted RPM/DEB/Arch packages when dependency
+  and scriptlet policy allow it.
+- Atomic package-state changesets, history, and rollback-oriented state
+  tracking.
+- Immutable EROFS/composefs generations on hosts with the needed kernel and
+  tooling.
+- Raw, qcow2, and x86_64 UEFI ISO generation export for validation workflows.
+- Remi on-demand conversion, package search, sparse metadata, and public
+  release/self-update serving.
+
+## What Will Break
+
+- Many scriptlet-heavy packages still need review or adapter work.
+- Critical system packages and packages requiring privileged runtime
+  capabilities may be refused before conversion.
+- Security-only updates fail closed unless a repository declares trusted
+  advisory metadata support.
+- Native transaction-history import is not implemented.
+- Non-x86_64 generation boot assets are still reserved.
+- SBOM/provenance sidecars are not published for every preview artifact yet.
+
+## Common Commands
 
 ```bash
-# Build from source (requires Rust 1.96+, Linux only)
-git clone https://github.com/ConaryLabs/Conary.git
-cd Conary
-cargo build -p conary
+# Install and inspect packages
+conary install nginx --dry-run
+conary install nginx --yes
+conary list
+conary list nginx --info
+conary list nginx --files
+conary query depends nginx
+conary query whatprovides 'soname(libssl.so.3)'
 
-# Use the freshly built CLI directly from target/
-./target/debug/conary system init
+# Update Conary-owned packages
+conary update --dry-run
+conary update nginx --yes
 
-# Add the Remi package server (Fedora 44, Ubuntu 26.04 LTS, Arch)
-./target/debug/conary repo add remi https://remi.conary.io
-./target/debug/conary repo sync
-```
+# Build and select immutable generations
+conary system generation build --summary "After nginx setup" --yes
+conary system generation list
+conary system generation switch 1 --yes
+conary system generation rollback --yes
 
-Commands that mutate packages, files, generation state, or selected native authority require command-local apply intent with `--yes`; dry-run commands remain the safest first pass.
+# Export a generation artifact
+conary system generation export --path /conary/generations/1 --format qcow2 --output gen1.qcow2
+conary system generation export --path /conary/generations/1 --format iso --output gen1.iso
 
-```bash
-# Install a package
-./target/debug/conary install nginx --dry-run   # Preview changes
-./target/debug/conary install nginx --yes       # Apply atomically
-
-# Query your system
-./target/debug/conary list                      # All installed packages
-./target/debug/conary list nginx --info         # Installed package identity
-./target/debug/conary list nginx --files        # Installed files
-./target/debug/conary list --path /usr/sbin/nginx
-./target/debug/conary query depends nginx       # Show dependencies
-./target/debug/conary query whatprovides 'soname(libc.so.6)'
-./target/debug/conary query whatbreaks openssl
-# Add --version and/or --arch when multiple installed variants match.
-
-# Adopt packages already on the system; dnf/apt/pacman remain authoritative
-./target/debug/conary system adopt --system --dry-run
-./target/debug/conary system adopt --system # Track native packages
-
-# Optional escape hatch before a Conary generation is selected
-# ./target/debug/conary system unadopt --all --dry-run
-# ./target/debug/conary system unadopt --all --yes
-
-# Update only Conary-owned packages by default; adopted packages stay native-PM owned
-./target/debug/conary update --dry-run
-./target/debug/conary update nginx --yes
-
-# Security-only updates are fail-closed unless the requested source publishes advisories
-./target/debug/conary update --security --dry-run
-
-# Build a generation from current system state
-./target/debug/conary system generation build --summary "Initial setup" --yes
-./target/debug/conary system generation list
-./target/debug/conary system generation switch 1 --yes
+# Self-update the CLI
+conary self-update --check
+conary self-update
 ```
 
 The default `conary --help` shows the daily-driver commands. The full
-packaging/platform surface is listed by `conary --help-advanced` and
-described in [docs/guides/advanced-commands.md](docs/guides/advanced-commands.md).
+packaging/platform surface is listed by `conary --help-advanced` and in
+[docs/guides/advanced-commands.md](docs/guides/advanced-commands.md).
 
----
+## Architecture At A Glance
 
-## Features
+Conary is a virtual Rust workspace:
 
-### System Generations
+- `apps/conary`: package-manager CLI.
+- `crates/conary-core`: package metadata, repository sync, resolver,
+  transactions, scriptlets, database, CAS, generation, CCS, model, and
+  bootstrap logic.
+- `apps/remi`: public/admin package conversion and serving service.
+- `apps/conaryd`: local daemon with Unix-socket REST/SSE scaffolding.
+- `apps/conary-test`: integration-test harness.
+- `crates/conary-bootstrap`, `crates/conary-agent-contract`, and
+  `crates/conary-mcp`: shared runtime and automation support crates.
 
-Build immutable EROFS images of your entire system and mount them via composefs. Each generation is a complete, read-only system snapshot. Select generations for next boot, or export a complete generation artifact to raw/qcow2/ISO for QEMU and image validation. Old generations can be garbage collected to reclaim space.
+For the maintained architecture map, see
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-Requires Linux 6.2+ with composefs support.
+## Build From Source
 
-```bash
-conary system generation build --summary "Post-update" --yes
-conary system generation list        # Show all generations
-conary system generation switch 3 --yes    # Select generation 3 for next boot
-conary system generation rollback --yes    # Select previous generation for next boot
-conary system generation gc --keep 3 --yes # Keep only the 3 most recent
-conary system generation info 2      # Detailed info about generation 2
-conary system generation export --path /conary/generations/3 --format qcow2 --output gen3.qcow2
-conary system generation export --path /conary/generations/3 --format iso --output gen3.iso
-```
-
-When a package mutation commits but generation publication fails, Conary exits
-successfully for the package transaction and records pending publication debt.
-Run `conary system generation pending` to inspect it and
-`conary system generation publish --yes` to retry
-publication of the current DB state.
-
-### Adoption And Explicit Takeover
-
-Adopt an existing Linux installation without giving up native package-manager authority. The fastest preview path today is metadata-only system adoption, `conary system adopt --system`, which records native packages in Conary while dnf, apt, or pacman remains authoritative for those packages. Use `--full` when you want CAS backing for adopted package files and have budgeted the extra first-run time and disk growth. `conary system unadopt --all --yes` removes Conary tracking without deleting native package files on hosts without a selected Conary generation. If a Conary generation is already selected, use the staged native-authority handoff flow: run `conary system native-handoff --dry-run`, then `conary system native-handoff --yes`; if the operation is interrupted after its record is written, rerun `conary system native-handoff --recover --yes`.
-
-Updates follow the same authority boundary. Conary-owned packages can be installed, removed, and updated on a normal mutable host without first selecting a Conary generation. Adopted packages are not silently replaced by Conary during `update`; Conary reports that the native package manager remains authoritative unless you explicitly choose `--dep-mode takeover`. Critical adopted packages remain blocked even under takeover.
-
-Security-only updates are deliberately conservative. A repository added without advisory support metadata is treated as `unknown`, so `conary update --security` refuses before changing requested Conary-owned packages from that source. Only mark a repository `--security-advisories supported` when its synced metadata publishes a trusted advisory source. The supported JSON repository path records advisory ID, CVEs, severity, fixed version, and source trust, and the update preview prints those details before applying the trusted fix.
-
-Takeover is a separate, explicit step. The `system takeover` release path builds a bootable generation and boot entry, then stops ready to activate instead of switching live automatically. The lower `cas` and `owned` stop-points still exist as internal/debug checkpoints, not normal preview workflows.
+Conary requires Rust 1.96+ on Linux.
 
 ```bash
-# Risk-free adoption lane
-conary system adopt --system --full  # Bulk adoption with CAS backing
-conary system unadopt --all --dry-run
-conary system native-handoff --dry-run
-conary system unadopt --all --yes
-conary system native-handoff --yes
-
-# Explicit takeover lane
-conary system takeover --dry-run     # Preview the takeover plan
-conary system takeover --up-to generation --yes
-conary system generation switch 1 --yes    # Select the prepared generation for next boot
+git clone https://github.com/ConaryLabs/Conary.git
+cd Conary
+cargo build -p conary
+./target/debug/conary system init
 ```
 
-### Atomic Transactions
-
-Every operation produces a changeset. It applies completely or not at all. The full history is retained for rollback.
+Useful verification commands:
 
 ```bash
-conary install nginx postgresql redis --yes
-conary system state list          # See all system snapshots
-conary system state diff 5 8      # Compare two snapshots
-conary system state revert 5 --yes      # Revert to snapshot 5
-```
-
-### Multi-Format Support
-
-Install supported RPM, DEB, and Arch package files. Conary parses metadata, dependencies, and scriptlets from those formats.
-
-```bash
-conary install ./package.rpm --yes
-conary install ./package.deb --yes
-conary install ./package.pkg.tar.zst --yes
-```
-
-### Declarative System Model
-
-Define desired system state in TOML. Conary computes what needs to change and applies it atomically.
-
-```toml
-# /etc/conary/system.toml
-[model]
-version = 1
-install = ["nginx", "postgresql", "redis"]
-exclude = ["sendmail"]
-
-[pin]
-openssl = "3.0.*"
-
-[system]
-selection_mode = "latest"
-allowed_distros = ["fedora-44", "ubuntu-26.04", "arch"]
-
-[system.pin]
-distro = "fedora-44"
-strength = "guarded"
-```
-
-```bash
-conary model diff     # What needs to change?
-conary model apply --yes # Make it so
-conary model check    # Drift detection (CI/CD friendly, uses exit codes)
-conary distro info
-conary distro selection-mode latest
-```
-
-### Content-Addressable Storage
-
-Files are stored by SHA-256 hash with automatic deduplication. Content-defined chunking (FastCDC) enables cross-package deduplication and implicit delta updates -- if the client has 48 of 50 chunks, it downloads only 2.
-
-```bash
-conary system verify nginx      # Integrity check against CAS
-conary system restore nginx --yes # Restore files from CAS
-conary system gc                # Garbage collect unreferenced objects
-```
-
-### Dependency Resolution
-
-SAT-based resolver (via [resolvo](https://github.com/prefix-dev/resolvo)) with typed dependency kinds: package, soname, python, perl, ruby, java, pkgconfig, cmake, binary, and more.
-
-```bash
-conary query depends nginx          # Forward dependencies
-conary query rdepends openssl       # Reverse dependencies
-conary query whatprovides 'soname(libssl.so.3)' # Typed capability lookup
-conary query whatbreaks openssl     # Removal preflight explanation
-conary query deptree nginx          # Full dependency tree
-conary pin nginx                    # Hold an installed package
-conary list --pinned                # Show held packages
-conary unpin nginx                  # Release the hold
-conary autoremove --dry-run         # Preview orphan cleanup
-```
-
-### Component Model
-
-Packages are automatically split into components: `:runtime`, `:lib`, `:devel`, `:doc`, `:config`, `:debuginfo`. Install only what you need.
-
-```bash
-conary install nginx:runtime --yes # Binaries only
-conary install openssl:devel --yes # Headers and libs for building
-```
-
-### Bootstrap System
-
-Build a complete Conary-managed Linux system from scratch. The current public command surface is `cross-tools`, `temp-tools`, `system`, `config`, `image`, and optional `tier2`, with `bootstrap run` available for manifest-driven derivation pipelines. Completed manifest-driven runs persist operation-scoped artifacts under `<work_dir>/operations/<op-id>/`, and the comparison commands operate on those completed run workdirs. The checked-in self-hosting VM wrapper builds and validates an x86_64 Tier-2 qcow2 under QEMU. Targets are x86_64, aarch64, and riscv64, though the first self-hosting VM path is x86_64-first.
-
-```bash
-conary bootstrap init --target x86_64
-conary bootstrap check              # Verify prerequisites
-conary bootstrap dry-run            # Validate pipeline without building
-conary bootstrap cross-tools        # Cross-compilation toolchain
-conary bootstrap temp-tools         # Temporary/self-hosted tools
-conary bootstrap system             # Core system packages
-conary bootstrap config             # System configuration
-conary bootstrap tier2              # BLFS + Conary self-hosting (optional)
-conary bootstrap image --format raw # Bootable disk image (systemd-repart)
-conary bootstrap status             # Progress report
-conary bootstrap resume             # Resume from last checkpoint
-conary bootstrap system --skip-verify   # Skip checksum enforcement
-conary bootstrap run conaryos.toml --seed ./seed    # Manifest-driven derivation pipeline
-conary bootstrap verify-convergence --run-a ./bootstrap-a --run-b ./bootstrap-b
-conary bootstrap diff-seeds ./seed-a ./seed-b
-scripts/bootstrap-vm/build-selfhost-qcow2.sh --work-dir /tmp/conary-selfhost-vm --image-size 32G
-```
-
-### Derived Packages
-
-Create custom variants of existing packages with patches and file overrides, without rebuilding from source. Derived packages track their parent and can be flagged as stale when the parent is updated.
-
-```bash
-conary derive create my-nginx --from nginx
-conary derive patch my-nginx fix-config.patch
-conary derive override my-nginx /etc/nginx/nginx.conf --source ./custom.conf
-conary derive build my-nginx
-conary derive stale              # List derived packages needing rebuild
-```
-
-<details>
-<summary><strong>CCS Native Package Format</strong></summary>
-
-Conary's native format uses content-addressable chunked storage, CBOR manifests with Merkle tree verification, and Ed25519 signatures. Packages can be exported to OCI container images.
-
-```bash
-conary ccs build .                   # Build from ccs.toml
-conary ccs install package.ccs --yes # Install a CCS package
-conary ccs install package.ccs --reinstall --yes # Reinstall same version
-conary ccs sign package.ccs          # Ed25519 signatures
-conary ccs verify package.ccs        # Verify integrity
-conary ccs export package.ccs --output ./package.oci  # Export to container image
-```
-
-</details>
-
-<details>
-<summary><strong>Recipe System and Hermetic Builds</strong></summary>
-
-Build packages from source using TOML recipe files in isolated, network-blocked build environments. Hermetic builds use PID, UTS, IPC, and network namespaces with dependency-hash cache invalidation.
-
-```bash
-conary cook nginx.recipe.toml                # Build from recipe
-conary cook --hermetic nginx.recipe.toml     # Maximum isolation
-conary cook --fetch-only nginx.recipe.toml   # Pre-fetch for offline build
-```
-
-</details>
-
-<details>
-<summary><strong>Dev Shells</strong></summary>
-
-Temporary environments without permanent installation -- similar to `nix shell`.
-
-```bash
-conary ccs shell python nodejs   # Spawn a shell with packages available
-conary ccs run gcc -- make       # One-shot command execution
-```
-
-</details>
-
-<details>
-<summary><strong>Collections</strong></summary>
-
-Group packages into named sets for bulk operations.
-
-```bash
-conary collection create web-stack --members nginx,postgresql,redis
-conary install @web-stack --yes
-conary collection show web-stack
-conary collection add web-stack haproxy
-```
-
-</details>
-
-<details>
-<summary><strong>Labels and Federation</strong></summary>
-
-Route packages through label chains with delegation. Inspired by the original Conary's label system for tracking package provenance.
-
-```bash
-conary query label add local@devel:main
-conary query label add fedora@f44:stable
-conary query label delegate local@devel:main fedora@f44:stable
-```
-
-</details>
-
-<details>
-<summary><strong>Sandboxed Scriptlets</strong></summary>
-
-Package install scripts run in namespace isolation with resource limits by default. Protected live-root mode preflights namespace/enforcement setup before mutation and records both requested and effective sandbox mode for any warning-only post-scriptlet degradation.
-
-```bash
-conary install pkg --sandbox=always --yes # Force sandboxing
-conary install pkg --sandbox=never --yes # Trust the scripts
-```
-
-</details>
-
-<details>
-<summary><strong>Capability Enforcement</strong></summary>
-
-Packages declare their runtime capabilities. Landlock restricts filesystem access; seccomp-bpf restricts syscalls.
-
-```bash
-conary capability list                # Packages with/without declarations
-conary capability show nginx          # Show declared restrictions
-conary capability run nginx -- /usr/sbin/nginx -t
-```
-
-#### Install-Time Policy
-
-CCS packages declaring capabilities are evaluated against a three-tier policy:
-
-| Tier | Behavior | Default capabilities |
-|------|----------|---------------------|
-| **Allowed** | Install proceeds silently | `cap-dac-read-search`, `cap-chown` |
-| **Prompt** | Requires `--allow-capabilities` | `cap-net-raw`, `cap-sys-ptrace` |
-| **Denied** | Always rejected | `cap-sys-admin`, `cap-sys-rawio` |
-
-```bash
-conary install htop --dry-run --allow-capabilities          # Approve prompted caps in normal install
-conary ccs install package.ccs --allow-capabilities --yes # Approve prompted caps
-conary ccs install package.ccs --capability-policy /path/to/policy.toml --yes
-```
-
-Scriptlet-scoped host integration declarations use `[[scriptlets.capabilities]]`
-for narrow cases such as systemd service, tmpfiles, or D-Bus registration.
-Those declarations parse today, but install fails closed until enforcement
-exists unless the operator explicitly chooses direct legacy execution with
-`--sandbox=never`.
-
-Custom policy file (`/etc/conary/capability-policy.toml`):
-```toml
-[capabilities]
-allowed = ["cap-dac-read-search", "cap-chown"]
-prompt = ["cap-net-raw", "cap-net-bind-service"]
-denied = ["cap-sys-admin"]
-default_tier = "prompt"
-```
-
-</details>
-
-<details>
-<summary><strong>Configuration Management</strong></summary>
-
-Track, diff, backup, and restore configuration files across package updates. Conary records which config files belong to which packages and detects local modifications. Backup and restore operations are tied to the database so you can see the full history of changes.
-
-```bash
-conary config list                   # Show modified config files
-conary config list nginx --all       # All config files for a package
-conary config diff /etc/nginx/nginx.conf  # Diff against package version
-conary config backup /etc/nginx/nginx.conf
-conary config restore /etc/nginx/nginx.conf
-conary config check                  # Check all config file status
-```
-
-</details>
-
-<details>
-<summary><strong>Package Provenance and SBOM</strong></summary>
-
-Full supply chain metadata for every package. Provenance tracks where a package came from, how it was built, and what it contains. SBOM generation produces standard formats for auditing. Includes SLSA attestation support for verifying build integrity.
-
-```bash
-conary provenance show nginx         # Origin, build info, signatures
-conary provenance verify nginx       # Verify signatures and attestations
-conary provenance diff nginx openssl # Compare provenance between packages
-conary system sbom nginx --format cyclonedx        # Generate runtime SBOM
-conary provenance export nginx --format spdx       # Export provenance SBOM
-```
-
-</details>
-
-<details>
-<summary><strong>Trigger System</strong></summary>
-
-Automatic post-transaction actions with DAG-based ordering. 10+ built-in triggers handle common system maintenance: ldconfig (shared library cache), depmod (kernel modules), fc-cache (fonts), update-mime-database, update-desktop-database, gtk-update-icon-cache, glib-compile-schemas, systemd-related reloads, and more. Triggers fire based on file path patterns and can be enabled, disabled, or extended with custom triggers.
-
-```bash
-conary system trigger list           # Show all triggers
-conary system trigger show ldconfig  # Trigger details
-conary system trigger enable NAME    # Enable a trigger
-conary system trigger disable NAME   # Disable a trigger
-```
-
-</details>
-
----
-
-## Architecture
-
-Conary is a system manager structured around a few core concepts:
-
-| Concept | Description |
-|---------|-------------|
-| **Trove** | The universal unit -- packages, components, and collections are all troves |
-| **Changeset** | An atomic transition from one system state to another |
-| **Generation** | An immutable EROFS image of a complete system state |
-| **Flavor** | Build variations (architecture, feature flags): `[ssl, !debug, is: x86_64]` |
-| **Label** | Package provenance: `repository@namespace:tag` |
-| **CAS** | Content-addressable storage for all file data |
-
-**Database-first design.** All state lives in SQLite. No config files for runtime state. Every operation is queryable, every state transition is recorded. Conary writes SQLite-native checkpoint backups for first-wave adoption/unadoption paths and stores generation-bound DB backups next to published generation artifacts. Use `conary system db-backup recover --latest --dry-run`, `conary system generation verify-db-backup --current`, and `conary system generation recover-db --generation <n> --dry-run` to verify recovery metadata before applying it.
-
-SQLite-native backups recover Conary manager visibility for packages and generations represented by the backed-up DB. They do not recover missing package payloads, private keys, remote repository history, or native package-manager transaction history. Applying a generation-bound DB backup requires an explicit live-host acknowledgement and confirmation: `conary system generation recover-db --generation <n> --yes`.
-
-For a detailed architecture overview, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
-
----
-
-## Remi Server
-
-Conary includes an on-demand CCS conversion proxy called Remi. It converts supported legacy packages (Fedora 44 RPM, Ubuntu 26.04 DEB, and Arch packages) to CCS format on the fly, serves only public-ready converted artifacts through the public package surfaces, and provides a sparse index for efficient client sync without requiring upstream package authors to republish in CCS first.
-
-A public instance runs at **[remi.conary.io](https://remi.conary.io)**.
-For private test hosts, see
-[docs/guides/self-hosted-remi.md](docs/guides/self-hosted-remi.md).
-
-Features: Bloom filter acceleration, batch endpoints, pull-through caching, full-text search (Tantivy), repository metadata verification, and Prometheus metrics.
-
-- **Authenticated MCP endpoint** at [`https://remi.conary.io/mcp`](https://remi.conary.io/mcp) for production automation
-- **Admin origin listener** on `:8082` for bearer-authenticated REST operations behind the reverse proxy
-
-```bash
-# Build the owning service crate
+cargo build -p conary
 cargo build -p remi
-
-# Run the server
-cargo run -p remi -- --bind 0.0.0.0:8080
-```
-
----
-
-## conaryd Daemon
-
-A local daemon with Unix-socket REST scaffolding, a persistent job queue, SSE event streaming, read/query routes, package install/remove/update execution, and enhance-job support. Package mutation jobs reuse the CLI command contracts and keep the same explicit live-host mutation acknowledgement boundary.
-
-```bash
-# Build the daemon crate
 cargo build -p conaryd
-
-# Run the daemon
-cargo run -p conaryd -- --foreground
-```
-
-See [docs/modules/conaryd.md](docs/modules/conaryd.md) for the maintained daemon endpoint list.
-
----
-
-## CAS Federation
-
-Distributed chunk sharing across Conary nodes for bandwidth savings. Federation supports hierarchical peer routing, optional mDNS discovery for trusted LANs, tier allowlists, and pinned TLS identities for HTTPS peers.
-
-```bash
-conary federation status              # Overview
-conary federation peers               # List peers
-conary federation add-peer URL --tier cell_hub --tls-fingerprint SHA256HEX
-conary federation scan                # mDNS discovery (requires allowlist or authenticated transport)
-conary federation stats --days 7      # Bandwidth savings report
-```
-
----
-
-## Test Infrastructure
-
-The `conary-test` Rust engine runs container-backed integration suites against real distros and a live Remi deployment:
-
-```bash
-cargo run -p conary-test -- bootstrap check --json  # Local prerequisite/smoke-readiness inspection
-cargo run -p conary-test -- run --suite phase1-core --distro fedora44 --phase 1
-cargo run -p conary-test -- health    # Service health check
-cargo run -p conary-test -- logs T42  # Retrieve test logs
-```
-
-- TOML manifest-based tests with per-step logging
-- Structured test and deployment operations exposed through HTTP/MCP transports
-- Results streamed to Remi for persistent storage
-
----
-
-## Building
-
-Requires Rust 1.96+ (edition 2024). The project root is a virtual Cargo
-workspace with eight members: `apps/conary` (CLI), `apps/remi` (Remi),
-`apps/conaryd` (daemon), `apps/conary-test` (test infrastructure),
-`crates/conary-bootstrap` (shared binary bootstrap helpers),
-`crates/conary-core` (shared library), `crates/conary-agent-contract`
-(transport-neutral agent operation contract), and `crates/conary-mcp` (shared
-MCP adapter helpers).
-
-```bash
-cargo build -p conary                              # CLI
-cargo build -p remi && cargo build -p conaryd      # Service binaries
-cargo test -p conary                               # CLI tests
-cargo test -p remi && cargo test -p conaryd        # Service tests
-cargo build -p conary-test                         # Test harness
+cargo build -p conary-test
+cargo test -p conary
+cargo test -p conary-core
 cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --check
 ```
 
-Release builds use LTO and single codegen unit for maximum optimization:
+## Remi
 
-```bash
-cargo build --release                # Optimized build
-cargo build --profile fast-release   # Faster compile, still optimized
-```
+Remi is Conary's public on-demand conversion service at
+[remi.conary.io](https://remi.conary.io). It converts supported Fedora,
+Ubuntu, and Arch packages into CCS artifacts, serves public release metadata,
+and records scriptlet evidence for packages that need review.
 
----
+Remi public serving is intentionally conservative while the scriptlet adapter
+surface matures. A package may fail even when the upstream package exists and
+downloads normally. Those failures are preview feedback, not proof that the
+package should be ignored.
 
-## Project Status
-
-**Version 0.9.2** -- The project has a working end-to-end stack: multi-format installs, atomic changesets, adoption/unadoption, selected-generation native-authority handoff, immutable generations, explicit takeover/bootstrap flows, Remi conversion and serving, federation, conaryd package execution, and capability-restricted runtime execution. The current public preview is deliberately narrower: a Fedora 44, Ubuntu 26.04 LTS, and Arch Linux package-manager slice with `v0.9.2` release packages, checksums, and a detached CCS signature. Generation export, x86_64 ISO carrier work, Remi publication, and provenance sidecars remain part of the larger Conary system, but first-wave external feedback should focus on reversible adoption, package listing/search, dry-run update behavior, Conary-owned install dry-runs, and non-destructive unadoption. Remaining gaps include signed portable generation bundles, SBOM/provenance sidecars for every release artifact, native transaction-history import, and non-x86_64 generation boot assets.
-
-See [ROADMAP.md](ROADMAP.md) for what we're building next.
-
----
-
-## What's Next
-
-The next milestone is the current **adoption-led preview and validation** push -- see [ROADMAP.md](ROADMAP.md) for the full plan. Near-term priorities:
-
-- Keep Fedora 44, Ubuntu 26.04 LTS, and Arch adoption/unadoption proof in regular rotation
-- Keep raw/qcow2/ISO generation-export validation green in regular rotation
-- Keep the selected-generation native-authority handoff suite green across Fedora 44, Ubuntu 26.04 LTS, and Arch
-- Finish signed portable generation bundles and release-artifact SBOM/provenance sidecars
-- Keep self-host VM validation freshness checks green and finish snapshot/overlay rerun hygiene
-- Keep the Goal 7 daily-driver UX matrix, shell completion rendering checks, and operator diagnostics current
-- Continue hardening trust, federation, release, and rollback behavior
-
----
+See [docs/modules/remi.md](docs/modules/remi.md) and
+[docs/guides/self-hosted-remi.md](docs/guides/self-hosted-remi.md) for service
+details.
 
 ## Documentation
 
-For the repo-level documentation system:
-
-- Human contributors should start with [CONTRIBUTING.md](CONTRIBUTING.md).
-- Coding assistants should start with [AGENTS.md](AGENTS.md) and
-  [docs/llms/README.md](docs/llms/README.md), then follow the linked canonical
-  docs.
-
-| Document | Description |
-|----------|-------------|
-| [AGENTS.md](AGENTS.md) | Canonical repo-wide contract for coding agents |
-| [ROADMAP.md](ROADMAP.md) | Forward-looking development roadmap |
-| [CHANGELOG.md](CHANGELOG.md) | Release history |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | Development setup and contribution guidelines |
-| [SECURITY.md](SECURITY.md) | Vulnerability reporting policy |
-| [docs/llms/README.md](docs/llms/README.md) | Vendor-neutral assistant map into the canonical docs |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | System design overview |
-| [docs/INTEGRATION-TESTING.md](docs/INTEGRATION-TESTING.md) | Integration-test suites, phases, and runtime expectations |
-| [docs/modules/bootstrap.md](docs/modules/bootstrap.md) | Bootstrap pipeline and command-surface reference |
-| [docs/operations/bootstrap-selfhosting-vm.md](docs/operations/bootstrap-selfhosting-vm.md) | Truthful operator flow for the current self-hosting VM path |
-| [docs/operations/daily-driver-ux-matrix.md](docs/operations/daily-driver-ux-matrix.md) | Daily-driver CLI diagnostics, unsupported-case routes, and shell completion checks |
-| [docs/operations/post-generation-export-follow-up-roadmap.md](docs/operations/post-generation-export-follow-up-roadmap.md) | Remaining generation export, image projection, and provenance follow-ups |
-| [docs/operations/bootstrap-follow-up-investigations.md](docs/operations/bootstrap-follow-up-investigations.md) | Deferred bootstrap architecture follow-ups to revisit later |
-| [docs/operations/infrastructure.md](docs/operations/infrastructure.md) | MCP, deploy, and host workflow notes |
-| [docs/conaryopedia-v2.md](docs/conaryopedia-v2.md) | Comprehensive technical guide |
-| [docs/specs/ccs-format-v1.md](docs/specs/ccs-format-v1.md) | CCS package format specification |
-| [docs/SCRIPTLET_SECURITY.md](docs/SCRIPTLET_SECURITY.md) | Scriptlet sandboxing and isolation |
-
-For CLI reference: `conary --help` or `man conary` (man pages are auto-generated during build).
-
----
+- [AGENTS.md](AGENTS.md): repo contract for coding agents.
+- [CONTRIBUTING.md](CONTRIBUTING.md): development setup and contribution flow.
+- [ROADMAP.md](ROADMAP.md): current priorities.
+- [CHANGELOG.md](CHANGELOG.md): release history.
+- [docs/guides/agent-assisted-tester-loop.md](docs/guides/agent-assisted-tester-loop.md): first-wave tester workflow.
+- [docs/operations/release-artifact-matrix.md](docs/operations/release-artifact-matrix.md): release artifact expectations.
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): system architecture.
+- [docs/INTEGRATION-TESTING.md](docs/INTEGRATION-TESTING.md): integration test harness and suites.
+- [docs/SCRIPTLET_SECURITY.md](docs/SCRIPTLET_SECURITY.md): scriptlet sandboxing and policy.
 
 ## Community
 
-- **[GitHub Discussions](https://github.com/ConaryLabs/Conary/discussions)** -- Questions, ideas, and general conversation
-- **[Good First Issues](https://github.com/ConaryLabs/Conary/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)** -- Starter tasks for new contributors
-- **[CONTRIBUTING.md](CONTRIBUTING.md)** -- Development setup and guidelines
-
----
+- [GitHub Discussions](https://github.com/ConaryLabs/Conary/discussions)
+- [Good First Issues](https://github.com/ConaryLabs/Conary/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
+- [CONTRIBUTING.md](CONTRIBUTING.md)
 
 ## License
 

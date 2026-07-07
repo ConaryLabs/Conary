@@ -14,10 +14,12 @@ make_good_repo() {
 
     mkdir -p \
         "$root/apps/conary/src/cli" \
+        "$root/apps/conary" \
         "$root/apps/conaryd/src/daemon/routes" \
         "$root/apps/conaryd/src/daemon" \
         "$root/crates/conary-core/src/db" \
         "$root/crates/conary-core/src" \
+        "$root/docs/guides" \
         "$root/docs/modules" \
         "$root/docs/operations" \
         "$root/site/src/routes/about" \
@@ -45,11 +47,20 @@ EOF
     cat > "$root/README.md" <<'EOF'
 # Conary
 
-Conary is being prepared as an adoption-led limited public preview.
-Remote Forge validation is paused pending a KVM-capable runner.
-The 2026-05-21 Group O local QEMU evidence is recorded.
-The 2026-05-21 Group P local QEMU evidence is recorded.
+Conary is still early. Expect failures.
+Use a VM or disposable host first.
+Scriptlet-heavy packages are expected to fail while adapter work continues.
+If a package install fails, capture the command, distro, package name, Conary version, and refusal text.
 Use `conary system adopt --refresh` to refresh adoption tracking.
+Install the pinned preview release from v0.10.1.
+EOF
+
+    cat > "$root/docs/guides/agent-assisted-tester-loop.md" <<'EOF'
+# Agent-Assisted Tester Loop
+
+Use only the pinned v0.10.1 release from
+https://github.com/ConaryLabs/Conary/releases/tag/v0.10.1.
+Fedora artifact: conary-0.10.1-1.fc44.x86_64.rpm.
 EOF
 
     cat > "$root/CHANGELOG.md" <<'EOF'
@@ -75,6 +86,14 @@ EOF
 Remote Forge control-plane validation is temporarily paused pending a KVM-capable runner.
 Current Group O QEMU export evidence from 2026-05-21 is local evidence.
 Current Group P ISO export evidence from 2026-05-21 is local evidence.
+EOF
+
+    cat > "$root/docs/operations/release-artifact-matrix.md" <<'EOF'
+# Release Artifact Matrix
+
+| Product | Source commit | Binary download or package URL | Required evidence |
+| --- | --- | --- | --- |
+| `conary` | `v0.10.1` | https://github.com/ConaryLabs/Conary/releases/tag/v0.10.1 | release-build green |
 EOF
 
     cat > "$root/site/src/routes/about/+page.svelte" <<'EOF'
@@ -126,6 +145,13 @@ impl Default for DaemonConfig {
         }
     }
 }
+EOF
+
+    cat > "$root/apps/conary/Cargo.toml" <<'EOF'
+[package]
+name = "conary"
+version = "0.10.1"
+publish = false
 EOF
 
     cat > "$root/crates/conary-core/Cargo.toml" <<'EOF'
@@ -314,7 +340,15 @@ break_core_api_claim() {
 }
 
 break_preview_status() {
-    sed -i 's/adoption-led/feature-rich/' "$1/README.md"
+    sed -i 's/Conary is still early. Expect failures./Conary is production ready./' "$1/README.md"
+}
+
+break_release_doc_version() {
+    sed -i 's/v0.10.1/v0.9.2/g' "$1/docs/guides/agent-assisted-tester-loop.md"
+}
+
+break_release_artifact_version() {
+    sed -i 's/conary-0.10.1/conary-0.9.2/g' "$1/docs/guides/agent-assisted-tester-loop.md"
 }
 
 break_conaryd_501_claim() {
@@ -351,7 +385,9 @@ expect_failure "require_polkit default" break_require_polkit_default 'require_po
 expect_failure "missing route doc" break_route_doc 'conaryd route'
 expect_failure "missing core publish guard" break_core_publish_guard 'publish = false'
 expect_failure "stable core API claim" break_core_api_claim 'stable.*conary-core'
-expect_failure "preview status drift" break_preview_status 'adoption-led'
+expect_failure "preview status drift" break_preview_status 'early preview warning'
+expect_failure "release doc version drift" break_release_doc_version 'stale conary release reference'
+expect_failure "release artifact version drift" break_release_artifact_version 'stale conary release reference'
 expect_failure "conaryd 501 claim" break_conaryd_501_claim 'claims conaryd package execution is still blanket 501'
 expect_failure "site schema drift" break_site_schema_version 'schema.*65.*SCHEMA_VERSION.*69'
 expect_failure "every install EROFS claim" break_every_install_erofs_claim 'every install builds an EROFS generation'

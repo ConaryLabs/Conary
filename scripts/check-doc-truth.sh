@@ -108,6 +108,13 @@ require_match() {
     fi
 }
 
+conary_release_version() {
+    local manifest="apps/conary/Cargo.toml"
+    require_file "$manifest" || return 1
+
+    sed -nE 's/^version[[:space:]]*=[[:space:]]*"([^"]+)"/\1/p' "$manifest" | head -n1
+}
+
 check_schema_versions() {
     local schema_file="crates/conary-core/src/db/schema.rs"
     require_file "$schema_file" || return
@@ -164,19 +171,59 @@ check_retired_commands() {
 }
 
 check_preview_status() {
-    require_match "README.md" 'adoption-led' 'adoption-led preview wording'
+    require_match "README.md" 'Conary is still early\. Expect failures\.' 'early preview warning'
+    require_match "README.md" 'VM or disposable host' 'VM or disposable host warning'
+    require_match "README.md" '[Ss]criptlet-heavy packages|package scriptlets' 'scriptlet-heavy package caveat'
+    require_match "README.md" 'capture the command, distro, package name' 'tester failure data request'
+
     require_match "ROADMAP.md" 'adoption-led' 'adoption-led preview wording'
 
-    require_match "README.md" 'Remote Forge validation is paused pending (a new |a )KVM-capable runner' 'remote Forge paused wording'
     require_match "ROADMAP.md" 'remote Forge validation is paused pending (a new |a )KVM-capable runner|Remote Forge validation is paused pending (a new |a )KVM-capable runner' 'remote Forge paused wording'
     require_match "docs/INTEGRATION-TESTING.md" 'Remote Forge control-plane validation is temporarily paused pending a KVM-capable runner|Forge-backed.*paused' 'remote Forge paused wording'
 
-    require_match "README.md" '2026-05-21.*Group O' 'dated Group O evidence'
-    require_match "README.md" '2026-05-21.*Group P' 'dated Group P evidence'
     require_match "ROADMAP.md" '2026-05-21.*Group O' 'dated Group O evidence'
     require_match "ROADMAP.md" '2026-05-21.*Group P' 'dated Group P evidence'
     require_match "docs/INTEGRATION-TESTING.md" 'Group O.*2026-05-21' 'dated Group O evidence'
     require_match "docs/INTEGRATION-TESTING.md" 'Group P.*2026-05-21' 'dated Group P evidence'
+}
+
+check_release_doc_versions() {
+    local version
+    version="$(conary_release_version)"
+    if [[ -z "$version" ]]; then
+        report_error "apps/conary/Cargo.toml: could not parse Conary release version"
+        return
+    fi
+
+    local current_tag="v${version}"
+    local current_artifact_dash="conary-${version}"
+    local current_artifact_underscore="conary_${version}"
+    local path
+    local -a release_docs=(
+        "README.md"
+        "docs/guides/agent-assisted-tester-loop.md"
+        "docs/operations/release-artifact-matrix.md"
+        "docs/superpowers/first-external-tester-loop-tracker.md"
+        "docs/superpowers/limited-preview-subreddit-tester-post-2026-05-19.md"
+    )
+
+    for path in "${release_docs[@]}"; do
+        [[ -e "$path" ]] || continue
+        require_match "$path" "$current_tag" "current Conary release tag ${current_tag}"
+
+        local file line_no text
+        while IFS=: read -r file line_no text; do
+            if [[ "$text" != *"$current_tag"* ]]; then
+                report_error "$file:$line_no has stale conary release reference; expected ${current_tag}: $text"
+            fi
+        done < <(rg -nH -- 'v[0-9]+\.[0-9]+\.[0-9]+' "$path" || true)
+
+        while IFS=: read -r file line_no text; do
+            if [[ "$text" != *"$current_artifact_dash"* && "$text" != *"$current_artifact_underscore"* ]]; then
+                report_error "$file:$line_no has stale conary release reference; expected ${version}: $text"
+            fi
+        done < <(rg -nH -- 'conary[-_][0-9]+\.[0-9]+\.[0-9]+' "$path" || true)
+    done
 }
 
 check_preview_claim_drift() {
@@ -512,6 +559,7 @@ check_required_scan_paths
 check_schema_versions
 check_retired_commands
 check_preview_status
+check_release_doc_versions
 check_preview_claim_drift
 check_policykit_truth
 check_conaryd_routes

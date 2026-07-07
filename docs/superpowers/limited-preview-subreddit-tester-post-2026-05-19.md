@@ -40,9 +40,9 @@ Tested preview targets:
 - Ubuntu 26.04 LTS
 - Arch Linux
 
-Install the pinned preview release (tag `v0.9.2`):
+Install the pinned preview release (tag `v0.10.1`):
 download and checksum/signature instructions at
-https://github.com/ConaryLabs/Conary/releases/tag/v0.9.2
+https://github.com/ConaryLabs/Conary/releases/tag/v0.10.1
 
 Before starting, check the compatibility checklist --
 the whole loop below runs on stock kernels:
@@ -58,7 +58,7 @@ Prompt shape:
 Help me run the Conary first external tester loop on this disposable VM.
 Read the agent-assisted tester guide first. Confirm distro, architecture,
 kernel, sudo, and VM/snapshot/non-critical-host status before installing
-anything. Use only the pinned v0.9.2 release, verify SHA256SUMS, ask before
+anything. Use only the pinned v0.10.1 release, verify SHA256SUMS, ask before
 every non-dry-run mutation, keep a command transcript, and draft a beta
 feedback issue from the GitHub template.
 ```
@@ -66,12 +66,12 @@ feedback issue from the GitHub template.
 What I would love people to try in a VM, snapshot, or spare system:
 
 ```bash
-conary install jq --dry-run
-conary install jq --yes
+conary install htop --dry-run
+conary install htop --yes
 conary system adopt --system --dry-run
 conary system adopt --system --yes
 conary list
-conary search jq
+conary search htop
 conary update --dry-run
 conary system unadopt --all --dry-run
 conary system unadopt --all --yes
