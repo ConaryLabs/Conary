@@ -192,7 +192,6 @@ pub fn classify_cli(cli: &Cli) -> Option<CommandRiskPolicy> {
         Commands::Cache(command) => Some(classify_cache(command)),
         Commands::SelfUpdate {
             check,
-            force,
             verify_sha256,
             verify_signature_file,
             print_trusted_keys,
@@ -209,7 +208,7 @@ pub fn classify_cli(cli: &Cli) -> Option<CommandRiskPolicy> {
                     "conary self-update",
                     CommandRisk::ActiveHostMutation,
                     false,
-                    *force,
+                    true,
                 )
             },
         ),
@@ -826,6 +825,37 @@ mod tests {
         assert_eq!(policy.risk, CommandRisk::ReadOnly);
         assert!(!policy.dry_run);
         assert!(!policy.apply_intent);
+    }
+
+    #[test]
+    fn classify_self_update_default_as_apply_intent() {
+        let policy = policy(&["conary", "self-update"]);
+        assert_eq!(policy.command_label.as_ref(), "conary self-update");
+        assert_eq!(policy.risk, CommandRisk::ActiveHostMutation);
+        assert!(policy.requires_ack());
+        assert!(policy.apply_intent);
+    }
+
+    #[test]
+    fn classify_self_update_check_and_offline_verification_as_read_only() {
+        for args in [
+            ["conary", "self-update", "--check"].as_slice(),
+            [
+                "conary",
+                "self-update",
+                "--verify-sha256",
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                "--verify-signature-file",
+                "/tmp/conary.sig",
+            ]
+            .as_slice(),
+            ["conary", "self-update", "--print-trusted-keys"].as_slice(),
+        ] {
+            let policy = policy(args);
+            assert_eq!(policy.risk, CommandRisk::ReadOnly);
+            assert!(!policy.requires_ack());
+            assert!(!policy.apply_intent);
+        }
     }
 
     #[test]
