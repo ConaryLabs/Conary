@@ -13,14 +13,15 @@
 - Scope is the `apps/conary` CLI only. Do **not** change `remi` or `conaryd` logging behavior.
 - Output stays **ASCII-only**. No emoji, no Unicode symbol glyphs, no TUI.
 - Color backend is **`console`** only. Do not add `anstyle`, `owo-colors`, or `colored`.
-- Do **not** migrate the ~2,000-site general `println!` long tail. Migration is bounded to the guarded status vocabulary plus the named daily-driver commands.
-- The **guarded status vocabulary** is exactly these literals: bracket tags `[OK] [FAIL] [FAILED] [WARN] [WARNING] [ERROR] [COMPLETE] [VALID] [DONE]` (case-insensitive) and any printed string beginning `Warning:`. The top-level `Error:` prose reporter in `app.rs` is **not** in this set and is left as-is.
+- Do **not** migrate the ~2,000-site general `println!` long tail. Migration is bounded to the guarded status vocabulary.
+- The **guarded status vocabulary** is exactly this word-list: `[OK] [COMPLETE] [DONE] [VALID] [FAIL] [FAILED] [ERROR] [WARN] [WARNING] [INFO] [OFF] [MISSING] [PENDING]` (case-insensitive) plus any printed string beginning `Warning:`. The top-level `Error:` prose reporter in `app.rs` is **not** in this set and is left as-is.
+- The `ui` `Status` enum is `{ Ok, Fail, Warn, Skip, Info, Off, Missing, Pending }`. Tags are lowercase, bracketed, no inner padding: `[ok] [fail] [warn] [skip] [info] [off] [missing] [pending]`. `row` right-pads the tag by **visible** width to the widest tag so columns align.
 - Level precedence (highest wins): `RUST_LOG` env var → `-q`/`--verbose` flags → default `warn`.
 - Global verbose flag is `--verbose` (long only, repeatable count). It has **no `-v` short** because `-v` is already `--version` on `install`/`update`/`list` and 11 other subcommands. `-q`/`--quiet` is free and keeps its short.
 - `conary-bootstrap` is edition 2024, `rust-version = "1.96"`.
 - Every `git commit` in this plan ends with the trailer line:
   `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`
-- Work happens on branch `cli-output-ux` (already created; the spec commit is its first commit).
+- Work happens on branch `cli-output-ux` (already created; the spec commit is its first commit; rebased onto current `origin/main`).
 
 ---
 
@@ -160,22 +161,12 @@ pub fn init_cli_tracing(default_directive: &str) {
 
 - [ ] **Step 2: Update the remi caller**
 
-In `apps/remi/src/bin/remi.rs:255`, change:
-
-```rust
-    conary_bootstrap::init_tracing();
-```
-
-to:
-
-```rust
-    conary_bootstrap::init_server_tracing();
-```
+In `apps/remi/src/bin/remi.rs:255`, change `conary_bootstrap::init_tracing();` to `conary_bootstrap::init_server_tracing();`.
 
 - [ ] **Step 3: Verify the workspace still builds**
 
 Run: `cargo build -p conary-bootstrap -p remi 2>&1 | tail -5`
-Expected: `Finished` with no errors. (`apps/conary` still references the old name and is fixed in Task 3; build it there.)
+Expected: `Finished` with no errors. (`apps/conary` still references the old name and is fixed in Task 3.)
 
 - [ ] **Step 4: Commit**
 
@@ -191,13 +182,12 @@ git commit -m "refactor(bootstrap): split server and cli tracing init"
 Add `--verbose`/`--quiet` to the top-level CLI, reorder `app.rs` to parse before initializing tracing, and prove the log flood is gone by default.
 
 **Files:**
-- Modify: `apps/conary/src/cli/mod.rs:139-155` (add fields to `Cli`)
-- Modify: `apps/conary/src/app.rs:9-19` (`run()`)
+- Modify: `apps/conary/src/cli/mod.rs` (add fields to `Cli`, after `allow_live_system_mutation`, before `#[command(subcommand)]`)
+- Modify: `apps/conary/src/app.rs` (`run()`)
 - Test: `apps/conary/tests/logging_verbosity.rs`
 
 **Interfaces:**
-- Consumes: `crate::logging::verbosity_directive` (Task 1), `conary_bootstrap::init_cli_tracing` (Task 2)
-- Consumes: `Cli.quiet: bool`, `Cli.verbose: u8`
+- Consumes: `crate::logging::verbosity_directive` (Task 1), `conary_bootstrap::init_cli_tracing` (Task 2), `Cli.quiet: bool`, `Cli.verbose: u8`
 
 - [ ] **Step 1: Write the failing integration test**
 
@@ -243,7 +233,7 @@ fn verbose_restores_info_logs() {
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `cargo test -p conary --test logging_verbosity 2>&1 | tail -25`
-Expected: FAIL. `list_is_quiet_by_default` fails because stderr still contains `INFO` (current default), and the crate may fail to compile until Task 3's code changes land — either failure counts as red.
+Expected: FAIL (stderr still contains `INFO`, and/or the crate does not yet compile because `app.rs` references the renamed function). Either is red.
 
 - [ ] **Step 3: Add the CLI flags**
 
@@ -261,7 +251,7 @@ In `apps/conary/src/cli/mod.rs`, inside `pub struct Cli { ... }` (after the `all
 
 - [ ] **Step 4: Reorder app.rs to parse before init**
 
-In `apps/conary/src/app.rs`, replace the body of `run()` (lines 9-19) with:
+In `apps/conary/src/app.rs`, replace the body of `run()` with:
 
 ```rust
 pub async fn run() -> Result<()> {
@@ -302,7 +292,7 @@ git commit -m "feat(cli): quiet-by-default logging with --verbose/--quiet"
 
 ## Task 4: The `ui` module
 
-The single source of truth for output styling: pure `*_line` formatters (unit-testable, no I/O) plus thin printers. Color via `console`, auto-off when not a TTY or `NO_COLOR` is set.
+The single source of truth for output styling: pure `*_line` formatters (unit-testable, no I/O) plus thin printers. Color via `console`, auto-off when not a TTY or `NO_COLOR` is set. Eight-state `Status` enum; `row` column-aligns variable-width tags.
 
 **Files:**
 - Create: `apps/conary/src/ui/mod.rs`
@@ -311,13 +301,13 @@ The single source of truth for output styling: pure `*_line` formatters (unit-te
 - Test: inline `#[cfg(test)]` in `apps/conary/src/ui/mod.rs`
 
 **Interfaces:**
-- Produces (formatters returning `String`): `tag(Status) -> String`, `row_line(Status, &[&str]) -> String`, `error_line(&str) -> String`, `warn_line(&str) -> String`, `note_line(&str) -> String`, `status_line(&str, &str) -> String`, `heading_line(&str) -> String`, `field_line(&str, &str) -> String`
-- Produces (printers): `error`, `warn`, `note`, `status`, `row`, `heading`, `field` (same args, return `()`)
-- Produces: `pub enum Status { Ok, Fail, Warn, Skip }`
+- Produces: `pub enum Status { Ok, Fail, Warn, Skip, Info, Off, Missing, Pending }`
+- Produces (formatters → `String`): `tag(Status)`, `row_line(Status, &[&str])`, `error_line(&str)`, `warn_line(&str)`, `note_line(&str)`, `status_line(&str, &str)`, `heading_line(&str)`, `field_line(&str, &str)`
+- Produces (printers → `()`): `error`, `warn`, `note`, `status`, `row`, `heading`, `field`
 
 - [ ] **Step 1: Add the `console` dependency**
 
-In `apps/conary/Cargo.toml`, under `[dependencies]` (near the `indicatif.workspace = true` line), add:
+In `apps/conary/Cargo.toml`, under `[dependencies]` (near `indicatif.workspace = true`), add:
 
 ```toml
 console = "0.16"
@@ -337,42 +327,63 @@ Create `apps/conary/src/ui/mod.rs`:
 
 use console::style;
 
-/// Per-item outcome used by [`row`]/[`row_line`].
+/// Per-item indicator used by [`row`]/[`row_line`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Status {
     Ok,
     Fail,
     Warn,
     Skip,
+    Info,
+    Off,
+    Missing,
+    Pending,
 }
 
 impl Status {
-    /// Fixed-width (4 char) inner label, so every tag renders as width 6.
-    fn inner(self) -> &'static str {
+    /// Lowercase word shown inside the brackets.
+    fn label(self) -> &'static str {
         match self {
-            Status::Ok => " ok ",
+            Status::Ok => "ok",
             Status::Fail => "fail",
             Status::Warn => "warn",
             Status::Skip => "skip",
+            Status::Info => "info",
+            Status::Off => "off",
+            Status::Missing => "missing",
+            Status::Pending => "pending",
         }
     }
 }
 
-/// Render a fixed-width status tag, e.g. `[ ok ]`.
+/// Width of the widest rendered tag, `[missing]` / `[pending]` (9 columns).
+/// Used by [`row_line`] to align the column after the tag.
+const TAG_COLUMN: usize = 9;
+
+/// Render a colored status tag, e.g. `[ok]`.
 pub fn tag(status: Status) -> String {
-    let inner = status.inner();
+    let inner = status.label();
     let styled = match status {
         Status::Ok => style(inner).green(),
         Status::Fail => style(inner).red(),
         Status::Warn => style(inner).yellow(),
         Status::Skip => style(inner).dim(),
+        Status::Info => style(inner).cyan(),
+        Status::Off => style(inner).dim(),
+        Status::Missing => style(inner).red(),
+        Status::Pending => style(inner).yellow(),
     };
     format!("[{styled}]")
 }
 
-/// Render a per-item row: `[ ok ]  cell1  cell2`.
+/// Render a per-item row with the tag column padded so cells align:
+/// `[ok]       nginx  1.27.2`.
 pub fn row_line(status: Status, cells: &[&str]) -> String {
-    format!("{}  {}", tag(status), cells.join("  "))
+    // Pad by the *visible* width (`[label]`), never the styled string, so ANSI
+    // codes do not throw off alignment.
+    let visible = status.label().len() + 2;
+    let pad = TAG_COLUMN.saturating_sub(visible);
+    format!("{}{}  {}", tag(status), " ".repeat(pad), cells.join("  "))
 }
 
 pub fn error_line(msg: &str) -> String {
@@ -447,21 +458,25 @@ mod tests {
     }
 
     #[test]
-    fn tags_are_uniform_width() {
+    fn tags_are_lowercase_bracketed_words() {
         plain();
-        assert_eq!(tag(Status::Ok), "[ ok ]");
+        assert_eq!(tag(Status::Ok), "[ok]");
         assert_eq!(tag(Status::Fail), "[fail]");
         assert_eq!(tag(Status::Warn), "[warn]");
         assert_eq!(tag(Status::Skip), "[skip]");
+        assert_eq!(tag(Status::Info), "[info]");
+        assert_eq!(tag(Status::Off), "[off]");
+        assert_eq!(tag(Status::Missing), "[missing]");
+        assert_eq!(tag(Status::Pending), "[pending]");
     }
 
     #[test]
-    fn row_joins_cells_after_tag() {
+    fn rows_align_regardless_of_tag_width() {
         plain();
-        assert_eq!(
-            row_line(Status::Ok, &["nginx", "1.27.2"]),
-            "[ ok ]  nginx  1.27.2"
-        );
+        let short = row_line(Status::Ok, &["alpha"]);
+        let long = row_line(Status::Missing, &["beta"]);
+        // The cell starts at the same column in both rows.
+        assert_eq!(short.find("alpha"), long.find("beta"));
     }
 
     #[test]
@@ -488,14 +503,14 @@ Expected: `test result: ok. 3 passed`.
 
 ```bash
 git add apps/conary/Cargo.toml apps/conary/src/ui/mod.rs apps/conary/src/lib.rs
-git commit -m "feat(cli): add ui module for unified output vocabulary"
+git commit -m "feat(cli): add ui module with 8-state status vocabulary"
 ```
 
 ---
 
 ## Task 5: Exact-output tests for daily-driver commands
 
-Lock the user-visible output of `list` and `search` so the later sweep and polish are provably safe. Uses inline expected strings (a lightweight snapshot) with `NO_COLOR=1` for determinism — no new test dependency.
+Lock the user-visible output of `list` and `search` so the later sweep is provably safe. Inline expected strings (a lightweight snapshot) with `NO_COLOR=1` for determinism — no new test dependency.
 
 **Files:**
 - Test: `apps/conary/tests/cli_output_snapshots.rs`
@@ -555,7 +570,7 @@ fn list_one_package() {
 - [ ] **Step 2: Run the tests to verify they pass against current output**
 
 Run: `cargo test -p conary --test cli_output_snapshots 2>&1 | tail -20`
-Expected: all three PASS. (If `Trove::new` needs a different signature, mirror the constructor used in `apps/conary/tests/cli_daily_ux.rs` — `Trove::new_with_source` — and drop the `source` argument to `InstallSource::default()` if required. Adjust only the constructor call, not the expected strings.)
+Expected: all three PASS. (If `Trove::new` has a different arity in your tree, mirror the constructor used in `apps/conary/tests/cli_daily_ux.rs`. Adjust only the constructor call, never the expected strings — those are the lock.)
 
 - [ ] **Step 3: Commit**
 
@@ -566,62 +581,50 @@ git commit -m "test(cli): lock daily-driver output for list and search"
 
 ---
 
-## Task 6: Migrate status-tag sites and add the guardrail
+## Task 6: Migrate warnings + add the guardrail scaffold
 
-Convert every guarded-vocabulary site (89 bracket-tag occurrences across 24 files + 9 `Warning:` prints across 6 files, plus `progress.rs` phase strings) to the `ui` module, and add a test that fails if any survive outside `ui/`. The guard is the completeness gate: when it is green, the vocabulary is centralized.
+First migration family: warnings are unambiguously single-state, so they are the safe place to introduce the guard. Add the guard with only the warning literals, convert every warning site, and end green.
 
 **Files:**
 - Create: `apps/conary/tests/output_vocabulary_guard.rs`
-- Modify: every `apps/conary/src/**/*.rs` file the guard reports (drive from the test output)
-- Modify: `apps/conary/src/commands/progress.rs:111-112,318-319,451-452` (phase strings `[done]`/`[FAILED: …]`)
+- Modify: the ~33 files/lines emitting `Warning:` / `[WARN]` / `[WARNING]` / `[warning]` (drive from the guard output)
 
 **Interfaces:**
-- Consumes: `crate::ui` (Task 4) — `ui::row`, `ui::warn`, `ui::error`, `ui::note`, `ui::Status`
+- Consumes: `crate::ui::warn` (Task 4)
 
-**Conversion recipe** (apply per reported site):
+**Conversion recipe:** `println!("Warning: {x}")`, `eprintln!("[WARN] {x}")`, `[WARNING]`, `[warning]` → `crate::ui::warn(&x)` (drop the tag/prefix; `ui::warn` supplies `warning:`). Reword any comment that literally contains a listed word.
 
-| Current literal | Replace with |
-|---|---|
-| `println!("[OK] {x}")` / `[COMPLETE]` / `[VALID]` / `[DONE]` status line | `ui::row(ui::Status::Ok, &[/* columns */])` — or `ui::status("Done", x)` for a one-off verb line |
-| `println!("[FAIL] {x}")` / `[FAILED]` / `[ERROR]` row | `ui::row(ui::Status::Fail, &[/* columns */])` |
-| `eprintln!("[WARN] {x}")` / `[WARNING]` | `ui::warn(x)` |
-| `println!("Warning: {x}")` | `ui::warn(x)` |
-| a "skipped"/"already" row | `ui::row(ui::Status::Skip, &[/* columns */])` |
-
-Keep the column content identical to today; only the tag/prefix changes. Comments that literally contain a guarded tag (e.g. `// prints [OK]`) must be reworded — the guard scans whole lines.
-
-- [ ] **Step 1: Write the guardrail test**
+- [ ] **Step 1: Write the guardrail test (warning literals only)**
 
 Create `apps/conary/tests/output_vocabulary_guard.rs`:
 
 ```rust
-//! Fails if any guarded status-vocabulary literal is emitted outside the ui
-//! module. Keeps CLI output converging on one vocabulary (see the CLI output
-//! UX spec). The forbidden set here must match the spec's "replaces" table.
+//! Fails if a guarded status-vocabulary literal is emitted outside the ui
+//! module. This is a line-level lint: it matches the exact listed words only.
+//! The list grows as migration families land (warnings, then errors, then
+//! success/info/state), so every migration step ends with the guard green.
 
 use std::fs;
 use std::path::Path;
 
-const FORBIDDEN_TAGS: &[&str] = &[
-    "[OK]", "[FAIL]", "[FAILED]", "[WARN]", "[WARNING]", "[ERROR]", "[COMPLETE]", "[VALID]",
-    "[DONE]",
-];
+/// Guarded literals. Extended by later migration tasks.
+const FORBIDDEN: &[&str] = &["[WARN]", "[WARNING]"];
 
 fn scan(dir: &Path, violations: &mut Vec<String>) {
     for entry in fs::read_dir(dir).unwrap() {
         let path = entry.unwrap().path();
         if path.is_dir() {
-            // The ui module defines the canonical vocabulary; skip it.
             if path.file_name().is_some_and(|n| n == "ui") {
-                continue;
+                continue; // the ui module defines the canonical vocabulary
             }
             scan(&path, violations);
         } else if path.extension().is_some_and(|e| e == "rs") {
             let text = fs::read_to_string(&path).unwrap();
             for (i, line) in text.lines().enumerate() {
                 let upper = line.to_uppercase();
-                if FORBIDDEN_TAGS.iter().any(|t| upper.contains(t)) || line.contains("\"Warning:")
-                {
+                let hit = FORBIDDEN.iter().any(|t| upper.contains(t))
+                    || line.contains("\"Warning:");
+                if hit {
                     violations.push(format!("{}:{}: {}", path.display(), i + 1, line.trim()));
                 }
             }
@@ -643,65 +646,150 @@ fn no_raw_status_vocabulary_outside_ui() {
 }
 ```
 
-- [ ] **Step 2: Run the guard to enumerate violations (expected red)**
+- [ ] **Step 2: Run the guard to enumerate warning sites (expected red)**
 
 Run: `cargo test -p conary --test output_vocabulary_guard 2>&1 | tail -60`
-Expected: FAIL, printing the list of sites to fix. This list is your worklist.
+Expected: FAIL, printing the warning sites. This is your worklist.
 
-- [ ] **Step 3: Convert every reported site using the recipe**
+- [ ] **Step 3: Convert every reported site with the recipe**
 
-Work through the printed list file by file, applying the conversion recipe above. Include `apps/conary/src/commands/progress.rs`: change the phase strings so `format!("{} [done]", package)` becomes `format!("{} done", package)` (the `[done]` tag is the guarded literal) and `format!("{} [FAILED: {}]", package, err)` becomes `format!("{package} failed: {err}")`. Import `crate::ui` where needed.
+Work the printed list file by file, replacing each with `crate::ui::warn(...)`. Import `crate::ui` where needed.
 
 - [ ] **Step 4: Re-run the guard until green**
 
 Run: `cargo test -p conary --test output_vocabulary_guard 2>&1 | tail -20`
-Expected: PASS (`test result: ok`). Repeat Step 3 for any remaining hits.
+Expected: PASS.
 
 - [ ] **Step 5: Confirm nothing else regressed**
 
 Run: `cargo test -p conary 2>&1 | tail -30`
-Expected: the full suite passes, including `cli_output_snapshots` (list/search have no guarded tags, so their goldens are unchanged) and `cli_daily_ux`.
+Expected: full suite passes, including `cli_output_snapshots` and `cli_daily_ux`.
 
 - [ ] **Step 6: Commit**
 
 ```bash
 git add apps/conary/tests/output_vocabulary_guard.rs apps/conary/src
-git commit -m "refactor(cli): route status vocabulary through ui module + guardrail"
+git commit -m "refactor(cli): route warnings through ui::warn + guard"
 ```
 
 ---
 
-## Task 7: Polish the `list` command output
-
-`list` is the flagship read command. Route its heading through `ui::heading` and remove the `{:?}` Debug-format leak on the trove type (`(Package)` → `(package)`), then update the locked golden.
+## Task 7: Migrate errors (extend the guard)
 
 **Files:**
-- Modify: `apps/conary/src/commands/query/package.rs:78-92` (`print_installed_packages`)
-- Modify: `apps/conary/tests/cli_output_snapshots.rs` (`list_one_package` expected string)
+- Modify: `apps/conary/tests/output_vocabulary_guard.rs` (extend `FORBIDDEN`)
+- Modify: the ~18 files/lines emitting `[FAIL]` / `[FAILED]` / `[ERROR]`
 
 **Interfaces:**
-- Consumes: `crate::ui::heading` (Task 4)
+- Consumes: `crate::ui::error`, `crate::ui::row`, `crate::ui::Status` (Task 4)
 
-- [ ] **Step 1: Update the expected golden first (TDD red)**
+**Conversion recipe:** a one-off error message → `crate::ui::error(&x)` (→ `error: x`). A per-item failure row in a list → `crate::ui::row(ui::Status::Fail, &[/* same columns */])`. An enum arm that returns a bare tag string (e.g. `DerivedStatus::Error => "[ERROR]"`) → return `ui::tag(ui::Status::Fail)`.
 
-In `apps/conary/tests/cli_output_snapshots.rs`, change the `list_one_package` expected string from:
+- [ ] **Step 1: Extend the guard (TDD red)**
 
-```rust
-        "Installed packages:\n  nginx 1.27.2 (Package) [x86_64]\n\nTotal: 1 package(s)\n"
-```
-
-to:
+In `apps/conary/tests/output_vocabulary_guard.rs`, change `FORBIDDEN` to:
 
 ```rust
-        "Installed packages:\n  nginx 1.27.2 (package) [x86_64]\n\nTotal: 1 package(s)\n"
+const FORBIDDEN: &[&str] = &["[WARN]", "[WARNING]", "[FAIL]", "[FAILED]", "[ERROR]"];
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [ ] **Step 2: Run the guard to enumerate error sites (expected red)**
 
-Run: `cargo test -p conary --test cli_output_snapshots list_one_package 2>&1 | tail -20`
-Expected: FAIL — output still shows `(Package)`.
+Run: `cargo test -p conary --test output_vocabulary_guard 2>&1 | tail -60`
+Expected: FAIL, listing the `[FAIL]`/`[FAILED]`/`[ERROR]` sites.
 
-- [ ] **Step 3: Update the renderer**
+- [ ] **Step 3: Convert every reported site with the recipe**
+
+- [ ] **Step 4: Re-run guard + full suite until green**
+
+Run: `cargo test -p conary --test output_vocabulary_guard 2>&1 | tail -20`
+Then: `cargo test -p conary 2>&1 | tail -30`
+Expected: both green.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add apps/conary/tests/output_vocabulary_guard.rs apps/conary/src
+git commit -m "refactor(cli): route errors through ui + extend guard"
+```
+
+---
+
+## Task 8: Migrate success / info / state (extend the guard, align progress.rs)
+
+The largest and most entangled family: success tags plus the multi-state indicators (`[OK]` paired with `[OFF]`/`[MISSING]`, `[COMPLETE]` paired with `[PENDING]`). This is where the 8-state `Status` enum earns its keep — convert *both* sides of each indicator so no raw tag is left next to a styled one.
+
+**Files:**
+- Modify: `apps/conary/tests/output_vocabulary_guard.rs` (extend `FORBIDDEN`)
+- Modify: the ~54 success/info/state sites, notably:
+  - `apps/conary/src/commands/federation.rs:198` — `if peer.enabled { "[OK]" } else { "[OFF]" }`
+  - `apps/conary/src/commands/bootstrap/setup.rs:51` — `if present { "[OK]" } else { "[MISSING]" }`
+  - `apps/conary/src/commands/bootstrap/setup.rs:108` — `if complete { "[COMPLETE]" } else { "[PENDING]" }`
+  - `apps/conary/src/commands/derived.rs:36` — enum arm returning `"[ERROR]"`-style tags (convert the whole set of arms)
+  - `apps/conary/src/commands/progress.rs` — phase strings (see recipe)
+
+**Interfaces:**
+- Consumes: `crate::ui::{row, tag, status, note, Status}` (Task 4)
+
+**Conversion recipe:**
+
+| Legacy | Replace with |
+|---|---|
+| `[OK]` / `[COMPLETE]` / `[DONE]` / `[VALID]` success row | `ui::row(ui::Status::Ok, &[…])` |
+| `[OK]`/`[OFF]` indicator | `ui::tag(if cond { ui::Status::Ok } else { ui::Status::Off })` |
+| `[OK]`/`[MISSING]` indicator | `ui::tag(if cond { ui::Status::Ok } else { ui::Status::Missing })` |
+| `[COMPLETE]`/`[PENDING]` indicator | `ui::tag(if cond { ui::Status::Ok } else { ui::Status::Pending })` |
+| `[INFO]` line | `ui::note(&x)` (message) or `ui::row(ui::Status::Info, &[…])` (row) |
+| one-off success verb (e.g. "Cooked: x") | `ui::status("Cooked", &x)` |
+
+For `progress.rs`: `format!("{} [done]", package)` → `format!("{package} done")`; `format!("{} [FAILED: {}]", package, err)` → `format!("{package} failed: {err}")`. Note the guard does **not** catch `[FAILED: …]` (colon before `]`) — convert it by hand while you are in the file; the `[done]` form *is* guard-caught via `[DONE]`.
+
+- [ ] **Step 1: Extend the guard to the full word-list (TDD red)**
+
+In `apps/conary/tests/output_vocabulary_guard.rs`, change `FORBIDDEN` to:
+
+```rust
+const FORBIDDEN: &[&str] = &[
+    "[OK]", "[COMPLETE]", "[DONE]", "[VALID]", "[FAIL]", "[FAILED]", "[ERROR]", "[WARN]",
+    "[WARNING]", "[INFO]", "[OFF]", "[MISSING]", "[PENDING]",
+];
+```
+
+- [ ] **Step 2: Run the guard to enumerate remaining sites (expected red)**
+
+Run: `cargo test -p conary --test output_vocabulary_guard 2>&1 | tail -80`
+Expected: FAIL, listing the success/info/state sites (including the entangled indicators above).
+
+- [ ] **Step 3: Convert every reported site with the recipe**
+
+Convert both branches of each paired indicator so no raw tag remains beside a styled one. Include `progress.rs` per the recipe.
+
+- [ ] **Step 4: Re-run guard + full suite until green**
+
+Run: `cargo test -p conary --test output_vocabulary_guard 2>&1 | tail -20`
+Then: `cargo test -p conary 2>&1 | tail -30`
+Expected: both green.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add apps/conary/tests/output_vocabulary_guard.rs apps/conary/src
+git commit -m "refactor(cli): route success/info/state tags through ui + full guard"
+```
+
+---
+
+## Task 9: De-Debug the `list` type column
+
+`list` is the flagship read command. Its type column uses `{:?}` (Debug) — replace it with the type's own `as_str()`. `TroveType` is a strum `AsRefStr`, so `as_str()` returns `"Package"`: output is unchanged, but the fragile Debug-in-output is gone. Route the heading through `ui::heading`.
+
+**Files:**
+- Modify: `apps/conary/src/commands/query/package.rs` (`print_installed_packages`)
+
+**Interfaces:**
+- Consumes: `crate::ui::heading` (Task 4); `TroveType::as_str()` (existing)
+
+- [ ] **Step 1: Update the renderer**
 
 In `apps/conary/src/commands/query/package.rs`, replace `print_installed_packages`:
 
@@ -709,8 +797,12 @@ In `apps/conary/src/commands/query/package.rs`, replace `print_installed_package
 fn print_installed_packages(troves: &[conary_core::db::models::Trove]) {
     crate::ui::heading("Installed packages:");
     for trove in troves {
-        let kind = format!("{:?}", trove.trove_type).to_lowercase();
-        print!("  {} {} ({})", trove.name, trove.version, kind);
+        print!(
+            "  {} {} ({})",
+            trove.name,
+            trove.version,
+            trove.trove_type.as_str()
+        );
         if let Some(arch) = &trove.architecture {
             print!(" [{}]", arch);
         }
@@ -720,35 +812,35 @@ fn print_installed_packages(troves: &[conary_core::db::models::Trove]) {
 }
 ```
 
-- [ ] **Step 4: Run to verify it passes**
+- [ ] **Step 2: Run the locked snapshot to prove output is unchanged**
 
 Run: `cargo test -p conary --test cli_output_snapshots 2>&1 | tail -20`
-Expected: all PASS.
+Expected: all PASS — `as_str()` yields `"Package"` and `ui::heading` under `NO_COLOR` yields the bare text, so the golden `(Package)` / `Installed packages:` still match.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
-git add apps/conary/src/commands/query/package.rs apps/conary/tests/cli_output_snapshots.rs
-git commit -m "polish(cli): list uses ui heading and drops debug-format type"
+git add apps/conary/src/commands/query/package.rs
+git commit -m "polish(cli): list heading via ui, drop debug-format type column"
 ```
 
 ---
 
-## Task 8: Document the vocabulary and verbosity in AGENTS.md
+## Task 10: Document the vocabulary and verbosity in AGENTS.md
 
 Give contributors one canonical reference so the guardrail's rules are discoverable.
 
 **Files:**
-- Modify: `AGENTS.md` (add a "CLI output conventions" section)
+- Modify: `AGENTS.md`
 
 - [ ] **Step 1: Find the insertion point**
 
 Run: `grep -nE '^#{1,3} ' AGENTS.md | tail -30`
-Expected: a list of section headers. Pick the end of the most relevant existing section (e.g. conventions/standards); if none is obvious, append at the end of the file.
+Expected: section headers. Pick the end of the most relevant conventions section; if none is obvious, append at the end.
 
 - [ ] **Step 2: Add the conventions section**
 
-Append this section to `AGENTS.md`:
+Append to `AGENTS.md`:
 
 ```markdown
 ## CLI output conventions (apps/conary)
@@ -756,16 +848,22 @@ Append this section to `AGENTS.md`:
 All user-facing status output goes through `apps/conary/src/ui/`. Do not print
 raw status tags. The `output_vocabulary_guard` test enforces this.
 
-| State | Message form | Row tag | Color |
-|---|---|---|---|
-| success | `ui::status(verb, msg)` (green verb) | `ui::row(Status::Ok, …)` → `[ ok ]` | green |
-| failure | `ui::error(msg)` → `error: …` | `ui::row(Status::Fail, …)` → `[fail]` | red |
-| warning | `ui::warn(msg)` → `warning: …` | `ui::row(Status::Warn, …)` → `[warn]` | yellow |
-| skipped | — | `ui::row(Status::Skip, …)` → `[skip]` | dim |
-| note | `ui::note(msg)` → `note: …` | — | cyan |
+`Status { Ok, Fail, Warn, Skip, Info, Off, Missing, Pending }` — tags render
+lowercase and bracketed (`[ok]`, `[fail]`, `[warn]`, `[skip]`, `[info]`,
+`[off]`, `[missing]`, `[pending]`); `ui::row` aligns the column after the tag.
 
-Tags are lowercase and ASCII-only; color is applied by `console` and disabled
-automatically off-TTY or under `NO_COLOR`.
+| Use | Call |
+|---|---|
+| warning message | `ui::warn(msg)` → `warning: …` |
+| error message | `ui::error(msg)` → `error: …` |
+| note / info message | `ui::note(msg)` → `note: …` |
+| success verb line | `ui::status(verb, msg)` (green verb) |
+| per-item row | `ui::row(Status::_, &[cells])` |
+| section heading | `ui::heading(text)` |
+| key/value line | `ui::field(label, value)` |
+
+Tags are ASCII-only; color is applied by `console` and disabled automatically
+off-TTY or under `NO_COLOR`.
 
 Logging: the CLI defaults to `warn` and is quiet. `--verbose` (repeatable) raises
 to info/debug/trace; `-q`/`--quiet` drops to errors only; `RUST_LOG` overrides
@@ -789,12 +887,12 @@ git commit -m "docs(cli): document output vocabulary and verbosity conventions"
 - `RUST_LOG` > flags > `warn` precedence → Task 1 (directive) + Task 2 (`try_from_default_env` fallback) + Task 3 (wiring), asserted in `logging_verbosity.rs`.
 - `remi` unchanged → Task 2 keeps `init_server_tracing` byte-for-byte and only renames the call site.
 - Global `--verbose`/`-q` with the `-v` collision documented → Task 3 + Global Constraints.
-- Pillar B `ui` module + hybrid vocabulary + `console` backend + TTY/`NO_COLOR` → Task 4.
-- Bounded migration (status-tag sites + daily commands) + `progress.rs` alignment → Task 6; `list` polish → Task 7; long tail explicitly out of scope → Global Constraints.
-- Enforcement: guardrail → Task 6; color-stripped exact-output tests for daily commands → Task 5.
-- Vocabulary documented in `AGENTS.md` → Task 8.
+- Pillar B `ui` module, 8-state `Status`, column-aligned tags, `console` backend → Task 4.
+- Bounded migration of the full guarded vocabulary, by family → Tasks 6 (warnings), 7 (errors), 8 (success/info/state + `progress.rs`); entangled indicators explicitly enumerated in Task 8.
+- Enforcement: guardrail introduced in Task 6 and grown in Tasks 7–8 (each ends green); color-stripped exact-output tests for `list`/`search` → Task 5.
+- `list` Debug-format cleanup → Task 9. Vocabulary documented in `AGENTS.md` → Task 10.
 - Command tiering already shipped → not a task (Global Constraints / spec framing).
 
-**Placeholder scan:** No `TBD`/`TODO` in delivered code. The only `todo!()` is the intentional TDD-red stub in Task 1 Step 1, replaced in Step 3. The Task 6 sweep is driven by the guard's concrete output plus an explicit recipe and named files rather than a per-site diff, because the guard is the machine-checkable completeness gate.
+**Placeholder scan:** No `TBD`/`TODO` in delivered code. The only `todo!()` is the intentional TDD-red stub in Task 1. The Tasks 6–8 sweeps are driven by the guard's concrete output plus an explicit recipe and named files, because the guard is the machine-checkable completeness gate; the entangled sites are named individually in Task 8.
 
-**Type consistency:** `verbosity_directive(bool, u8) -> &'static str` is defined in Task 1 and consumed with the same signature in Task 3. `init_cli_tracing(&str)` is defined in Task 2 and called with a `&'static str` in Task 3. `ui::Status`, `ui::row`, `ui::warn`, `ui::error`, `ui::heading` are defined in Task 4 and consumed in Tasks 6–7 with matching signatures. `console = "0.16"` (Task 4) matches the resolved transitive version.
+**Type consistency:** `verbosity_directive(bool, u8) -> &'static str` (Task 1) consumed identically in Task 3. `init_cli_tracing(&str)` (Task 2) called with `&'static str` in Task 3. `Status` (8 variants), `tag`, `row`, `warn`, `error`, `note`, `status`, `heading` defined in Task 4 and consumed with matching signatures in Tasks 6–10. `TroveType::as_str()` (Task 9) is the existing strum `AsRefStr` method. The guard's `FORBIDDEN` list only ever grows and is a superset at each step (warnings ⊂ +errors ⊂ +success/info/state). `console = "0.16"` (Task 4) matches the resolved transitive version 0.16.3.

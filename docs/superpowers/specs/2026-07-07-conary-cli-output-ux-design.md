@@ -177,12 +177,24 @@ Message helpers (cargo-style, lowercase, colored+bold prefix):
 | `ui::note(msg)` | `note: {msg}` | cyan | stderr |
 | `ui::status(verb, msg)` | `{verb} {msg}` (bold green verb, cargo-style) | green | stdout |
 
-Row helper for per-item lists — fixed-width aligned tags:
+Row helper for per-item lists — column-aligned tags:
 
-- `ui::row(status: Status, cells: &[&str])` → `[ ok ]  nginx    1.27.2`
-- `enum Status { Ok, Fail, Warn, Skip }` — all rendered as width-6 tags
-  (`[ ok ]`, `[fail]`, `[warn]`, `[skip]`), colored to match the message helpers
-  (Ok=green, Fail=red, Warn=yellow, Skip=dim).
+- `ui::row(status: Status, cells: &[&str])` → `[ok]      nginx    1.27.2`
+- `enum Status { Ok, Fail, Warn, Skip, Info, Off, Missing, Pending }`. A code
+  survey of the actual bracket tags in use (filtering out code noise like
+  `#[test]` and `&[String]`) found the real indicator vocabulary is these
+  eight states — success/fail/warn/skip plus the multi-state indicators
+  `off`/`missing`/`pending` (e.g. `federation.rs:198` renders `[OK]`/`[OFF]`,
+  `bootstrap/setup.rs:51,108` render `[OK]`/`[MISSING]` and
+  `[COMPLETE]`/`[PENDING]`) and `info`.
+- Tags are `[ok]`, `[fail]`, `[warn]`, `[skip]`, `[info]`, `[off]`, `[missing]`,
+  `[pending]` — bracket plus a lowercase word, no inner padding. Because the
+  words differ in length, `row` right-pads the tag (by **visible** width, so
+  ANSI is not counted) to the widest tag so the following columns line up. This
+  supersedes the earlier fixed-width `[ ok ]` sketch, which only worked when
+  every state fit in four characters.
+- Colors: Ok=green, Fail=red, Warn=yellow, Skip=dim, Info=cyan, Off=dim,
+  Missing=red, Pending=yellow.
 
 Detail helper for key/value screens:
 
@@ -196,17 +208,20 @@ spelling:
 
 | State | Message form | Row tag | Color | Replaces |
 |---|---|---|---|---|
-| success | green verb via `ui::status` | `[ ok ]` | green | `[OK]`, `[COMPLETE]`, `[VALID]`, `[done]` |
-| failure | `error:` | `[fail]` | red | `[FAILED]`, `[FAIL]`, `[ERROR]` |
-| warning | `warning:` | `[warn]` | yellow | `Warning:`, `[WARN]`, `[WARNING]` |
+| success | green verb via `ui::status` | `[ok]` | green | `[OK]`, `[COMPLETE]`, `[DONE]`, `[VALID]` |
+| failure | `ui::error` → `error:` | `[fail]` | red | `[FAILED]`, `[FAIL]`, `[ERROR]` |
+| warning | `ui::warn` → `warning:` | `[warn]` | yellow | `Warning:`, `[WARN]`, `[WARNING]`, `[warning]` |
+| info | `ui::note` → `note:` | `[info]` | cyan | `[INFO]` |
 | skipped | — | `[skip]` | dim | ad-hoc "skipped"/"already" strings |
-| note | `note:` | — | cyan | ad-hoc `[INFO]`, `Note:` |
+| off | — | `[off]` | dim | `[OFF]` |
+| missing | — | `[missing]` | red | `[MISSING]` |
+| pending | — | `[pending]` | yellow | `[PENDING]` |
 
-The "replaces" column lists exactly the literals the
-[guardrail](#ci-guardrail) enforces, so the vocabulary table and the guard regex
-stay in lockstep. Build-domain spellings such as `[built]` are converted during
-migration where they mean success, but are not guard-enforced (they can denote a
-non-status field label elsewhere).
+The "replaces" column is exactly the literal word-list the
+[guardrail](#ci-guardrail) enforces, so the vocabulary table and the guard stay
+in lockstep. Tags are lowercase and ASCII-only. Lowercase descriptive markers
+that are *not* status indicators (e.g. `[circular]`, `[blocked]`, `[deferred]`,
+`[already shown]`) are prose, not vocabulary, and are out of scope.
 
 The canonical table is copied into `AGENTS.md` (the repo's canonical conventions
 doc) so future contributors have one reference.
@@ -226,35 +241,45 @@ package reads the same as everywhere else.
 
 ### Migration boundary
 
-In scope for this spec:
+In scope for this spec: **every** site emitting a guarded-vocabulary literal —
+roughly 100 occurrences across ~30 files (about 33 warnings, 18 errors, and 54
+success/info/state tags), plus `progress.rs`'s phase strings. When the guard is
+green, the whole guarded vocabulary is centralized.
 
-- **(a) Status-tag sites** — the ~60 call sites emitting the unified-vocabulary
-  literals above.
-- **(b) Daily-driver command paths** — `install`, `remove`, `update`, `search`,
-  `list`, `autoremove`, `pin`, `unpin` (the commands in the daily-driver UX
-  matrix).
+Out of scope: the ~2,000-site long tail of general `println!` prose that carries
+no status tag. It is converted opportunistically; the guard prevents new drift.
 
-Out of scope: the ~2,000-site long tail of general `println!` output. These are
-converted opportunistically over time; the guardrail below prevents new drift in
-the unified vocabulary.
+Two kinds of enforcement, with different reach:
+
+- **Guard** — machine-guarantees the *vocabulary* is centralized everywhere in
+  `apps/conary/src`.
+- **Snapshots** — lock the *exact output* of `list` and `search` only (the two
+  daily commands that are cheap to drive deterministically). Other daily
+  commands (`install`, `update`, …) benefit from the sweep but are not
+  snapshot-locked here, because exercising them needs heavy repo/package
+  fixtures. This is a deliberate coverage boundary, not an oversight.
 
 ## Enforcement
 
 ### CI guardrail
 
-A test (e.g. `apps/conary/tests/output_vocabulary_guard.rs`) scans
-`apps/conary/src`, excluding `apps/conary/src/ui/`, for literals in the unified
-status vocabulary:
+A test (`apps/conary/tests/output_vocabulary_guard.rs`) scans `apps/conary/src`,
+excluding `apps/conary/src/ui/`, and fails if any line contains a literal from an
+explicit word-list — `[OK] [COMPLETE] [DONE] [VALID] [FAIL] [FAILED] [ERROR]
+[WARN] [WARNING] [INFO] [OFF] [MISSING] [PENDING]` (case-insensitive) or a
+printed string beginning `Warning:`.
 
-- bracket tags matching `\[(OK|FAIL|FAILED|WARN|WARNING|ERROR|COMPLETE|VALID|DONE)\]`
-  (case-insensitive), and
-- a line beginning `Warning:`.
+It is a **line-level lint**, not a semantic analyzer: it matches the exact
+listed words only, so unrelated bracket tags (`[SUMMARY]`, `[ORPHANS]`, section
+headers) and code noise (`#[test]`, `&[String]`) are untouched. Two consequences
+to plan around: (1) it also flags a listed word appearing in a *comment*, so
+such comments get reworded during migration; (2) it matches only the closed
+form, so `progress.rs`'s inline `[FAILED: {err}]` (colon before `]`) is **not**
+caught and is converted by hand.
 
-If any survive outside `ui/`, the test fails. The regex is scoped **only** to the
-vocabulary Pillar B fully centralizes, so after the migration zero matches
-remain and the guard starts green; it then blocks any regression. Domain tags
-that are not status (`[MISSING]`, `[ORPHANS]`, etc.) are intentionally not
-matched.
+The word-list is introduced incrementally alongside the migration families
+(warnings, then errors, then success/info/state) so that each migration step
+ends with the guard green rather than deferring one large red-to-green jump.
 
 ### Snapshot tests
 
@@ -297,7 +322,7 @@ Independently shippable, in this order:
 |---|---|
 | Reordering tracing init drops very-early logs | None exist in current code; negligible. |
 | Snapshot nondeterminism from color/timestamps | Force `NO_COLOR=1`, fixed fixture, strip/avoid timestamps. |
-| Guard false-positives on non-status bracket tags | Regex scoped narrowly to the unified status vocabulary only. |
+| Guard false-positives on non-status bracket tags | Word-list matches only the explicit status/indicator literals; section headers and code noise are excluded. Comments containing a listed word are reworded during migration. |
 | Changing shared `init_tracing` breaks `remi` logging | Split into two functions; `remi` keeps `init_server_tracing` with identical behavior. Only 2 callers total. |
 | Custom CLI tracing formatter proves fiddly | Compact formatter (no time/target) is the baseline; `warning:`/`error:` alignment is a should-have that can defer. |
 
