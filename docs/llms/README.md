@@ -12,13 +12,29 @@ This directory is the vendor-neutral map for coding assistants working on
 Conary. Use it to find the right canonical docs quickly without turning the root
 guidance into a manual.
 
+## Choose By Task
+
+- **Feature or source edit:** run `bash scripts/agent-context.sh --path <file>`
+  for each touched path, or `--feature <slug>` when starting from a capability.
+- **Docs-only assistant guidance edit:** start with `AGENTS.md`, this file,
+  `docs/llms/subsystem-map.md`, and the affected tool shim; use the docs proof
+  floor below.
+- **Architecture or subsystem question:** use `docs/ARCHITECTURE.md` and the
+  relevant `docs/modules/*.md` file after owner-card routing.
+- **Integration-test or fixture work:** read `docs/INTEGRATION-TESTING.md` and
+  `docs/modules/test-fixtures.md`.
+- **Deploy, MCP, or host workflow:** read `docs/operations/infrastructure.md`.
+- **Version-specific tool, SDK, MCP, or model behavior:** check current vendor
+  documentation before editing durable guidance.
+
 ## Guidance Order
 
-1. Start with `AGENTS.md` for the repo contract, verification commands, and
-   safety rules.
-2. Use this file to find the right deeper docs.
-3. Follow the linked canonical docs for subsystem, testing, and operations
-   detail.
+1. `AGENTS.md` is the canonical repo-wide contract.
+2. This file is the vendor-neutral routing layer into canonical docs.
+3. `scripts/agent-context.sh` and `docs/modules/feature-ownership.md` own exact
+   feature slugs, path routing, start-here files, focused proof, and interaction
+   gates.
+4. Linked canonical docs own subsystem, testing, and operations detail.
 
 ## Instruction Layers
 
