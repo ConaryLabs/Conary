@@ -1599,6 +1599,13 @@ mod tests {
             GoldenAdapterCase {
                 fixture_id: "adapter-sysctl",
                 command: "sysctl",
+                argv: &["-w", "kernel.example=1"],
+                adapter_id: "sysctl/v1",
+                reason_code: "helper-complete-sysctl",
+            },
+            GoldenAdapterCase {
+                fixture_id: "adapter-sysctl-target-profile-private-review",
+                command: "sysctl",
                 argv: &["-w", "net.ipv4.ip_forward=1"],
                 adapter_id: "sysctl/v1",
                 reason_code: "helper-complete-sysctl",

@@ -16,9 +16,9 @@ use rusqlite::{Connection, OptionalExtension, Row, params};
 /// Current conversion algorithm version
 /// Bump this when making changes that require re-conversion of existing packages.
 ///
-/// v5 invalidates Remi artifacts produced before public scriptlet metadata
-/// required security policy intents and stale rows failed closed directly.
-pub const CONVERSION_VERSION: i32 = 5;
+/// v6 invalidates Remi artifacts produced before sysctl target-profile public
+/// policy split public-ready from private-review scriptlet publication.
+pub const CONVERSION_VERSION: i32 = 6;
 
 /// A converted package record
 #[derive(Debug, Clone)]
@@ -1004,6 +1004,8 @@ mod tests {
 
     #[test]
     fn stale_converted_rows_are_not_scriptlet_public_ready() {
+        assert_eq!(CONVERSION_VERSION, 6);
+
         let mut converted = ConvertedPackage::new_server(
             "fedora".to_string(),
             "stale".to_string(),

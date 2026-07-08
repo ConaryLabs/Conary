@@ -119,8 +119,11 @@ fn adapter_entry(adapter_id: &'static str) -> SupportMatrixEntry {
         "sysctl/v1" => (
             Some("sysctl -w <key>=<value>"),
             "helper-complete-sysctl",
-            "Narrow sysctl writes are complete only when the key and value validate and conversion projects the effect into native hooks.sysctl.",
-            &["adapter-sysctl"],
+            "Narrow sysctl writes are complete when the key and value validate and conversion projects the effect into native hooks.sysctl; public-ready status also requires target-profile policy to accept the exact key.",
+            &[
+                "adapter-sysctl",
+                "adapter-sysctl-target-profile-private-review",
+            ],
             &["rpm", "deb", "arch"],
         ),
         "setuid-mode/v1" => (
@@ -362,6 +365,37 @@ mod tests {
         );
         assert_eq!(
             fixtures.get("adapter-file-capability-high-risk"),
+            Some(&golden_fixtures::GoldenFixtureOutcome::ReviewRequired)
+        );
+    }
+
+    #[test]
+    fn sysctl_support_matrix_distinguishes_public_and_private_review_fixtures() {
+        let matrix = SupportMatrix::default();
+        let row = matrix
+            .entries()
+            .iter()
+            .find(|entry| entry.adapter_id == Some("sysctl/v1"))
+            .expect("sysctl adapter row exists");
+
+        assert_eq!(
+            row.fixture_names,
+            &[
+                "adapter-sysctl",
+                "adapter-sysctl-target-profile-private-review"
+            ]
+        );
+
+        let fixtures: std::collections::BTreeMap<_, _> = golden_fixtures::all_cases()
+            .iter()
+            .map(|case| (case.id, case.expected_outcome))
+            .collect();
+        assert_eq!(
+            fixtures.get("adapter-sysctl"),
+            Some(&golden_fixtures::GoldenFixtureOutcome::FullyReplaced)
+        );
+        assert_eq!(
+            fixtures.get("adapter-sysctl-target-profile-private-review"),
             Some(&golden_fixtures::GoldenFixtureOutcome::ReviewRequired)
         );
     }

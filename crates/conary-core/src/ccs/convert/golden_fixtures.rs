@@ -189,6 +189,10 @@ const ALL_GOLDEN_FIXTURE_CASES: &[GoldenFixtureCase] = &[
         "fedora-44",
         "fedora-44",
     ),
+    fixture(
+        "adapter-sysctl-target-profile-private-review",
+        GoldenFixtureOutcome::ReviewRequired,
+    ),
     public_fixture(
         "adapter-setuid-mode",
         GoldenFixtureOutcome::FullyReplaced,
