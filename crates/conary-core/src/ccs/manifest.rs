@@ -77,6 +77,10 @@ pub struct CcsManifest {
     #[serde(default)]
     pub policy: BuildPolicyConfig,
 
+    /// Linux file capabilities to apply to shipped payload files.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub file_capabilities: Vec<FileCapability>,
+
     /// Full provenance / Package DNA information
     #[serde(default)]
     pub provenance: Option<ManifestProvenance>,
@@ -213,6 +217,9 @@ impl CcsManifest {
         }
 
         self.scriptlets.validate()?;
+        for capability in &self.file_capabilities {
+            capability.validate()?;
+        }
         if let Some(bundle) = &self.legacy_scriptlets {
             bundle.validate().map_err(|error| {
                 ManifestError::Invalid(format!(
@@ -250,6 +257,7 @@ impl CcsManifest {
             build: None,
             legacy: None,
             policy: BuildPolicyConfig::default(),
+            file_capabilities: Vec::new(),
             provenance: None,
             capabilities: None,
             redirects: Redirects::default(),
@@ -608,6 +616,127 @@ fn supported_scriptlet_capability_paths(name: &str) -> Option<&'static [&'static
         _ => None,
     }
 }
+
+/// Linux file capabilities for an executable shipped by the package.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileCapability {
+    pub path: String,
+    #[serde(default)]
+    pub capabilities: Vec<String>,
+    #[serde(default = "default_true")]
+    pub permitted: bool,
+    #[serde(default = "default_true")]
+    pub effective: bool,
+    #[serde(default)]
+    pub inheritable: bool,
+}
+
+impl FileCapability {
+    pub fn validate(&self) -> Result<(), ManifestError> {
+        if !self.path.starts_with('/') {
+            return Err(ManifestError::Invalid(format!(
+                "relative path not allowed in file_capabilities: {}",
+                self.path
+            )));
+        }
+        sanitize_path(&self.path).map_err(|error| {
+            ManifestError::Invalid(format!(
+                "invalid file_capabilities path '{}': {}",
+                self.path, error
+            ))
+        })?;
+        if self.capabilities.is_empty() {
+            return Err(ManifestError::Invalid(format!(
+                "file_capabilities '{}' must declare at least one Linux capability",
+                self.path
+            )));
+        }
+        for capability in &self.capabilities {
+            if !is_supported_linux_file_capability(capability) {
+                return Err(ManifestError::Invalid(format!(
+                    "unknown Linux file capability '{}' for {}",
+                    capability, self.path
+                )));
+            }
+        }
+        if self.effective && !self.permitted {
+            return Err(ManifestError::Invalid(format!(
+                "effective file capability requires permitted for {}",
+                self.path
+            )));
+        }
+        if self.inheritable {
+            return Err(ManifestError::Invalid(format!(
+                "inheritable file capabilities are not supported yet for {}",
+                self.path
+            )));
+        }
+        Ok(())
+    }
+
+    pub fn to_setcap_spec(&self) -> Result<String, ManifestError> {
+        self.validate()?;
+        let mut flags = String::new();
+        if self.effective {
+            flags.push('e');
+        }
+        if self.inheritable {
+            flags.push('i');
+        }
+        if self.permitted {
+            flags.push('p');
+        }
+        Ok(format!("{}=+{}", self.capabilities.join(","), flags))
+    }
+}
+
+pub fn is_supported_linux_file_capability(name: &str) -> bool {
+    LINUX_FILE_CAPABILITY_NAMES.contains(&name)
+}
+
+pub const LINUX_FILE_CAPABILITY_NAMES: &[&str] = &[
+    "cap_chown",
+    "cap_dac_override",
+    "cap_dac_read_search",
+    "cap_fowner",
+    "cap_fsetid",
+    "cap_kill",
+    "cap_setgid",
+    "cap_setuid",
+    "cap_setpcap",
+    "cap_linux_immutable",
+    "cap_net_bind_service",
+    "cap_net_broadcast",
+    "cap_net_admin",
+    "cap_net_raw",
+    "cap_ipc_lock",
+    "cap_ipc_owner",
+    "cap_sys_module",
+    "cap_sys_rawio",
+    "cap_sys_chroot",
+    "cap_sys_ptrace",
+    "cap_sys_pacct",
+    "cap_sys_admin",
+    "cap_sys_boot",
+    "cap_sys_nice",
+    "cap_sys_resource",
+    "cap_sys_time",
+    "cap_sys_tty_config",
+    "cap_mknod",
+    "cap_lease",
+    "cap_audit_write",
+    "cap_audit_control",
+    "cap_setfcap",
+    "cap_mac_override",
+    "cap_mac_admin",
+    "cap_syslog",
+    "cap_wake_alarm",
+    "cap_block_suspend",
+    "cap_audit_read",
+    "cap_perfmon",
+    "cap_bpf",
+    "cap_checkpoint_restore",
+];
 
 /// Script hook -- an arbitrary shell command run during install/remove
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1311,6 +1440,106 @@ paths = ["/etc/pam.d"]
             ),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn test_manifest_accepts_supported_file_capabilities() {
+        let toml = r#"
+[package]
+name = "test"
+version = "1.0.0"
+description = "test"
+
+[[file_capabilities]]
+path = "/usr/bin/demo"
+capabilities = ["cap_net_bind_service"]
+permitted = true
+effective = true
+inheritable = false
+"#;
+
+        let manifest = CcsManifest::parse(toml).unwrap();
+        assert_eq!(manifest.file_capabilities.len(), 1);
+        assert_eq!(manifest.file_capabilities[0].path, "/usr/bin/demo");
+        assert_eq!(
+            manifest.file_capabilities[0].capabilities,
+            vec!["cap_net_bind_service".to_string()]
+        );
+        assert!(manifest.file_capabilities[0].permitted);
+        assert!(manifest.file_capabilities[0].effective);
+        assert!(!manifest.file_capabilities[0].inheritable);
+
+        let encoded = manifest.to_toml().expect("serialize manifest");
+        assert!(encoded.contains("[[file_capabilities]]"));
+        let decoded = CcsManifest::parse(&encoded).expect("parse serialized manifest");
+        assert_eq!(decoded.file_capabilities[0].path, "/usr/bin/demo");
+    }
+
+    #[test]
+    fn test_manifest_rejects_unsafe_file_capabilities() {
+        for (toml, expected) in [
+            (
+                r#"
+[package]
+name = "test"
+version = "1.0.0"
+description = "test"
+
+[[file_capabilities]]
+path = "usr/bin/demo"
+capabilities = ["cap_net_bind_service"]
+"#,
+                "relative path not allowed in file_capabilities",
+            ),
+            (
+                r#"
+[package]
+name = "test"
+version = "1.0.0"
+description = "test"
+
+[[file_capabilities]]
+path = "/usr/bin/demo"
+capabilities = ["cap_not_real"]
+"#,
+                "unknown Linux file capability",
+            ),
+            (
+                r#"
+[package]
+name = "test"
+version = "1.0.0"
+description = "test"
+
+[[file_capabilities]]
+path = "/usr/bin/demo"
+capabilities = ["cap_net_bind_service"]
+permitted = false
+effective = true
+"#,
+                "effective file capability requires permitted",
+            ),
+            (
+                r#"
+[package]
+name = "test"
+version = "1.0.0"
+description = "test"
+
+[[file_capabilities]]
+path = "/usr/bin/demo"
+capabilities = ["cap_net_bind_service"]
+inheritable = true
+"#,
+                "inheritable file capabilities are not supported yet",
+            ),
+        ] {
+            let err = CcsManifest::parse(toml).unwrap_err();
+            assert!(
+                err.to_string().contains(expected),
+                "expected {expected:?}, got {err}"
+            );
+        }
     }
 
     fn manifest_with_legacy_scriptlet_bundle(body: &str, body_sha256: &str) -> String {

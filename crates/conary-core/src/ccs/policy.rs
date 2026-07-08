@@ -192,6 +192,10 @@ pub struct BuildPolicyConfig {
     #[serde(default)]
     pub reject_paths: Vec<String>,
 
+    /// Exact paths where setuid mode bits may be preserved.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allow_setuid_paths: Vec<String>,
+
     /// Whether to strip ELF binaries
     #[serde(default)]
     pub strip_binaries: bool,
@@ -310,7 +314,16 @@ impl BuildPolicy for StripSetuidPolicy {
     }
 
     fn apply(&self, ctx: &mut PolicyContext) -> Result<PolicyAction> {
-        ctx.entry.mode &= !0o6000;
+        let allow_setuid = ctx
+            .config
+            .allow_setuid_paths
+            .iter()
+            .any(|path| path == &ctx.entry.path);
+        if allow_setuid {
+            ctx.entry.mode &= !0o2000;
+        } else {
+            ctx.entry.mode &= !0o6000;
+        }
         Ok(PolicyAction::Keep)
     }
 }
@@ -790,6 +803,7 @@ mod tests {
             fix_shebangs: HashMap::new(),
             normalize_timestamps: false,
             compress_manpages: false,
+            allow_setuid_paths: Vec::new(),
         };
 
         let chain = PolicyChain::from_config(&config).unwrap();
@@ -957,5 +971,25 @@ mod tests {
         let result = policy.apply(&mut ctx).unwrap();
         assert!(matches!(result, PolicyAction::Keep));
         assert_eq!(ctx.entry.mode, 0o755);
+    }
+
+    #[test]
+    fn test_strip_setuid_policy_preserves_explicitly_allowed_setuid_path() {
+        let policy = StripSetuidPolicy::new();
+        let mut entry = make_entry("/usr/bin/helper", 0o4755);
+        let config = BuildPolicyConfig {
+            allow_setuid_paths: vec!["/usr/bin/helper".to_string()],
+            ..BuildPolicyConfig::default()
+        };
+        let mut ctx = PolicyContext {
+            source_path: Path::new("/src/usr/bin/helper"),
+            entry: &mut entry,
+            content: b"#!/bin/sh\necho hi",
+            config: &config,
+        };
+
+        let result = policy.apply(&mut ctx).unwrap();
+        assert!(matches!(result, PolicyAction::Keep));
+        assert_eq!(ctx.entry.mode, 0o4755);
     }
 }

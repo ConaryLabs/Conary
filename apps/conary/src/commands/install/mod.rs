@@ -11,6 +11,7 @@ mod dep_mode;
 mod dep_resolution;
 mod dependencies;
 mod execute;
+mod file_capabilities;
 mod inner;
 mod legacy_replay;
 mod lifecycle;

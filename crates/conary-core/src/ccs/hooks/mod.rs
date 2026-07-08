@@ -28,7 +28,7 @@ mod tmpfiles;
 mod user_group;
 
 // Re-export helper functions that may be useful externally
-pub(crate) use sysctl::is_denied_sysctl_key;
+pub(crate) use sysctl::{is_denied_sysctl_key, validate_sysctl_key, validate_sysctl_value};
 pub(crate) use systemd::is_safe_unit_name;
 pub use systemd::{compute_relative_unit_path, parse_systemd_install_section};
 pub use tmpfiles::hash_string;

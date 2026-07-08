@@ -125,6 +125,7 @@ pub(super) fn make_conversion_result(
         build: None,
         legacy: None,
         policy: Default::default(),
+        file_capabilities: Vec::new(),
         provenance: None,
         capabilities: None,
         redirects: Default::default(),

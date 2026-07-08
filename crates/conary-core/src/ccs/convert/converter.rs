@@ -32,8 +32,8 @@ use crate::ccs::convert::scriptlet_bundle::{
 };
 use crate::ccs::legacy_scriptlets::LegacyScriptletBundle;
 use crate::ccs::manifest::{
-    Capability, CcsManifest, Components, Config, Hooks, Package, PackageDep, Platform, Provides,
-    Redirects, Requires, Service, ServiceAction, Suggests, User,
+    Capability, CcsManifest, Components, Config, FileCapability, Hooks, Package, PackageDep,
+    Platform, Provides, Redirects, Requires, Service, ServiceAction, Suggests, SysctlHook, User,
 };
 use crate::ccs::policy::BuildPolicyConfig;
 use crate::dependencies::{DependencyClass, LanguageDepDetector};
@@ -250,11 +250,19 @@ impl LegacyConverter {
         // Step 1: Analyze scriptlets (remaining ones) to extract declarative hooks
         let (detected_hooks_list, fidelity) = self.analyzer.analyze(&final_metadata.scriptlets);
         let mut detected_hooks = ScriptletAnalyzer::build_hooks(&detected_hooks_list);
-        let manifest_hooks = captured_hooks.clone();
+        let adapter_hooks = manifest_hooks_from_complete_adapter_effects(&scriptlet_classification);
+        let setuid_mode_updates =
+            setuid_mode_updates_from_complete_adapter_effects(&scriptlet_classification);
+        let file_capability_updates =
+            file_capability_updates_from_complete_adapter_effects(&scriptlet_classification)?;
+        apply_setuid_mode_updates(&mut final_files, &setuid_mode_updates)?;
+        let mut manifest_hooks = captured_hooks.clone();
+        manifest_hooks.sysctl.extend(adapter_hooks.sysctl.clone());
 
         // Merge captured hooks
         detected_hooks.users.extend(captured_hooks.users);
         detected_hooks.services.extend(captured_hooks.services);
+        detected_hooks.sysctl.extend(adapter_hooks.sysctl);
         // TODO: Merge other hooks
 
         // Step 2: Check fidelity threshold
@@ -329,6 +337,8 @@ impl LegacyConverter {
 
         // Step 4: Build CCS manifest from metadata
         let mut manifest = self.build_manifest(&final_metadata, &final_files, &manifest_hooks)?;
+        apply_setuid_policy_allowlist(&mut manifest, &setuid_mode_updates);
+        apply_file_capability_authority(&mut manifest, &file_capability_updates);
         manifest.capabilities = inferred_capabilities
             .as_ref()
             .map(InferredCapabilities::to_declaration);
@@ -574,6 +584,7 @@ impl LegacyConverter {
             build: None,
             legacy: None,
             policy: BuildPolicyConfig::default(),
+            file_capabilities: Vec::new(),
             provenance: None,
             capabilities: None,
             redirects: Redirects::default(),
@@ -939,6 +950,213 @@ fn classify_scriptlets(
     }
 
     report
+}
+
+fn manifest_hooks_from_complete_adapter_effects(
+    classification: &ScriptletClassificationReport,
+) -> Hooks {
+    let mut hooks = Hooks::default();
+
+    for entry in &classification.entries {
+        let ScriptletClassification::Known { effects, .. } = &entry.classification else {
+            continue;
+        };
+
+        for effect in effects {
+            if effect.adapter_id.as_deref() != Some("sysctl/v1")
+                || effect.kind != "sysctl-setting"
+                || effect.replacement != crate::ccs::legacy_scriptlets::EffectReplacement::Complete
+            {
+                continue;
+            }
+
+            let Some(key) = effect.extra.get("key").and_then(toml::Value::as_str) else {
+                continue;
+            };
+            let Some(value) = effect.extra.get("value").and_then(toml::Value::as_str) else {
+                continue;
+            };
+            let only_if_lower = effect
+                .extra
+                .get("only_if_lower")
+                .and_then(toml::Value::as_bool)
+                .unwrap_or(false);
+
+            hooks.sysctl.push(SysctlHook {
+                key: key.to_string(),
+                value: value.to_string(),
+                only_if_lower,
+                reversible: Some(true),
+            });
+        }
+    }
+
+    hooks
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SetuidModeUpdate {
+    path: String,
+    target_mode: u32,
+}
+
+fn setuid_mode_updates_from_complete_adapter_effects(
+    classification: &ScriptletClassificationReport,
+) -> Vec<SetuidModeUpdate> {
+    let mut updates = std::collections::BTreeMap::new();
+
+    for entry in &classification.entries {
+        let ScriptletClassification::Known { effects, .. } = &entry.classification else {
+            continue;
+        };
+
+        for effect in effects {
+            if effect.adapter_id.as_deref() != Some("setuid-mode/v1")
+                || effect.kind != "setuid-mode"
+                || effect.replacement != crate::ccs::legacy_scriptlets::EffectReplacement::Complete
+            {
+                continue;
+            }
+
+            let Some(path) = effect.path.as_deref() else {
+                continue;
+            };
+            let Some(target_mode) = effect
+                .extra
+                .get("target_mode")
+                .and_then(toml::Value::as_integer)
+                .and_then(|value| u32::try_from(value).ok())
+            else {
+                continue;
+            };
+            if target_mode & 0o4000 == 0 || target_mode & 0o2000 != 0 {
+                continue;
+            }
+
+            updates.insert(path.to_string(), target_mode);
+        }
+    }
+
+    updates
+        .into_iter()
+        .map(|(path, target_mode)| SetuidModeUpdate { path, target_mode })
+        .collect()
+}
+
+fn apply_setuid_mode_updates(
+    files: &mut [ExtractedFile],
+    updates: &[SetuidModeUpdate],
+) -> Result<(), ConversionError> {
+    for update in updates {
+        let Some(file) = files.iter_mut().find(|file| file.path == update.path) else {
+            return Err(ConversionError::ManifestError(format!(
+                "setuid adapter referenced missing payload path {}",
+                update.path
+            )));
+        };
+        let existing_mode = file.mode as u32;
+        file.mode = ((existing_mode & !0o7777) | update.target_mode) as i32;
+    }
+    Ok(())
+}
+
+fn apply_setuid_policy_allowlist(manifest: &mut CcsManifest, updates: &[SetuidModeUpdate]) {
+    manifest
+        .policy
+        .allow_setuid_paths
+        .extend(updates.iter().map(|update| update.path.clone()));
+    manifest.policy.allow_setuid_paths.sort();
+    manifest.policy.allow_setuid_paths.dedup();
+}
+
+fn file_capability_updates_from_complete_adapter_effects(
+    classification: &ScriptletClassificationReport,
+) -> Result<Vec<FileCapability>, ConversionError> {
+    let mut updates = std::collections::BTreeMap::<String, FileCapability>::new();
+
+    for entry in &classification.entries {
+        let ScriptletClassification::Known { effects, .. } = &entry.classification else {
+            continue;
+        };
+
+        for effect in effects {
+            if effect.adapter_id.as_deref() != Some("file-capability/v1")
+                || effect.kind != "file-capability"
+                || effect.replacement != crate::ccs::legacy_scriptlets::EffectReplacement::Complete
+            {
+                continue;
+            }
+
+            let Some(path) = effect.path.as_deref() else {
+                continue;
+            };
+            let capabilities = effect
+                .extra
+                .get("capabilities")
+                .and_then(toml::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(toml::Value::as_str)
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            let permitted = effect
+                .extra
+                .get("permitted")
+                .and_then(toml::Value::as_bool)
+                .unwrap_or(true);
+            let effective = effect
+                .extra
+                .get("effective")
+                .and_then(toml::Value::as_bool)
+                .unwrap_or(true);
+            let inheritable = effect
+                .extra
+                .get("inheritable")
+                .and_then(toml::Value::as_bool)
+                .unwrap_or(false);
+
+            let capability = FileCapability {
+                path: path.to_string(),
+                capabilities,
+                permitted,
+                effective,
+                inheritable,
+            };
+            capability.validate().map_err(|error| {
+                ConversionError::ManifestError(format!(
+                    "file capability adapter produced invalid manifest authority: {error}"
+                ))
+            })?;
+
+            updates
+                .entry(path.to_string())
+                .and_modify(|existing| {
+                    if existing.permitted == capability.permitted
+                        && existing.effective == capability.effective
+                        && existing.inheritable == capability.inheritable
+                    {
+                        existing
+                            .capabilities
+                            .extend(capability.capabilities.iter().cloned());
+                        existing.capabilities.sort();
+                        existing.capabilities.dedup();
+                    }
+                })
+                .or_insert(capability);
+        }
+    }
+
+    Ok(updates.into_values().collect())
+}
+
+fn apply_file_capability_authority(manifest: &mut CcsManifest, updates: &[FileCapability]) {
+    manifest.file_capabilities.extend(updates.iter().cloned());
+    manifest.file_capabilities.sort_by(|left, right| {
+        left.path
+            .cmp(&right.path)
+            .then_with(|| left.capabilities.cmp(&right.capabilities))
+    });
+    manifest.file_capabilities.dedup();
 }
 
 fn deferred_native_support_is_fully_adapter_covered(
@@ -1686,6 +1904,137 @@ update-mime-database /usr/share/mime
     }
 
     #[test]
+    fn conversion_integration_projects_safe_sysctl_write_into_manifest_hook() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut metadata = make_test_metadata();
+        metadata.scriptlets = vec![Scriptlet {
+            phase: ScriptletPhase::PostInstall,
+            interpreter: "/bin/sh".to_string(),
+            content: "sysctl -w net.ipv4.ip_forward=1\n".to_string(),
+            flags: None,
+        }];
+        let converter = passive_test_converter(temp_dir.path());
+
+        let result = converter
+            .convert(&metadata, &make_test_files(), "rpm", "sha256:test")
+            .expect("conversion succeeds");
+
+        let sysctl_hooks = &result.build_result.manifest.hooks.sysctl;
+        assert_eq!(sysctl_hooks.len(), 1);
+        assert_eq!(sysctl_hooks[0].key, "net.ipv4.ip_forward");
+        assert_eq!(sysctl_hooks[0].value, "1");
+        assert!(!sysctl_hooks[0].only_if_lower);
+
+        let bundle = result
+            .build_result
+            .manifest
+            .legacy_scriptlets
+            .as_ref()
+            .expect("conversion should embed passive scriptlet bundle");
+        assert_eq!(bundle.entries.len(), 1);
+        assert_eq!(bundle.entries[0].decision.as_str(), "replaced");
+        assert_eq!(bundle.entries[0].reason_code, "helper-complete-sysctl");
+        assert_eq!(bundle.entries[0].effects.len(), 1);
+        assert_eq!(
+            bundle.entries[0].effects[0].adapter_id.as_deref(),
+            Some("sysctl/v1")
+        );
+        assert_eq!(result.scriptlet_metadata.publication_status, "public");
+    }
+
+    #[test]
+    fn conversion_integration_projects_payload_backed_setuid_into_file_mode_authority() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut metadata = make_test_metadata();
+        metadata.scriptlets = vec![Scriptlet {
+            phase: ScriptletPhase::PostInstall,
+            interpreter: "/bin/sh".to_string(),
+            content: "chmod u+s /usr/bin/test\n".to_string(),
+            flags: None,
+        }];
+        let converter = passive_test_converter(temp_dir.path());
+
+        let result = converter
+            .convert(&metadata, &make_test_files(), "rpm", "sha256:test")
+            .expect("conversion succeeds");
+
+        let setuid_file = result
+            .build_result
+            .files
+            .iter()
+            .find(|file| file.path == "/usr/bin/test")
+            .expect("payload file should remain present");
+        assert_eq!(setuid_file.mode & 0o4000, 0o4000);
+        assert_eq!(
+            result.build_result.manifest.policy.allow_setuid_paths,
+            vec!["/usr/bin/test".to_string()]
+        );
+
+        let bundle = result
+            .build_result
+            .manifest
+            .legacy_scriptlets
+            .as_ref()
+            .expect("conversion should embed passive scriptlet bundle");
+        assert_eq!(bundle.entries.len(), 1);
+        assert_eq!(bundle.entries[0].decision.as_str(), "replaced");
+        assert_eq!(bundle.entries[0].reason_code, "helper-complete-setuid-mode");
+        assert_eq!(bundle.entries[0].effects.len(), 1);
+        assert_eq!(
+            bundle.entries[0].effects[0].adapter_id.as_deref(),
+            Some("setuid-mode/v1")
+        );
+        assert_eq!(result.scriptlet_metadata.publication_status, "public");
+    }
+
+    #[test]
+    fn conversion_integration_projects_payload_backed_setcap_into_file_capability_authority() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut metadata = make_test_metadata();
+        metadata.scriptlets = vec![Scriptlet {
+            phase: ScriptletPhase::PostInstall,
+            interpreter: "/bin/sh".to_string(),
+            content: "setcap cap_net_bind_service=+ep /usr/bin/test\n".to_string(),
+            flags: None,
+        }];
+        let converter = passive_test_converter(temp_dir.path());
+
+        let result = converter
+            .convert(&metadata, &make_test_files(), "rpm", "sha256:test")
+            .expect("conversion succeeds");
+
+        let file_capabilities = &result.build_result.manifest.file_capabilities;
+        assert_eq!(file_capabilities.len(), 1);
+        assert_eq!(file_capabilities[0].path, "/usr/bin/test");
+        assert_eq!(
+            file_capabilities[0].capabilities,
+            vec!["cap_net_bind_service".to_string()]
+        );
+        assert!(file_capabilities[0].permitted);
+        assert!(file_capabilities[0].effective);
+        assert!(!file_capabilities[0].inheritable);
+
+        let bundle = result
+            .build_result
+            .manifest
+            .legacy_scriptlets
+            .as_ref()
+            .expect("conversion should embed passive scriptlet bundle");
+        assert_eq!(bundle.entries.len(), 1);
+        assert_eq!(bundle.entries[0].decision.as_str(), "replaced");
+        assert_eq!(
+            bundle.entries[0].reason_code,
+            "helper-complete-file-capability"
+        );
+        assert_eq!(bundle.entries[0].effects.len(), 1);
+        assert_eq!(
+            bundle.entries[0].effects[0].adapter_id.as_deref(),
+            Some("file-capability/v1")
+        );
+        assert_eq!(result.scriptlet_metadata.publication_status, "public");
+    }
+
+    #[test]
     fn selinux_adapter_records_four_generic_policy_intents_in_bundle_and_summary() {
         let temp_dir = tempfile::tempdir().unwrap();
         let mut metadata = make_test_metadata();
@@ -1746,7 +2095,7 @@ setsebool -P demo_can_network on
     }
 
     #[test]
-    fn apparmor_helper_is_typed_review_intent_not_public_ready() {
+    fn apparmor_profile_reload_records_public_adapter_backed_policy_intent() {
         let temp_dir = tempfile::tempdir().unwrap();
         let mut metadata = make_test_metadata();
         metadata.scriptlets = vec![Scriptlet {
@@ -1778,13 +2127,19 @@ setsebool -P demo_can_network on
             .as_ref()
             .expect("written CCS archive should carry passive scriptlet bundle");
 
-        assert_eq!(bundle.publication_status.as_str(), "blocked");
-        assert_eq!(bundle.decision_counts.blocked, 1);
+        assert_eq!(bundle.publication_status.as_str(), "public");
+        assert_eq!(bundle.decision_counts.replaced, 1);
         assert_eq!(bundle.entries.len(), 1);
         let entry = &bundle.entries[0];
-        assert_eq!(entry.decision.as_str(), "blocked");
-        assert_eq!(entry.reason_code, "blocked-class-apparmor");
-        assert_eq!(entry.blocked_classes, vec!["apparmor"]);
+        assert_eq!(entry.decision.as_str(), "replaced");
+        assert_eq!(entry.reason_code, "helper-complete-apparmor-policy");
+        assert!(entry.blocked_classes.is_empty());
+        assert_eq!(entry.effects.len(), 1);
+        assert_eq!(entry.effects[0].kind, "apparmor-profile-reload");
+        assert_eq!(
+            entry.effects[0].adapter_id.as_deref(),
+            Some("apparmor-policy/v1")
+        );
         assert_eq!(entry.security_policy_intents.len(), 1);
         let intent = &entry.security_policy_intents[0];
         assert_eq!(intent.provider.as_str(), "apparmor");
@@ -1794,9 +2149,11 @@ setsebool -P demo_can_network on
             Some("/etc/apparmor.d/usr.bin.demo")
         );
         assert_eq!(intent.scope.paths, vec!["/etc/apparmor.d/usr.bin.demo"]);
-        assert_eq!(intent.reconciliation.state.as_str(), "review");
+        assert_eq!(intent.fallback.as_str(), "dormant");
+        assert_eq!(intent.reconciliation.state.as_str(), "pending");
+        assert!(intent.payload_evidence.payload_backed);
         assert_eq!(bundle.security_policy_intents, vec![intent.clone()]);
-        assert_eq!(result.scriptlet_metadata.publication_status, "blocked");
+        assert_eq!(result.scriptlet_metadata.publication_status, "public");
         assert_eq!(
             result.scriptlet_metadata.security_policy_intents,
             vec![intent.clone()]

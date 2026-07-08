@@ -143,6 +143,10 @@ pub struct ServerConfig {
     /// Path to SvelteKit static build directory (None = disabled)
     pub web_root: Option<PathBuf>,
 
+    // === Non-public conversion test serving ===
+    /// Default-off admin/test access for non-public converted artifacts.
+    pub non_public_test_serving: crate::server::config::NonPublicTestServingSection,
+
     // === Release publication ===
     /// Trusted release signer and repository signing-key configuration.
     pub release_publish: crate::server::config::ReleasePublishSection,

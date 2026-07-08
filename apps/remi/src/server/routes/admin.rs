@@ -52,6 +52,14 @@ pub fn create_admin_router(state: Arc<RwLock<ServerState>>) -> Router {
             "/v1/admin/packages/{distro}/{package}/scriptlet-review",
             get(admin_handlers::get_scriptlet_review_artifact),
         )
+        .route(
+            "/v1/admin/packages/{distro}/{package}/test-manifest",
+            get(admin_handlers::get_non_public_test_manifest),
+        )
+        .route(
+            "/v1/admin/packages/{distro}/{package}/test-download",
+            get(admin_handlers::download_non_public_test_package),
+        )
         .route_layer(middleware::from_fn(require_localhost))
         .with_state(state)
 }
@@ -86,6 +94,14 @@ pub fn create_external_admin_router(
         .route(
             "/v1/admin/packages/{distro}/{package}/scriptlet-review",
             get(admin_handlers::get_scriptlet_review_artifact),
+        )
+        .route(
+            "/v1/admin/packages/{distro}/{package}/test-manifest",
+            get(admin_handlers::get_non_public_test_manifest),
+        )
+        .route(
+            "/v1/admin/packages/{distro}/{package}/test-download",
+            get(admin_handlers::download_non_public_test_package),
         )
         .route(
             "/v1/admin/scriptlet-evidence/backfill",

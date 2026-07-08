@@ -24,6 +24,7 @@
 
 pub mod adapters;
 mod analyzer;
+mod apparmor_adapters;
 pub mod blocked_classes;
 pub mod capture;
 pub mod command_evidence;

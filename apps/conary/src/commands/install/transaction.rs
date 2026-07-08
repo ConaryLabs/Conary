@@ -22,6 +22,7 @@ pub(super) struct TransactionContext<'a> {
     pub(super) old_trove_to_upgrade: Option<&'a conary_core::db::models::Trove>,
     pub(super) ccs_manifest_provides: Option<&'a conary_core::ccs::manifest::Provides>,
     pub(super) ccs_capabilities: Option<&'a conary_core::capability::CapabilityDeclaration>,
+    pub(super) ccs_file_capabilities: Option<&'a [conary_core::ccs::manifest::FileCapability]>,
     pub(super) execution_path: PackageExecutionPath,
     pub(super) defer_generation: bool,
     pub(super) repository_provenance: Option<RepositoryInstallProvenance>,
@@ -72,6 +73,8 @@ fn execute_install_transaction_inner(
     progress: &InstallProgress,
     transaction_config_override: Option<TransactionConfig>,
 ) -> Result<InstallTransactionResult> {
+    reject_unsupported_generation_file_capabilities(ctx)?;
+
     let _legacy_replay = ctx.legacy_replay;
     if ctx.execution_path == PackageExecutionPath::MutableLiveRoot {
         inner::preflight_live_root_file_ownership(
@@ -131,6 +134,19 @@ fn execute_install_transaction_inner(
                 tx_description.clone(),
             )?;
             live_tx.apply_install_files(&live_files)?;
+            if let Some(file_capabilities) = ctx.ccs_file_capabilities {
+                let applied = super::file_capabilities::apply_selected_file_capabilities(
+                    Path::new(ctx.root),
+                    file_capabilities,
+                    live_files.iter().map(|file| file.path.as_str()),
+                )?;
+                if applied > 0 {
+                    info!(
+                        "Applied {} CCS file capability declaration(s) to mutable live root",
+                        applied
+                    );
+                }
+            }
 
             let tx = conn.unchecked_transaction()?;
             let db_result = (|| -> Result<i64> {
@@ -276,6 +292,18 @@ fn execute_install_transaction_inner(
     Ok(InstallTransactionResult { changeset_id })
 }
 
+fn reject_unsupported_generation_file_capabilities(ctx: &TransactionContext<'_>) -> Result<()> {
+    if ctx.execution_path == PackageExecutionPath::GenerationAware
+        && matches!(ctx.ccs_file_capabilities, Some(file_capabilities) if !file_capabilities.is_empty())
+    {
+        anyhow::bail!(
+            "CCS file_capabilities cannot be applied by generation-aware installs yet; generation image xattr propagation is required"
+        );
+    }
+
+    Ok(())
+}
+
 fn persist_ccs_manifest_provides(
     tx: &rusqlite::Transaction<'_>,
     trove_id: i64,
@@ -335,6 +363,41 @@ fn insert_ccs_manifest_typed_provide(
 mod tests {
     use super::*;
     use crate::commands::PackageFormatType;
+
+    #[test]
+    fn reject_unsupported_generation_file_capabilities_requires_mutable_live_root() {
+        let file_capabilities = vec![conary_core::ccs::manifest::FileCapability {
+            path: "/usr/bin/server".to_string(),
+            capabilities: vec!["cap_net_bind_service".to_string()],
+            permitted: true,
+            effective: true,
+            inheritable: false,
+        }];
+        let ctx = TransactionContext {
+            db_path: "/tmp/conary.db",
+            root: "/",
+            semantics: InstallSemantics::legacy(PackageFormatType::Rpm),
+            selection_reason: None,
+            old_trove_to_upgrade: None,
+            ccs_manifest_provides: None,
+            ccs_capabilities: None,
+            ccs_file_capabilities: Some(&file_capabilities),
+            execution_path: PackageExecutionPath::GenerationAware,
+            defer_generation: false,
+            repository_provenance: None,
+            legacy_replay: LegacyReplayOptions::default(),
+            accepted_legacy_bundle: None,
+        };
+
+        let error = reject_unsupported_generation_file_capabilities(&ctx).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("generation image xattr propagation is required"),
+            "{error}"
+        );
+    }
 
     #[test]
     fn no_generation_install_transaction_materializes_live_root_file() {
@@ -428,6 +491,7 @@ mod tests {
             old_trove_to_upgrade: None,
             ccs_manifest_provides: None,
             ccs_capabilities: None,
+            ccs_file_capabilities: None,
             execution_path: PackageExecutionPath::MutableLiveRoot,
             defer_generation: false,
             repository_provenance: None,
@@ -580,6 +644,7 @@ mod tests {
             old_trove_to_upgrade: None,
             ccs_manifest_provides: None,
             ccs_capabilities: None,
+            ccs_file_capabilities: None,
             execution_path: PackageExecutionPath::MutableLiveRoot,
             defer_generation: false,
             repository_provenance: None,

@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-07-03
-revision: 19
-summary: Document M4e CCS v2 lifecycle authoring proof
+revision: 22
+summary: Document CCS AppArmor profile conversion authority
 ---
 
 # CCS Module (conary-core/src/ccs/)
@@ -76,15 +76,31 @@ replay policy, and target compatibility checks. Declarative manifest hooks are
 emitted only from adapter-backed or curated evidence; text-pattern detections
 remain advisory metadata for review diagnostics. Remaining scripts are
 preserved for guarded local replay or review when they cannot be safely
-captured. Supported SELinux scriptlet forms are modeled as
+captured. The `sysctl/v1` adapter projects only narrow, validated
+`sysctl -w <key>=<value>` invocations into native `hooks.sysctl`; broad forms
+such as `sysctl -p` and denied security-sensitive keys remain blocked.
+The `setuid-mode/v1` adapter projects only payload-executable
+`chmod u+s` or `chmod 4xxx` forms into native file mode authority plus an exact
+`policy.allow_setuid_paths` build-policy allowlist entry. The
+`file-capability/v1` adapter separately projects known Linux
+`setcap cap_*=+ep <payload-executable>` grants into
+`[[file_capabilities]]`, and mutable live-root installs apply that authority
+after file deployment and before DB commit. Setcap removal,
+inheritable/process/ambient capability forms, setgid, broad `chmod +s`, unknown
+capability names, and non-payload privilege mutations remain blocked/private.
+Supported SELinux scriptlet forms are modeled as
 `selinux-policy/v1` effects and bridged into generic `SecurityPolicyIntent`
 metadata, so Fedora-origin policy declarations can be portable to Arch or
 Debian targets without requiring SELinux on those targets. Generic intent
 records provider, operation, scope, fallback, payload evidence, and
 reconciliation state while preserving provider-specific effect evidence.
-AppArmor helper calls are review-only generic policy intent until a
-payload-backed AppArmor adapter proves profile install, reload, and mode
-semantics. Tracks conversion fidelity (High/Medium/Low) via `FidelityReport`.
+The `apparmor-policy/v1` adapter projects only payload-backed
+`apparmor_parser -r|--replace /etc/apparmor.d/<profile>` reloads into generic
+`SecurityPolicyIntent` metadata with dormant optional-policy fallback. AppArmor
+mode changes, disable/status helpers, broad reloads, and unbacked paths remain
+blocked/private and use `block-on-enforcing-target` fallback when captured as
+review intent. Tracks conversion fidelity (High/Medium/Low) via
+`FidelityReport`.
 
 **legacy_scriptlets.rs** -- Versioned metadata for converted package scriptlet
 semantics and local replay planning. The v1 bundle lives in the TOML manifest as
@@ -226,8 +242,11 @@ Public-ready conversion is narrower than local replay acceptance. The supported
 public source targets are `fedora-44`, `ubuntu-26.04`, and `arch`. A converted
 artifact is public-ready only when the scriptlet outcome is native-free or
 fully replaced by adapter/support-matrix evidence for the exact source and
-target. Legacy replay, review-required, blocked, malformed, or local-only
-scriptlet outcomes remain private conversion results.
+target, such as validated `sysctl/v1` evidence projected into native
+`hooks.sysctl` or validated `setuid-mode/v1` evidence projected into payload
+file mode plus `policy.allow_setuid_paths`. Legacy replay, review-required,
+blocked, malformed, or local-only scriptlet outcomes remain private conversion
+results.
 
 Foreign raw replay has a second gate. If the bundle source target differs from
 the host target and the host is not listed in `allowed_targets`, the operation

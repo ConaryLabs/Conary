@@ -6,6 +6,8 @@ use std::collections::{BTreeMap, BTreeSet};
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PayloadHints {
     pub payload_paths: BTreeSet<String>,
+    pub file_modes: BTreeMap<String, u32>,
+    pub executable_paths: BTreeSet<String>,
     pub systemd_units: BTreeSet<String>,
     pub tmpfiles_configs: BTreeSet<String>,
     pub sysusers_configs: BTreeSet<String>,
@@ -20,6 +22,11 @@ impl PayloadHints {
         for file in files {
             let path = file.path.as_str();
             hints.payload_paths.insert(path.to_string());
+            let mode = file.mode as u32;
+            hints.file_modes.insert(path.to_string(), mode);
+            if file.symlink_target.is_none() && mode & 0o111 != 0 {
+                hints.executable_paths.insert(path.to_string());
+            }
             if let Some(unit) = systemd_unit_name(path) {
                 hints.systemd_units.insert(unit.to_string());
             }
@@ -155,6 +162,7 @@ mod tests {
                 .contains("/usr/lib/systemd/system/demo.service")
         );
         assert!(hints.payload_paths.contains("/usr/lib64/libdemo.so.1"));
+        assert!(hints.executable_paths.is_empty());
     }
 
     #[test]

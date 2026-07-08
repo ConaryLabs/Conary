@@ -406,6 +406,7 @@ fn install_ccs_package_transactionally_inner(
         old_trove_to_upgrade: old_trove,
         ccs_manifest_provides: Some(&pkg.manifest().provides),
         ccs_capabilities: pkg.manifest().capabilities.as_ref(),
+        ccs_file_capabilities: Some(&pkg.manifest().file_capabilities),
         execution_path,
         defer_generation: opts.defer_generation,
         repository_provenance: opts.repository_provenance,

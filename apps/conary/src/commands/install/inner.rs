@@ -568,6 +568,7 @@ mod tests {
             old_trove_to_upgrade: None,
             ccs_manifest_provides: None,
             ccs_capabilities: None,
+            ccs_file_capabilities: None,
             execution_path: PackageExecutionPath::MutableLiveRoot,
             defer_generation: false,
             repository_provenance: None,
@@ -685,6 +686,7 @@ mod tests {
             old_trove_to_upgrade: None,
             ccs_manifest_provides: None,
             ccs_capabilities: None,
+            ccs_file_capabilities: None,
             execution_path: PackageExecutionPath::MutableLiveRoot,
             defer_generation: false,
             repository_provenance: None,
@@ -764,6 +766,7 @@ mod tests {
             old_trove_to_upgrade: None,
             ccs_manifest_provides: None,
             ccs_capabilities: None,
+            ccs_file_capabilities: None,
             execution_path: PackageExecutionPath::MutableLiveRoot,
             defer_generation: false,
             repository_provenance: Some(RepositoryInstallProvenance {

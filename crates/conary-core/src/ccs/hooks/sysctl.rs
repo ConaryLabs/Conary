@@ -54,7 +54,7 @@ pub(crate) fn is_denied_sysctl_key(key: &str) -> bool {
 }
 
 /// Validate sysctl value contains no newline characters
-fn validate_sysctl_value(value: &str) -> Result<()> {
+pub(crate) fn validate_sysctl_value(value: &str) -> Result<()> {
     if value.contains('\n') || value.contains('\r') {
         return Err(anyhow::anyhow!("Sysctl value contains newline characters"));
     }

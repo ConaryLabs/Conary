@@ -116,11 +116,39 @@ fn adapter_entry(adapter_id: &'static str) -> SupportMatrixEntry {
             &["adapter-sysusers"],
             &["rpm", "deb", "arch"],
         ),
+        "sysctl/v1" => (
+            Some("sysctl -w <key>=<value>"),
+            "helper-complete-sysctl",
+            "Narrow sysctl writes are complete only when the key and value validate and conversion projects the effect into native hooks.sysctl.",
+            &["adapter-sysctl"],
+            &["rpm", "deb", "arch"],
+        ),
+        "setuid-mode/v1" => (
+            Some("chmod u+s|4xxx <payload-executable>"),
+            "helper-complete-setuid-mode",
+            "Narrow setuid chmod forms are complete only for payload executables and only when conversion preserves the mode through explicit build-policy allowlist authority.",
+            &["adapter-setuid-mode"],
+            &["rpm", "deb", "arch"],
+        ),
+        "file-capability/v1" => (
+            Some("setcap cap_*=+ep <payload-executable>"),
+            "helper-complete-file-capability",
+            "Narrow Linux file capability grants are complete only for known capabilities on payload executables and project into manifest file_capabilities authority.",
+            &["adapter-file-capability"],
+            &["rpm", "deb", "arch"],
+        ),
         "selinux-policy/v1" => (
             Some("restorecon|semanage fcontext|setsebool -P|semodule -i"),
             "helper-complete-selinux-policy",
             "Supported SELinux label, file-context, boolean, and module-install intent is recorded as optional policy that applies when SELinux is present and remains dormant when absent.",
             &["adapter-selinux-policy"],
+            &["rpm", "deb", "arch"],
+        ),
+        "apparmor-policy/v1" => (
+            Some("apparmor_parser -r <payload-profile>"),
+            "helper-complete-apparmor-policy",
+            "Supported AppArmor profile reload intent is complete only when the profile file is shipped by the package payload and can remain dormant when AppArmor is absent.",
+            &["adapter-apparmor-policy"],
             &["rpm", "deb", "arch"],
         ),
         "alternatives-registration/v1" => (
@@ -202,7 +230,7 @@ fn lifecycle_notes_for_class(
 ) -> &'static str {
     match class_id {
         "apparmor" => {
-            "AppArmor helper calls are captured as generic security-policy review intent, but no AppArmor command is public-ready until a payload-backed adapter proves profile install/reload/mode semantics."
+            "Unsupported AppArmor helper calls are captured as generic security-policy review intent; apparmor-policy/v1 covers only payload-backed profile reloads."
         }
         _ => default_description,
     }
@@ -467,6 +495,29 @@ mod tests {
     }
 
     #[test]
+    fn apparmor_has_supported_adapter_row_and_blocked_fallback_row() {
+        let matrix = SupportMatrix::default();
+
+        let adapter_row = matrix
+            .entries()
+            .iter()
+            .find(|entry| entry.adapter_id == Some("apparmor-policy/v1"))
+            .expect("AppArmor supported forms should have a native adapter row");
+        assert_eq!(adapter_row.outcome, SupportOutcome::Known);
+        assert_eq!(adapter_row.reason_code, "helper-complete-apparmor-policy");
+        assert_eq!(adapter_row.fixture_names, &["adapter-apparmor-policy"]);
+
+        let blocked_row = matrix
+            .entries()
+            .iter()
+            .find(|entry| entry.class_id == Some("apparmor"))
+            .expect("unsupported AppArmor forms should retain a blocked fallback row");
+        assert_eq!(blocked_row.outcome, SupportOutcome::Blocked);
+        assert!(blocked_row.adapter_id.is_none());
+        assert_eq!(blocked_row.fixture_names, &["blocked-class-apparmor"]);
+    }
+
+    #[test]
     fn goal8_required_corpus_rows_are_declared() {
         let fixtures: std::collections::BTreeMap<_, _> = golden_fixtures::required_goal8_cases()
             .iter()
@@ -508,6 +559,10 @@ mod tests {
             ),
             (
                 "adapter-selinux-policy",
+                golden_fixtures::GoldenFixtureOutcome::FullyReplaced,
+            ),
+            (
+                "adapter-apparmor-policy",
                 golden_fixtures::GoldenFixtureOutcome::FullyReplaced,
             ),
             (

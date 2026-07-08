@@ -1,5 +1,6 @@
 // conary-core/src/ccs/convert/adapters.rs
 
+use crate::ccs::convert::apparmor_adapters::ApparmorPolicyAdapter;
 use crate::ccs::convert::blocked_classes::{BlockedClassOutcome, BlockedClassRegistry};
 use crate::ccs::convert::command_evidence::{CommandEvidenceSource, CommandInvocation};
 use crate::ccs::convert::debian_adapters::DebSystemdHelperAdapter;
@@ -8,7 +9,9 @@ use crate::ccs::convert::effects::{
 };
 use crate::ccs::convert::payload_hints::PayloadHints;
 use crate::ccs::convert::selinux_adapters::SelinuxPolicyAdapter;
+use crate::ccs::hooks::{validate_sysctl_key, validate_sysctl_value};
 use crate::ccs::legacy_scriptlets::{EffectConfidence, EffectReplacement, EffectSource};
+use crate::ccs::manifest::is_supported_linux_file_capability;
 use std::collections::{BTreeMap, BTreeSet};
 
 const PARTIAL_COVERAGE_REASON: &str = "known-helper-partial-coverage";
@@ -17,6 +20,9 @@ const SYSTEMD_DAEMON_RELOAD_COMPLETE_REASON: &str = "helper-complete-systemd-dae
 const SYSTEMD_UNIT_STATE_COMPLETE_REASON: &str = "helper-complete-systemd-unit-state";
 const TMPFILES_CREATE_COMPLETE_REASON: &str = "helper-complete-tmpfiles-create";
 const SYSUSERS_COMPLETE_REASON: &str = "helper-complete-sysusers";
+const SYSCTL_COMPLETE_REASON: &str = "helper-complete-sysctl";
+const SETUID_COMPLETE_REASON: &str = "helper-complete-setuid-mode";
+const FILE_CAPABILITY_COMPLETE_REASON: &str = "helper-complete-file-capability";
 const ALTERNATIVES_COMPLETE_REASON: &str = "helper-complete-alternatives-registration";
 const CACHE_REFRESH_COMPLETE_REASON: &str = "helper-complete-cache-refresh";
 const ALTERNATIVES_REVIEW_REASON: &str = "review-class-alternatives-interactive-or-broad";
@@ -78,6 +84,30 @@ pub fn bootstrap_adapter_evidence() -> &'static [BootstrapAdapterEvidence] {
             coverage_ids: &["systemd-sysusers/v1"],
         },
         BootstrapAdapterEvidence {
+            command: "sysctl",
+            forms: &["sysctl -w <key>=<value>"],
+            package_count: 1,
+            invocation_count: 1,
+            coverage_ids: &["sysctl/v1"],
+        },
+        BootstrapAdapterEvidence {
+            command: "chmod",
+            forms: &[
+                "chmod u+s <payload-executable>",
+                "chmod 4xxx <payload-executable>",
+            ],
+            package_count: 1,
+            invocation_count: 1,
+            coverage_ids: &["setuid-mode/v1"],
+        },
+        BootstrapAdapterEvidence {
+            command: "setcap",
+            forms: &["setcap cap_*=+ep <payload-executable>"],
+            package_count: 1,
+            invocation_count: 1,
+            coverage_ids: &["file-capability/v1"],
+        },
+        BootstrapAdapterEvidence {
             command: "update-alternatives",
             forms: &[
                 "update-alternatives --install",
@@ -105,6 +135,13 @@ pub fn bootstrap_adapter_evidence() -> &'static [BootstrapAdapterEvidence] {
             package_count: 1,
             invocation_count: 4,
             coverage_ids: &["selinux-policy/v1"],
+        },
+        BootstrapAdapterEvidence {
+            command: "apparmor_parser",
+            forms: &["apparmor_parser -r <payload-profile>"],
+            package_count: 1,
+            invocation_count: 1,
+            coverage_ids: &["apparmor-policy/v1"],
         },
         BootstrapAdapterEvidence {
             command: "install-info",
@@ -152,7 +189,11 @@ impl Default for AdapterRegistry {
             Box::new(DebSystemdHelperAdapter),
             Box::new(SystemdTmpfilesCreateAdapter),
             Box::new(SystemdSysusersAdapter),
+            Box::new(SysctlAdapter),
+            Box::new(SetuidModeAdapter),
+            Box::new(FileCapabilityAdapter),
             Box::new(SelinuxPolicyAdapter),
+            Box::new(ApparmorPolicyAdapter),
             Box::new(AlternativesRegistrationAdapter),
             Box::new(CacheRefreshAdapter),
         ];
@@ -287,6 +328,9 @@ struct SystemdDaemonReloadAdapter;
 struct SystemdUnitStateAdapter;
 struct SystemdTmpfilesCreateAdapter;
 struct SystemdSysusersAdapter;
+struct SysctlAdapter;
+struct SetuidModeAdapter;
+struct FileCapabilityAdapter;
 struct AlternativesRegistrationAdapter;
 struct CacheRefreshAdapter;
 
@@ -500,6 +544,140 @@ impl ScriptletEffectAdapter for SystemdSysusersAdapter {
     }
 }
 
+impl ScriptletEffectAdapter for SysctlAdapter {
+    fn id(&self) -> &'static str {
+        "sysctl/v1"
+    }
+
+    fn digest(&self) -> String {
+        crate::hash::sha256_prefixed(b"sysctl/v1:sysctl-setting:write")
+    }
+
+    fn command_names(&self) -> &'static [&'static str] {
+        &["sysctl"]
+    }
+
+    fn matches(&self, input: AdapterInput<'_>) -> bool {
+        input.invocation.command == "sysctl" && parse_sysctl_write(&input.invocation.argv).is_some()
+    }
+
+    fn classify(&self, input: AdapterInput<'_>) -> ScriptletClassification {
+        let setting =
+            parse_sysctl_write(&input.invocation.argv).expect("matches() must ensure sysctl write");
+        known_effect_classification(
+            self,
+            input.invocation,
+            "sysctl-setting",
+            EffectReplacement::Complete,
+            Some(setting.key.clone()),
+            SYSCTL_COMPLETE_REASON,
+            BTreeMap::from([
+                ("key".to_string(), toml::Value::String(setting.key)),
+                ("value".to_string(), toml::Value::String(setting.value)),
+                ("only_if_lower".to_string(), toml::Value::Boolean(false)),
+            ]),
+        )
+    }
+}
+
+impl ScriptletEffectAdapter for SetuidModeAdapter {
+    fn id(&self) -> &'static str {
+        "setuid-mode/v1"
+    }
+
+    fn digest(&self) -> String {
+        crate::hash::sha256_prefixed(b"setuid-mode/v1:payload-executable:setuid-only")
+    }
+
+    fn command_names(&self) -> &'static [&'static str] {
+        &["chmod"]
+    }
+
+    fn matches(&self, input: AdapterInput<'_>) -> bool {
+        input.invocation.command == "chmod"
+            && parse_setuid_mode_change(&input.invocation.argv, input.payload).is_some()
+    }
+
+    fn classify(&self, input: AdapterInput<'_>) -> ScriptletClassification {
+        let change = parse_setuid_mode_change(&input.invocation.argv, input.payload)
+            .expect("matches() must ensure setuid mode change");
+        known_effect_classification(
+            self,
+            input.invocation,
+            "setuid-mode",
+            EffectReplacement::Complete,
+            Some(change.path.clone()),
+            SETUID_COMPLETE_REASON,
+            BTreeMap::from([
+                (
+                    "target_mode".to_string(),
+                    toml::Value::Integer(i64::from(change.target_mode)),
+                ),
+                (
+                    "target_mode_octal".to_string(),
+                    toml::Value::String(format!("{:04o}", change.target_mode)),
+                ),
+            ]),
+        )
+    }
+}
+
+impl ScriptletEffectAdapter for FileCapabilityAdapter {
+    fn id(&self) -> &'static str {
+        "file-capability/v1"
+    }
+
+    fn digest(&self) -> String {
+        crate::hash::sha256_prefixed(b"file-capability/v1:payload-executable:+ep")
+    }
+
+    fn command_names(&self) -> &'static [&'static str] {
+        &["setcap"]
+    }
+
+    fn matches(&self, input: AdapterInput<'_>) -> bool {
+        input.invocation.command == "setcap"
+            && parse_file_capability_change(&input.invocation.argv, input.payload).is_some()
+    }
+
+    fn classify(&self, input: AdapterInput<'_>) -> ScriptletClassification {
+        let change = parse_file_capability_change(&input.invocation.argv, input.payload)
+            .expect("matches() must ensure file capability change");
+        known_effect_classification(
+            self,
+            input.invocation,
+            "file-capability",
+            EffectReplacement::Complete,
+            Some(change.path),
+            FILE_CAPABILITY_COMPLETE_REASON,
+            BTreeMap::from([
+                (
+                    "capabilities".to_string(),
+                    toml::Value::Array(
+                        change
+                            .capabilities
+                            .into_iter()
+                            .map(toml::Value::String)
+                            .collect(),
+                    ),
+                ),
+                (
+                    "permitted".to_string(),
+                    toml::Value::Boolean(change.permitted),
+                ),
+                (
+                    "effective".to_string(),
+                    toml::Value::Boolean(change.effective),
+                ),
+                (
+                    "inheritable".to_string(),
+                    toml::Value::Boolean(change.inheritable),
+                ),
+            ]),
+        )
+    }
+}
+
 impl ScriptletEffectAdapter for AlternativesRegistrationAdapter {
     fn id(&self) -> &'static str {
         "alternatives-registration/v1"
@@ -676,6 +854,121 @@ fn sysusers_configs(argv: &[String], payload: &PayloadHints) -> Option<Vec<Strin
     }
 
     payload_gated_configs(configs, &payload.sysusers_configs)
+}
+
+#[derive(Debug, Clone)]
+struct SysctlSetting {
+    key: String,
+    value: String,
+}
+
+#[derive(Debug, Clone)]
+struct SetuidModeChange {
+    path: String,
+    target_mode: u32,
+}
+
+#[derive(Debug, Clone)]
+struct FileCapabilityChange {
+    path: String,
+    capabilities: Vec<String>,
+    permitted: bool,
+    effective: bool,
+    inheritable: bool,
+}
+
+fn parse_sysctl_write(argv: &[String]) -> Option<SysctlSetting> {
+    match argv {
+        [flag, assignment] if matches!(flag.as_str(), "-w" | "--write") => {
+            parse_sysctl_assignment(assignment)
+        }
+        _ => None,
+    }
+}
+
+fn parse_sysctl_assignment(assignment: &str) -> Option<SysctlSetting> {
+    let (key, value) = assignment.split_once('=')?;
+    validate_sysctl_key(key).ok()?;
+    validate_sysctl_value(value).ok()?;
+    Some(SysctlSetting {
+        key: key.to_string(),
+        value: value.to_string(),
+    })
+}
+
+fn parse_setuid_mode_change(argv: &[String], payload: &PayloadHints) -> Option<SetuidModeChange> {
+    let [mode_arg, path] = argv else {
+        return None;
+    };
+    if !path.starts_with('/') || !payload.executable_paths.contains(path) {
+        return None;
+    }
+
+    let current_mode = payload.file_modes.get(path).copied()? & 0o7777;
+    let target_mode = match mode_arg.as_str() {
+        "u+s" => current_mode | 0o4000,
+        mode => parse_setuid_numeric_mode(mode)?,
+    };
+    if target_mode & 0o4000 == 0 || target_mode & 0o2000 != 0 {
+        return None;
+    }
+
+    Some(SetuidModeChange {
+        path: path.to_string(),
+        target_mode,
+    })
+}
+
+fn parse_setuid_numeric_mode(mode: &str) -> Option<u32> {
+    if mode.len() != 4 || !mode.starts_with('4') || !mode.chars().all(|ch| matches!(ch, '0'..='7'))
+    {
+        return None;
+    }
+    let parsed = u32::from_str_radix(mode, 8).ok()?;
+    (parsed & 0o7000 == 0o4000 && parsed & 0o111 != 0).then_some(parsed)
+}
+
+fn parse_file_capability_change(
+    argv: &[String],
+    payload: &PayloadHints,
+) -> Option<FileCapabilityChange> {
+    let [spec, path] = argv else {
+        return None;
+    };
+    if !path.starts_with('/') || !payload.executable_paths.contains(path) {
+        return None;
+    }
+    let capabilities = parse_setcap_ep_spec(spec)?;
+    Some(FileCapabilityChange {
+        path: path.to_string(),
+        capabilities,
+        permitted: true,
+        effective: true,
+        inheritable: false,
+    })
+}
+
+fn parse_setcap_ep_spec(spec: &str) -> Option<Vec<String>> {
+    let (capabilities, flags) = spec.split_once('=')?;
+    if flags != "+ep" {
+        return None;
+    }
+
+    let mut parsed = capabilities
+        .split(',')
+        .map(str::trim)
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    if parsed.is_empty()
+        || parsed
+            .iter()
+            .any(|capability| !is_supported_linux_file_capability(capability))
+    {
+        return None;
+    }
+    parsed.sort();
+    parsed.dedup();
+    Some(parsed)
 }
 
 fn payload_gated_configs(
@@ -1040,7 +1333,10 @@ fn classification_has_complete_adapter_replacement(
 }
 
 fn blocked_class_can_be_adapter_modeled(class_id: &str) -> bool {
-    matches!(class_id, "selinux")
+    matches!(
+        class_id,
+        "selinux" | "apparmor" | "sysctl" | "setuid-setcap"
+    )
 }
 
 fn effect_source(source: CommandEvidenceSource) -> EffectSource {
@@ -1228,7 +1524,11 @@ mod tests {
                 "deb-systemd-helper/v1",
                 "systemd-tmpfiles-create/v1",
                 "systemd-sysusers/v1",
+                "sysctl/v1",
+                "setuid-mode/v1",
+                "file-capability/v1",
                 "selinux-policy/v1",
+                "apparmor-policy/v1",
                 "alternatives-registration/v1",
                 "cache-refresh/v1",
             ]
@@ -1259,10 +1559,14 @@ mod tests {
             "systemctl",
             "systemd-tmpfiles",
             "systemd-sysusers",
+            "sysctl",
+            "chmod",
+            "setcap",
             "update-alternatives",
             "deb-systemd-helper",
             "update-mime-database",
             "restorecon",
+            "apparmor_parser",
             "install-info",
             "gconftool-2",
         ] {
@@ -1291,6 +1595,27 @@ mod tests {
                 argv: &["/usr/lib/sysusers.d/demo.conf"],
                 adapter_id: "systemd-sysusers/v1",
                 reason_code: "helper-complete-sysusers",
+            },
+            GoldenAdapterCase {
+                fixture_id: "adapter-sysctl",
+                command: "sysctl",
+                argv: &["-w", "net.ipv4.ip_forward=1"],
+                adapter_id: "sysctl/v1",
+                reason_code: "helper-complete-sysctl",
+            },
+            GoldenAdapterCase {
+                fixture_id: "adapter-setuid-mode",
+                command: "chmod",
+                argv: &["u+s", "/usr/bin/demo"],
+                adapter_id: "setuid-mode/v1",
+                reason_code: "helper-complete-setuid-mode",
+            },
+            GoldenAdapterCase {
+                fixture_id: "adapter-file-capability",
+                command: "setcap",
+                argv: &["cap_net_bind_service=+ep", "/usr/bin/demo"],
+                adapter_id: "file-capability/v1",
+                reason_code: "helper-complete-file-capability",
             },
             GoldenAdapterCase {
                 fixture_id: "adapter-registry-systemd-daemon-reload",
@@ -1333,6 +1658,13 @@ mod tests {
                 argv: &["-R", "/usr/bin/demo"],
                 adapter_id: "selinux-policy/v1",
                 reason_code: "helper-complete-selinux-policy",
+            },
+            GoldenAdapterCase {
+                fixture_id: "adapter-apparmor-policy",
+                command: "apparmor_parser",
+                argv: &["-r", "/etc/apparmor.d/usr.bin.demo"],
+                adapter_id: "apparmor-policy/v1",
+                reason_code: "helper-complete-apparmor-policy",
             },
             GoldenAdapterCase {
                 fixture_id: "adapter-alternatives-registration",
@@ -1458,6 +1790,78 @@ mod tests {
                     class_id,
                     command: Some(_),
                 } if reason_code == "blocked-class-selinux" && class_id == "selinux"
+            ));
+        }
+    }
+
+    #[test]
+    fn apparmor_adapter_models_payload_backed_profile_reload_as_portable_effect() {
+        let registry = AdapterRegistry::default();
+        let payload = PayloadHints::from_files(&[file("/etc/apparmor.d/usr.bin.demo")]);
+
+        let classification = registry.classify_invocation_with_context(AdapterInput {
+            invocation: &invocation("apparmor_parser", &["-r", "/etc/apparmor.d/usr.bin.demo"]),
+            payload: &payload,
+        });
+
+        let ScriptletClassification::Known {
+            reason_code,
+            effects,
+        } = classification
+        else {
+            panic!("payload-backed AppArmor profile reload should be modeled as policy intent");
+        };
+
+        assert_eq!(reason_code, "helper-complete-apparmor-policy");
+        assert_eq!(effects.len(), 1);
+        let effect = &effects[0];
+        assert_eq!(effect.kind, "apparmor-profile-reload");
+        assert_eq!(effect.adapter_id.as_deref(), Some("apparmor-policy/v1"));
+        assert_eq!(effect.replacement, EffectReplacement::Complete);
+        assert_eq!(effect.path.as_deref(), Some("/etc/apparmor.d/usr.bin.demo"));
+        assert_eq!(
+            extra_str(effect, "apparmor_operation"),
+            Some("profile-reload")
+        );
+        assert_eq!(
+            extra_str(effect, "profile_path"),
+            Some("/etc/apparmor.d/usr.bin.demo")
+        );
+        assert_eq!(extra_str(effect, "profile_name"), Some("usr.bin.demo"));
+        assert_eq!(extra_bool(effect, "payload_backed"), Some(true));
+        assert_eq!(
+            extra_string_array(effect, "paths"),
+            vec!["/etc/apparmor.d/usr.bin.demo"]
+        );
+    }
+
+    #[test]
+    fn apparmor_adapter_leaves_broad_or_unbacked_profile_mutation_blocked() {
+        let registry = AdapterRegistry::default();
+        let payload = PayloadHints::from_files(&[file("/etc/apparmor.d/usr.bin.demo")]);
+
+        for (command, argv) in [
+            ("apparmor_parser", vec!["-r", "/etc/apparmor.d"]),
+            ("apparmor_parser", vec!["-r", "/tmp/usr.bin.demo"]),
+            (
+                "apparmor_parser",
+                vec!["-R", "/etc/apparmor.d/usr.bin.demo"],
+            ),
+            ("aa-enforce", vec!["/etc/apparmor.d/usr.bin.demo"]),
+            ("aa-status", vec![]),
+        ] {
+            let classification = registry.classify_invocation_with_context(AdapterInput {
+                invocation: &invocation(command, &argv),
+                payload: &payload,
+            });
+
+            assert!(matches!(
+                classification,
+                ScriptletClassification::Blocked {
+                    reason_code,
+                    class_id,
+                    command: Some(_),
+                } if reason_code == "blocked-class-apparmor" && class_id == "apparmor"
             ));
         }
     }
@@ -1851,6 +2255,163 @@ mod tests {
     }
 
     #[test]
+    fn sysctl_adapter_models_safe_write_as_complete_native_intent() {
+        let registry = AdapterRegistry::default();
+        let payload = PayloadHints::default();
+
+        let classification = registry.classify_invocation_with_context(AdapterInput {
+            invocation: &invocation("sysctl", &["-w", "net.ipv4.ip_forward=1"]),
+            payload: &payload,
+        });
+
+        let ScriptletClassification::Known {
+            reason_code,
+            effects,
+        } = classification
+        else {
+            panic!("safe sysctl write should be modeled as native intent");
+        };
+        assert_eq!(reason_code, "helper-complete-sysctl");
+        assert_eq!(effects.len(), 1);
+        let effect = &effects[0];
+        assert_eq!(effect.kind, "sysctl-setting");
+        assert_eq!(effect.adapter_id.as_deref(), Some("sysctl/v1"));
+        assert_eq!(effect.replacement, EffectReplacement::Complete);
+        assert_eq!(effect.path.as_deref(), Some("net.ipv4.ip_forward"));
+        assert_eq!(extra_str(effect, "key"), Some("net.ipv4.ip_forward"));
+        assert_eq!(extra_str(effect, "value"), Some("1"));
+    }
+
+    #[test]
+    fn sysctl_adapter_leaves_broad_and_denied_forms_blocked() {
+        let registry = AdapterRegistry::default();
+        let payload = PayloadHints::default();
+
+        for argv in [
+            vec!["-p"],
+            vec!["-w", "kernel.modules_disabled=1"],
+            vec!["-w", "net.ipv4.ip_forward=1", "vm.swappiness=10"],
+        ] {
+            let classification = registry.classify_invocation_with_context(AdapterInput {
+                invocation: &invocation("sysctl", &argv),
+                payload: &payload,
+            });
+            assert!(matches!(
+                classification,
+                ScriptletClassification::Blocked {
+                    reason_code,
+                    class_id,
+                    command: Some(_),
+                } if reason_code == "blocked-class-sysctl" && class_id == "sysctl"
+            ));
+        }
+    }
+
+    #[test]
+    fn setuid_adapter_requires_payload_executable_and_leaves_other_privilege_forms_blocked() {
+        let registry = AdapterRegistry::default();
+        let mut payload = PayloadHints::default();
+        payload.payload_paths.insert("/usr/bin/demo".to_string());
+        payload
+            .file_modes
+            .insert("/usr/bin/demo".to_string(), 0o755);
+        payload.executable_paths.insert("/usr/bin/demo".to_string());
+
+        for (command, argv) in [
+            ("chmod", vec!["u+s", "/usr/bin/missing"]),
+            ("chmod", vec!["g+s", "/usr/bin/demo"]),
+            ("chmod", vec!["+s", "/usr/bin/demo"]),
+            ("chmod", vec!["6755", "/usr/bin/demo"]),
+            ("setpriv", vec!["--no-new-privs", "/usr/bin/demo"]),
+        ] {
+            let classification = registry.classify_invocation_with_context(AdapterInput {
+                invocation: &invocation(command, &argv),
+                payload: &payload,
+            });
+            assert!(matches!(
+                classification,
+                ScriptletClassification::Blocked {
+                    reason_code,
+                    class_id,
+                    command: Some(_),
+                } if reason_code == "blocked-class-setuid-setcap"
+                    && class_id == "setuid-setcap"
+            ));
+        }
+    }
+
+    #[test]
+    fn file_capability_adapter_models_supported_payload_executable_setcap() {
+        let registry = AdapterRegistry::default();
+        let mut payload = PayloadHints::default();
+        payload.payload_paths.insert("/usr/bin/demo".to_string());
+        payload
+            .file_modes
+            .insert("/usr/bin/demo".to_string(), 0o755);
+        payload.executable_paths.insert("/usr/bin/demo".to_string());
+
+        let classification = registry.classify_invocation_with_context(AdapterInput {
+            invocation: &invocation("setcap", &["cap_net_bind_service=+ep", "/usr/bin/demo"]),
+            payload: &payload,
+        });
+
+        let ScriptletClassification::Known {
+            reason_code,
+            effects,
+        } = classification
+        else {
+            panic!("supported setcap should be modeled as file capability authority");
+        };
+        assert_eq!(reason_code, "helper-complete-file-capability");
+        assert_eq!(effects.len(), 1);
+        let effect = &effects[0];
+        assert_eq!(effect.kind, "file-capability");
+        assert_eq!(effect.adapter_id.as_deref(), Some("file-capability/v1"));
+        assert_eq!(effect.replacement, EffectReplacement::Complete);
+        assert_eq!(effect.path.as_deref(), Some("/usr/bin/demo"));
+        assert_eq!(
+            extra_string_array(effect, "capabilities"),
+            vec!["cap_net_bind_service"]
+        );
+        assert_eq!(extra_bool(effect, "permitted"), Some(true));
+        assert_eq!(extra_bool(effect, "effective"), Some(true));
+        assert_eq!(extra_bool(effect, "inheritable"), Some(false));
+    }
+
+    #[test]
+    fn file_capability_adapter_keeps_broad_unknown_and_non_payload_setcap_blocked() {
+        let registry = AdapterRegistry::default();
+        let mut payload = PayloadHints::default();
+        payload.payload_paths.insert("/usr/bin/demo".to_string());
+        payload
+            .file_modes
+            .insert("/usr/bin/demo".to_string(), 0o755);
+        payload.executable_paths.insert("/usr/bin/demo".to_string());
+
+        for argv in [
+            vec!["-r", "/usr/bin/demo"],
+            vec!["cap_net_bind_service=+eip", "/usr/bin/demo"],
+            vec!["cap_not_real=+ep", "/usr/bin/demo"],
+            vec!["cap_net_bind_service=+ep", "/usr/bin/missing"],
+            vec!["cap_net_bind_service=+ep", "/etc/demo.conf"],
+        ] {
+            let classification = registry.classify_invocation_with_context(AdapterInput {
+                invocation: &invocation("setcap", &argv),
+                payload: &payload,
+            });
+            assert!(matches!(
+                classification,
+                ScriptletClassification::Blocked {
+                    reason_code,
+                    class_id,
+                    command: Some(_),
+                } if reason_code == "blocked-class-setuid-setcap"
+                    && class_id == "setuid-setcap"
+            ));
+        }
+    }
+
+    #[test]
     fn alternatives_install_and_remove_are_complete_when_parseable() {
         let registry = AdapterRegistry::default();
         let payload = PayloadHints::default();
@@ -2096,8 +2657,15 @@ mod tests {
         let mut payload = PayloadHints::default();
         payload.payload_paths.insert("/usr/bin/demo".to_string());
         payload
+            .file_modes
+            .insert("/usr/bin/demo".to_string(), 0o755);
+        payload.executable_paths.insert("/usr/bin/demo".to_string());
+        payload
             .payload_paths
             .insert("/usr/share/selinux/packages/demo.pp".to_string());
+        payload
+            .payload_paths
+            .insert("/etc/apparmor.d/usr.bin.demo".to_string());
         payload.systemd_units.insert("demo.service".to_string());
         payload
             .tmpfiles_configs

@@ -6,6 +6,7 @@
 //! - [storage] - Root directory, eviction thresholds
 //! - [upstream.*] - Upstream repository configuration
 //! - [conversion] - CCS conversion settings
+//! - [non_public_test_serving] - Default-off admin/test serving for non-public conversions
 //! - [release_publish] - Trusted release signer and repository signing settings
 //! - [federation] - Federation peer settings
 //! - [security] - Rate limiting, banning, CORS
@@ -38,6 +39,10 @@ pub struct RemiConfig {
     /// Conversion settings
     #[serde(default)]
     pub conversion: ConversionSection,
+
+    /// Non-public conversion test-serving settings
+    #[serde(default)]
+    pub non_public_test_serving: NonPublicTestServingSection,
 
     /// Release artifact publication settings
     #[serde(default)]
@@ -269,6 +274,14 @@ fn default_chunk_max() -> usize {
 
 fn default_max_conversions() -> usize {
     DEFAULT_MAX_CONVERSIONS
+}
+
+/// Admin/test access for converted artifacts that are not public-ready.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+pub struct NonPublicTestServingSection {
+    /// Allow admin/test endpoints to serve blocked or review-required conversions.
+    #[serde(default)]
+    pub enabled: bool,
 }
 
 /// Release artifact publication settings.
@@ -803,6 +816,7 @@ impl RemiConfig {
             ban_threshold: self.security.ban_threshold,
             ban_duration_secs: self.ban_duration_secs()?,
             web_root: self.web_root().map(Path::to_path_buf),
+            non_public_test_serving: self.non_public_test_serving.clone(),
             release_publish: self.release_publish.clone(),
         })
     }
@@ -1012,6 +1026,28 @@ mod tests {
         assert_eq!(runtime.ban_threshold, 10);
         assert_eq!(runtime.ban_duration_secs, 300);
         assert_eq!(runtime.web_root, None);
+    }
+
+    #[test]
+    fn non_public_test_serving_defaults_disabled() {
+        let runtime = RemiConfig::default().to_server_config().unwrap();
+
+        assert!(!runtime.non_public_test_serving.enabled);
+    }
+
+    #[test]
+    fn non_public_test_serving_can_be_enabled_from_toml() {
+        let config: RemiConfig = toml::from_str(
+            r#"
+            [non_public_test_serving]
+            enabled = true
+            "#,
+        )
+        .unwrap();
+
+        let runtime = config.to_server_config().unwrap();
+
+        assert!(runtime.non_public_test_serving.enabled);
     }
 
     #[test]

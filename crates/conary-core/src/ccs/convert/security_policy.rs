@@ -23,10 +23,17 @@ fn policy_intent_from_effect(
     entry_id: &str,
     effect: &ScriptletEffect,
 ) -> Option<SecurityPolicyIntent> {
-    if effect.adapter_id.as_deref() != Some("selinux-policy/v1") {
-        return None;
+    match effect.adapter_id.as_deref() {
+        Some("selinux-policy/v1") => selinux_policy_intent_from_effect(entry_id, effect),
+        Some("apparmor-policy/v1") => apparmor_policy_intent_from_effect(entry_id, effect),
+        _ => None,
     }
+}
 
+fn selinux_policy_intent_from_effect(
+    entry_id: &str,
+    effect: &ScriptletEffect,
+) -> Option<SecurityPolicyIntent> {
     let operation = effect
         .extra
         .get("selinux_operation")
@@ -94,12 +101,84 @@ fn policy_intent_from_effect(
     })
 }
 
+fn apparmor_policy_intent_from_effect(
+    entry_id: &str,
+    effect: &ScriptletEffect,
+) -> Option<SecurityPolicyIntent> {
+    let operation = effect
+        .extra
+        .get("apparmor_operation")
+        .and_then(toml::Value::as_str)
+        .unwrap_or_else(|| apparmor_operation_from_kind(&effect.kind))
+        .to_string();
+    let payload_paths = payload_paths(effect);
+    let mut desired_state = BTreeMap::new();
+    for key in ["profile_path", "profile_name"] {
+        if let Some(value) = effect.extra.get(key) {
+            desired_state.insert(key.to_string(), value.clone());
+        }
+    }
+
+    Some(SecurityPolicyIntent {
+        schema: SECURITY_POLICY_INTENT_SCHEMA_V1.to_string(),
+        id: format!("{entry_id}:{}", effect.kind),
+        source: SecurityPolicySource {
+            source_format: None,
+            source_distro: None,
+            entry_id: Some(entry_id.to_string()),
+            command: effect.command.clone(),
+            argv: effect.args.clone(),
+            adapter_id: effect.adapter_id.clone(),
+        },
+        provider: SecurityPolicyProvider::Apparmor,
+        operation,
+        scope: SecurityPolicyScope {
+            kind: "profile".to_string(),
+            name: effect.path.clone(),
+            paths: payload_paths.clone(),
+            service: None,
+            port: None,
+            extra: BTreeMap::new(),
+        },
+        desired_state,
+        requirements: SecurityPolicyRequirements {
+            required_on_active_provider: false,
+            provider_mode: None,
+            tools: effect.command.iter().cloned().collect(),
+            modules: Vec::new(),
+        },
+        fallback: SecurityPolicyFallback::Dormant,
+        payload_evidence: SecurityPolicyPayloadEvidence {
+            payload_backed: effect
+                .extra
+                .get("payload_backed")
+                .and_then(toml::Value::as_bool)
+                .unwrap_or(false),
+            paths: payload_paths,
+            digest: effect.adapter_digest.clone(),
+        },
+        reconciliation: SecurityPolicyReconciliation {
+            state: SecurityPolicyReconciliationState::Pending,
+            reason: Some("metadata-only-provider-planning-deferred".to_string()),
+            target_provider: None,
+        },
+        extra: BTreeMap::new(),
+    })
+}
+
 fn operation_from_kind(kind: &str) -> &str {
     match kind {
         "selinux-label-refresh" => "label-refresh",
         "selinux-file-context" => "file-context",
         "selinux-boolean" => "boolean-set",
         "selinux-policy-module" => "module-install",
+        _ => kind,
+    }
+}
+
+fn apparmor_operation_from_kind(kind: &str) -> &str {
+    match kind {
+        "apparmor-profile-reload" => "profile-reload",
         _ => kind,
     }
 }
@@ -164,20 +243,43 @@ mod tests {
     };
     use std::collections::BTreeMap;
 
-    fn selinux_effect(kind: &str, command: &str) -> ScriptletEffect {
+    fn adapter_effect(
+        kind: &str,
+        command: &str,
+        adapter_id: &str,
+        reason_code: &str,
+    ) -> ScriptletEffect {
         ScriptletEffect {
             kind: kind.to_string(),
             source: EffectSource::StaticSignal,
             confidence: EffectConfidence::Inferred,
             replacement: EffectReplacement::Complete,
-            adapter_id: Some("selinux-policy/v1".to_string()),
-            adapter_digest: Some(crate::hash::sha256_prefixed(b"selinux-policy/v1")),
+            adapter_id: Some(adapter_id.to_string()),
+            adapter_digest: Some(crate::hash::sha256_prefixed(adapter_id.as_bytes())),
             command: Some(command.to_string()),
             args: Vec::new(),
             path: None,
-            reason_code: Some("helper-complete-selinux-policy".to_string()),
+            reason_code: Some(reason_code.to_string()),
             extra: BTreeMap::new(),
         }
+    }
+
+    fn selinux_effect(kind: &str, command: &str) -> ScriptletEffect {
+        adapter_effect(
+            kind,
+            command,
+            "selinux-policy/v1",
+            "helper-complete-selinux-policy",
+        )
+    }
+
+    fn apparmor_effect(kind: &str, command: &str) -> ScriptletEffect {
+        adapter_effect(
+            kind,
+            command,
+            "apparmor-policy/v1",
+            "helper-complete-apparmor-policy",
+        )
     }
 
     #[test]
@@ -361,6 +463,61 @@ mod tests {
         assert_eq!(
             intent.payload_evidence.paths,
             vec!["/usr/share/selinux/packages/demo.pp"]
+        );
+        assert_eq!(intent.fallback.as_str(), "dormant");
+        assert_eq!(intent.reconciliation.state.as_str(), "pending");
+    }
+
+    #[test]
+    fn apparmor_profile_reload_effects_project_generic_policy_intent() {
+        let mut effect = apparmor_effect("apparmor-profile-reload", "apparmor_parser");
+        effect.args = vec!["-r".to_string(), "/etc/apparmor.d/usr.bin.demo".to_string()];
+        effect.path = Some("/etc/apparmor.d/usr.bin.demo".to_string());
+        effect.extra.insert(
+            "apparmor_operation".to_string(),
+            toml::Value::String("profile-reload".to_string()),
+        );
+        effect.extra.insert(
+            "profile_path".to_string(),
+            toml::Value::String("/etc/apparmor.d/usr.bin.demo".to_string()),
+        );
+        effect.extra.insert(
+            "profile_name".to_string(),
+            toml::Value::String("usr.bin.demo".to_string()),
+        );
+        effect
+            .extra
+            .insert("payload_backed".to_string(), toml::Value::Boolean(true));
+        effect.extra.insert(
+            "paths".to_string(),
+            toml::Value::Array(vec![toml::Value::String(
+                "/etc/apparmor.d/usr.bin.demo".to_string(),
+            )]),
+        );
+
+        let intents = policy_intents_from_effects("scriptlet:0:post-install", &[effect]);
+
+        assert_eq!(intents.len(), 1);
+        let intent = &intents[0];
+        assert_eq!(intent.provider.as_str(), "apparmor");
+        assert_eq!(intent.operation, "profile-reload");
+        assert_eq!(intent.scope.kind, "profile");
+        assert_eq!(
+            intent.scope.name.as_deref(),
+            Some("/etc/apparmor.d/usr.bin.demo")
+        );
+        assert_eq!(intent.scope.paths, vec!["/etc/apparmor.d/usr.bin.demo"]);
+        assert_eq!(
+            intent
+                .desired_state
+                .get("profile_name")
+                .and_then(toml::Value::as_str),
+            Some("usr.bin.demo")
+        );
+        assert!(intent.payload_evidence.payload_backed);
+        assert_eq!(
+            intent.payload_evidence.paths,
+            vec!["/etc/apparmor.d/usr.bin.demo"]
         );
         assert_eq!(intent.fallback.as_str(), "dormant");
         assert_eq!(intent.reconciliation.state.as_str(), "pending");

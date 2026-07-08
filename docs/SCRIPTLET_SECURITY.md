@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-07-03
-revision: 6
-summary: Record classified-but-blocked boot/security scriptlet evidence for Remi refusal diagnostics
+last_updated: 2026-07-08
+revision: 10
+summary: Document narrow AppArmor profile conversion authority
 ---
 
 # Scriptlet Security Model
@@ -166,10 +166,50 @@ SELinux is absent and applies only through native policy handling when SELinux
 is present. Conversion never runs `restorecon`, `semanage`, `setsebool`, or
 `semodule` against the host policy store.
 
+Supported AppArmor forms are narrow. `apparmor-policy/v1` records
+payload-backed `apparmor_parser -r|--replace /etc/apparmor.d/<profile>` as
+optional policy intent. That evidence is dormant when AppArmor is absent and is
+eligible for native policy handling only when AppArmor is present. Conversion
+never runs `apparmor_parser` against the host policy store. Mode changes such
+as `aa-enforce` and `aa-complain`, profile disable/status helpers, broad
+directory reloads, and non-payload profile paths remain blocked/private and use
+`block-on-enforcing-target` fallback when captured as review intent.
+
+Sysctl handling has a narrow native-authority bridge. Conversion may replace a
+simple `sysctl -w <key>=<value>` scriptlet with a validated native
+`hooks.sysctl` declaration when the key and value pass the same CCS sysctl
+validators used at install time. Broad loads such as `sysctl -p`, multiple
+assignment batches, and denied security-sensitive keys remain blocked and can
+only be fetched through the non-public admin/test lane.
+
+Setuid handling has a similarly narrow file-mode bridge. Conversion may replace
+`chmod u+s <payload-executable>` or `chmod 4xxx <payload-executable>` only when
+the target is an executable shipped by the package payload. The converter moves
+that authority into the CCS file mode and adds the exact path to
+`policy.allow_setuid_paths`, so the normal build policy can preserve that one
+setuid bit while still stripping unapproved setuid and all setgid bits.
+
+File-capability handling is separate manifest authority, not package dependency
+capabilities. Conversion may replace
+`setcap cap_net_bind_service=+ep <payload-executable>` and other known
+Linux-capability `+ep` grants only when the target is an executable shipped by
+the package payload. The converter records that authority in
+`[[file_capabilities]]`, and mutable live-root CCS installs apply it through a
+controlled `setcap` invocation after file deployment and before DB commit.
+Capability removal, inheritable/process/ambient capability forms, `setpriv`,
+setgid modes, broad `chmod +s`, unknown capability names, and non-payload
+targets remain blocked/private.
+
 This evidence is harvested from package-authored metadata and static command
 signals during conversion. It is an advisory trace for refusal diagnostics, not
 runtime execution and not permission to mutate the host boot or security state.
 Environment values are not surfaced in public boot/security evidence.
+
+Maintainers may use Remi's non-public admin/test serving lane to fetch blocked
+or review-required converted CCS files for inspection. That lane is disabled by
+default, requires admin access, and preserves the original scriptlet publication
+status. It is not public publication authority and does not permit raw legacy
+scriptlet replay.
 
 ### 5. Basic Protections (Always Active)
 

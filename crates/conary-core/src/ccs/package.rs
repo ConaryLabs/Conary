@@ -240,6 +240,7 @@ pub fn convert_binary_to_ccs_manifest(
         build,
         legacy: None,
         policy: BuildPolicyConfig::default(),
+        file_capabilities: Vec::new(),
         provenance: None,
         capabilities: bin.capabilities.clone(),
         redirects: Redirects::default(),

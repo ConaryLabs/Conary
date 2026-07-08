@@ -369,6 +369,7 @@ pub(crate) fn install_prepared_inner(
         old_trove_to_upgrade: execution.prepared.old_trove_to_upgrade.as_ref(),
         ccs_manifest_provides: None,
         ccs_capabilities: None,
+        ccs_file_capabilities: None,
         execution_path: PackageExecutionPath::GenerationAware,
         defer_generation: false,
         repository_provenance: None,

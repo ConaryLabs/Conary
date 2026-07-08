@@ -97,6 +97,18 @@ const REQUIRED_GOAL8_CASES: &[GoldenFixtureCase] = &[
         "arch",
     ),
     public_fixture(
+        "adapter-apparmor-policy",
+        GoldenFixtureOutcome::FullyReplaced,
+        "ubuntu-26.04",
+        "ubuntu-26.04",
+    ),
+    public_fixture(
+        "adapter-file-capability",
+        GoldenFixtureOutcome::FullyReplaced,
+        "fedora-44",
+        "fedora-44",
+    ),
+    public_fixture(
         "adapter-alternatives-registration",
         GoldenFixtureOutcome::FullyReplaced,
         "ubuntu-26.04",
@@ -172,6 +184,24 @@ const ALL_GOLDEN_FIXTURE_CASES: &[GoldenFixtureCase] = &[
         "fedora-44",
     ),
     public_fixture(
+        "adapter-sysctl",
+        GoldenFixtureOutcome::FullyReplaced,
+        "fedora-44",
+        "fedora-44",
+    ),
+    public_fixture(
+        "adapter-setuid-mode",
+        GoldenFixtureOutcome::FullyReplaced,
+        "fedora-44",
+        "fedora-44",
+    ),
+    public_fixture(
+        "adapter-file-capability",
+        GoldenFixtureOutcome::FullyReplaced,
+        "fedora-44",
+        "fedora-44",
+    ),
+    public_fixture(
         "adapter-alternatives-registration",
         GoldenFixtureOutcome::FullyReplaced,
         "ubuntu-26.04",
@@ -188,6 +218,12 @@ const ALL_GOLDEN_FIXTURE_CASES: &[GoldenFixtureCase] = &[
         GoldenFixtureOutcome::FullyReplaced,
         "fedora-44",
         "arch",
+    ),
+    public_fixture(
+        "adapter-apparmor-policy",
+        GoldenFixtureOutcome::FullyReplaced,
+        "ubuntu-26.04",
+        "ubuntu-26.04",
     ),
     fixture("blocked-class-network", GoldenFixtureOutcome::Blocked),
     fixture(

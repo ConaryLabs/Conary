@@ -111,7 +111,14 @@ impl Default for BlockedClassRegistry {
                 "Setuid and file capability mutation is security-sensitive.",
                 "blocked-class-setuid-setcap",
                 &["setcap", "setpriv"],
-                &["chmod u+s*", "chmod 4*"],
+                &[
+                    "chmod u+s*",
+                    "chmod g+s*",
+                    "chmod +s*",
+                    "chmod 2*",
+                    "chmod 4*",
+                    "chmod 6*",
+                ],
                 "Model executable privilege metadata in the package manifest and verify it at install time.",
             ),
             blocked_class(
@@ -627,6 +634,19 @@ mod tests {
             chmod_mode.unwrap().reason_code,
             "blocked-class-setuid-setcap"
         );
+
+        for argv in [
+            vec!["g+s", "/usr/bin/foo"],
+            vec!["+s", "/usr/bin/foo"],
+            vec!["2755", "/usr/bin/foo"],
+            vec!["6755", "/usr/bin/foo"],
+        ] {
+            let chmod_form = registry.match_invocation(&invocation("chmod", &argv));
+            assert_eq!(
+                chmod_form.unwrap().reason_code,
+                "blocked-class-setuid-setcap"
+            );
+        }
     }
 
     #[test]

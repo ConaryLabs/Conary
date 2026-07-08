@@ -284,7 +284,7 @@ pub(super) fn security_policy_intent_from_classification(
             tools: vec![command.command.clone()],
             modules: Vec::new(),
         },
-        fallback: SecurityPolicyFallback::Dormant,
+        fallback: SecurityPolicyFallback::BlockOnEnforcingTarget,
         payload_evidence: SecurityPolicyPayloadEvidence::default(),
         reconciliation: SecurityPolicyReconciliation {
             state: SecurityPolicyReconciliationState::Review,
@@ -368,7 +368,7 @@ mod tests {
         assert_eq!(intent.provider.as_str(), "apparmor");
         assert_eq!(intent.operation, "profile-reload");
         assert_eq!(intent.scope.kind, "profile");
-        assert_eq!(intent.fallback.as_str(), "dormant");
+        assert_eq!(intent.fallback.as_str(), "block-on-enforcing-target");
         assert_eq!(intent.reconciliation.state.as_str(), "review");
         assert_eq!(intent.source.command.as_deref(), Some("apparmor_parser"));
     }

@@ -76,6 +76,9 @@ triage state, add private maintainer notes, and export private or
 family. Queue samples include sanitized generic LSM `security_policy_intents`
 when conversion can type SELinux or AppArmor helper behavior, and the queue
 uses those records for adapter planning and public/private packet export.
+Supported SELinux and AppArmor adapter evidence can stay dormant on targets
+without the matching provider. Unsupported AppArmor forms still stay
+review-only and record `block-on-enforcing-target` fallback.
 Detail responses expose review-artifact availability and staleness, never raw
 local review artifact paths. Private packets include sanitized artifact
 references for maintainer follow-up; `public-sanitized` packets omit review
@@ -97,6 +100,23 @@ by adapter/support-matrix evidence. Rows with `private-review`, `blocked`,
 `local-only`, malformed summary JSON, or non-default scriptlet evidence without
 an explicit summary are terminal review/blocked conversion outcomes and are not
 public-ready.
+For sysctl, public-ready means the converter produced complete `sysctl/v1`
+evidence and projected it into native `hooks.sysctl`; broad or denied sysctl
+forms remain blocked/private.
+For setuid, public-ready means the converter produced complete
+`setuid-mode/v1` evidence for a payload executable and projected it into native
+file mode plus `policy.allow_setuid_paths`.
+For file capabilities, public-ready means the converter produced complete
+`file-capability/v1` evidence for known Linux `+ep` grants on a payload
+executable and projected it into `[[file_capabilities]]`; setcap removal,
+inheritable/process/ambient capability forms, setpriv, setgid, broad chmod,
+unknown capability names, and non-payload privilege forms remain
+blocked/private.
+For AppArmor, public-ready means the converter produced complete
+`apparmor-policy/v1` evidence for a payload-backed
+`apparmor_parser -r|--replace /etc/apparmor.d/<profile>` reload. Mode changes,
+profile disable/status helpers, broad reloads, and non-payload profile paths
+remain blocked/private.
 
 This gate is publication-only. It does not replay scriptlets, promote reviewed
 packages, or change client install/update/remove behavior.
@@ -105,6 +125,18 @@ Sparse-index and search responses use `converted=true` only for rows that do
 not need reconversion and pass the same public-ready scriptlet gate. A completed
 conversion row that requires legacy replay, review, or blocking remains private
 server state and is not advertised as a normal converted artifact.
+
+### Non-Public Test Serving
+
+Remi also has a default-off admin/test lane for converted artifacts that are
+blocked or private-review. When `non_public_test_serving.enabled = true`, an
+admin can request `/v1/admin/packages/{distro}/{package}/test-manifest` or
+`/v1/admin/packages/{distro}/{package}/test-download` with an exact version and
+optional architecture (`arch`, or `architecture` as an alias). This does not
+change public publication status, public
+indexes, OCI tags, sparse indexes, search results, or public chunk serving.
+Malformed rows are not test-served; they need reconversion or metadata repair
+first.
 
 ### Fixture Ownership
 

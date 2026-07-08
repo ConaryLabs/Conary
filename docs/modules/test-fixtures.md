@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-07-03
-revision: 6
-summary: Map M4e lifecycle authoring and Remi native proof gates
+revision: 7
+summary: Map AppArmor policy golden fixture proof
 ---
 
 # Test Fixtures And Proof Maps
@@ -64,7 +64,10 @@ Each fixture family should record:
 - **Safety notes:** Public-ready fixtures must use exact supported target IDs:
   `fedora-44`, `ubuntu-26.04`, or `arch`. The `adapter-selinux-policy`
   fixture intentionally uses a Fedora source and Arch target to prove supported
-  SELinux intent remains portable when the target does not require SELinux.
+  SELinux intent remains portable when the target does not require SELinux. The
+  `adapter-apparmor-policy` fixture covers only payload-backed
+  `apparmor_parser -r|--replace /etc/apparmor.d/<profile>` evidence; broader
+  AppArmor helper forms stay in blocked/private fixtures.
 
 ### ccs-v2-native-authority-fixtures
 

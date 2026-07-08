@@ -201,6 +201,7 @@ pub async fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> 
         old_trove_to_upgrade: old_trove_to_upgrade.as_deref(),
         ccs_manifest_provides: None,
         ccs_capabilities: None,
+        ccs_file_capabilities: None,
         execution_path,
         defer_generation: false,
         repository_provenance,

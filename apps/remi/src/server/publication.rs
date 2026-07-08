@@ -627,6 +627,7 @@ mod tests {
         let intent = &report.security_policy_intents[0];
         assert_eq!(intent.provider.as_str(), "apparmor");
         assert_eq!(intent.operation, "profile-reload");
+        assert_eq!(intent.fallback.as_str(), "block-on-enforcing-target");
         assert_eq!(intent.reconciliation.state.as_str(), "review");
         assert_eq!(intent.scope.paths, vec!["/etc/apparmor.d/usr.bin.demo"]);
     }
@@ -731,7 +732,7 @@ mod tests {
                 tools: vec!["apparmor_parser".to_string()],
                 modules: Vec::new(),
             },
-            fallback: SecurityPolicyFallback::Dormant,
+            fallback: SecurityPolicyFallback::BlockOnEnforcingTarget,
             payload_evidence: SecurityPolicyPayloadEvidence {
                 payload_backed: true,
                 paths: vec!["/etc/apparmor.d/usr.bin.demo".to_string()],

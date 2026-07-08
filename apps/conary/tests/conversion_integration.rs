@@ -140,6 +140,14 @@ fn golden_payload_files(name: &str) -> Vec<ExtractedFile> {
             sha256: None,
             symlink_target: None,
         },
+        ExtractedFile {
+            path: "/etc/apparmor.d/usr.bin.demo".to_string(),
+            content: b"profile usr.bin.demo /usr/bin/demo { }\n".to_vec(),
+            size: 38,
+            mode: 0o644,
+            sha256: None,
+            symlink_target: None,
+        },
     ]);
     files
 }
@@ -574,6 +582,7 @@ restorecon -R /usr/bin/adapter-registry-fully-replaced
 semanage fcontext -a -t demo_exec_t /usr/bin/adapter-registry-fully-replaced
 semodule -i /usr/share/selinux/packages/demo.pp
 setsebool -P demo_can_network on
+apparmor_parser -r /etc/apparmor.d/usr.bin.demo
 update-alternatives --install /usr/bin/editor editor /usr/bin/demo-editor 50
 "
         .to_string(),
@@ -619,6 +628,16 @@ update-alternatives --install /usr/bin/editor editor /usr/bin/demo-editor 50
                     .get("target_security_policy")
                     .and_then(toml::Value::as_str)
                     == Some("selinux-optional")
+        })
+    }));
+    assert!(bundle.entries.iter().any(|entry| {
+        entry.effects.iter().any(|effect| {
+            effect.adapter_id.as_deref() == Some("apparmor-policy/v1")
+                && effect
+                    .extra
+                    .get("target_security_policy")
+                    .and_then(toml::Value::as_str)
+                    == Some("apparmor-optional")
         })
     }));
     assert!(
