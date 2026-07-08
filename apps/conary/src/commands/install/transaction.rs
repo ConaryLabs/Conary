@@ -73,7 +73,7 @@ fn execute_install_transaction_inner(
     progress: &InstallProgress,
     transaction_config_override: Option<TransactionConfig>,
 ) -> Result<InstallTransactionResult> {
-    reject_unsupported_generation_file_capabilities(ctx)?;
+    preflight_generation_file_capabilities(ctx)?;
 
     let _legacy_replay = ctx.legacy_replay;
     if ctx.execution_path == PackageExecutionPath::MutableLiveRoot {
@@ -292,15 +292,39 @@ fn execute_install_transaction_inner(
     Ok(InstallTransactionResult { changeset_id })
 }
 
-fn reject_unsupported_generation_file_capabilities(ctx: &TransactionContext<'_>) -> Result<()> {
-    if ctx.execution_path == PackageExecutionPath::GenerationAware
-        && matches!(ctx.ccs_file_capabilities, Some(file_capabilities) if !file_capabilities.is_empty())
-    {
+fn preflight_generation_file_capabilities(ctx: &TransactionContext<'_>) -> Result<()> {
+    preflight_generation_file_capabilities_with_xattr_support(
+        ctx,
+        conary_core::generation::builder::erofs_xattr_image_support_available(),
+    )
+}
+
+fn preflight_generation_file_capabilities_with_xattr_support(
+    ctx: &TransactionContext<'_>,
+    xattr_image_support_available: bool,
+) -> Result<()> {
+    let Some(file_capabilities) = ctx.ccs_file_capabilities else {
+        return Ok(());
+    };
+    if file_capabilities.is_empty() {
+        return Ok(());
+    }
+    for capability in file_capabilities {
+        capability.validate()?;
+    }
+    if ctx.execution_path != PackageExecutionPath::GenerationAware {
+        return Ok(());
+    }
+    if ctx.defer_generation {
         anyhow::bail!(
-            "CCS file_capabilities cannot be applied by generation-aware installs yet; generation image xattr propagation is required"
+            "CCS file_capabilities require immediate generation publication; generation-aware installs cannot use --defer-generation"
         );
     }
-
+    if !xattr_image_support_available {
+        anyhow::bail!(
+            "CCS file_capabilities require generation image xattr propagation, but generation image xattr propagation is unavailable in this build"
+        );
+    }
     Ok(())
 }
 
@@ -364,16 +388,22 @@ mod tests {
     use super::*;
     use crate::commands::PackageFormatType;
 
-    #[test]
-    fn reject_unsupported_generation_file_capabilities_requires_mutable_live_root() {
-        let file_capabilities = vec![conary_core::ccs::manifest::FileCapability {
+    fn sample_file_capabilities() -> Vec<conary_core::ccs::manifest::FileCapability> {
+        vec![conary_core::ccs::manifest::FileCapability {
             path: "/usr/bin/server".to_string(),
             capabilities: vec!["cap_net_bind_service".to_string()],
             permitted: true,
             effective: true,
             inheritable: false,
-        }];
-        let ctx = TransactionContext {
+        }]
+    }
+
+    fn transaction_context_with_file_capabilities<'a>(
+        file_capabilities: &'a [conary_core::ccs::manifest::FileCapability],
+        execution_path: PackageExecutionPath,
+        defer_generation: bool,
+    ) -> TransactionContext<'a> {
+        TransactionContext {
             db_path: "/tmp/conary.db",
             root: "/",
             semantics: InstallSemantics::legacy(PackageFormatType::Rpm),
@@ -381,21 +411,78 @@ mod tests {
             old_trove_to_upgrade: None,
             ccs_manifest_provides: None,
             ccs_capabilities: None,
-            ccs_file_capabilities: Some(&file_capabilities),
-            execution_path: PackageExecutionPath::GenerationAware,
-            defer_generation: false,
+            ccs_file_capabilities: Some(file_capabilities),
+            execution_path,
+            defer_generation,
             repository_provenance: None,
             legacy_replay: LegacyReplayOptions::default(),
             accepted_legacy_bundle: None,
-        };
+        }
+    }
 
-        let error = reject_unsupported_generation_file_capabilities(&ctx).unwrap_err();
+    #[test]
+    fn reject_unsupported_generation_file_capabilities_allows_generation_file_capabilities_when_xattr_image_support_available()
+     {
+        let file_capabilities = sample_file_capabilities();
+        let ctx = transaction_context_with_file_capabilities(
+            &file_capabilities,
+            PackageExecutionPath::GenerationAware,
+            false,
+        );
+
+        preflight_generation_file_capabilities(&ctx)
+            .expect("generation-aware install should allow file capabilities when xattr image support is available");
+    }
+
+    #[test]
+    fn reject_unsupported_generation_file_capabilities_rejects_generation_file_capabilities_when_deferred_generation_is_requested()
+     {
+        let file_capabilities = sample_file_capabilities();
+        let ctx = transaction_context_with_file_capabilities(
+            &file_capabilities,
+            PackageExecutionPath::GenerationAware,
+            true,
+        );
+
+        let error = preflight_generation_file_capabilities(&ctx)
+            .expect_err("deferred generation-aware install must reject file capabilities");
+
+        assert!(error.to_string().contains("--defer-generation"), "{error}");
+    }
+
+    #[test]
+    fn reject_unsupported_generation_file_capabilities_rejects_generation_file_capabilities_when_xattr_image_support_is_unavailable()
+     {
+        let file_capabilities = sample_file_capabilities();
+        let ctx = transaction_context_with_file_capabilities(
+            &file_capabilities,
+            PackageExecutionPath::GenerationAware,
+            false,
+        );
+
+        let error = preflight_generation_file_capabilities_with_xattr_support(&ctx, false)
+            .expect_err("generation-aware install must reject file capabilities without xattr image support");
 
         assert!(
             error
                 .to_string()
-                .contains("generation image xattr propagation is required"),
+                .contains("generation image xattr propagation is unavailable"),
             "{error}"
+        );
+    }
+
+    #[test]
+    fn reject_unsupported_generation_file_capabilities_keeps_generation_file_capabilities_available_to_mutable_live_root()
+     {
+        let file_capabilities = sample_file_capabilities();
+        let ctx = transaction_context_with_file_capabilities(
+            &file_capabilities,
+            PackageExecutionPath::MutableLiveRoot,
+            false,
+        );
+
+        preflight_generation_file_capabilities_with_xattr_support(&ctx, false).expect(
+            "mutable live-root installs should skip generation-only file capability preflight",
         );
     }
 
