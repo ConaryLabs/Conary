@@ -58,8 +58,8 @@ values remain private server state and are represented publicly only as
 ### Scriptlet Evidence Queue
 
 Remi maintains an admin/operator-only scriptlet evidence queue for adapter
-planning. Schema v76 stores `scriptlet_evidence_*` queue samples with sanitized
-boot/security and generic LSM intent evidence, clustering blocked,
+planning. Schema v76 and later store `scriptlet_evidence_*` queue samples with
+sanitized boot/security and generic LSM intent evidence, clustering blocked,
 review-required, and malformed conversion evidence by stable command shape,
 blocked class, distro, target profile, and lifecycle phase. Conary-core owns the
 database schema and model helpers; Remi owns the normalization, aggregation,

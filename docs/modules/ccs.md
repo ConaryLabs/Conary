@@ -89,7 +89,11 @@ against the known Linux capability table. Public-ready conversion is narrower:
 the first public allowlist is `cap_net_bind_service`; other known capability
 names remain valid native manifest authority but non-public conversion
 evidence. Mutable live-root installs apply that authority after file deployment
-and before DB commit. Setcap removal,
+and before DB commit. Generation-aware installs preserve the same authority
+only when Conary persists the installed file-capability rows, attaches
+`security.capability` during generation runtime-input collection, publishes a
+non-deferred generation, and emits the expected capability-xattr count through
+generation inspection metadata. Setcap removal,
 inheritable/process/ambient capability forms, setgid, broad `chmod +s`, unknown
 capability names, and non-payload privilege mutations remain blocked/private.
 Supported SELinux scriptlet forms are modeled as
@@ -302,6 +306,14 @@ conary ccs install package.ccs --dry-run     # Preview without applying
 The `--reinstall` flag forces reinstallation even when the same version is
 already present. This is useful for repairing corrupted files or re-running
 hooks without bumping the version.
+
+For `[[file_capabilities]]`, the install boundary depends on the execution
+path. Mutable live-root installs still apply the manifest authority with a
+controlled `setcap` call after deployment. Generation-aware installs preserve
+the same authority only through immediate generation publication: Conary
+persists the installed file-capability rows, attaches `security.capability`
+while building the runtime generation inputs, and reports the resulting xattr
+count through `conary system generation info`.
 
 Implementation routing: `apps/conary/src/commands/ccs/install.rs` is the
 stable command hub. Command execution lives in

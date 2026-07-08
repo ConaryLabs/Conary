@@ -199,6 +199,16 @@ and `cap_setfcap` remain private-review until a future target-profile policy
 explicitly allows them. The converter records recognized authority in
 `[[file_capabilities]]`, and mutable live-root CCS installs apply it through a
 controlled `setcap` invocation after file deployment and before DB commit.
+Generation-aware CCS installs now support the same manifest authority only when
+the install persists file-capability rows, publishes a generation immediately
+instead of using `--defer-generation`, attaches `security.capability` during
+generation runtime-input collection, and writes the generation image through an
+xattr-preserving format. `conary system generation info` reports the resulting
+capability-xattr count for published generations. Group O includes a QEMU
+export proof for both capability-present and capability-absent exported
+artifacts as rollback-equivalent evidence; the fresh local run is currently
+blocked before that case by the `minimal-boot-v3` source image SSH readiness
+failure.
 Capability removal, inheritable/process/ambient capability forms, `setpriv`,
 setgid modes, broad `chmod +s`, unknown capability names, and non-payload
 targets remain blocked/private.

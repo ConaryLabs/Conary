@@ -64,12 +64,13 @@ baseline covered `TGE01` and `TGE02`. The active Fedora 44 suite now covers:
 - `TGE01`: metadata-only installed generations fail closed before artifact publication
 - `TGE03`: CAS-backed installed generations fail closed when an included CAS object is missing
 - `TGE04`: intended proof that a full CAS-backed installed runtime generation exports to qcow2 and boots under UEFI
+- `TGE05`: exported installed-runtime generations are intended to preserve capability-absent and capability-present `security.capability` state for the same payload path, with rollback-equivalent proof via separate exported artifacts; fresh execution is blocked until the `minimal-boot-v3` source image reaches SSH again
 - `TGE02`: bootstrap-run generation artifact exports to qcow2 and boots under UEFI
 
 Keep this suite in the Phase 3 rotation for regressions in generation artifact
 export, QEMU fixture copying, scratch-disk handling, CAS integrity checks,
-guest SSH access, and exported-image boot. Group P adds the focused ISO
-generation-carrier path:
+guest SSH access, exported-image boot, and generation file-capability xattr
+preservation. Group P adds the focused ISO generation-carrier path:
 
 - `TISO01`: bootstrap-run generation artifact exports to ISO, emits an output
   provenance sidecar, and boots under UEFI through `image_format = "iso"`

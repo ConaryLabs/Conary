@@ -92,9 +92,14 @@ Historical operational validation:
 Current active validation:
 
 - `cargo run -p conary-test -- run --suite phase3-group-o-generation-export --distro fedora44 --phase 3`
-- covered cases: `TGE01`, `TGE03`, `TGE04`, and `TGE02`
+- covered cases: `TGE01`, `TGE03`, `TGE04`, `TGE05`, and `TGE02`
 - when the source fixture is generation-builder-ready, `TGE04` is the intended
   proof that installed-runtime qcow2 export boots under UEFI
+- `TGE05` is the generation file-capability xattr proof candidate: separate
+  exported baseline and capability-enabled artifacts are intended to verify
+  rollback-equivalent absence and presence of `security.capability` for the
+  same payload executable; fresh local execution is currently blocked before
+  this case because the `minimal-boot-v3` source image does not reach SSH
 - the active manifests use the generation-builder-ready `minimal-boot-v3`
   source image; they no longer install `cpio`, `dracut`, `qemu-img`,
   `dosfstools`, or related helper libraries through Conary before the runtime
@@ -151,7 +156,10 @@ Remaining work:
 - keep the `minimal-boot-v3` QEMU source image generation-builder-ready for
   Groups N and O, and keep Group P helper provisioning covered while the source
   fixture remains minimal
-- keep `TGE01`, `TGE03`, and `TGE04` in the active Phase 3 rotation
+- keep `TGE01`, `TGE03`, `TGE04`, and `TGE05` in the active Phase 3 rotation
+- keep the exported capability-absent and capability-present generation pair
+  as the required pending proof for `security.capability` preservation plus
+  rollback-equivalent behavior for the same payload path
 - preserve usr-merge and package symlink handling for runtime generations
 - keep missing-CAS and checksum/size mismatch failures before artifact
   publication
