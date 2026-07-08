@@ -1788,8 +1788,11 @@ mod tests {
 
         for (command, argv) in [
             ("restorecon", vec!["-R", "/"]),
+            ("restorecon", vec!["-Rv", "/usr"]),
             ("semodule", vec!["-i", "/tmp/demo.pp"]),
+            ("semodule", vec!["-r", "demo"]),
             ("semanage", vec!["permissive", "-a", "demo_t"]),
+            ("setsebool", vec!["demo_can_network", "on"]),
             ("fixfiles", vec!["restore"]),
         ] {
             let classification = registry.classify_invocation_with_context(AdapterInput {
@@ -1861,7 +1864,21 @@ mod tests {
                 "apparmor_parser",
                 vec!["-R", "/etc/apparmor.d/usr.bin.demo"],
             ),
+            (
+                "apparmor_parser",
+                vec![
+                    "--replace",
+                    "/etc/apparmor.d/usr.bin.demo",
+                    "/etc/apparmor.d/usr.bin.other",
+                ],
+            ),
+            (
+                "apparmor_parser",
+                vec!["--replace", "/etc/apparmor.d/subdir/usr.bin.demo"],
+            ),
             ("aa-enforce", vec!["/etc/apparmor.d/usr.bin.demo"]),
+            ("aa-complain", vec!["/etc/apparmor.d/usr.bin.demo"]),
+            ("aa-disable", vec!["/etc/apparmor.d/usr.bin.demo"]),
             ("aa-status", vec![]),
         ] {
             let classification = registry.classify_invocation_with_context(AdapterInput {
