@@ -10,6 +10,7 @@ use super::boot_assets::{
 };
 use super::cas::{cas_objects_from_file_refs, verify_runtime_generation_cas_object_presence};
 use super::erofs::{BuildResult, build_erofs_image};
+use super::file_capabilities::SECURITY_CAPABILITY_XATTR;
 use super::root_validation::validate_runtime_generation_root_is_self_contained;
 use super::runtime_inputs;
 use super::sysroot::runtime_generation_architecture;
@@ -185,6 +186,11 @@ pub fn build_generation_from_db_with_boot_root_and_activation(
     let all_files = FileEntry::find_all_ordered(conn)?;
     let runtime_inputs =
         runtime_inputs::collect_runtime_generation_inputs(conn, &troves, all_files)?;
+    let security_capability_xattr_count = runtime_inputs
+        .file_refs
+        .iter()
+        .filter(|file| file.xattrs.contains_key(SECURITY_CAPABILITY_XATTR))
+        .count();
 
     // Step 4: Build EROFS image with symlinks from DB.
     // This must succeed before we commit state to the database.
@@ -252,6 +258,8 @@ pub fn build_generation_from_db_with_boot_root_and_activation(
         fsverity_enabled: false, // Caller can enable separately
         erofs_verity_digest: result.erofs_verity_digest.clone(),
         artifact_manifest_sha256: Some(artifact_manifest_sha256),
+        security_capability_xattr_count: (security_capability_xattr_count > 0)
+            .then_some(security_capability_xattr_count as i64),
         created_at: chrono::Utc::now().to_rfc3339(),
         package_count: troves.len() as i64,
         kernel_version: Some(kernel_version),
@@ -287,9 +295,11 @@ mod tests {
         runtime_generation_db_with_missing_regular_file_cas_object,
     };
     use super::*;
-    use crate::db::models::{FileEntry, Trove, TroveType};
+    use crate::ccs::manifest::FileCapability;
+    use crate::db::models::{FileEntry, InstalledFileCapability, Trove, TroveType};
     use crate::db::schema::migrate;
     use crate::filesystem::CasStore;
+    use crate::generation::builder::file_capabilities::SECURITY_CAPABILITY_XATTR;
     use crate::generation::metadata::GenerationMetadata;
 
     #[cfg(feature = "composefs-rs")]
@@ -353,6 +363,100 @@ mod tests {
         assert!(metadata.artifact_manifest_sha256.is_some());
         assert_eq!(metadata.kernel_version.as_deref(), Some("6.19.8-conary"));
         crate::generation::artifact::load_generation_artifact(&gen_dir).unwrap();
+    }
+
+    #[cfg(feature = "composefs-rs")]
+    #[test]
+    fn build_generation_from_db_records_capability_xattr_count() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let generations_root = tmp.path().join("generations");
+        let objects_dir = tmp.path().join("objects");
+        let boot_root = tmp.path().join("boot");
+        std::fs::create_dir_all(&generations_root).unwrap();
+        std::fs::create_dir_all(boot_root.join("EFI/BOOT")).unwrap();
+        std::fs::write(boot_root.join("vmlinuz-6.19.8-conary"), b"kernel").unwrap();
+        std::fs::write(boot_root.join("initramfs-6.19.8-conary.img"), b"initramfs").unwrap();
+        std::fs::write(boot_root.join("EFI/BOOT/BOOTX64.EFI"), b"efi").unwrap();
+
+        let cas = CasStore::new(&objects_dir).unwrap();
+        let hello_hash = cas.store(b"hello").unwrap();
+        let init_hash = cas.store(b"init").unwrap();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let mut trove = Trove::new(
+            "kernel".to_string(),
+            "6.19.8-conary".to_string(),
+            TroveType::Package,
+        );
+        trove.architecture = Some("x86_64".to_string());
+        let trove_id = trove.insert(&conn).unwrap();
+        let mut file = FileEntry::new(
+            "/usr/bin/hello".to_string(),
+            hello_hash,
+            b"hello".len() as i64,
+            0o755,
+            trove_id,
+        );
+        file.insert(&conn).unwrap();
+        let mut init = FileEntry::new(
+            "/usr/sbin/init".to_string(),
+            init_hash,
+            b"init".len() as i64,
+            0o755,
+            trove_id,
+        );
+        init.insert(&conn).unwrap();
+
+        InstalledFileCapability::replace_for_trove(
+            &conn,
+            trove_id,
+            &[FileCapability {
+                path: "/usr/bin/hello".to_string(),
+                capabilities: vec!["cap_net_bind_service".to_string()],
+                permitted: true,
+                effective: true,
+                inheritable: false,
+            }],
+        )
+        .unwrap();
+
+        let (generation, _result) = build_generation_from_db_with_boot_root(
+            &conn,
+            &generations_root,
+            "runtime artifact test",
+            &boot_root,
+        )
+        .unwrap();
+        let gen_dir = generations_root.join(generation.to_string());
+        let metadata = GenerationMetadata::read_from(&gen_dir).unwrap();
+        let artifact = crate::generation::artifact::load_generation_artifact(&gen_dir).unwrap();
+        let image_bytes = std::fs::read(&artifact.erofs_path).unwrap();
+        let fs = composefs::erofs::reader::erofs_to_filesystem::<
+            composefs::fsverity::Sha256HashValue,
+        >(&image_bytes)
+        .unwrap();
+        let leaf = fs
+            .as_dir()
+            .get_directory_ref(std::ffi::OsStr::new("usr"))
+            .unwrap()
+            .get_directory_ref(std::ffi::OsStr::new("bin"))
+            .unwrap()
+            .leaf(
+                fs.as_dir()
+                    .get_directory_ref(std::ffi::OsStr::new("usr"))
+                    .unwrap()
+                    .get_directory_ref(std::ffi::OsStr::new("bin"))
+                    .unwrap()
+                    .leaf_id(std::ffi::OsStr::new("hello"))
+                    .unwrap(),
+            );
+
+        assert_eq!(metadata.security_capability_xattr_count, Some(1));
+        assert!(
+            leaf.stat
+                .xattrs
+                .contains_key(std::ffi::OsStr::new(SECURITY_CAPABILITY_XATTR))
+        );
     }
 
     #[cfg(feature = "composefs-rs")]

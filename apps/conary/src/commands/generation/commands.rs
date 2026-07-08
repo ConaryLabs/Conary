@@ -11,6 +11,7 @@ use conary_core::generation::mount::{
 use conary_core::runtime_root::ConaryRuntimeRoot;
 use conary_core::transaction::{TransactionConfig, TransactionEngine};
 use rusqlite::Connection;
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 
@@ -136,42 +137,64 @@ pub async fn cmd_generation_info(gen_number: i64) -> Result<()> {
     let current = current_generation(runtime_root.root())?;
     let is_active = current == Some(gen_number);
 
+    print!(
+        "{}",
+        render_generation_info(gen_number, &meta, is_active, dir_size_bytes(&gen_dir))
+    );
+
+    Ok(())
+}
+
+fn render_generation_info(
+    gen_number: i64,
+    meta: &GenerationMetadata,
+    is_active: bool,
+    generation_dir_size: u64,
+) -> String {
     let status = if is_active { "active" } else { "inactive" };
     let kernel = meta.kernel_version.as_deref().unwrap_or("none");
+    let format = if meta.format.is_empty() {
+        "reflink"
+    } else {
+        &meta.format
+    };
 
-    println!("Generation {gen_number}");
-    println!("  Status:   {status}");
-    println!(
-        "  Format:   {}",
-        if meta.format.is_empty() {
-            "reflink"
-        } else {
-            &meta.format
-        }
-    );
-    println!("  Created:  {}", meta.created_at);
-    println!("  Packages: {}", meta.package_count);
-    println!("  Kernel:   {kernel}");
-    println!("  Summary:  {}", meta.summary);
+    let mut rendered = String::new();
+    let _ = writeln!(&mut rendered, "Generation {gen_number}");
+    let _ = writeln!(&mut rendered, "  Status:   {status}");
+    let _ = writeln!(&mut rendered, "  Format:   {format}");
+    let _ = writeln!(&mut rendered, "  Created:  {}", meta.created_at);
+    let _ = writeln!(&mut rendered, "  Packages: {}", meta.package_count);
+    let _ = writeln!(&mut rendered, "  Kernel:   {kernel}");
+    let _ = writeln!(&mut rendered, "  Summary:  {}", meta.summary);
 
-    // Show EROFS-specific info if available
     if let Some(erofs_size) = meta.erofs_size {
-        println!(
+        let _ = writeln!(
+            &mut rendered,
             "  Image:    {} (root.erofs)",
             format_bytes(erofs_size as u64)
         );
     } else {
-        let size = dir_size_bytes(&gen_dir);
-        println!("  Size:     {}", format_bytes(size));
+        let _ = writeln!(
+            &mut rendered,
+            "  Size:     {}",
+            format_bytes(generation_dir_size)
+        );
     }
     if let Some(cas_refs) = meta.cas_objects_referenced {
-        println!("  CAS refs: {cas_refs}");
+        let _ = writeln!(&mut rendered, "  CAS refs: {cas_refs}");
+    }
+    if let Some(cap_xattrs) = meta
+        .security_capability_xattr_count
+        .filter(|count| *count > 0)
+    {
+        let _ = writeln!(&mut rendered, "  Cap xattrs: {cap_xattrs}");
     }
     if meta.fsverity_enabled {
-        println!("  Verity:   enabled");
+        let _ = writeln!(&mut rendered, "  Verity:   enabled");
     }
 
-    Ok(())
+    rendered
 }
 
 /// Garbage-collect old generations, keeping the current generation, GC roots,
@@ -990,11 +1013,13 @@ mod tests {
     use super::{
         booted_generation_from_cmdline, classify_side_effect_reasons, cmd_generation_gc_locked,
         etc_state_paths, load_gc_roots, parse_gc_root_setting, remove_generation_etc_state,
-        removed_members_for_side_effect_warning, runtime_root_for_generation_db_path,
+        removed_members_for_side_effect_warning, render_generation_info,
+        runtime_root_for_generation_db_path,
     };
     use conary_core::db::models::settings;
     use conary_core::db::models::{StateDiff, StateMember};
     use conary_core::db::schema;
+    use conary_core::generation::metadata::{GENERATION_FORMAT, GenerationMetadata};
     use rusqlite::Connection;
     use tempfile::TempDir;
 
@@ -1188,5 +1213,49 @@ mod tests {
             booted_generation_from_cmdline("quiet conary.generation=7", temp_dir.path()),
             Some(7)
         );
+    }
+
+    #[test]
+    fn generation_info_reports_capability_xattr_count_when_present() {
+        let metadata = GenerationMetadata {
+            generation: 7,
+            format: GENERATION_FORMAT.to_string(),
+            erofs_size: Some(4096),
+            cas_objects_referenced: Some(2),
+            fsverity_enabled: false,
+            erofs_verity_digest: None,
+            artifact_manifest_sha256: None,
+            security_capability_xattr_count: Some(3),
+            created_at: "2026-07-08T00:00:00Z".to_string(),
+            package_count: 2,
+            kernel_version: Some("6.19.8-conary".to_string()),
+            summary: "fixture".to_string(),
+        };
+
+        let rendered = render_generation_info(7, &metadata, false, 4096);
+
+        assert!(rendered.contains("  Cap xattrs: 3"));
+    }
+
+    #[test]
+    fn generation_info_omits_capability_xattr_count_when_zero() {
+        let metadata = GenerationMetadata {
+            generation: 7,
+            format: GENERATION_FORMAT.to_string(),
+            erofs_size: Some(4096),
+            cas_objects_referenced: Some(2),
+            fsverity_enabled: false,
+            erofs_verity_digest: None,
+            artifact_manifest_sha256: None,
+            security_capability_xattr_count: Some(0),
+            created_at: "2026-07-08T00:00:00Z".to_string(),
+            package_count: 2,
+            kernel_version: Some("6.19.8-conary".to_string()),
+            summary: "fixture".to_string(),
+        };
+
+        let rendered = render_generation_info(7, &metadata, false, 4096);
+
+        assert!(!rendered.contains("Cap xattrs"));
     }
 }

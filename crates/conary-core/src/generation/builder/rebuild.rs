@@ -9,6 +9,7 @@ use super::boot_assets::{
 };
 use super::cas::{cas_objects_from_file_refs, verify_runtime_generation_cas_object_presence};
 use super::erofs::{BuildResult, build_erofs_image};
+use super::file_capabilities::SECURITY_CAPABILITY_XATTR;
 use super::root_validation::validate_runtime_generation_root_is_self_contained;
 use super::runtime_inputs;
 use super::sysroot::runtime_generation_architecture;
@@ -62,6 +63,11 @@ pub(crate) fn rebuild_generation_image_with_boot_root(
     let all_files = FileEntry::find_all_ordered(conn)?;
     let runtime_inputs =
         runtime_inputs::collect_runtime_generation_inputs(conn, &troves, all_files)?;
+    let security_capability_xattr_count = runtime_inputs
+        .file_refs
+        .iter()
+        .filter(|file| file.xattrs.contains_key(SECURITY_CAPABILITY_XATTR))
+        .count();
 
     validate_runtime_generation_root_is_self_contained(
         &runtime_inputs.file_refs,
@@ -109,6 +115,8 @@ pub(crate) fn rebuild_generation_image_with_boot_root(
         fsverity_enabled: false,
         erofs_verity_digest: result.erofs_verity_digest.clone(),
         artifact_manifest_sha256: Some(artifact_manifest_sha256),
+        security_capability_xattr_count: (security_capability_xattr_count > 0)
+            .then_some(security_capability_xattr_count as i64),
         created_at: chrono::Utc::now().to_rfc3339(),
         package_count: troves.len() as i64,
         kernel_version: Some(kernel_version),
