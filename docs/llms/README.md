@@ -1,16 +1,30 @@
 ---
-last_updated: 2026-07-02
-revision: 12
-summary: Vendor-neutral assistant map with feature ownership, bootstrap smoke, and drift-control routing
+last_updated: 2026-07-08
+revision: 13
+summary: Vendor-neutral fresh-agent landing map with feature ownership and routing ergonomics
 ---
 
 # Conary For Coding Assistants
 
 ## Purpose
 
-This directory is the vendor-neutral map for coding assistants working on
-Conary. Use it to find the right canonical docs quickly without turning the root
-guidance into a manual.
+This directory is the vendor-neutral landing map for coding assistants working
+on Conary. It should get a fresh agent from "I know nothing about this repo" to
+"I know the owner files and proof commands for this task" without becoming a
+second subsystem manual.
+
+## First Five Minutes
+
+1. Read [`AGENTS.md`](../../AGENTS.md) for the repo contract, safety rules, and
+   verification expectations.
+2. Use this file to decide which canonical docs to open next.
+3. Run one command to route the work:
+   - `bash scripts/agent-context.sh --list`
+   - `bash scripts/agent-context.sh --feature <slug>`
+   - `bash scripts/agent-context.sh --path <file>`
+4. Read the start-here files printed by that command before editing.
+5. Use the focused proof for narrow edits and the interaction gate when the
+   change crosses a neighbor system.
 
 ## Choose By Task
 
@@ -39,17 +53,18 @@ guidance into a manual.
 ## Instruction Layers
 
 - `AGENTS.md` is the shared repo-wide contract for coding agents.
-- This file is the vendor-neutral map into the canonical docs under `docs/`.
+- `docs/llms/README.md` is the vendor-neutral landing map into canonical docs.
+- `docs/modules/feature-ownership.md` is the detailed owner-card source, reached
+  through `scripts/agent-context.sh` whenever possible.
+- `docs/llms/subsystem-map.md` is a compact workspace orientation index, not a
+  second ownership database.
 - Canonical subsystem and operations detail belongs in human-readable docs such
   as `docs/ARCHITECTURE.md`, `docs/modules/*.md`, and
   `docs/operations/*.md`.
 - Tool-specific entrypoints such as `CLAUDE.md`, `GEMINI.md`, `REASONIX.md`, and
-  `.github/copilot-instructions.md` should stay intentionally thin and point
-  back to this layered doc system instead of becoming parallel manuals.
-- `CLAUDE.md` is an active thin shim for Claude setups. Keep older Claude-era
-  harness context in `docs/llms/archive/`, not in active guidance.
-- If a subtree later needs materially different durable instructions, prefer a
-  nested `AGENTS.md` scoped to that subtree over bloating the root guidance.
+  `.github/copilot-instructions.md` stay intentionally thin and point back to
+  this layered doc system instead of becoming parallel manuals.
+- Historical tool notes belong under `docs/llms/archive/`.
 
 ## Core Docs
 
@@ -73,13 +88,34 @@ guidance into a manual.
 - [`docs/operations/bootstrap-follow-up-investigations.md`](../operations/bootstrap-follow-up-investigations.md): deferred architecture and cleanup ideas to revisit after bootstrap is stable
 - [`docs/llms/openai-codex.md`](openai-codex.md): OpenAI/Codex-specific prompt and harness notes kept out of the vendor-neutral map
 
+## Doc Families
+
+- **Contract:** `AGENTS.md` and thin tool shims. These are durable instructions
+  loaded by agents or coding tools.
+- **Routing:** this file, `docs/llms/subsystem-map.md`,
+  `docs/modules/feature-ownership.md`, and `scripts/agent-context.sh`.
+- **Canonical docs:** architecture, module, integration-testing, operations,
+  guide, and spec docs that describe current repo behavior or intended active
+  product contracts.
+- **Planning docs:** active files under `docs/superpowers/plans/` and
+  `docs/superpowers/specs/`. They define scoped future work and must not be
+  mistaken for already-shipped behavior.
+- **Historical docs:** archive directories and rows marked historical in the
+  documentation accuracy audit inventory. Use them for provenance, not current
+  instructions.
+
 ## Working Rules
 
-- Treat `AGENTS.md` as a map, not a manual.
+- Treat `AGENTS.md` as a contract and this file as a map.
 - Prefer `AGENTS.md` as the shared cross-tool filename where the tool supports
   it.
+- Use `scripts/agent-context.sh` before feature-scoped edits instead of
+  manually skimming long route lists.
+- Do not duplicate detailed owner-card routing outside
+  `docs/modules/feature-ownership.md`.
 - Keep tool-specific files such as `CLAUDE.md`, `GEMINI.md`, `REASONIX.md`, or
-  `.github/copilot-instructions.md` short and pointed back at `AGENTS.md`.
+  `.github/copilot-instructions.md` short and pointed back at the shared
+  contract.
 - Do not reintroduce tracked `.claude/` harness files or Claude hook helpers
   unless the active toolchain needs shared versioned Claude configuration.
 - Avoid duplicating or conflicting repo-wide guidance across tool-specific
@@ -95,16 +131,13 @@ guidance into a manual.
 - Treat `bootstrap smoke` as a local test-runner proof loop. It may build
   images, start containers, and write result files, but it is not fixture
   publishing and does not add live MCP resources or live MCP prompts.
-- When version-specific library behavior matters, check current external
-  documentation instead of guessing APIs.
+- When version-specific library, SDK, MCP, model, or coding-agent behavior
+  matters, check current external documentation before editing durable
+  guidance.
 - For maintainability, pruning, or refactor work, require the task packet to
   name the owning subsystem, the current large-file or stale-surface pressure,
   the intended new boundary, persisted-state impact, focused verification, and
   docs or subsystem-map updates.
-- For feature-scoped work, run `bash scripts/agent-context.sh --feature <slug>`
-  (or `--path <file>` to route a path) to print the owning card's start-here
-  files, safety invariants, focused proof, and interaction gate before editing.
-  `docs/modules/feature-ownership.md` stays the canonical map behind the tool.
 - Use `scripts/line-count-report.sh` when a planning or review pass needs a
   fresh Rust hotspot snapshot. Treat the report as a prioritization aid, not a
   CI failure condition.
@@ -112,11 +145,31 @@ guidance into a manual.
   refactor, or docs-routing changes to get warn-only changed-path owner hints,
   docs-audit status, and current hotspot context.
 
+## Agent-Doc Proof Floor
+
+For docs-only edits to assistant guidance, run:
+
+```bash
+bash scripts/check-doc-truth.sh
+bash scripts/check-doc-audit-ledger.sh docs/superpowers/documentation-accuracy-audit-ledger.tsv --require-complete
+LC_ALL=C bash scripts/docs-audit-inventory.sh | diff -u docs/superpowers/documentation-accuracy-audit-inventory.tsv -
+bash scripts/check-coherency-ledger.sh docs/superpowers/feature-coherency-ledger.tsv
+git diff --check
+```
+
+Add a focused stale-reference sweep for any retired path, tool shim, or routing
+phrase touched by the edit.
+
 ## Freshness Rules
 
 - Prefer linked canonical docs over copied volatile facts.
 - Use frontmatter (`last_updated`, `revision`, `summary`) for canonical docs
   that are meant to stay discoverable and maintained over time.
+- Treat `AGENTS.md` as a contract and this file as a map.
+- Use `scripts/agent-context.sh` before feature-scoped edits instead of
+  manually skimming long route lists.
+- Do not duplicate detailed owner-card routing outside
+  `docs/modules/feature-ownership.md`.
 - Do not duplicate schema counts, workflow counts, or host-specific trivia here.
 - If a detail cannot be kept fresh realistically, omit it instead of preserving
   stale lore.
@@ -129,3 +182,6 @@ guidance into a manual.
   `scripts/check-coherency-wave-scopes.sh`; grep the ledger for
   `doc:<path>` or `path:<path>` before editing a doc or source file that may be
   pinned by a coherency row.
+- When version-specific library, SDK, MCP, model, or coding-agent behavior
+  matters, check current external documentation before editing durable
+  guidance.
