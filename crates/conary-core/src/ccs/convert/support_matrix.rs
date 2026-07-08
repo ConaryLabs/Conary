@@ -260,9 +260,7 @@ mod tests {
     use crate::ccs::convert::blocked_classes::BlockedClassRegistry;
     use crate::ccs::convert::golden_fixtures;
 
-    fn pam_associated_known_rows<'a>(
-        entries: &'a [SupportMatrixEntry],
-    ) -> Vec<&'a SupportMatrixEntry> {
+    fn pam_associated_known_rows(entries: &[SupportMatrixEntry]) -> Vec<&SupportMatrixEntry> {
         entries
             .iter()
             .filter(|entry| {
