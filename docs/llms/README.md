@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-07-08
 revision: 13
-summary: Vendor-neutral assistant map with fresh-agent routing ergonomics, feature ownership, bootstrap smoke, and drift-control routing
+summary: Vendor-neutral fresh-agent landing map with feature ownership, bootstrap smoke, and routing ergonomics
 ---
 
 # Conary For Coding Assistants
@@ -18,12 +18,14 @@ second subsystem manual.
 1. Read [`AGENTS.md`](../../AGENTS.md) for the repo contract, safety rules, and
    verification expectations.
 2. Use this file to decide which canonical docs to open next.
-3. Run one command to route the work:
-   - `bash scripts/agent-context.sh --list`
-   - `bash scripts/agent-context.sh --feature <slug>`
-   - `bash scripts/agent-context.sh --path <file>`
-4. Read the start-here files printed by that command before editing.
-5. Use the focused proof for narrow edits and the interaction gate when the
+3. If you need a capability name, run
+   `bash scripts/agent-context.sh --list` to discover available feature slugs.
+4. Route the actual work with:
+   - `bash scripts/agent-context.sh --feature <slug>` for a feature slug.
+   - `bash scripts/agent-context.sh --path <file>` for a specific path.
+5. Read the start-here files, focused proof, and interaction gates printed by
+   the `--feature` or `--path` command before editing.
+6. Use the focused proof for narrow edits and the interaction gate when the
    change crosses a neighbor system.
 
 ## Choose By Task
@@ -40,6 +42,15 @@ second subsystem manual.
 - **Deploy, MCP, or host workflow:** read `docs/operations/infrastructure.md`.
 - **Version-specific tool, SDK, MCP, or model behavior:** check current vendor
   documentation before editing durable guidance.
+
+## Guidance Order
+
+1. `AGENTS.md` is the canonical repo-wide contract.
+2. This file is the vendor-neutral routing layer into canonical docs.
+3. `scripts/agent-context.sh` and `docs/modules/feature-ownership.md` own exact
+   feature slugs, path routing, start-here files, focused proof, and interaction
+   gates.
+4. Linked canonical docs own subsystem, testing, and operations detail.
 
 ## Instruction Layers
 
@@ -86,8 +97,8 @@ second subsystem manual.
 - **Routing:** this file, `docs/llms/subsystem-map.md`,
   `docs/modules/feature-ownership.md`, and `scripts/agent-context.sh`.
 - **Canonical docs:** architecture, module, integration-testing, operations,
-  guide, and spec docs that describe current repo behavior or intended active
-  product contracts.
+  guide, and `docs/specs/` contract docs that describe current repo behavior or
+  intended active product contracts.
 - **Planning docs:** active files under `docs/superpowers/plans/` and
   `docs/superpowers/specs/`. They define scoped future work and must not be
   mistaken for already-shipped behavior.
@@ -95,31 +106,20 @@ second subsystem manual.
   documentation accuracy audit inventory. Use them for provenance, not current
   instructions.
 
-## Agent-Doc Proof Floor
-
-For docs-only edits to assistant guidance, run:
-
-```bash
-bash scripts/check-doc-truth.sh
-bash scripts/check-doc-audit-ledger.sh docs/superpowers/documentation-accuracy-audit-ledger.tsv --require-complete
-LC_ALL=C bash scripts/docs-audit-inventory.sh | diff -u docs/superpowers/documentation-accuracy-audit-inventory.tsv -
-bash scripts/check-coherency-ledger.sh docs/superpowers/feature-coherency-ledger.tsv
-git diff --check
-```
-
-Add a focused stale-reference sweep for any retired path, tool shim, or routing
-phrase touched by the edit.
-
 ## Working Rules
 
 - Treat `AGENTS.md` as a contract and this file as a map.
 - Prefer `AGENTS.md` as the shared cross-tool filename where the tool supports
   it.
-- Use `scripts/agent-context.sh` before feature-scoped edits instead of
-  manually skimming long route lists.
+- Use `scripts/agent-context.sh --feature <slug>` before feature-scoped edits,
+  or `--path <file>` to route a path, instead of manually skimming long route
+  lists. It prints the owning card's start-here files, safety invariants,
+  focused proof, and interaction gate before editing.
 - Do not duplicate detailed owner-card routing outside
   `docs/modules/feature-ownership.md`.
-- Keep tool-specific files short and pointed back at the shared contract.
+- Keep tool-specific files such as `CLAUDE.md`, `GEMINI.md`, `REASONIX.md`, or
+  `.github/copilot-instructions.md` short and pointed back at the shared
+  contract.
 - Do not reintroduce tracked `.claude/` harness files or Claude hook helpers
   unless the active toolchain needs shared versioned Claude configuration.
 - Avoid duplicating or conflicting repo-wide guidance across tool-specific
@@ -135,22 +135,34 @@ phrase touched by the edit.
 - Treat `bootstrap smoke` as a local test-runner proof loop. It may build
   images, start containers, and write result files, but it is not fixture
   publishing and does not add live MCP resources or live MCP prompts.
-- When version-specific library behavior matters, check current external
-  documentation instead of guessing APIs.
+- When version-specific library, SDK, MCP, model, or coding-agent behavior
+  matters, check current external documentation before editing durable
+  guidance.
 - For maintainability, pruning, or refactor work, require the task packet to
   name the owning subsystem, the current large-file or stale-surface pressure,
   the intended new boundary, persisted-state impact, focused verification, and
   docs or subsystem-map updates.
-- For feature-scoped work, run `bash scripts/agent-context.sh --feature <slug>`
-  (or `--path <file>` to route a path) to print the owning card's start-here
-  files, safety invariants, focused proof, and interaction gate before editing.
-  `docs/modules/feature-ownership.md` stays the canonical map behind the tool.
 - Use `scripts/line-count-report.sh` when a planning or review pass needs a
   fresh Rust hotspot snapshot. Treat the report as a prioritization aid, not a
   CI failure condition.
 - Use `scripts/maintainability-drift-report.sh` before broad feature,
   refactor, or docs-routing changes to get warn-only changed-path owner hints,
   docs-audit status, and current hotspot context.
+
+## Agent-Doc Proof Floor
+
+For docs-only edits to assistant guidance, run:
+
+```bash
+bash scripts/check-doc-truth.sh
+bash scripts/check-doc-audit-ledger.sh docs/superpowers/documentation-accuracy-audit-ledger.tsv --require-complete
+LC_ALL=C bash scripts/docs-audit-inventory.sh | diff -u docs/superpowers/documentation-accuracy-audit-inventory.tsv -
+bash scripts/check-coherency-ledger.sh docs/superpowers/feature-coherency-ledger.tsv
+git diff --check
+```
+
+Add a focused stale-reference sweep for any retired path, tool shim, or routing
+phrase touched by the edit.
 
 ## Freshness Rules
 
@@ -171,3 +183,6 @@ phrase touched by the edit.
   `scripts/check-coherency-wave-scopes.sh`; grep the ledger for
   `doc:<path>` or `path:<path>` before editing a doc or source file that may be
   pinned by a coherency row.
+- When version-specific library, SDK, MCP, model, or coding-agent behavior
+  matters, check current external documentation before editing durable
+  guidance.
