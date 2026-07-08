@@ -2003,6 +2003,19 @@ update-mime-database /usr/share/mime
             .convert(&metadata, &make_test_files(), "rpm", "sha256:test")
             .expect("conversion succeeds");
 
+        assert_eq!(
+            result.scriptlet_metadata.scriptlet_fidelity,
+            "fully-replaced"
+        );
+        assert_eq!(
+            result.scriptlet_metadata.target_compatibility,
+            "conary-portable"
+        );
+        assert_eq!(result.scriptlet_metadata.publication_status, "public");
+        assert!(result.scriptlet_metadata.review_reason_codes.is_empty());
+        assert_eq!(result.scriptlet_metadata.decision_counts.replaced, 1);
+        assert_eq!(result.scriptlet_metadata.decision_counts.review, 0);
+
         let file_capabilities = &result.build_result.manifest.file_capabilities;
         assert_eq!(file_capabilities.len(), 1);
         assert_eq!(file_capabilities[0].path, "/usr/bin/test");
@@ -2032,6 +2045,67 @@ update-mime-database /usr/share/mime
             Some("file-capability/v1")
         );
         assert_eq!(result.scriptlet_metadata.publication_status, "public");
+    }
+
+    #[test]
+    fn conversion_integration_keeps_high_risk_setcap_replaced_but_private_review() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut metadata = make_test_metadata();
+        metadata.scriptlets = vec![Scriptlet {
+            phase: ScriptletPhase::PostInstall,
+            interpreter: "/bin/sh".to_string(),
+            content: "setcap cap_sys_admin=+ep /usr/bin/test\n".to_string(),
+            flags: None,
+        }];
+        let converter = passive_test_converter(temp_dir.path());
+
+        let result = converter
+            .convert(&metadata, &make_test_files(), "rpm", "sha256:test")
+            .expect("conversion succeeds");
+
+        assert_eq!(
+            result.scriptlet_metadata.scriptlet_fidelity,
+            "fully-replaced"
+        );
+        assert_eq!(
+            result.scriptlet_metadata.target_compatibility,
+            "conary-portable"
+        );
+        assert_eq!(
+            result.scriptlet_metadata.publication_status,
+            "private-review"
+        );
+        assert_eq!(result.scriptlet_metadata.decision_counts.replaced, 1);
+        assert_eq!(result.scriptlet_metadata.decision_counts.review, 0);
+        assert_eq!(
+            result.scriptlet_metadata.review_reason_codes,
+            vec!["public-policy-file-capability-private-review".to_string()]
+        );
+
+        let file_capabilities = &result.build_result.manifest.file_capabilities;
+        assert_eq!(file_capabilities.len(), 1);
+        assert_eq!(file_capabilities[0].path, "/usr/bin/test");
+        assert_eq!(
+            file_capabilities[0].capabilities,
+            vec!["cap_sys_admin".to_string()]
+        );
+
+        let bundle = result
+            .build_result
+            .manifest
+            .legacy_scriptlets
+            .as_ref()
+            .expect("conversion should embed passive scriptlet bundle");
+        assert_eq!(bundle.entries.len(), 1);
+        assert_eq!(bundle.entries[0].decision.as_str(), "replaced");
+        assert_eq!(
+            bundle.entries[0].reason_code,
+            "helper-complete-file-capability"
+        );
+        assert_eq!(
+            bundle.entries[0].effects[0].adapter_id.as_deref(),
+            Some("file-capability/v1")
+        );
     }
 
     #[test]

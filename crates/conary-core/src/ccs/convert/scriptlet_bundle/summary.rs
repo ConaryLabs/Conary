@@ -1,5 +1,6 @@
 // conary-core/src/ccs/convert/scriptlet_bundle/summary.rs
 
+use super::super::public_policy;
 use super::types::{ScriptletBundleSummary, ScriptletDecisionCountsSummary};
 use crate::ccs::legacy_scriptlets::{
     DecisionCounts, LegacyScriptletBundle, LegacyScriptletEntry, PublicationPolicy,
@@ -19,7 +20,10 @@ pub(super) fn summary_from_bundle(
     evidence_digest: Option<String>,
 ) -> ScriptletBundleSummary {
     let blocked_reason_codes = sorted_entry_reason_codes(bundle, "blocked");
-    let review_reason_codes = sorted_entry_reason_codes(bundle, "review");
+    let mut review_reason_codes = sorted_entry_reason_codes(bundle, "review");
+    review_reason_codes.extend(public_policy_review_reason_codes(bundle));
+    review_reason_codes.sort();
+    review_reason_codes.dedup();
     let unknown_commands = bundle
         .entries
         .iter()
@@ -88,6 +92,16 @@ fn sorted_entry_reason_codes(bundle: &LegacyScriptletBundle, decision: &str) -> 
         .collect()
 }
 
+fn public_policy_review_reason_codes(bundle: &LegacyScriptletBundle) -> Vec<String> {
+    bundle
+        .entries
+        .iter()
+        .flat_map(public_policy::entry_public_policy_review_reasons)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
 pub(super) fn decision_counts(entries: &[LegacyScriptletEntry]) -> DecisionCounts {
     let mut counts = DecisionCounts::default();
     for entry in entries {
@@ -141,6 +155,17 @@ pub(super) fn aggregate_status(
             TargetCompatibility::SourceNative,
             PublicationPolicy::LocalOnly,
             PublicationStatus::LocalOnly,
+        );
+    }
+    let public_policy_review_required = entries
+        .iter()
+        .any(|entry| !public_policy::entry_public_policy_review_reasons(entry).is_empty());
+    if public_policy_review_required {
+        return (
+            ScriptletFidelity::FullyReplaced,
+            TargetCompatibility::ConaryPortable,
+            PublicationPolicy::PrivateReview,
+            PublicationStatus::PrivateReview,
         );
     }
     (
