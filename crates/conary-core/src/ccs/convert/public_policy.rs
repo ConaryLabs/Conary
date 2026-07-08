@@ -1,5 +1,6 @@
 // conary-core/src/ccs/convert/public_policy.rs
 
+use crate::ccs::legacy_scriptlets::EffectReplacement;
 use crate::ccs::legacy_scriptlets::LegacyScriptletEntry;
 use crate::ccs::v2::validation::{ProfileConstraintStatus, TargetProfileQuery};
 use std::collections::BTreeSet;
@@ -26,7 +27,7 @@ pub(crate) fn sysctl_public_review_reason(
     key: &str,
     profile: Option<&dyn TargetProfileQuery>,
 ) -> Option<&'static str> {
-    match profile.map(|profile| profile.sysctl_status(key.trim())) {
+    match profile.map(|profile| profile.sysctl_status(key)) {
         Some(ProfileConstraintStatus::Accepted) => None,
         Some(ProfileConstraintStatus::Unsupported) | None => Some(SYSCTL_PUBLIC_REVIEW_REASON),
     }
@@ -59,7 +60,10 @@ pub(crate) fn entry_public_policy_review_reasons(
 
         // kind "sysctl-setting" is defined by SysctlAdapter::classify in
         // crates/conary-core/src/ccs/convert/adapters.rs.
-        if effect.adapter_id.as_deref() == Some("sysctl/v1") && effect.kind == "sysctl-setting" {
+        if effect.adapter_id.as_deref() == Some("sysctl/v1")
+            && effect.kind == "sysctl-setting"
+            && effect.replacement == EffectReplacement::Complete
+        {
             let key = effect
                 .extra
                 .get("key")
@@ -129,7 +133,10 @@ mod tests {
         }
     }
 
-    fn sysctl_entry(key: &str) -> LegacyScriptletEntry {
+    fn sysctl_entry_with_replacement(
+        key: &str,
+        replacement: EffectReplacement,
+    ) -> LegacyScriptletEntry {
         let mut extra = BTreeMap::new();
         extra.insert("key".to_string(), toml::Value::String(key.to_string()));
 
@@ -160,7 +167,7 @@ mod tests {
                 kind: "sysctl-setting".to_string(),
                 source: EffectSource::StaticSignal,
                 confidence: EffectConfidence::Declared,
-                replacement: EffectReplacement::Complete,
+                replacement,
                 adapter_id: Some("sysctl/v1".to_string()),
                 adapter_digest: None,
                 command: Some("sysctl".to_string()),
@@ -179,6 +186,10 @@ mod tests {
             residual_replay: None,
             extra: BTreeMap::new(),
         }
+    }
+
+    fn sysctl_entry(key: &str) -> LegacyScriptletEntry {
+        sysctl_entry_with_replacement(key, EffectReplacement::Complete)
     }
 
     #[test]
@@ -241,6 +252,18 @@ mod tests {
     }
 
     #[test]
+    fn sysctl_public_review_reason_treats_whitespace_padded_keys_as_private_review() {
+        let profile = SysctlProfile {
+            accepted: "kernel.example",
+        };
+
+        assert_eq!(
+            sysctl_public_review_reason(" kernel.example ", Some(&profile)),
+            Some(SYSCTL_PUBLIC_REVIEW_REASON)
+        );
+    }
+
+    #[test]
     fn sysctl_entries_require_review_when_target_profile_does_not_accept_them() {
         let profile = SysctlProfile {
             accepted: "kernel.example",
@@ -260,6 +283,21 @@ mod tests {
         assert_eq!(
             entry_public_policy_review_reasons(&sysctl_entry("kernel.example"), None),
             vec![SYSCTL_PUBLIC_REVIEW_REASON.to_string()]
+        );
+    }
+
+    #[test]
+    fn partial_sysctl_effects_do_not_count_as_public_policy_evidence() {
+        let profile = SysctlProfile {
+            accepted: "kernel.example",
+        };
+
+        assert_eq!(
+            entry_public_policy_review_reasons(
+                &sysctl_entry_with_replacement("net.ipv4.ip_forward", EffectReplacement::Partial),
+                Some(&profile)
+            ),
+            Vec::<String>::new()
         );
     }
 }
