@@ -123,6 +123,8 @@ For AppArmor, public-ready means the converter produced complete
 `apparmor_parser -r|--replace /etc/apparmor.d/<profile>` reload. Mode changes,
 profile disable/status helpers, broad reloads, and non-payload profile paths
 remain blocked/private.
+Remi treats those broader LSM forms as non-public until a later target-provider
+policy model proves the provider behavior and fallback semantics.
 
 This gate is publication-only. It does not replay scriptlets, promote reviewed
 packages, or change client install/update/remove behavior.

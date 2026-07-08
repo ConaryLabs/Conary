@@ -174,6 +174,9 @@ never runs `apparmor_parser` against the host policy store. Mode changes such
 as `aa-enforce` and `aa-complain`, profile disable/status helpers, broad
 directory reloads, and non-payload profile paths remain blocked/private and use
 `block-on-enforcing-target` fallback when captured as review intent.
+Promoting any broader SELinux or AppArmor form requires target-provider facts
+for availability, mode, policy store behavior, profile or module content
+validation where applicable, and an operator-visible absent-provider fallback.
 
 Sysctl handling has a narrow native-authority bridge. Conversion may replace a
 simple `sysctl -w <key>=<value>` scriptlet with a validated native

@@ -114,6 +114,9 @@ mode changes, disable/status helpers, broad reloads, and unbacked paths remain
 blocked/private and use `block-on-enforcing-target` fallback when captured as
 review intent. Tracks conversion fidelity (High/Medium/Low) via
 `FidelityReport`.
+Future LSM expansion must add target-provider facts and content semantics
+before any mode change, status, disable, directory reload, or policy-store
+mutation can become public-ready.
 
 **legacy_scriptlets.rs** -- Versioned metadata for converted package scriptlet
 semantics and local replay planning. The v1 bundle lives in the TOML manifest as
