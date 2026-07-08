@@ -389,7 +389,8 @@ fn git_clone_subcommand_after_global_options(invocation: &CommandInvocation) -> 
                 index += 2;
                 continue;
             }
-            "--exec-path" | "--git-dir" | "--namespace" | "--super-prefix" | "--work-tree" => {
+            "--config-env" | "--exec-path" | "--git-dir" | "--namespace" | "--super-prefix"
+            | "--work-tree" => {
                 index += 2;
                 continue;
             }
@@ -583,6 +584,15 @@ mod tests {
                 vec![
                     "--work-tree",
                     "/tmp/work",
+                    "clone",
+                    "https://example.invalid/repo.git",
+                ],
+            ),
+            (
+                "git",
+                vec![
+                    "--config-env",
+                    "foo=BAR",
                     "clone",
                     "https://example.invalid/repo.git",
                 ],

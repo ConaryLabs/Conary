@@ -159,7 +159,8 @@ fn git_clone_subcommand_after_global_options(args: &[&str]) -> bool {
                 index += 2;
                 continue;
             }
-            "--exec-path" | "--git-dir" | "--namespace" | "--super-prefix" | "--work-tree" => {
+            "--config-env" | "--exec-path" | "--git-dir" | "--namespace" | "--super-prefix"
+            | "--work-tree" => {
                 index += 2;
                 continue;
             }
@@ -282,6 +283,20 @@ mod tests {
         assert_eq!(git_long_option_summary.command_counts.get("git"), Some(&2));
         assert_eq!(
             git_long_option_summary.blocked_class_hints,
+            vec!["network".to_string()]
+        );
+
+        let git_config_env_summary = ScriptletCorpusSummary::from_scriptlets(
+            "arch",
+            "bad-news",
+            &[scriptlet(
+                "git --config-env foo=BAR clone https://example.invalid/repo.git\n",
+            )],
+        );
+
+        assert_eq!(git_config_env_summary.command_counts.get("git"), Some(&1));
+        assert_eq!(
+            git_config_env_summary.blocked_class_hints,
             vec!["network".to_string()]
         );
 
