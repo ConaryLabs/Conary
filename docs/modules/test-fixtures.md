@@ -68,6 +68,10 @@ Each fixture family should record:
   `adapter-apparmor-policy` fixture covers only payload-backed
   `apparmor_parser -r|--replace /etc/apparmor.d/<profile>` evidence; broader
   AppArmor helper forms stay in blocked/private fixtures.
+- `adapter-file-capability`: allowlisted `cap_net_bind_service` replacement
+  evidence, expected public-ready fully replaced outcome.
+- `adapter-file-capability-high-risk`: known high-risk capability replacement
+  evidence, expected private-review outcome while preserving adapter evidence.
 
 ### ccs-v2-native-authority-fixtures
 

@@ -106,12 +106,13 @@ forms remain blocked/private.
 For setuid, public-ready means the converter produced complete
 `setuid-mode/v1` evidence for a payload executable and projected it into native
 file mode plus `policy.allow_setuid_paths`.
-For file capabilities, public-ready means the converter produced complete
-`file-capability/v1` evidence for known Linux `+ep` grants on a payload
-executable and projected it into `[[file_capabilities]]`; setcap removal,
-inheritable/process/ambient capability forms, setpriv, setgid, broad chmod,
-unknown capability names, and non-payload privilege forms remain
-blocked/private.
+Fully replaced scriptlets are public only when their projected authority also
+passes public policy. For `file-capability/v1`, `cap_net_bind_service` may be
+public-ready; high-risk known capabilities produce valid replacement evidence
+and valid CCS manifest authority but Remi treats the converted row as
+private-review. Setcap removal, inheritable/process/ambient capability forms,
+setpriv, setgid, broad chmod, unknown capability names, and non-payload
+privilege forms remain blocked/private.
 For AppArmor, public-ready means the converter produced complete
 `apparmor-policy/v1` evidence for a payload-backed
 `apparmor_parser -r|--replace /etc/apparmor.d/<profile>` reload. Mode changes,

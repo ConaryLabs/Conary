@@ -84,8 +84,12 @@ The `setuid-mode/v1` adapter projects only payload-executable
 `policy.allow_setuid_paths` build-policy allowlist entry. The
 `file-capability/v1` adapter separately projects known Linux
 `setcap cap_*=+ep <payload-executable>` grants into
-`[[file_capabilities]]`, and mutable live-root installs apply that authority
-after file deployment and before DB commit. Setcap removal,
+`[[file_capabilities]]`. The manifest still validates `[[file_capabilities]]`
+against the known Linux capability table. Public-ready conversion is narrower:
+the first public allowlist is `cap_net_bind_service`; other known capability
+names remain valid native manifest authority but non-public conversion
+evidence. Mutable live-root installs apply that authority after file deployment
+and before DB commit. Setcap removal,
 inheritable/process/ambient capability forms, setgid, broad `chmod +s`, unknown
 capability names, and non-payload privilege mutations remain blocked/private.
 Supported SELinux scriptlet forms are modeled as

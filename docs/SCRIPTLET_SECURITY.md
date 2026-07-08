@@ -190,10 +190,13 @@ that authority into the CCS file mode and adds the exact path to
 setuid bit while still stripping unapproved setuid and all setgid bits.
 
 File-capability handling is separate manifest authority, not package dependency
-capabilities. Conversion may replace
-`setcap cap_net_bind_service=+ep <payload-executable>` and other known
-Linux-capability `+ep` grants only when the target is an executable shipped by
-the package payload. The converter records that authority in
+capabilities. `file-capability/v1` still recognizes known Linux
+`setcap cap_*=+ep <payload-executable>` grants as complete replacement
+evidence, but only `cap_net_bind_service` is public-ready by default. High-risk
+known capabilities such as `cap_sys_admin`, `cap_sys_module`, `cap_sys_rawio`,
+`cap_sys_boot`, `cap_sys_ptrace`, `cap_bpf`, `cap_net_admin`, `cap_setpcap`,
+and `cap_setfcap` remain private-review until a future target-profile policy
+explicitly allows them. The converter records recognized authority in
 `[[file_capabilities]]`, and mutable live-root CCS installs apply it through a
 controlled `setcap` invocation after file deployment and before DB commit.
 Capability removal, inheritable/process/ambient capability forms, `setpriv`,
