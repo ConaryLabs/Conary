@@ -1972,7 +1972,7 @@ update-mime-database /usr/share/mime
     }
 
     #[test]
-    fn conversion_keeps_unsupported_sysctl_projected_but_private_review() {
+    fn adapter_sysctl_target_profile_private_review_reports_public_policy_reason() {
         let temp_dir = tempfile::tempdir().unwrap();
         let converter = passive_test_converter(temp_dir.path()).with_target_profile_id("fedora-44");
 
@@ -1984,11 +1984,16 @@ update-mime-database /usr/share/mime
         let bundle = result.legacy_scriptlets.as_ref().expect("scriptlet bundle");
         assert_eq!(bundle.decision_counts.replaced, 1);
         assert_eq!(bundle.publication_status.as_str(), "private-review");
-        assert!(
-            result
-                .scriptlet_metadata
-                .review_reason_codes
-                .contains(&"public-policy-sysctl-target-profile-unsupported".to_string())
+        assert_eq!(
+            result.scriptlet_metadata.review_reason_codes,
+            vec!["public-policy-sysctl-target-profile-unsupported".to_string()]
+        );
+        let bundle_summary =
+            ScriptletBundleSummary::from_bundle(bundle, bundle.evidence_digest.clone());
+        assert_eq!(bundle_summary.publication_status, "private-review");
+        assert_eq!(
+            bundle_summary.review_reason_codes,
+            vec!["public-policy-sysctl-target-profile-unsupported".to_string()]
         );
     }
 
