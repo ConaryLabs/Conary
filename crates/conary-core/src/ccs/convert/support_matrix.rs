@@ -260,6 +260,28 @@ mod tests {
     use crate::ccs::convert::blocked_classes::BlockedClassRegistry;
     use crate::ccs::convert::golden_fixtures;
 
+    fn pam_associated_known_rows<'a>(
+        entries: &'a [SupportMatrixEntry],
+    ) -> Vec<&'a SupportMatrixEntry> {
+        entries
+            .iter()
+            .filter(|entry| {
+                entry.outcome == SupportOutcome::Known
+                    && (entry.class_id == Some("pam")
+                        || entry
+                            .adapter_id
+                            .is_some_and(|adapter_id| adapter_id.contains("pam"))
+                        || entry.command.is_some_and(|command| command.contains("pam"))
+                        || entry.reason_code.contains("pam")
+                        || entry
+                            .fixture_names
+                            .iter()
+                            .any(|fixture_name| fixture_name.contains("pam"))
+                        || entry.lifecycle_notes.contains("PAM"))
+            })
+            .collect()
+    }
+
     #[test]
     fn support_matrix_covers_every_builtin_adapter() {
         let matrix = SupportMatrix::default();
@@ -556,6 +578,13 @@ mod tests {
         assert_eq!(row.outcome, SupportOutcome::Blocked);
         assert!(row.adapter_id.is_none());
         assert_eq!(row.fixture_names, &["blocked-class-pam"]);
+
+        let known_rows = pam_associated_known_rows(matrix.entries());
+        assert!(
+            known_rows.is_empty(),
+            "PAM should not have any known adapter/support rows: {:?}",
+            known_rows.iter().map(|entry| entry.id).collect::<Vec<_>>()
+        );
     }
 
     #[test]
