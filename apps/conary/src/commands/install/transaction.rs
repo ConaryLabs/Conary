@@ -387,6 +387,7 @@ fn insert_ccs_manifest_typed_provide(
 mod tests {
     use super::*;
     use crate::commands::PackageFormatType;
+    use std::ffi::OsString;
 
     fn sample_file_capabilities() -> Vec<conary_core::ccs::manifest::FileCapability> {
         vec![conary_core::ccs::manifest::FileCapability {
@@ -486,13 +487,36 @@ mod tests {
         );
     }
 
-    #[test]
-    fn no_generation_install_transaction_materializes_live_root_file() {
-        use conary_core::db::models::{Changeset, ChangesetStatus, FileEntry, Trove, TroveType};
-        use conary_core::packages::traits::{
-            Dependency, ExtractedFile, PackageFile, PackageFormat, Scriptlet,
-        };
-        use std::collections::HashMap;
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+            let previous = std::env::var_os(key);
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            unsafe {
+                if let Some(previous) = &self.previous {
+                    std::env::set_var(self.key, previous);
+                } else {
+                    std::env::remove_var(self.key);
+                }
+            }
+        }
+    }
+
+    fn fake_package() -> impl PackageFormat {
+        use conary_core::db::models::{Trove, TroveType};
+        use conary_core::packages::traits::{Dependency, ExtractedFile, PackageFile, Scriptlet};
 
         struct FakePackage;
 
@@ -541,6 +565,15 @@ mod tests {
                 )
             }
         }
+
+        FakePackage
+    }
+
+    #[test]
+    fn no_generation_install_transaction_materializes_live_root_file() {
+        use conary_core::db::models::{Changeset, ChangesetStatus, FileEntry};
+        use conary_core::packages::traits::ExtractedFile;
+        use std::collections::HashMap;
 
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("root");
@@ -590,7 +623,7 @@ mod tests {
 
         let result = execute_install_transaction(
             &mut conn,
-            &FakePackage,
+            &fake_package(),
             &extraction,
             &ctx,
             &InstallProgress::single("Installing"),
@@ -617,59 +650,9 @@ mod tests {
     #[test]
     fn no_generation_install_conflict_preflight_preserves_live_root_file() {
         use conary_core::db::models::{FileEntry, Trove, TroveType};
-        use conary_core::packages::traits::{
-            Dependency, ExtractedFile, PackageFile, PackageFormat, Scriptlet,
-        };
+        use conary_core::packages::traits::ExtractedFile;
         use std::collections::HashMap;
         use std::os::unix::fs::PermissionsExt;
-
-        struct FakePackage;
-
-        impl PackageFormat for FakePackage {
-            fn parse(_path: &str) -> conary_core::Result<Self> {
-                unreachable!("test constructs package directly")
-            }
-
-            fn name(&self) -> &str {
-                "fixture"
-            }
-
-            fn version(&self) -> &str {
-                "1.0.0"
-            }
-
-            fn architecture(&self) -> Option<&str> {
-                Some("x86_64")
-            }
-
-            fn description(&self) -> Option<&str> {
-                None
-            }
-
-            fn files(&self) -> &[PackageFile] {
-                &[]
-            }
-
-            fn dependencies(&self) -> &[Dependency] {
-                &[]
-            }
-
-            fn extract_file_contents(&self) -> conary_core::Result<Vec<ExtractedFile>> {
-                Ok(vec![])
-            }
-
-            fn scriptlets(&self) -> &[Scriptlet] {
-                &[]
-            }
-
-            fn to_trove(&self) -> Trove {
-                Trove::new(
-                    "fixture".to_string(),
-                    "1.0.0".to_string(),
-                    TroveType::Package,
-                )
-            }
-        }
 
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("root");
@@ -741,7 +724,7 @@ mod tests {
 
         let error = match execute_install_transaction(
             &mut conn,
-            &FakePackage,
+            &fake_package(),
             &extraction,
             &ctx,
             &InstallProgress::single("Installing"),
@@ -765,6 +748,113 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(root.join("usr/bin/fixture")).unwrap(),
             "owned elsewhere"
+        );
+    }
+
+    #[test]
+    fn file_capabilities_mutable_live_root_transaction_applies_selected_capabilities_after_live_file_deploy()
+     {
+        use conary_core::db::models::FileEntry;
+        use conary_core::packages::traits::ExtractedFile;
+        use std::collections::HashMap;
+        use std::os::unix::fs::PermissionsExt;
+
+        let _env_lock = crate::commands::composefs_ops::test_mount_env_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("root");
+        let db_path = temp.path().join("conary.db");
+        let bin_dir = temp.path().join("bin");
+        let setcap = bin_dir.join("setcap");
+        let args_file = temp.path().join("setcap.args");
+        let target_file = temp.path().join("setcap.target");
+        std::fs::create_dir_all(root.join("usr/bin")).unwrap();
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        std::fs::write(
+            &setcap,
+            "#!/bin/sh\nprintf '%s\\n' \"$1\" > \"$SETCAP_ARGS_FILE\"\nprintf '%s\\n' \"$2\" > \"$SETCAP_TARGET_FILE\"\n[ -f \"$2\" ] || exit 41\n[ \"$(cat \"$2\")\" = \"server-bytes\" ] || exit 42\n",
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&setcap).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&setcap, permissions).unwrap();
+
+        let path_entries = match std::env::var_os("PATH") {
+            Some(existing) => std::iter::once(bin_dir.clone())
+                .chain(std::env::split_paths(&existing))
+                .collect::<Vec<_>>(),
+            None => vec![bin_dir.clone()],
+        };
+        let path = std::env::join_paths(path_entries).unwrap();
+        let _path_guard = EnvVarGuard::set("PATH", &path);
+        let _args_guard = EnvVarGuard::set("SETCAP_ARGS_FILE", &args_file);
+        let _target_guard = EnvVarGuard::set("SETCAP_TARGET_FILE", &target_file);
+
+        conary_core::db::init(&db_path).unwrap();
+        let mut conn = conary_core::db::open(&db_path).unwrap();
+        let extraction = ExtractionResult {
+            extracted_files: vec![ExtractedFile {
+                path: "/usr/bin/server".to_string(),
+                content: b"server-bytes".to_vec(),
+                size: 12,
+                mode: 0o100755,
+                sha256: None,
+                symlink_target: None,
+            }],
+            classified: HashMap::from([(
+                conary_core::components::ComponentType::Runtime,
+                vec!["/usr/bin/server".to_string()],
+            )]),
+            component_names_by_path: None,
+            installed_component_names: None,
+            ccs_pre_remove_script: None,
+            installed_component_types: vec![conary_core::components::ComponentType::Runtime],
+            skipped_components: Vec::new(),
+            language_provides: Vec::new(),
+        };
+        let file_capabilities = sample_file_capabilities();
+        let db_path_string = db_path.to_string_lossy().into_owned();
+        let root_string = root.to_string_lossy().into_owned();
+        let ctx = TransactionContext {
+            db_path: &db_path_string,
+            root: &root_string,
+            semantics: InstallSemantics::legacy(PackageFormatType::Rpm),
+            selection_reason: None,
+            old_trove_to_upgrade: None,
+            ccs_manifest_provides: None,
+            ccs_capabilities: None,
+            ccs_file_capabilities: Some(&file_capabilities),
+            execution_path: PackageExecutionPath::MutableLiveRoot,
+            defer_generation: false,
+            repository_provenance: None,
+            legacy_replay: LegacyReplayOptions::default(),
+            accepted_legacy_bundle: None,
+        };
+
+        execute_install_transaction(
+            &mut conn,
+            &fake_package(),
+            &extraction,
+            &ctx,
+            &InstallProgress::single("Installing"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(root.join("usr/bin/server")).unwrap(),
+            "server-bytes"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&args_file).unwrap().trim(),
+            "cap_net_bind_service=+ep"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&target_file).unwrap().trim(),
+            root.join("usr/bin/server").display().to_string()
+        );
+        assert!(
+            FileEntry::find_by_path(&conn, "/usr/bin/server")
+                .unwrap()
+                .is_some()
         );
     }
 }
