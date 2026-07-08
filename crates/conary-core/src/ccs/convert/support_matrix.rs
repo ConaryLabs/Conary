@@ -280,6 +280,27 @@ mod tests {
             .collect()
     }
 
+    fn live_fetch_or_package_manager_known_rows(
+        entries: &[SupportMatrixEntry],
+    ) -> Vec<&SupportMatrixEntry> {
+        entries
+            .iter()
+            .filter(|entry| {
+                entry.outcome == SupportOutcome::Known
+                    && (matches!(
+                        entry.class_id,
+                        Some("network" | "package-manager-recursion")
+                    ) || entry.adapter_id.is_some_and(|adapter_id| {
+                        adapter_id.contains("network")
+                            || adapter_id.contains("package-manager")
+                            || adapter_id.contains("live-fetch")
+                            || adapter_id.contains("dependency-intent")
+                            || adapter_id.contains("offline-artifact")
+                    }))
+            })
+            .collect()
+    }
+
     #[test]
     fn support_matrix_covers_every_builtin_adapter() {
         let matrix = SupportMatrix::default();
@@ -581,6 +602,72 @@ mod tests {
         assert!(
             known_rows.is_empty(),
             "PAM should not have any known adapter/support rows: {:?}",
+            known_rows.iter().map(|entry| entry.id).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn live_fetch_and_package_manager_known_row_guard_rejects_fake_rows() {
+        let mut entries = SupportMatrix::default().entries().to_vec();
+        entries.push(SupportMatrixEntry {
+            id: "network-fetch/v0-test-only",
+            command: Some("git clone"),
+            class_id: None,
+            adapter_id: Some("network-fetch/v0-test-only"),
+            outcome: SupportOutcome::Known,
+            reason_code: "helper-complete-network-fetch",
+            source_families: &["rpm", "deb", "arch"],
+            lifecycle_notes: "temporary in-test support row",
+            fixture_names: &["adapter-network-fetch-test-only"],
+        });
+        entries.push(SupportMatrixEntry {
+            id: "package-manager-recursion/v0-test-only",
+            command: Some("microdnf install"),
+            class_id: None,
+            adapter_id: Some("package-manager-recursion/v0-test-only"),
+            outcome: SupportOutcome::Known,
+            reason_code: "helper-complete-package-manager-recursion",
+            source_families: &["rpm", "deb", "arch"],
+            lifecycle_notes: "temporary in-test support row",
+            fixture_names: &["adapter-package-manager-test-only"],
+        });
+
+        let known_rows = live_fetch_or_package_manager_known_rows(&entries);
+        assert_eq!(
+            known_rows.iter().map(|entry| entry.id).collect::<Vec<_>>(),
+            vec![
+                "network-fetch/v0-test-only",
+                "package-manager-recursion/v0-test-only"
+            ]
+        );
+    }
+
+    #[test]
+    fn live_fetch_and_package_manager_classes_remain_blocked_without_native_adapters() {
+        let matrix = SupportMatrix::default();
+
+        for (class_id, fixture_name) in [
+            ("network", "blocked-class-network"),
+            (
+                "package-manager-recursion",
+                "blocked-class-package-manager-recursion",
+            ),
+        ] {
+            let row = matrix
+                .entries()
+                .iter()
+                .find(|entry| entry.class_id == Some(class_id))
+                .unwrap_or_else(|| panic!("missing support row for {class_id}"));
+
+            assert_eq!(row.outcome, SupportOutcome::Blocked);
+            assert!(row.adapter_id.is_none());
+            assert_eq!(row.fixture_names, &[fixture_name]);
+        }
+
+        let known_rows = live_fetch_or_package_manager_known_rows(matrix.entries());
+        assert!(
+            known_rows.is_empty(),
+            "live fetch and package-manager recursion should not have Known support rows: {:?}",
             known_rows.iter().map(|entry| entry.id).collect::<Vec<_>>()
         );
     }
