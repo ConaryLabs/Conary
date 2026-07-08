@@ -27,7 +27,11 @@ impl ScriptletCorpusSummary {
                 *command_form_counts
                     .entry(evidence.form.clone())
                     .or_insert(0) += 1;
-                for class in blocked_class_hints_for_command(&evidence.command, &evidence.form) {
+                for class in blocked_class_hints_for_command(
+                    &evidence.command,
+                    &evidence.form,
+                    evidence.git_clone_fetch,
+                ) {
                     blocked.insert(class);
                 }
             }
@@ -48,6 +52,7 @@ impl ScriptletCorpusSummary {
 struct CommandEvidence {
     command: String,
     form: String,
+    git_clone_fetch: bool,
 }
 
 fn commands_from_scriptlet(content: &str, interpreter: &str) -> Vec<CommandEvidence> {
@@ -136,20 +141,58 @@ fn command_from_segment(segment: &str) -> Option<CommandEvidence> {
     } else {
         format!("{} {}", command, args.join(" "))
     };
+    let git_clone_fetch =
+        command == "git" && git_clone_subcommand_after_global_options(&tokens[index + 1..]);
 
     Some(CommandEvidence {
         command: command.to_string(),
         form,
+        git_clone_fetch,
     })
 }
 
-fn blocked_class_hints_for_command(command: &str, form: &str) -> Vec<String> {
+fn git_clone_subcommand_after_global_options(args: &[&str]) -> bool {
+    let mut index = 0;
+    while index < args.len() {
+        match args[index] {
+            "-C" | "-c" => {
+                index += 2;
+                continue;
+            }
+            "--exec-path" | "--git-dir" | "--namespace" | "--super-prefix" | "--work-tree" => {
+                index += 2;
+                continue;
+            }
+            value if value.starts_with("--") && value.contains('=') => {
+                index += 1;
+                continue;
+            }
+            value if value.starts_with('-') => {
+                index += 1;
+                continue;
+            }
+            _ => break,
+        }
+    }
+
+    args.get(index).is_some_and(|arg| *arg == "clone")
+}
+
+fn blocked_class_hints_for_command(
+    command: &str,
+    form: &str,
+    git_clone_fetch: bool,
+) -> Vec<String> {
     let mut classes = Vec::new();
     match command {
-        "dnf" | "yum" | "rpm" | "apt" | "apt-get" | "dpkg" | "pacman" => {
+        "apk" | "apt" | "apt-get" | "dnf" | "dnf5" | "dpkg" | "microdnf" | "pacman" | "rpm"
+        | "yum" | "zypper" => {
             classes.push("package-manager-recursion".to_string());
         }
         "curl" | "wget" | "scp" | "ssh" => {
+            classes.push("network".to_string());
+        }
+        "git" if git_clone_fetch => {
             classes.push("network".to_string());
         }
         "restorecon" | "semanage" | "setsebool" => {
@@ -216,21 +259,65 @@ mod tests {
     }
 
     #[test]
-    fn corpus_summary_marks_package_manager_recursion() {
-        let summary = ScriptletCorpusSummary::from_scriptlets(
+    fn corpus_summary_marks_live_fetch_and_package_manager_recursion() {
+        let git_summary = ScriptletCorpusSummary::from_scriptlets(
             "arch",
             "bad-news",
             &[scriptlet(
-                "pacman -Syu\ncurl https://example.invalid/script.sh\n",
+                "git -C /tmp clone https://example.invalid/repo.git\ngit -c http.sslVerify=false clone https://example.invalid/repo.git\n",
             )],
         );
 
-        assert!(
-            summary
-                .blocked_class_hints
-                .contains(&"package-manager-recursion".to_string())
+        assert_eq!(git_summary.command_counts.get("git"), Some(&2));
+        assert_eq!(git_summary.blocked_class_hints, vec!["network".to_string()]);
+
+        let git_long_option_summary = ScriptletCorpusSummary::from_scriptlets(
+            "arch",
+            "bad-news",
+            &[scriptlet(
+                "git --git-dir /tmp/repo clone https://example.invalid/repo.git\ngit --work-tree /tmp/work clone https://example.invalid/repo.git\n",
+            )],
         );
-        assert!(summary.blocked_class_hints.contains(&"network".to_string()));
+
+        assert_eq!(git_long_option_summary.command_counts.get("git"), Some(&2));
+        assert_eq!(
+            git_long_option_summary.blocked_class_hints,
+            vec!["network".to_string()]
+        );
+
+        let non_fetch_git_summary = ScriptletCorpusSummary::from_scriptlets(
+            "arch",
+            "bad-news",
+            &[scriptlet(
+                "git help clone\ngit config remote.origin.tagOpt clone\n",
+            )],
+        );
+
+        assert_eq!(non_fetch_git_summary.command_counts.get("git"), Some(&2));
+        assert!(non_fetch_git_summary.blocked_class_hints.is_empty());
+
+        let package_manager_summary = ScriptletCorpusSummary::from_scriptlets(
+            "arch",
+            "bad-news",
+            &[scriptlet(
+                "microdnf install demo\napk add demo\nzypper install demo\ndnf5 install demo\n",
+            )],
+        );
+
+        assert_eq!(
+            package_manager_summary.command_counts.get("microdnf"),
+            Some(&1)
+        );
+        assert_eq!(package_manager_summary.command_counts.get("apk"), Some(&1));
+        assert_eq!(
+            package_manager_summary.command_counts.get("zypper"),
+            Some(&1)
+        );
+        assert_eq!(package_manager_summary.command_counts.get("dnf5"), Some(&1));
+        assert_eq!(
+            package_manager_summary.blocked_class_hints,
+            vec!["package-manager-recursion".to_string()]
+        );
     }
 
     #[test]

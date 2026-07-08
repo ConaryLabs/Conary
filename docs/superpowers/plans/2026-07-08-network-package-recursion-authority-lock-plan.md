@@ -14,7 +14,7 @@
 - Network fetch evidence remains `blocked-class-network` with `publication_status = "blocked"`.
 - Nested package-manager evidence remains `blocked-class-package-manager-recursion` with `publication_status = "blocked"`.
 - Do not add a network adapter, package-manager adapter, dependency-intent projection, offline artifact authority, target-profile package-manager facts, replay behavior, or Remi public gate exception.
-- `git*clone*` is blocked as live fetch evidence so global git options before `clone` cannot bypass detection, but this slice must not block every `git` invocation by command name.
+- `git` live fetch evidence is blocked only when the first non-global-option subcommand is `clone`, so global git options before `clone` cannot bypass detection without blocking unrelated `git` commands.
 - Admin/non-public test serving may continue to serve valid blocked rows only through the existing default-off admin lane; public package, detail, index, sparse, OCI, and chunk routes continue to require public-ready status.
 - Corpus summaries remain advisory planning evidence only; they do not declare scriptlets `replaced`.
 - Documentation changes must keep `docs/SCRIPTLET_SECURITY.md`, `docs/modules/ccs.md`, `docs/modules/remi.md`, `docs/modules/test-fixtures.md`, docs-audit ledger, and inventory aligned.
@@ -24,7 +24,7 @@
 ## File Structure
 
 - Modify `crates/conary-core/src/ccs/convert/blocked_classes.rs`
-  - Add blocked-class tests and command/form evidence for common distro package-manager aliases and `git*clone*`.
+  - Add blocked-class tests and narrow git-clone-subcommand evidence for common distro package-manager aliases.
 - Modify `apps/remi/src/server/scriptlet_corpus.rs`
   - Keep advisory corpus blocked-class hints aligned with the blocked-class registry for the same forms.
 - Modify `crates/conary-core/src/ccs/convert/support_matrix.rs`
@@ -169,7 +169,7 @@ cargo test -p conary-core blocked_classes_block_live_fetch_and_package_manager_r
 cargo test -p remi corpus_summary_marks_live_fetch_and_package_manager_recursion
 ```
 
-Expected: FAIL because option-prefixed `git clone`, `apk`, `dnf5`, `microdnf`, and `zypper` are not yet fully classified in both locations.
+Expected: FAIL because option-prefixed `git clone`, `apk`, `dnf5`, `microdnf`, and `zypper` are not yet fully classified in both locations, and negative `git help clone` / `git config ... clone` cases still overmatch.
 
 - [ ] **Step 4: Extend the blocked-class registry**
 
@@ -194,10 +194,14 @@ blocked_class(
     "Network access from scriptlets is not replay-safe.",
     "blocked-class-network",
     &["curl", "wget", "scp", "ssh"],
-    &["git*clone*"],
+    &[],
     "Provide a declared package dependency or a curated offline artifact.",
 ),
 ```
+
+and add a narrow helper that blocks `git` only when the first non-global-option
+subcommand is exactly `clone` (including forms like `git -C /tmp clone ...` and
+`git -c name=value clone ...`).
 
 Change the package-manager recursion command list from:
 
@@ -843,7 +847,7 @@ Create a review package from the plan-review base through HEAD and dispatch a re
 
 - no live fetch or nested package-manager form is public-ready;
 - no network/package-manager adapter, manifest projection, dependency-intent projection, offline artifact authority, replay authority, or public gate exception was added;
-- `git*clone*` is blocked without blocking every `git` command by name;
+- git live-fetch clone forms are blocked after global-option skipping without blocking unrelated `git` commands by name;
 - support matrix has blocked rows only and no Known support row for these classes;
 - converter/publication/Remi surfaces keep blocked rows non-public-only;
 - docs and docs-audit metadata align with Workstream F.
