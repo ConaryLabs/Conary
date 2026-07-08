@@ -2,6 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+**Status:** Implemented in `goal/scriptlet-public-authority` through
+`e7fd13e7`. The code path is unit- and doc-gate verified, but merge/shipping
+remains gated on either a passing Group O `TGE05` QEMU interaction run or an
+explicit maintainer risk-acceptance decision. Fresh local Group O execution is
+currently blocked before `TGE05` because `minimal-boot-v3` does not reach SSH;
+Group P shows the same source-image readiness blocker under a bounded rerun.
+
 **Goal:** Let generation-aware CCS installs preserve `[[file_capabilities]]` as `security.capability` xattrs in generation images before removing the current fail-closed refusal.
 
 **Architecture:** Persist installed CCS file-capability authority in the database, convert that persisted authority into generation runtime input xattrs, encode those xattrs into EROFS file stats, and surface generation metadata/inspection evidence. Only after that path exists may generation-aware installs accept file capabilities, and deferred generation publication with file capabilities remains refused until there is a generated artifact carrying the xattr authority.
@@ -88,11 +95,11 @@
 - Produces: `InstalledFileCapability::find_all_ordered(conn)`
 - Produces: `InstalledFileCapability::find_by_trove(conn, trove_id)`
 
-- [ ] **Step 1: Write failing migration/model tests**
+- [x] **Step 1: Write failing migration/model tests**
 
 Add tests proving migration `77` creates `installed_file_capabilities`, rejects unknown troves through foreign keys, cascades on trove deletion, and round-trips a row for `/usr/bin/server` with `["cap_net_bind_service"]`, `permitted = true`, `effective = true`, `inheritable = false`.
 
-- [ ] **Step 2: Run the focused failing tests**
+- [x] **Step 2: Run the focused failing tests**
 
 Run:
 
@@ -103,7 +110,7 @@ cargo test -p conary-core migrate_v77
 
 Expected: FAIL because the table/model do not exist yet.
 
-- [ ] **Step 3: Implement schema and model**
+- [x] **Step 3: Implement schema and model**
 
 Add a table shaped like:
 
@@ -127,9 +134,9 @@ Add `77 => migrations::migrate_v77(conn)` to `apply_migration` in `crates/conary
 
 The model must deserialize `capabilities_json` as a sorted, deduplicated nonempty string list and validate by reusing `conary_core::ccs::manifest::FileCapability::validate()`. `InstalledFileCapability::replace_for_trove` must delete existing rows for the trove before inserting the normalized set, or use an equivalent `INSERT OR REPLACE` strategy, so repeated installs/upgrades do not trip the `UNIQUE(trove_id, path)` constraint.
 
-`capabilities_json` is acceptable for this slice because generation input loading needs per-trove/per-path rows, not capability-name SQL queries. A future reporting slice can normalize capability names into child rows if SQL-level capability queries become product behavior.
+`capabilities_json` is acceptable for this slice because generation input loading needs per-trove/per-path rows, not capability-name SQL queries. Keep this as an explicit future reporting/normalization debt: a later slice should normalize capability names into child rows if SQL-level capability queries become product behavior.
 
-- [ ] **Step 4: Verify the model tests pass**
+- [x] **Step 4: Verify the model tests pass**
 
 Run:
 
@@ -140,7 +147,7 @@ cargo test -p conary-core migrate_v77
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit Task 1**
+- [x] **Step 5: Commit Task 1**
 
 Commit message:
 
@@ -159,13 +166,13 @@ git commit -m "security: persist installed file capability authority"
 - Consumes: installed file metadata from `install_inner_with_stored_files`
 - Produces: persisted installed capability rows only for package payload paths installed in the transaction
 
-- [ ] **Step 1: Write failing install persistence tests**
+- [x] **Step 1: Write failing install persistence tests**
 
 Add tests showing a CCS install with `ccs_file_capabilities = ["/usr/bin/server"]` persists exactly one installed capability row when `/usr/bin/server` is in `stored_files`, and persists none for a manifest capability whose path was not selected/installed.
 
 Also add an upgrade test showing the old trove's installed capability row is removed by cascade and the new trove owns the current row.
 
-- [ ] **Step 2: Run the focused failing tests**
+- [x] **Step 2: Run the focused failing tests**
 
 Run:
 
@@ -176,13 +183,13 @@ cargo test -p conary --lib install_inner
 
 Expected: FAIL until persistence is wired into install.
 
-- [ ] **Step 3: Implement install persistence**
+- [x] **Step 3: Implement install persistence**
 
 After file rows are inserted and `installed_file_metadata` is known, persist normalized file-capability rows for `ctx.ccs_file_capabilities` whose paths appear in the installed payload map. Use the same selected-path boundary as mutable-live-root application so DB authority and live-root `setcap` authority agree.
 
 Do not apply `setcap` in generation-aware installs. This task only records authority.
 
-- [ ] **Step 4: Verify install persistence**
+- [x] **Step 4: Verify install persistence**
 
 Run:
 
@@ -193,7 +200,7 @@ cargo test -p conary --lib install_inner
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit Task 2**
+- [x] **Step 5: Commit Task 2**
 
 Commit message:
 
@@ -217,7 +224,7 @@ git commit -m "security: record ccs file capabilities during install"
 - Produces: `FileEntryRef.xattrs: BTreeMap<String, Vec<u8>>`
 - Produces: `collect_runtime_generation_inputs(conn: &rusqlite::Connection, troves: &[Trove], files: Vec<FileEntry>)`
 
-- [ ] **Step 1: Write failing xattr encoder tests**
+- [x] **Step 1: Write failing xattr encoder tests**
 
 Add tests for:
 
@@ -230,7 +237,7 @@ Add tests for:
 
 Use Linux vfs capability xattr bytes directly instead of invoking `setcap`; tests must not require root or host xattr support.
 
-- [ ] **Step 2: Write failing runtime-input tests**
+- [x] **Step 2: Write failing runtime-input tests**
 
 Add tests showing:
 
@@ -238,7 +245,7 @@ Add tests showing:
 - capability rows for missing paths, excluded paths, symlinks, directories, or non-generation sources fail closed with package/path context;
 - generation inputs without capability rows remain byte-for-byte compatible at the public struct level except for an empty `xattrs` map.
 
-- [ ] **Step 3: Run the focused failing tests**
+- [x] **Step 3: Run the focused failing tests**
 
 Run:
 
@@ -249,7 +256,7 @@ cargo test -p conary-core generation::builder::runtime_inputs
 
 Expected: FAIL until encoder/runtime-input wiring exists.
 
-- [ ] **Step 4: Implement encoder and runtime-input wiring**
+- [x] **Step 4: Implement encoder and runtime-input wiring**
 
 Implement the encoder from the ordered `LINUX_FILE_CAPABILITY_NAMES` table so capability bit positions match Linux `CAP_*` numbering. Emit revision-2 vfs capability data with no namespace rootid unless the repo already has a stronger local reason to choose revision 3. Serialize `magic_etc` and all capability bitmap words with explicit little-endian byte order (`to_le_bytes()`), never native-endian serialization. Keep the implementation deterministic.
 
@@ -259,7 +266,7 @@ Change `collect_runtime_generation_inputs` to accept `conn: &rusqlite::Connectio
 
 Before attaching xattrs, iterate persisted capability rows and fail immediately if a path is excluded by generation `is_excluded`, belongs to a non-regular file type in the generation root, belongs to a non-generation source, or has no matching installed file entry. Include package name and path in the error.
 
-- [ ] **Step 5: Verify encoder/runtime-input tests**
+- [x] **Step 5: Verify encoder/runtime-input tests**
 
 Run:
 
@@ -270,7 +277,7 @@ cargo test -p conary-core generation::builder::runtime_inputs
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit Task 3**
+- [x] **Step 6: Commit Task 3**
 
 Commit message:
 
@@ -293,17 +300,17 @@ git commit -m "security: feed file capabilities into generation inputs"
 - Produces: optional/defaulted generation metadata count for `security.capability` xattrs
 - Produces: generation inspection output line `  Cap xattrs: {count}` when the count is nonzero
 
-- [ ] **Step 1: Write failing EROFS/stat tests**
+- [x] **Step 1: Write failing EROFS/stat tests**
 
 Add tests proving the builder passes `FileEntryRef.xattrs` into the `composefs::tree::Stat` for regular files. If the `composefs` dependency exposes a suitable inspection API, assert the built file inode carries the exact expected xattr bytes. If it does not, assert deterministic EROFS output changes when the same file gains a `security.capability` xattr and rely on the Task 6 QEMU activation proof for end-to-end inode validation.
 
 For `#[cfg(not(feature = "composefs-rs"))]`, add a support predicate test that reports xattr image support as unavailable.
 
-- [ ] **Step 2: Write failing metadata/inspection tests**
+- [x] **Step 2: Write failing metadata/inspection tests**
 
 Add tests showing new generation metadata can report `security_capability_xattr_count`, older metadata without the field still deserializes, and `conary system generation info` includes a concise count when the field is nonzero.
 
-- [ ] **Step 3: Run the focused failing tests**
+- [x] **Step 3: Run the focused failing tests**
 
 Run:
 
@@ -315,13 +322,13 @@ cargo test -p conary --lib generation::commands
 
 Expected: FAIL until xattrs and metadata are wired.
 
-- [ ] **Step 4: Implement EROFS xattr preservation**
+- [x] **Step 4: Implement EROFS xattr preservation**
 
 Set regular-file `Stat.xattrs` from `FileEntryRef.xattrs`. Keep directory and symlink xattrs empty in this slice.
 
 Carry the `security.capability` xattr count directly from `RuntimeGenerationInputs` into `GenerationMetadata` in `create.rs`; do not add a `BuildResult` field unless implementation reality makes that simpler. Avoid changing artifact manifest schema unless artifact load needs to validate the new metadata digest.
 
-- [ ] **Step 5: Verify EROFS/metadata tests**
+- [x] **Step 5: Verify EROFS/metadata tests**
 
 Run:
 
@@ -333,7 +340,7 @@ cargo test -p conary --lib generation::commands
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit Task 4**
+- [x] **Step 6: Commit Task 4**
 
 Commit message:
 
@@ -351,7 +358,7 @@ git commit -m "security: preserve file capability xattrs in generations"
 - Replaces: `reject_unsupported_generation_file_capabilities`
 - Produces: `preflight_generation_file_capabilities(ctx) -> Result<()>`
 
-- [ ] **Step 1: Write failing install preflight tests**
+- [x] **Step 1: Write failing install preflight tests**
 
 Add tests proving:
 
@@ -360,7 +367,7 @@ Add tests proving:
 - generation-aware install with file capabilities is rejected when xattr image support is unavailable;
 - mutable live-root installs are unchanged.
 
-- [ ] **Step 2: Run the focused failing tests**
+- [x] **Step 2: Run the focused failing tests**
 
 Run:
 
@@ -371,7 +378,7 @@ cargo test -p conary --lib reject_unsupported_generation_file_capabilities
 
 Expected: FAIL until the preflight changes.
 
-- [ ] **Step 3: Implement staged preflight**
+- [x] **Step 3: Implement staged preflight**
 
 Replace the old unconditional refusal with a preflight that validates:
 
@@ -382,7 +389,7 @@ Replace the old unconditional refusal with a preflight that validates:
 
 The existing `MutableLiveRoot` branch in `transaction.rs` already prevents the `setcap` applier from running for generation-aware installs. Add a regression test proving the mutable live-root `file_capabilities.rs` path still applies selected capabilities after this preflight changes.
 
-- [ ] **Step 4: Verify install preflight**
+- [x] **Step 4: Verify install preflight**
 
 Run:
 
@@ -393,7 +400,7 @@ cargo test -p conary --lib reject_unsupported_generation_file_capabilities
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit Task 5**
+- [x] **Step 5: Commit Task 5**
 
 Commit message:
 
@@ -419,7 +426,7 @@ git commit -m "security: allow generation file capabilities after xattr prefligh
 - Produces: rollback evidence that returning to a prior generation restores the prior file-capability state
 - Produces: docs that no longer claim generation-aware file capabilities are impossible once the code proves them
 
-- [ ] **Step 1: Add failing interaction proof**
+- [x] **Step 1: Add failing interaction proof**
 
 Add a QEMU scenario that builds at least two generations:
 
@@ -430,7 +437,7 @@ The proof must boot or switch into the later generation and verify the expected 
 
 If the existing carrier flow cannot switch generations in-place, export/boot separate artifacts for the capability-present and capability-absent generations and record that as the rollback-equivalent proof in the implementation report.
 
-- [ ] **Step 1a: Check the doc proof floor before public-claim edits**
+- [x] **Step 1a: Check the doc proof floor before public-claim edits**
 
 Before changing docs, run:
 
@@ -443,7 +450,7 @@ bash scripts/check-coherency-ledger.sh docs/superpowers/feature-coherency-ledger
 
 Fix any pre-existing failure before adding new claims. If a script is missing in the execution environment, record that as an environmental blocker and do a manual doc review for the same surface.
 
-- [ ] **Step 2: Run focused unit and integration gates**
+- [x] **Step 2: Run focused unit and integration gates**
 
 Run:
 
@@ -456,7 +463,7 @@ cargo test -p conary --test conversion_integration golden_conversion
 
 Expected: PASS.
 
-- [ ] **Step 3: Run generation interaction gates**
+- [x] **Step 3: Run generation interaction gates**
 
 Run:
 
@@ -467,7 +474,15 @@ cargo run -p conary-test -- run --suite phase3-group-p-iso-export --distro fedor
 
 Expected: PASS, or record an environmental blocker only if the fixture image/tooling is unavailable after the code-level proof is green. Do not remove the generation-aware fail-closed behavior from the final branch without either passing interaction evidence or an explicit maintainer decision.
 
-- [ ] **Step 4: Update docs and audit metadata**
+Status: code-level proof is green, and the `TGE05` manifest is present with
+capability-absent and capability-present exported artifacts, `getcap -n`
+validation, and exact raw `security.capability` xattr fallback validation.
+Fresh local Group O execution failed in `TGE01` before reaching `TGE05` because
+`minimal-boot-v3` did not reach SSH; an unsandboxed rerun failed the same way.
+Group P was also blocked on the same source image. This remains a merge/shipping
+gate, not a passed interaction gate.
+
+- [x] **Step 4: Update docs and audit metadata**
 
 Update docs to say generation-aware file capabilities are supported only when:
 
@@ -479,7 +494,7 @@ Update docs to say generation-aware file capabilities are supported only when:
 
 Keep public Remi file-capability policy language from the first slice unchanged.
 
-- [ ] **Step 5: Run docs and formatting gates**
+- [x] **Step 5: Run docs and formatting gates**
 
 Run:
 
@@ -494,7 +509,7 @@ git diff --check
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit Task 6**
+- [x] **Step 6: Commit Task 6**
 
 Commit message:
 
