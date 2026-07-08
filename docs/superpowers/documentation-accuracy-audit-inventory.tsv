@@ -170,6 +170,7 @@ docs/superpowers/release-security-waivers-2026-05-06.md	planning	maintainer
 docs/superpowers/specs/2026-07-01-first-external-tester-loop-design.md	planning	maintainer
 docs/superpowers/specs/2026-07-03-kernel-initramfs-selinux-scriptlet-handling-design.md	planning	maintainer
 docs/superpowers/specs/2026-07-08-remi-non-public-test-serving-design.md	planning	maintainer
+docs/superpowers/specs/2026-07-08-scriptlet-public-authority-roadmap-design.md	planning	maintainer
 docs/superpowers/specs/archive/2026-04-10-all-tracks-release-hardening-design.md	historical	historical
 docs/superpowers/specs/archive/2026-04-10-conaryd-forge-staging-deployment-design.md	historical	historical
 docs/superpowers/specs/archive/2026-04-16-bootstrap-self-hosting-vm-design.md	historical	historical
