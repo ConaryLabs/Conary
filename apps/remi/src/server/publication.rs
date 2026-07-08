@@ -682,6 +682,58 @@ mod tests {
     }
 
     #[test]
+    fn blocked_live_fetch_and_package_manager_reports_stay_private_and_non_public_only() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let db_path = temp.path().join("remi.db");
+        conary_core::db::init(&db_path).unwrap();
+        let conn = conary_core::db::open(&db_path).unwrap();
+
+        for (name, chunk, class_id, reason_code) in [
+            (
+                "network-private",
+                "network-chunk",
+                "network",
+                "blocked-class-network",
+            ),
+            (
+                "pm-private",
+                "pm-chunk",
+                "package-manager-recursion",
+                "blocked-class-package-manager-recursion",
+            ),
+        ] {
+            let mut summary = golden_summary("blocked", "blocked", "blocked");
+            summary.decision_counts = ScriptletDecisionCountsSummary {
+                blocked: 1,
+                ..ScriptletDecisionCountsSummary::default()
+            };
+            summary.blocked_reason_codes.push(reason_code.to_string());
+            summary.blocked_classes.push(class_id.to_string());
+            insert_golden_converted(&conn, name, chunk, &summary);
+
+            let converted = ConvertedPackage::find_publication_candidates(&conn, "fedora", None)
+                .unwrap()
+                .into_iter()
+                .find(|converted| converted.package_name.as_deref() == Some(name))
+                .unwrap_or_else(|| panic!("private converted row {name} should remain queryable"));
+            assert!(!converted.is_scriptlet_public_ready());
+            assert_eq!(
+                ConvertedPackage::chunk_publication_state(&conn, chunk).unwrap(),
+                ChunkPublicationState::NonPublicOnly
+            );
+
+            let report = match classify_converted_package(&converted) {
+                PublicationDecision::Blocked(report) => report,
+                other => panic!("expected blocked {class_id} report, got {other:?}"),
+            };
+            assert_eq!(report.publication_status, "blocked");
+            assert_eq!(report.blocked_classes, vec![class_id.to_string()]);
+            assert!(report.boot_security_intents.is_empty());
+            assert!(report.security_policy_intents.is_empty());
+        }
+    }
+
+    #[test]
     fn publication_report_reasons_are_deterministic_and_deduplicated() {
         let summary = ScriptletBundleSummary {
             publication_status: "private-review".to_string(),
