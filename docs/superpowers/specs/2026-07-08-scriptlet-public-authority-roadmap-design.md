@@ -50,11 +50,19 @@ Sysctl has the same pattern in a milder form. `sysctl/v1` accepts a single
 validated `sysctl -w <key>=<value>` and rejects denied keys, but denylist-shaped
 validation is not the same as positive public target policy.
 
+One compatibility wrinkle matters for every child plan: existing converted rows
+can carry cached publication summaries. A policy slice that makes previously
+public adapter evidence private-review must version-stale, backfill, or
+reconvert affected rows instead of relying only on new code paths.
+
 ## Safety Invariants
 
 - Raw legacy scriptlet replay is never public-serving authority.
 - Public-ready conversion requires complete replacement plus positive public
   policy for the exact authority being projected.
+- Adapter replacement evidence and public-serving authority are separate
+  decisions. Complete replacement can preserve local/native install semantics
+  even when public Remi serving remains private-review.
 - Syntactic narrowness alone is not enough for public-ready status when the
   operation grants kernel, LSM, boot, PAM, privilege, network, or package
   manager authority.
@@ -97,6 +105,12 @@ validation is not the same as positive public target policy.
   shape for publication and currently requires `boot_security_intents`.
   Publication reports also include `security_policy_intents`, so the shape gate
   should require that field as well.
+- `crates/conary-core/src/db/models/converted.rs` owns
+  `CONVERSION_VERSION`; the first policy slice that changes file-capability
+  public readiness must bump it so stale cached rows are reconverted.
+- `crates/conary-core/src/ccs/v2/validation.rs` already exposes
+  `TargetProfileQuery::sysctl_status()`. There is no equivalent
+  file-capability target-profile query yet.
 - `docs/modules/ccs.md`, `docs/modules/remi.md`, `docs/SCRIPTLET_SECURITY.md`,
   and `docs/modules/test-fixtures.md` describe the current public gate and
   fixture ownership surfaces.
@@ -114,6 +128,11 @@ Existing adapters already focus on the replacement contract. This roadmap adds
 the public policy contract where security-sensitive authority needs more than
 command-shape parsing.
 
+The public policy contract should be applied at aggregate bundle or publication
+status construction, before public Remi status is persisted or served. It should
+not be implemented by rejecting otherwise complete adapter evidence at parse
+time unless the evidence is invalid.
+
 ## Workstream A: File Capability Policy Precision
 
 ### Decision
@@ -128,7 +147,12 @@ Split file capability validation into at least two concepts:
 The first public-ready allowlist should be intentionally tiny. Start with
 `cap_net_bind_service` because it is common, narrow, and already used by the
 fixture corpus. High-risk capabilities remain private-review until a target
-profile explicitly authorizes them.
+profile explicitly authorizes them in a later, separately designed slice.
+
+The first slice does not add target-profile overrides. Until a dedicated
+`TargetProfileQuery::file_capability_status()` or equivalent profile catalog
+exists, every known capability outside the public allowlist remains
+private-review regardless of target.
 
 High-risk examples that must not be public-ready by default:
 
@@ -147,11 +171,17 @@ High-risk examples that must not be public-ready by default:
 - `setcap cap_net_bind_service=+ep /usr/bin/demo` may remain fully replaced and
   public-ready when the executable is payload-backed.
 - `setcap cap_sys_admin=+ep /usr/bin/demo` remains recognized evidence, but the
-  bundle must be private-review or blocked for public Remi until target policy
-  explicitly allows it.
+  bundle must be private-review or blocked for public Remi until a future
+  target-policy slice explicitly allows it.
+- High-risk known capability entries may still be `replaced` at the individual
+  adapter-entry layer. Their public-policy failure must downgrade the aggregate
+  bundle or publication status, not erase the replacement evidence.
 - Unknown capability names remain rejected or blocked as they are today.
 - Inheritable, process, ambient, removal, setpriv, setgid, broad chmod, and
   non-payload privilege mutations stay blocked/private.
+- `setuid-mode/v1` is narrower: it projects payload file mode plus
+  `policy.allow_setuid_paths`. Revisit its public-policy treatment only if
+  adapter evidence or fixtures show risky patterns beyond the current bridge.
 
 ### First Plan
 
@@ -162,7 +192,11 @@ The first child plan should add tests before implementation:
 - conversion still projects allowed public capabilities into
   `[[file_capabilities]]`;
 - support-matrix and golden fixture evidence distinguish public-ready from
-  private-review capability evidence.
+  private-review capability evidence in
+  `crates/conary-core/src/ccs/convert/golden_fixtures.rs` and
+  `crates/conary-core/src/ccs/convert/support_matrix.rs`;
+- `CONVERSION_VERSION` bumps so existing cached public rows cannot bypass the
+  stricter public policy.
 
 ## Workstream B: Generation-Aware File Capability Propagation
 
@@ -191,6 +225,14 @@ This work crosses CCS install, transaction commit, generation builder, image
 artifact, and rollback behavior. It needs the generation interaction gate, not
 only CCS conversion tests.
 
+When xattr propagation changes generation artifacts, include the QEMU-backed
+generation gates:
+
+```bash
+cargo run -p conary-test -- run --suite phase3-group-o-generation-export --distro fedora44 --phase 3
+cargo run -p conary-test -- run --suite phase3-group-p-iso-export --distro fedora44 --phase 3
+```
+
 ## Workstream C: Sysctl Target-Profile Public Policy
 
 ### Decision
@@ -201,7 +243,8 @@ live in target-profile facts rather than in a free-floating denylist.
 
 ### Requirements
 
-- `TargetProfileQuery` gains a public sysctl policy query or equivalent
+- Conversion and publication policy use the existing
+  `TargetProfileQuery::sysctl_status()` boundary, or an equivalent
   profile-backed allowlist.
 - Defaults answer unsupported.
 - Existing denied-key validation remains as a defensive floor.
@@ -299,6 +342,10 @@ Preserve the current separation between public serving and admin test serving.
 The test lane may serve valid blocked or review-required artifacts to maintainers
 when explicitly enabled. It must never become a public gate bypass.
 
+Current Remi classification maps valid non-public, non-blocked rows to
+review-required for the admin test lane, which means `local-only` rows are
+servable today when the lane is enabled and the caller is admin-scoped.
+
 ### Follow-On Alignment
 
 The next Remi alignment slice should decide whether `local-only` is meant to be
@@ -316,9 +363,14 @@ index, and detail routes keep filtering through public-ready status.
 ### Required Corrections
 
 - Require `security_policy_intents` in the publication summary shape gate when
-  non-default scriptlet metadata is present.
+  newly written non-default scriptlet metadata is present, while handling older
+  rows gracefully by defaulting a missing field to empty, backfilling it, or
+  version-staling and reconverting those rows.
 - Keep `boot_security_intents` and `security_policy_intents` both sanitized in
   public refusal and non-public test responses.
+- Treat the current empty-summary default-public shape as a compatibility path,
+  not a way for stale adapter evidence to remain public after policy changes.
+- Bump `CONVERSION_VERSION` in the first file-capability public-policy slice.
 - Refresh CCS/Remi docs when file-capability or sysctl public policy changes.
 - Keep `docs/modules/ccs.md` front matter dates aligned when its public claims
   change.
@@ -367,6 +419,8 @@ changes easy to review.
 
 Each refactor child plan must state:
 
+- which product or policy slice forced the refactor, with files not touched by
+  that slice out of scope;
 - which behavior moves;
 - which module owns it afterward;
 - whether persisted state or public API shape changes;
@@ -419,11 +473,16 @@ The first plan should:
    `cap_net_bind_service`.
 2. Keep the manifest's known Linux capability table for syntax and install-time
    validity.
-3. Route high-risk known capabilities to private-review or blocked publication
-   status.
-4. Update golden fixtures and support-matrix expectations.
-5. Tighten publication summary shape validation for `security_policy_intents`.
-6. Update CCS/Remi/scriptlet security docs and audit metadata.
+3. Keep payload-backed high-risk known capability entries as replacement
+   evidence while routing aggregate publication status to private-review or
+   blocked unless public policy allows them.
+4. Bump `CONVERSION_VERSION` and ensure stale cached rows cannot bypass the new
+   policy.
+5. Handle default and older publication summary shapes compatibly while
+   tightening newly written `security_policy_intents` shape validation.
+6. Update `crates/conary-core/src/ccs/convert/golden_fixtures.rs` and
+   `crates/conary-core/src/ccs/convert/support_matrix.rs`.
+7. Update CCS/Remi/scriptlet security docs and audit metadata.
 
 The second slice should handle generation-aware `security.capability` xattr
 propagation. It should start only after the public policy boundary is explicit.
