@@ -43,6 +43,19 @@ pub(super) fn complete_effect(kind: &str, command: &str) -> ScriptletEffectEvide
     }
 }
 
+pub(super) fn sysctl_effect(key: &str) -> ScriptletEffectEvidence {
+    let mut effect = complete_effect("sysctl-setting", "sysctl");
+    effect.adapter_id = Some("sysctl/v1".to_string());
+    effect.confidence = EffectConfidence::Declared;
+    effect.args = vec!["-w".to_string(), format!("{key}=1")];
+    effect.reason_code = Some("helper-complete-sysctl".to_string());
+    effect.extra.insert(
+        "key".to_string(),
+        toml::Value::String(key.to_string()),
+    );
+    effect
+}
+
 pub(super) fn known_report_with_effect(
     effect: ScriptletEffectEvidence,
 ) -> ScriptletClassificationReport {

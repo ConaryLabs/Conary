@@ -6,6 +6,7 @@ use crate::ccs::legacy_scriptlets::{
     DecisionCounts, LegacyScriptletBundle, LegacyScriptletEntry, PublicationPolicy,
     PublicationStatus, ScriptletDecision, ScriptletFidelity, TargetCompatibility,
 };
+use crate::ccs::v2::validation::TargetProfileQuery;
 use crate::ccs::security_policy::SecurityPolicyIntent;
 use std::collections::BTreeSet;
 
@@ -20,8 +21,14 @@ pub(super) fn summary_from_bundle(
     evidence_digest: Option<String>,
 ) -> ScriptletBundleSummary {
     let blocked_reason_codes = sorted_entry_reason_codes(bundle, "blocked");
+    let target_profile = public_policy_target_profile(bundle);
+    let target_profile_query =
+        target_profile.map(|profile| profile as &dyn TargetProfileQuery);
     let mut review_reason_codes = sorted_entry_reason_codes(bundle, "review");
-    review_reason_codes.extend(public_policy_review_reason_codes(bundle));
+    review_reason_codes.extend(public_policy_review_reason_codes(
+        bundle,
+        target_profile_query,
+    ));
     review_reason_codes.sort();
     review_reason_codes.dedup();
     let unknown_commands = bundle
@@ -54,7 +61,7 @@ pub(super) fn summary_from_bundle(
                 bundle.publication_status.clone(),
             )
         } else {
-            aggregate_status(&bundle.entries, &recomputed_counts)
+            aggregate_status(&bundle.entries, &recomputed_counts, target_profile_query)
         };
 
     ScriptletBundleSummary {
@@ -104,11 +111,24 @@ fn sorted_entry_reason_codes(bundle: &LegacyScriptletBundle, decision: &str) -> 
         .collect()
 }
 
-fn public_policy_review_reason_codes(bundle: &LegacyScriptletBundle) -> Vec<String> {
+fn public_policy_target_profile(
+    bundle: &LegacyScriptletBundle,
+) -> Option<&'static crate::repository::supported_profiles::SupportedProfile> {
+    bundle
+        .extra
+        .get("public_policy_target_profile_id")
+        .and_then(toml::Value::as_str)
+        .and_then(crate::repository::supported_profiles::profile_by_public_id)
+}
+
+fn public_policy_review_reason_codes(
+    bundle: &LegacyScriptletBundle,
+    profile: Option<&dyn TargetProfileQuery>,
+) -> Vec<String> {
     bundle
         .entries
         .iter()
-        .flat_map(|entry| public_policy::entry_public_policy_review_reasons(entry, None))
+        .flat_map(|entry| public_policy::entry_public_policy_review_reasons(entry, profile))
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect()
@@ -131,6 +151,7 @@ pub(super) fn decision_counts(entries: &[LegacyScriptletEntry]) -> DecisionCount
 pub(super) fn aggregate_status(
     entries: &[LegacyScriptletEntry],
     counts: &DecisionCounts,
+    profile: Option<&dyn TargetProfileQuery>,
 ) -> (
     ScriptletFidelity,
     TargetCompatibility,
@@ -171,7 +192,7 @@ pub(super) fn aggregate_status(
     }
     let public_policy_review_required = entries
         .iter()
-        .any(|entry| !public_policy::entry_public_policy_review_reasons(entry, None).is_empty());
+        .any(|entry| !public_policy::entry_public_policy_review_reasons(entry, profile).is_empty());
     if public_policy_review_required {
         return (
             ScriptletFidelity::FullyReplaced,
@@ -190,8 +211,10 @@ pub(super) fn aggregate_status(
 
 #[cfg(test)]
 mod tests {
+    use super::aggregate_status;
     use super::super::test_support::{bundle_for_metadata, package_metadata};
     use super::super::{ScriptletBundleSummary, ScriptletDecisionCountsSummary};
+    use crate::ccs::v2::validation::TargetProfileQuery;
     use crate::ccs::convert::effects::ScriptletClassificationReport;
     use crate::ccs::legacy_scriptlets::{
         DecisionCounts, EffectConfidence, EffectReplacement, EffectSource, ForeignReplayPolicy,
@@ -288,6 +311,95 @@ mod tests {
             deb_maintainer: None,
             arch_install: None,
             residual_replay: None,
+            extra: BTreeMap::new(),
+        }
+    }
+
+    fn replaced_sysctl_entry(key: &str) -> LegacyScriptletEntry {
+        let body = format!("sysctl -w {key}=1\n");
+        let mut extra = BTreeMap::new();
+        extra.insert("key".to_string(), toml::Value::String(key.to_string()));
+
+        LegacyScriptletEntry {
+            id: "scriptlet:0:post-install".to_string(),
+            native_slot: "%post".to_string(),
+            phase: LifecyclePath::PostInstall,
+            lifecycle_paths: vec!["post-install".to_string()],
+            interpreter: "/bin/sh".to_string(),
+            interpreter_args: Vec::new(),
+            body_sha256: crate::hash::sha256_prefixed(body.as_bytes()),
+            body,
+            body_encoding: None,
+            native_invocation: NativeInvocation::default(),
+            transaction_order: TransactionOrder {
+                position: "after-payload".to_string(),
+                ..TransactionOrder::default()
+            },
+            timeout_ms: 30_000,
+            sandbox: None,
+            capabilities: Vec::new(),
+            decision: ScriptletDecision::Replaced,
+            reason_code: "helper-complete-sysctl".to_string(),
+            human_reason: None,
+            evidence_digest: Some(crate::hash::sha256_prefixed(format!("sysctl:{key}").as_bytes())),
+            source_evidence_refs: Vec::new(),
+            effects: vec![ScriptletEffect {
+                kind: "sysctl-setting".to_string(),
+                source: EffectSource::StaticSignal,
+                confidence: EffectConfidence::Declared,
+                replacement: EffectReplacement::Complete,
+                adapter_id: Some("sysctl/v1".to_string()),
+                adapter_digest: None,
+                command: Some("sysctl".to_string()),
+                args: vec!["-w".to_string(), format!("{key}=1")],
+                path: None,
+                reason_code: Some("helper-complete-sysctl".to_string()),
+                extra,
+            }],
+            unknown_commands: Vec::new(),
+            blocked_classes: Vec::new(),
+            boot_security_intents: Vec::new(),
+            security_policy_intents: Vec::new(),
+            rpm_trigger: None,
+            deb_maintainer: None,
+            arch_install: None,
+            residual_replay: None,
+            extra: BTreeMap::new(),
+        }
+    }
+
+    fn stale_public_sysctl_bundle(key: &str) -> LegacyScriptletBundle {
+        LegacyScriptletBundle {
+            schema: LEGACY_SCRIPTLET_SCHEMA_V1.to_string(),
+            schema_revision: 1,
+            source_format: SourceFormat::Rpm,
+            source_family: "fedora-rhel".to_string(),
+            source_distro: Some("fedora".to_string()),
+            source_release: Some("44".to_string()),
+            source_arch: Some("x86_64".to_string()),
+            source_package: "sysctl-target".to_string(),
+            source_version: "1.0".to_string(),
+            source_checksum: Some(crate::hash::sha256_prefixed(b"sysctl-target-source")),
+            version_scheme: VersionScheme::Rpm,
+            conversion_tool: "stale-converter".to_string(),
+            conversion_tool_version: "0.0.0".to_string(),
+            conversion_policy: "stale-public-policy".to_string(),
+            adapter_registry_digest: None,
+            target_policy_digest: None,
+            evidence_digest: Some(crate::hash::sha256_prefixed(b"sysctl-target-evidence")),
+            target_compatibility: TargetCompatibility::ConaryPortable,
+            allowed_targets: Vec::new(),
+            foreign_replay_policy: ForeignReplayPolicy::Deny,
+            publication_policy: PublicationPolicy::PublicIfNoBlocked,
+            publication_status: PublicationStatus::Public,
+            scriptlet_fidelity: ScriptletFidelity::FullyReplaced,
+            decision_counts: DecisionCounts {
+                replaced: 1,
+                ..DecisionCounts::default()
+            },
+            unsupported_class_counts: BTreeMap::new(),
+            security_policy_intents: Vec::new(),
+            entries: vec![replaced_sysctl_entry(key)],
             extra: BTreeMap::new(),
         }
     }
@@ -414,6 +526,76 @@ mod tests {
         assert_eq!(
             summary.evidence_digest,
             Some(crate::hash::sha256_prefixed(b"reconstructed-evidence"))
+        );
+    }
+
+    #[test]
+    fn aggregate_status_applies_target_aware_sysctl_public_policy() {
+        let counts = DecisionCounts {
+            replaced: 1,
+            ..DecisionCounts::default()
+        };
+        let kernel_example_entry = replaced_sysctl_entry("kernel.example");
+        let ip_forward_entry = replaced_sysctl_entry("net.ipv4.ip_forward");
+        let fedora = crate::repository::supported_profiles::profile_by_public_id("fedora-44")
+            .expect("fedora profile");
+
+        let public = aggregate_status(
+            &[kernel_example_entry],
+            &counts,
+            Some(fedora as &dyn TargetProfileQuery),
+        );
+        assert_eq!(public.3.as_str(), "public");
+
+        let private = aggregate_status(
+            &[ip_forward_entry],
+            &counts,
+            Some(fedora as &dyn TargetProfileQuery),
+        );
+        assert_eq!(private.3.as_str(), "private-review");
+
+        let missing = aggregate_status(
+            &[replaced_sysctl_entry("kernel.example")],
+            &counts,
+            None,
+        );
+        assert_eq!(missing.3.as_str(), "private-review");
+    }
+
+    #[test]
+    fn scriptlet_bundle_summary_recomputes_sysctl_public_policy_without_target_profile_id() {
+        let bundle = stale_public_sysctl_bundle("kernel.example");
+        bundle.validate().expect("fixture bundle is valid");
+
+        let summary = ScriptletBundleSummary::from_bundle(
+            &bundle,
+            Some(crate::hash::sha256_prefixed(b"reconstructed-sysctl-evidence")),
+        );
+
+        assert_eq!(summary.publication_status, "private-review");
+        assert!(
+            summary
+                .review_reason_codes
+                .contains(&"public-policy-sysctl-target-profile-unsupported".to_string())
+        );
+    }
+
+    #[test]
+    fn scriptlet_bundle_summary_recomputes_sysctl_public_policy_for_unknown_target_profile_id() {
+        let mut bundle = stale_public_sysctl_bundle("kernel.example");
+        bundle.extra.insert(
+            "public_policy_target_profile_id".to_string(),
+            toml::Value::String("unknown-distro".to_string()),
+        );
+        bundle.validate().expect("fixture bundle is valid");
+
+        let summary =
+            ScriptletBundleSummary::from_bundle(&bundle, bundle.evidence_digest.clone());
+        assert_eq!(summary.publication_status, "private-review");
+        assert!(
+            summary
+                .review_reason_codes
+                .contains(&"public-policy-sysctl-target-profile-unsupported".to_string())
         );
     }
 
