@@ -426,6 +426,13 @@ mod tests {
         ));
         assert!(matches!(
             classify_summary(ScriptletSummaryForPublication {
+                summary: summary("local-only"),
+                valid: true,
+            }),
+            PublicationDecision::ReviewRequired(_)
+        ));
+        assert!(matches!(
+            classify_summary(ScriptletSummaryForPublication {
                 summary: summary("blocked"),
                 valid: true,
             }),
@@ -474,6 +481,8 @@ mod tests {
             .review_reason_codes
             .push("review-class-deb-trigger".to_string());
 
+        let local_only = golden_summary("local-only", "local-only", "local-only");
+
         let mut blocked = golden_summary("blocked", "blocked", "blocked");
         blocked.decision_counts = ScriptletDecisionCountsSummary {
             blocked: 1,
@@ -501,6 +510,12 @@ mod tests {
                 "goal8a-review-required",
                 "review-required-chunk",
                 review_required,
+                false,
+            ),
+            (
+                "goal8a-local-only",
+                "local-only-chunk",
+                local_only,
                 false,
             ),
             ("goal8a-blocked", "blocked-chunk", blocked, false),

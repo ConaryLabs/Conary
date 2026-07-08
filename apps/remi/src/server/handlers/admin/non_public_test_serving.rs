@@ -465,6 +465,16 @@ mod tests {
         }
     }
 
+    fn local_only_summary() -> ScriptletBundleSummary {
+        ScriptletBundleSummary {
+            publication_status: "local-only".to_string(),
+            scriptlet_fidelity: "local-only".to_string(),
+            target_compatibility: "local-only".to_string(),
+            review_artifact_path: Some("/tmp/private-review-secret.json".to_string()),
+            ..ScriptletBundleSummary::default()
+        }
+    }
+
     fn issue35_boot_security_summary() -> ScriptletBundleSummary {
         ScriptletBundleSummary {
             publication_status: "blocked".to_string(),
@@ -633,6 +643,65 @@ mod tests {
         assert!(body.contains("\"review_artifact_available\":true"));
         assert!(!body.contains("review_artifact_path"));
         assert!(!body.contains("private-review-secret"));
+    }
+
+    #[tokio::test]
+    async fn non_public_test_serving_manifest_and_download_allow_local_only_rows() {
+        let (app, db_path) = test_app_with_non_public_test_serving(true).await;
+        seed_non_public_test_row_with_summary(
+            &db_path,
+            "x86_64",
+            "pkg-local-only.ccs",
+            local_only_summary(),
+            true,
+        );
+
+        let manifest_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/v1/admin/packages/fedora/pkg/test-manifest?version=1.0&arch=x86_64")
+                    .header(header::AUTHORIZATION, "Bearer test-admin-token-12345")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(manifest_response.status(), StatusCode::OK);
+        let body = to_bytes(manifest_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body = String::from_utf8(body.to_vec()).unwrap();
+
+        assert!(body.contains("\"status\":\"non-public-test-serving\""));
+        assert!(body.contains("\"publication_status\":\"local-only\""));
+        assert!(body.contains("\"review_artifact_available\":true"));
+        assert!(!body.contains("review_artifact_path"));
+        assert!(!body.contains("private-review-secret"));
+
+        let download_response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/v1/admin/packages/fedora/pkg/test-download?version=1.0&arch=x86_64")
+                    .header(header::AUTHORIZATION, "Bearer test-admin-token-12345")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(download_response.status(), StatusCode::OK);
+        assert_eq!(
+            download_response.headers().get(header::CACHE_CONTROL).unwrap(),
+            "no-store"
+        );
+        let body = to_bytes(download_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(&body[..], b"non-public ccs");
     }
 
     #[tokio::test]
