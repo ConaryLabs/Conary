@@ -362,6 +362,7 @@ impl LegacyConverter {
             source_arch: metadata.architecture.as_deref(),
             source_checksum: Some(checksum),
             classification: &scriptlet_classification,
+            target_profile_id: None,
             conversion_tool: self.conversion_tool.as_str(),
             conversion_tool_version: env!("CARGO_PKG_VERSION"),
         })

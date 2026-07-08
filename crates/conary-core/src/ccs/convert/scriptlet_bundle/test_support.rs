@@ -76,6 +76,7 @@ pub(super) fn bundle_for_metadata(
         source_arch: Some("x86_64"),
         source_checksum: None,
         classification,
+        target_profile_id: None,
         conversion_tool: "remi",
         conversion_tool_version: "0.1.0",
     })

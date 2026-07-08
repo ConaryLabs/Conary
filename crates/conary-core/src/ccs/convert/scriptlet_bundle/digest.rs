@@ -22,6 +22,10 @@ pub(super) fn evidence_digest(
         "source_package": &bundle.source_package,
         "source_version": &bundle.source_version,
         "source_checksum": bundle.source_checksum.as_deref(),
+        "public_policy_target_profile_id": bundle
+            .extra
+            .get("public_policy_target_profile_id")
+            .and_then(toml::Value::as_str),
         "native_entries": sorted_native_digest_entries(input.source_metadata),
         "flat_entries": sorted_flat_digest_entries(input.source_metadata),
         "classification_counts": {
@@ -243,6 +247,7 @@ mod tests {
     use super::super::test_support::{
         bundle_for_metadata, complete_effect, known_report_with_effect, package_metadata,
     };
+    use super::super::{ScriptletBundleInput, build_legacy_scriptlet_bundle};
     use crate::ccs::convert::effects::{ScriptletClassification, ScriptletClassificationReport};
     use crate::ccs::legacy_scriptlets::EffectReplacement;
     use crate::packages::traits::{Scriptlet, ScriptletPhase};
@@ -313,5 +318,52 @@ mod tests {
         assert_ne!(base, replacement_digest);
         assert_ne!(base, unknown_digest);
         assert_ne!(base, blocked_digest);
+    }
+
+    #[test]
+    fn digest_changes_when_public_policy_target_profile_changes() {
+        let metadata = package_metadata("digest-profile", "1.0");
+        let files = Vec::new();
+        let classification = ScriptletClassificationReport::default();
+
+        let fedora_digest = build_legacy_scriptlet_bundle(ScriptletBundleInput {
+            source_metadata: &metadata,
+            final_metadata: &metadata,
+            source_files: &files,
+            final_files: &files,
+            source_format: "rpm",
+            source_distro: Some("fedora-44"),
+            source_release: Some("44"),
+            source_arch: Some("x86_64"),
+            source_checksum: None,
+            classification: &classification,
+            target_profile_id: Some("fedora-44"),
+            conversion_tool: "remi",
+            conversion_tool_version: "0.1.0",
+        })
+        .unwrap()
+        .bundle
+        .evidence_digest;
+
+        let ubuntu_digest = build_legacy_scriptlet_bundle(ScriptletBundleInput {
+            source_metadata: &metadata,
+            final_metadata: &metadata,
+            source_files: &files,
+            final_files: &files,
+            source_format: "rpm",
+            source_distro: Some("fedora-44"),
+            source_release: Some("44"),
+            source_arch: Some("x86_64"),
+            source_checksum: None,
+            classification: &classification,
+            target_profile_id: Some("ubuntu-26.04"),
+            conversion_tool: "remi",
+            conversion_tool_version: "0.1.0",
+        })
+        .unwrap()
+        .bundle
+        .evidence_digest;
+
+        assert_ne!(fedora_digest, ubuntu_digest);
     }
 }

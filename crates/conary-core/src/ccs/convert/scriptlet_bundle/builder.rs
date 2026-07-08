@@ -25,6 +25,10 @@ pub fn build_legacy_scriptlet_bundle(
         .source_checksum
         .filter(|checksum| valid_prefixed_sha256(checksum))
         .map(str::to_string);
+    let target_profile_id = input
+        .target_profile_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
 
     let entries = build_entries(&input)?;
     let security_policy_intents = entries
@@ -65,6 +69,13 @@ pub fn build_legacy_scriptlet_bundle(
         entries,
         extra: BTreeMap::new(),
     };
+
+    if let Some(profile_id) = target_profile_id {
+        bundle.extra.insert(
+            "public_policy_target_profile_id".to_string(),
+            toml::Value::String(profile_id.to_string()),
+        );
+    }
 
     let digest = evidence_digest(&bundle, &input)?;
     bundle.evidence_digest = Some(digest.clone());
@@ -139,6 +150,7 @@ mod tests {
                 "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             ),
             classification: &classification,
+            target_profile_id: None,
             conversion_tool: "remi",
             conversion_tool_version: "0.1.0",
         })
@@ -186,5 +198,69 @@ mod tests {
         build.bundle.entries[0].body.push_str("tampered\n");
 
         assert!(build.bundle.validate().is_err());
+    }
+
+    #[test]
+    fn bundle_extra_records_public_policy_target_profile_id() {
+        let metadata = package_metadata("profiled", "1.0");
+        let files = Vec::new();
+        let classification = ScriptletClassificationReport::default();
+
+        let build = super::build_legacy_scriptlet_bundle(ScriptletBundleInput {
+            source_metadata: &metadata,
+            final_metadata: &metadata,
+            source_files: &files,
+            final_files: &files,
+            source_format: "rpm",
+            source_distro: Some("fedora-44"),
+            source_release: Some("44"),
+            source_arch: Some("x86_64"),
+            source_checksum: None,
+            classification: &classification,
+            target_profile_id: Some("fedora-44"),
+            conversion_tool: "remi",
+            conversion_tool_version: "0.1.0",
+        })
+        .unwrap();
+
+        assert_eq!(
+            build
+                .bundle
+                .extra
+                .get("public_policy_target_profile_id")
+                .and_then(toml::Value::as_str),
+            Some("fedora-44")
+        );
+    }
+
+    #[test]
+    fn bundle_extra_omits_public_policy_target_profile_id_when_absent() {
+        let metadata = package_metadata("profiled", "1.0");
+        let files = Vec::new();
+        let classification = ScriptletClassificationReport::default();
+
+        let build = super::build_legacy_scriptlet_bundle(ScriptletBundleInput {
+            source_metadata: &metadata,
+            final_metadata: &metadata,
+            source_files: &files,
+            final_files: &files,
+            source_format: "rpm",
+            source_distro: Some("fedora-44"),
+            source_release: Some("44"),
+            source_arch: Some("x86_64"),
+            source_checksum: None,
+            classification: &classification,
+            target_profile_id: None,
+            conversion_tool: "remi",
+            conversion_tool_version: "0.1.0",
+        })
+        .unwrap();
+
+        assert!(
+            !build
+                .bundle
+                .extra
+                .contains_key("public_policy_target_profile_id")
+        );
     }
 }
