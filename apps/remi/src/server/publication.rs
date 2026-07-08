@@ -512,12 +512,7 @@ mod tests {
                 review_required,
                 false,
             ),
-            (
-                "goal8a-local-only",
-                "local-only-chunk",
-                local_only,
-                false,
-            ),
+            ("goal8a-local-only", "local-only-chunk", local_only, false),
             ("goal8a-blocked", "blocked-chunk", blocked, false),
         ];
 

@@ -695,7 +695,10 @@ mod tests {
 
         assert_eq!(download_response.status(), StatusCode::OK);
         assert_eq!(
-            download_response.headers().get(header::CACHE_CONTROL).unwrap(),
+            download_response
+                .headers()
+                .get(header::CACHE_CONTROL)
+                .unwrap(),
             "no-store"
         );
         let body = to_bytes(download_response.into_body(), usize::MAX)
