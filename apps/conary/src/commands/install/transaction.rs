@@ -322,16 +322,25 @@ fn preflight_selected_generation_file_capability_targets(
     }
 
     for capability in file_capabilities {
-        let capability_selected = extraction
+        let Some(selected_file) = extraction
             .extracted_files
             .iter()
-            .any(|file| file.path == capability.path);
-        if !capability_selected {
+            .find(|file| file.path == capability.path)
+        else {
             continue;
-        }
+        };
         if conary_core::generation::metadata::is_excluded(&capability.path) {
             anyhow::bail!(
                 "CCS file_capabilities target {} is excluded from generation; generation-aware installs require file capability authority to be represented in the generated artifact",
+                capability.path
+            );
+        }
+        if !super::file_capabilities::is_regular_file_capability_payload(
+            selected_file.mode,
+            selected_file.symlink_target.as_deref(),
+        ) {
+            anyhow::bail!(
+                "CCS file_capabilities target {} is not a regular installed file; generation-aware installs require file capability authority to be represented on regular generated payload files",
                 capability.path
             );
         }
@@ -991,6 +1000,103 @@ mod tests {
         assert_eq!(
             publication_count, 0,
             "excluded capability target must not leave deferred generation publication debt"
+        );
+    }
+
+    #[test]
+    fn generation_file_capabilities_reject_selected_symlink_before_db_commit() {
+        use conary_core::db::models::{FileEntry, InstalledFileCapability};
+        use conary_core::packages::traits::ExtractedFile;
+        use std::collections::HashMap;
+
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("root");
+        let db_path = temp.path().join("conary.db");
+        std::fs::create_dir_all(&root).unwrap();
+        conary_core::db::init(&db_path).unwrap();
+        let mut conn = conary_core::db::open(&db_path).unwrap();
+        let extraction = ExtractionResult {
+            extracted_files: vec![ExtractedFile {
+                path: "/usr/bin/server-link".to_string(),
+                content: Vec::new(),
+                size: 6,
+                mode: 0o120777,
+                sha256: None,
+                symlink_target: Some("server".to_string()),
+            }],
+            classified: HashMap::from([(
+                conary_core::components::ComponentType::Runtime,
+                vec!["/usr/bin/server-link".to_string()],
+            )]),
+            component_names_by_path: None,
+            installed_component_names: None,
+            ccs_pre_remove_script: None,
+            installed_component_types: vec![conary_core::components::ComponentType::Runtime],
+            skipped_components: Vec::new(),
+            language_provides: Vec::new(),
+        };
+        let file_capabilities = vec![conary_core::ccs::manifest::FileCapability {
+            path: "/usr/bin/server-link".to_string(),
+            capabilities: vec!["cap_net_bind_service".to_string()],
+            permitted: true,
+            effective: true,
+            inheritable: false,
+        }];
+        let db_path_string = db_path.to_string_lossy().into_owned();
+        let root_string = root.to_string_lossy().into_owned();
+        let ctx = TransactionContext {
+            db_path: &db_path_string,
+            root: &root_string,
+            semantics: InstallSemantics::legacy(PackageFormatType::Rpm),
+            selection_reason: None,
+            old_trove_to_upgrade: None,
+            ccs_manifest_provides: None,
+            ccs_capabilities: None,
+            ccs_file_capabilities: Some(&file_capabilities),
+            execution_path: PackageExecutionPath::GenerationAware,
+            defer_generation: false,
+            repository_provenance: None,
+            legacy_replay: LegacyReplayOptions::default(),
+            accepted_legacy_bundle: None,
+        };
+
+        let error = match execute_install_transaction(
+            &mut conn,
+            &fake_package(),
+            &extraction,
+            &ctx,
+            &InstallProgress::single("Installing"),
+        ) {
+            Ok(_) => {
+                panic!("symlink generation file capability target must fail before DB commit")
+            }
+            Err(error) => error,
+        };
+
+        assert!(
+            error
+                .to_string()
+                .contains("is not a regular installed file"),
+            "{error}"
+        );
+        assert!(
+            FileEntry::find_by_path(&conn, "/usr/bin/server-link")
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            InstalledFileCapability::find_all_ordered(&conn)
+                .unwrap()
+                .is_empty()
+        );
+        let publication_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM generation_publications", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(
+            publication_count, 0,
+            "symlink capability target must not leave deferred generation publication debt"
         );
     }
 }
