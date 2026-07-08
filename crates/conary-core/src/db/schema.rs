@@ -11,7 +11,7 @@ use rusqlite::Connection;
 use tracing::info;
 
 /// Current schema version
-pub const SCHEMA_VERSION: i32 = 76;
+pub const SCHEMA_VERSION: i32 = 77;
 
 /// Initialize the schema version tracking table
 fn init_schema_version(conn: &Connection) -> Result<()> {
@@ -200,6 +200,7 @@ fn apply_migration(conn: &Connection, version: i32) -> Result<()> {
         74 => migrations::migrate_v74(conn),
         75 => migrations::migrate_v75(conn),
         76 => migrations::migrate_v76(conn),
+        77 => migrations::migrate_v77(conn),
         _ => Err(crate::error::Error::InitError(format!(
             "Unknown migration version: {}",
             version
@@ -564,7 +565,7 @@ mod tests {
         migrate(&conn).unwrap();
 
         assert_eq!(get_schema_version(&conn).unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 76);
+        assert_eq!(SCHEMA_VERSION, 77);
 
         let columns: Vec<(String, String, bool, Option<String>, i32)> = conn
             .prepare("PRAGMA table_info(try_sessions)")
@@ -862,5 +863,87 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn migrate_v77_creates_installed_file_capabilities_table() {
+        let (_temp, conn) = create_test_db_at_version(76);
+
+        apply_migration_version(&conn, 77).unwrap();
+
+        assert_eq!(get_schema_version(&conn).unwrap(), 77);
+
+        let columns: Vec<(String, String, bool, Option<String>)> = conn
+            .prepare("PRAGMA table_info(installed_file_capabilities)")
+            .unwrap()
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i32>(3)? != 0,
+                    row.get::<_, Option<String>>(4)?,
+                ))
+            })
+            .unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap();
+        let column_names: Vec<&str> = columns
+            .iter()
+            .map(|(name, _, _, _)| name.as_str())
+            .collect();
+
+        for required in [
+            "id",
+            "trove_id",
+            "path",
+            "capabilities_json",
+            "permitted",
+            "effective",
+            "inheritable",
+            "created_at",
+        ] {
+            assert!(
+                column_names.contains(&required),
+                "missing installed file capability column {required}"
+            );
+        }
+
+        assert!(
+            columns.iter().any(|(name, ty, required, _)| {
+                name == "trove_id" && ty == "INTEGER" && *required
+            })
+        );
+        assert!(columns.iter().any(|(name, ty, required, _)| {
+            name == "capabilities_json" && ty == "TEXT" && *required
+        }));
+        assert!(columns.iter().any(|(name, _, required, default)| {
+            name == "permitted" && *required && default.as_deref() == Some("1")
+        }));
+        assert!(columns.iter().any(|(name, _, required, default)| {
+            name == "effective" && *required && default.as_deref() == Some("1")
+        }));
+        assert!(columns.iter().any(|(name, _, required, default)| {
+            name == "inheritable" && *required && default.as_deref() == Some("0")
+        }));
+
+        let create_sql: String = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'installed_file_capabilities'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(create_sql.contains("UNIQUE(trove_id, path)"));
+        assert!(create_sql.contains("REFERENCES troves(id) ON DELETE CASCADE"));
+
+        let indexes: Vec<String> = conn
+            .prepare("PRAGMA index_list(installed_file_capabilities)")
+            .unwrap()
+            .query_map([], |row| row.get(1))
+            .unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap();
+        assert!(indexes.contains(&"idx_installed_file_capabilities_trove".to_string()));
+        assert!(indexes.contains(&"idx_installed_file_capabilities_path".to_string()));
     }
 }
