@@ -1182,15 +1182,15 @@ post_upgrade() {
             .iter()
             .find(|entry| entry.native_slot == "post_upgrade")
             .expect("post_upgrade entry");
-        assert_eq!(post_upgrade.invocation.args[0].name, "old-version");
+        assert_eq!(post_upgrade.invocation.args[0].name, "new-version");
         assert_eq!(
             post_upgrade.invocation.args[0].value,
-            NativeArgumentValue::OldVersion
+            NativeArgumentValue::NewVersion
         );
-        assert_eq!(post_upgrade.invocation.args[1].name, "new-version");
+        assert_eq!(post_upgrade.invocation.args[1].name, "old-version");
         assert_eq!(
             post_upgrade.invocation.args[1].value,
-            NativeArgumentValue::NewVersion
+            NativeArgumentValue::OldVersion
         );
     }
 
