@@ -125,6 +125,7 @@ pub struct LegacyConverter {
     analyzer: ScriptletAnalyzer,
     source_distro: Option<String>,
     source_release: Option<String>,
+    target_profile_id: Option<String>,
     conversion_tool: String,
 }
 
@@ -136,6 +137,7 @@ impl LegacyConverter {
             analyzer: ScriptletAnalyzer::new(),
             source_distro: None,
             source_release: None,
+            target_profile_id: None,
             conversion_tool: "conary".to_string(),
         }
     }
@@ -154,6 +156,12 @@ impl LegacyConverter {
     /// Attach source release context for passive scriptlet bundle metadata.
     pub fn with_source_release(mut self, release: impl Into<String>) -> Self {
         self.source_release = Some(release.into());
+        self
+    }
+
+    /// Attach target profile context for passive scriptlet bundle policy review.
+    pub fn with_target_profile_id(mut self, profile_id: impl Into<String>) -> Self {
+        self.target_profile_id = Some(profile_id.into());
         self
     }
 
@@ -362,7 +370,7 @@ impl LegacyConverter {
             source_arch: metadata.architecture.as_deref(),
             source_checksum: Some(checksum),
             classification: &scriptlet_classification,
-            target_profile_id: None,
+            target_profile_id: self.target_profile_id.as_deref(),
             conversion_tool: self.conversion_tool.as_str(),
             conversion_tool_version: env!("CARGO_PKG_VERSION"),
         })
@@ -1907,22 +1915,13 @@ update-mime-database /usr/share/mime
     #[test]
     fn conversion_integration_projects_safe_sysctl_write_into_manifest_hook() {
         let temp_dir = tempfile::tempdir().unwrap();
-        let mut metadata = make_test_metadata();
-        metadata.scriptlets = vec![Scriptlet {
-            phase: ScriptletPhase::PostInstall,
-            interpreter: "/bin/sh".to_string(),
-            content: "sysctl -w net.ipv4.ip_forward=1\n".to_string(),
-            flags: None,
-        }];
-        let converter = passive_test_converter(temp_dir.path());
+        let converter = passive_test_converter(temp_dir.path()).with_target_profile_id("fedora-44");
 
-        let result = converter
-            .convert(&metadata, &make_test_files(), "rpm", "sha256:test")
-            .expect("conversion succeeds");
+        let result = convert_scriptlet_body(&converter, "sysctl -w kernel.example=1\n");
 
         let sysctl_hooks = &result.build_result.manifest.hooks.sysctl;
         assert_eq!(sysctl_hooks.len(), 1);
-        assert_eq!(sysctl_hooks[0].key, "net.ipv4.ip_forward");
+        assert_eq!(sysctl_hooks[0].key, "kernel.example");
         assert_eq!(sysctl_hooks[0].value, "1");
         assert!(!sysctl_hooks[0].only_if_lower);
 
@@ -1940,7 +1939,57 @@ update-mime-database /usr/share/mime
             bundle.entries[0].effects[0].adapter_id.as_deref(),
             Some("sysctl/v1")
         );
+        assert_eq!(bundle.publication_status.as_str(), "public");
         assert_eq!(result.scriptlet_metadata.publication_status, "public");
+    }
+
+    fn convert_scriptlet_body(converter: &LegacyConverter, content: &str) -> ConversionResult {
+        let mut metadata = make_test_metadata();
+        metadata.scriptlets = vec![Scriptlet {
+            phase: ScriptletPhase::PostInstall,
+            interpreter: "/bin/sh".to_string(),
+            content: content.to_string(),
+            flags: None,
+        }];
+        converter
+            .convert(&metadata, &make_test_files(), "rpm", "sha256:test")
+            .expect("conversion succeeds")
+    }
+
+    #[test]
+    fn conversion_public_ready_for_profile_allowed_sysctl_key() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let converter = passive_test_converter(temp_dir.path()).with_target_profile_id("fedora-44");
+
+        let result = convert_scriptlet_body(&converter, "sysctl -w kernel.example=1\n");
+
+        let sysctl_hooks = &result.build_result.manifest.hooks.sysctl;
+        assert_eq!(sysctl_hooks.len(), 1);
+        assert_eq!(sysctl_hooks[0].key, "kernel.example");
+        let bundle = result.legacy_scriptlets.as_ref().expect("scriptlet bundle");
+        assert_eq!(bundle.publication_status.as_str(), "public");
+        assert_eq!(result.scriptlet_metadata.publication_status, "public");
+    }
+
+    #[test]
+    fn conversion_keeps_unsupported_sysctl_projected_but_private_review() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let converter = passive_test_converter(temp_dir.path()).with_target_profile_id("fedora-44");
+
+        let result = convert_scriptlet_body(&converter, "sysctl -w net.ipv4.ip_forward=1\n");
+
+        let sysctl_hooks = &result.build_result.manifest.hooks.sysctl;
+        assert_eq!(sysctl_hooks.len(), 1);
+        assert_eq!(sysctl_hooks[0].key, "net.ipv4.ip_forward");
+        let bundle = result.legacy_scriptlets.as_ref().expect("scriptlet bundle");
+        assert_eq!(bundle.decision_counts.replaced, 1);
+        assert_eq!(bundle.publication_status.as_str(), "private-review");
+        assert!(
+            result
+                .scriptlet_metadata
+                .review_reason_codes
+                .contains(&"public-policy-sysctl-target-profile-unsupported".to_string())
+        );
     }
 
     #[test]

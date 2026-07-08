@@ -28,6 +28,24 @@ struct ParsedConversion {
 }
 
 impl ConversionService {
+    fn public_target_profile_for_route(
+        distro: &str,
+    ) -> Result<&'static conary_core::repository::supported_profiles::SupportedProfile> {
+        let route = conary_core::repository::supported_profiles::route_by_slug(distro)
+            .ok_or_else(|| anyhow!("unsupported release distro {distro}"))?;
+        let profile_id = route
+            .public_profile_ids()
+            .first()
+            .ok_or_else(|| anyhow!("release distro {distro} has no public target profile"))?;
+        conary_core::repository::supported_profiles::profile_by_public_id(profile_id).ok_or_else(
+            || {
+                anyhow!(
+                    "release distro {distro} maps to missing public target profile {profile_id}"
+                )
+            },
+        )
+    }
+
     /// Convert a package from a repository.
     pub async fn convert_package_async(
         &self,
@@ -247,8 +265,10 @@ impl ConversionService {
             ..Default::default()
         };
 
+        let target_profile = Self::public_target_profile_for_route(distro)?;
         let converter = LegacyConverter::new(options)
             .with_source_distro(distro)
+            .with_target_profile_id(target_profile.id())
             .with_conversion_tool("remi");
         if metadata.scriptlets.is_empty() {
             skipped_phases.push(ConversionSkippedPhase {
@@ -295,6 +315,7 @@ impl ConversionService {
 #[cfg(test)]
 mod tests {
     use super::super::test_support::production_source_without_comments;
+    use super::ConversionService;
 
     #[test]
     fn remi_server_conversion_paths_do_not_block_on_async_work() {
@@ -319,5 +340,12 @@ mod tests {
                 "{relative_path} must not call Handle::block_on in production Remi server paths"
             );
         }
+    }
+
+    #[test]
+    fn conversion_route_resolves_public_target_profile() {
+        let profile = ConversionService::public_target_profile_for_route("fedora")
+            .expect("fedora route profile");
+        assert_eq!(profile.id(), "fedora-44");
     }
 }
