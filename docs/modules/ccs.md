@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-07-03
-revision: 22
-summary: Document CCS AppArmor profile conversion authority
+last_updated: 2026-07-08
+revision: 23
+summary: Document CCS file-capability public-policy authority split
 ---
 
 # CCS Module (conary-core/src/ccs/)

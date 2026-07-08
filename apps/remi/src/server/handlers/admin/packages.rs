@@ -1074,6 +1074,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn admin_upload_recomputes_stale_public_high_risk_file_capability_bundle() {
+        let (app, db_path) = test_app().await;
+        let archive = stale_public_high_risk_file_capability_ccs_fixture();
+
+        let response = tower::ServiceExt::oneshot(
+            app,
+            Request::builder()
+                .method(Method::POST)
+                .uri("/v1/admin/packages/fedora")
+                .header("Authorization", "Bearer test-admin-token-12345")
+                .body(Body::from(archive))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        assert_status(response, StatusCode::CREATED).await;
+
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let converted = ConvertedPackage::find_by_package_identity(
+            &conn,
+            "fedora",
+            "stale-public-file-capability-fixture",
+            Some("1.0"),
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(converted.scriptlet_fidelity, "fully-replaced");
+        assert_eq!(converted.target_compatibility, "conary-portable");
+        assert_eq!(converted.publication_status, "private-review");
+        assert!(converted.review_artifact_path.is_some());
+
+        let summary = converted.scriptlet_summary();
+        assert_eq!(
+            summary.review_reason_codes,
+            vec!["public-policy-file-capability-private-review".to_string()]
+        );
+
+        let artifact_path = std::path::PathBuf::from(converted.review_artifact_path.unwrap());
+        let artifact: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(artifact_path).unwrap()).unwrap();
+        assert_eq!(
+            artifact["publication"]["publication_status"].as_str(),
+            Some("private-review")
+        );
+        assert_eq!(
+            artifact["publication"]["review_reason_codes"]
+                .as_array()
+                .and_then(|codes| codes.first())
+                .and_then(serde_json::Value::as_str),
+            Some("public-policy-file-capability-private-review")
+        );
+    }
+
+    #[tokio::test]
     async fn admin_review_artifact_lookup_is_arch_specific_and_reports_stale_rows() {
         let (app, db_path) = test_app().await;
         seed_review_artifact_row(
@@ -1156,6 +1212,124 @@ mod tests {
 
         std::fs::write(temp.path().join("payload.txt"), b"fixture").unwrap();
         let path = temp.path().join("blocked.ccs");
+        let result = CcsBuilder::new(manifest, temp.path())
+            .build()
+            .expect("fixture build");
+        write_ccs_package(&result, &path).expect("fixture CCS package");
+        std::fs::read(path).expect("fixture bytes")
+    }
+
+    fn stale_public_high_risk_file_capability_ccs_fixture() -> Vec<u8> {
+        use conary_core::ccs::builder::{CcsBuilder, write_ccs_package};
+        use conary_core::ccs::legacy_scriptlets::{
+            DecisionCounts, EffectConfidence, EffectReplacement, EffectSource, ForeignReplayPolicy,
+            LEGACY_SCRIPTLET_SCHEMA_V1, LegacyScriptletBundle, LegacyScriptletEntry, LifecyclePath,
+            NativeInvocation, PublicationPolicy, PublicationStatus, ScriptletDecision,
+            ScriptletEffect, ScriptletFidelity, SourceFormat, TargetCompatibility,
+            TransactionOrder, VersionScheme,
+        };
+        use std::collections::BTreeMap;
+
+        let temp = tempfile::tempdir().unwrap();
+        let capability = "cap_sys_admin";
+        let body = format!("setcap {capability}=+ep /usr/bin/test\n");
+        let mut effect_extra = BTreeMap::new();
+        effect_extra.insert(
+            "capabilities".to_string(),
+            toml::Value::Array(vec![toml::Value::String(capability.to_string())]),
+        );
+
+        let mut manifest = conary_core::ccs::manifest::CcsManifest::new_minimal(
+            "stale-public-file-capability-fixture",
+            "1.0",
+        );
+        manifest.legacy_scriptlets = Some(LegacyScriptletBundle {
+            schema: LEGACY_SCRIPTLET_SCHEMA_V1.to_string(),
+            schema_revision: 1,
+            source_format: SourceFormat::Rpm,
+            source_family: "fedora-rhel".to_string(),
+            source_distro: Some("fedora".to_string()),
+            source_release: Some("44".to_string()),
+            source_arch: Some("x86_64".to_string()),
+            source_package: "stale-public-file-capability-fixture".to_string(),
+            source_version: "1.0".to_string(),
+            source_checksum: Some(conary_core::hash::sha256_prefixed(
+                b"stale-public-file-capability-source",
+            )),
+            version_scheme: VersionScheme::Rpm,
+            conversion_tool: "stale-converter".to_string(),
+            conversion_tool_version: "0.0.0".to_string(),
+            conversion_policy: "stale-public-policy".to_string(),
+            adapter_registry_digest: None,
+            target_policy_digest: None,
+            evidence_digest: Some(conary_core::hash::sha256_prefixed(
+                b"stale-public-file-capability-evidence",
+            )),
+            target_compatibility: TargetCompatibility::ConaryPortable,
+            allowed_targets: Vec::new(),
+            foreign_replay_policy: ForeignReplayPolicy::Deny,
+            publication_policy: PublicationPolicy::PublicIfNoBlocked,
+            publication_status: PublicationStatus::Public,
+            scriptlet_fidelity: ScriptletFidelity::FullyReplaced,
+            decision_counts: DecisionCounts {
+                replaced: 1,
+                ..DecisionCounts::default()
+            },
+            unsupported_class_counts: BTreeMap::new(),
+            security_policy_intents: Vec::new(),
+            entries: vec![LegacyScriptletEntry {
+                id: "scriptlet:0:post-install".to_string(),
+                native_slot: "%post".to_string(),
+                phase: LifecyclePath::PostInstall,
+                lifecycle_paths: vec!["post-install".to_string()],
+                interpreter: "/bin/sh".to_string(),
+                interpreter_args: Vec::new(),
+                body_sha256: conary_core::hash::sha256_prefixed(body.as_bytes()),
+                body,
+                body_encoding: None,
+                native_invocation: NativeInvocation::default(),
+                transaction_order: TransactionOrder {
+                    position: "after-payload".to_string(),
+                    ..TransactionOrder::default()
+                },
+                timeout_ms: 30_000,
+                sandbox: None,
+                capabilities: Vec::new(),
+                decision: ScriptletDecision::Replaced,
+                reason_code: "helper-complete-file-capability".to_string(),
+                human_reason: None,
+                evidence_digest: Some(conary_core::hash::sha256_prefixed(
+                    b"stale-public-file-capability-entry",
+                )),
+                source_evidence_refs: Vec::new(),
+                effects: vec![ScriptletEffect {
+                    kind: "file-capability".to_string(),
+                    source: EffectSource::StaticSignal,
+                    confidence: EffectConfidence::Declared,
+                    replacement: EffectReplacement::Complete,
+                    adapter_id: Some("file-capability/v1".to_string()),
+                    adapter_digest: None,
+                    command: Some("setcap".to_string()),
+                    args: vec![format!("{capability}=+ep"), "/usr/bin/test".to_string()],
+                    path: Some("/usr/bin/test".to_string()),
+                    reason_code: Some("helper-complete-file-capability".to_string()),
+                    extra: effect_extra,
+                }],
+                unknown_commands: Vec::new(),
+                blocked_classes: Vec::new(),
+                boot_security_intents: Vec::new(),
+                security_policy_intents: Vec::new(),
+                rpm_trigger: None,
+                deb_maintainer: None,
+                arch_install: None,
+                residual_replay: None,
+                extra: BTreeMap::new(),
+            }],
+            extra: BTreeMap::new(),
+        });
+
+        std::fs::write(temp.path().join("payload.txt"), b"fixture").unwrap();
+        let path = temp.path().join("stale-public-file-capability.ccs");
         let result = CcsBuilder::new(manifest, temp.path())
             .build()
             .expect("fixture build");

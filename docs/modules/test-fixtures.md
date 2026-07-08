@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-07-03
-revision: 7
-summary: Map AppArmor policy golden fixture proof
+last_updated: 2026-07-08
+revision: 8
+summary: Map file-capability public and private-review fixture proof
 ---
 
 # Test Fixtures And Proof Maps

@@ -44,18 +44,30 @@ pub(super) fn summary_from_bundle(
         .flat_map(|entry| entry.boot_security_intents.iter().cloned())
         .collect::<Vec<_>>();
     let security_policy_intents = merged_security_policy_intents(bundle);
+    let recomputed_counts = decision_counts(&bundle.entries);
+    let (scriptlet_fidelity, target_compatibility, _publication_policy, publication_status) =
+        if bundle.entries.is_empty() {
+            (
+                bundle.scriptlet_fidelity.clone(),
+                bundle.target_compatibility.clone(),
+                bundle.publication_policy.clone(),
+                bundle.publication_status.clone(),
+            )
+        } else {
+            aggregate_status(&bundle.entries, &recomputed_counts)
+        };
 
     ScriptletBundleSummary {
-        scriptlet_fidelity: bundle.scriptlet_fidelity.as_str().to_string(),
-        target_compatibility: bundle.target_compatibility.as_str().to_string(),
-        publication_status: bundle.publication_status.as_str().to_string(),
+        scriptlet_fidelity: scriptlet_fidelity.as_str().to_string(),
+        target_compatibility: target_compatibility.as_str().to_string(),
+        publication_status: publication_status.as_str().to_string(),
         evidence_digest,
         curation_evidence_digest: None,
         decision_counts: ScriptletDecisionCountsSummary {
-            replaced: bundle.decision_counts.replaced,
-            legacy: bundle.decision_counts.legacy,
-            blocked: bundle.decision_counts.blocked,
-            review: bundle.decision_counts.review,
+            replaced: recomputed_counts.replaced,
+            legacy: recomputed_counts.legacy,
+            blocked: recomputed_counts.blocked,
+            review: recomputed_counts.review,
         },
         blocked_reason_codes,
         review_reason_codes,
@@ -181,6 +193,12 @@ mod tests {
     use super::super::test_support::{bundle_for_metadata, package_metadata};
     use super::super::{ScriptletBundleSummary, ScriptletDecisionCountsSummary};
     use crate::ccs::convert::effects::ScriptletClassificationReport;
+    use crate::ccs::legacy_scriptlets::{
+        DecisionCounts, EffectConfidence, EffectReplacement, EffectSource, ForeignReplayPolicy,
+        LEGACY_SCRIPTLET_SCHEMA_V1, LegacyScriptletBundle, LegacyScriptletEntry, LifecyclePath,
+        NativeInvocation, PublicationPolicy, PublicationStatus, ScriptletDecision, ScriptletEffect,
+        ScriptletFidelity, SourceFormat, TargetCompatibility, TransactionOrder, VersionScheme,
+    };
     use crate::ccs::security_policy::{
         SECURITY_POLICY_INTENT_SCHEMA_V1, SecurityPolicyFallback, SecurityPolicyIntent,
         SecurityPolicyPayloadEvidence, SecurityPolicyProvider, SecurityPolicyReconciliation,
@@ -207,6 +225,105 @@ mod tests {
                 reason: None,
                 target_provider: None,
             },
+            extra: BTreeMap::new(),
+        }
+    }
+
+    fn file_capability_effect(capability: &str) -> ScriptletEffect {
+        let mut extra = BTreeMap::new();
+        extra.insert(
+            "capabilities".to_string(),
+            toml::Value::Array(vec![toml::Value::String(capability.to_string())]),
+        );
+
+        ScriptletEffect {
+            kind: "file-capability".to_string(),
+            source: EffectSource::StaticSignal,
+            confidence: EffectConfidence::Declared,
+            replacement: EffectReplacement::Complete,
+            adapter_id: Some("file-capability/v1".to_string()),
+            adapter_digest: None,
+            command: Some("setcap".to_string()),
+            args: vec![format!("{capability}=+ep"), "/usr/bin/test".to_string()],
+            path: Some("/usr/bin/test".to_string()),
+            reason_code: Some("helper-complete-file-capability".to_string()),
+            extra,
+        }
+    }
+
+    fn replaced_file_capability_entry(capability: &str) -> LegacyScriptletEntry {
+        let body = format!("setcap {capability}=+ep /usr/bin/test\n");
+
+        LegacyScriptletEntry {
+            id: "scriptlet:0:post-install".to_string(),
+            native_slot: "%post".to_string(),
+            phase: LifecyclePath::PostInstall,
+            lifecycle_paths: vec!["post-install".to_string()],
+            interpreter: "/bin/sh".to_string(),
+            interpreter_args: Vec::new(),
+            body_sha256: crate::hash::sha256_prefixed(body.as_bytes()),
+            body,
+            body_encoding: None,
+            native_invocation: NativeInvocation::default(),
+            transaction_order: TransactionOrder {
+                position: "after-payload".to_string(),
+                ..TransactionOrder::default()
+            },
+            timeout_ms: 30_000,
+            sandbox: None,
+            capabilities: Vec::new(),
+            decision: ScriptletDecision::Replaced,
+            reason_code: "helper-complete-file-capability".to_string(),
+            human_reason: None,
+            evidence_digest: Some(crate::hash::sha256_prefixed(
+                format!("file-capability:{capability}").as_bytes(),
+            )),
+            source_evidence_refs: Vec::new(),
+            effects: vec![file_capability_effect(capability)],
+            unknown_commands: Vec::new(),
+            blocked_classes: Vec::new(),
+            boot_security_intents: Vec::new(),
+            security_policy_intents: Vec::new(),
+            rpm_trigger: None,
+            deb_maintainer: None,
+            arch_install: None,
+            residual_replay: None,
+            extra: BTreeMap::new(),
+        }
+    }
+
+    fn stale_public_file_capability_bundle(capability: &str) -> LegacyScriptletBundle {
+        LegacyScriptletBundle {
+            schema: LEGACY_SCRIPTLET_SCHEMA_V1.to_string(),
+            schema_revision: 1,
+            source_format: SourceFormat::Rpm,
+            source_family: "fedora-rhel".to_string(),
+            source_distro: Some("fedora".to_string()),
+            source_release: Some("44".to_string()),
+            source_arch: Some("x86_64".to_string()),
+            source_package: "high-risk-file-capability".to_string(),
+            source_version: "1.0".to_string(),
+            source_checksum: Some(crate::hash::sha256_prefixed(b"high-risk-source")),
+            version_scheme: VersionScheme::Rpm,
+            conversion_tool: "stale-converter".to_string(),
+            conversion_tool_version: "0.0.0".to_string(),
+            conversion_policy: "stale-public-policy".to_string(),
+            adapter_registry_digest: None,
+            target_policy_digest: None,
+            evidence_digest: Some(crate::hash::sha256_prefixed(b"high-risk-evidence")),
+            target_compatibility: TargetCompatibility::ConaryPortable,
+            allowed_targets: Vec::new(),
+            foreign_replay_policy: ForeignReplayPolicy::Deny,
+            publication_policy: PublicationPolicy::PublicIfNoBlocked,
+            publication_status: PublicationStatus::Public,
+            scriptlet_fidelity: ScriptletFidelity::FullyReplaced,
+            decision_counts: DecisionCounts {
+                replaced: 1,
+                ..DecisionCounts::default()
+            },
+            unsupported_class_counts: BTreeMap::new(),
+            security_policy_intents: Vec::new(),
+            entries: vec![replaced_file_capability_entry(capability)],
             extra: BTreeMap::new(),
         }
     }
@@ -273,6 +390,31 @@ mod tests {
             Some(crate::hash::sha256_prefixed(b"x"))
         );
         assert_eq!(summary.review_artifact_path, None);
+    }
+
+    #[test]
+    fn scriptlet_bundle_summary_from_bundle_recomputes_high_risk_file_capability_public_policy() {
+        let bundle = stale_public_file_capability_bundle("cap_sys_admin");
+        bundle.validate().expect("fixture bundle is valid");
+
+        let summary = ScriptletBundleSummary::from_bundle(
+            &bundle,
+            Some(crate::hash::sha256_prefixed(b"reconstructed-evidence")),
+        );
+
+        assert_eq!(summary.scriptlet_fidelity, "fully-replaced");
+        assert_eq!(summary.target_compatibility, "conary-portable");
+        assert_eq!(summary.publication_status, "private-review");
+        assert_eq!(summary.decision_counts.replaced, 1);
+        assert_eq!(summary.decision_counts.review, 0);
+        assert_eq!(
+            summary.review_reason_codes,
+            vec!["public-policy-file-capability-private-review".to_string()]
+        );
+        assert_eq!(
+            summary.evidence_digest,
+            Some(crate::hash::sha256_prefixed(b"reconstructed-evidence"))
+        );
     }
 
     #[test]

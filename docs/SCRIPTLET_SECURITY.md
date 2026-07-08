@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-07-08
-revision: 10
-summary: Document narrow AppArmor profile conversion authority
+revision: 11
+summary: Document file-capability public-policy review boundary
 ---
 
 # Scriptlet Security Model

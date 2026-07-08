@@ -429,7 +429,7 @@ impl ConvertedPackage {
     }
 
     /// Classify whether a CAS chunk is reachable from current public-ready
-    /// conversions, current non-public conversions only, or no conversions.
+    /// conversions, stale/non-public conversions only, or no conversions.
     pub fn chunk_publication_state(conn: &Connection, hash: &str) -> Result<ChunkPublicationState> {
         let bare_hash = hash.strip_prefix("sha256:").unwrap_or(hash);
         let prefixed_hash = format!("sha256:{bare_hash}");
@@ -437,18 +437,17 @@ impl ConvertedPackage {
         let prefixed_pattern = format!("%\"{prefixed_hash}\"%");
 
         let mut stmt = conn.prepare(
-            "SELECT chunk_hashes_json,
+            "SELECT chunk_hashes_json, conversion_version,
                     scriptlet_fidelity, target_compatibility, publication_status,
                     evidence_digest, curation_evidence_digest, blocked_reason_codes_json,
                     scriptlet_summary_json, review_artifact_path
              FROM converted_packages
-             WHERE conversion_version >= ?1
-               AND chunk_hashes_json IS NOT NULL
-               AND (chunk_hashes_json LIKE ?2 OR chunk_hashes_json LIKE ?3)",
+             WHERE chunk_hashes_json IS NOT NULL
+               AND (chunk_hashes_json LIKE ?1 OR chunk_hashes_json LIKE ?2)",
         )?;
         let rows = stmt
             .query_map(
-                params![CONVERSION_VERSION, bare_pattern, prefixed_pattern],
+                params![bare_pattern, prefixed_pattern],
                 ChunkPublicationCandidate::from_row,
             )?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -754,6 +753,7 @@ impl ConvertedPackage {
 
 struct ChunkPublicationCandidate {
     chunk_hashes_json: Option<String>,
+    conversion_version: i32,
     scriptlet_fidelity: String,
     target_compatibility: String,
     publication_status: String,
@@ -768,14 +768,15 @@ impl ChunkPublicationCandidate {
     fn from_row(row: &Row) -> rusqlite::Result<Self> {
         Ok(Self {
             chunk_hashes_json: row.get(0)?,
-            scriptlet_fidelity: row.get(1)?,
-            target_compatibility: row.get(2)?,
-            publication_status: row.get(3)?,
-            evidence_digest: row.get(4)?,
-            curation_evidence_digest: row.get(5)?,
-            blocked_reason_codes_json: row.get(6)?,
-            scriptlet_summary_json: row.get(7)?,
-            review_artifact_path: row.get(8)?,
+            conversion_version: row.get(1)?,
+            scriptlet_fidelity: row.get(2)?,
+            target_compatibility: row.get(3)?,
+            publication_status: row.get(4)?,
+            evidence_digest: row.get(5)?,
+            curation_evidence_digest: row.get(6)?,
+            blocked_reason_codes_json: row.get(7)?,
+            scriptlet_summary_json: row.get(8)?,
+            review_artifact_path: row.get(9)?,
         })
     }
 
@@ -790,8 +791,10 @@ impl ChunkPublicationCandidate {
             .any(|chunk_hash| chunk_hash == bare_hash || chunk_hash == prefixed_hash)
     }
 
-    // Stale rows are excluded by the chunk_publication_state SQL filter on conversion_version.
     fn is_scriptlet_public_ready(&self) -> bool {
+        if self.conversion_version < CONVERSION_VERSION {
+            return false;
+        }
         let Ok(value) = serde_json::from_str::<serde_json::Value>(&self.scriptlet_summary_json)
         else {
             return false;
@@ -1187,6 +1190,99 @@ mod tests {
             10,
             "sha256:public-content".to_string(),
             "/tmp/public.ccs".to_string(),
+        );
+        public
+            .set_scriptlet_metadata(&ScriptletBundleSummary::default())
+            .unwrap();
+        public.insert(&conn).unwrap();
+
+        assert_eq!(
+            ConvertedPackage::chunk_publication_state(&conn, shared_hash).unwrap(),
+            ChunkPublicationState::PublicReady,
+        );
+    }
+
+    #[test]
+    fn chunk_publication_state_treats_stale_only_references_as_non_public() {
+        let (_temp, conn) = create_test_db();
+        let shared_hash = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+        let mut stale = ConvertedPackage::new_server(
+            "fedora".to_string(),
+            "stale-public-looking".to_string(),
+            "1.0".to_string(),
+            "rpm".to_string(),
+            "sha256:stale-public-looking".to_string(),
+            "high".to_string(),
+            &[format!("sha256:{shared_hash}")],
+            10,
+            "sha256:stale-public-looking-content".to_string(),
+            "/tmp/stale-public-looking.ccs".to_string(),
+        );
+        stale
+            .set_scriptlet_metadata(&ScriptletBundleSummary {
+                scriptlet_fidelity: "fully-replaced".to_string(),
+                target_compatibility: "conary-portable".to_string(),
+                publication_status: "public".to_string(),
+                evidence_digest: Some(crate::hash::sha256_prefixed(b"stale-evidence")),
+                decision_counts: crate::ccs::convert::ScriptletDecisionCountsSummary {
+                    replaced: 1,
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .unwrap();
+        stale.conversion_version = CONVERSION_VERSION - 1;
+        stale.insert(&conn).unwrap();
+
+        assert_eq!(
+            ConvertedPackage::chunk_publication_state(&conn, shared_hash).unwrap(),
+            ChunkPublicationState::NonPublicOnly,
+        );
+    }
+
+    #[test]
+    fn chunk_publication_state_keeps_current_public_when_stale_also_references_chunk() {
+        let (_temp, conn) = create_test_db();
+        let shared_hash = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+        let mut stale = ConvertedPackage::new_server(
+            "fedora".to_string(),
+            "stale-public-looking".to_string(),
+            "1.0".to_string(),
+            "rpm".to_string(),
+            "sha256:stale-shared".to_string(),
+            "high".to_string(),
+            &[shared_hash.to_string()],
+            10,
+            "sha256:stale-shared-content".to_string(),
+            "/tmp/stale-shared.ccs".to_string(),
+        );
+        stale
+            .set_scriptlet_metadata(&ScriptletBundleSummary {
+                scriptlet_fidelity: "fully-replaced".to_string(),
+                target_compatibility: "conary-portable".to_string(),
+                publication_status: "public".to_string(),
+                evidence_digest: Some(crate::hash::sha256_prefixed(b"stale-shared-evidence")),
+                decision_counts: crate::ccs::convert::ScriptletDecisionCountsSummary {
+                    replaced: 1,
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .unwrap();
+        stale.conversion_version = CONVERSION_VERSION - 1;
+        stale.insert(&conn).unwrap();
+
+        let mut public = ConvertedPackage::new_server(
+            "fedora".to_string(),
+            "current-public".to_string(),
+            "1.0".to_string(),
+            "rpm".to_string(),
+            "sha256:current-public".to_string(),
+            "high".to_string(),
+            &[shared_hash.to_string()],
+            10,
+            "sha256:current-public-content".to_string(),
+            "/tmp/current-public.ccs".to_string(),
         );
         public
             .set_scriptlet_metadata(&ScriptletBundleSummary::default())

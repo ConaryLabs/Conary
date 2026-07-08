@@ -37,7 +37,6 @@ mod golden_fixtures;
 pub mod legacy_provenance;
 pub mod mock;
 pub mod payload_hints;
-#[allow(dead_code)]
 mod public_policy;
 pub mod scriptlet_bundle;
 mod security_policy;
