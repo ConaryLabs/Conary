@@ -49,10 +49,9 @@ pub(super) fn sysctl_effect(key: &str) -> ScriptletEffectEvidence {
     effect.confidence = EffectConfidence::Declared;
     effect.args = vec!["-w".to_string(), format!("{key}=1")];
     effect.reason_code = Some("helper-complete-sysctl".to_string());
-    effect.extra.insert(
-        "key".to_string(),
-        toml::Value::String(key.to_string()),
-    );
+    effect
+        .extra
+        .insert("key".to_string(), toml::Value::String(key.to_string()));
     effect
 }
 

@@ -6,8 +6,8 @@ use crate::ccs::legacy_scriptlets::{
     DecisionCounts, LegacyScriptletBundle, LegacyScriptletEntry, PublicationPolicy,
     PublicationStatus, ScriptletDecision, ScriptletFidelity, TargetCompatibility,
 };
-use crate::ccs::v2::validation::TargetProfileQuery;
 use crate::ccs::security_policy::SecurityPolicyIntent;
+use crate::ccs::v2::validation::TargetProfileQuery;
 use std::collections::BTreeSet;
 
 impl ScriptletBundleSummary {
@@ -22,8 +22,7 @@ pub(super) fn summary_from_bundle(
 ) -> ScriptletBundleSummary {
     let blocked_reason_codes = sorted_entry_reason_codes(bundle, "blocked");
     let target_profile = public_policy_target_profile(bundle);
-    let target_profile_query =
-        target_profile.map(|profile| profile as &dyn TargetProfileQuery);
+    let target_profile_query = target_profile.map(|profile| profile as &dyn TargetProfileQuery);
     let mut review_reason_codes = sorted_entry_reason_codes(bundle, "review");
     review_reason_codes.extend(public_policy_review_reason_codes(
         bundle,
@@ -211,10 +210,9 @@ pub(super) fn aggregate_status(
 
 #[cfg(test)]
 mod tests {
-    use super::aggregate_status;
     use super::super::test_support::{bundle_for_metadata, package_metadata};
     use super::super::{ScriptletBundleSummary, ScriptletDecisionCountsSummary};
-    use crate::ccs::v2::validation::TargetProfileQuery;
+    use super::aggregate_status;
     use crate::ccs::convert::effects::ScriptletClassificationReport;
     use crate::ccs::legacy_scriptlets::{
         DecisionCounts, EffectConfidence, EffectReplacement, EffectSource, ForeignReplayPolicy,
@@ -228,6 +226,7 @@ mod tests {
         SecurityPolicyReconciliationState, SecurityPolicyRequirements, SecurityPolicyScope,
         SecurityPolicySource,
     };
+    use crate::ccs::v2::validation::TargetProfileQuery;
     use crate::packages::traits::{Scriptlet, ScriptletPhase};
     use std::collections::BTreeMap;
 
@@ -341,7 +340,9 @@ mod tests {
             decision: ScriptletDecision::Replaced,
             reason_code: "helper-complete-sysctl".to_string(),
             human_reason: None,
-            evidence_digest: Some(crate::hash::sha256_prefixed(format!("sysctl:{key}").as_bytes())),
+            evidence_digest: Some(crate::hash::sha256_prefixed(
+                format!("sysctl:{key}").as_bytes(),
+            )),
             source_evidence_refs: Vec::new(),
             effects: vec![ScriptletEffect {
                 kind: "sysctl-setting".to_string(),
@@ -554,11 +555,7 @@ mod tests {
         );
         assert_eq!(private.3.as_str(), "private-review");
 
-        let missing = aggregate_status(
-            &[replaced_sysctl_entry("kernel.example")],
-            &counts,
-            None,
-        );
+        let missing = aggregate_status(&[replaced_sysctl_entry("kernel.example")], &counts, None);
         assert_eq!(missing.3.as_str(), "private-review");
     }
 
@@ -569,7 +566,9 @@ mod tests {
 
         let summary = ScriptletBundleSummary::from_bundle(
             &bundle,
-            Some(crate::hash::sha256_prefixed(b"reconstructed-sysctl-evidence")),
+            Some(crate::hash::sha256_prefixed(
+                b"reconstructed-sysctl-evidence",
+            )),
         );
 
         assert_eq!(summary.publication_status, "private-review");
@@ -589,8 +588,7 @@ mod tests {
         );
         bundle.validate().expect("fixture bundle is valid");
 
-        let summary =
-            ScriptletBundleSummary::from_bundle(&bundle, bundle.evidence_digest.clone());
+        let summary = ScriptletBundleSummary::from_bundle(&bundle, bundle.evidence_digest.clone());
         assert_eq!(summary.publication_status, "private-review");
         assert!(
             summary

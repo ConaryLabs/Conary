@@ -36,15 +36,14 @@ pub fn build_legacy_scriptlet_bundle(
         .flat_map(|entry| entry.security_policy_intents.iter().cloned())
         .collect::<Vec<_>>();
     let decision_counts = decision_counts(&entries);
-    let target_profile = target_profile_id
-        .and_then(crate::repository::supported_profiles::profile_by_public_id);
+    let target_profile =
+        target_profile_id.and_then(crate::repository::supported_profiles::profile_by_public_id);
     let (scriptlet_fidelity, target_compatibility, publication_policy, publication_status) =
         aggregate_status(
             &entries,
             &decision_counts,
-            target_profile.map(|profile| {
-                profile as &dyn crate::ccs::v2::validation::TargetProfileQuery
-            }),
+            target_profile
+                .map(|profile| profile as &dyn crate::ccs::v2::validation::TargetProfileQuery),
         );
 
     let mut bundle = LegacyScriptletBundle {
