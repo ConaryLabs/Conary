@@ -16,9 +16,9 @@ use rusqlite::{Connection, OptionalExtension, Row, params};
 /// Current conversion algorithm version
 /// Bump this when making changes that require re-conversion of existing packages.
 ///
-/// v4 invalidates Remi artifacts produced before passive legacy scriptlet
-/// bundles and scriptlet metadata were embedded in converted CCS manifests.
-pub const CONVERSION_VERSION: i32 = 4;
+/// v5 invalidates Remi artifacts produced before public scriptlet metadata
+/// required security policy intents and stale rows failed closed directly.
+pub const CONVERSION_VERSION: i32 = 5;
 
 /// A converted package record
 #[derive(Debug, Clone)]
@@ -414,6 +414,9 @@ impl ConvertedPackage {
     }
 
     pub fn is_scriptlet_public_ready(&self) -> bool {
+        if self.needs_reconversion() {
+            return false;
+        }
         let publication = self.scriptlet_summary_for_publication();
         publication.valid && publication.summary.publication_status == "public"
     }
@@ -787,6 +790,7 @@ impl ChunkPublicationCandidate {
             .any(|chunk_hash| chunk_hash == bare_hash || chunk_hash == prefixed_hash)
     }
 
+    // Stale rows are excluded by the chunk_publication_state SQL filter on conversion_version.
     fn is_scriptlet_public_ready(&self) -> bool {
         let Ok(value) = serde_json::from_str::<serde_json::Value>(&self.scriptlet_summary_json)
         else {
@@ -851,6 +855,7 @@ impl ScriptletPublicationColumns<'_> {
             "unknown_commands",
             "blocked_classes",
             "boot_security_intents",
+            "security_policy_intents",
         ]
         .iter()
         .all(|key| object.contains_key(*key))
@@ -994,6 +999,95 @@ mod tests {
 
         assert!(publication.valid);
         assert_eq!(publication.summary.publication_status, "public");
+        assert!(converted.is_scriptlet_public_ready());
+    }
+
+    #[test]
+    fn stale_converted_rows_are_not_scriptlet_public_ready() {
+        let mut converted = ConvertedPackage::new_server(
+            "fedora".to_string(),
+            "stale".to_string(),
+            "1.0".to_string(),
+            "rpm".to_string(),
+            "sha256:source".to_string(),
+            "high".to_string(),
+            &["sha256:chunk".to_string()],
+            42,
+            "sha256:content".to_string(),
+            "/tmp/stale.ccs".to_string(),
+        );
+        let summary = ScriptletBundleSummary {
+            scriptlet_fidelity: "fully-replaced".to_string(),
+            target_compatibility: "conary-portable".to_string(),
+            publication_status: "public".to_string(),
+            evidence_digest: Some(crate::hash::sha256_prefixed(b"evidence")),
+            decision_counts: crate::ccs::convert::ScriptletDecisionCountsSummary {
+                replaced: 1,
+                ..Default::default()
+            },
+            ..ScriptletBundleSummary::default()
+        };
+        converted.set_scriptlet_metadata(&summary).unwrap();
+        converted.conversion_version = CONVERSION_VERSION - 1;
+
+        assert!(converted.needs_reconversion());
+        assert!(!converted.is_scriptlet_public_ready());
+    }
+
+    #[test]
+    fn non_default_publication_summary_requires_security_policy_intents() {
+        let mut converted = ConvertedPackage::new(
+            "rpm".to_string(),
+            "sha256:source".to_string(),
+            "high".to_string(),
+        );
+        converted.scriptlet_fidelity = "fully-replaced".to_string();
+        converted.target_compatibility = "conary-portable".to_string();
+        converted.publication_status = "public".to_string();
+        converted.evidence_digest = Some(crate::hash::sha256_prefixed(b"evidence"));
+        converted.scriptlet_summary_json = serde_json::json!({
+            "scriptlet_fidelity": "fully-replaced",
+            "target_compatibility": "conary-portable",
+            "publication_status": "public",
+            "decision_counts": {
+                "replaced": 1,
+                "legacy": 0,
+                "blocked": 0,
+                "review": 0
+            },
+            "blocked_reason_codes": [],
+            "review_reason_codes": [],
+            "unknown_commands": [],
+            "blocked_classes": [],
+            "boot_security_intents": []
+        })
+        .to_string();
+
+        assert!(!converted.scriptlet_summary_for_publication().valid);
+        assert!(!converted.is_scriptlet_public_ready());
+    }
+
+    #[test]
+    fn non_default_publication_summary_accepts_security_policy_intents() {
+        let mut converted = ConvertedPackage::new(
+            "rpm".to_string(),
+            "sha256:source".to_string(),
+            "high".to_string(),
+        );
+        let summary = ScriptletBundleSummary {
+            scriptlet_fidelity: "fully-replaced".to_string(),
+            target_compatibility: "conary-portable".to_string(),
+            publication_status: "public".to_string(),
+            evidence_digest: Some(crate::hash::sha256_prefixed(b"evidence")),
+            decision_counts: crate::ccs::convert::ScriptletDecisionCountsSummary {
+                replaced: 1,
+                ..Default::default()
+            },
+            ..ScriptletBundleSummary::default()
+        };
+        converted.set_scriptlet_metadata(&summary).unwrap();
+
+        assert!(converted.scriptlet_summary_for_publication().valid);
         assert!(converted.is_scriptlet_public_ready());
     }
 
