@@ -252,6 +252,12 @@ The scriptlet corpus summary is evidence for adapter planning only. It is not
 the authority for declaring a scriptlet `replaced`; that authority belongs to
 the legacy scriptlet semantics bundle decision model.
 
+Scan-only network and package-manager hints are advisory. They help maintainers
+find packages that attempted live fetch or nested package-manager recursion,
+but those hints do not make a conversion `replaced` and do not bypass the
+public-ready gate. Valid blocked rows remain available only through the
+default-off admin test lane.
+
 Running without `--scan-only` performs real conversions and writes CCS/CAS cache
 artifacts under the supplied cache and chunk directories. Use scratch paths for
 local experiments unless you intentionally want to warm a real Remi cache.

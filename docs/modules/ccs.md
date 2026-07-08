@@ -272,6 +272,13 @@ Common PAM stack helpers (`authselect`, `authconfig`, `pam-auth-update`, and
 manifest authority or public Remi eligibility without a future native PAM
 policy adapter and target-profile PAM facts.
 
+Live network fetches and nested package-manager calls remain blocked conversion
+evidence. A scriptlet that fetches content with `curl`, `wget`, `scp`, `ssh`, or
+`git clone`, or that invokes a nested package manager such as `dnf`, `apt`,
+`dpkg`, `rpm`, `pacman`, `apk`, `microdnf`, or `zypper`, does not project native
+manifest authority and cannot become public-ready without a future dependency
+or offline-artifact authority model.
+
 Foreign raw replay has a second gate. If the bundle source target differs from
 the host target and the host is not listed in `allowed_targets`, the operation
 also requires `--allow-foreign-legacy-replay` plus compatible bundle and host

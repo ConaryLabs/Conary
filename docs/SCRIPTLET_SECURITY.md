@@ -163,6 +163,14 @@ PAM stack helpers such as `authselect`, `authconfig`, `pam-auth-update`, and
 requires a future native PAM adapter with target-profile PAM stack facts,
 rollback semantics, and operator-visible review.
 
+Live network fetches and nested package-manager calls are also blocked for
+public serving. Commands such as `curl`, `wget`, `scp`, `ssh`, `git clone`,
+`dnf`, `apt`, `dpkg`, `rpm`, `pacman`, `apk`, `microdnf`, and `zypper` may be
+preserved as sanitized refusal evidence, but they are not native authority.
+Future support must model dependency intent or curated offline artifacts; it
+must not run a foreign package manager or fetch live network content during
+conversion or install.
+
 Supported SELinux forms are different: `selinux-policy/v1` records
 payload-scoped label refresh, payload-backed file-context rules, persistent boolean
 declarations, and payload-backed policy-module installs as optional policy

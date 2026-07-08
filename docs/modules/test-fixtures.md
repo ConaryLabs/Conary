@@ -83,6 +83,12 @@ Each fixture family should record:
 - `blocked-class-pam`: common PAM stack helper evidence such as `authconfig`
   or `pam-config`, expected blocked outcome until native PAM policy authority is
   modeled.
+- `blocked-class-network`: live-fetch evidence such as `curl` or `git clone`,
+  expected blocked outcome until dependency intent or curated offline artifact
+  authority is modeled.
+- `blocked-class-package-manager-recursion`: nested package-manager evidence
+  such as `dnf`, `apt`, `pacman`, `apk`, or `microdnf`, expected blocked
+  outcome until native dependency or artifact authority is modeled.
 
 ### ccs-v2-native-authority-fixtures
 
