@@ -397,6 +397,10 @@ fn install_ccs_package_transactionally_inner(
         &scriptlet_ctx,
         &progress,
     )?;
+    let normalized_file_capabilities = crate::commands::ccs::normalize_ccs_file_capabilities(
+        Path::new(opts.root),
+        &pkg.manifest().file_capabilities,
+    )?;
 
     let tx_ctx = TransactionContext {
         db_path: opts.db_path,
@@ -406,7 +410,7 @@ fn install_ccs_package_transactionally_inner(
         old_trove_to_upgrade: old_trove,
         ccs_manifest_provides: Some(&pkg.manifest().provides),
         ccs_capabilities: pkg.manifest().capabilities.as_ref(),
-        ccs_file_capabilities: Some(&pkg.manifest().file_capabilities),
+        ccs_file_capabilities: Some(&normalized_file_capabilities),
         execution_path,
         defer_generation: opts.defer_generation,
         repository_provenance: opts.repository_provenance,

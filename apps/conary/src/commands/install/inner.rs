@@ -880,6 +880,79 @@ mod tests {
     }
 
     #[test]
+    fn install_inner_persists_usrmerge_normalized_file_capability_metadata() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("root");
+        let db_path = temp.path().join("conary.db");
+        std::fs::create_dir_all(&root).unwrap();
+        conary_core::db::init(&db_path).unwrap();
+        let conn = conary_core::db::open(&db_path).unwrap();
+
+        let package = FakePackage::with_file("demo", "/usr/bin/demo", b"demo\n");
+        let extraction = ExtractionResult {
+            extracted_files: package.extracted_files.clone(),
+            classified: HashMap::from([(
+                conary_core::components::ComponentType::Runtime,
+                vec!["/usr/bin/demo".to_string()],
+            )]),
+            component_names_by_path: None,
+            installed_component_names: None,
+            ccs_pre_remove_script: None,
+            installed_component_types: vec![conary_core::components::ComponentType::Runtime],
+            skipped_components: Vec::new(),
+            language_provides: Vec::new(),
+        };
+        let manifest_file_capabilities = vec![
+            file_capability("/bin/demo"),
+            file_capability("/sbin/admin-tool"),
+        ];
+        let normalized_file_capabilities = crate::commands::ccs::normalize_ccs_file_capabilities(
+            root.as_path(),
+            &manifest_file_capabilities,
+        )
+        .unwrap();
+        let db_path_string = db_path.to_string_lossy().into_owned();
+        let root_string = root.to_string_lossy().into_owned();
+        let ctx = TransactionContext {
+            db_path: &db_path_string,
+            root: &root_string,
+            semantics: InstallSemantics::ccs(),
+            selection_reason: None,
+            old_trove_to_upgrade: None,
+            ccs_manifest_provides: None,
+            ccs_capabilities: None,
+            ccs_file_capabilities: Some(&normalized_file_capabilities),
+            execution_path: PackageExecutionPath::MutableLiveRoot,
+            defer_generation: false,
+            repository_provenance: None,
+            legacy_replay: LegacyReplayOptions::default(),
+            accepted_legacy_bundle: None,
+        };
+        let tx_config = TransactionConfig::from_paths(root.clone(), db_path.clone());
+        let mut engine = TransactionEngine::new(tx_config).unwrap();
+        let tx = conn.unchecked_transaction().unwrap();
+        let changeset_id = Changeset::new("Install demo-1.0.0".to_string())
+            .insert(&tx)
+            .unwrap();
+
+        let result = install_inner(
+            &tx,
+            &mut engine,
+            changeset_id,
+            &package,
+            &extraction,
+            &ctx,
+            &InstallProgress::single("Installing"),
+        )
+        .unwrap();
+        tx.commit().unwrap();
+
+        let rows = InstalledFileCapability::find_by_trove(&conn, result.trove_id).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].path, "/usr/bin/demo");
+    }
+
+    #[test]
     fn install_inner_replaces_installed_file_capability_metadata_on_upgrade() {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("root");
