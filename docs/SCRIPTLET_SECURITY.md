@@ -158,6 +158,11 @@ classes until native adapter and target-profile evidence proves complete
 replacement. Raw replay, `--no-scripts`, or malformed summary metadata must not
 make these packages public-ready.
 
+PAM stack helpers such as `authselect`, `authconfig`, `pam-auth-update`, and
+`pam-config` are also blocked for public serving. Public-ready PAM conversion
+requires a future native PAM adapter with target-profile PAM stack facts,
+rollback semantics, and operator-visible review.
+
 Supported SELinux forms are different: `selinux-policy/v1` records
 payload-scoped label refresh, payload-backed file-context rules, persistent boolean
 declarations, and payload-backed policy-module installs as optional policy

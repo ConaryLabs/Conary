@@ -129,6 +129,11 @@ policy model proves the provider behavior and fallback semantics.
 This gate is publication-only. It does not replay scriptlets, promote reviewed
 packages, or change client install/update/remove behavior.
 
+PAM helper conversions are blocked/non-public under the same gate. The
+default-off admin test lane may expose sanitized blocked metadata to maintainers,
+but public package, detail, index, sparse, OCI, and chunk routes continue to
+require public-ready status.
+
 Sparse-index and search responses use `converted=true` only for rows that do
 not need reconversion and pass the same public-ready scriptlet gate. A completed
 conversion row that requires legacy replay, review, or blocking remains private

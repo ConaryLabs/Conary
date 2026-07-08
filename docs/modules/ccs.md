@@ -267,6 +267,11 @@ until a supported profile explicitly allows it. Legacy replay, review-required,
 blocked, malformed, or local-only scriptlet outcomes remain private conversion
 results.
 
+Common PAM stack helpers (`authselect`, `authconfig`, `pam-auth-update`, and
+`pam-config`) remain `blocked-class-pam` evidence. They do not project native
+manifest authority or public Remi eligibility without a future native PAM
+policy adapter and target-profile PAM facts.
+
 Foreign raw replay has a second gate. If the bundle source target differs from
 the host target and the host is not listed in `allowed_targets`, the operation
 also requires `--allow-foreign-legacy-replay` plus compatible bundle and host

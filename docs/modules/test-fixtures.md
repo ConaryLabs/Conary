@@ -80,6 +80,9 @@ Each fixture family should record:
 - `adapter-sysctl-target-profile-private-review`: one validated
   `sysctl -w net.ipv4.ip_forward=1` write, expected private-review outcome
   while preserving complete native replacement evidence.
+- `blocked-class-pam`: common PAM stack helper evidence such as `authconfig`
+  or `pam-config`, expected blocked outcome until native PAM policy authority is
+  modeled.
 
 ### ccs-v2-native-authority-fixtures
 
