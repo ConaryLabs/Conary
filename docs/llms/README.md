@@ -19,10 +19,14 @@ second subsystem manual.
    verification expectations.
 2. Use this file to decide which canonical docs to open next.
 3. Run one command to route the work:
-   - `bash scripts/agent-context.sh --list`
-   - `bash scripts/agent-context.sh --feature <slug>`
-   - `bash scripts/agent-context.sh --path <file>`
-4. Read the start-here files printed by that command before editing.
+   - `bash scripts/agent-context.sh --list` to discover available feature
+     slugs.
+   - `bash scripts/agent-context.sh --feature <slug>` to print start-here
+     files, focused proof, and interaction gates for a feature slug.
+   - `bash scripts/agent-context.sh --path <file>` to print the same routing
+     details for a specific path.
+4. Read the start-here files printed by the `--feature` or `--path` command
+   before editing.
 5. Use the focused proof for narrow edits and the interaction gate when the
    change crosses a neighbor system.
 
