@@ -11,7 +11,7 @@ use crate::generation::metadata::{ROOT_SYMLINKS, is_excluded};
 
 #[cfg_attr(feature = "composefs-rs", allow(dead_code))]
 #[must_use]
-pub fn erofs_xattr_image_support_available() -> bool {
+pub(crate) fn erofs_xattr_image_support_available() -> bool {
     cfg!(feature = "composefs-rs")
 }
 

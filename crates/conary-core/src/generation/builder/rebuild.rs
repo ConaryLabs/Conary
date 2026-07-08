@@ -151,7 +151,8 @@ mod tests {
         runtime_generation_db_with_missing_regular_file_cas_object,
     };
     use super::*;
-    use crate::db::models::{FileEntry, Trove, TroveType};
+    use crate::ccs::manifest::FileCapability;
+    use crate::db::models::{FileEntry, InstalledFileCapability, Trove, TroveType};
     use crate::db::schema::migrate;
     use crate::filesystem::CasStore;
     use crate::generation::metadata::{is_generation_pending, mark_generation_pending};
@@ -254,5 +255,101 @@ mod tests {
             "successful recovery rebuild must clear a stale pending marker"
         );
         crate::generation::artifact::load_generation_artifact(&gen_dir).unwrap();
+    }
+
+    #[cfg(feature = "composefs-rs")]
+    #[test]
+    fn rebuild_generation_image_records_capability_xattr_count() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let generations_root = tmp.path().join("generations");
+        let objects_dir = tmp.path().join("objects");
+        let boot_root = tmp.path().join("boot");
+        std::fs::create_dir_all(&generations_root).unwrap();
+        std::fs::create_dir_all(boot_root.join("EFI/BOOT")).unwrap();
+        std::fs::write(boot_root.join("vmlinuz-6.19.8-conary"), b"kernel").unwrap();
+        std::fs::write(boot_root.join("initramfs-6.19.8-conary.img"), b"initramfs").unwrap();
+        std::fs::write(boot_root.join("EFI/BOOT/BOOTX64.EFI"), b"efi").unwrap();
+
+        let cas = CasStore::new(&objects_dir).unwrap();
+        let hello_hash = cas.store(b"hello").unwrap();
+        let init_hash = cas.store(b"init").unwrap();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let mut trove = Trove::new(
+            "kernel".to_string(),
+            "6.19.8-conary".to_string(),
+            TroveType::Package,
+        );
+        trove.architecture = Some("x86_64".to_string());
+        let trove_id = trove.insert(&conn).unwrap();
+        let mut file = FileEntry::new(
+            "/usr/bin/hello".to_string(),
+            hello_hash,
+            b"hello".len() as i64,
+            0o755,
+            trove_id,
+        );
+        file.insert(&conn).unwrap();
+        let mut init = FileEntry::new(
+            "/usr/sbin/init".to_string(),
+            init_hash,
+            b"init".len() as i64,
+            0o755,
+            trove_id,
+        );
+        init.insert(&conn).unwrap();
+
+        InstalledFileCapability::replace_for_trove(
+            &conn,
+            trove_id,
+            &[FileCapability {
+                path: "/usr/bin/hello".to_string(),
+                capabilities: vec!["cap_net_bind_service".to_string()],
+                permitted: true,
+                effective: true,
+                inheritable: false,
+            }],
+        )
+        .unwrap();
+
+        rebuild_generation_image_with_boot_root(
+            &conn,
+            &generations_root,
+            7,
+            "recovery rebuild",
+            &boot_root,
+        )
+        .unwrap();
+
+        let gen_dir = generations_root.join("7");
+        let metadata = GenerationMetadata::read_from(&gen_dir).unwrap();
+        let artifact = crate::generation::artifact::load_generation_artifact(&gen_dir).unwrap();
+        let image_bytes = std::fs::read(&artifact.erofs_path).unwrap();
+        let fs = composefs::erofs::reader::erofs_to_filesystem::<
+            composefs::fsverity::Sha256HashValue,
+        >(&image_bytes)
+        .unwrap();
+        let leaf = fs
+            .as_dir()
+            .get_directory_ref(std::ffi::OsStr::new("usr"))
+            .unwrap()
+            .get_directory_ref(std::ffi::OsStr::new("bin"))
+            .unwrap()
+            .leaf(
+                fs.as_dir()
+                    .get_directory_ref(std::ffi::OsStr::new("usr"))
+                    .unwrap()
+                    .get_directory_ref(std::ffi::OsStr::new("bin"))
+                    .unwrap()
+                    .leaf_id(std::ffi::OsStr::new("hello"))
+                    .unwrap(),
+            );
+
+        assert_eq!(metadata.security_capability_xattr_count, Some(1));
+        assert!(
+            leaf.stat
+                .xattrs
+                .contains_key(std::ffi::OsStr::new(SECURITY_CAPABILITY_XATTR))
+        );
     }
 }
