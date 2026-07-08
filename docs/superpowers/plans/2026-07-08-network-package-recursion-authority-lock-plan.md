@@ -4,7 +4,7 @@
 
 **Goal:** Keep live network fetches and nested package-manager calls blocked/non-public while broadening command evidence for common alias forms.
 
-**Architecture:** Extend the blocked-class registry and Remi corpus hints for common distro package-manager aliases and `git clone` live-fetch evidence. Add support-matrix, converter, and Remi publication regressions proving these classes have no Known adapter row, no manifest or policy authority, no replay authority, and no public-ready gate exception. Update docs and fixture metadata to state that future support must model dependency intent or curated offline artifacts instead of live fetch or nested package-manager execution.
+**Architecture:** Extend the blocked-class registry and Remi corpus hints for common distro package-manager aliases and `git clone` live-fetch evidence, including global-option forms such as `git -C /tmp clone ...`. Add support-matrix, converter, and Remi publication regressions proving these classes have no Known adapter row, no manifest or policy authority, no replay authority, and no public-ready gate exception. Update docs and fixture metadata to state that future support must model dependency intent or curated offline artifacts instead of live fetch or nested package-manager execution.
 
 **Tech Stack:** Rust unit tests in `conary-core` and `remi`, passive conversion tests, Remi publication tests, docs-audit checks.
 
@@ -14,7 +14,7 @@
 - Network fetch evidence remains `blocked-class-network` with `publication_status = "blocked"`.
 - Nested package-manager evidence remains `blocked-class-package-manager-recursion` with `publication_status = "blocked"`.
 - Do not add a network adapter, package-manager adapter, dependency-intent projection, offline artifact authority, target-profile package-manager facts, replay behavior, or Remi public gate exception.
-- `git clone*` is blocked as live fetch evidence, but this slice must not block every `git` invocation by command name.
+- `git*clone*` is blocked as live fetch evidence so global git options before `clone` cannot bypass detection, but this slice must not block every `git` invocation by command name.
 - Admin/non-public test serving may continue to serve valid blocked rows only through the existing default-off admin lane; public package, detail, index, sparse, OCI, and chunk routes continue to require public-ready status.
 - Corpus summaries remain advisory planning evidence only; they do not declare scriptlets `replaced`.
 - Documentation changes must keep `docs/SCRIPTLET_SECURITY.md`, `docs/modules/ccs.md`, `docs/modules/remi.md`, `docs/modules/test-fixtures.md`, docs-audit ledger, and inventory aligned.
@@ -24,7 +24,7 @@
 ## File Structure
 
 - Modify `crates/conary-core/src/ccs/convert/blocked_classes.rs`
-  - Add blocked-class tests and command/form evidence for common distro package-manager aliases and `git clone*`.
+  - Add blocked-class tests and command/form evidence for common distro package-manager aliases and `git*clone*`.
 - Modify `apps/remi/src/server/scriptlet_corpus.rs`
   - Keep advisory corpus blocked-class hints aligned with the blocked-class registry for the same forms.
 - Modify `crates/conary-core/src/ccs/convert/support_matrix.rs`
@@ -55,7 +55,7 @@
 **Interfaces:**
 - Consumes: `BlockedClassRegistry::match_invocation`
 - Consumes: `ScriptletCorpusSummary::from_scriptlets`
-- Produces: `git clone*` mapped to `blocked-class-network`
+- Produces: `git clone` forms, including global-option forms such as `git -C /tmp clone ...`, mapped to `blocked-class-network`
 - Produces: `apk`, `dnf5`, `microdnf`, and `zypper` mapped to `blocked-class-package-manager-recursion`
 - Produces: matching corpus `blocked_class_hints` for scan-only planning evidence
 
@@ -74,6 +74,19 @@ fn blocked_classes_block_live_fetch_and_package_manager_recursion() {
         ("scp", vec!["host:/tmp/pkg", "/tmp/pkg"]),
         ("ssh", vec!["builder.example.invalid", "true"]),
         ("git", vec!["clone", "https://example.invalid/repo.git"]),
+        (
+            "git",
+            vec!["-C", "/tmp", "clone", "https://example.invalid/repo.git"],
+        ),
+        (
+            "git",
+            vec![
+                "-c",
+                "http.sslVerify=false",
+                "clone",
+                "https://example.invalid/repo.git",
+            ],
+        ),
     ] {
         let class = registry
             .match_invocation(&invocation(command, &argv))
@@ -129,12 +142,13 @@ fn corpus_summary_marks_live_fetch_and_package_manager_recursion() {
         "arch",
         "bad-news",
         &[scriptlet(
-            "pacman -Syu\ngit clone https://example.invalid/repo.git\nmicrodnf install demo\napk add demo\n",
+            "pacman -Syu\ncurl https://example.invalid/script.sh\ngit clone https://example.invalid/repo.git\ngit -C /tmp clone https://example.invalid/repo.git\ngit -c http.sslVerify=false clone https://example.invalid/repo.git\nmicrodnf install demo\napk add demo\n",
         )],
     );
 
     assert_eq!(summary.command_counts.get("pacman"), Some(&1));
-    assert_eq!(summary.command_counts.get("git"), Some(&1));
+    assert_eq!(summary.command_counts.get("curl"), Some(&1));
+    assert_eq!(summary.command_counts.get("git"), Some(&3));
     assert_eq!(summary.command_counts.get("microdnf"), Some(&1));
     assert_eq!(summary.command_counts.get("apk"), Some(&1));
     assert!(
@@ -155,7 +169,7 @@ cargo test -p conary-core blocked_classes_block_live_fetch_and_package_manager_r
 cargo test -p remi corpus_summary_marks_live_fetch_and_package_manager_recursion
 ```
 
-Expected: FAIL because `git clone`, `apk`, `dnf5`, `microdnf`, and `zypper` are not yet fully classified in both locations.
+Expected: FAIL because option-prefixed `git clone`, `apk`, `dnf5`, `microdnf`, and `zypper` are not yet fully classified in both locations.
 
 - [ ] **Step 4: Extend the blocked-class registry**
 
@@ -180,7 +194,7 @@ blocked_class(
     "Network access from scriptlets is not replay-safe.",
     "blocked-class-network",
     &["curl", "wget", "scp", "ssh"],
-    &["git clone*"],
+    &["git*clone*"],
     "Provide a declared package dependency or a curated offline artifact.",
 ),
 ```
@@ -202,7 +216,78 @@ to:
 
 - [ ] **Step 5: Extend the Remi corpus hints**
 
-In `apps/remi/src/server/scriptlet_corpus.rs`, change:
+In `apps/remi/src/server/scriptlet_corpus.rs`, first change `CommandEvidence` from:
+
+```rust
+struct CommandEvidence {
+    command: String,
+    form: String,
+}
+```
+
+to:
+
+```rust
+struct CommandEvidence {
+    command: String,
+    form: String,
+    git_clone_fetch: bool,
+}
+```
+
+In `command_from_segment`, add the `git_clone_fetch` value after `form` is built:
+
+```rust
+let git_clone_fetch = command == "git" && tokens.iter().skip(index + 1).any(|arg| *arg == "clone");
+```
+
+and return:
+
+```rust
+Some(CommandEvidence {
+    command: command.to_string(),
+    form,
+    git_clone_fetch,
+})
+```
+
+Then in `ScriptletCorpusSummary::from_scriptlets`, change:
+
+```rust
+for class in blocked_class_hints_for_command(&evidence.command, &evidence.form) {
+    blocked.insert(class);
+}
+```
+
+to:
+
+```rust
+for class in blocked_class_hints_for_command(
+    &evidence.command,
+    &evidence.form,
+    evidence.git_clone_fetch,
+) {
+    blocked.insert(class);
+}
+```
+
+Change `blocked_class_hints_for_command` from:
+
+```rust
+fn blocked_class_hints_for_command(command: &str, form: &str) -> Vec<String> {
+```
+
+to:
+
+```rust
+fn blocked_class_hints_for_command(
+    command: &str,
+    form: &str,
+    git_clone_fetch: bool,
+) -> Vec<String> {
+```
+
+Finally, change:
 
 ```rust
 "dnf" | "yum" | "rpm" | "apt" | "apt-get" | "dpkg" | "pacman" => {
@@ -223,7 +308,7 @@ to:
 "curl" | "wget" | "scp" | "ssh" => {
     classes.push("network".to_string());
 }
-"git" if form.starts_with("git clone") => {
+"git" if git_clone_fetch => {
     classes.push("network".to_string());
 }
 ```
@@ -256,49 +341,49 @@ git commit -m "test: cover live fetch and package-manager recursion forms"
 **Interfaces:**
 - Consumes: `SupportMatrix::default()`
 - Produces: explicit proof that `network` and `package-manager-recursion` have blocked-class rows only
-- Produces: a test helper that fails if a future Known row carries network or package-manager-recursion support identity
+- Produces: a test helper that fails if a future Known row carries network, package-manager-recursion, live-fetch, dependency-intent, or offline-artifact support identity
 
-- [ ] **Step 1: Add the support-matrix helper**
+- [ ] **Step 1: Add the support-matrix regressions**
 
-In `crates/conary-core/src/ccs/convert/support_matrix.rs`, inside the existing `#[cfg(test)] mod tests`, add this helper after `pam_associated_known_rows`:
+In `crates/conary-core/src/ccs/convert/support_matrix.rs`, inside the existing `#[cfg(test)] mod tests`, add these tests after `pam_class_remains_blocked_without_native_adapter`:
 
 ```rust
-fn live_fetch_or_package_manager_known_rows(
-    entries: &[SupportMatrixEntry],
-) -> Vec<&SupportMatrixEntry> {
-    entries
-        .iter()
-        .filter(|entry| {
-            entry.outcome == SupportOutcome::Known
-                && (matches!(
-                    entry.class_id,
-                    Some("network" | "package-manager-recursion")
-                ) || entry.adapter_id.is_some_and(|adapter_id| {
-                    adapter_id.contains("network") || adapter_id.contains("package-manager")
-                }) || entry.command.is_some_and(|command| {
-                    command.contains("curl")
-                        || command.contains("wget")
-                        || command.contains("git clone")
-                        || command.contains("dnf")
-                        || command.contains("apt")
-                        || command.contains("pacman")
-                        || command.contains("package-manager")
-                }) || entry.reason_code.contains("network")
-                    || entry.reason_code.contains("package-manager")
-                    || entry.fixture_names.iter().any(|fixture_name| {
-                        fixture_name.contains("network")
-                            || fixture_name.contains("package-manager")
-                    }))
-        })
-        .collect()
+#[test]
+fn live_fetch_and_package_manager_known_row_guard_rejects_fake_rows() {
+    let mut entries = SupportMatrix::default().entries().to_vec();
+    entries.push(SupportMatrixEntry {
+        id: "network-fetch/v0-test-only",
+        command: Some("git clone"),
+        class_id: None,
+        adapter_id: Some("network-fetch/v0-test-only"),
+        outcome: SupportOutcome::Known,
+        reason_code: "helper-complete-network-fetch",
+        source_families: &["rpm", "deb", "arch"],
+        lifecycle_notes: "temporary in-test support row",
+        fixture_names: &["adapter-network-fetch-test-only"],
+    });
+    entries.push(SupportMatrixEntry {
+        id: "package-manager-recursion/v0-test-only",
+        command: Some("microdnf install"),
+        class_id: None,
+        adapter_id: Some("package-manager-recursion/v0-test-only"),
+        outcome: SupportOutcome::Known,
+        reason_code: "helper-complete-package-manager-recursion",
+        source_families: &["rpm", "deb", "arch"],
+        lifecycle_notes: "temporary in-test support row",
+        fixture_names: &["adapter-package-manager-test-only"],
+    });
+
+    let known_rows = live_fetch_or_package_manager_known_rows(&entries);
+    assert_eq!(
+        known_rows.iter().map(|entry| entry.id).collect::<Vec<_>>(),
+        vec![
+            "network-fetch/v0-test-only",
+            "package-manager-recursion/v0-test-only"
+        ]
+    );
 }
-```
 
-- [ ] **Step 2: Add the support-matrix regression**
-
-In the same test module, add this test after `pam_class_remains_blocked_without_native_adapter`:
-
-```rust
 #[test]
 fn live_fetch_and_package_manager_classes_remain_blocked_without_native_adapters() {
     let matrix = SupportMatrix::default();
@@ -330,39 +415,50 @@ fn live_fetch_and_package_manager_classes_remain_blocked_without_native_adapters
 }
 ```
 
-- [ ] **Step 3: Verify the test can fail for the intended future bug**
-
-Temporarily inject a fake Known support row in `SupportMatrix::default()` after the adapter rows are created:
-
-```rust
-entries.push(SupportMatrixEntry {
-    id: "network-fetch/v0-test-only",
-    command: Some("git clone"),
-    class_id: None,
-    adapter_id: Some("network-fetch/v0-test-only"),
-    outcome: SupportOutcome::Known,
-    reason_code: "helper-complete-network-fetch",
-    source_families: &["rpm", "deb", "arch"],
-    lifecycle_notes: "temporary red proof only",
-    fixture_names: &["blocked-class-network"],
-});
-```
+- [ ] **Step 2: Run the focused failing tests**
 
 Run:
 
 ```bash
+cargo test -p conary-core live_fetch_and_package_manager_known_row_guard_rejects_fake_rows --lib
 cargo test -p conary-core live_fetch_and_package_manager_classes_remain_blocked_without_native_adapters --lib
 ```
 
-Expected: FAIL with `live fetch and package-manager recursion should not have Known support rows`.
+Expected: FAIL to compile because `live_fetch_or_package_manager_known_rows` is not defined yet.
 
-Remove the temporary fake row before continuing.
+- [ ] **Step 3: Add the support-matrix helper**
 
-- [ ] **Step 4: Verify the real test passes**
+In the same test module, add this helper after `pam_associated_known_rows`:
+
+```rust
+fn live_fetch_or_package_manager_known_rows(
+    entries: &[SupportMatrixEntry],
+) -> Vec<&SupportMatrixEntry> {
+    entries
+        .iter()
+        .filter(|entry| {
+            entry.outcome == SupportOutcome::Known
+                && (matches!(
+                    entry.class_id,
+                    Some("network" | "package-manager-recursion")
+                ) || entry.adapter_id.is_some_and(|adapter_id| {
+                    adapter_id.contains("network")
+                        || adapter_id.contains("package-manager")
+                        || adapter_id.contains("live-fetch")
+                        || adapter_id.contains("dependency-intent")
+                        || adapter_id.contains("offline-artifact")
+                }))
+        })
+        .collect()
+}
+```
+
+- [ ] **Step 4: Verify the real tests pass**
 
 Run:
 
 ```bash
+cargo test -p conary-core live_fetch_and_package_manager_known_row_guard_rejects_fake_rows --lib
 cargo test -p conary-core live_fetch_and_package_manager_classes_remain_blocked_without_native_adapters --lib
 cargo test -p conary-core support_matrix --lib
 ```
@@ -455,7 +551,7 @@ Then add this test immediately after the helper:
 #[test]
 fn live_fetch_and_package_manager_helpers_remain_blocked_without_manifest_authority() {
     assert_blocked_scriptlet_has_no_native_authority(
-        "git clone https://example.invalid/repo.git\n",
+        "git -C /tmp clone https://example.invalid/repo.git\n",
         "network",
         "blocked-class-network",
     );
@@ -598,7 +694,7 @@ conversion or install.
 
 - [ ] **Step 2: Update CCS module docs**
 
-In `docs/modules/ccs.md`, after the PAM paragraph in the public-ready conversion section, add:
+In `docs/modules/ccs.md`, after the paragraph that starts `Common PAM stack helpers (` in the public-ready conversion section, add:
 
 ```markdown
 Live network fetches and nested package-manager calls remain blocked conversion
@@ -660,6 +756,7 @@ Run:
 bash scripts/check-doc-truth.sh
 bash scripts/check-doc-audit-ledger.sh docs/superpowers/documentation-accuracy-audit-ledger.tsv --require-complete
 LC_ALL=C bash scripts/docs-audit-inventory.sh | diff -u docs/superpowers/documentation-accuracy-audit-inventory.tsv -
+grep -n 'docs/SCRIPTLET_SECURITY.md\|docs/modules/ccs.md\|docs/modules/remi.md\|docs/modules/test-fixtures.md' docs/superpowers/feature-coherency-ledger.tsv
 bash scripts/check-coherency-ledger.sh docs/superpowers/feature-coherency-ledger.tsv
 git diff --check
 ```
@@ -706,6 +803,7 @@ Run:
 cargo test -p conary-core support_matrix --lib
 cargo test -p conary-core golden_fixtures --lib
 cargo test -p conary --test conversion_integration golden_conversion
+cargo test -p remi corpus_summary
 cargo test -p remi publication
 ```
 
@@ -732,6 +830,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 bash scripts/check-doc-truth.sh
 bash scripts/check-doc-audit-ledger.sh docs/superpowers/documentation-accuracy-audit-ledger.tsv --require-complete
 LC_ALL=C bash scripts/docs-audit-inventory.sh | diff -u docs/superpowers/documentation-accuracy-audit-inventory.tsv -
+grep -n 'docs/SCRIPTLET_SECURITY.md\|docs/modules/ccs.md\|docs/modules/remi.md\|docs/modules/test-fixtures.md' docs/superpowers/feature-coherency-ledger.tsv
 bash scripts/check-coherency-ledger.sh docs/superpowers/feature-coherency-ledger.tsv
 git diff --check
 ```
@@ -744,7 +843,7 @@ Create a review package from the plan-review base through HEAD and dispatch a re
 
 - no live fetch or nested package-manager form is public-ready;
 - no network/package-manager adapter, manifest projection, dependency-intent projection, offline artifact authority, replay authority, or public gate exception was added;
-- `git clone*` is blocked without blocking every `git` command by name;
+- `git*clone*` is blocked without blocking every `git` command by name;
 - support matrix has blocked rows only and no Known support row for these classes;
 - converter/publication/Remi surfaces keep blocked rows non-public-only;
 - docs and docs-audit metadata align with Workstream F.
@@ -759,6 +858,6 @@ If the final reviewer finds Critical or Important issues, dispatch one fix subag
 
 - Workstream coverage: Implements Workstream F's current defensive boundary only; future dependency extraction, offline artifact requirements, repository hints, and maintainer review clusters remain advisory/future work.
 - Public gate: No public-ready path is added for live fetch or package-manager recursion.
-- TDD: Task 1 has real red tests for new classification coverage; Task 2 uses a temporary fake Known row to prove the support-matrix guard fails for the intended future bug.
+- TDD: Task 1 has real red tests for new classification coverage; Task 2 uses an in-test fake Known row so the support-matrix guard proves the intended future bug without temporary production-code injection.
 - Docs: Scriptlet security, CCS, Remi, fixture docs, ledger, and inventory are included.
 - Verification: Focused, interaction, broad package, Clippy, docs, coherency, and diff gates are listed.
