@@ -178,7 +178,14 @@ directory reloads, and non-payload profile paths remain blocked/private and use
 Sysctl handling has a narrow native-authority bridge. Conversion may replace a
 simple `sysctl -w <key>=<value>` scriptlet with a validated native
 `hooks.sysctl` declaration when the key and value pass the same CCS sysctl
-validators used at install time. Broad loads such as `sysctl -p`, multiple
+validators used at install time, and one validated write still counts as
+complete native replacement evidence for `sysctl/v1`. Public-ready serving is
+narrower: the converted package is public only when the target profile accepts
+that exact sysctl key. Missing target-profile context or keys the profile does
+not allow stay `private-review`, even when the native hook projection is
+otherwise complete. Today the public catalog proof key is `kernel.example`;
+`net.ipv4.ip_forward` remains valid private-review evidence unless a future
+target profile explicitly allows it. Broad loads such as `sysctl -p`, multiple
 assignment batches, and denied security-sensitive keys remain blocked and can
 only be fetched through the non-public admin/test lane.
 

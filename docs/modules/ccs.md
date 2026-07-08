@@ -78,7 +78,12 @@ remain advisory metadata for review diagnostics. Remaining scripts are
 preserved for guarded local replay or review when they cannot be safely
 captured. The `sysctl/v1` adapter projects only narrow, validated
 `sysctl -w <key>=<value>` invocations into native `hooks.sysctl`; broad forms
-such as `sysctl -p` and denied security-sensitive keys remain blocked.
+such as `sysctl -p` and denied security-sensitive keys remain blocked. One
+validated write still counts as complete native replacement evidence, but
+public-ready conversion additionally requires the target profile to allow the
+exact sysctl key. Missing target-profile context and supported-but-unallowed
+keys stay `private-review`; the current public fixture uses `kernel.example`,
+while `net.ipv4.ip_forward` remains private-review evidence.
 The `setuid-mode/v1` adapter projects only payload-executable
 `chmod u+s` or `chmod 4xxx` forms into native file mode authority plus an exact
 `policy.allow_setuid_paths` build-policy allowlist entry. The
@@ -251,8 +256,11 @@ public source targets are `fedora-44`, `ubuntu-26.04`, and `arch`. A converted
 artifact is public-ready only when the scriptlet outcome is native-free or
 fully replaced by adapter/support-matrix evidence for the exact source and
 target, such as validated `sysctl/v1` evidence projected into native
-`hooks.sysctl` or validated `setuid-mode/v1` evidence projected into payload
-file mode plus `policy.allow_setuid_paths`. Legacy replay, review-required,
+`hooks.sysctl` plus target-profile approval for the exact key, or validated
+`setuid-mode/v1` evidence projected into payload file mode plus
+`policy.allow_setuid_paths`. For the current public sysctl proof corpus,
+`kernel.example` is allowed and `net.ipv4.ip_forward` stays private-review
+until a supported profile explicitly allows it. Legacy replay, review-required,
 blocked, malformed, or local-only scriptlet outcomes remain private conversion
 results.
 

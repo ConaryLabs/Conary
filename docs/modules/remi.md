@@ -101,8 +101,13 @@ by adapter/support-matrix evidence. Rows with `private-review`, `blocked`,
 an explicit summary are terminal review/blocked conversion outcomes and are not
 public-ready.
 For sysctl, public-ready means the converter produced complete `sysctl/v1`
-evidence and projected it into native `hooks.sysctl`; broad or denied sysctl
-forms remain blocked/private.
+evidence, projected it into native `hooks.sysctl`, and the target profile
+derived from the public route slug allows that exact sysctl key. Missing
+profile context or unsupported keys stay `private-review`, not public. The
+current public proof key is `kernel.example`; `net.ipv4.ip_forward` remains
+valid private-review evidence and reports
+`public-policy-sysctl-target-profile-unsupported` unless a future target
+profile allows it. Broad or denied sysctl forms remain blocked/private.
 For setuid, public-ready means the converter produced complete
 `setuid-mode/v1` evidence for a payload executable and projected it into native
 file mode plus `policy.allow_setuid_paths`.

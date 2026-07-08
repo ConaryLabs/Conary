@@ -67,11 +67,19 @@ Each fixture family should record:
   SELinux intent remains portable when the target does not require SELinux. The
   `adapter-apparmor-policy` fixture covers only payload-backed
   `apparmor_parser -r|--replace /etc/apparmor.d/<profile>` evidence; broader
-  AppArmor helper forms stay in blocked/private fixtures.
+  AppArmor helper forms stay in blocked/private fixtures. The public sysctl
+  fixture now uses `kernel.example`; `net.ipv4.ip_forward` remains a
+  private-review fixture because target-profile policy does not yet allow it.
 - `adapter-file-capability`: allowlisted `cap_net_bind_service` replacement
   evidence, expected public-ready fully replaced outcome.
 - `adapter-file-capability-high-risk`: known high-risk capability replacement
   evidence, expected private-review outcome while preserving adapter evidence.
+- `adapter-sysctl`: one validated `sysctl -w kernel.example=1` write, expected
+  public-ready fully replaced outcome because the target profile allows the
+  exact key.
+- `adapter-sysctl-target-profile-private-review`: one validated
+  `sysctl -w net.ipv4.ip_forward=1` write, expected private-review outcome
+  while preserving complete native replacement evidence.
 
 ### ccs-v2-native-authority-fixtures
 
