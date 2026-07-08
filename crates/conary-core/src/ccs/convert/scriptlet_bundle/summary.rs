@@ -108,7 +108,7 @@ fn public_policy_review_reason_codes(bundle: &LegacyScriptletBundle) -> Vec<Stri
     bundle
         .entries
         .iter()
-        .flat_map(public_policy::entry_public_policy_review_reasons)
+        .flat_map(|entry| public_policy::entry_public_policy_review_reasons(entry, None))
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect()
@@ -171,7 +171,7 @@ pub(super) fn aggregate_status(
     }
     let public_policy_review_required = entries
         .iter()
-        .any(|entry| !public_policy::entry_public_policy_review_reasons(entry).is_empty());
+        .any(|entry| !public_policy::entry_public_policy_review_reasons(entry, None).is_empty());
     if public_policy_review_required {
         return (
             ScriptletFidelity::FullyReplaced,
