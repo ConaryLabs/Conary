@@ -544,6 +544,21 @@ mod tests {
     }
 
     #[test]
+    fn pam_class_remains_blocked_without_native_adapter() {
+        let matrix = SupportMatrix::default();
+
+        let row = matrix
+            .entries()
+            .iter()
+            .find(|entry| entry.class_id == Some("pam"))
+            .expect("missing support row for pam");
+
+        assert_eq!(row.outcome, SupportOutcome::Blocked);
+        assert!(row.adapter_id.is_none());
+        assert_eq!(row.fixture_names, &["blocked-class-pam"]);
+    }
+
+    #[test]
     fn selinux_has_supported_adapter_row_and_blocked_fallback_row() {
         let matrix = SupportMatrix::default();
 
