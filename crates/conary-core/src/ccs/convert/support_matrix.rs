@@ -280,6 +280,17 @@ mod tests {
             .collect()
     }
 
+    fn has_live_fetch_or_package_manager_identity(identity: Option<&str>) -> bool {
+        matches!(identity, Some("network" | "package-manager-recursion"))
+            || identity.is_some_and(|identity| {
+                identity.contains("network")
+                    || identity.contains("package-manager")
+                    || identity.contains("live-fetch")
+                    || identity.contains("dependency-intent")
+                    || identity.contains("offline-artifact")
+            })
+    }
+
     fn live_fetch_or_package_manager_known_rows(
         entries: &[SupportMatrixEntry],
     ) -> Vec<&SupportMatrixEntry> {
@@ -287,16 +298,8 @@ mod tests {
             .iter()
             .filter(|entry| {
                 entry.outcome == SupportOutcome::Known
-                    && (matches!(
-                        entry.class_id,
-                        Some("network" | "package-manager-recursion")
-                    ) || entry.adapter_id.is_some_and(|adapter_id| {
-                        adapter_id.contains("network")
-                            || adapter_id.contains("package-manager")
-                            || adapter_id.contains("live-fetch")
-                            || adapter_id.contains("dependency-intent")
-                            || adapter_id.contains("offline-artifact")
-                    }))
+                    && (has_live_fetch_or_package_manager_identity(entry.class_id)
+                        || has_live_fetch_or_package_manager_identity(entry.adapter_id))
             })
             .collect()
     }
@@ -621,6 +624,17 @@ mod tests {
             fixture_names: &["adapter-network-fetch-test-only"],
         });
         entries.push(SupportMatrixEntry {
+            id: "dependency-intent/v0-test-only",
+            command: None,
+            class_id: Some("dependency-intent/v0-test-only"),
+            adapter_id: None,
+            outcome: SupportOutcome::Known,
+            reason_code: "helper-complete-dependency-intent",
+            source_families: &["rpm", "deb", "arch"],
+            lifecycle_notes: "temporary in-test support row",
+            fixture_names: &["adapter-dependency-intent-test-only"],
+        });
+        entries.push(SupportMatrixEntry {
             id: "package-manager-recursion/v0-test-only",
             command: Some("microdnf install"),
             class_id: None,
@@ -637,6 +651,7 @@ mod tests {
             known_rows.iter().map(|entry| entry.id).collect::<Vec<_>>(),
             vec![
                 "network-fetch/v0-test-only",
+                "dependency-intent/v0-test-only",
                 "package-manager-recursion/v0-test-only"
             ]
         );
