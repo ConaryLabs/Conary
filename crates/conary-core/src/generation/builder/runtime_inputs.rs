@@ -18,6 +18,10 @@ const X86_64_LFS_LOADER: &str = "/usr/lib/ld-linux-x86-64.so.2";
 const X86_64_LIB64_LOADER: &str = "/usr/lib64/ld-linux-x86-64.so.2";
 const X86_64_LIB64_LOADER_TARGET: &str = "../lib/ld-linux-x86-64.so.2";
 
+type RuntimeXattrs = BTreeMap<String, Vec<u8>>;
+type CapabilityTargetKey = (i64, String);
+type RuntimeCapabilityXattrs = HashMap<CapabilityTargetKey, RuntimeXattrs>;
+
 #[derive(Debug, Clone)]
 enum ValidatedRuntimeEntry {
     Regular(FileEntryRef),
@@ -120,7 +124,7 @@ fn collect_runtime_capability_xattrs(
     conn: &rusqlite::Connection,
     trove_map: &HashMap<i64, (&str, &InstallSource)>,
     files: &[FileEntry],
-) -> crate::Result<HashMap<(i64, String), BTreeMap<String, Vec<u8>>>> {
+) -> crate::Result<RuntimeCapabilityXattrs> {
     let capability_rows = InstalledFileCapability::find_all_ordered(conn).map_err(|error| {
         crate::Error::InternalError(format!(
             "failed to load installed file capabilities: {error}"
@@ -401,7 +405,7 @@ mod tests {
         crate::db::models::InstalledFileCapability::replace_for_trove(
             conn,
             trove_id,
-            &[capability.clone()],
+            std::slice::from_ref(&capability),
         )
         .expect("persist file capability");
         capability

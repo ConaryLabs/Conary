@@ -370,16 +370,16 @@ fn persist_declared_file_capabilities(
         .collect::<HashMap<_, _>>();
     let selected = file_capabilities
         .iter()
-        .filter_map(|capability| {
+        .filter(|capability| {
             if !installed_file_metadata.contains_key(&capability.path) {
                 warn!(
                     "Skipping declared file capability {} for {} because it was not installed",
                     capability.path,
                     pkg.name()
                 );
-                return None;
+                return false;
             }
-            Some(capability)
+            true
         })
         .map(|capability| {
             let stored_file = stored_files_by_path
