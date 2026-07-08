@@ -11,7 +11,7 @@ use anyhow::{Context, Result, anyhow};
 use conary_core::components::ComponentType;
 use conary_core::db::models::{
     Component, ConfigFile, ConfigSource, DependencyEntry, FileEntry, InstallSource,
-    InstalledLegacyScriptletBundle, ProvideEntry, ScriptletEntry, Trove,
+    InstalledFileCapability, InstalledLegacyScriptletBundle, ProvideEntry, ScriptletEntry, Trove,
 };
 use conary_core::dependencies::DependencyClass;
 use conary_core::transaction::TransactionEngine;
@@ -234,6 +234,7 @@ pub(super) fn install_inner_with_stored_files(
         }
 
         persist_declared_config_files(tx, trove_id, pkg, ctx, &installed_file_metadata)?;
+        persist_declared_file_capabilities(tx, trove_id, pkg, ctx, &installed_file_metadata)?;
 
         for dep in pkg.dependencies() {
             let mut dep_entry = DependencyEntry::new(
@@ -343,6 +344,39 @@ fn persist_declared_config_files(
     Ok(())
 }
 
+fn persist_declared_file_capabilities(
+    tx: &Transaction<'_>,
+    trove_id: i64,
+    pkg: &dyn conary_core::packages::PackageFormat,
+    ctx: &TransactionContext<'_>,
+    installed_file_metadata: &HashMap<String, (i64, String)>,
+) -> Result<()> {
+    let Some(file_capabilities) = ctx.ccs_file_capabilities else {
+        return Ok(());
+    };
+
+    let selected = file_capabilities
+        .iter()
+        .filter_map(|capability| {
+            if installed_file_metadata.contains_key(&capability.path) {
+                Some(capability.clone())
+            } else {
+                warn!(
+                    "Skipping declared file capability {} for {} because it was not installed",
+                    capability.path,
+                    pkg.name()
+                );
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+
+    InstalledFileCapability::replace_for_trove(tx, trove_id, &selected)
+        .with_context(|| format!("Failed to persist CCS file capabilities for {}", pkg.name()))?;
+
+    Ok(())
+}
+
 fn config_source_for_context(ctx: &TransactionContext<'_>) -> ConfigSource {
     match ctx.semantics.source {
         super::PreparedSourceKind::Legacy { format } => match format {
@@ -428,7 +462,8 @@ mod tests {
         RepositoryInstallProvenance, TransactionContext,
     };
     use conary_core::db::models::{
-        Changeset, ConfigFile, ConfigSource, FileEntry, Repository, Trove, TroveType,
+        Changeset, ConfigFile, ConfigSource, FileEntry, InstalledFileCapability, Repository, Trove,
+        TroveType,
     };
     use conary_core::packages::traits::{
         ConfigFileInfo, Dependency, ExtractedFile, PackageFile, PackageFormat, Scriptlet,
@@ -471,6 +506,16 @@ mod tests {
                 scriptlets: Vec::new(),
                 config_files: Vec::new(),
             }
+        }
+    }
+
+    fn file_capability(path: &str) -> conary_core::ccs::manifest::FileCapability {
+        conary_core::ccs::manifest::FileCapability {
+            path: path.to_string(),
+            capabilities: vec!["cap_net_bind_service".to_string()],
+            permitted: true,
+            effective: true,
+            inheritable: false,
         }
     }
 
@@ -726,6 +771,163 @@ mod tests {
         );
         assert!(config.noreplace);
         assert_eq!(config.source, ConfigSource::Rpm);
+    }
+
+    #[test]
+    fn install_inner_persists_selected_file_capability_metadata() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("root");
+        let db_path = temp.path().join("conary.db");
+        std::fs::create_dir_all(&root).unwrap();
+        conary_core::db::init(&db_path).unwrap();
+        let conn = conary_core::db::open(&db_path).unwrap();
+
+        let package = FakePackage::with_file("server", "/usr/bin/server", b"server\n");
+        let extraction = ExtractionResult {
+            extracted_files: package.extracted_files.clone(),
+            classified: HashMap::from([(
+                conary_core::components::ComponentType::Runtime,
+                vec!["/usr/bin/server".to_string()],
+            )]),
+            component_names_by_path: None,
+            installed_component_names: None,
+            ccs_pre_remove_script: None,
+            installed_component_types: vec![conary_core::components::ComponentType::Runtime],
+            skipped_components: Vec::new(),
+            language_provides: Vec::new(),
+        };
+        let file_capabilities = vec![
+            file_capability("/usr/bin/server"),
+            file_capability("/usr/bin/not-installed"),
+        ];
+        let db_path_string = db_path.to_string_lossy().into_owned();
+        let root_string = root.to_string_lossy().into_owned();
+        let ctx = TransactionContext {
+            db_path: &db_path_string,
+            root: &root_string,
+            semantics: InstallSemantics::ccs(),
+            selection_reason: None,
+            old_trove_to_upgrade: None,
+            ccs_manifest_provides: None,
+            ccs_capabilities: None,
+            ccs_file_capabilities: Some(&file_capabilities),
+            execution_path: PackageExecutionPath::MutableLiveRoot,
+            defer_generation: false,
+            repository_provenance: None,
+            legacy_replay: LegacyReplayOptions::default(),
+            accepted_legacy_bundle: None,
+        };
+        let tx_config = TransactionConfig::from_paths(root.clone(), db_path.clone());
+        let mut engine = TransactionEngine::new(tx_config).unwrap();
+        let tx = conn.unchecked_transaction().unwrap();
+        let changeset_id = Changeset::new("Install server-1.0.0".to_string())
+            .insert(&tx)
+            .unwrap();
+
+        let result = install_inner(
+            &tx,
+            &mut engine,
+            changeset_id,
+            &package,
+            &extraction,
+            &ctx,
+            &InstallProgress::single("Installing"),
+        )
+        .unwrap();
+        tx.commit().unwrap();
+
+        let rows = InstalledFileCapability::find_by_trove(&conn, result.trove_id).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].path, "/usr/bin/server");
+        assert_eq!(rows[0].capabilities, vec!["cap_net_bind_service"]);
+        assert!(rows[0].permitted);
+        assert!(rows[0].effective);
+        assert!(!rows[0].inheritable);
+    }
+
+    #[test]
+    fn install_inner_replaces_file_capability_metadata_on_upgrade() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("root");
+        let db_path = temp.path().join("conary.db");
+        std::fs::create_dir_all(&root).unwrap();
+        conary_core::db::init(&db_path).unwrap();
+        let conn = conary_core::db::open(&db_path).unwrap();
+
+        let mut old_trove = Trove::new(
+            "server".to_string(),
+            "1.0.0".to_string(),
+            TroveType::Package,
+        );
+        let old_trove_id = old_trove.insert(&conn).unwrap();
+        InstalledFileCapability::replace_for_trove(
+            &conn,
+            old_trove_id,
+            &[file_capability("/usr/bin/old-server")],
+        )
+        .unwrap();
+
+        let mut package = FakePackage::with_file("server", "/usr/bin/server", b"server-v2\n");
+        package.version = "2.0.0".to_string();
+        let extraction = ExtractionResult {
+            extracted_files: package.extracted_files.clone(),
+            classified: HashMap::from([(
+                conary_core::components::ComponentType::Runtime,
+                vec!["/usr/bin/server".to_string()],
+            )]),
+            component_names_by_path: None,
+            installed_component_names: None,
+            ccs_pre_remove_script: None,
+            installed_component_types: vec![conary_core::components::ComponentType::Runtime],
+            skipped_components: Vec::new(),
+            language_provides: Vec::new(),
+        };
+        let file_capabilities = vec![file_capability("/usr/bin/server")];
+        let db_path_string = db_path.to_string_lossy().into_owned();
+        let root_string = root.to_string_lossy().into_owned();
+        let ctx = TransactionContext {
+            db_path: &db_path_string,
+            root: &root_string,
+            semantics: InstallSemantics::ccs(),
+            selection_reason: None,
+            old_trove_to_upgrade: Some(&old_trove),
+            ccs_manifest_provides: None,
+            ccs_capabilities: None,
+            ccs_file_capabilities: Some(&file_capabilities),
+            execution_path: PackageExecutionPath::MutableLiveRoot,
+            defer_generation: false,
+            repository_provenance: None,
+            legacy_replay: LegacyReplayOptions::default(),
+            accepted_legacy_bundle: None,
+        };
+        let tx_config = TransactionConfig::from_paths(root.clone(), db_path.clone());
+        let mut engine = TransactionEngine::new(tx_config).unwrap();
+        let tx = conn.unchecked_transaction().unwrap();
+        let changeset_id = Changeset::new("Install server-2.0.0".to_string())
+            .insert(&tx)
+            .unwrap();
+
+        let result = install_inner(
+            &tx,
+            &mut engine,
+            changeset_id,
+            &package,
+            &extraction,
+            &ctx,
+            &InstallProgress::single("Installing"),
+        )
+        .unwrap();
+        tx.commit().unwrap();
+
+        assert!(
+            InstalledFileCapability::find_by_trove(&conn, old_trove_id)
+                .unwrap()
+                .is_empty()
+        );
+        let rows = InstalledFileCapability::find_by_trove(&conn, result.trove_id).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].path, "/usr/bin/server");
+        assert_eq!(rows[0].trove_id, result.trove_id);
     }
 
     #[test]
