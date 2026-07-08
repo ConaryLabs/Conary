@@ -2370,6 +2370,8 @@ setsebool -P demo_can_network on
             .legacy_scriptlets
             .as_ref()
             .expect("written CCS archive should carry passive scriptlet bundle");
+        let bundle_summary =
+            ScriptletBundleSummary::from_bundle(bundle, bundle.evidence_digest.clone());
 
         assert_eq!(bundle.publication_status.as_str(), "blocked");
         assert_eq!(bundle.decision_counts.blocked, 1);
@@ -2381,6 +2383,8 @@ setsebool -P demo_can_network on
         assert!(entry.effects.is_empty());
         assert!(entry.boot_security_intents.is_empty());
         assert!(entry.security_policy_intents.is_empty());
+        assert!(bundle_summary.boot_security_intents.is_empty());
+        assert!(bundle_summary.security_policy_intents.is_empty());
         assert!(bundle.security_policy_intents.is_empty());
         assert_eq!(result.scriptlet_metadata.publication_status, "blocked");
         assert_eq!(result.scriptlet_metadata.blocked_classes, vec!["pam"]);
