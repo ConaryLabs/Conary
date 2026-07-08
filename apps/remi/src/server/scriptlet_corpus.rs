@@ -155,7 +155,7 @@ fn blocked_class_hints_for_command(command: &str, form: &str) -> Vec<String> {
         "restorecon" | "semanage" | "setsebool" => {
             classes.push("selinux".to_string());
         }
-        "authselect" | "pam-auth-update" => {
+        "authconfig" | "authselect" | "pam-auth-update" | "pam-config" => {
             classes.push("pam".to_string());
         }
         "dracut" | "mkinitcpio" | "update-initramfs" => {
@@ -231,6 +231,21 @@ mod tests {
                 .contains(&"package-manager-recursion".to_string())
         );
         assert!(summary.blocked_class_hints.contains(&"network".to_string()));
+    }
+
+    #[test]
+    fn corpus_summary_marks_common_pam_stack_helpers() {
+        let summary = ScriptletCorpusSummary::from_scriptlets(
+            "fedora",
+            "pam-ish",
+            &[scriptlet(
+                "authconfig --enablefaillock --update\npam-config --add --mkhomedir\n",
+            )],
+        );
+
+        assert_eq!(summary.command_counts.get("authconfig"), Some(&1));
+        assert_eq!(summary.command_counts.get("pam-config"), Some(&1));
+        assert_eq!(summary.blocked_class_hints, vec!["pam".to_string()]);
     }
 
     #[test]

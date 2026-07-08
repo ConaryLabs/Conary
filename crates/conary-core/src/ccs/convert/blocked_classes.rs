@@ -50,7 +50,7 @@ impl Default for BlockedClassRegistry {
                 "pam",
                 "Authentication stack mutation requires explicit policy support.",
                 "blocked-class-pam",
-                &["authselect", "pam-auth-update"],
+                &["authconfig", "authselect", "pam-auth-update", "pam-config"],
                 &[],
                 "Add a native PAM policy adapter with operator-visible review.",
             ),
@@ -615,6 +615,25 @@ mod tests {
                 .match_invocation(&invocation(command, &argv))
                 .unwrap_or_else(|| panic!("missing blocked class for {command}"));
             assert_eq!(class.id, class_id);
+            assert_eq!(class.default_outcome, BlockedClassOutcome::Blocked);
+        }
+    }
+
+    #[test]
+    fn blocked_classes_cover_common_pam_stack_helpers() {
+        let registry = BlockedClassRegistry::default();
+
+        for (command, argv) in [
+            ("authselect", vec!["select", "sssd", "with-mkhomedir"]),
+            ("authconfig", vec!["--enablefaillock", "--update"]),
+            ("pam-auth-update", vec!["--package"]),
+            ("pam-config", vec!["--add", "--mkhomedir"]),
+        ] {
+            let class = registry
+                .match_invocation(&invocation(command, &argv))
+                .unwrap_or_else(|| panic!("missing blocked class for {command}"));
+            assert_eq!(class.id, "pam");
+            assert_eq!(class.reason_code, "blocked-class-pam");
             assert_eq!(class.default_outcome, BlockedClassOutcome::Blocked);
         }
     }
