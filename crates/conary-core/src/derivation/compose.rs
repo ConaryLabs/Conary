@@ -63,6 +63,7 @@ pub fn compose_file_entries(manifests: &[&OutputManifest]) -> Vec<FileEntryRef> 
                     permissions: file.mode,
                     owner: None,
                     group_name: None,
+                    xattrs: BTreeMap::new(),
                 },
             );
         }
@@ -127,6 +128,7 @@ pub fn compose_entries(manifests: &[&OutputManifest]) -> ComposedEntries {
                     permissions: file.mode,
                     owner: None,
                     group_name: None,
+                    xattrs: BTreeMap::new(),
                 }),
             );
         }

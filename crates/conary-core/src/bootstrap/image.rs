@@ -551,6 +551,7 @@ impl ImageBuilder {
                 permissions: *perms,
                 owner: None,
                 group_name: None,
+                xattrs: std::collections::BTreeMap::new(),
             })
             .collect();
 

@@ -60,7 +60,8 @@ pub(crate) fn rebuild_generation_image_with_boot_root(
 
     let troves = Trove::list_all(conn)?;
     let all_files = FileEntry::find_all_ordered(conn)?;
-    let runtime_inputs = runtime_inputs::collect_runtime_generation_inputs(&troves, all_files)?;
+    let runtime_inputs =
+        runtime_inputs::collect_runtime_generation_inputs(conn, &troves, all_files)?;
 
     validate_runtime_generation_root_is_self_contained(
         &runtime_inputs.file_refs,

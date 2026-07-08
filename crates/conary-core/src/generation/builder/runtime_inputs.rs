@@ -1,11 +1,13 @@
 // conary-core/src/generation/builder/runtime_inputs.rs
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
-use crate::db::models::{FileEntry, InstallSource, Trove};
+use crate::ccs::manifest::FileCapability;
+use crate::db::models::{FileEntry, InstallSource, InstalledFileCapability, Trove};
 use crate::filesystem::CasStore;
 use crate::generation::metadata::is_excluded;
 
+use super::file_capabilities::{SECURITY_CAPABILITY_XATTR, encode_security_capability_xattr};
 use super::{FileEntryRef, SymlinkEntryRef, hex_to_digest};
 
 const S_IFMT: i32 = 0o170000;
@@ -53,6 +55,7 @@ pub(super) struct RuntimeGenerationInputs {
 }
 
 pub(super) fn collect_runtime_generation_inputs(
+    conn: &rusqlite::Connection,
     troves: &[Trove],
     files: Vec<FileEntry>,
 ) -> crate::Result<RuntimeGenerationInputs> {
@@ -68,8 +71,10 @@ pub(super) fn collect_runtime_generation_inputs(
         .iter()
         .filter(|trove| trove.install_source == InstallSource::AdoptedTrack)
         .count();
+    let capability_xattrs = collect_runtime_capability_xattrs(conn, &trove_map, &files)?;
     let mut file_refs = Vec::new();
     let mut symlink_refs = Vec::new();
+    let mut capability_xattrs = capability_xattrs;
 
     for file in files {
         let Some((package_name, source)) = trove_map.get(&file.trove_id) else {
@@ -90,7 +95,13 @@ pub(super) fn collect_runtime_generation_inputs(
         }
 
         match validate_runtime_file_entry(package_name, &file)? {
-            Some(ValidatedRuntimeEntry::Regular(file_ref)) => file_refs.push(file_ref),
+            Some(ValidatedRuntimeEntry::Regular(mut file_ref)) => {
+                if let Some(xattrs) = capability_xattrs.remove(&(file.trove_id, file.path.clone()))
+                {
+                    file_ref.xattrs = xattrs;
+                }
+                file_refs.push(file_ref);
+            }
             Some(ValidatedRuntimeEntry::Symlink(symlink_ref)) => symlink_refs.push(symlink_ref),
             None => {}
         }
@@ -103,6 +114,109 @@ pub(super) fn collect_runtime_generation_inputs(
         symlink_refs,
         adopted_track_count,
     })
+}
+
+fn collect_runtime_capability_xattrs(
+    conn: &rusqlite::Connection,
+    trove_map: &HashMap<i64, (&str, &InstallSource)>,
+    files: &[FileEntry],
+) -> crate::Result<HashMap<(i64, String), BTreeMap<String, Vec<u8>>>> {
+    let capability_rows = InstalledFileCapability::find_all_ordered(conn).map_err(|error| {
+        crate::Error::InternalError(format!(
+            "failed to load installed file capabilities: {error}"
+        ))
+    })?;
+    if capability_rows.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let files_by_trove_path = files
+        .iter()
+        .map(|file| ((file.trove_id, file.path.as_str()), file))
+        .collect::<HashMap<_, _>>();
+    let mut xattrs = HashMap::new();
+
+    for row in capability_rows {
+        let Some((package_name, source)) = trove_map.get(&row.trove_id) else {
+            return Err(capability_input_error(
+                "unknown",
+                &row.path,
+                format!(
+                    "persisted capability references missing trove_id {}",
+                    row.trove_id
+                ),
+            ));
+        };
+
+        if is_excluded(&row.path) {
+            return Err(capability_input_error(
+                package_name,
+                &row.path,
+                "path is excluded from generation",
+            ));
+        }
+
+        if !is_generation_input_source((*source).clone()) {
+            return Err(capability_input_error(
+                package_name,
+                &row.path,
+                format!(
+                    "trove has non-generation install source {}",
+                    source.as_str()
+                ),
+            ));
+        }
+
+        let Some(file) = files_by_trove_path.get(&(row.trove_id, row.path.as_str())) else {
+            return Err(capability_input_error(
+                package_name,
+                &row.path,
+                "has no matching installed file entry",
+            ));
+        };
+
+        ensure_capability_target_is_regular(package_name, file)?;
+        let capability = FileCapability {
+            path: row.path.clone(),
+            capabilities: row.capabilities.clone(),
+            permitted: row.permitted,
+            effective: row.effective,
+            inheritable: row.inheritable,
+        };
+        let encoded = encode_security_capability_xattr(&capability)?;
+        xattrs.insert(
+            (row.trove_id, row.path.clone()),
+            BTreeMap::from([(SECURITY_CAPABILITY_XATTR.to_string(), encoded)]),
+        );
+    }
+
+    Ok(xattrs)
+}
+
+fn ensure_capability_target_is_regular(package_name: &str, file: &FileEntry) -> crate::Result<()> {
+    match classify_file_entry(file) {
+        Ok(RuntimeEntryKind::Regular) => Ok(()),
+        Ok(RuntimeEntryKind::Symlink { .. }) => Err(capability_input_error(
+            package_name,
+            &file.path,
+            "file capability target is a symlink, not a regular file",
+        )),
+        Ok(RuntimeEntryKind::Directory) => Err(capability_input_error(
+            package_name,
+            &file.path,
+            "file capability target is a directory, not a regular file",
+        )),
+        Err(RuntimeEntryProblem::MissingSymlinkTarget) => Err(capability_input_error(
+            package_name,
+            &file.path,
+            "file capability target is a symlink without symlink_target, not a regular file",
+        )),
+        Err(RuntimeEntryProblem::UnsupportedFileType(mode)) => Err(capability_input_error(
+            package_name,
+            &file.path,
+            format!("file capability target is non-regular mode {mode:o}"),
+        )),
+    }
 }
 
 fn add_abi_compat_symlinks(file_refs: &[FileEntryRef], symlink_refs: &mut Vec<SymlinkEntryRef>) {
@@ -184,6 +298,7 @@ fn validate_runtime_file_entry(
                 permissions,
                 owner: file.owner.clone(),
                 group_name: file.group_name.clone(),
+                xattrs: BTreeMap::new(),
             })))
         }
         RuntimeEntryKind::Symlink { target } => {
@@ -218,11 +333,24 @@ fn runtime_input_error(
     ))
 }
 
+fn capability_input_error(
+    package_name: &str,
+    path: &str,
+    detail: impl std::fmt::Display,
+) -> crate::Error {
+    crate::Error::InvalidPath(format!(
+        "exportable runtime generation cannot preserve file capability: package {package_name} path {path}: {detail}"
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ccs::manifest::FileCapability;
     use crate::db::models::{FileEntry, Trove, TroveType};
+    use crate::db::testing::create_test_db;
     use crate::filesystem::CasStore;
+    use crate::generation::builder::file_capabilities::SECURITY_CAPABILITY_XATTR;
 
     fn trove(id: i64, name: &str, source: InstallSource) -> Trove {
         let mut trove = Trove::new_with_source(
@@ -256,6 +384,27 @@ mod tests {
                 "expected error to contain {snippet:?}; got {error}"
             );
         }
+    }
+
+    fn persist_capability(
+        conn: &rusqlite::Connection,
+        trove_id: i64,
+        path: &str,
+    ) -> FileCapability {
+        let capability = FileCapability {
+            path: path.to_string(),
+            capabilities: vec!["cap_net_bind_service".to_string()],
+            permitted: true,
+            effective: true,
+            inheritable: false,
+        };
+        crate::db::models::InstalledFileCapability::replace_for_trove(
+            conn,
+            trove_id,
+            &[capability.clone()],
+        )
+        .expect("persist file capability");
+        capability
     }
 
     #[test]
@@ -404,6 +553,7 @@ mod tests {
 
     #[test]
     fn collect_runtime_generation_inputs_skips_excluded_paths_before_validation() {
+        let (_tmp, conn) = create_test_db();
         let troves = vec![trove(1, "runtime", InstallSource::AdoptedFull)];
         let files = vec![
             file_entry("/var/bad-fifo", "not-a-sha256", 0o010644, 1),
@@ -411,7 +561,7 @@ mod tests {
             symlink_entry("/tmp/bad-link", "target", &"f".repeat(64), 0o120777, 1),
         ];
 
-        let inputs = collect_runtime_generation_inputs(&troves, files).unwrap();
+        let inputs = collect_runtime_generation_inputs(&conn, &troves, files).unwrap();
 
         assert!(inputs.file_refs.is_empty());
         assert!(inputs.symlink_refs.is_empty());
@@ -420,6 +570,7 @@ mod tests {
 
     #[test]
     fn collect_runtime_generation_inputs_skips_adopted_track_entries_but_counts_them() {
+        let (_tmp, conn) = create_test_db();
         let troves = vec![
             trove(1, "tracked", InstallSource::AdoptedTrack),
             trove(2, "runtime", InstallSource::AdoptedFull),
@@ -429,7 +580,7 @@ mod tests {
             file_entry("/usr/bin/runtime", &"1".repeat(64), 0o100755, 2),
         ];
 
-        let inputs = collect_runtime_generation_inputs(&troves, files).unwrap();
+        let inputs = collect_runtime_generation_inputs(&conn, &troves, files).unwrap();
 
         assert_eq!(inputs.adopted_track_count, 1);
         assert_eq!(inputs.file_refs.len(), 1);
@@ -439,6 +590,7 @@ mod tests {
 
     #[test]
     fn collect_runtime_generation_inputs_rejects_non_excluded_special_file() {
+        let (_tmp, conn) = create_test_db();
         let troves = vec![trove(1, "systemd", InstallSource::Repository)];
         let files = vec![file_entry(
             "/etc/systemd/fifo",
@@ -448,7 +600,7 @@ mod tests {
         )];
 
         assert_error_contains(
-            collect_runtime_generation_inputs(&troves, files),
+            collect_runtime_generation_inputs(&conn, &troves, files),
             &[
                 "package systemd",
                 "/etc/systemd/fifo",
@@ -459,21 +611,23 @@ mod tests {
 
     #[test]
     fn collect_runtime_generation_inputs_rejects_orphaned_file_entries() {
+        let (_tmp, conn) = create_test_db();
         let troves = vec![trove(1, "runtime", InstallSource::Repository)];
         let files = vec![file_entry("/usr/bin/orphan", &"3".repeat(64), 0o100755, 99)];
 
         assert_error_contains(
-            collect_runtime_generation_inputs(&troves, files),
+            collect_runtime_generation_inputs(&conn, &troves, files),
             &["orphaned file entry", "trove_id 99", "/usr/bin/orphan"],
         );
     }
 
     #[test]
     fn collect_runtime_generation_inputs_adds_lib64_loader_bridge_for_lfs_roots() {
+        let (_tmp, conn) = create_test_db();
         let troves = vec![trove(1, "glibc", InstallSource::AdoptedFull)];
         let files = vec![file_entry(X86_64_LFS_LOADER, &"4".repeat(64), 0o100755, 1)];
 
-        let inputs = collect_runtime_generation_inputs(&troves, files).unwrap();
+        let inputs = collect_runtime_generation_inputs(&conn, &troves, files).unwrap();
 
         assert_eq!(inputs.file_refs.len(), 1);
         assert!(
@@ -488,6 +642,7 @@ mod tests {
 
     #[test]
     fn collect_runtime_generation_inputs_does_not_duplicate_existing_lib64_loader() {
+        let (_tmp, conn) = create_test_db();
         let troves = vec![trove(1, "glibc", InstallSource::AdoptedFull)];
         let existing_target = "../lib/ld-linux-x86-64.so.2";
         let files = vec![
@@ -501,7 +656,7 @@ mod tests {
             ),
         ];
 
-        let inputs = collect_runtime_generation_inputs(&troves, files).unwrap();
+        let inputs = collect_runtime_generation_inputs(&conn, &troves, files).unwrap();
         let loader_symlinks = inputs
             .symlink_refs
             .iter()
@@ -509,5 +664,169 @@ mod tests {
             .count();
 
         assert_eq!(loader_symlinks, 1);
+    }
+
+    #[test]
+    fn persisted_regular_file_capability_attaches_security_capability_xattr() {
+        let (_tmp, conn) = create_test_db();
+        let mut trove = trove(1, "server", InstallSource::Repository);
+        let trove_id = trove.insert(&conn).expect("insert trove");
+        let expected = persist_capability(&conn, trove_id, "/usr/bin/server");
+        let troves = vec![trove];
+        let files = vec![file_entry(
+            "/usr/bin/server",
+            &"6".repeat(64),
+            0o100755,
+            trove_id,
+        )];
+
+        let inputs = collect_runtime_generation_inputs(&conn, &troves, files).unwrap();
+
+        assert_eq!(inputs.file_refs.len(), 1);
+        assert_eq!(inputs.file_refs[0].path, "/usr/bin/server");
+        assert_eq!(
+            inputs.file_refs[0].xattrs.get(SECURITY_CAPABILITY_XATTR),
+            Some(
+                &crate::generation::builder::file_capabilities::encode_security_capability_xattr(
+                    &expected
+                )
+                .unwrap()
+            )
+        );
+    }
+
+    #[test]
+    fn runtime_inputs_without_capabilities_keep_empty_xattr_maps() {
+        let (_tmp, conn) = create_test_db();
+        let troves = vec![trove(1, "runtime", InstallSource::Repository)];
+        let files = vec![file_entry("/usr/bin/runtime", &"7".repeat(64), 0o100755, 1)];
+
+        let inputs = collect_runtime_generation_inputs(&conn, &troves, files).unwrap();
+
+        assert_eq!(inputs.file_refs.len(), 1);
+        assert_eq!(inputs.file_refs[0].path, "/usr/bin/runtime");
+        assert!(inputs.file_refs[0].xattrs.is_empty());
+    }
+
+    #[test]
+    fn persisted_capability_missing_file_fails_closed_with_package_and_path() {
+        let (_tmp, conn) = create_test_db();
+        let mut trove = trove(1, "server", InstallSource::Repository);
+        let trove_id = trove.insert(&conn).expect("insert trove");
+        persist_capability(&conn, trove_id, "/usr/bin/missing");
+
+        assert_error_contains(
+            collect_runtime_generation_inputs(&conn, &[trove], vec![]),
+            &[
+                "package server",
+                "/usr/bin/missing",
+                "has no matching installed file entry",
+            ],
+        );
+    }
+
+    #[test]
+    fn persisted_capability_on_excluded_file_fails_closed_with_package_and_path() {
+        let (_tmp, conn) = create_test_db();
+        let mut trove = trove(1, "logs", InstallSource::Repository);
+        let trove_id = trove.insert(&conn).expect("insert trove");
+        persist_capability(&conn, trove_id, "/var/log/service");
+        let files = vec![file_entry(
+            "/var/log/service",
+            &"8".repeat(64),
+            0o100755,
+            trove_id,
+        )];
+
+        assert_error_contains(
+            collect_runtime_generation_inputs(&conn, &[trove], files),
+            &[
+                "package logs",
+                "/var/log/service",
+                "excluded from generation",
+            ],
+        );
+    }
+
+    #[test]
+    fn persisted_capability_on_non_generation_source_fails_closed() {
+        let (_tmp, conn) = create_test_db();
+        let mut trove = trove(1, "tracked", InstallSource::AdoptedTrack);
+        let trove_id = trove.insert(&conn).expect("insert trove");
+        persist_capability(&conn, trove_id, "/usr/bin/tracked");
+        let files = vec![file_entry(
+            "/usr/bin/tracked",
+            &"9".repeat(64),
+            0o100755,
+            trove_id,
+        )];
+
+        assert_error_contains(
+            collect_runtime_generation_inputs(&conn, &[trove], files),
+            &[
+                "package tracked",
+                "/usr/bin/tracked",
+                "non-generation install source",
+            ],
+        );
+    }
+
+    #[test]
+    fn persisted_capability_on_symlink_fails_closed() {
+        let (_tmp, conn) = create_test_db();
+        let mut trove = trove(1, "links", InstallSource::Repository);
+        let trove_id = trove.insert(&conn).expect("insert trove");
+        persist_capability(&conn, trove_id, "/usr/bin/link");
+        let target = "real";
+        let files = vec![symlink_entry(
+            "/usr/bin/link",
+            target,
+            &CasStore::compute_symlink_hash(target),
+            0o120777,
+            trove_id,
+        )];
+
+        assert_error_contains(
+            collect_runtime_generation_inputs(&conn, &[trove], files),
+            &["package links", "/usr/bin/link", "symlink"],
+        );
+    }
+
+    #[test]
+    fn persisted_capability_on_directory_fails_closed() {
+        let (_tmp, conn) = create_test_db();
+        let mut trove = trove(1, "dirs", InstallSource::Repository);
+        let trove_id = trove.insert(&conn).expect("insert trove");
+        persist_capability(&conn, trove_id, "/usr/lib/service");
+        let files = vec![file_entry(
+            "/usr/lib/service",
+            "directory-placeholder",
+            0o040755,
+            trove_id,
+        )];
+
+        assert_error_contains(
+            collect_runtime_generation_inputs(&conn, &[trove], files),
+            &["package dirs", "/usr/lib/service", "directory"],
+        );
+    }
+
+    #[test]
+    fn persisted_capability_on_special_file_fails_closed() {
+        let (_tmp, conn) = create_test_db();
+        let mut trove = trove(1, "devices", InstallSource::Repository);
+        let trove_id = trove.insert(&conn).expect("insert trove");
+        persist_capability(&conn, trove_id, "/etc/device");
+        let files = vec![file_entry(
+            "/etc/device",
+            &"a".repeat(64),
+            0o020600,
+            trove_id,
+        )];
+
+        assert_error_contains(
+            collect_runtime_generation_inputs(&conn, &[trove], files),
+            &["package devices", "/etc/device", "non-regular"],
+        );
     }
 }

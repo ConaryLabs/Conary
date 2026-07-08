@@ -183,7 +183,8 @@ pub fn build_generation_from_db_with_boot_root_and_activation(
     // Step 3: Collect and validate exportable runtime inputs before building.
     let troves = Trove::list_all(conn)?;
     let all_files = FileEntry::find_all_ordered(conn)?;
-    let runtime_inputs = runtime_inputs::collect_runtime_generation_inputs(&troves, all_files)?;
+    let runtime_inputs =
+        runtime_inputs::collect_runtime_generation_inputs(conn, &troves, all_files)?;
 
     // Step 4: Build EROFS image with symlinks from DB.
     // This must succeed before we commit state to the database.

@@ -1,5 +1,6 @@
 // conary-core/src/generation/builder/erofs.rs
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use tracing::{debug, info, warn};
@@ -28,6 +29,8 @@ pub struct FileEntryRef {
     /// Group name (e.g., `"wheel"`). Resolved to numeric GID at EROFS
     /// build time via `getgrnam_r`. Defaults to root (GID 0) when `None`.
     pub group_name: Option<String>,
+    /// Extended attributes to preserve for this regular file.
+    pub xattrs: BTreeMap<String, Vec<u8>>,
 }
 
 /// A symbolic link entry for EROFS building.
@@ -468,6 +471,7 @@ mod tests {
                     permissions: 0o755,
                     owner: None,
                     group_name: None,
+                    xattrs: BTreeMap::new(),
                 },
                 FileEntryRef {
                     path: "/usr/lib/libfoo.so".to_string(),
@@ -477,6 +481,7 @@ mod tests {
                     permissions: 0o644,
                     owner: None,
                     group_name: None,
+                    xattrs: BTreeMap::new(),
                 },
             ];
 
@@ -512,6 +517,7 @@ mod tests {
                     permissions: 0o755,
                     owner: None,
                     group_name: None,
+                    xattrs: BTreeMap::new(),
                 },
                 FileEntryRef {
                     path: "/var/log/messages".to_string(),
@@ -521,6 +527,7 @@ mod tests {
                     permissions: 0o644,
                     owner: None,
                     group_name: None,
+                    xattrs: BTreeMap::new(),
                 },
             ];
 
@@ -552,6 +559,7 @@ mod tests {
                     permissions: 0o755,
                     owner: None,
                     group_name: None,
+                    xattrs: BTreeMap::new(),
                 },
                 FileEntryRef {
                     path: "/usr/lib/libfoo.so".to_string(),
@@ -561,6 +569,7 @@ mod tests {
                     permissions: 0o644,
                     owner: None,
                     group_name: None,
+                    xattrs: BTreeMap::new(),
                 },
             ];
 
@@ -584,6 +593,7 @@ mod tests {
                 permissions: 0o755,
                 owner: Some("root".to_string()),
                 group_name: Some("root".to_string()),
+                xattrs: BTreeMap::new(),
             }];
 
             let result = build_erofs_image(&entries, &[], tmp.path()).unwrap();
@@ -602,6 +612,7 @@ mod tests {
                 permissions: 0o755,
                 owner: None,
                 group_name: None,
+                xattrs: BTreeMap::new(),
             }];
 
             let r1 = build_erofs_image(&entries, &[], tmp1.path()).unwrap();

@@ -10,6 +10,7 @@ mod boot_assets;
 mod cas;
 mod create;
 mod erofs;
+mod file_capabilities;
 mod initramfs;
 mod kernel;
 mod rebuild;
