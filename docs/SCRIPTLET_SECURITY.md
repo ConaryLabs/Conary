@@ -205,11 +205,11 @@ signals during conversion. It is an advisory trace for refusal diagnostics, not
 runtime execution and not permission to mutate the host boot or security state.
 Environment values are not surfaced in public boot/security evidence.
 
-Maintainers may use Remi's non-public admin/test serving lane to fetch blocked
-or review-required converted CCS files for inspection. That lane is disabled by
-default, requires admin access, and preserves the original scriptlet publication
-status. It is not public publication authority and does not permit raw legacy
-scriptlet replay.
+Maintainers may use Remi's non-public admin/test serving lane to fetch blocked,
+private-review, or local-only converted CCS files for inspection. That lane is
+disabled by default, requires admin access, and preserves the original
+scriptlet publication status. It is not public publication authority and does
+not permit raw legacy scriptlet replay.
 
 ### 5. Basic Protections (Always Active)
 
