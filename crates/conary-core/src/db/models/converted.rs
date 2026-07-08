@@ -399,18 +399,10 @@ impl ConvertedPackage {
         };
 
         let columns = self.publication_columns();
-        let shape_valid = columns.summary_json_shape_valid_for_publication(&value);
+        let valid = columns.summary_json_valid_for_publication(&value);
         let summary = self.scriptlet_summary();
-        let status_matches = value
-            .get("publication_status")
-            .and_then(|value| value.as_str())
-            .map(|status| status == self.publication_status)
-            .unwrap_or_else(|| columns.is_default_scriptlet_publication_shape(&value));
 
-        ScriptletSummaryForPublication {
-            summary,
-            valid: shape_valid && status_matches,
-        }
+        ScriptletSummaryForPublication { summary, valid }
     }
 
     pub fn is_scriptlet_public_ready(&self) -> bool {
@@ -829,14 +821,19 @@ struct ScriptletPublicationColumns<'a> {
 
 impl ScriptletPublicationColumns<'_> {
     fn summary_json_valid_for_publication(&self, value: &serde_json::Value) -> bool {
-        let shape_valid = self.summary_json_shape_valid_for_publication(value);
-        let status_matches = value
-            .get("publication_status")
-            .and_then(|value| value.as_str())
-            .map(|status| status == self.publication_status)
-            .unwrap_or_else(|| self.is_default_scriptlet_publication_shape(value));
+        if self.is_default_scriptlet_publication_shape(value) {
+            return true;
+        }
 
-        shape_valid && status_matches
+        if !self.summary_json_shape_valid_for_publication(value) {
+            return false;
+        }
+
+        let Ok(summary) = serde_json::from_value::<ScriptletBundleSummary>(value.clone()) else {
+            return false;
+        };
+
+        summary.publication_status == self.publication_status
     }
 
     fn summary_json_shape_valid_for_publication(&self, value: &serde_json::Value) -> bool {
@@ -1128,6 +1125,33 @@ mod tests {
     }
 
     #[test]
+    fn malformed_typed_summary_json_is_not_valid_for_publication() {
+        let mut converted = ConvertedPackage::new(
+            "rpm".to_string(),
+            "sha256:source".to_string(),
+            "high".to_string(),
+        );
+        converted.scriptlet_summary_json = serde_json::json!({
+            "scriptlet_fidelity": "fully-replaced",
+            "target_compatibility": "conary-portable",
+            "publication_status": "public",
+            "decision_counts": "bad",
+            "blocked_reason_codes": [],
+            "review_reason_codes": [],
+            "unknown_commands": [],
+            "blocked_classes": [],
+            "boot_security_intents": [],
+            "security_policy_intents": []
+        })
+        .to_string();
+
+        let publication = converted.scriptlet_summary_for_publication();
+
+        assert!(!publication.valid);
+        assert!(!converted.is_scriptlet_public_ready());
+    }
+
+    #[test]
     fn scriptlet_public_ready_requires_valid_summary_and_public_status() {
         let mut converted = ConvertedPackage::new(
             "rpm".to_string(),
@@ -1199,6 +1223,48 @@ mod tests {
         assert_eq!(
             ConvertedPackage::chunk_publication_state(&conn, shared_hash).unwrap(),
             ChunkPublicationState::PublicReady,
+        );
+    }
+
+    #[test]
+    fn chunk_publication_state_rejects_malformed_typed_summary_json() {
+        let (_temp, conn) = create_test_db();
+        let shared_hash = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+        let mut malformed = ConvertedPackage::new_server(
+            "fedora".to_string(),
+            "malformed-public-looking".to_string(),
+            "1.0".to_string(),
+            "rpm".to_string(),
+            "sha256:malformed-public-looking".to_string(),
+            "high".to_string(),
+            &[shared_hash.to_string()],
+            10,
+            "sha256:malformed-public-looking-content".to_string(),
+            "/tmp/malformed-public-looking.ccs".to_string(),
+        );
+        malformed.scriptlet_summary_json = serde_json::json!({
+            "scriptlet_fidelity": "fully-replaced",
+            "target_compatibility": "conary-portable",
+            "publication_status": "public",
+            "decision_counts": {
+                "replaced": 1,
+                "legacy": 0,
+                "blocked": 0,
+                "review": 0
+            },
+            "blocked_reason_codes": [],
+            "review_reason_codes": [],
+            "unknown_commands": [],
+            "blocked_classes": [],
+            "boot_security_intents": [],
+            "security_policy_intents": "bad"
+        })
+        .to_string();
+        malformed.insert(&conn).unwrap();
+
+        assert_eq!(
+            ConvertedPackage::chunk_publication_state(&conn, shared_hash).unwrap(),
+            ChunkPublicationState::NonPublicOnly,
         );
     }
 
