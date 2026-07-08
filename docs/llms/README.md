@@ -95,8 +95,8 @@ second subsystem manual.
 - **Routing:** this file, `docs/llms/subsystem-map.md`,
   `docs/modules/feature-ownership.md`, and `scripts/agent-context.sh`.
 - **Canonical docs:** architecture, module, integration-testing, operations,
-  guide, and spec docs that describe current repo behavior or intended active
-  product contracts.
+  guide, and `docs/specs/` contract docs that describe current repo behavior or
+  intended active product contracts.
 - **Planning docs:** active files under `docs/superpowers/plans/` and
   `docs/superpowers/specs/`. They define scoped future work and must not be
   mistaken for already-shipped behavior.
