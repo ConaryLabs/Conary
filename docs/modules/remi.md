@@ -134,15 +134,15 @@ server state and is not advertised as a normal converted artifact.
 
 ### Non-Public Test Serving
 
-Remi also has a default-off admin/test lane for converted artifacts that are
-blocked or private-review. When `non_public_test_serving.enabled = true`, an
-admin can request `/v1/admin/packages/{distro}/{package}/test-manifest` or
+Remi also has a default-off admin/test lane for valid non-public converted
+artifacts, including rows classified as `blocked`, `private-review`, or
+`local-only`. When `non_public_test_serving.enabled = true`, an admin can
+request `/v1/admin/packages/{distro}/{package}/test-manifest` or
 `/v1/admin/packages/{distro}/{package}/test-download` with an exact version and
 optional architecture (`arch`, or `architecture` as an alias). This does not
-change public publication status, public
-indexes, OCI tags, sparse indexes, search results, or public chunk serving.
-Malformed rows are not test-served; they need reconversion or metadata repair
-first.
+change public publication status, public indexes, OCI tags, sparse indexes,
+search results, or public chunk serving. Malformed or stale rows are not
+test-served; they need reconversion or metadata repair first.
 
 ### Fixture Ownership
 
