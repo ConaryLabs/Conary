@@ -82,13 +82,13 @@ Read these before executing:
 
 - `AGENTS.md`
 - `docs/llms/README.md`
-- `docs/superpowers/specs/2026-06-18-m4e-lifecycle-authoring-native-proof-corpus-design.md`
-- `docs/superpowers/specs/2026-06-17-m4-ccs-native-ecosystem-design.md`
-- `docs/superpowers/specs/2026-06-17-m4a-ccs-v2-native-package-contract-design.md`
-- `docs/superpowers/specs/2026-06-18-m4b-native-authoring-build-lint-test-design.md`
-- `docs/superpowers/specs/2026-06-18-m4c-remi-native-ccs-publication-design.md`
-- `docs/superpowers/specs/2026-06-18-m4d-supported-distro-adapter-profiles-design.md`
-- `docs/superpowers/plans/2026-06-05-ccs-native-ecosystem-roadmap.md`
+- `docs/superpowers/specs/archive/2026-06-18-m4e-lifecycle-authoring-native-proof-corpus-design.md`
+- `docs/superpowers/specs/archive/2026-06-17-m4-ccs-native-ecosystem-design.md`
+- `docs/superpowers/specs/archive/2026-06-17-m4a-ccs-v2-native-package-contract-design.md`
+- `docs/superpowers/specs/archive/2026-06-18-m4b-native-authoring-build-lint-test-design.md`
+- `docs/superpowers/specs/archive/2026-06-18-m4c-remi-native-ccs-publication-design.md`
+- `docs/superpowers/specs/archive/2026-06-18-m4d-supported-distro-adapter-profiles-design.md`
+- `docs/superpowers/plans/archive/2026-06-05-ccs-native-ecosystem-roadmap.md`
 - `docs/modules/ccs.md`
 - `docs/modules/remi.md`
 - `docs/modules/test-fixtures.md`
@@ -213,8 +213,8 @@ Maintainability boundaries:
 ### Task 0: Rebaseline The Current Checkout Before Implementation
 
 **Files:**
-- Read: `docs/superpowers/specs/2026-06-18-m4e-lifecycle-authoring-native-proof-corpus-design.md`
-- Read: `docs/superpowers/plans/2026-06-18-m4e-lifecycle-authoring-native-proof-corpus-implementation-plan.md`
+- Read: `docs/superpowers/specs/archive/2026-06-18-m4e-lifecycle-authoring-native-proof-corpus-design.md`
+- Read: `docs/superpowers/plans/archive/2026-06-18-m4e-lifecycle-authoring-native-proof-corpus-implementation-plan.md`
 - Read: `apps/conary/src/commands/ccs/init_template.rs`
 - Read: `apps/conary/src/cli/ccs.rs`
 - Read: `crates/conary-core/src/ccs/v2/authoring.rs`
@@ -281,8 +281,8 @@ before starting M4e.
 Run:
 
 ```bash
-git add docs/superpowers/specs/2026-06-18-m4e-lifecycle-authoring-native-proof-corpus-design.md \
-  docs/superpowers/plans/2026-06-18-m4e-lifecycle-authoring-native-proof-corpus-implementation-plan.md \
+git add docs/superpowers/specs/archive/2026-06-18-m4e-lifecycle-authoring-native-proof-corpus-design.md \
+  docs/superpowers/plans/archive/2026-06-18-m4e-lifecycle-authoring-native-proof-corpus-implementation-plan.md \
   docs/superpowers/documentation-accuracy-audit-ledger.tsv
 git commit -m "docs(ccs): rebaseline m4e lifecycle plan"
 ```
@@ -1848,7 +1848,7 @@ bash scripts/docs-audit-inventory.sh > docs/superpowers/documentation-accuracy-a
 
 Add or update ledger rows for:
 
-- `docs/superpowers/plans/2026-06-18-m4e-lifecycle-authoring-native-proof-corpus-implementation-plan.md`
+- `docs/superpowers/plans/archive/2026-06-18-m4e-lifecycle-authoring-native-proof-corpus-implementation-plan.md`
 - `docs/modules/ccs.md`
 - `docs/modules/remi.md`
 - `docs/modules/test-fixtures.md`
@@ -1900,7 +1900,7 @@ Before launching implementation:
 1. Run DeepSeek and Gemini with:
 
 ```bash
-scripts/agentic-plan-review.sh docs/superpowers/plans/2026-06-18-m4e-lifecycle-authoring-native-proof-corpus-implementation-plan.md --review-kind plan --context docs/superpowers/specs/2026-06-18-m4e-lifecycle-authoring-native-proof-corpus-design.md --context docs/superpowers/specs/2026-06-18-m4b-native-authoring-build-lint-test-design.md --context docs/superpowers/specs/2026-06-18-m4c-remi-native-ccs-publication-design.md --context docs/superpowers/specs/2026-06-18-m4d-supported-distro-adapter-profiles-design.md
+scripts/agentic-plan-review.sh docs/superpowers/plans/archive/2026-06-18-m4e-lifecycle-authoring-native-proof-corpus-implementation-plan.md --review-kind plan --context docs/superpowers/specs/archive/2026-06-18-m4e-lifecycle-authoring-native-proof-corpus-design.md --context docs/superpowers/specs/archive/2026-06-18-m4b-native-authoring-build-lint-test-design.md --context docs/superpowers/specs/archive/2026-06-18-m4c-remi-native-ccs-publication-design.md --context docs/superpowers/specs/archive/2026-06-18-m4d-supported-distro-adapter-profiles-design.md
 ```
 
 2. Patch verified external findings.

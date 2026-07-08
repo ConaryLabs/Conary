@@ -44,7 +44,7 @@ behavior. It should be reviewed and locked in before implementation starts.
 - `docs/modules/test-fixtures.md`
 - `docs/modules/source-selection.md`
 - `docs/superpowers/plans/archive/2026-06-06-project-maintainability-agent-readiness-roadmap.md`
-- `docs/superpowers/plans/2026-06-05-ccs-native-ecosystem-roadmap.md`
+- `docs/superpowers/plans/archive/2026-06-05-ccs-native-ecosystem-roadmap.md`
 - `docs/superpowers/project-maintainability-dead-surface-inventory-2026-06-06.md`
 - `apps/conary/src/commands/install/mod.rs`
 - `apps/conary/src/commands/install/batch.rs`
@@ -301,7 +301,7 @@ Add this literal-tab row to
 maintainability plan rows:
 
 ```text
-docs/superpowers/plans/archive/2026-06-06-project-maintainability-phase4-install-hotspot-decomposition-plan.md	docs/superpowers/plans/archive/2026-06-06-project-maintainability-phase4-install-hotspot-decomposition-plan.md	planning	maintainer	maintainability; phase4; hotspot-decomposition; conary-install; legacy-replay	AGENTS.md; docs/llms/README.md; docs/llms/subsystem-map.md; docs/ARCHITECTURE.md; docs/INTEGRATION-TESTING.md; docs/modules/ccs.md; docs/modules/test-fixtures.md; docs/modules/source-selection.md; docs/superpowers/plans/archive/2026-06-06-project-maintainability-agent-readiness-roadmap.md; docs/superpowers/plans/2026-06-05-ccs-native-ecosystem-roadmap.md; apps/conary/src/commands/install/mod.rs; apps/conary/src/commands/install/batch.rs; apps/conary/src/commands/install/restore.rs; apps/conary/src/commands/install/inner.rs; apps/conary/src/commands/update.rs; crates/conary-core/src/ccs/legacy_replay.rs	verified	corrected	Added the reviewed Phase 4 plan for the first install hotspot decomposition slice: extract the install-side legacy replay adapter, preserve import paths and replay gates, route docs to the new owner module, and avoid CCS native, Remi, conaryd, schema, and behavior changes.
+docs/superpowers/plans/archive/2026-06-06-project-maintainability-phase4-install-hotspot-decomposition-plan.md	docs/superpowers/plans/archive/2026-06-06-project-maintainability-phase4-install-hotspot-decomposition-plan.md	planning	maintainer	maintainability; phase4; hotspot-decomposition; conary-install; legacy-replay	AGENTS.md; docs/llms/README.md; docs/llms/subsystem-map.md; docs/ARCHITECTURE.md; docs/INTEGRATION-TESTING.md; docs/modules/ccs.md; docs/modules/test-fixtures.md; docs/modules/source-selection.md; docs/superpowers/plans/archive/2026-06-06-project-maintainability-agent-readiness-roadmap.md; docs/superpowers/plans/archive/2026-06-05-ccs-native-ecosystem-roadmap.md; apps/conary/src/commands/install/mod.rs; apps/conary/src/commands/install/batch.rs; apps/conary/src/commands/install/restore.rs; apps/conary/src/commands/install/inner.rs; apps/conary/src/commands/update.rs; crates/conary-core/src/ccs/legacy_replay.rs	verified	corrected	Added the reviewed Phase 4 plan for the first install hotspot decomposition slice: extract the install-side legacy replay adapter, preserve import paths and replay gates, route docs to the new owner module, and avoid CCS native, Remi, conaryd, schema, and behavior changes.
 ```
 
 - [ ] **Step 4: Update the audit summary for the active Phase 4 plan**

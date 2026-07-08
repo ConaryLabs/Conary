@@ -27,7 +27,7 @@ and creates the inventory that later pruning and refactor plans can use.
 - `docs/llms/README.md`
 - `docs/llms/subsystem-map.md`
 - `docs/superpowers/plans/archive/2026-06-06-project-maintainability-agent-readiness-roadmap.md`
-- `docs/superpowers/plans/2026-06-05-ccs-native-ecosystem-roadmap.md`
+- `docs/superpowers/plans/archive/2026-06-05-ccs-native-ecosystem-roadmap.md`
 - `data/distros.toml`
 - `apps/conary/src/cli/repo.rs`
 - `apps/conary/src/commands/ccs/init.rs`
@@ -183,7 +183,7 @@ Add this row to `docs/superpowers/documentation-accuracy-audit-ledger.tsv` with
 literal tab separators:
 
 ```text
-docs/superpowers/plans/archive/2026-06-06-project-maintainability-phase2-dead-surface-pruning-plan.md	docs/superpowers/plans/archive/2026-06-06-project-maintainability-phase2-dead-surface-pruning-plan.md	planning	maintainer	maintainability; phase2; dead-surface-pruning; stale-surface-inventory	AGENTS.md; CONTRIBUTING.md; docs/llms/README.md; docs/llms/subsystem-map.md; docs/superpowers/plans/archive/2026-06-06-project-maintainability-agent-readiness-roadmap.md; docs/superpowers/plans/2026-06-05-ccs-native-ecosystem-roadmap.md; data/distros.toml; apps/conary/src/cli/repo.rs; apps/conary/src/commands/ccs/init.rs; apps/remi/src/bin/remi.rs; scripts/docs-audit-inventory.sh; scripts/check-doc-audit-ledger.sh	verified	corrected	Added the reviewed Phase 2 implementation plan for the first dead-surface pruning slice: portable docs-audit inventory filtering, tested public CLI help cleanup, current supported-target wording, CCS init command-name correction, and a pruning inventory artifact.
+docs/superpowers/plans/archive/2026-06-06-project-maintainability-phase2-dead-surface-pruning-plan.md	docs/superpowers/plans/archive/2026-06-06-project-maintainability-phase2-dead-surface-pruning-plan.md	planning	maintainer	maintainability; phase2; dead-surface-pruning; stale-surface-inventory	AGENTS.md; CONTRIBUTING.md; docs/llms/README.md; docs/llms/subsystem-map.md; docs/superpowers/plans/archive/2026-06-06-project-maintainability-agent-readiness-roadmap.md; docs/superpowers/plans/archive/2026-06-05-ccs-native-ecosystem-roadmap.md; data/distros.toml; apps/conary/src/cli/repo.rs; apps/conary/src/commands/ccs/init.rs; apps/remi/src/bin/remi.rs; scripts/docs-audit-inventory.sh; scripts/check-doc-audit-ledger.sh	verified	corrected	Added the reviewed Phase 2 implementation plan for the first dead-surface pruning slice: portable docs-audit inventory filtering, tested public CLI help cleanup, current supported-target wording, CCS init command-name correction, and a pruning inventory artifact.
 ```
 
 - [ ] **Step 6: Update the docs-audit summary for the active plan**

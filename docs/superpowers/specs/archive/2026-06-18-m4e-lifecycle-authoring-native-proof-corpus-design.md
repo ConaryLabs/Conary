@@ -5,7 +5,7 @@
 2026-07-03 repo rebaseline. The original design was locked on 2026-06-18 after
 DeepSeek, Gemini, and local agentic review; the refresh baseline below records
 the pre-implementation state that this branch closes.
-**Parent umbrella:** `docs/superpowers/specs/2026-06-17-m4-ccs-native-ecosystem-design.md`
+**Parent umbrella:** `docs/superpowers/specs/archive/2026-06-17-m4-ccs-native-ecosystem-design.md`
 **Prerequisites:** M4a CCS v2 native package contract, M4b native authoring
 workflow, M4c Remi native CCS publication, and M4d supported target profiles
 are implemented and merged.

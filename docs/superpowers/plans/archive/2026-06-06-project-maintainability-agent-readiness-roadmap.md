@@ -72,7 +72,7 @@ Read these before writing any child spec or implementation plan:
 - `docs/modules/remi.md`
 - `docs/modules/recipe.md`
 - `docs/modules/source-selection.md`
-- `docs/superpowers/plans/2026-06-05-ccs-native-ecosystem-roadmap.md`
+- `docs/superpowers/plans/archive/2026-06-05-ccs-native-ecosystem-roadmap.md`
 - Relevant `docs/modules/*.md` files for the touched subsystem
 
 Areas that child specs must inspect before proposing implementation:
@@ -454,7 +454,7 @@ decompositions.
 **Roadmap coordination:** Decompositions of
 `apps/conary/src/commands/ccs/install.rs`, `apps/remi/src/server/conversion.rs`,
 and core CCS conversion modules must be scheduled with the CCS native ecosystem
-roadmap at `docs/superpowers/plans/2026-06-05-ccs-native-ecosystem-roadmap.md`.
+roadmap at `docs/superpowers/plans/archive/2026-06-05-ccs-native-ecosystem-roadmap.md`.
 That roadmap is contract-first, so CCS v2 native package contract work can
 proceed before CLI hotspot decomposition. CCS hotspot decomposition should be
 driven by the active CCS child spec, not file size alone. If a CCS child plan

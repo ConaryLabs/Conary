@@ -23,7 +23,7 @@
 
 ## Scope Boundary
 
-This plan implements the metadata and review-data foundation from `docs/superpowers/specs/2026-07-07-generic-lsm-security-policy-intent-design.md`.
+This plan implements the metadata and review-data foundation from `docs/superpowers/specs/archive/2026-07-07-generic-lsm-security-policy-intent-design.md`.
 
 Included:
 
@@ -1519,7 +1519,7 @@ Queue samples include sanitized generic LSM `security_policy_intents` when conve
 Append or refresh the ledger row for this plan:
 
 ```text
-docs/superpowers/plans/2026-07-07-generic-lsm-security-policy-intent-plan.md	docs/superpowers/plans/2026-07-07-generic-lsm-security-policy-intent-plan.md	planning	maintainer	lsm-security-policy; selinux; apparmor; implementation-plan; scriptlet-evidence-queue	docs/superpowers/specs/2026-07-07-generic-lsm-security-policy-intent-design.md; docs/superpowers/specs/2026-07-03-remi-scriptlet-evidence-queue-design.md; docs/modules/ccs.md; docs/modules/remi.md; crates/conary-core/src/ccs/legacy_scriptlets.rs; crates/conary-core/src/ccs/convert/selinux_adapters.rs; apps/remi/src/server/scriptlet_evidence_queue/	verified	verified-no-change	Implementation plan for the first additive generic LSM policy intent slice, covering legacy conversion metadata, SELinux bridging, AppArmor review intent, Remi queue projection, public/private outcomes, and docs verification.
+docs/superpowers/plans/archive/2026-07-07-generic-lsm-security-policy-intent-plan.md	docs/superpowers/plans/archive/2026-07-07-generic-lsm-security-policy-intent-plan.md	planning	maintainer	lsm-security-policy; selinux; apparmor; implementation-plan; scriptlet-evidence-queue	docs/superpowers/specs/archive/2026-07-07-generic-lsm-security-policy-intent-design.md; docs/superpowers/specs/archive/2026-07-03-remi-scriptlet-evidence-queue-design.md; docs/modules/ccs.md; docs/modules/remi.md; crates/conary-core/src/ccs/legacy_scriptlets.rs; crates/conary-core/src/ccs/convert/selinux_adapters.rs; apps/remi/src/server/scriptlet_evidence_queue/	verified	verified-no-change	Implementation plan for the first additive generic LSM policy intent slice, covering legacy conversion metadata, SELinux bridging, AppArmor review intent, Remi queue projection, public/private outcomes, and docs verification.
 ```
 
 Regenerate inventory:
@@ -1574,7 +1574,7 @@ git commit -m "docs: document generic LSM policy intent metadata"
 
 ## Execution Handoff
 
-Plan complete and saved to `docs/superpowers/plans/2026-07-07-generic-lsm-security-policy-intent-plan.md`. Two execution options:
+Plan complete and saved to `docs/superpowers/plans/archive/2026-07-07-generic-lsm-security-policy-intent-plan.md`. Two execution options:
 
 1. Subagent-Driven (recommended) - dispatch a fresh subagent per task, review between tasks, fast iteration.
 2. Inline Execution - execute tasks in this session using `superpowers:executing-plans`, batch execution with checkpoints.

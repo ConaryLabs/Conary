@@ -3,7 +3,7 @@
 **Date:** 2026-06-18
 **Status:** Locked for implementation planning after DeepSeek, Gemini, and
 local agentic review.
-**Parent umbrella:** `docs/superpowers/specs/2026-06-17-m4-ccs-native-ecosystem-design.md`
+**Parent umbrella:** `docs/superpowers/specs/archive/2026-06-17-m4-ccs-native-ecosystem-design.md`
 **Prerequisites:** M4a CCS v2 native package contract and M4b native authoring,
 build, lint, and local test workflow are implemented and merged.
 **Scope:** M4c only: Remi native CCS intake, verification, storage, indexing,
@@ -672,7 +672,7 @@ bash scripts/docs-audit-inventory.sh > docs/superpowers/documentation-accuracy-a
 bash scripts/docs-audit-inventory.sh | diff -u docs/superpowers/documentation-accuracy-audit-inventory.tsv -
 bash scripts/check-doc-audit-ledger.sh docs/superpowers/documentation-accuracy-audit-ledger.tsv --require-complete
 bash scripts/check-doc-truth.sh
-! rg -n "TB[D]|TO[D]O" docs/superpowers/specs/2026-06-18-m4c-remi-native-ccs-publication-design.md
+! rg -n "TB[D]|TO[D]O" docs/superpowers/specs/archive/2026-06-18-m4c-remi-native-ccs-publication-design.md
 git diff --check
 cargo fmt --check
 ```

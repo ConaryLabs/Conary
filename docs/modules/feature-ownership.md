@@ -340,7 +340,7 @@ install CCS packages, and preserve/replay legacy scriptlet metadata safely.
 `apps/conary/src/commands/ccs/payload_paths.rs`;
 `docs/modules/ccs.md`;
 `docs/modules/test-fixtures.md`;
-`docs/superpowers/plans/2026-06-05-ccs-native-ecosystem-roadmap.md`.
+`docs/superpowers/plans/archive/2026-06-05-ccs-native-ecosystem-roadmap.md`.
 
 **Neighbor systems:** install orchestration, Remi publication, repository
 metadata, scriptlet sandboxing (`crates/conary-core/src/scriptlet/mod.rs`,

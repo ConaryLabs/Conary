@@ -18,12 +18,12 @@ Read these before executing:
 
 - `AGENTS.md`
 - `docs/llms/README.md`
-- `docs/superpowers/specs/2026-06-18-m4d-supported-distro-adapter-profiles-design.md`
-- `docs/superpowers/specs/2026-06-17-m4-ccs-native-ecosystem-design.md`
-- `docs/superpowers/specs/2026-06-17-m4a-ccs-v2-native-package-contract-design.md`
-- `docs/superpowers/specs/2026-06-18-m4b-native-authoring-build-lint-test-design.md`
-- `docs/superpowers/specs/2026-06-18-m4c-remi-native-ccs-publication-design.md`
-- `docs/superpowers/plans/2026-06-05-ccs-native-ecosystem-roadmap.md`
+- `docs/superpowers/specs/archive/2026-06-18-m4d-supported-distro-adapter-profiles-design.md`
+- `docs/superpowers/specs/archive/2026-06-17-m4-ccs-native-ecosystem-design.md`
+- `docs/superpowers/specs/archive/2026-06-17-m4a-ccs-v2-native-package-contract-design.md`
+- `docs/superpowers/specs/archive/2026-06-18-m4b-native-authoring-build-lint-test-design.md`
+- `docs/superpowers/specs/archive/2026-06-18-m4c-remi-native-ccs-publication-design.md`
+- `docs/superpowers/plans/archive/2026-06-05-ccs-native-ecosystem-roadmap.md`
 - `docs/modules/source-selection.md`
 - `docs/modules/remi.md`
 - `docs/modules/ccs.md`
@@ -2061,7 +2061,7 @@ Apply the inventory diff to `docs/superpowers/documentation-accuracy-audit-inven
 Add or update ledger rows for every tracked doc changed in this task. The M4d plan row should use:
 
 ```text
-docs/superpowers/plans/2026-06-18-m4d-supported-distro-adapter-profiles-implementation-plan.md	docs/superpowers/plans/2026-06-18-m4d-supported-distro-adapter-profiles-implementation-plan.md	planning	maintainer	ccs-native; m4d; supported-target-profiles; implementation-plan; distro-adapters; lifecycle-validation; remi-route-slugs	docs/superpowers/specs/2026-06-18-m4d-supported-distro-adapter-profiles-design.md; docs/superpowers/specs/2026-06-17-m4-ccs-native-ecosystem-design.md; crates/conary-core/src/repository/supported_profiles/; data/distros.toml; crates/conary-core/src/repository/distro.rs; crates/conary-core/src/ccs/v2/validation.rs; apps/conary/src/commands/distro.rs; apps/conary/src/commands/install/source_policy.rs; apps/remi/src/server/handlers/mod.rs; apps/remi/src/server/handlers/sparse.rs; apps/remi/src/server/handlers/tuf.rs; apps/remi/src/server/handlers/admin/mod.rs; apps/remi/src/server/handlers/admin/packages.rs; apps/remi/src/server/conversion/lookup.rs; apps/remi/src/server/conversion/metadata.rs; crates/conary-core/src/repository/sync/remi.rs	verified	corrected	Locked the M4d implementation plan after DeepSeek, Gemini, and local agentic review; covers compile-time embedded supported-target profiles, old data/distros.toml deletion, public ID and route slug boundaries, explicit profile string domains, profile-backed CLI/source-policy/replay behavior, full CCS v2 lifecycle target-profile validation, Remi route inventory validation, route-only Remi sync derivation, M2 publish-gate regression proof, and docs/coherency gates before implementation.
+docs/superpowers/plans/archive/2026-06-18-m4d-supported-distro-adapter-profiles-implementation-plan.md	docs/superpowers/plans/archive/2026-06-18-m4d-supported-distro-adapter-profiles-implementation-plan.md	planning	maintainer	ccs-native; m4d; supported-target-profiles; implementation-plan; distro-adapters; lifecycle-validation; remi-route-slugs	docs/superpowers/specs/archive/2026-06-18-m4d-supported-distro-adapter-profiles-design.md; docs/superpowers/specs/archive/2026-06-17-m4-ccs-native-ecosystem-design.md; crates/conary-core/src/repository/supported_profiles/; data/distros.toml; crates/conary-core/src/repository/distro.rs; crates/conary-core/src/ccs/v2/validation.rs; apps/conary/src/commands/distro.rs; apps/conary/src/commands/install/source_policy.rs; apps/remi/src/server/handlers/mod.rs; apps/remi/src/server/handlers/sparse.rs; apps/remi/src/server/handlers/tuf.rs; apps/remi/src/server/handlers/admin/mod.rs; apps/remi/src/server/handlers/admin/packages.rs; apps/remi/src/server/conversion/lookup.rs; apps/remi/src/server/conversion/metadata.rs; crates/conary-core/src/repository/sync/remi.rs	verified	corrected	Locked the M4d implementation plan after DeepSeek, Gemini, and local agentic review; covers compile-time embedded supported-target profiles, old data/distros.toml deletion, public ID and route slug boundaries, explicit profile string domains, profile-backed CLI/source-policy/replay behavior, full CCS v2 lifecycle target-profile validation, Remi route inventory validation, route-only Remi sync derivation, M2 publish-gate regression proof, and docs/coherency gates before implementation.
 ```
 
 - [ ] **Step 8: Run docs and coherency checks**
@@ -2127,7 +2127,7 @@ Expected: all commands pass.
 
 ## Execution Handoff
 
-Plan complete and saved to `docs/superpowers/plans/2026-06-18-m4d-supported-distro-adapter-profiles-implementation-plan.md`.
+Plan complete and saved to `docs/superpowers/plans/archive/2026-06-18-m4d-supported-distro-adapter-profiles-implementation-plan.md`.
 
 Two execution options:
 

@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-18
 **Status:** Locked for implementation after DeepSeek, Gemini, and local agentic review.
-**Parent umbrella:** `docs/superpowers/specs/2026-06-17-m4-ccs-native-ecosystem-design.md`
+**Parent umbrella:** `docs/superpowers/specs/archive/2026-06-17-m4-ccs-native-ecosystem-design.md`
 **Prerequisite:** M4a CCS v2 native package contract is implemented and merged.
 **Scope:** M4b only: maintainer-facing native CCS authoring, lint, v2 build,
 and local test workflow.

@@ -17,10 +17,10 @@
 Read these before executing:
 
 - `AGENTS.md`
-- `docs/superpowers/specs/2026-06-18-m4b-native-authoring-build-lint-test-design.md`
-- `docs/superpowers/specs/2026-06-17-m4-ccs-native-ecosystem-design.md`
-- `docs/superpowers/specs/2026-06-17-m4a-ccs-v2-native-package-contract-design.md`
-- `docs/superpowers/plans/2026-06-05-ccs-native-ecosystem-roadmap.md`
+- `docs/superpowers/specs/archive/2026-06-18-m4b-native-authoring-build-lint-test-design.md`
+- `docs/superpowers/specs/archive/2026-06-17-m4-ccs-native-ecosystem-design.md`
+- `docs/superpowers/specs/archive/2026-06-17-m4a-ccs-v2-native-package-contract-design.md`
+- `docs/superpowers/plans/archive/2026-06-05-ccs-native-ecosystem-roadmap.md`
 - `docs/modules/ccs.md`
 - `docs/modules/test-fixtures.md`
 - `docs/llms/subsystem-map.md`
@@ -2008,7 +2008,7 @@ If the diff only contains expected new/changed tracked docs, replace the invento
 Add or update ledger rows for the M4b plan and touched docs. The M4b plan row should use:
 
 ```text
-docs/superpowers/plans/2026-06-18-m4b-native-authoring-build-lint-test-implementation-plan.md	docs/superpowers/plans/2026-06-18-m4b-native-authoring-build-lint-test-implementation-plan.md	planning	maintainer	ccs-native; m4b; authoring-workflow; implementation-plan; ccs-v2; lint; local-test	docs/superpowers/specs/2026-06-18-m4b-native-authoring-build-lint-test-design.md; docs/superpowers/specs/2026-06-17-m4-ccs-native-ecosystem-design.md; apps/conary/src/cli/ccs.rs; apps/conary/src/commands/ccs/init.rs; apps/conary/src/commands/ccs/build.rs; apps/conary/src/commands/ccs/install/command.rs; crates/conary-core/src/ccs/v2/authoring.rs; crates/conary-core/src/ccs/builder/package_writer.rs	verified	corrected	Locked the M4b implementation plan after DeepSeek, Gemini, and local agentic review; covers minimal-file template generation, v2 authoring projection, component-default selection, lint diagnostics, service-hook and dependency blocking, local-dev and explicit-key signing, host hardening for all M4b builds, v2 release filenames, signing flag guardrails, local-dev verification, isolated local-dev test state, isolated dry-run package test, command-risk classification, M4b integration proof, external and local review patch points, and docs/coherency gates.
+docs/superpowers/plans/archive/2026-06-18-m4b-native-authoring-build-lint-test-implementation-plan.md	docs/superpowers/plans/archive/2026-06-18-m4b-native-authoring-build-lint-test-implementation-plan.md	planning	maintainer	ccs-native; m4b; authoring-workflow; implementation-plan; ccs-v2; lint; local-test	docs/superpowers/specs/archive/2026-06-18-m4b-native-authoring-build-lint-test-design.md; docs/superpowers/specs/archive/2026-06-17-m4-ccs-native-ecosystem-design.md; apps/conary/src/cli/ccs.rs; apps/conary/src/commands/ccs/init.rs; apps/conary/src/commands/ccs/build.rs; apps/conary/src/commands/ccs/install/command.rs; crates/conary-core/src/ccs/v2/authoring.rs; crates/conary-core/src/ccs/builder/package_writer.rs	verified	corrected	Locked the M4b implementation plan after DeepSeek, Gemini, and local agentic review; covers minimal-file template generation, v2 authoring projection, component-default selection, lint diagnostics, service-hook and dependency blocking, local-dev and explicit-key signing, host hardening for all M4b builds, v2 release filenames, signing flag guardrails, local-dev verification, isolated local-dev test state, isolated dry-run package test, command-risk classification, M4b integration proof, external and local review patch points, and docs/coherency gates.
 ```
 
 - [ ] **Step 4: Run final verification**
@@ -2053,8 +2053,8 @@ Dispatch a local reviewer with this prompt:
 
 ```text
 Review the M4b implementation against:
-- docs/superpowers/specs/2026-06-18-m4b-native-authoring-build-lint-test-design.md
-- docs/superpowers/plans/2026-06-18-m4b-native-authoring-build-lint-test-implementation-plan.md
+- docs/superpowers/specs/archive/2026-06-18-m4b-native-authoring-build-lint-test-design.md
+- docs/superpowers/plans/archive/2026-06-18-m4b-native-authoring-build-lint-test-implementation-plan.md
 
 Focus on: v2 authority projection from BuildResult, local-dev signing trust separation, ccs verify local-dev fallback, ccs test isolated root/database behavior, command-risk classification, static publish rejection of local-dev output, and docs-audit/coherency updates.
 

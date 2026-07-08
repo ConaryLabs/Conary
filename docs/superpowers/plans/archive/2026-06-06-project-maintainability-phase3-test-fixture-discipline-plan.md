@@ -41,7 +41,7 @@ Phase 4 implementation slices once the map shape is proven.
 - `docs/modules/ccs.md`
 - `docs/modules/remi.md`
 - `docs/superpowers/plans/archive/2026-06-06-project-maintainability-agent-readiness-roadmap.md`
-- `docs/superpowers/plans/2026-06-05-ccs-native-ecosystem-roadmap.md`
+- `docs/superpowers/plans/archive/2026-06-05-ccs-native-ecosystem-roadmap.md`
 - `docs/superpowers/project-maintainability-dead-surface-inventory-2026-06-06.md`
 
 ## Design
@@ -140,7 +140,7 @@ Add this literal-tab row to
 maintainability plan rows:
 
 ```text
-docs/superpowers/plans/archive/2026-06-06-project-maintainability-phase3-test-fixture-discipline-plan.md	docs/superpowers/plans/archive/2026-06-06-project-maintainability-phase3-test-fixture-discipline-plan.md	planning	maintainer	maintainability; phase3; test-fixtures; fixture-discipline; remi; ccs	AGENTS.md; docs/llms/README.md; docs/llms/subsystem-map.md; docs/ARCHITECTURE.md; docs/INTEGRATION-TESTING.md; docs/modules/ccs.md; docs/modules/remi.md; docs/superpowers/plans/archive/2026-06-06-project-maintainability-agent-readiness-roadmap.md; docs/superpowers/plans/2026-06-05-ccs-native-ecosystem-roadmap.md; crates/conary-core/src/ccs/convert/golden_fixtures.rs; crates/conary-core/src/ccs/convert/support_matrix.rs; apps/conary/tests/common/legacy_scriptlet_fixtures.rs; apps/remi/src/server/publication.rs; apps/remi/src/server/conversion.rs; apps/conary/tests/integration/remi/manifests	verified	corrected	Added the reviewed Phase 3 plan for the first test and fixture discipline slice: a Remi plus CCS conversion/publication fixture ownership map, exact proof recipes, and docs routing without moving fixtures.
+docs/superpowers/plans/archive/2026-06-06-project-maintainability-phase3-test-fixture-discipline-plan.md	docs/superpowers/plans/archive/2026-06-06-project-maintainability-phase3-test-fixture-discipline-plan.md	planning	maintainer	maintainability; phase3; test-fixtures; fixture-discipline; remi; ccs	AGENTS.md; docs/llms/README.md; docs/llms/subsystem-map.md; docs/ARCHITECTURE.md; docs/INTEGRATION-TESTING.md; docs/modules/ccs.md; docs/modules/remi.md; docs/superpowers/plans/archive/2026-06-06-project-maintainability-agent-readiness-roadmap.md; docs/superpowers/plans/archive/2026-06-05-ccs-native-ecosystem-roadmap.md; crates/conary-core/src/ccs/convert/golden_fixtures.rs; crates/conary-core/src/ccs/convert/support_matrix.rs; apps/conary/tests/common/legacy_scriptlet_fixtures.rs; apps/remi/src/server/publication.rs; apps/remi/src/server/conversion.rs; apps/conary/tests/integration/remi/manifests	verified	corrected	Added the reviewed Phase 3 plan for the first test and fixture discipline slice: a Remi plus CCS conversion/publication fixture ownership map, exact proof recipes, and docs routing without moving fixtures.
 ```
 
 - [ ] **Step 4: Update the audit summary for the active Phase 3 plan**

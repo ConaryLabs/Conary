@@ -15,9 +15,9 @@
 Read these before executing:
 
 - `AGENTS.md`
-- `docs/superpowers/specs/2026-06-17-m4a-ccs-v2-native-package-contract-design.md`
-- `docs/superpowers/specs/2026-06-17-m4-ccs-native-ecosystem-design.md`
-- `docs/superpowers/plans/2026-06-05-ccs-native-ecosystem-roadmap.md`
+- `docs/superpowers/specs/archive/2026-06-17-m4a-ccs-v2-native-package-contract-design.md`
+- `docs/superpowers/specs/archive/2026-06-17-m4-ccs-native-ecosystem-design.md`
+- `docs/superpowers/plans/archive/2026-06-05-ccs-native-ecosystem-roadmap.md`
 - `docs/modules/ccs.md`
 - `docs/modules/test-fixtures.md`
 - `docs/specs/ccs-format-v1.md`

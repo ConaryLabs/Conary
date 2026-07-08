@@ -42,7 +42,7 @@
 **Files:**
 - Modify: `docs/llms/README.md`
 - Reference: `AGENTS.md`
-- Reference: `docs/superpowers/specs/2026-07-08-agent-docs-routing-ergonomics-refresh-design.md`
+- Reference: `docs/superpowers/specs/archive/2026-07-08-agent-docs-routing-ergonomics-refresh-design.md`
 - Reference: `docs/modules/feature-ownership.md`
 - Reference: `scripts/agent-context.sh`
 
@@ -230,7 +230,7 @@ git commit -m "docs(llms): sharpen fresh-agent landing map"
 - Modify: `docs/llms/subsystem-map.md`
 - Reference: `docs/modules/feature-ownership.md`
 - Reference: `scripts/agent-context.sh`
-- Reference: `docs/superpowers/specs/2026-07-08-agent-docs-routing-ergonomics-refresh-design.md`
+- Reference: `docs/superpowers/specs/archive/2026-07-08-agent-docs-routing-ergonomics-refresh-design.md`
 
 **Interfaces:**
 - Consumes: Task 1's command-first landing map.

@@ -17,11 +17,11 @@
 Read these before executing:
 
 - `AGENTS.md`
-- `docs/superpowers/specs/2026-06-18-m4c-remi-native-ccs-publication-design.md`
-- `docs/superpowers/specs/2026-06-17-m4-ccs-native-ecosystem-design.md`
-- `docs/superpowers/specs/2026-06-17-m4a-ccs-v2-native-package-contract-design.md`
-- `docs/superpowers/specs/2026-06-18-m4b-native-authoring-build-lint-test-design.md`
-- `docs/superpowers/plans/2026-06-05-ccs-native-ecosystem-roadmap.md`
+- `docs/superpowers/specs/archive/2026-06-18-m4c-remi-native-ccs-publication-design.md`
+- `docs/superpowers/specs/archive/2026-06-17-m4-ccs-native-ecosystem-design.md`
+- `docs/superpowers/specs/archive/2026-06-17-m4a-ccs-v2-native-package-contract-design.md`
+- `docs/superpowers/specs/archive/2026-06-18-m4b-native-authoring-build-lint-test-design.md`
+- `docs/superpowers/plans/archive/2026-06-05-ccs-native-ecosystem-roadmap.md`
 - `docs/modules/remi.md`
 - `docs/modules/feature-ownership.md`
 - `docs/modules/test-fixtures.md`
@@ -2374,7 +2374,7 @@ bash scripts/docs-audit-inventory.sh > docs/superpowers/documentation-accuracy-a
 
 Add or update ledger rows for:
 
-- `docs/superpowers/plans/2026-06-18-m4c-remi-native-ccs-publication-implementation-plan.md`
+- `docs/superpowers/plans/archive/2026-06-18-m4c-remi-native-ccs-publication-implementation-plan.md`
 - `docs/modules/remi.md`
 - `docs/modules/test-fixtures.md`
 - `docs/modules/feature-ownership.md`
@@ -2471,7 +2471,7 @@ Before marking M4c implemented, verify:
 This plan should receive the normal review loop before `/goal` implementation:
 
 ```bash
-scripts/agentic-plan-review.sh docs/superpowers/plans/2026-06-18-m4c-remi-native-ccs-publication-implementation-plan.md --review-kind plan --only all
+scripts/agentic-plan-review.sh docs/superpowers/plans/archive/2026-06-18-m4c-remi-native-ccs-publication-implementation-plan.md --review-kind plan --only all
 ```
 
 Then run the local agentic review, patch findings, lock the plan, update docs-audit records, and only then start the implementation goal.

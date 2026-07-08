@@ -494,10 +494,10 @@ The umbrella packet itself is docs-only. Use lightweight documentation gates:
 
 ```bash
 git diff --check
-git diff --no-index --check /dev/null docs/superpowers/plans/2026-06-05-ccs-native-ecosystem-roadmap.md
-rg -n "TB[D]|TO[D]O" docs/superpowers/plans/2026-06-05-ccs-native-ecosystem-roadmap.md
-rg -n "(?i)\\b([c]entos|[r]hel|[d]ebian|[o]pensuse|[a]lpine|[t]umbleweed)\\b" docs/superpowers/plans/2026-06-05-ccs-native-ecosystem-roadmap.md
-rg -n "Fedora 4[4]|Ubuntu 26\\.[0]4|\\bArc[h]\\b" docs/superpowers/plans/2026-06-05-ccs-native-ecosystem-roadmap.md
+git diff --no-index --check /dev/null docs/superpowers/plans/archive/2026-06-05-ccs-native-ecosystem-roadmap.md
+rg -n "TB[D]|TO[D]O" docs/superpowers/plans/archive/2026-06-05-ccs-native-ecosystem-roadmap.md
+rg -n "(?i)\\b([c]entos|[r]hel|[d]ebian|[o]pensuse|[a]lpine|[t]umbleweed)\\b" docs/superpowers/plans/archive/2026-06-05-ccs-native-ecosystem-roadmap.md
+rg -n "Fedora 4[4]|Ubuntu 26\\.[0]4|\\bArc[h]\\b" docs/superpowers/plans/archive/2026-06-05-ccs-native-ecosystem-roadmap.md
 git status --short --branch
 ```
 

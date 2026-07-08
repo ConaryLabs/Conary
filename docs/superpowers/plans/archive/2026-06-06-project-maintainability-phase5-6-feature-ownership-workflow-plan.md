@@ -51,7 +51,7 @@ live-system mutation acknowledgement behavior.
 - `docs/operations/daily-driver-ux-matrix.md`
 - `docs/operations/post-generation-export-follow-up-roadmap.md`
 - `docs/superpowers/plans/archive/2026-06-06-project-maintainability-agent-readiness-roadmap.md`
-- `docs/superpowers/plans/2026-06-05-ccs-native-ecosystem-roadmap.md`
+- `docs/superpowers/plans/archive/2026-06-05-ccs-native-ecosystem-roadmap.md`
 - `docs/superpowers/project-maintainability-dead-surface-inventory-2026-06-06.md`
 
 ## Design Summary
@@ -190,7 +190,7 @@ Add this literal-tab row to
 maintainability plan rows:
 
 ```text
-docs/superpowers/plans/archive/2026-06-06-project-maintainability-phase5-6-feature-ownership-workflow-plan.md	docs/superpowers/plans/archive/2026-06-06-project-maintainability-phase5-6-feature-ownership-workflow-plan.md	planning	maintainer	maintainability; phase5; phase6; feature-ownership; contributor-ux; workflow	AGENTS.md; CONTRIBUTING.md; .github/PULL_REQUEST_TEMPLATE.md; docs/llms/README.md; docs/llms/subsystem-map.md; docs/ARCHITECTURE.md; docs/INTEGRATION-TESTING.md; docs/modules/ccs.md; docs/modules/remi.md; docs/modules/conaryd.md; docs/modules/source-selection.md; docs/modules/test-fixtures.md; docs/operations/bootstrap-selfhosting-vm.md; docs/operations/daily-driver-ux-matrix.md; docs/operations/post-generation-export-follow-up-roadmap.md; docs/superpowers/plans/archive/2026-06-06-project-maintainability-agent-readiness-roadmap.md; docs/superpowers/plans/2026-06-05-ccs-native-ecosystem-roadmap.md	verified	corrected	Added the reviewed Phase 5/6 plan for feature ownership cards, contributor workflow routing, focused verification recipes, and cross-system interaction gates without changing Rust behavior, schemas, licensing, or live-mutation UX.
+docs/superpowers/plans/archive/2026-06-06-project-maintainability-phase5-6-feature-ownership-workflow-plan.md	docs/superpowers/plans/archive/2026-06-06-project-maintainability-phase5-6-feature-ownership-workflow-plan.md	planning	maintainer	maintainability; phase5; phase6; feature-ownership; contributor-ux; workflow	AGENTS.md; CONTRIBUTING.md; .github/PULL_REQUEST_TEMPLATE.md; docs/llms/README.md; docs/llms/subsystem-map.md; docs/ARCHITECTURE.md; docs/INTEGRATION-TESTING.md; docs/modules/ccs.md; docs/modules/remi.md; docs/modules/conaryd.md; docs/modules/source-selection.md; docs/modules/test-fixtures.md; docs/operations/bootstrap-selfhosting-vm.md; docs/operations/daily-driver-ux-matrix.md; docs/operations/post-generation-export-follow-up-roadmap.md; docs/superpowers/plans/archive/2026-06-06-project-maintainability-agent-readiness-roadmap.md; docs/superpowers/plans/archive/2026-06-05-ccs-native-ecosystem-roadmap.md	verified	corrected	Added the reviewed Phase 5/6 plan for feature ownership cards, contributor workflow routing, focused verification recipes, and cross-system interaction gates without changing Rust behavior, schemas, licensing, or live-mutation UX.
 ```
 
 - [ ] **Step 4: Update the audit summary for the active Phase 5/6 plan**
@@ -393,7 +393,7 @@ install CCS packages, and preserve/replay legacy scriptlet metadata safely.
 `crates/conary-core/src/ccs/legacy_replay.rs`;
 `apps/conary/src/commands/ccs/`; `docs/modules/ccs.md`;
 `docs/modules/test-fixtures.md`;
-`docs/superpowers/plans/2026-06-05-ccs-native-ecosystem-roadmap.md`.
+`docs/superpowers/plans/archive/2026-06-05-ccs-native-ecosystem-roadmap.md`.
 
 **Neighbor systems:** install orchestration, Remi publication, repository
 metadata, scriptlet sandboxing, fixture maps.

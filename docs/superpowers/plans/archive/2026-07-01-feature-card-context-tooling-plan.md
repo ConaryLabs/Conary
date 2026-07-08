@@ -8,7 +8,7 @@
 
 **Tech Stack:** bash (`set -euo pipefail`), POSIX awk, git plumbing (`ls-files`, `diff --name-only`). No Rust/product code changes.
 
-**Source spec:** `docs/superpowers/specs/2026-07-01-feature-card-context-tooling-design.md` (read it before starting; this plan implements it 1:1).
+**Source spec:** `docs/superpowers/specs/archive/2026-07-01-feature-card-context-tooling-design.md` (read it before starting; this plan implements it 1:1).
 
 ## Global Constraints
 
@@ -51,8 +51,8 @@ These were left open by the design; this plan locks them. Flag to the card owner
 The spec file is currently untracked, so `scripts/docs-audit-inventory.sh` (which reads `git ls-files`) cannot see it. Once either doc is committed without audit metadata, the docs-truth CI job fails. Fix that first so every later commit is CI-green.
 
 **Files:**
-- Stage: `docs/superpowers/specs/2026-07-01-feature-card-context-tooling-design.md`
-- Stage: `docs/superpowers/plans/2026-07-01-feature-card-context-tooling-plan.md` (this file)
+- Stage: `docs/superpowers/specs/archive/2026-07-01-feature-card-context-tooling-design.md`
+- Stage: `docs/superpowers/plans/archive/2026-07-01-feature-card-context-tooling-plan.md` (this file)
 - Modify: `docs/superpowers/documentation-accuracy-audit-inventory.tsv`
 - Modify: `docs/superpowers/documentation-accuracy-audit-ledger.tsv`
 
@@ -63,8 +63,8 @@ The spec file is currently untracked, so `scripts/docs-audit-inventory.sh` (whic
 - [ ] **Step 1: Stage both docs so the inventory script can see them**
 
 ```bash
-git add docs/superpowers/specs/2026-07-01-feature-card-context-tooling-design.md \
-        docs/superpowers/plans/2026-07-01-feature-card-context-tooling-plan.md
+git add docs/superpowers/specs/archive/2026-07-01-feature-card-context-tooling-design.md \
+        docs/superpowers/plans/archive/2026-07-01-feature-card-context-tooling-plan.md
 ```
 
 - [ ] **Step 2: Regenerate the inventory**
@@ -75,16 +75,16 @@ git diff docs/superpowers/documentation-accuracy-audit-inventory.tsv
 ```
 
 Expected: exactly two added rows, both `planning`/`maintainer`:
-`docs/superpowers/plans/2026-07-01-feature-card-context-tooling-plan.md` and
-`docs/superpowers/specs/2026-07-01-feature-card-context-tooling-design.md`.
+`docs/superpowers/plans/archive/2026-07-01-feature-card-context-tooling-plan.md` and
+`docs/superpowers/specs/archive/2026-07-01-feature-card-context-tooling-design.md`.
 
 - [ ] **Step 3: Append two ledger rows**
 
 Append these two lines to `docs/superpowers/documentation-accuracy-audit-ledger.tsv` (fields are TAB-separated; 9 fields per row matching the header `origin_path path family audience claim_clusters evidence_sources status disposition notes`):
 
 ```text
-docs/superpowers/specs/2026-07-01-feature-card-context-tooling-design.md	docs/superpowers/specs/2026-07-01-feature-card-context-tooling-design.md	planning	maintainer	feature-card-tooling; agent-context; drift-report-cutover; plan-review-cutover	docs/modules/feature-ownership.md; scripts/maintainability-drift-report.sh; scripts/agentic-plan-review.sh	verified	verified-no-change	Design spec for scripts/agent-context.sh, the Slug/Paths card schema fields, and the drift-report/plan-review hard cutovers.
-docs/superpowers/plans/2026-07-01-feature-card-context-tooling-plan.md	docs/superpowers/plans/2026-07-01-feature-card-context-tooling-plan.md	planning	maintainer	feature-card-tooling; agent-context; implementation-plan	docs/superpowers/specs/2026-07-01-feature-card-context-tooling-design.md; docs/modules/feature-ownership.md	verified	verified-no-change	Implementation plan for the feature-card context tooling slice; tasks mirror the 2026-07-01 design spec.
+docs/superpowers/specs/archive/2026-07-01-feature-card-context-tooling-design.md	docs/superpowers/specs/archive/2026-07-01-feature-card-context-tooling-design.md	planning	maintainer	feature-card-tooling; agent-context; drift-report-cutover; plan-review-cutover	docs/modules/feature-ownership.md; scripts/maintainability-drift-report.sh; scripts/agentic-plan-review.sh	verified	verified-no-change	Design spec for scripts/agent-context.sh, the Slug/Paths card schema fields, and the drift-report/plan-review hard cutovers.
+docs/superpowers/plans/archive/2026-07-01-feature-card-context-tooling-plan.md	docs/superpowers/plans/archive/2026-07-01-feature-card-context-tooling-plan.md	planning	maintainer	feature-card-tooling; agent-context; implementation-plan	docs/superpowers/specs/archive/2026-07-01-feature-card-context-tooling-design.md; docs/modules/feature-ownership.md	verified	verified-no-change	Implementation plan for the feature-card context tooling slice; tasks mirror the 2026-07-01 design spec.
 ```
 
 - [ ] **Step 4: Verify the docs gates pass**
@@ -1850,7 +1850,7 @@ resolve_features
 
 ```bash
 bash scripts/test-agentic-plan-review.sh
-bash scripts/agentic-plan-review.sh docs/superpowers/specs/2026-07-01-feature-card-context-tooling-design.md --feature packaging --dry-run | head -60
+bash scripts/agentic-plan-review.sh docs/superpowers/specs/archive/2026-07-01-feature-card-context-tooling-design.md --feature packaging --dry-run | head -60
 ```
 
 Expected: test prints `Agentic plan review wrapper fixtures passed.`; the dry-run shows the generated context list (packaging Start here files) and pressure points, and none of the old hardcoded list.
@@ -1962,7 +1962,7 @@ bash scripts/test-agent-context.sh
 bash scripts/test-maintainability-drift-report.sh
 bash scripts/maintainability-drift-report.sh --all | head -80
 bash scripts/test-agentic-plan-review.sh
-bash scripts/agentic-plan-review.sh docs/superpowers/specs/2026-07-01-feature-card-context-tooling-design.md --feature packaging --dry-run >/dev/null && echo dry-run-ok
+bash scripts/agentic-plan-review.sh docs/superpowers/specs/archive/2026-07-01-feature-card-context-tooling-design.md --feature packaging --dry-run >/dev/null && echo dry-run-ok
 bash scripts/check-coherency-ledger.sh docs/superpowers/feature-coherency-ledger.tsv
 bash scripts/check-doc-audit-ledger.sh docs/superpowers/documentation-accuracy-audit-ledger.tsv --require-complete
 diff -u docs/superpowers/documentation-accuracy-audit-inventory.tsv <(bash scripts/docs-audit-inventory.sh)

@@ -921,7 +921,7 @@ Add a feature-coherency row for the admin evidence routes covering:
 Register `docs/modules/remi.md` changes and this implementation plan. Regenerate inventory after staging new tracked docs:
 
 ```bash
-git add docs/superpowers/plans/2026-07-04-remi-scriptlet-evidence-queue-plan.md
+git add docs/superpowers/plans/archive/2026-07-04-remi-scriptlet-evidence-queue-plan.md
 LC_ALL=C bash scripts/docs-audit-inventory.sh > docs/superpowers/documentation-accuracy-audit-inventory.tsv
 ```
 

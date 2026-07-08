@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-17
 **Status:** Draft child design for review
-**Parent umbrella:** `docs/superpowers/specs/2026-06-17-m4-ccs-native-ecosystem-design.md`
+**Parent umbrella:** `docs/superpowers/specs/archive/2026-06-17-m4-ccs-native-ecosystem-design.md`
 **Scope:** M4a only: define the CCS v2 native package contract before authoring,
 Remi native publication, supported-target profiles, or proof corpus work.
 

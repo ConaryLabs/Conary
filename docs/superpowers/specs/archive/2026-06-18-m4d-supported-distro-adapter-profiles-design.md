@@ -3,8 +3,8 @@
 **Date:** 2026-06-18
 **Status:** Locked design after DeepSeek, Gemini, Opus, and local agentic
 review. Implementation plan:
-`docs/superpowers/plans/2026-06-18-m4d-supported-distro-adapter-profiles-implementation-plan.md`.
-**Parent umbrella:** `docs/superpowers/specs/2026-06-17-m4-ccs-native-ecosystem-design.md`
+`docs/superpowers/plans/archive/2026-06-18-m4d-supported-distro-adapter-profiles-implementation-plan.md`.
+**Parent umbrella:** `docs/superpowers/specs/archive/2026-06-17-m4-ccs-native-ecosystem-design.md`
 **Prerequisites:** M4a CCS v2 native package contract, M4b native authoring
 workflow, and M4c Remi native CCS publication are implemented and merged.
 **Scope:** M4d only: compile-time embedded supported-target profile data,

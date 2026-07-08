@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-17
 **Status:** Approved umbrella design; child specs and plans required before implementation
-**Parent roadmap:** `docs/superpowers/plans/2026-06-05-ccs-native-ecosystem-roadmap.md`
+**Parent roadmap:** `docs/superpowers/plans/archive/2026-06-05-ccs-native-ecosystem-roadmap.md`
 **Prerequisite milestone:** M0-M3 packaging work is closed on `main`.
 
 ## Purpose
@@ -388,16 +388,16 @@ bash scripts/docs-audit-inventory.sh > docs/superpowers/documentation-accuracy-a
 bash scripts/docs-audit-inventory.sh | diff -u docs/superpowers/documentation-accuracy-audit-inventory.tsv -
 bash scripts/check-doc-audit-ledger.sh docs/superpowers/documentation-accuracy-audit-ledger.tsv --require-complete
 bash scripts/check-doc-truth.sh
-! rg -n "TB[D]|TO[D]O" docs/superpowers/specs/2026-06-17-m4-ccs-native-ecosystem-design.md
-! rg -n "(?i)\\b([c]entos|[r]hel|[d]ebian|[o]pensuse|[a]lpine|[t]umbleweed)\\b" docs/superpowers/specs/2026-06-17-m4-ccs-native-ecosystem-design.md
-rg -n "Fedora 4[4]|Ubuntu 26\\.[0]4|\\bArc[h]\\b" docs/superpowers/specs/2026-06-17-m4-ccs-native-ecosystem-design.md
+! rg -n "TB[D]|TO[D]O" docs/superpowers/specs/archive/2026-06-17-m4-ccs-native-ecosystem-design.md
+! rg -n "(?i)\\b([c]entos|[r]hel|[d]ebian|[o]pensuse|[a]lpine|[t]umbleweed)\\b" docs/superpowers/specs/archive/2026-06-17-m4-ccs-native-ecosystem-design.md
+rg -n "Fedora 4[4]|Ubuntu 26\\.[0]4|\\bArc[h]\\b" docs/superpowers/specs/archive/2026-06-17-m4-ccs-native-ecosystem-design.md
 git diff --check
 cargo fmt --check
 ```
 
 If the docs-audit ledger check reports this umbrella design as missing, add a
 reviewed ledger row for
-`docs/superpowers/specs/2026-06-17-m4-ccs-native-ecosystem-design.md` before
+`docs/superpowers/specs/archive/2026-06-17-m4-ccs-native-ecosystem-design.md` before
 committing. Child slices add their own code, integration verification, and
 ledger rows.
 
