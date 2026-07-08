@@ -2347,6 +2347,49 @@ setsebool -P demo_can_network on
     }
 
     #[test]
+    fn pam_helper_remains_blocked_without_manifest_authority() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut metadata = make_test_metadata();
+        metadata.scriptlets = vec![Scriptlet {
+            phase: ScriptletPhase::PostInstall,
+            interpreter: "/bin/sh".to_string(),
+            content: "authconfig --enablefaillock --update\n".to_string(),
+            flags: None,
+        }];
+        let files = make_test_files();
+        let converter = passive_test_converter(temp_dir.path());
+
+        let result = converter
+            .convert(&metadata, &files, "rpm", "sha256:test")
+            .expect("conversion succeeds");
+        let package =
+            crate::ccs::CcsPackage::parse(result.package_path.as_ref().unwrap().to_str().unwrap())
+                .expect("converted CCS package should parse");
+        let bundle = package
+            .manifest()
+            .legacy_scriptlets
+            .as_ref()
+            .expect("written CCS archive should carry passive scriptlet bundle");
+
+        assert_eq!(bundle.publication_status.as_str(), "blocked");
+        assert_eq!(bundle.decision_counts.blocked, 1);
+        assert_eq!(bundle.entries.len(), 1);
+        let entry = &bundle.entries[0];
+        assert_eq!(entry.decision.as_str(), "blocked");
+        assert_eq!(entry.reason_code, "blocked-class-pam");
+        assert_eq!(entry.blocked_classes, vec!["pam"]);
+        assert!(entry.effects.is_empty());
+        assert!(entry.boot_security_intents.is_empty());
+        assert!(entry.security_policy_intents.is_empty());
+        assert!(bundle.security_policy_intents.is_empty());
+        assert_eq!(result.scriptlet_metadata.publication_status, "blocked");
+        assert_eq!(result.scriptlet_metadata.blocked_classes, vec!["pam"]);
+        assert!(result.scriptlet_metadata.boot_security_intents.is_empty());
+        assert!(result.scriptlet_metadata.security_policy_intents.is_empty());
+        assert_ne!(result.scriptlet_metadata.publication_status, "public");
+    }
+
+    #[test]
     fn conversion_integration_reviews_deb_private_helpers_without_manifest_changes() {
         let temp_dir = tempfile::tempdir().unwrap();
         let mut metadata = make_test_metadata();

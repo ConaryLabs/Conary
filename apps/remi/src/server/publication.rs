@@ -643,6 +643,45 @@ mod tests {
     }
 
     #[test]
+    fn blocked_pam_report_stays_private_and_non_public_only() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let db_path = temp.path().join("remi.db");
+        conary_core::db::init(&db_path).unwrap();
+        let conn = conary_core::db::open(&db_path).unwrap();
+        let mut summary = golden_summary("blocked", "blocked", "blocked");
+        summary.decision_counts = ScriptletDecisionCountsSummary {
+            blocked: 1,
+            ..ScriptletDecisionCountsSummary::default()
+        };
+        summary
+            .blocked_reason_codes
+            .push("blocked-class-pam".to_string());
+        summary.blocked_classes.push("pam".to_string());
+        insert_golden_converted(&conn, "pam-private", "pam-chunk", &summary);
+
+        let converted = ConvertedPackage::find_publication_candidates(&conn, "fedora", None)
+            .unwrap()
+            .into_iter()
+            .find(|converted| converted.package_name.as_deref() == Some("pam-private"))
+            .expect("private converted PAM row should remain queryable as server state");
+        assert!(!converted.is_scriptlet_public_ready());
+        assert_eq!(
+            ConvertedPackage::chunk_publication_state(&conn, "pam-chunk").unwrap(),
+            ChunkPublicationState::NonPublicOnly
+        );
+
+        let report = match classify_converted_package(&converted) {
+            PublicationDecision::Blocked(report) => report,
+            other => panic!("expected blocked PAM report, got {other:?}"),
+        };
+        assert_eq!(report.publication_status, "blocked");
+        assert_eq!(report.blocked_classes, vec!["pam"]);
+        assert!(report.boot_security_intents.is_empty());
+        assert!(report.security_policy_intents.is_empty());
+        assert!(report.message.contains("pam"));
+    }
+
+    #[test]
     fn publication_report_reasons_are_deterministic_and_deduplicated() {
         let summary = ScriptletBundleSummary {
             publication_status: "private-review".to_string(),
