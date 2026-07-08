@@ -18,16 +18,14 @@ second subsystem manual.
 1. Read [`AGENTS.md`](../../AGENTS.md) for the repo contract, safety rules, and
    verification expectations.
 2. Use this file to decide which canonical docs to open next.
-3. Run one command to route the work:
-   - `bash scripts/agent-context.sh --list` to discover available feature
-     slugs.
-   - `bash scripts/agent-context.sh --feature <slug>` to print start-here
-     files, focused proof, and interaction gates for a feature slug.
-   - `bash scripts/agent-context.sh --path <file>` to print the same routing
-     details for a specific path.
-4. Read the start-here files printed by the `--feature` or `--path` command
-   before editing.
-5. Use the focused proof for narrow edits and the interaction gate when the
+3. If you need a capability name, run
+   `bash scripts/agent-context.sh --list` to discover available feature slugs.
+4. Route the actual work with:
+   - `bash scripts/agent-context.sh --feature <slug>` for a feature slug.
+   - `bash scripts/agent-context.sh --path <file>` for a specific path.
+5. Read the start-here files, focused proof, and interaction gates printed by
+   the `--feature` or `--path` command before editing.
+6. Use the focused proof for narrow edits and the interaction gate when the
    change crosses a neighbor system.
 
 ## Choose By Task
