@@ -138,7 +138,7 @@ fn execute_install_transaction_inner(
                 let applied = super::file_capabilities::apply_selected_file_capabilities(
                     Path::new(ctx.root),
                     file_capabilities,
-                    live_files.iter().map(|file| file.path.as_str()),
+                    live_files.iter(),
                 )?;
                 if applied > 0 {
                     info!(

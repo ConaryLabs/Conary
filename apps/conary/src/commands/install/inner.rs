@@ -19,6 +19,7 @@ use rusqlite::{OptionalExtension, Transaction};
 use std::collections::HashMap;
 use tracing::{info, warn};
 
+use super::file_capabilities::is_regular_file_capability_payload;
 use super::{
     ExtractionResult, InstallPhase, InstallProgress, TransactionContext,
     mark_upgraded_parent_deriveds_stale, scheme_to_string,
@@ -234,7 +235,14 @@ pub(super) fn install_inner_with_stored_files(
         }
 
         persist_declared_config_files(tx, trove_id, pkg, ctx, &installed_file_metadata)?;
-        persist_declared_file_capabilities(tx, trove_id, pkg, ctx, &installed_file_metadata)?;
+        persist_declared_file_capabilities(
+            tx,
+            trove_id,
+            pkg,
+            ctx,
+            &installed_file_metadata,
+            stored_files,
+        )?;
 
         for dep in pkg.dependencies() {
             let mut dep_entry = DependencyEntry::new(
@@ -350,26 +358,52 @@ fn persist_declared_file_capabilities(
     pkg: &dyn conary_core::packages::PackageFormat,
     ctx: &TransactionContext<'_>,
     installed_file_metadata: &HashMap<String, (i64, String)>,
+    stored_files: &[StoredInstallFile],
 ) -> Result<()> {
     let Some(file_capabilities) = ctx.ccs_file_capabilities else {
         return Ok(());
     };
 
+    let stored_files_by_path = stored_files
+        .iter()
+        .map(|file| (file.path.as_str(), file))
+        .collect::<HashMap<_, _>>();
     let selected = file_capabilities
         .iter()
         .filter_map(|capability| {
-            if installed_file_metadata.contains_key(&capability.path) {
-                Some(capability.clone())
-            } else {
+            if !installed_file_metadata.contains_key(&capability.path) {
                 warn!(
                     "Skipping declared file capability {} for {} because it was not installed",
                     capability.path,
                     pkg.name()
                 );
-                None
+                return None;
             }
+            Some(capability)
         })
-        .collect::<Vec<_>>();
+        .map(|capability| {
+            let stored_file = stored_files_by_path
+                .get(capability.path.as_str())
+                .ok_or_else(|| {
+                    anyhow!(
+                        "file capability target {} for {} is missing stored file metadata",
+                        capability.path,
+                        pkg.name()
+                    )
+                })?;
+            if !is_regular_file_capability_payload(
+                stored_file.mode,
+                stored_file.symlink_target.as_deref(),
+            ) {
+                anyhow::bail!(
+                    "file capability target {} for {} is not a regular installed file",
+                    capability.path,
+                    pkg.name()
+                );
+            }
+            Ok(capability.clone())
+        })
+        .collect::<Result<Vec<_>>>()?;
 
     InstalledFileCapability::replace_for_trove(tx, trove_id, &selected)
         .with_context(|| format!("Failed to persist CCS file capabilities for {}", pkg.name()))?;
@@ -774,7 +808,7 @@ mod tests {
     }
 
     #[test]
-    fn install_inner_persists_selected_file_capability_metadata() {
+    fn install_inner_persists_selected_installed_file_capability_metadata() {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("root");
         let db_path = temp.path().join("conary.db");
@@ -846,7 +880,7 @@ mod tests {
     }
 
     #[test]
-    fn install_inner_replaces_file_capability_metadata_on_upgrade() {
+    fn install_inner_replaces_installed_file_capability_metadata_on_upgrade() {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("root");
         let db_path = temp.path().join("conary.db");
@@ -928,6 +962,91 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].path, "/usr/bin/server");
         assert_eq!(rows[0].trove_id, result.trove_id);
+    }
+
+    #[test]
+    fn install_inner_rejects_installed_file_capability_on_symlink_payload() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("root");
+        let db_path = temp.path().join("conary.db");
+        std::fs::create_dir_all(&root).unwrap();
+        conary_core::db::init(&db_path).unwrap();
+        let conn = conary_core::db::open(&db_path).unwrap();
+
+        let package = FakePackage {
+            name: "server".to_string(),
+            version: "1.0.0".to_string(),
+            files: vec![PackageFile {
+                path: "/usr/bin/server-link".to_string(),
+                size: 6,
+                mode: 0o120777,
+                sha256: None,
+                symlink_target: Some("server".to_string()),
+            }],
+            extracted_files: vec![ExtractedFile {
+                path: "/usr/bin/server-link".to_string(),
+                content: Vec::new(),
+                size: 6,
+                mode: 0o120777,
+                sha256: None,
+                symlink_target: Some("server".to_string()),
+            }],
+            dependencies: Vec::new(),
+            scriptlets: Vec::new(),
+            config_files: Vec::new(),
+        };
+        let extraction = ExtractionResult {
+            extracted_files: package.extracted_files.clone(),
+            classified: HashMap::from([(
+                conary_core::components::ComponentType::Runtime,
+                vec!["/usr/bin/server-link".to_string()],
+            )]),
+            component_names_by_path: None,
+            installed_component_names: None,
+            ccs_pre_remove_script: None,
+            installed_component_types: vec![conary_core::components::ComponentType::Runtime],
+            skipped_components: Vec::new(),
+            language_provides: Vec::new(),
+        };
+        let file_capabilities = vec![file_capability("/usr/bin/server-link")];
+        let db_path_string = db_path.to_string_lossy().into_owned();
+        let root_string = root.to_string_lossy().into_owned();
+        let ctx = TransactionContext {
+            db_path: &db_path_string,
+            root: &root_string,
+            semantics: InstallSemantics::ccs(),
+            selection_reason: None,
+            old_trove_to_upgrade: None,
+            ccs_manifest_provides: None,
+            ccs_capabilities: None,
+            ccs_file_capabilities: Some(&file_capabilities),
+            execution_path: PackageExecutionPath::MutableLiveRoot,
+            defer_generation: false,
+            repository_provenance: None,
+            legacy_replay: LegacyReplayOptions::default(),
+            accepted_legacy_bundle: None,
+        };
+        let tx_config = TransactionConfig::from_paths(root.clone(), db_path.clone());
+        let mut engine = TransactionEngine::new(tx_config).unwrap();
+        let tx = conn.unchecked_transaction().unwrap();
+        let changeset_id = Changeset::new("Install server-1.0.0".to_string())
+            .insert(&tx)
+            .unwrap();
+
+        let err = match install_inner(
+            &tx,
+            &mut engine,
+            changeset_id,
+            &package,
+            &extraction,
+            &ctx,
+            &InstallProgress::single("Installing"),
+        ) {
+            Ok(_) => panic!("selected symlink file capability target must fail closed"),
+            Err(error) => error,
+        };
+
+        assert!(err.to_string().contains("is not a regular installed file"));
     }
 
     #[test]

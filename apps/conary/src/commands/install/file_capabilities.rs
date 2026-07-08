@@ -1,10 +1,14 @@
 // apps/conary/src/commands/install/file_capabilities.rs
 
+use crate::commands::LiveRootFile;
 use anyhow::{Context, Result, bail};
 use conary_core::ccs::manifest::FileCapability;
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::Command;
+
+const S_IFMT: i32 = 0o170000;
+const S_IFREG: i32 = 0o100000;
 
 pub(crate) trait FileCapabilityApplier {
     fn apply_file_capability(&mut self, target: &Path, capability: &FileCapability) -> Result<()>;
@@ -35,38 +39,45 @@ impl FileCapabilityApplier for SetcapCommandFileCapabilityApplier {
 pub(crate) fn apply_selected_file_capabilities<'a>(
     root: &Path,
     capabilities: &[FileCapability],
-    installed_paths: impl IntoIterator<Item = &'a str>,
+    installed_files: impl IntoIterator<Item = &'a LiveRootFile>,
 ) -> Result<usize> {
     let mut applier = SetcapCommandFileCapabilityApplier;
-    apply_selected_file_capabilities_with(root, capabilities, installed_paths, &mut applier)
+    apply_selected_file_capabilities_with(root, capabilities, installed_files, &mut applier)
 }
 
 pub(crate) fn apply_selected_file_capabilities_with<'a>(
     root: &Path,
     capabilities: &[FileCapability],
-    installed_paths: impl IntoIterator<Item = &'a str>,
+    installed_files: impl IntoIterator<Item = &'a LiveRootFile>,
     applier: &mut impl FileCapabilityApplier,
 ) -> Result<usize> {
-    let installed_paths = installed_paths.into_iter().collect::<BTreeSet<_>>();
+    let installed_files = installed_files
+        .into_iter()
+        .map(|file| (file.path.as_str(), file))
+        .collect::<BTreeMap<_, _>>();
     let mut applied = 0;
     for capability in capabilities {
-        if !installed_paths.contains(capability.path.as_str()) {
+        let Some(installed_file) = installed_files.get(capability.path.as_str()) else {
             continue;
-        }
+        };
         if !capability.path.starts_with('/') {
             bail!(
                 "relative path not allowed in file_capabilities: {}",
                 capability.path
             );
         }
-        let target = crate::commands::live_root::target_path(root, &capability.path)?;
-        capability.validate()?;
-        if !target.exists() {
+        if !is_regular_file_capability_payload(
+            installed_file.mode,
+            installed_file.symlink_target.as_deref(),
+        ) {
             bail!(
-                "file capability target {} was selected but is missing after install",
+                "file capability target {} is not a regular installed file",
                 capability.path
             );
         }
+        let target = crate::commands::live_root::target_path(root, &capability.path)?;
+        capability.validate()?;
+        ensure_live_root_regular_file_target(&capability.path, &target)?;
         applier
             .apply_file_capability(&target, capability)
             .with_context(|| {
@@ -75,6 +86,24 @@ pub(crate) fn apply_selected_file_capabilities_with<'a>(
         applied += 1;
     }
     Ok(applied)
+}
+
+pub(in crate::commands::install) fn is_regular_file_capability_payload(
+    mode: i32,
+    symlink_target: Option<&str>,
+) -> bool {
+    symlink_target.is_none() && matches!(mode & S_IFMT, 0 | S_IFREG)
+}
+
+fn ensure_live_root_regular_file_target(package_path: &str, target: &Path) -> Result<()> {
+    let metadata = std::fs::symlink_metadata(target).with_context(|| {
+        format!("file capability target {package_path} was selected but is missing after install")
+    })?;
+    let file_type = metadata.file_type();
+    if file_type.is_symlink() || !file_type.is_file() {
+        bail!("file capability target {package_path} is not a regular installed file");
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -109,12 +138,31 @@ mod tests {
         }
     }
 
+    fn live_root_file(path: &str) -> LiveRootFile {
+        LiveRootFile {
+            path: path.to_string(),
+            content: Vec::new(),
+            mode: 0o100644,
+            symlink_target: None,
+        }
+    }
+
+    fn live_root_symlink(path: &str, target: &str) -> LiveRootFile {
+        LiveRootFile {
+            path: path.to_string(),
+            content: Vec::new(),
+            mode: 0o120777,
+            symlink_target: Some(target.to_string()),
+        }
+    }
+
     #[test]
     fn applies_selected_file_capabilities_inside_live_root() {
         let root = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(root.path().join("usr/bin")).unwrap();
         std::fs::write(root.path().join("usr/bin/demo"), b"demo").unwrap();
         let mut applier = RecordingApplier::default();
+        let installed_files = [live_root_file("/usr/bin/demo")];
 
         let applied = apply_selected_file_capabilities_with(
             root.path(),
@@ -122,7 +170,7 @@ mod tests {
                 file_capability("/usr/bin/demo"),
                 file_capability("/usr/bin/other"),
             ],
-            ["/usr/bin/demo"],
+            installed_files.iter(),
             &mut applier,
         )
         .expect("apply selected file capabilities");
@@ -137,16 +185,38 @@ mod tests {
     fn refuses_file_capability_paths_that_escape_live_root() {
         let root = tempfile::tempdir().unwrap();
         let mut applier = RecordingApplier::default();
+        let installed_files = [live_root_file("/usr/../demo")];
 
         let err = apply_selected_file_capabilities_with(
             root.path(),
             &[file_capability("/usr/../demo")],
-            ["/usr/../demo"],
+            installed_files.iter(),
             &mut applier,
         )
         .expect_err("escape path must fail before invoking setcap");
 
         assert!(err.to_string().contains("escapes the target root"));
+        assert!(applier.calls.is_empty());
+    }
+
+    #[test]
+    fn refuses_selected_file_capability_symlink_targets() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("usr/bin")).unwrap();
+        std::fs::write(root.path().join("usr/bin/server"), b"server").unwrap();
+        std::os::unix::fs::symlink("server", root.path().join("usr/bin/server-link")).unwrap();
+        let mut applier = RecordingApplier::default();
+        let installed_files = [live_root_symlink("/usr/bin/server-link", "server")];
+
+        let err = apply_selected_file_capabilities_with(
+            root.path(),
+            &[file_capability("/usr/bin/server-link")],
+            installed_files.iter(),
+            &mut applier,
+        )
+        .expect_err("symlink file capability target must fail before invoking setcap");
+
+        assert!(err.to_string().contains("is not a regular installed file"));
         assert!(applier.calls.is_empty());
     }
 }
