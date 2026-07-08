@@ -201,6 +201,10 @@ const ALL_GOLDEN_FIXTURE_CASES: &[GoldenFixtureCase] = &[
         "fedora-44",
         "fedora-44",
     ),
+    fixture(
+        "adapter-file-capability-high-risk",
+        GoldenFixtureOutcome::ReviewRequired,
+    ),
     public_fixture(
         "adapter-alternatives-registration",
         GoldenFixtureOutcome::FullyReplaced,

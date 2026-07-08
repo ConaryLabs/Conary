@@ -1618,6 +1618,13 @@ mod tests {
                 reason_code: "helper-complete-file-capability",
             },
             GoldenAdapterCase {
+                fixture_id: "adapter-file-capability-high-risk",
+                command: "setcap",
+                argv: &["cap_sys_admin=+ep", "/usr/bin/demo"],
+                adapter_id: "file-capability/v1",
+                reason_code: "helper-complete-file-capability",
+            },
+            GoldenAdapterCase {
                 fixture_id: "adapter-registry-systemd-daemon-reload",
                 command: "systemctl",
                 argv: &["daemon-reload"],

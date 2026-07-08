@@ -134,7 +134,10 @@ fn adapter_entry(adapter_id: &'static str) -> SupportMatrixEntry {
             Some("setcap cap_*=+ep <payload-executable>"),
             "helper-complete-file-capability",
             "Narrow Linux file capability grants are complete only for known capabilities on payload executables and project into manifest file_capabilities authority.",
-            &["adapter-file-capability"],
+            &[
+                "adapter-file-capability",
+                "adapter-file-capability-high-risk",
+            ],
             &["rpm", "deb", "arch"],
         ),
         "selinux-policy/v1" => (
@@ -333,6 +336,37 @@ mod tests {
     }
 
     #[test]
+    fn file_capability_support_matrix_distinguishes_public_and_private_review_fixtures() {
+        let matrix = SupportMatrix::default();
+        let row = matrix
+            .entries()
+            .iter()
+            .find(|entry| entry.adapter_id == Some("file-capability/v1"))
+            .expect("file-capability adapter row exists");
+
+        assert_eq!(
+            row.fixture_names,
+            &[
+                "adapter-file-capability",
+                "adapter-file-capability-high-risk"
+            ]
+        );
+
+        let fixtures: std::collections::BTreeMap<_, _> = golden_fixtures::all_cases()
+            .iter()
+            .map(|case| (case.id, case.expected_outcome))
+            .collect();
+        assert_eq!(
+            fixtures.get("adapter-file-capability"),
+            Some(&golden_fixtures::GoldenFixtureOutcome::FullyReplaced)
+        );
+        assert_eq!(
+            fixtures.get("adapter-file-capability-high-risk"),
+            Some(&golden_fixtures::GoldenFixtureOutcome::ReviewRequired)
+        );
+    }
+
+    #[test]
     fn public_ready_adapter_rows_have_golden_fixture_evidence() {
         let fixtures: std::collections::BTreeMap<_, _> = golden_fixtures::all_cases()
             .iter()
@@ -351,25 +385,29 @@ mod tests {
                 !entry.fixture_names.is_empty(),
                 "adapter {adapter_id} has no golden fixture evidence"
             );
+            let expected = if adapter_id == "native-free/v1" {
+                golden_fixtures::GoldenFixtureOutcome::NativeFree
+            } else {
+                golden_fixtures::GoldenFixtureOutcome::FullyReplaced
+            };
 
+            let mut has_public_ready_fixture = false;
             for fixture_name in entry.fixture_names {
                 let fixture = fixtures.get(fixture_name).unwrap_or_else(|| {
                     panic!("adapter {adapter_id} fixture {fixture_name} is not declared")
                 });
-                let expected = if adapter_id == "native-free/v1" {
-                    golden_fixtures::GoldenFixtureOutcome::NativeFree
-                } else {
-                    golden_fixtures::GoldenFixtureOutcome::FullyReplaced
-                };
-                assert_eq!(
-                    fixture.expected_outcome, expected,
-                    "adapter {adapter_id} fixture {fixture_name} has wrong public-ready outcome"
-                );
-                assert!(
-                    fixture.source_distro_id.is_some() && fixture.target_distro_id.is_some(),
-                    "public-ready fixture {fixture_name} must use exact source and target distro ids"
-                );
+                if fixture.expected_outcome == expected {
+                    has_public_ready_fixture = true;
+                    assert!(
+                        fixture.source_distro_id.is_some() && fixture.target_distro_id.is_some(),
+                        "public-ready fixture {fixture_name} must use exact source and target distro ids"
+                    );
+                }
             }
+            assert!(
+                has_public_ready_fixture,
+                "adapter {adapter_id} has no public-ready golden fixture evidence"
+            );
         }
     }
 
