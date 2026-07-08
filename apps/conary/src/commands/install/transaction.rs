@@ -73,8 +73,7 @@ fn execute_install_transaction_inner(
     progress: &InstallProgress,
     transaction_config_override: Option<TransactionConfig>,
 ) -> Result<InstallTransactionResult> {
-    preflight_generation_file_capabilities(ctx)?;
-    preflight_selected_generation_file_capability_targets(ctx, extraction)?;
+    preflight_generation_file_capabilities_for_install(ctx, extraction)?;
 
     let _legacy_replay = ctx.legacy_replay;
     if ctx.execution_path == PackageExecutionPath::MutableLiveRoot {
@@ -291,6 +290,14 @@ fn execute_install_transaction_inner(
     post_commit_result?;
 
     Ok(InstallTransactionResult { changeset_id })
+}
+
+pub(super) fn preflight_generation_file_capabilities_for_install(
+    ctx: &TransactionContext<'_>,
+    extraction: &ExtractionResult,
+) -> Result<()> {
+    preflight_generation_file_capabilities(ctx)?;
+    preflight_selected_generation_file_capability_targets(ctx, extraction)
 }
 
 fn preflight_generation_file_capabilities(ctx: &TransactionContext<'_>) -> Result<()> {

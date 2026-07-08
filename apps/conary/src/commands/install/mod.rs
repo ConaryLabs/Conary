@@ -77,5 +77,5 @@ use semantics::{InstallSemantics, PreparedSourceKind, scheme_to_string};
 use source_policy::{build_resolution_policy, resolve_canonical_name};
 use transaction::{
     InstallTransactionResult, TransactionContext, execute_install_transaction,
-    execute_install_transaction_with_config,
+    execute_install_transaction_with_config, preflight_generation_file_capabilities_for_install,
 };
