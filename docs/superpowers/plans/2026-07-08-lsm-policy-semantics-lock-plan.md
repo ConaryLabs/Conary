@@ -59,7 +59,7 @@ In `crates/conary-core/src/ccs/convert/adapters.rs`, extend
 cases to its `for (command, argv)` table:
 
 ```rust
-("restorecon", vec!["-R", "/usr"]),
+("restorecon", vec!["-Rv", "/usr"]),
 ("semodule", vec!["-r", "demo"]),
 ("setsebool", vec!["demo_can_network", "on"]),
 ```
@@ -100,26 +100,29 @@ add this test after `blocked_apparmor_command_projects_review_policy_intent`:
 ```rust
 #[test]
 fn blocked_apparmor_lifecycle_helpers_project_review_policy_operations() {
-    for (command, argv, operation, paths) in [
+    for (command, argv, operation, expected_name, paths) in [
         (
             "aa-enforce",
             vec!["/etc/apparmor.d/usr.bin.demo"],
             "mode-enforce",
+            Some("/etc/apparmor.d/usr.bin.demo".to_string()),
             vec!["/etc/apparmor.d/usr.bin.demo".to_string()],
         ),
         (
             "aa-complain",
             vec!["/etc/apparmor.d/usr.bin.demo"],
             "mode-complain",
+            Some("/etc/apparmor.d/usr.bin.demo".to_string()),
             vec!["/etc/apparmor.d/usr.bin.demo".to_string()],
         ),
         (
             "aa-disable",
             vec!["/etc/apparmor.d/usr.bin.demo"],
             "profile-disable",
+            Some("/etc/apparmor.d/usr.bin.demo".to_string()),
             vec!["/etc/apparmor.d/usr.bin.demo".to_string()],
         ),
-        ("aa-status", Vec::new(), "status-query", Vec::new()),
+        ("aa-status", Vec::new(), "status-query", None, Vec::new()),
     ] {
         let classification = ScriptletClassification::Blocked {
             reason_code: "blocked-class-apparmor".to_string(),
@@ -144,6 +147,7 @@ fn blocked_apparmor_lifecycle_helpers_project_review_policy_operations() {
         assert_eq!(intent.provider.as_str(), "apparmor");
         assert_eq!(intent.operation, operation);
         assert_eq!(intent.scope.kind, "profile");
+        assert_eq!(intent.scope.name, expected_name);
         assert_eq!(intent.scope.paths, paths);
         assert_eq!(intent.fallback.as_str(), "block-on-enforcing-target");
         assert_eq!(intent.reconciliation.state.as_str(), "review");
@@ -296,8 +300,8 @@ git commit -m "test: keep AppArmor mode helpers private"
 
 - [ ] **Step 1: Update scriptlet security docs**
 
-In `docs/SCRIPTLET_SECURITY.md`, extend the AppArmor paragraph by adding this
-sentence after the current blocked/private sentence:
+In `docs/SCRIPTLET_SECURITY.md`, add this sentence after the sentence ending
+with "`block-on-enforcing-target` fallback when captured as review intent.":
 
 ```markdown
 Promoting any broader SELinux or AppArmor form requires target-provider facts
@@ -307,7 +311,10 @@ validation where applicable, and an operator-visible absent-provider fallback.
 
 - [ ] **Step 2: Update CCS module docs**
 
-In `docs/modules/ccs.md`, extend the AppArmor paragraph by adding:
+In `docs/modules/ccs.md`, add this sentence after the sentence ending with
+"Mode changes, profile disable/status helpers, broad reloads, and unbacked
+paths remain blocked/private and use `block-on-enforcing-target` fallback when
+captured as review intent.":
 
 ```markdown
 Future LSM expansion must add target-provider facts and content semantics
@@ -317,8 +324,10 @@ mutation can become public-ready.
 
 - [ ] **Step 3: Update Remi module docs**
 
-In `docs/modules/remi.md`, extend the AppArmor paragraph in the legacy
-scriptlet publication gate section by adding:
+In `docs/modules/remi.md`, add this sentence after the sentence ending with
+"Mode changes, profile disable/status helpers, broad reloads, and non-payload
+profile paths remain blocked/private." in the legacy scriptlet publication gate
+section:
 
 ```markdown
 Remi treats those broader LSM forms as non-public until a later target-provider
@@ -332,8 +341,10 @@ for `docs/superpowers/plans/2026-07-08-lsm-policy-semantics-lock-plan.md`
 still names the implementation files touched by this slice:
 `crates/conary-core/src/ccs/convert/adapters.rs`,
 `crates/conary-core/src/ccs/convert/scriptlet_bundle/classification.rs`, and
-`crates/conary-core/src/ccs/convert/converter.rs`. Keep exactly 9
-tab-separated fields and do not replace literal tabs with spaces.
+`crates/conary-core/src/ccs/convert/converter.rs`. Remove
+`docs/modules/test-fixtures.md` from this row unless Task 3 actually changes
+that file. Keep exactly 9 tab-separated fields and do not replace literal tabs
+with spaces.
 
 - [ ] **Step 5: Regenerate inventory**
 
@@ -369,6 +380,14 @@ git commit -m "docs: document LSM policy semantics boundary"
 ```
 
 ## Task 4: Final Verification And Review
+
+> [!NOTE]
+> `crates/conary-core/src/ccs/convert/adapters.rs` and
+> `crates/conary-core/src/ccs/convert/converter.rs` are over the 2,500-line
+> hotspot threshold. This lock plan may add narrow regression tests there, but
+> future LSM feature expansion beyond lock coverage must include a reviewed
+> decomposition path for adapter registry/parsing and converter projection
+> boundaries.
 
 **Files:**
 - Read: `docs/superpowers/plans/2026-07-08-lsm-policy-semantics-lock-plan.md`
