@@ -58,7 +58,9 @@
 
 - [ ] **Step 1: Add the blocked-class regression**
 
-In `crates/conary-core/src/ccs/convert/blocked_classes.rs`, add this test after `blocked_classes_cover_kernel_install_selinux_module_and_label_tools`:
+In `crates/conary-core/src/ccs/convert/blocked_classes.rs`, add this test
+immediately after the closing brace of
+`blocked_classes_cover_kernel_install_selinux_module_and_label_tools`:
 
 ```rust
 #[test]
@@ -328,6 +330,12 @@ fn blocked_pam_report_stays_private_and_non_public_only() {
 }
 ```
 
+This intentionally proves public-route exclusion and chunk reachability rather
+than adding a separate admin-lane route test. Admin test-serving compatibility
+for valid blocked rows is exercised-equivalent to the existing blocked-row admin
+lane coverage; this slice only changes which helper names are classified as
+`blocked-class-pam`.
+
 - [ ] **Step 3: Run the focused tests**
 
 Run:
@@ -386,7 +394,8 @@ rollback semantics, and operator-visible review.
 
 - [ ] **Step 2: Update CCS module docs**
 
-In `docs/modules/ccs.md`, add this paragraph after the paragraph ending with "Legacy replay, review-required, blocked, malformed, or local-only scriptlet outcomes remain private conversion results.":
+In `docs/modules/ccs.md`, add this paragraph after the paragraph ending with
+"remain private conversion results.":
 
 ```markdown
 Common PAM stack helpers (`authselect`, `authconfig`, `pam-auth-update`, and
@@ -408,7 +417,9 @@ require public-ready status.
 
 - [ ] **Step 4: Update fixture docs**
 
-In `docs/modules/test-fixtures.md`, add this bullet after the private-review sysctl fixture bullets:
+In `docs/modules/test-fixtures.md`, add this bullet after the bullet ending
+with "expected private-review outcome while preserving complete native
+replacement evidence.":
 
 ```markdown
 - `blocked-class-pam`: common PAM stack helper evidence such as `authconfig`
@@ -427,6 +438,15 @@ docs/superpowers/plans/2026-07-08-pam-authority-lock-plan.md	docs/superpowers/pl
 Do not replace literal tabs with spaces.
 
 - [ ] **Step 6: Regenerate inventory**
+
+Before running the docs scripts, verify the expected helpers exist:
+
+```bash
+test -x scripts/docs-audit-inventory.sh
+test -x scripts/check-doc-truth.sh
+test -x scripts/check-doc-audit-ledger.sh
+test -x scripts/check-coherency-ledger.sh
+```
 
 Run:
 
@@ -490,6 +510,8 @@ cargo test -p conary-core support_matrix --lib
 cargo test -p conary-core golden_fixtures --lib
 cargo test -p conary --test conversion_integration golden_conversion
 cargo test -p remi publication
+cargo test -p conary-core
+cargo test -p remi
 ```
 
 Expected: PASS.
