@@ -209,6 +209,18 @@ fn report_from_summary_with_intent_visibility(
     summary_valid: bool,
     intent_visibility: ReportIntentVisibility,
 ) -> PublicationGateReport {
+    let unknown_commands = match intent_visibility {
+        ReportIntentVisibility::Sanitized => summary
+            .unknown_commands
+            .iter()
+            .filter_map(|command| {
+                crate::server::scriptlet_evidence_queue::normalization::normalize_token(command)
+            })
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect(),
+        ReportIntentVisibility::Raw => sorted(&summary.unknown_commands),
+    };
     let mut reason_codes = Vec::new();
     let mut seen = BTreeSet::new();
     for code in &summary.blocked_reason_codes {
@@ -217,7 +229,7 @@ fn report_from_summary_with_intent_visibility(
     for code in &summary.review_reason_codes {
         push_reason(&mut reason_codes, &mut seen, code.clone());
     }
-    for command in sorted(&summary.unknown_commands) {
+    for command in &unknown_commands {
         push_reason(
             &mut reason_codes,
             &mut seen,
@@ -259,7 +271,7 @@ fn report_from_summary_with_intent_visibility(
         reason_codes,
         blocked_reason_codes: summary.blocked_reason_codes.clone(),
         review_reason_codes: summary.review_reason_codes.clone(),
-        unknown_commands: sorted(&summary.unknown_commands),
+        unknown_commands,
         blocked_classes: sorted(&summary.blocked_classes),
         boot_security_intents,
         security_policy_intents,
@@ -906,6 +918,41 @@ mod tests {
         assert!(!json.contains("SECRET="));
         assert!(!json.contains("review_artifact_path"));
         assert!(!json.contains("private-review-secret"));
+    }
+
+    #[test]
+    fn publication_report_sanitizes_unknown_commands_and_reasons_while_raw_report_retains_them() {
+        let raw_commands = ["/home/remi/private-helper", "note:SECRET=/home/remi/token"];
+        let summary = ScriptletBundleSummary {
+            publication_status: "blocked".to_string(),
+            unknown_commands: raw_commands.iter().map(|value| value.to_string()).collect(),
+            ..ScriptletBundleSummary::default()
+        };
+
+        let sanitized = report_from_summary(&summary, true);
+        let sanitized_json = serde_json::to_string(&sanitized).unwrap();
+        let raw = raw_report_from_summary(&summary, true);
+
+        for command in raw_commands {
+            assert!(
+                !sanitized
+                    .unknown_commands
+                    .iter()
+                    .any(|value| value == command)
+            );
+            assert!(
+                !sanitized
+                    .reason_codes
+                    .iter()
+                    .any(|reason| reason.contains(command))
+            );
+            assert!(!sanitized_json.contains(command));
+            assert!(raw.unknown_commands.iter().any(|value| value == command));
+            assert!(
+                raw.reason_codes
+                    .contains(&format!("unknown-command:{command}"))
+            );
+        }
     }
 
     #[test]

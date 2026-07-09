@@ -1,9 +1,15 @@
 // apps/remi/src/server/scriptlet_evidence_queue/normalization.rs
 
-use std::sync::LazyLock;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::LazyLock,
+};
 
 use conary_core::ccs::legacy_scriptlets::BootSecurityIntentEvidence;
-use conary_core::ccs::security_policy::SecurityPolicyIntent;
+use conary_core::ccs::security_policy::{
+    SecurityPolicyFallback, SecurityPolicyIntent, SecurityPolicyProvider,
+    SecurityPolicyReconciliationState,
+};
 use conary_core::db::models::CLUSTER_KEY_PREFIX;
 use conary_core::repository::supported_profiles;
 use regex::Regex;
@@ -16,11 +22,28 @@ static ENV_REF_RE: LazyLock<Regex> = LazyLock::new(|| {
 });
 static ENV_ASSIGNMENT_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^[A-Za-z_][A-Za-z0-9_]*=.*$").unwrap());
+static EMBEDDED_ENV_ASSIGNMENT_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(^|[=,:;\s])[A-Za-z_][A-Za-z0-9_]*=.*$").unwrap());
 static KERNEL_VERSION_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\d+\.\d+\.\d+[-._A-Za-z0-9]*").unwrap());
 static WHITESPACE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s+").unwrap());
 static EMBEDDED_ABSOLUTE_PATH_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(^|[=,:;\s])/(?:$|[A-Za-z0-9._@%+-][^\s,;:]*)").unwrap());
+    LazyLock::new(|| Regex::new(r"(^|[=,:;\s])/+(?:$|[A-Za-z0-9._@%+-][^\s,;:=]*)").unwrap());
+
+const SECURITY_POLICY_INTENT_FIELDS: &[&str] = &[
+    "schema",
+    "id",
+    "source",
+    "provider",
+    "operation",
+    "scope",
+    "desired_state",
+    "requirements",
+    "fallback",
+    "payload_evidence",
+    "reconciliation",
+];
+const SECURITY_POLICY_SCOPE_FIELDS: &[&str] = &["kind", "name", "paths", "service", "port"];
 
 pub fn normalize_command_shape(command: &str, argv: &[String]) -> String {
     let mut parts = Vec::with_capacity(argv.len() + 1);
@@ -48,6 +71,16 @@ pub fn normalize_token(token: &str) -> Option<String> {
             normalize_option_value(value)
         ));
     }
+    if EMBEDDED_ENV_ASSIGNMENT_RE.is_match(token) {
+        return Some("<env-assignment>".to_string());
+    }
+    let absolute_path_count = absolute_path_count(token);
+    if absolute_path_count > 1 || (contains_parent_dir(token) && absolute_path_count > 0) {
+        return Some("<path>".to_string());
+    }
+    if is_approved_lsm_path(token) {
+        return Some(token.to_string());
+    }
 
     let had_img_extension = token.ends_with(".img");
     let mut token = KERNEL_VERSION_RE.replace_all(token, "<kver>").to_string();
@@ -57,10 +90,13 @@ pub fn normalize_token(token: &str) -> Option<String> {
     if let Some(rest) = token.strip_prefix("/boot/") {
         return Some(format!("<boot>/{rest}"));
     }
-    if is_approved_absolute_path(&token) {
+    if is_approved_kernel_module_path(&token) {
         return Some(token);
     }
     if token.starts_with('/') {
+        return Some("<path>".to_string());
+    }
+    if contains_absolute_path(&token) {
         return Some("<path>".to_string());
     }
 
@@ -107,9 +143,14 @@ pub fn sanitize_boot_security_intents_value(value: &str) -> Value {
 pub fn sanitize_security_policy_intents(
     intents: &[SecurityPolicyIntent],
 ) -> Vec<SecurityPolicyIntent> {
-    let mut value = serde_json::to_value(intents).unwrap_or_else(|_| Value::Array(Vec::new()));
-    sanitize_security_policy_intents_value_inner(&mut value);
-    serde_json::from_value(value).unwrap_or_default()
+    intents
+        .iter()
+        .cloned()
+        .map(|mut intent| {
+            sanitize_security_policy_intent(&mut intent);
+            intent
+        })
+        .collect()
 }
 
 pub fn sanitize_security_policy_intents_value(value: &str) -> Value {
@@ -173,7 +214,7 @@ fn normalize_option_value(value: &str) -> String {
     if value.is_empty() {
         return String::new();
     }
-    if ENV_ASSIGNMENT_RE.is_match(value) {
+    if ENV_ASSIGNMENT_RE.is_match(value) || EMBEDDED_ENV_ASSIGNMENT_RE.is_match(value) {
         return "<env-assignment>".to_string();
     }
     if ENV_REF_RE.is_match(value) {
@@ -187,75 +228,244 @@ fn normalize_option_value(value: &str) -> String {
     collapse_whitespace(&value)
 }
 
-fn sanitize_boot_security_intent_value(value: &mut Value) {
+fn sanitize_security_policy_intent(intent: &mut SecurityPolicyIntent) {
+    redact_private_string(&mut intent.schema);
+    redact_private_string(&mut intent.id);
+    redact_optional_private_string(&mut intent.source.source_format);
+    redact_optional_private_string(&mut intent.source.source_distro);
+    redact_optional_private_string(&mut intent.source.entry_id);
+    sanitize_optional_string(&mut intent.source.command);
+    sanitize_strings(&mut intent.source.argv);
+    redact_optional_private_string(&mut intent.source.adapter_id);
+    if let SecurityPolicyProvider::Unknown(value) = &mut intent.provider {
+        redact_private_string(value);
+    }
+    redact_private_string(&mut intent.operation);
+    redact_private_string(&mut intent.scope.kind);
+    redact_optional_private_string(&mut intent.scope.name);
+    sanitize_strings(&mut intent.scope.paths);
+    redact_optional_private_string(&mut intent.scope.service);
+    redact_optional_private_string(&mut intent.scope.port);
+    sanitize_toml_map(&mut intent.scope.extra, SECURITY_POLICY_SCOPE_FIELDS);
+    sanitize_toml_map(&mut intent.desired_state, &[]);
+    redact_optional_private_string(&mut intent.requirements.provider_mode);
+    redact_private_strings(&mut intent.requirements.tools);
+    redact_private_strings(&mut intent.requirements.modules);
+    if let SecurityPolicyFallback::Unknown(value) = &mut intent.fallback {
+        redact_private_string(value);
+    }
+    sanitize_strings(&mut intent.payload_evidence.paths);
+    redact_optional_private_string(&mut intent.payload_evidence.digest);
+    if let SecurityPolicyReconciliationState::Unknown(value) = &mut intent.reconciliation.state {
+        redact_private_string(value);
+    }
+    redact_optional_private_string(&mut intent.reconciliation.reason);
+    redact_optional_private_string(&mut intent.reconciliation.target_provider);
+    sanitize_toml_map(&mut intent.extra, SECURITY_POLICY_INTENT_FIELDS);
+}
+
+fn redact_private_string(value: &mut String) {
+    if requires_privacy_redaction(value)
+        && let Some(normalized) = normalize_token(value)
+    {
+        *value = normalized;
+    }
+}
+
+fn redact_optional_private_string(value: &mut Option<String>) {
+    if let Some(value) = value {
+        redact_private_string(value);
+    }
+}
+
+fn redact_private_strings(values: &mut [String]) {
+    for value in values {
+        redact_private_string(value);
+    }
+}
+
+fn sanitize_string(value: &mut String) {
+    if let Some(normalized) = normalize_token(value) {
+        *value = normalized;
+    }
+}
+
+fn sanitize_optional_string(value: &mut Option<String>) {
+    if let Some(value) = value {
+        sanitize_string(value);
+    }
+}
+
+fn sanitize_strings(values: &mut [String]) {
+    for value in values {
+        sanitize_string(value);
+    }
+}
+
+fn sanitize_toml_map(fields: &mut BTreeMap<String, toml::Value>, reserved_fields: &[&str]) {
+    let mut sanitized = BTreeMap::new();
+    let mut occupied = reserved_fields
+        .iter()
+        .map(|field| (*field).to_string())
+        .collect::<BTreeSet<_>>();
+    for (key, mut field) in ordered_sanitized_entries(std::mem::take(fields)) {
+        sanitize_toml_value(&mut field);
+        let key = collision_safe_key(key, &mut occupied);
+        sanitized.insert(key, field);
+    }
+    *fields = sanitized;
+}
+
+fn sanitize_toml_value(value: &mut toml::Value) {
     match value {
-        Value::Object(fields) => {
-            let mut sanitized = serde_json::Map::new();
-            for (key, mut field) in std::mem::take(fields) {
-                sanitize_boot_security_intent_value(&mut field);
-                let key = normalize_token(&key).unwrap_or(key);
+        toml::Value::String(value) => sanitize_string(value),
+        toml::Value::Array(values) => {
+            for value in values {
+                sanitize_toml_value(value);
+            }
+        }
+        toml::Value::Table(fields) => {
+            let mut sanitized = toml::map::Map::new();
+            let mut occupied = BTreeSet::new();
+            for (key, mut field) in ordered_sanitized_entries(std::mem::take(fields)) {
+                sanitize_toml_value(&mut field);
+                let key = collision_safe_key(key, &mut occupied);
                 sanitized.insert(key, field);
             }
             *fields = sanitized;
         }
-        Value::Array(values) => {
-            for value in values {
-                sanitize_boot_security_intent_value(value);
-            }
-        }
-        Value::String(value) => {
-            if let Some(normalized) = normalize_token(value) {
-                *value = normalized;
-            }
-        }
-        Value::Null | Value::Bool(_) | Value::Number(_) => {}
+        toml::Value::Integer(_)
+        | toml::Value::Float(_)
+        | toml::Value::Boolean(_)
+        | toml::Value::Datetime(_) => {}
     }
+}
+
+fn sanitize_boot_security_intent_value(value: &mut Value) {
+    sanitize_json_value(value);
 }
 
 fn sanitize_security_policy_intents_value_inner(value: &mut Value) {
+    sanitize_json_value(value);
+}
+
+fn sanitize_json_value(value: &mut Value) {
     match value {
         Value::Object(fields) => {
             let mut sanitized = serde_json::Map::new();
-            for (key, mut field) in std::mem::take(fields) {
-                sanitize_security_policy_intents_value_inner(&mut field);
-                let key = normalize_token(&key).unwrap_or(key);
+            let mut occupied = BTreeSet::new();
+            for (key, mut field) in ordered_sanitized_entries(std::mem::take(fields)) {
+                sanitize_json_value(&mut field);
+                let key = collision_safe_key(key, &mut occupied);
                 sanitized.insert(key, field);
             }
             *fields = sanitized;
         }
         Value::Array(values) => {
             for value in values {
-                sanitize_security_policy_intents_value_inner(value);
+                sanitize_json_value(value);
             }
         }
-        Value::String(value) => {
-            if let Some(normalized) = normalize_token(value) {
-                *value = normalized;
-            }
-        }
+        Value::String(value) => sanitize_string(value),
         Value::Null | Value::Bool(_) | Value::Number(_) => {}
     }
 }
 
-fn is_approved_absolute_path(token: &str) -> bool {
+fn ordered_sanitized_entries<V>(
+    entries: impl IntoIterator<Item = (String, V)>,
+) -> Vec<(String, V)> {
+    let mut entries = entries
+        .into_iter()
+        .map(|(original, value)| {
+            let normalized = normalize_token(&original).unwrap_or_else(|| original.clone());
+            (normalized != original, original, normalized, value)
+        })
+        .collect::<Vec<_>>();
+    entries.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+    entries
+        .into_iter()
+        .map(|(_, _, normalized, value)| (normalized, value))
+        .collect()
+}
+
+fn collision_safe_key(base: String, occupied: &mut BTreeSet<String>) -> String {
+    if occupied.insert(base.clone()) {
+        return base;
+    }
+    for suffix in 2usize.. {
+        let candidate = format!("{base}#{suffix}");
+        if occupied.insert(candidate.clone()) {
+            return candidate;
+        }
+    }
+    unreachable!("unbounded numeric suffixes must yield an unused key")
+}
+
+fn is_approved_lsm_path(token: &str) -> bool {
     let path = std::path::Path::new(token);
-    if !path.is_absolute()
-        || path
-            .components()
-            .any(|component| matches!(component, std::path::Component::ParentDir))
-    {
+    if !path.is_absolute() || contains_parent_dir(token) {
         return false;
     }
 
-    token.starts_with("/lib/modules/<kver>/")
-        || token.starts_with("/usr/lib/modules/<kver>/")
-        || token.starts_with("/etc/apparmor.d/")
+    token.starts_with("/etc/apparmor.d/")
         || token.starts_with("/etc/selinux/")
         || token.starts_with("/usr/share/selinux/")
 }
 
+fn is_approved_kernel_module_path(token: &str) -> bool {
+    let path = std::path::Path::new(token);
+    path.is_absolute()
+        && !contains_parent_dir(token)
+        && (token.starts_with("/lib/modules/<kver>/")
+            || token.starts_with("/usr/lib/modules/<kver>/"))
+}
+
+fn contains_parent_dir(value: &str) -> bool {
+    std::path::Path::new(value)
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir))
+}
+
+fn requires_privacy_redaction(token: &str) -> bool {
+    let token = token.trim();
+    if token.is_empty() {
+        return false;
+    }
+    if ENV_ASSIGNMENT_RE.is_match(token) || ENV_REF_RE.is_match(token) {
+        return true;
+    }
+    if let Some((_, _, value)) = option_value(token) {
+        let value = value.trim();
+        return ENV_ASSIGNMENT_RE.is_match(value)
+            || EMBEDDED_ENV_ASSIGNMENT_RE.is_match(value)
+            || ENV_REF_RE.is_match(value)
+            || contains_absolute_path(value);
+    }
+    if EMBEDDED_ENV_ASSIGNMENT_RE.is_match(token) {
+        return true;
+    }
+
+    let absolute_path_count = absolute_path_count(token);
+    if absolute_path_count > 1 || (contains_parent_dir(token) && absolute_path_count > 0) {
+        return true;
+    }
+    if is_approved_lsm_path(token) || token.starts_with("/boot/") {
+        return false;
+    }
+    let kernel_normalized = KERNEL_VERSION_RE.replace_all(token, "<kver>");
+    if is_approved_kernel_module_path(&kernel_normalized) {
+        return false;
+    }
+
+    token.starts_with('/') || absolute_path_count > 0
+}
+
 fn contains_absolute_path(value: &str) -> bool {
     EMBEDDED_ABSOLUTE_PATH_RE.is_match(value)
+}
+
+fn absolute_path_count(value: &str) -> usize {
+    EMBEDDED_ABSOLUTE_PATH_RE.find_iter(value).count()
 }
 
 fn collapse_whitespace(value: &str) -> String {
@@ -351,6 +561,69 @@ mod tests {
     }
 
     #[test]
+    fn sanitizer_redacts_boot_traversal_embedded_paths_and_env_assignments() {
+        assert_eq!(
+            normalize_token("/boot/../../home/remi/private.img"),
+            Some("<path>".to_string())
+        );
+        assert_eq!(
+            normalize_token("origin:/home/remi/private"),
+            Some("<path>".to_string())
+        );
+        assert_eq!(
+            normalize_token("file:///home/remi/private"),
+            Some("<path>".to_string())
+        );
+        assert_eq!(
+            normalize_token("--root=//home/remi/private"),
+            Some("--root=<path>".to_string())
+        );
+        assert_eq!(
+            normalize_token("note:SECRET=/home/remi/token"),
+            Some("<env-assignment>".to_string())
+        );
+        assert_eq!(
+            normalize_token("origin:/etc/apparmor.d/../../home/remi/private.pp"),
+            Some("<path>".to_string())
+        );
+    }
+
+    #[test]
+    fn sanitizer_preserves_versioned_approved_lsm_paths() {
+        for path in [
+            "/etc/apparmor.d/vendor.1.2.3",
+            "/etc/selinux/targeted/policy/policy.1.2.3",
+            "/usr/share/selinux/packages/vendor.1.2.3.pp",
+        ] {
+            assert_eq!(normalize_token(path), Some(path.to_string()));
+        }
+    }
+
+    #[test]
+    fn sanitizer_redacts_private_suffixes_after_approved_roots() {
+        for token in [
+            "/etc/apparmor.d/vendor:/home/remi/private",
+            "/etc/apparmor.d/vendor=/home/remi/private",
+            "/etc/selinux/targeted/policy:/home/remi/private",
+            "/etc/selinux/targeted/policy=/home/remi/private",
+            "/usr/share/selinux/packages/vendor.pp:/home/remi/private",
+            "/usr/share/selinux/packages/vendor.pp=/home/remi/private",
+            "/boot/initramfs.img:/home/remi/private",
+            "/boot/initramfs.img=/home/remi/private",
+            "/lib/modules/6.10.12/vendor.ko:/home/remi/private",
+            "/lib/modules/6.10.12/vendor.ko=/home/remi/private",
+            "/usr/lib/modules/6.10.12/vendor.ko:/home/remi/private",
+            "/usr/lib/modules/6.10.12/vendor.ko=/home/remi/private",
+        ] {
+            assert_eq!(
+                normalize_token(token),
+                Some("<path>".to_string()),
+                "approved roots must not hide a second private path: {token}"
+            );
+        }
+    }
+
+    #[test]
     fn security_policy_value_sanitizer_redacts_private_object_keys() {
         let value = r#"[{"provider":"selinux","desired_state":{"/home/remi/private.pp":"enabled"},"/home/remi/private-extra":"value"}]"#;
 
@@ -359,6 +632,97 @@ mod tests {
 
         assert!(!json.contains("/home/remi"));
         assert!(json.contains("<path>"));
+    }
+
+    #[test]
+    fn security_policy_value_sanitizer_preserves_colliding_dynamic_keys() {
+        let intent = colliding_security_policy_intent();
+        let value = serde_json::to_string(&[intent]).unwrap();
+
+        let sanitized = sanitize_security_policy_intents_value(&value);
+        let intents = sanitized.as_array().unwrap();
+        let intent = intents[0].as_object().unwrap();
+        let desired_state = intent["desired_state"].as_object().unwrap();
+        let json = serde_json::to_string(&sanitized).unwrap();
+
+        assert_eq!(intents.len(), 1);
+        assert_eq!(intent["provider"], "selinux");
+        assert_eq!(intent["provider#2"], "shadow");
+        assert_eq!(desired_state.len(), 2);
+        assert_eq!(desired_state["<path>"], "enabled");
+        assert_eq!(desired_state["<path>#2"], "disabled");
+        assert!(!json.contains("/home/remi"));
+    }
+
+    #[test]
+    fn security_policy_intent_sanitizer_preserves_cardinality_and_structural_fields() {
+        let sanitized = sanitize_security_policy_intents(&[colliding_security_policy_intent()]);
+        let intent = &sanitized[0];
+        let json = serde_json::to_string(&sanitized).unwrap();
+
+        assert_eq!(sanitized.len(), 1);
+        assert_eq!(intent.schema, "conary.security-policy-intent.v1");
+        assert_eq!(intent.id, "scriptlet:0:post-install:selinux:test");
+        assert_eq!(intent.provider.as_str(), "selinux");
+        assert_eq!(intent.operation, "module-install");
+        assert_eq!(intent.fallback.as_str(), "block-on-enforcing-target");
+        assert_eq!(intent.reconciliation.state.as_str(), "review");
+        assert_eq!(intent.desired_state.len(), 2);
+        assert_eq!(
+            intent.desired_state.get("<path>"),
+            Some(&toml::Value::String("enabled".to_string()))
+        );
+        assert_eq!(
+            intent.desired_state.get("<path>#2"),
+            Some(&toml::Value::String("disabled".to_string()))
+        );
+        assert_eq!(
+            intent.extra.get("provider#2"),
+            Some(&toml::Value::String("shadow".to_string()))
+        );
+        assert!(!json.contains("/home/remi"));
+    }
+
+    #[test]
+    fn security_policy_intent_sanitizer_preserves_safe_semantics_and_redacts_unsafe_semantics() {
+        let mut safe = colliding_security_policy_intent();
+        safe.schema = "schema-1.2.3".to_string();
+        safe.id = "intent-1.2.3".to_string();
+        safe.source.source_format = Some("format-1.2.3".to_string());
+        safe.provider = SecurityPolicyProvider::Unknown("provider-1.2.3".to_string());
+        safe.operation = "operation-1.2.3".to_string();
+        safe.scope.kind = "kind-1.2.3".to_string();
+        safe.fallback = SecurityPolicyFallback::Unknown("fallback-1.2.3".to_string());
+        safe.reconciliation.state =
+            SecurityPolicyReconciliationState::Unknown("state-1.2.3".to_string());
+        safe.reconciliation.reason = Some("reason-1.2.3".to_string());
+
+        let mut unsafe_intent = colliding_security_policy_intent();
+        unsafe_intent.provider = SecurityPolicyProvider::Unknown("/home/remi/provider".to_string());
+        unsafe_intent.operation = "note:SECRET=/home/remi/token".to_string();
+        unsafe_intent.fallback =
+            SecurityPolicyFallback::Unknown("origin:/home/remi/fallback".to_string());
+        unsafe_intent.reconciliation.state = SecurityPolicyReconciliationState::Unknown(
+            "file:///home/remi/reconciliation".to_string(),
+        );
+
+        let sanitized = sanitize_security_policy_intents(&[safe, unsafe_intent]);
+        let safe = &sanitized[0];
+        let unsafe_intent = &sanitized[1];
+
+        assert_eq!(safe.schema, "schema-1.2.3");
+        assert_eq!(safe.id, "intent-1.2.3");
+        assert_eq!(safe.source.source_format.as_deref(), Some("format-1.2.3"));
+        assert_eq!(safe.provider.as_str(), "provider-1.2.3");
+        assert_eq!(safe.operation, "operation-1.2.3");
+        assert_eq!(safe.scope.kind, "kind-1.2.3");
+        assert_eq!(safe.fallback.as_str(), "fallback-1.2.3");
+        assert_eq!(safe.reconciliation.state.as_str(), "state-1.2.3");
+        assert_eq!(safe.reconciliation.reason.as_deref(), Some("reason-1.2.3"));
+        assert_eq!(unsafe_intent.provider.as_str(), "<path>");
+        assert_eq!(unsafe_intent.operation, "<env-assignment>");
+        assert_eq!(unsafe_intent.fallback.as_str(), "<path>");
+        assert_eq!(unsafe_intent.reconciliation.state.as_str(), "<path>");
     }
 
     #[test]
@@ -387,5 +751,24 @@ mod tests {
         assert_eq!(target_profile_for_distro("ubuntu"), "ubuntu-26.04");
         assert_eq!(target_profile_for_distro("arch"), "arch");
         assert_eq!(target_profile_for_distro("debian"), "unknown");
+    }
+
+    fn colliding_security_policy_intent() -> SecurityPolicyIntent {
+        serde_json::from_value(serde_json::json!({
+            "schema": "conary.security-policy-intent.v1",
+            "id": "scriptlet:0:post-install:selinux:test",
+            "provider": "selinux",
+            "operation": "module-install",
+            "desired_state": {
+                "/home/remi/a.pp": "enabled",
+                "/home/remi/b.pp": "disabled"
+            },
+            "fallback": "block-on-enforcing-target",
+            "reconciliation": {
+                "state": "review"
+            },
+            "provider ": "shadow"
+        }))
+        .unwrap()
     }
 }
