@@ -16,6 +16,7 @@
 - Public refusal responses and non-public admin test-serving manifests must not expose `review_artifact_path`, private local paths such as `/home/remi/private.pp`, `/tmp/private-review-secret.json`, or embedded secret environment assignments.
 - Private review artifact JSON remains operator diagnostic state and may retain raw boot/security intent paths and tokens; it is not serialized through public refusal or non-public test-serving responses.
 - Sanitization must preserve public policy semantics: class IDs, reason codes, provider, operation, fallback, reconciliation state, and approved system policy paths such as `/etc/apparmor.d/<profile>`, `/etc/selinux/*`, and `/usr/share/selinux/*`.
+- Approved absolute paths must be traversal-free; a lexical allowlist prefix never permits a `..` path component to escape an approved root.
 - Non-public test serving remains default-off, admin-scoped, and not publication authority.
 - Do not add a new adapter, new publication bypass, new schema migration, public gate exception, or live replay behavior in this slice.
 - Documentation changes must keep `docs/SCRIPTLET_SECURITY.md`, `docs/modules/ccs.md`, `docs/modules/remi.md`, `docs/modules/test-fixtures.md`, docs-audit ledger, inventory, and feature coherency ledger aligned.
@@ -98,6 +99,23 @@ fn sanitizer_preserves_approved_lsm_policy_paths_and_redacts_private_values() {
 }
 
 #[test]
+fn sanitizer_rejects_traversal_under_approved_absolute_path_prefixes() {
+    for path in [
+        "/lib/modules/<kver>/../../../home/remi/private.ko",
+        "/usr/lib/modules/<kver>/../../../../home/remi/private.ko",
+        "/etc/apparmor.d/../../home/remi/private.pp",
+        "/etc/selinux/../home/remi/private.pp",
+        "/usr/share/selinux/../../../home/remi/private.pp",
+    ] {
+        assert_eq!(
+            normalize_token(path),
+            Some("<path>".to_string()),
+            "approved absolute-path prefixes must not admit traversal: {path}"
+        );
+    }
+}
+
+#[test]
 fn security_policy_value_sanitizer_redacts_private_object_keys() {
     let value = r#"[{"provider":"selinux","desired_state":{"/home/remi/private.pp":"enabled"},"/home/remi/private-extra":"value"}]"#;
 
@@ -115,11 +133,12 @@ Run:
 
 ```bash
 cargo test -p remi sanitizer_preserves_approved_lsm_policy_paths_and_redacts_private_values
+cargo test -p remi sanitizer_rejects_traversal_under_approved_absolute_path_prefixes
 cargo test -p remi security_policy_value_sanitizer_redacts_private_object_keys
 cargo test -p remi non_public_test_serving
 ```
 
-Expected: the first two commands FAIL because `/etc/apparmor.d/usr.bin.demo` is normalized to `<path>` and object keys are not normalized before this task's implementation. The existing `non_public_test_serving` baseline should PASS.
+Expected: the first three commands FAIL because `/etc/apparmor.d/usr.bin.demo` is normalized to `<path>`, approved lexical prefixes currently admit `..` traversal components, and object keys are not normalized before this task's implementation. The existing `non_public_test_serving` baseline should PASS.
 
 - [ ] **Step 3: Preserve approved AppArmor policy paths and sanitize dynamic JSON keys**
 
@@ -127,6 +146,15 @@ In `apps/remi/src/server/scriptlet_evidence_queue/normalization.rs`, update `is_
 
 ```rust
 fn is_approved_absolute_path(token: &str) -> bool {
+    let path = std::path::Path::new(token);
+    if !path.is_absolute()
+        || path
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return false;
+    }
+
     token.starts_with("/lib/modules/<kver>/")
         || token.starts_with("/usr/lib/modules/<kver>/")
         || token.starts_with("/etc/apparmor.d/")
@@ -464,6 +492,7 @@ cargo test -p remi raw_publication_report_retains_private_intents_for_review_art
 cargo test -p remi blocked_apparmor_report_stays_private_and_carries_security_policy_intent
 cargo test -p remi publication_report_includes_boot_security_intents
 cargo test -p remi sanitizer_preserves_approved_lsm_policy_paths_and_redacts_private_values
+cargo test -p remi sanitizer_rejects_traversal_under_approved_absolute_path_prefixes
 cargo test -p remi security_policy_value_sanitizer_redacts_private_object_keys
 cargo test -p remi review_artifact
 ```
@@ -695,7 +724,8 @@ generic LSM security-policy intent metadata is normalized before serialization,
 private paths and secret-bearing tokens are redacted, and local
 `review_artifact_path` values remain private. Private review artifact files use
 the raw report helper so operators can still inspect exact blocked paths during
-triage. Preserving `/etc/apparmor.d/<profile>` as an approved policy path also
+triage. Approved system policy paths are preserved only when absolute and free
+of `..` traversal components. Preserving `/etc/apparmor.d/<profile>` as an approved policy path also
 affects scriptlet evidence queue normalization; operators should run the bounded
 admin evidence backfill after deployment when they need historical AppArmor
 samples normalized into the same shape as new samples.
@@ -720,6 +750,17 @@ Append or refresh a `docs/superpowers/documentation-accuracy-audit-ledger.tsv` r
 docs/superpowers/plans/2026-07-08-publication-summary-schema-docs-truth-plan.md	docs/superpowers/plans/2026-07-08-publication-summary-schema-docs-truth-plan.md	planning	maintainer	scriptlet-security; publication-summary; security-policy-intents; remi-publication-gate; implementation-plan	docs/superpowers/specs/2026-07-08-scriptlet-public-authority-roadmap-design.md; docs/SCRIPTLET_SECURITY.md; docs/modules/ccs.md; docs/modules/remi.md; docs/modules/test-fixtures.md; crates/conary-core/src/db/models/converted.rs; apps/remi/src/server/publication.rs; apps/remi/src/server/handlers/admin/non_public_test_serving.rs	verified	corrected	Implementation plan for Workstream H, tightening scriptlet publication summary schema truth, sanitizing boot/security intent evidence in Remi public refusal and admin non-public test-serving responses, and preserving raw private review artifacts for operator diagnostics.
 ```
 
+Also refresh the existing ledger rows whose first column is each of the four
+canonical docs below. Preserve their existing classification, owner, and prior
+evidence, then add these exact values:
+
+| Ledger row | Topics to add | Evidence references to add | Exact audit-note sentence to append |
+|---|---|---|---|
+| `docs/SCRIPTLET_SECURITY.md` | `publication-summary; sanitized-intent-reports` | `docs/superpowers/plans/2026-07-08-publication-summary-schema-docs-truth-plan.md; crates/conary-core/src/db/models/converted.rs; apps/remi/src/server/scriptlet_evidence_queue/normalization.rs; apps/remi/src/server/publication.rs; apps/remi/src/server/handlers/admin/non_public_test_serving.rs` | `Documented the required non-default publication-summary intent fields, sanitized public/admin report boundary, traversal-free approved policy paths, and raw private review-artifact boundary.` |
+| `docs/modules/ccs.md` | `publication-summary; sanitized-intent-reports` | `docs/superpowers/plans/2026-07-08-publication-summary-schema-docs-truth-plan.md; crates/conary-core/src/db/models/converted.rs; apps/remi/src/server/publication.rs` | `Documented that non-default publication summaries require boot and security-policy intent fields and that stale rows must be reconverted before publication.` |
+| `docs/modules/remi.md` | `publication-summary; sanitized-intent-reports` | `docs/superpowers/plans/2026-07-08-publication-summary-schema-docs-truth-plan.md; apps/remi/src/server/scriptlet_evidence_queue/normalization.rs; apps/remi/src/server/publication.rs; apps/remi/src/server/handlers/admin/non_public_test_serving.rs` | `Documented sanitized publication and admin-test intent reports, traversal-free approved policy paths, raw private review artifacts, and the AppArmor evidence-backfill note.` |
+| `docs/modules/test-fixtures.md` | `publication-summary; sanitized-intent-reports` | `docs/superpowers/plans/2026-07-08-publication-summary-schema-docs-truth-plan.md; crates/conary-core/src/db/models/converted.rs; apps/remi/src/server/publication.rs; apps/remi/src/server/handlers/admin/non_public_test_serving.rs` | `Registered focused publication-summary shape and sanitized-intent response proof.` |
+
 - [ ] **Step 6: Update feature coherency ledger**
 
 Append a row to `docs/superpowers/feature-coherency-ledger.tsv`:
@@ -727,7 +768,7 @@ Append a row to `docs/superpowers/feature-coherency-ledger.tsv`:
 The `ROUTE-REMI-SCRIPTLET-EVIDENCE-001` relationship below is a dependency: this publication-report row reuses the evidence queue normalization helpers. It does not replace or invalidate the evidence-queue workflow claim.
 
 ```tsv
-DOC-SCRIPTLET-PUBLICATION-SUMMARY-001	scriptlet publication summary and sanitized reports	doc:docs/SCRIPTLET_SECURITY.md;doc:docs/modules/ccs.md;doc:docs/modules/remi.md;doc:docs/modules/test-fixtures.md;path:crates/conary-core/src/db/models/converted.rs;path:apps/remi/src/server/publication.rs;path:apps/remi/src/server/handlers/admin/non_public_test_serving.rs	ROUTE-REMI-SCRIPTLET-EVIDENCE-001	scriptlet-publication-summary-schema	Remi Publication, Serving, Admin, And Fixture Artifacts	Non-default scriptlet publication summaries require boot and security-policy intent fields, stale converted rows stay non-public, and Remi public refusal plus admin non-public test-serving responses serialize sanitized boot/security intent metadata only	Focused conary-core schema tests and Remi publication/admin tests prove missing security_policy_intents is not public-ready, stale summaries require reconversion, review_artifact_path stays private, private paths or secret-bearing tokens are normalized before responses, and private review artifacts keep raw operator diagnostics	works	verified-no-change	2026-07-08	doc:docs/SCRIPTLET_SECURITY.md;doc:docs/modules/ccs.md;doc:docs/modules/remi.md;doc:docs/modules/test-fixtures.md;path:crates/conary-core/src/db/models/converted.rs;path:apps/remi/src/server/publication.rs;path:apps/remi/src/server/handlers/admin/non_public_test_serving.rs	none	test:cargo test -p conary-core non_default_publication_summary_requires_security_policy_intents;test:cargo test -p conary-core older_non_default_summary_without_security_policy_intents_is_stale_and_not_public_ready;test:cargo test -p remi publication_report_sanitizes_boot_and_security_policy_intents;test:cargo test -p remi raw_publication_report_retains_private_intents_for_review_artifacts;test:cargo test -p remi non_public_test_serving_manifest_sanitizes_private_intent_values;test:cargo test -p remi security_policy_value_sanitizer_redacts_private_object_keys;cmd:bash scripts/check-doc-truth.sh;cmd:bash scripts/check-doc-audit-ledger.sh docs/superpowers/documentation-accuracy-audit-ledger.tsv --require-complete;cmd:LC_ALL=C bash scripts/docs-audit-inventory.sh | diff -u docs/superpowers/documentation-accuracy-audit-inventory.tsv -;cmd:bash scripts/check-coherency-ledger.sh docs/superpowers/feature-coherency-ledger.tsv	verify	Re-run schema, publication, admin-test, review-artifact, docs, and coherency proof before changing scriptlet publication summary validation or report serialization	Public/admin report sanitization is a response-layer contract; private review artifacts remain admin-only raw diagnostic state
+DOC-SCRIPTLET-PUBLICATION-SUMMARY-001	scriptlet publication summary and sanitized reports	doc:docs/SCRIPTLET_SECURITY.md;doc:docs/modules/ccs.md;doc:docs/modules/remi.md;doc:docs/modules/test-fixtures.md;path:crates/conary-core/src/db/models/converted.rs;path:apps/remi/src/server/publication.rs;path:apps/remi/src/server/handlers/admin/non_public_test_serving.rs	ROUTE-REMI-SCRIPTLET-EVIDENCE-001	scriptlet-publication-summary-schema	Remi Publication, Serving, Admin, And Fixture Artifacts	Non-default scriptlet publication summaries require boot and security-policy intent fields, stale converted rows stay non-public, and Remi public refusal plus admin non-public test-serving responses serialize sanitized boot/security intent metadata only	Focused conary-core schema tests and Remi publication/admin tests prove missing security_policy_intents is not public-ready, stale summaries require reconversion, review_artifact_path stays private, private paths, traversal-bearing approved-prefix paths, or secret-bearing tokens are normalized before responses, and private review artifacts keep raw operator diagnostics	works	verified-no-change	2026-07-08	doc:docs/SCRIPTLET_SECURITY.md;doc:docs/modules/ccs.md;doc:docs/modules/remi.md;doc:docs/modules/test-fixtures.md;path:crates/conary-core/src/db/models/converted.rs;path:apps/remi/src/server/publication.rs;path:apps/remi/src/server/handlers/admin/non_public_test_serving.rs	none	test:cargo test -p conary-core non_default_publication_summary_requires_security_policy_intents;test:cargo test -p conary-core older_non_default_summary_without_security_policy_intents_is_stale_and_not_public_ready;test:cargo test -p remi publication_report_sanitizes_boot_and_security_policy_intents;test:cargo test -p remi raw_publication_report_retains_private_intents_for_review_artifacts;test:cargo test -p remi non_public_test_serving_manifest_sanitizes_private_intent_values;test:cargo test -p remi sanitizer_rejects_traversal_under_approved_absolute_path_prefixes;test:cargo test -p remi security_policy_value_sanitizer_redacts_private_object_keys;cmd:bash scripts/check-doc-truth.sh;cmd:bash scripts/check-doc-audit-ledger.sh docs/superpowers/documentation-accuracy-audit-ledger.tsv --require-complete;cmd:LC_ALL=C bash scripts/docs-audit-inventory.sh | diff -u docs/superpowers/documentation-accuracy-audit-inventory.tsv -;cmd:bash scripts/check-coherency-ledger.sh docs/superpowers/feature-coherency-ledger.tsv	verify	Re-run schema, publication, admin-test, review-artifact, docs, and coherency proof before changing scriptlet publication summary validation or report serialization	Public/admin report sanitization is a response-layer contract; private review artifacts remain admin-only raw diagnostic state
 ```
 
 - [ ] **Step 7: Regenerate inventory after staging docs**
@@ -783,6 +824,7 @@ cargo test -p conary-core stale_converted_rows_are_not_scriptlet_public_ready --
 cargo test -p remi publication
 cargo test -p remi non_public_test_serving
 cargo test -p remi review_artifact
+cargo test -p remi sanitizer_rejects_traversal_under_approved_absolute_path_prefixes
 cargo fmt --check
 cargo clippy --workspace --all-targets -- -D warnings
 bash scripts/check-doc-truth.sh
