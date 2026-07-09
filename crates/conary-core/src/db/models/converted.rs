@@ -1070,6 +1070,51 @@ mod tests {
     }
 
     #[test]
+    fn older_non_default_summary_without_security_policy_intents_is_stale_and_not_public_ready() {
+        let mut converted = ConvertedPackage::new_server(
+            "fedora".to_string(),
+            "stale-policy".to_string(),
+            "1.0".to_string(),
+            "rpm".to_string(),
+            "sha256:source".to_string(),
+            "high".to_string(),
+            &["sha256:chunk".to_string()],
+            42,
+            "sha256:content".to_string(),
+            "/tmp/stale-policy.ccs".to_string(),
+        );
+        converted.scriptlet_fidelity = "fully-replaced".to_string();
+        converted.target_compatibility = "conary-portable".to_string();
+        converted.publication_status = "public".to_string();
+        converted.evidence_digest = Some(crate::hash::sha256_prefixed(b"evidence"));
+        converted.conversion_version = CONVERSION_VERSION - 1;
+        converted.scriptlet_summary_json = serde_json::json!({
+            "scriptlet_fidelity": "fully-replaced",
+            "target_compatibility": "conary-portable",
+            "publication_status": "public",
+            "evidence_digest": crate::hash::sha256_prefixed(b"evidence"),
+            "decision_counts": {
+                "replaced": 1,
+                "legacy": 0,
+                "blocked": 0,
+                "review": 0
+            },
+            "blocked_reason_codes": [],
+            "review_reason_codes": [],
+            "unknown_commands": [],
+            "blocked_classes": [],
+            "boot_security_intents": []
+        })
+        .to_string();
+
+        let publication = converted.scriptlet_summary_for_publication();
+
+        assert!(!publication.valid);
+        assert!(converted.needs_reconversion());
+        assert!(!converted.is_scriptlet_public_ready());
+    }
+
+    #[test]
     fn non_default_publication_summary_accepts_security_policy_intents() {
         let mut converted = ConvertedPackage::new(
             "rpm".to_string(),

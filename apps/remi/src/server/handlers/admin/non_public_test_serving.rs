@@ -744,6 +744,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn non_public_test_serving_manifest_sanitizes_private_intent_values() {
+        let (app, db_path) = test_app_with_non_public_test_serving(true).await;
+        let mut summary = apparmor_review_summary();
+        summary.security_policy_intents[0]
+            .source
+            .argv
+            .push("SECRET=/home/remi/token".to_string());
+        summary.security_policy_intents[0]
+            .scope
+            .paths
+            .push("/home/remi/private.pp".to_string());
+        summary.security_policy_intents[0]
+            .payload_evidence
+            .paths
+            .push("/home/remi/private.pp".to_string());
+        seed_non_public_test_row_with_summary(&db_path, "x86_64", "pkg.ccs", summary, true);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/v1/admin/packages/fedora/pkg/test-manifest?version=1.0&arch=x86_64")
+                    .header(header::AUTHORIZATION, "Bearer test-admin-token-12345")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = String::from_utf8(body.to_vec()).unwrap();
+
+        assert!(body.contains("\"provider\":\"apparmor\""));
+        assert!(body.contains("\"operation\":\"profile-reload\""));
+        assert!(body.contains("/etc/apparmor.d/usr.bin.demo"));
+        assert!(body.contains("\"<path>\""));
+        assert!(!body.contains("/home/remi"));
+        assert!(!body.contains("SECRET="));
+        assert!(!body.contains("review_artifact_path"));
+        assert!(!body.contains("private-review-secret"));
+    }
+
+    #[tokio::test]
     async fn non_public_test_manifest_accepts_architecture_alias_for_boot_security_evidence() {
         let (app, db_path) = test_app_with_non_public_test_serving(true).await;
         seed_non_public_test_row_with_summary(
