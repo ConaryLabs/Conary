@@ -308,7 +308,9 @@ fn sanitize_toml_map(fields: &mut BTreeMap<String, toml::Value>, reserved_fields
         .iter()
         .map(|field| (*field).to_string())
         .collect::<BTreeSet<_>>();
-    for (key, mut field) in ordered_sanitized_entries(std::mem::take(fields)) {
+    for (key, mut field) in
+        ordered_sanitized_entries(std::mem::take(fields), normalize_dynamic_policy_string)
+    {
         sanitize_toml_value(&mut field);
         let key = collision_safe_key(key, &mut occupied);
         sanitized.insert(key, field);
@@ -318,7 +320,7 @@ fn sanitize_toml_map(fields: &mut BTreeMap<String, toml::Value>, reserved_fields
 
 fn sanitize_toml_value(value: &mut toml::Value) {
     match value {
-        toml::Value::String(value) => sanitize_string(value),
+        toml::Value::String(value) => *value = normalize_dynamic_policy_string(value),
         toml::Value::Array(values) => {
             for value in values {
                 sanitize_toml_value(value);
@@ -327,7 +329,9 @@ fn sanitize_toml_value(value: &mut toml::Value) {
         toml::Value::Table(fields) => {
             let mut sanitized = toml::map::Map::new();
             let mut occupied = BTreeSet::new();
-            for (key, mut field) in ordered_sanitized_entries(std::mem::take(fields)) {
+            for (key, mut field) in
+                ordered_sanitized_entries(std::mem::take(fields), normalize_dynamic_policy_string)
+            {
                 sanitize_toml_value(&mut field);
                 let key = collision_safe_key(key, &mut occupied);
                 sanitized.insert(key, field);
@@ -354,7 +358,9 @@ fn sanitize_json_value(value: &mut Value) {
         Value::Object(fields) => {
             let mut sanitized = serde_json::Map::new();
             let mut occupied = BTreeSet::new();
-            for (key, mut field) in ordered_sanitized_entries(std::mem::take(fields)) {
+            for (key, mut field) in
+                ordered_sanitized_entries(std::mem::take(fields), normalize_evidence_key)
+            {
                 sanitize_json_value(&mut field);
                 let key = collision_safe_key(key, &mut occupied);
                 sanitized.insert(key, field);
@@ -373,11 +379,12 @@ fn sanitize_json_value(value: &mut Value) {
 
 fn ordered_sanitized_entries<V>(
     entries: impl IntoIterator<Item = (String, V)>,
+    normalize_key: fn(&str) -> String,
 ) -> Vec<(String, V)> {
     let mut entries = entries
         .into_iter()
         .map(|(original, value)| {
-            let normalized = normalize_token(&original).unwrap_or_else(|| original.clone());
+            let normalized = normalize_key(&original);
             (normalized != original, original, normalized, value)
         })
         .collect::<Vec<_>>();
@@ -386,6 +393,19 @@ fn ordered_sanitized_entries<V>(
         .into_iter()
         .map(|(_, _, normalized, value)| (normalized, value))
         .collect()
+}
+
+fn normalize_evidence_key(value: &str) -> String {
+    normalize_token(value).unwrap_or_else(|| value.to_string())
+}
+
+fn normalize_dynamic_policy_string(value: &str) -> String {
+    let value = value.trim();
+    if requires_privacy_redaction(value) {
+        normalize_token(value).unwrap_or_else(|| value.to_string())
+    } else {
+        value.to_string()
+    }
 }
 
 fn collision_safe_key(base: String, occupied: &mut BTreeSet<String>) -> String {
@@ -723,6 +743,60 @@ mod tests {
         assert_eq!(unsafe_intent.operation, "<env-assignment>");
         assert_eq!(unsafe_intent.fallback.as_str(), "<path>");
         assert_eq!(unsafe_intent.reconciliation.state.as_str(), "<path>");
+    }
+
+    #[test]
+    fn security_policy_intent_sanitizer_preserves_dynamic_versioned_semantics() {
+        let mut intent = colliding_security_policy_intent();
+        intent.desired_state = BTreeMap::from([
+            (
+                "profile_path".to_string(),
+                toml::Value::String("/etc/apparmor.d/vendor.1.2.3".to_string()),
+            ),
+            (
+                "profile_name".to_string(),
+                toml::Value::String("vendor.1.2.3".to_string()),
+            ),
+            (
+                "private_path".to_string(),
+                toml::Value::String("/home/remi/private.pp".to_string()),
+            ),
+        ]);
+        intent.scope.extra.insert(
+            "scope_profile_name".to_string(),
+            toml::Value::String("vendor.1.2.3".to_string()),
+        );
+        intent.extra.clear();
+        intent.extra.insert(
+            "intent_profile_name".to_string(),
+            toml::Value::String("vendor.1.2.3".to_string()),
+        );
+
+        let sanitized = sanitize_security_policy_intents(&[intent]);
+        let intent = &sanitized[0];
+
+        assert_eq!(
+            intent.desired_state.get("profile_path"),
+            Some(&toml::Value::String(
+                "/etc/apparmor.d/vendor.1.2.3".to_string()
+            ))
+        );
+        assert_eq!(
+            intent.desired_state.get("profile_name"),
+            Some(&toml::Value::String("vendor.1.2.3".to_string()))
+        );
+        assert_eq!(
+            intent.scope.extra.get("scope_profile_name"),
+            Some(&toml::Value::String("vendor.1.2.3".to_string()))
+        );
+        assert_eq!(
+            intent.extra.get("intent_profile_name"),
+            Some(&toml::Value::String("vendor.1.2.3".to_string()))
+        );
+        assert_eq!(
+            intent.desired_state.get("private_path"),
+            Some(&toml::Value::String("<path>".to_string()))
+        );
     }
 
     #[test]
