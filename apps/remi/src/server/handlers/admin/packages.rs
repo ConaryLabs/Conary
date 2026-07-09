@@ -4,7 +4,9 @@
 use super::{check_scope, validate_path_param, validate_supported_admin_distro_route};
 use crate::server::ServerState;
 use crate::server::auth::{Scope, TokenScopes, json_error};
-use crate::server::publication::{ReviewArtifactInput, decision_refusal, write_review_artifact};
+use crate::server::publication::{
+    ReviewArtifactInput, decision_refusal, raw_report_from_summary, write_review_artifact,
+};
 use axum::{
     extract::{Path, Query, Request, State},
     http::{StatusCode, header},
@@ -532,15 +534,13 @@ pub async fn upload_package(
     }
 
     let mut review_artifact_path = None;
-    let decision = crate::server::publication::classify_summary(ScriptletSummaryForPublication {
+    let publication = ScriptletSummaryForPublication {
         summary: scriptlet_summary.clone(),
         valid: true,
-    });
-    if let Some(refusal) = decision_refusal(decision) {
-        let mut report = match refusal {
-            crate::server::publication::PublicationRefusal::ReviewRequired(report)
-            | crate::server::publication::PublicationRefusal::Blocked(report) => report,
-        };
+    };
+    let decision = crate::server::publication::classify_summary(publication.clone());
+    if decision_refusal(decision).is_some() {
+        let mut report = raw_report_from_summary(&publication.summary, publication.valid);
         report.review_artifact_available = true;
         let artifact_path = match write_review_artifact(
             &cache_dir,
@@ -559,15 +559,9 @@ pub async fn upload_package(
         ) {
             Ok(path) => path,
             Err(err) => {
-                tracing::error!(
-                    "Failed to write scriptlet review artifact for {}/{}/{}: {}",
-                    distro,
-                    package_name,
-                    package_version,
-                    err
-                );
+                tracing::error!("Failed to write scriptlet review artifact: {err}");
                 let _ = tokio::fs::remove_file(&staged_path).await;
-                return json_error(500, "Failed to write scriptlet review artifact", "IO_ERROR");
+                return json_error(500, "Failed to publish package", "REVIEW_ARTIFACT_ERROR");
             }
         };
         scriptlet_summary.review_artifact_path = Some(artifact_path.to_string_lossy().to_string());

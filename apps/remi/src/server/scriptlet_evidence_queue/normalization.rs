@@ -190,9 +190,13 @@ fn normalize_option_value(value: &str) -> String {
 fn sanitize_boot_security_intent_value(value: &mut Value) {
     match value {
         Value::Object(fields) => {
-            for field in fields.values_mut() {
-                sanitize_boot_security_intent_value(field);
+            let mut sanitized = serde_json::Map::new();
+            for (key, mut field) in std::mem::take(fields) {
+                sanitize_boot_security_intent_value(&mut field);
+                let key = normalize_token(&key).unwrap_or(key);
+                sanitized.insert(key, field);
             }
+            *fields = sanitized;
         }
         Value::Array(values) => {
             for value in values {
@@ -211,9 +215,13 @@ fn sanitize_boot_security_intent_value(value: &mut Value) {
 fn sanitize_security_policy_intents_value_inner(value: &mut Value) {
     match value {
         Value::Object(fields) => {
-            for field in fields.values_mut() {
-                sanitize_security_policy_intents_value_inner(field);
+            let mut sanitized = serde_json::Map::new();
+            for (key, mut field) in std::mem::take(fields) {
+                sanitize_security_policy_intents_value_inner(&mut field);
+                let key = normalize_token(&key).unwrap_or(key);
+                sanitized.insert(key, field);
             }
+            *fields = sanitized;
         }
         Value::Array(values) => {
             for value in values {
@@ -230,8 +238,18 @@ fn sanitize_security_policy_intents_value_inner(value: &mut Value) {
 }
 
 fn is_approved_absolute_path(token: &str) -> bool {
+    let path = std::path::Path::new(token);
+    if !path.is_absolute()
+        || path
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return false;
+    }
+
     token.starts_with("/lib/modules/<kver>/")
         || token.starts_with("/usr/lib/modules/<kver>/")
+        || token.starts_with("/etc/apparmor.d/")
         || token.starts_with("/etc/selinux/")
         || token.starts_with("/usr/share/selinux/")
 }
@@ -289,6 +307,58 @@ mod tests {
         assert!(!shape.contains("/tmp"));
         assert!(!shape.contains("/home"));
         assert!(!shape.contains("SECRET=/home"));
+    }
+
+    #[test]
+    fn sanitizer_preserves_approved_lsm_policy_paths_and_redacts_private_values() {
+        assert_eq!(
+            normalize_token("/etc/apparmor.d/usr.bin.demo"),
+            Some("/etc/apparmor.d/usr.bin.demo".to_string())
+        );
+        assert_eq!(
+            normalize_token("/etc/selinux/targeted/policy/policy.33"),
+            Some("/etc/selinux/targeted/policy/policy.33".to_string())
+        );
+        assert_eq!(
+            normalize_token("/usr/share/selinux/packages/demo.pp"),
+            Some("/usr/share/selinux/packages/demo.pp".to_string())
+        );
+        assert_eq!(
+            normalize_token("/home/remi/private.pp"),
+            Some("<path>".to_string())
+        );
+        assert_eq!(
+            normalize_token("SECRET=/home/remi/token"),
+            Some("<env-assignment>".to_string())
+        );
+    }
+
+    #[test]
+    fn sanitizer_rejects_traversal_under_approved_absolute_path_prefixes() {
+        for path in [
+            "/lib/modules/<kver>/../../../home/remi/private.ko",
+            "/usr/lib/modules/<kver>/../../../../home/remi/private.ko",
+            "/etc/apparmor.d/../../home/remi/private.pp",
+            "/etc/selinux/../home/remi/private.pp",
+            "/usr/share/selinux/../../../home/remi/private.pp",
+        ] {
+            assert_eq!(
+                normalize_token(path),
+                Some("<path>".to_string()),
+                "approved absolute-path prefixes must not admit traversal: {path}"
+            );
+        }
+    }
+
+    #[test]
+    fn security_policy_value_sanitizer_redacts_private_object_keys() {
+        let value = r#"[{"provider":"selinux","desired_state":{"/home/remi/private.pp":"enabled"},"/home/remi/private-extra":"value"}]"#;
+
+        let sanitized = sanitize_security_policy_intents_value(value);
+        let json = serde_json::to_string(&sanitized).unwrap();
+
+        assert!(!json.contains("/home/remi"));
+        assert!(json.contains("<path>"));
     }
 
     #[test]
