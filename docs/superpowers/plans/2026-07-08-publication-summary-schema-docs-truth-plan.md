@@ -506,6 +506,53 @@ git add apps/remi/src/server/scriptlet_evidence_queue/normalization.rs apps/remi
 git commit -m "security(remi): sanitize scriptlet publication reports"
 ```
 
+### Task 1 Review Corrections
+
+Task review found that the original Step 3 recursive object-branch snippets
+could overwrite canonical fields when normalized dynamic keys collided. The
+human resolution is that the global privacy and semantic-preservation
+constraints govern. This section supersedes those blind `Map::insert`
+snippets and extends the Task 1 requirements.
+
+The reviewed implementation must:
+
+- reject `/boot` traversal, embedded and repeated-slash absolute paths,
+  embedded environment assignments, and second absolute-path suffixes before
+  any approved-root return;
+- preserve traversal-free versioned LSM paths byte-for-byte while retaining
+  `<kver>` normalization for boot and kernel-module evidence;
+- process unchanged dynamic keys first, reserve typed structural field names,
+  and use deterministic `#2`, `#3`, and later suffixes instead of overwriting
+  colliding sanitized keys;
+- preserve typed intent vector cardinality without a whole-vector
+  `unwrap_or_default()` fallback;
+- apply privacy-only normalization to typed semantic fields and dynamic TOML
+  keys/values, preserving safe versioned policy semantics while redacting
+  private paths and environment assignments;
+- derive visibility-specific `unknown_commands` before reason-code
+  construction so sanitized response reports use normalized values and raw
+  private review artifacts retain exact diagnostics.
+
+Required review regressions:
+
+```text
+sanitizer_redacts_boot_traversal_embedded_paths_and_env_assignments
+sanitizer_preserves_versioned_approved_lsm_paths
+sanitizer_redacts_private_suffixes_after_approved_roots
+security_policy_value_sanitizer_preserves_colliding_dynamic_keys
+security_policy_intent_sanitizer_preserves_cardinality_and_structural_fields
+security_policy_intent_sanitizer_preserves_safe_semantics_and_redacts_unsafe_semantics
+security_policy_intent_sanitizer_preserves_dynamic_versioned_semantics
+publication_report_sanitizes_unknown_commands_and_reasons_while_raw_report_retains_them
+```
+
+The corrections landed in commits `994f9f74` and `f144303f` after the initial
+Task 1 commit `75108b91`. Focused regressions, the full Remi suite, Remi Clippy,
+formatting, and diff checks passed before the final Task 1 review approved the
+range. The reviewer retained one non-blocking follow-up: add an integration
+regression that drives a private intent through an actual review-artifact
+writer and the corresponding sanitized response route.
+
 ## Task 2: Pin Schema-Shape And Admin Manifest Evidence
 
 **Files:**
