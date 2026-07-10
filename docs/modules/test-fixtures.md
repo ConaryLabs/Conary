@@ -265,6 +265,10 @@ Each fixture family should record:
   `apps/remi/src/server/handlers/`.
 - **Consumes:** Remi publication, conversion, generated-index,
   sparse/detail/search/chunk serving, and prewarm tests.
+- `publication-summary-schema-and-sanitized-intents`: converted-package summary
+  shape tests require `security_policy_intents` for non-default metadata and
+  Remi publication/admin-test tests prove boot/security intent responses are
+  sanitized before serialization.
 - **Fast proof:** `cargo test -p remi publication`.
 - **Medium proof:**
   `cargo test -p remi persisted_goal8a_golden_outcomes_respect_publication_gate`;

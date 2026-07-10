@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-07-08
-revision: 23
-summary: Document CCS file-capability public-policy authority split
+revision: 24
+summary: Document scriptlet publication summary shape and sanitized intent reports
 ---
 
 # CCS Module (conary-core/src/ccs/)
@@ -117,6 +117,12 @@ review intent. Tracks conversion fidelity (High/Medium/Low) via
 Future LSM expansion must add target-provider facts and content semantics
 before any mode change, status, disable, directory reload, or policy-store
 mutation can become public-ready.
+
+Non-default scriptlet publication summaries must include both
+`boot_security_intents` and `security_policy_intents`; rows that predate the
+current conversion version are stale and must be reconverted before they can be
+public-ready. The empty `{}` summary shape remains a constructor compatibility
+path for native/default rows without scriptlet evidence.
 
 **legacy_scriptlets.rs** -- Versioned metadata for converted package scriptlet
 semantics and local replay planning. The v1 bundle lives in the TOML manifest as

@@ -247,6 +247,14 @@ disabled by default, requires admin access, and preserves the original
 scriptlet publication status. It is not public publication authority and does
 not permit raw legacy scriptlet replay.
 
+Publication refusal reports and Remi non-public test-serving manifests expose
+boot/security and generic LSM `security_policy_intents` only after Remi's
+shared scriptlet-evidence sanitizer runs. Raw review artifact paths, private
+local paths, and secret-bearing environment assignments stay private server
+state; responses expose only `review_artifact_available` and normalized intent
+metadata. Private scriptlet review artifact JSON remains an operator diagnostic
+surface and may retain raw path evidence under admin-only artifact access.
+
 ### 5. Basic Protections (Always Active)
 
 Even without sandboxing, these protections are always enforced:

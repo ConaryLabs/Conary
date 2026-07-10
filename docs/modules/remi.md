@@ -55,6 +55,18 @@ rows through a sanitized `scriptlets` object. Local `review_artifact_path`
 values remain private server state and are represented publicly only as
 `review_artifact_available`.
 
+Publication refusal responses and the default-off admin non-public test-serving
+manifest share the same sanitized `PublicationGateReport`: boot-security and
+generic LSM security-policy intent metadata is normalized before serialization,
+private paths and secret-bearing tokens are redacted, and local
+`review_artifact_path` values remain private. Private review artifact files use
+the raw report helper so operators can still inspect exact blocked paths during
+triage. Approved system policy paths are preserved only when absolute and free
+of `..` traversal components. Preserving `/etc/apparmor.d/<profile>` as an approved policy path also
+affects scriptlet evidence queue normalization; operators should run the bounded
+admin evidence backfill after deployment when they need historical AppArmor
+samples normalized into the same shape as new samples.
+
 ### Scriptlet Evidence Queue
 
 Remi maintains an admin/operator-only scriptlet evidence queue for adapter
