@@ -62,10 +62,13 @@ private paths and secret-bearing tokens are redacted, and local
 `review_artifact_path` values remain private. Private review artifact files use
 the raw report helper so operators can still inspect exact blocked paths during
 triage. Approved system policy paths are preserved only when absolute and free
-of `..` traversal components. Preserving `/etc/apparmor.d/<profile>` as an approved policy path also
-affects scriptlet evidence queue normalization; operators should run the bounded
-admin evidence backfill after deployment when they need historical AppArmor
-samples normalized into the same shape as new samples.
+of `..` traversal components. Preserving `/etc/apparmor.d/<profile>` changes the
+shape of newly observed scriptlet-evidence samples. The bounded admin backfill
+resumes after its stored converted-package high-water mark and does not rebuild
+existing samples; because observation identity includes the normalization-derived
+cluster key, historical AppArmor clusters may retain the older `<path>` shape.
+Consistent historical rematerialization requires a future explicit, versioned
+rebuild or reconciliation path.
 
 ### Scriptlet Evidence Queue
 

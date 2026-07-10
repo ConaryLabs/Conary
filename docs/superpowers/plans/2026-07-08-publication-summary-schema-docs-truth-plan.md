@@ -163,7 +163,14 @@ fn is_approved_absolute_path(token: &str) -> bool {
 }
 ```
 
-This changes the shared normalizer used by scriptlet evidence queue aggregation as well as publication report responses. Existing queue samples that normalized AppArmor profile paths to `<path>` should be re-materialized with `POST /v1/admin/scriptlet-evidence/backfill` after deployment when operators need consistent AppArmor clustering across old and new samples. The preview milestone can tolerate mixed historical samples before that backfill, but the deployment note must be explicit in docs.
+This changes the shared normalizer used by scriptlet evidence queue aggregation
+as well as publication report responses, so newly observed AppArmor samples use
+the preserved profile path. The bounded admin backfill resumes after its stored
+converted-package high-water mark and does not rebuild existing samples. Because
+observation identity includes the normalization-derived cluster key, historical
+AppArmor clusters may retain the older `<path>` shape. Consistent historical
+rematerialization requires a future explicit, versioned rebuild or reconciliation
+path; this task does not add one.
 
 Also update both recursive JSON sanitizer object branches so private paths in dynamic map keys cannot leak:
 
@@ -553,6 +560,12 @@ range. The reviewer retained one non-blocking follow-up: add an integration
 regression that drives a private intent through an actual review-artifact
 writer and the corresponding sanitized response route.
 
+Final review also required matched single- and double-quote wrappers to be
+covered by the response sanitizer, including typed dynamic-policy values and
+the authenticated admin route. It also confirmed that the bounded evidence
+backfill is a forward-only high-water-mark scan, not a historical normalization
+rebuild; this workstream does not add a replay or rebuild path.
+
 ## Task 2: Pin Schema-Shape And Admin Manifest Evidence
 
 **Files:**
@@ -772,10 +785,13 @@ private paths and secret-bearing tokens are redacted, and local
 `review_artifact_path` values remain private. Private review artifact files use
 the raw report helper so operators can still inspect exact blocked paths during
 triage. Approved system policy paths are preserved only when absolute and free
-of `..` traversal components. Preserving `/etc/apparmor.d/<profile>` as an approved policy path also
-affects scriptlet evidence queue normalization; operators should run the bounded
-admin evidence backfill after deployment when they need historical AppArmor
-samples normalized into the same shape as new samples.
+of `..` traversal components. Preserving `/etc/apparmor.d/<profile>` changes the
+shape of newly observed scriptlet-evidence samples. The bounded admin backfill
+resumes after its stored converted-package high-water mark and does not rebuild
+existing samples; because observation identity includes the normalization-derived
+cluster key, historical AppArmor clusters may retain the older `<path>` shape.
+Consistent historical rematerialization requires a future explicit, versioned
+rebuild or reconciliation path.
 ```
 
 - [ ] **Step 4: Update fixture docs**
@@ -805,7 +821,7 @@ evidence, then add these exact values:
 |---|---|---|---|
 | `docs/SCRIPTLET_SECURITY.md` | `publication-summary; sanitized-intent-reports` | `docs/superpowers/plans/2026-07-08-publication-summary-schema-docs-truth-plan.md; crates/conary-core/src/db/models/converted.rs; apps/remi/src/server/scriptlet_evidence_queue/normalization.rs; apps/remi/src/server/publication.rs; apps/remi/src/server/handlers/admin/non_public_test_serving.rs` | `Documented the required non-default publication-summary intent fields, sanitized public/admin report boundary, traversal-free approved policy paths, and raw private review-artifact boundary.` |
 | `docs/modules/ccs.md` | `publication-summary; sanitized-intent-reports` | `docs/superpowers/plans/2026-07-08-publication-summary-schema-docs-truth-plan.md; crates/conary-core/src/db/models/converted.rs; apps/remi/src/server/publication.rs` | `Documented that non-default publication summaries require boot and security-policy intent fields and that stale rows must be reconverted before publication.` |
-| `docs/modules/remi.md` | `publication-summary; sanitized-intent-reports` | `docs/superpowers/plans/2026-07-08-publication-summary-schema-docs-truth-plan.md; apps/remi/src/server/scriptlet_evidence_queue/normalization.rs; apps/remi/src/server/publication.rs; apps/remi/src/server/handlers/admin/non_public_test_serving.rs` | `Documented sanitized publication and admin-test intent reports, traversal-free approved policy paths, raw private review artifacts, and the AppArmor evidence-backfill note.` |
+| `docs/modules/remi.md` | `publication-summary; sanitized-intent-reports` | `docs/superpowers/plans/2026-07-08-publication-summary-schema-docs-truth-plan.md; apps/remi/src/server/scriptlet_evidence_queue/normalization.rs; apps/remi/src/server/scriptlet_evidence_queue/backfill.rs; apps/remi/src/server/publication.rs; apps/remi/src/server/handlers/admin/non_public_test_serving.rs` | `Documented sanitized publication and admin-test intent reports, traversal-free approved policy paths, raw private review artifacts, and the AppArmor historical-sample limitation.` |
 | `docs/modules/test-fixtures.md` | `publication-summary; sanitized-intent-reports` | `docs/superpowers/plans/2026-07-08-publication-summary-schema-docs-truth-plan.md; crates/conary-core/src/db/models/converted.rs; apps/remi/src/server/publication.rs; apps/remi/src/server/handlers/admin/non_public_test_serving.rs` | `Registered focused publication-summary shape and sanitized-intent response proof.` |
 
 - [ ] **Step 6: Update feature coherency ledger**
