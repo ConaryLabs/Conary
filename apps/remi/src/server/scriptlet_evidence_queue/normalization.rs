@@ -23,12 +23,12 @@ static ENV_REF_RE: LazyLock<Regex> = LazyLock::new(|| {
 static ENV_ASSIGNMENT_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^[A-Za-z_][A-Za-z0-9_]*=.*$").unwrap());
 static EMBEDDED_ENV_ASSIGNMENT_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(^|[=,:;\s])[A-Za-z_][A-Za-z0-9_]*=.*$").unwrap());
+    LazyLock::new(|| Regex::new(r#"(^|[=,:;\s"'])[A-Za-z_][A-Za-z0-9_]*=.*$"#).unwrap());
 static KERNEL_VERSION_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\d+\.\d+\.\d+[-._A-Za-z0-9]*").unwrap());
 static WHITESPACE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s+").unwrap());
 static EMBEDDED_ABSOLUTE_PATH_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(^|[=,:;\s])/+(?:$|[A-Za-z0-9._@%+-][^\s,;:=]*)").unwrap());
+    LazyLock::new(|| Regex::new(r#"(^|[=,:;\s"'])/+(?:$|[A-Za-z0-9._@%+-][^\s,;:="']*)"#).unwrap());
 
 const SECURITY_POLICY_INTENT_FIELDS: &[&str] = &[
     "schema",
@@ -59,7 +59,15 @@ pub fn normalize_token(token: &str) -> Option<String> {
     if token.is_empty() {
         return None;
     }
+    if let Some(unwrapped) = matching_quote_wrapper(token)
+        && (requires_privacy_redaction(unwrapped) || is_approved_lsm_path(unwrapped))
+    {
+        return normalize_token(unwrapped);
+    }
     if ENV_ASSIGNMENT_RE.is_match(token) {
+        if env_assignment_has_quoted_absolute_path(token) {
+            return Some("<path>".to_string());
+        }
         return Some("<env-assignment>".to_string());
     }
     if ENV_REF_RE.is_match(token) {
@@ -214,11 +222,20 @@ fn normalize_option_value(value: &str) -> String {
     if value.is_empty() {
         return String::new();
     }
+    let value = matching_quote_wrapper(value).unwrap_or(value);
     if ENV_ASSIGNMENT_RE.is_match(value) || EMBEDDED_ENV_ASSIGNMENT_RE.is_match(value) {
         return "<env-assignment>".to_string();
     }
     if ENV_REF_RE.is_match(value) {
         return "<env>".to_string();
+    }
+
+    let absolute_path_count = absolute_path_count(value);
+    if absolute_path_count > 1 || (contains_parent_dir(value) && absolute_path_count > 0) {
+        return "<path>".to_string();
+    }
+    if is_approved_lsm_path(value) {
+        return value.to_string();
     }
 
     let value = KERNEL_VERSION_RE.replace_all(value, "<kver>").to_string();
@@ -401,8 +418,11 @@ fn normalize_evidence_key(value: &str) -> String {
 
 fn normalize_dynamic_policy_string(value: &str) -> String {
     let value = value.trim();
-    if requires_privacy_redaction(value) {
-        normalize_token(value).unwrap_or_else(|| value.to_string())
+    let inspected = matching_quote_wrapper(value).unwrap_or(value);
+    if requires_privacy_redaction(inspected) {
+        normalize_token(inspected).unwrap_or_else(|| value.to_string())
+    } else if inspected != value && is_approved_lsm_path(inspected) {
+        inspected.to_string()
     } else {
         value.to_string()
     }
@@ -451,11 +471,15 @@ fn requires_privacy_redaction(token: &str) -> bool {
     if token.is_empty() {
         return false;
     }
+    if let Some(unwrapped) = matching_quote_wrapper(token) {
+        return requires_privacy_redaction(unwrapped);
+    }
     if ENV_ASSIGNMENT_RE.is_match(token) || ENV_REF_RE.is_match(token) {
         return true;
     }
     if let Some((_, _, value)) = option_value(token) {
         let value = value.trim();
+        let value = matching_quote_wrapper(value).unwrap_or(value);
         return ENV_ASSIGNMENT_RE.is_match(value)
             || EMBEDDED_ENV_ASSIGNMENT_RE.is_match(value)
             || ENV_REF_RE.is_match(value)
@@ -486,6 +510,24 @@ fn contains_absolute_path(value: &str) -> bool {
 
 fn absolute_path_count(value: &str) -> usize {
     EMBEDDED_ABSOLUTE_PATH_RE.find_iter(value).count()
+}
+
+fn matching_quote_wrapper(value: &str) -> Option<&str> {
+    let bytes = value.as_bytes();
+    if bytes.len() < 2 {
+        return None;
+    }
+    match (bytes[0], bytes[bytes.len() - 1]) {
+        (b'\'', b'\'') | (b'"', b'"') => Some(value[1..value.len() - 1].trim()),
+        _ => None,
+    }
+}
+
+fn env_assignment_has_quoted_absolute_path(token: &str) -> bool {
+    token
+        .split_once('=')
+        .and_then(|(_, value)| matching_quote_wrapper(value.trim()))
+        .is_some_and(contains_absolute_path)
 }
 
 fn collapse_whitespace(value: &str) -> String {
@@ -561,6 +603,29 @@ mod tests {
             normalize_token("SECRET=/home/remi/token"),
             Some("<env-assignment>".to_string())
         );
+    }
+
+    #[test]
+    fn sanitizer_redacts_quoted_and_wrapped_private_values() {
+        for (token, expected) in [
+            (r#"--replace="/home/remi/private.pp""#, "--replace=<path>"),
+            ("--replace='/home/remi/private.pp'", "--replace=<path>"),
+            (r#"--flag="TOKEN=value""#, "--flag=<env-assignment>"),
+            ("--flag='TOKEN=value'", "--flag=<env-assignment>"),
+            (r#""/home/remi/private.pp""#, "<path>"),
+            ("'TOKEN=value'", "<env-assignment>"),
+            (r#"prefix="/home/remi/private.pp""#, "<path>"),
+            (
+                r#"--profile="/etc/apparmor.d/vendor.1.2.3""#,
+                "--profile=/etc/apparmor.d/vendor.1.2.3",
+            ),
+        ] {
+            assert_eq!(
+                normalize_token(token).as_deref(),
+                Some(expected),
+                "quoted private value must be sanitized: {token}"
+            );
+        }
     }
 
     #[test]
@@ -761,6 +826,14 @@ mod tests {
                 "private_path".to_string(),
                 toml::Value::String("/home/remi/private.pp".to_string()),
             ),
+            (
+                "quoted_private_path".to_string(),
+                toml::Value::String(r#""/home/remi/quoted-private.pp""#.to_string()),
+            ),
+            (
+                "quoted_env_assignment".to_string(),
+                toml::Value::String("'TOKEN=value'".to_string()),
+            ),
         ]);
         intent.scope.extra.insert(
             "scope_profile_name".to_string(),
@@ -796,6 +869,14 @@ mod tests {
         assert_eq!(
             intent.desired_state.get("private_path"),
             Some(&toml::Value::String("<path>".to_string()))
+        );
+        assert_eq!(
+            intent.desired_state.get("quoted_private_path"),
+            Some(&toml::Value::String("<path>".to_string()))
+        );
+        assert_eq!(
+            intent.desired_state.get("quoted_env_assignment"),
+            Some(&toml::Value::String("<env-assignment>".to_string()))
         );
     }
 

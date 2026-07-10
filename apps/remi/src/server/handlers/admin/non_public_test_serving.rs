@@ -751,10 +751,19 @@ mod tests {
             .source
             .argv
             .push("SECRET=/home/remi/token".to_string());
+        summary.security_policy_intents[0].source.argv.extend([
+            r#"--replace="/home/remi/quoted-private.pp""#.to_string(),
+            "--flag='TOKEN=value'".to_string(),
+            r#"--profile="/etc/apparmor.d/vendor.1.2.3""#.to_string(),
+        ]);
         summary.security_policy_intents[0]
             .scope
             .paths
             .push("/home/remi/private.pp".to_string());
+        summary.security_policy_intents[0].scope.extra.insert(
+            "quoted_private_path".to_string(),
+            toml::Value::String(r#""/home/remi/dynamic-private.pp""#.to_string()),
+        );
         summary.security_policy_intents[0]
             .payload_evidence
             .paths
@@ -780,8 +789,11 @@ mod tests {
         assert!(body.contains("\"provider\":\"apparmor\""));
         assert!(body.contains("\"operation\":\"profile-reload\""));
         assert!(body.contains("/etc/apparmor.d/usr.bin.demo"));
+        assert!(body.contains("/etc/apparmor.d/vendor.1.2.3"));
         assert!(body.contains("\"<path>\""));
         assert!(!body.contains("/home/remi"));
+        assert!(!body.contains(r#"\"/home/remi/dynamic-private.pp\""#));
+        assert!(!body.contains("TOKEN="));
         assert!(!body.contains("SECRET="));
         assert!(!body.contains("review_artifact_path"));
         assert!(!body.contains("private-review-secret"));
