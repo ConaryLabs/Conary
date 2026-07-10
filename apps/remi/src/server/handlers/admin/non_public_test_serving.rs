@@ -754,7 +754,7 @@ mod tests {
         summary.security_policy_intents[0].source.argv.extend([
             r#"--replace="/home/remi/quoted-private.pp""#.to_string(),
             "--flag='TOKEN=value'".to_string(),
-            r#"--profile="/etc/apparmor.d/vendor.1.2.3""#.to_string(),
+            r#"--profile="/etc/apparmor.d/vendor.1.2.3"#.to_string(),
         ]);
         summary.security_policy_intents[0]
             .scope

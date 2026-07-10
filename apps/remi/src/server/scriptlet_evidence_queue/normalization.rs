@@ -222,7 +222,7 @@ fn normalize_option_value(value: &str) -> String {
     if value.is_empty() {
         return String::new();
     }
-    let value = matching_quote_wrapper(value).unwrap_or(value);
+    let value = option_value_for_inspection(value);
     if ENV_ASSIGNMENT_RE.is_match(value) || EMBEDDED_ENV_ASSIGNMENT_RE.is_match(value) {
         return "<env-assignment>".to_string();
     }
@@ -443,7 +443,11 @@ fn collision_safe_key(base: String, occupied: &mut BTreeSet<String>) -> String {
 
 fn is_approved_lsm_path(token: &str) -> bool {
     let path = std::path::Path::new(token);
-    if !path.is_absolute() || contains_parent_dir(token) {
+    if !path.is_absolute()
+        || contains_parent_dir(token)
+        || token.contains('"')
+        || token.contains('\'')
+    {
         return false;
     }
 
@@ -521,6 +525,13 @@ fn matching_quote_wrapper(value: &str) -> Option<&str> {
         (b'\'', b'\'') | (b'"', b'"') => Some(value[1..value.len() - 1].trim()),
         _ => None,
     }
+}
+
+fn option_value_for_inspection(value: &str) -> &str {
+    matching_quote_wrapper(value)
+        .or_else(|| value.strip_prefix('"'))
+        .or_else(|| value.strip_prefix('\''))
+        .unwrap_or(value)
 }
 
 fn env_assignment_has_quoted_absolute_path(token: &str) -> bool {
@@ -624,6 +635,51 @@ mod tests {
                 normalize_token(token).as_deref(),
                 Some(expected),
                 "quoted private value must be sanitized: {token}"
+            );
+        }
+    }
+
+    #[test]
+    fn sanitizer_preserves_parser_quoted_approved_policy_paths() {
+        for (shell_text, parser_token) in [
+            (
+                r#"apparmor_parser --profile="/etc/apparmor.d/vendor.1.2.3""#,
+                r#"--profile="/etc/apparmor.d/vendor.1.2.3"#,
+            ),
+            (
+                "apparmor_parser --profile='/etc/apparmor.d/vendor.1.2.3'",
+                "--profile='/etc/apparmor.d/vendor.1.2.3",
+            ),
+        ] {
+            let invocations =
+                conary_core::ccs::convert::command_evidence::extract_invocations_from_shell_text(
+                    "test:post-install",
+                    shell_text,
+                    None,
+                );
+
+            assert_eq!(invocations.len(), 1);
+            assert_eq!(invocations[0].argv, vec![parser_token.to_string()]);
+            assert_eq!(
+                normalize_token(parser_token).as_deref(),
+                Some("--profile=/etc/apparmor.d/vendor.1.2.3")
+            );
+        }
+    }
+
+    #[test]
+    fn sanitizer_rejects_unsafe_parser_quoted_policy_paths() {
+        for token in [
+            r#"--profile="/etc/apparmor.d/../home/remi/private.pp"#,
+            r#"--profile="/etc/apparmor.d/vendor:/home/remi/private.pp"#,
+            r#"--profile="//etc/apparmor.d/vendor.1.2.3"#,
+            r#"--profile="/etc/apparmor.d/vendor"unsafe"#,
+            r#"--profile="/home/remi/private.pp"#,
+        ] {
+            assert_eq!(
+                normalize_token(token).as_deref(),
+                Some("--profile=<path>"),
+                "parser-left quote must not bless an unsafe policy path: {token}"
             );
         }
     }
