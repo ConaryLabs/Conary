@@ -22,6 +22,7 @@ make_good_repo() {
         "$root/docs/guides" \
         "$root/docs/modules" \
         "$root/docs/operations" \
+        "$root/docs/roadmaps" \
         "$root/site/src/routes/about" \
         "$root/site/src/routes/install"
 
@@ -78,6 +79,30 @@ The preview remains adoption-led.
 Remote Forge validation is paused pending a KVM-capable runner.
 The 2026-05-21 Group O QEMU run is dated local evidence.
 The 2026-05-21 Group P QEMU run is dated local evidence.
+The current milestone is the first external tester loop.
+See the [detailed development roadmap](docs/roadmaps/development-roadmap.md).
+EOF
+
+    cat > "$root/docs/roadmaps/development-roadmap.md" <<'EOF'
+# Development Roadmap
+
+The first external tester milestone is the current product milestone.
+Remote Forge validation is paused pending a KVM-capable runner.
+The 2026-05-21 Group O QEMU run is dated local evidence.
+The 2026-05-21 Group P QEMU run is dated local evidence.
+EOF
+
+    cat > "$root/docs/roadmaps/external-tester-milestone.md" <<'EOF'
+# External Tester Milestone
+
+The currently pinned preview release is v0.10.1.
+EOF
+
+    cat > "$root/docs/operations/external-tester-outreach.md" <<'EOF'
+# External Tester Outreach
+
+Do not publish until release readiness is repinned.
+The currently pinned preview release is v0.10.1.
 EOF
 
     cat > "$root/docs/INTEGRATION-TESTING.md" <<'EOF'
@@ -343,6 +368,34 @@ break_preview_status() {
     sed -i 's/Conary is still early. Expect failures./Conary is production ready./' "$1/README.md"
 }
 
+break_root_roadmap_link() {
+    sed -i '/detailed development roadmap/d' "$1/ROADMAP.md"
+}
+
+break_detailed_roadmap_milestone() {
+    sed -i '/first external tester milestone/d' "$1/docs/roadmaps/development-roadmap.md"
+}
+
+break_tracker_release_version() {
+    sed -i 's/v0.10.1/v0.9.2/g' "$1/docs/roadmaps/external-tester-milestone.md"
+}
+
+break_outreach_release_version() {
+    sed -i 's/v0.10.1/v0.9.2/g' "$1/docs/operations/external-tester-outreach.md"
+}
+
+break_detailed_remote_forge_evidence() {
+    sed -i '/Remote Forge validation/d' "$1/docs/roadmaps/development-roadmap.md"
+}
+
+break_detailed_group_o_evidence() {
+    sed -i '/Group O/d' "$1/docs/roadmaps/development-roadmap.md"
+}
+
+break_detailed_group_p_evidence() {
+    sed -i '/Group P/d' "$1/docs/roadmaps/development-roadmap.md"
+}
+
 break_release_doc_version() {
     sed -i 's/v0.10.1/v0.9.2/g' "$1/docs/guides/agent-assisted-tester-loop.md"
 }
@@ -386,6 +439,13 @@ expect_failure "missing route doc" break_route_doc 'conaryd route'
 expect_failure "missing core publish guard" break_core_publish_guard 'publish = false'
 expect_failure "stable core API claim" break_core_api_claim 'stable.*conary-core'
 expect_failure "preview status drift" break_preview_status 'early preview warning'
+expect_failure "missing detailed roadmap link" break_root_roadmap_link 'detailed.*roadmap'
+expect_failure "missing external tester milestone" break_detailed_roadmap_milestone 'first external tester milestone'
+expect_failure "tracker release version drift" break_tracker_release_version 'stale conary release reference'
+expect_failure "outreach release version drift" break_outreach_release_version 'stale conary release reference'
+expect_failure "missing detailed remote Forge evidence" break_detailed_remote_forge_evidence 'remote Forge paused wording'
+expect_failure "missing detailed Group O evidence" break_detailed_group_o_evidence 'dated Group O evidence'
+expect_failure "missing detailed Group P evidence" break_detailed_group_p_evidence 'dated Group P evidence'
 expect_failure "release doc version drift" break_release_doc_version 'stale conary release reference'
 expect_failure "release artifact version drift" break_release_artifact_version 'stale conary release reference'
 expect_failure "conaryd 501 claim" break_conaryd_501_claim 'claims conaryd package execution is still blanket 501'

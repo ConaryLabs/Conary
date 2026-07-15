@@ -1,0 +1,74 @@
+---
+last_updated: 2026-07-15
+status: queued
+current_result: 0/10
+summary: Outcome tracker for Conary's first external tester milestone
+---
+
+# First External Tester Milestone
+
+The milestone closes when ten unique people outside the existing project
+circle complete the full supported flow and report friction, or when a
+maintainer records an evidence-backed pivot for a reproducible systemic
+blocker. Interest, downloads, partial attempts, and repeated runs by the same
+person do not count as separate completions.
+
+**Current result: 0/10 qualifying completions.**
+
+## Qualifying Flow
+
+Each qualifying report covers this sequence on one supported host:
+
+```text
+install -> adopt -> list/search -> update --dry-run -> unadopt
+```
+
+The report must confirm that the tester used the pinned release, stayed within
+the supported host scope, and completed every stage. A failed attempt remains
+useful evidence but does not count as a completion.
+
+## Launch Record
+
+- Pinned Conary release: `v0.10.1` is the current repository truth while W2 is
+  queued; W2 must replace this with the post-integration release before launch.
+- Compatible Remi commit: pending W2.
+- Prewarmed package set: pending W2.
+- Supported hosts: Fedora 44, Ubuntu 26.04 LTS, and Arch Linux on the release's
+  supported architecture and compatibility baseline.
+- Venue: not launched.
+- Launch timestamp: not launched.
+- Privacy-safe feedback path: the beta-feedback issue template and a reviewed
+  support bundle; never request secrets, credential files, private keys, broad
+  environment dumps, or a live database by default.
+
+## Outcomes
+
+Use an opaque report or issue reference rather than a person's name or host
+identity. The triage owner is responsible for keeping secrets and broad machine
+dumps out of linked evidence.
+
+| Attempt | Date | Privacy-safe report | Distro and host scope | Pinned release | Full flow completed | Friction or failure | Triage status | Triage owner |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| - | - | - | - | - | - | - | - | - |
+
+Triage statuses are `fix-now`, `next-slice`, and `declined-with-reason`.
+Qualifying and failed attempts both require an owner and a triage disposition.
+
+## Stall and Pivot Rules
+
+If no qualifying completion is recorded for three consecutive weeks after the
+launch timestamp, the maintainer reviews venue reach, onboarding friction, and
+observed failures. The review records whether to revise outreach, repair a
+blocker, or invoke the pivot exit.
+
+A pivot requires a reproducible failure inside the supported scope, the number
+and shape of affected attempts, and either a chosen remediation or an explicit
+support-scope change. Ordinary outreach difficulty or one unexplained partial
+attempt is not sufficient.
+
+## Closeout
+
+At milestone closeout, durable launch facts and findings move to the detailed
+roadmap, release history, and owning product documentation. Delete this tracker
+after that transfer; Git history remains the record of individual status
+updates.

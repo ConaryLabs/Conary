@@ -28,6 +28,7 @@ PRODUCT_DOC_PATHS=(
     "docs/conaryopedia-v2.md"
     "docs/modules"
     "docs/operations"
+    "docs/roadmaps"
     "site/src/routes"
 )
 
@@ -177,12 +178,15 @@ check_preview_status() {
     require_match "README.md" 'capture the command, distro, package name' 'tester failure data request'
 
     require_match "ROADMAP.md" 'adoption-led' 'adoption-led preview wording'
+    require_match "ROADMAP.md" '[Ff]irst external tester' 'first external tester milestone wording'
+    require_match "ROADMAP.md" 'docs/roadmaps/development-roadmap\.md' 'detailed development roadmap link'
+    require_match "docs/roadmaps/development-roadmap.md" '[Ff]irst external tester milestone' 'first external tester milestone wording'
 
-    require_match "ROADMAP.md" 'remote Forge validation is paused pending (a new |a )KVM-capable runner|Remote Forge validation is paused pending (a new |a )KVM-capable runner' 'remote Forge paused wording'
+    require_match "docs/roadmaps/development-roadmap.md" 'remote Forge validation is paused pending (a new |a )KVM-capable runner|Remote Forge validation is paused pending (a new |a )KVM-capable runner' 'remote Forge paused wording'
     require_match "docs/INTEGRATION-TESTING.md" 'Remote Forge control-plane validation is temporarily paused pending a KVM-capable runner|Forge-backed.*paused' 'remote Forge paused wording'
 
-    require_match "ROADMAP.md" '2026-05-21.*Group O' 'dated Group O evidence'
-    require_match "ROADMAP.md" '2026-05-21.*Group P' 'dated Group P evidence'
+    require_match "docs/roadmaps/development-roadmap.md" '2026-05-21.*Group O' 'dated Group O evidence'
+    require_match "docs/roadmaps/development-roadmap.md" '2026-05-21.*Group P' 'dated Group P evidence'
     require_match "docs/INTEGRATION-TESTING.md" 'Group O.*2026-05-21' 'dated Group O evidence'
     require_match "docs/INTEGRATION-TESTING.md" 'Group P.*2026-05-21' 'dated Group P evidence'
 }
@@ -203,8 +207,8 @@ check_release_doc_versions() {
         "README.md"
         "docs/guides/agent-assisted-tester-loop.md"
         "docs/operations/release-artifact-matrix.md"
-        "docs/superpowers/first-external-tester-loop-tracker.md"
-        "docs/superpowers/limited-preview-subreddit-tester-post-2026-05-19.md"
+        "docs/roadmaps/external-tester-milestone.md"
+        "docs/operations/external-tester-outreach.md"
     )
 
     for path in "${release_docs[@]}"; do

@@ -50,12 +50,15 @@ docs/operations/agent-mcp-adapter-decision.md	canonical	contributor
 docs/operations/bootstrap-follow-up-investigations.md	canonical	contributor
 docs/operations/bootstrap-selfhosting-vm.md	canonical	contributor
 docs/operations/daily-driver-ux-matrix.md	canonical	contributor
+docs/operations/external-tester-outreach.md	canonical	contributor
 docs/operations/infrastructure.md	canonical	contributor
 docs/operations/live-mutation-backup-inventory.md	canonical	contributor
 docs/operations/post-generation-export-follow-up-roadmap.md	canonical	contributor
 docs/operations/release-artifact-matrix.md	canonical	contributor
 docs/operations/system-adopt-single-package-dry-run-follow-up.md	canonical	contributor
 docs/plans/2026-07-15-development-roadmap-and-neutral-planning-migration-plan.md	canonical	contributor
+docs/roadmaps/development-roadmap.md	canonical	contributor
+docs/roadmaps/external-tester-milestone.md	canonical	contributor
 docs/specs/ccs-format-v1.md	canonical	contributor
 docs/specs/static-repo-format-v1.md	canonical	contributor
 docs/superpowers/archive/2026-04-04-codebase-simplification-retrospective.md	historical	historical
@@ -63,9 +66,7 @@ docs/superpowers/archive/2026-04-10-release-hardening-checklist.md	historical	hi
 docs/superpowers/daily-driver-readiness-completion-audit-2026-05-22.md	planning	maintainer
 docs/superpowers/distro-adoption-gap-analysis-2026-06-10.md	planning	maintainer
 docs/superpowers/documentation-accuracy-audit-summary.md	planning	maintainer
-docs/superpowers/first-external-tester-loop-tracker.md	planning	maintainer
 docs/superpowers/limited-preview-release-checkpoint-2026-05-16.md	planning	maintainer
-docs/superpowers/limited-preview-subreddit-tester-post-2026-05-19.md	planning	maintainer
 docs/superpowers/plans/2026-07-01-first-external-tester-loop-plan.md	planning	maintainer
 docs/superpowers/plans/2026-07-03-kernel-initramfs-selinux-scriptlet-handling-plan.md	planning	maintainer
 docs/superpowers/plans/2026-07-08-remi-non-public-test-serving-plan.md	planning	maintainer
