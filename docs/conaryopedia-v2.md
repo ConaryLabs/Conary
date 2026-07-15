@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-06-12
-revision: 17
-summary: Refresh current database schema version
+last_updated: 2026-07-15
+revision: 18
+summary: Remove the dead local link while retaining historical lineage context
 ---
 
 # Conaryopedia v2
@@ -10,7 +10,7 @@ summary: Refresh current database schema version
 
 This document is the definitive reference for Conary's concepts, commands, and architecture. It is organized to build understanding incrementally -- each chapter builds on the vocabulary established in the previous one.
 
-The [original Conaryopedia](conaryopedia.md) documented the rPath-era Conary (2005-2012). This document covers the modern Conary, rewritten in Rust with the same conceptual DNA but significantly expanded capabilities.
+The original Conaryopedia documented the rPath-era Conary (2005-2012). This document covers the modern Conary, rewritten in Rust with the same conceptual DNA but significantly expanded capabilities.
 
 ---
 

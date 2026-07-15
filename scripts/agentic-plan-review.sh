@@ -12,7 +12,7 @@ Run the local multi-model plan/spec review loop.
 
 Options:
   --only <all|deepseek|gemini>   Select reviewers. Defaults to all.
-  --out-dir <path>               Review output directory. Defaults to docs/superpowers/reviews.
+  --out-dir <path>               Review output directory. Defaults to target/agent-reviews/.
   --review-kind <auto|design|plan|implementation>
                                   Select the review rubric. Defaults to auto.
   --context <path>                Add an extra local context path to the prompt. Repeatable.
@@ -26,7 +26,7 @@ Options:
   --dry-run                      Print planned commands and output paths without running reviewers.
   -h, --help                     Show this help.
 
-Review files are local-only by default because docs/superpowers/reviews/ is ignored.
+Review files are local-only by default because target/ is ignored.
 Secrets are read by each CLI from its own local configuration or environment.
 EOF
 }
@@ -38,7 +38,7 @@ fail() {
 
 review_target=""
 only="all"
-out_dir="docs/superpowers/reviews"
+out_dir="target/agent-reviews"
 review_kind="auto"
 extra_context=()
 features=()
@@ -295,6 +295,7 @@ Shared review goals:
 3. Find task ordering problems, underspecified ownership boundaries, or missing regression tests.
 4. Check whether it respects parent design boundaries and does not pull later slices forward without a deliberate gate.
 5. Check whether supported target language stays limited to Fedora 44, Ubuntu 26.04, and Arch unless the target explicitly scopes otherwise.
+6. Check canonical truth, focused proof, migration, rollback, and closeout at the level warranted by the change.
 
 Review pressure points from feature ownership:
 EOF
@@ -320,7 +321,7 @@ Design-specific review rubric:
 3. Are migration and compatibility stances explicit, especially where old behavior should be deleted, narrowed, or fail-closed?
 4. Are failure semantics visible, retryable where relevant, and non-destructive where the design promises that?
 5. Are child designs/plans given the right decision questions without pretending this design already solved them?
-6. Are docs-audit, feature-coherency, and verification expectations named at the right level?
+6. Are canonical truth, focused proof, migration, rollback, and closeout expectations named at the right level?
 EOF
             ;;
         plan)
@@ -332,7 +333,7 @@ Plan-specific review rubric:
 3. Are code ownership boundaries clear enough to avoid expanding existing hotspots unnecessarily?
 4. Are rollback, retry, failure recovery, and diagnostic outputs covered where the design requires them?
 5. Are verification commands specific, sufficient, and sequenced after the relevant tasks?
-6. Are docs/coherency updates included when public claims, command help, routes, or assistant-facing surfaces change?
+6. Are canonical documentation and focused proof included when public claims, command help, routes, or assistant-facing surfaces change?
 EOF
             ;;
         implementation)

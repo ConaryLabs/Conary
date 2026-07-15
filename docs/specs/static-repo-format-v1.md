@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-06-12
-revision: 2
-summary: Normative specification of the static (file-based) Conary repository format — layout, conary-repo.toml, index.json, TUF metadata profile, publish algorithm, client behavior, and operator key lifecycle. M0 deliverable of the packaging toolchain design.
+last_updated: 2026-07-15
+revision: 3
+summary: Standalone normative contract for the static Conary repository format, publisher behavior, client behavior, and operator key lifecycle
 ---
 
 # Conary Static Repository Format Specification v1
@@ -15,7 +15,8 @@ logic. It carries CCS packages, a package index (`index.json`), and TUF
 `conary publish` (M1a) and, later, Remi (M2). Consumer: the conary client
 (`repo add` / sync / install).
 
-Parent design: `docs/superpowers/specs/archive/2026-06-10-packaging-toolchain-design.md`.
+This specification is the stable contract for static repository producers and
+consumers; its normative behavior does not depend on an active parent design.
 
 ## Scope
 

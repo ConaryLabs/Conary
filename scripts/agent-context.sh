@@ -363,14 +363,14 @@ require_unambiguous_route() {
 fallback_hint_for_path() {
     local path="$1"
     case "$path" in
-        AGENTS.md|CONTRIBUTING.md|CLAUDE.md|GEMINI.md|REASONIX.md|.github/PULL_REQUEST_TEMPLATE.md|.github/copilot-instructions.md|docs/llms/*|docs/modules/feature-ownership.md|docs/superpowers/documentation-accuracy-audit-*|scripts/maintainability-drift-report.sh|scripts/agent-context.sh)
-            printf 'Assistant/contributor guidance | focused: bash scripts/check-doc-audit-ledger.sh docs/superpowers/documentation-accuracy-audit-ledger.tsv --require-complete | gate: docs-audit inventory diff and stale-term added-line sweep'
+        AGENTS.md|CONTRIBUTING.md|CLAUDE.md|GEMINI.md|REASONIX.md|.github/PULL_REQUEST_TEMPLATE.md|.github/copilot-instructions.md|docs/llms/*|docs/modules/feature-ownership.md|scripts/maintainability-drift-report.sh|scripts/agent-context.sh)
+            printf 'Assistant/contributor guidance | focused: bash scripts/check-doc-truth.sh; bash scripts/test-agent-context.sh; bash scripts/agent-context.sh --validate | gate: canonical root contracts, docs/llms routing, feature ownership, and routing/maintainability guidance stay aligned'
             ;;
         docs/modules/*|docs/operations/*|docs/INTEGRATION-TESTING.md|docs/ARCHITECTURE.md)
-            printf 'Canonical docs | focused: docs-audit ledger and inventory checks | gate: affected feature card proof if behavior claims changed'
+            printf 'Canonical docs | focused: bash scripts/check-doc-truth.sh | gate: affected feature-card proof when behavior claims or interaction boundaries change'
             ;;
-        docs/superpowers/plans/*|docs/superpowers/specs/*)
-            printf 'Planning docs | focused: docs-audit ledger and inventory checks | gate: agentic review before lock-in'
+        docs/designs/*|docs/plans/*|docs/roadmaps/*)
+            printf 'Planning docs | focused: bash scripts/check-doc-truth.sh | gate: risk-proportional review gate before lock-in or closeout'
             ;;
         *)
             return 1

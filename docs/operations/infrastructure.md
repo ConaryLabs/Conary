@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-06-16
-revision: 10
+last_updated: 2026-07-15
+revision: 11
 summary: Non-secret infrastructure, agent-operations transport, release, Remi deploy, remote development, and Forge staging guidance for Conary contributors and coding assistants
 ---
 
@@ -278,4 +278,6 @@ old process. That can fail with `Text file busy`.
   [`docs/INTEGRATION-TESTING.md`](../INTEGRATION-TESTING.md)
 - For supported Forge smoke validation, prefer `scripts/forge-smoke.sh` over
   treating raw `cargo run -p conary-test -- run ...` as the main operator path
-- For legacy historical context, use [`docs/llms/archive/claude-era-notes.md`](../llms/archive/claude-era-notes.md)
+- For assistant and contributor routing, use `AGENTS.md` and
+  [`docs/llms/README.md`](../llms/README.md); Git history remains available for
+  retired tool-specific context

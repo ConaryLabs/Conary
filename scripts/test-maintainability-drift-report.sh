@@ -34,8 +34,10 @@ grep -q "base ref not found" "$tmp_out" \
 all_output="$(scripts/maintainability-drift-report.sh --all --limit 3)"
 grep -q "# Maintainability Drift Report" <<<"$all_output" \
     || fail "report header missing"
-grep -q "## Docs Audit Health" <<<"$all_output" \
-    || fail "docs audit section missing"
+grep -q "## Documentation Truth" <<<"$all_output" \
+    || fail "documentation truth section missing"
+grep -q '\[ok\] documentation truth check passed' <<<"$all_output" \
+    || fail "documentation truth result missing"
 grep -q "## Changed Path Hints" <<<"$all_output" \
     || fail "changed path section missing"
 grep -q "## Rust Hotspots" <<<"$all_output" \
@@ -48,7 +50,10 @@ grep -q "Bootstrap And Self-Hosting" <<<"$all_output" \
     || fail "all-path report did not include Bootstrap hint"
 grep -q "conaryd Package Jobs And Daemon Routes" <<<"$all_output" \
     || fail "all-path report did not include conaryd hint"
-grep -A1 -- '^- apps/remi/src/federation/' <<<"$all_output" | grep -q "Remi Publication, Serving, Admin, And Fixture Artifacts" \
+federation_hint="$(awk '
+    /^- apps\/remi\/src\/federation\// { getline; print; exit }
+' <<<"$all_output")"
+grep -q "Remi Publication, Serving, Admin, And Fixture Artifacts" <<<"$federation_hint" \
     || fail "federation paths did not route to the Remi card"
 
 tmp_path="$(mktemp docs/modules/drift-report-test.XXXXXX.tmp)"

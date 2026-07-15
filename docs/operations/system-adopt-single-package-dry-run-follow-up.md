@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-06-09
-revision: 1
+last_updated: 2026-07-15
+revision: 2
 summary: Follow-up path for true single-package system adopt dry-run preview
 ---
 
@@ -42,5 +42,6 @@ A future implementation plan must prove:
   lands
 - focused CLI safety coverage checks the actionable alternative text
 
-The Wave 1b feature-coherency ledger row for this surface should point here
-while the refusal remains deliberate.
+This document is the canonical owner of the deferred surface while the refusal
+remains deliberate. The owning adoption feature card and focused CLI safety
+tests own routing and behavioral proof.

@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-05-24
-revision: 7
-summary: Decision record for Conary's stateless MCP adapter path, compliance harness, raw HTTP proof, and conary-test read-only resources
+last_updated: 2026-07-15
+revision: 8
+summary: Decision record for Conary's stateless MCP adapter path and its current code and test evidence
 ---
 
 # Agent MCP Adapter Decision
@@ -89,9 +89,9 @@ in `crates/conary-mcp` without adding live MCP resources, tools, prompts,
 routes, or discovery behavior. This keeps Conary aimed at the MCP draft while
 avoiding fresh investment in the legacy session path.
 
-Source spec:
-
-- `docs/superpowers/specs/archive/2026-05-22-stateless-mcp-adapter-compliance-design.md`
+Current evidence lives in `crates/conary-mcp/src/stateless.rs`,
+`crates/conary-mcp/tests/stateless_dependency_boundary.rs`, and the owning
+crate tests.
 
 ## Raw HTTP Proof Slice
 
@@ -101,9 +101,8 @@ stateless HTTP requirements without waiting for `rmcp` support. It reuses
 adapter support, handles `server/discover`, and can dispatch `resources/list`
 and `resources/read` through a configured provider.
 
-Source spec:
-
-- `docs/superpowers/specs/archive/2026-05-24-stateless-raw-http-adapter-proof-design.md`
+Current evidence lives in `crates/conary-mcp/src/stateless_http.rs` and its
+focused unit tests.
 
 ## Conary-Test Stateless Route Slice
 
@@ -121,8 +120,6 @@ manifest-inventory `InspectResult` from `AppState.manifest_dir`. It must not
 add tools, prompts, resource templates, subscriptions, SSE, smoke execution,
 per-suite resources, or Remi route behavior.
 
-Source specs:
-
-- `docs/superpowers/specs/archive/2026-05-24-conary-test-stateless-discover-route-design.md`
-- `docs/superpowers/specs/archive/2026-05-24-conary-test-bootstrap-status-resource-design.md`
-- `docs/superpowers/specs/archive/2026-05-24-conary-test-suites-resource-design.md`
+Current evidence lives in `apps/conary-test/src/server/stateless_mcp.rs`,
+`apps/conary-test/src/bootstrap.rs`, `apps/conary-test/src/suite_inventory.rs`,
+and the owning package tests.

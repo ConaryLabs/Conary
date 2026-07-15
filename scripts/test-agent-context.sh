@@ -177,9 +177,19 @@ grep -q '^Alpha Feature |' <<<"$path_brief_out" \
 grep -q '^# Task Packet: Alpha Feature$' "$tmp/path-full.out" \
     || fail "--path without --brief did not print the full packet"
 
-fallback_out="$("$script" --path docs/superpowers/specs/2099-01-01-example-design.md --map "$fixture_map")"
-grep -q '^Planning docs |' <<<"$fallback_out" \
-    || fail "specs path did not use the planning fallback; got: $fallback_out"
+for planning_path in \
+    docs/designs/2099-01-01-example-design.md \
+    docs/plans/2099-01-01-example-plan.md \
+    docs/roadmaps/example-roadmap.md
+do
+    fallback_out="$("$script" --path "$planning_path" --map "$fixture_map")"
+    grep -q '^Planning docs |' <<<"$fallback_out" \
+        || fail "$planning_path did not use the planning fallback; got: $fallback_out"
+    grep -q 'bash scripts/check-doc-truth.sh' <<<"$fallback_out" \
+        || fail "$planning_path fallback did not name documentation truth proof"
+    grep -q 'risk-proportional review gate' <<<"$fallback_out" \
+        || fail "$planning_path fallback did not name the proportional review gate"
+done
 
 fallback_out="$("$script" --path docs/modules/anything-at-all.md --map "$fixture_map")"
 grep -q '^Canonical docs |' <<<"$fallback_out" \

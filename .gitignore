@@ -80,9 +80,4 @@ vendor/
 # Git worktrees
 .worktrees/
 
-# Local-only plan/spec/review archives
-docs/plans/archive/
-docs/superpowers/plans/archive/*
-docs/superpowers/specs/archive/*
-docs/superpowers/reviews/
 tests/integration/remi/runner/__pycache__/

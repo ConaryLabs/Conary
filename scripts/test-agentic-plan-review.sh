@@ -40,6 +40,8 @@ printf 'reasonix prompt contains deep passes: '
 grep -q 'perform separate passes' <<<"$prompt" && printf 'yes\n'
 printf 'reasonix prompt contains extra context: '
 grep -q 'docs/modules/remi.md' <<<"$prompt" && printf 'yes\n' || printf 'no\n'
+printf 'reasonix prompt contains neutral proof rubric: '
+grep -q 'canonical truth, focused proof, migration, rollback, and closeout' <<<"$prompt" && printf 'yes\n' || printf 'no\n'
 STUB
 chmod +x "$bin_dir/reasonix"
 
@@ -74,6 +76,10 @@ grep -q -- "--context <path>" <<<"$help_output" \
     || fail "help output did not name extra context"
 grep -q -- "--feature <slug>" <<<"$help_output" \
     || fail "help output did not name --feature"
+grep -q "Defaults to target/agent-reviews/" <<<"$help_output" \
+    || fail "help output did not name the neutral default output path"
+grep -q "target/ is ignored" <<<"$help_output" \
+    || fail "help output did not explain why default review output is local-only"
 
 if "$script" "does-not-exist.md" --out-dir "$out_dir" >"$tmp/missing.out" 2>&1; then
     fail "missing review target unexpectedly succeeded"
@@ -134,6 +140,8 @@ grep -q "reasonix prompt contains deep passes: yes" "$deepseek_review" \
     || fail "DeepSeek prompt did not include deep review passes"
 grep -q "reasonix prompt contains extra context: yes" "$deepseek_review" \
     || fail "DeepSeek prompt did not include extra context"
+grep -q "reasonix prompt contains neutral proof rubric: yes" "$deepseek_review" \
+    || fail "DeepSeek prompt did not include the neutral proof rubric"
 
 grep -q "model: Gemini 3.5 Flash (High)" "$gemini_review" \
     || fail "Gemini review metadata missing model"
@@ -191,6 +199,10 @@ fi
 if grep -q "file-size/refactor hazards" "$tmp/dry-run.out"; then
     fail "dry-run prompt still contains packaging-specific goal 5"
 fi
+
+PATH="$bin_dir:$PATH" "$script" "$target" --feature packaging --dry-run >"$tmp/default-dry-run.out"
+grep -q 'target/agent-reviews/' "$tmp/default-dry-run.out" \
+    || fail "dry-run did not use the neutral default review output directory"
 
 PATH="$bin_dir:$PATH" "$script" "$design_target" --feature packaging --review-kind design --only deepseek --out-dir "$out_dir" >"$tmp/design.out"
 design_review="$(find "$out_dir" -type f -name '*m4-wrapper-design-deepseek-pro.md' -print -quit)"

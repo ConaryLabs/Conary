@@ -1,7 +1,7 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-Conary is a virtual Rust workspace. The package-manager CLI lives in `apps/conary/src/` (`commands/`, `cli/`, `main.rs`). Core package-management logic is in `crates/conary-core/src/`. Remi lives in `apps/remi/src/` (`server/`, `federation/`, `bin/remi.rs`), and conaryd lives in `apps/conaryd/src/` (`daemon/`, `bin/conaryd.rs`). Test helpers and integration coverage live in `apps/conary/tests/`, `crates/conary-core/tests/`, and `apps/conary-test/src/`. Packaging assets are under `packaging/` and `deploy/`; design notes, plans, and reviews are in `docs/`.
+Conary is a virtual Rust workspace. The package-manager CLI lives in `apps/conary/src/` (`commands/`, `cli/`, `main.rs`). Core package-management logic is in `crates/conary-core/src/`. Remi lives in `apps/remi/src/` (`server/`, `federation/`, `bin/remi.rs`), and conaryd lives in `apps/conaryd/src/` (`daemon/`, `bin/conaryd.rs`). Test helpers and integration coverage live in `apps/conary/tests/`, `crates/conary-core/tests/`, and `apps/conary-test/src/`. Packaging assets are under `packaging/` and `deploy/`; current roadmap state, active designs, and active plans are under `docs/roadmaps/`, `docs/designs/`, and `docs/plans/`.
 
 ## Build, Test, and Verification Commands
 - `cargo build -p conary`: build the package-manager CLI.
@@ -41,13 +41,11 @@ split files mechanically, keep command and route handlers thin, and update
 `docs/llms/subsystem-map.md` or the relevant `docs/modules/*.md` file when the
 "look here first" path changes.
 
-Meta-layer budget: ledger, ownership-card, gate, and agent-tooling changes are
+Meta-layer budget: roadmap, ownership-card, gate, and agent-tooling changes are
 allowed only when product work forces them -- a touched path, a failing gate,
 or a factual drift. Discretionary meta-layer improvement is capped at one meta
 slice per four product slices. This budget holds at least until the first
-external tester milestone in
-`docs/superpowers/specs/2026-07-01-first-external-tester-loop-design.md` is
-met.
+external tester milestone in `docs/roadmaps/development-roadmap.md` is met.
 
 ## Testing and Documentation Guidance
 Prefer small unit tests near the code they cover and integration tests in `apps/conary/tests/` for end-to-end CLI flows. Name tests descriptively, for example `test_prepare_discovered_peer_rejects_https_without_pinned_fingerprint`. When touching service code, rerun the owning packages directly with `cargo test -p remi` and `cargo test -p conaryd`. Security and transaction changes should include regression coverage.
@@ -66,7 +64,17 @@ Assistant doc model:
 - `docs/llms/README.md` is the vendor-neutral routing layer into canonical docs.
 - Tool-specific entrypoints such as `CLAUDE.md`, `GEMINI.md`, `REASONIX.md`, or `.github/copilot-instructions.md` should point back here instead of restating repo-wide rules.
 - Keep `CLAUDE.md` as a thin compatibility shim for Claude setups, and keep old `.claude/` harness files retired unless the repository adopts a shared Claude-specific harness again.
-- The documentation accuracy ledger tracks per-file doc audit coverage; the feature coherency ledger tracks per-claim implementation truth. Before editing a public claim, command help, route, or agent-facing surface, grep `docs/superpowers/feature-coherency-ledger.tsv` for the touched path and rerun the coherency checks when rows point at it.
+- Public claims are protected by `scripts/check-doc-truth.sh`; feature cards
+  own subsystem routing and interaction proof; focused tests own behavior.
+  Rerun all three layers named by the touched feature card when a public claim,
+  command help, route, or agent-facing surface changes.
+- Detailed roadmap state lives in `docs/roadmaps/`, active decision records in
+  `docs/designs/`, active multi-step implementation plans in `docs/plans/`,
+  and stable public or persisted contracts in `docs/specs/`.
+- After canonical truth, proof, roadmap state, and resume facts are durable,
+  delete completed, superseded, or abandoned planning from the current tree.
+  Git history is the planning-history source; do not create a replacement
+  archive.
 - Add nested `AGENTS.md` files only when a subtree genuinely needs durable instructions that differ from the repo root.
 - Keep host-local, credential-bearing, or personal notes in ignored local files such as `docs/operations/LOCAL_ACCESS.md`, not in tracked assistant guidance.
 
@@ -91,4 +99,6 @@ command-specific meanings. Internal `tracing` logs are not primary user output.
 
 ## Security & Contributor Notes
 Do not weaken trust defaults casually. HTTPS federation peers should use pinned fingerprints, and service changes should be verified with `cargo test -p remi` and `cargo test -p conaryd`. Avoid destructive Git commands in shared worktrees, and do not add schema migrations unless the task explicitly calls for one.
-Historical review prompts and finished design docs belong under archive subdirectories, not in the active doc tree.
+Historical review prompts and finished planning do not remain in the active
+documentation tree. Preserve durable truth first, then delete them and use Git
+history when historical context is needed.

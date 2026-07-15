@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-07-03
-revision: 7
-summary: Map AppArmor policy golden fixture proof
+last_updated: 2026-07-15
+revision: 8
+summary: Map fixture ownership, regeneration, and focused proof without historical process dependencies
 ---
 
 # Test Fixtures And Proof Maps
@@ -305,7 +305,8 @@ Each fixture family should record:
 
 ## How To Use This Map
 
-- For docs-only edits to this map, run docs-audit and diff hygiene.
+- For docs-only edits to this map, run `bash scripts/check-doc-truth.sh` and
+  `git diff --check`.
 - For CCS conversion fixture edits, start with the core fast proof and add the
   Conary conversion integration filter when conversion output changes.
 - For local replay or query fixture edits, start with the focused Conary test

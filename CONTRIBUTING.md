@@ -175,9 +175,9 @@ manifests need explicit compatibility or migration decisions before they change.
 
 Before a broad refactor or cleanup PR, run
 `scripts/maintainability-drift-report.sh` for a warn-only view of changed-path
-owner hints, focused proof commands, docs-audit health, and current Rust
-hotspots. Treat its output as review guidance, not as a substitute for the
-feature card or the tests you actually ran.
+owner hints, focused proof commands, documentation-truth health, and current
+Rust hotspots. Treat its output as review guidance, not as a substitute for
+the feature card or the tests you actually ran.
 
 ### Feature Ownership And Verification
 
@@ -366,7 +366,14 @@ Before proposing significant architectural changes, please open an issue to disc
 ## Documentation Hygiene
 
 - Treat active docs as current-state references, not historical logs.
-- Move completed review prompts/specs/plans into the appropriate `archive/` subtree instead of keeping them in active paths.
+- Keep detailed roadmap state under `docs/roadmaps/`, active decisions under
+  `docs/designs/`, active multi-step plans under `docs/plans/`, and stable
+  public or persisted contracts under `docs/specs/`.
+- After canonical truth, proof, roadmap state, and resume facts are durable,
+  delete completed, superseded, or abandoned planning. Use Git history for
+  historical context; do not create a replacement planning archive.
+- Run `bash scripts/check-doc-truth.sh` and the owning feature-card proof when
+  editing a public claim or assistant-facing route.
 - When editing files under `docs/`, update YAML frontmatter (`last_updated`, `revision`, `summary`) unless the file is intentionally exempt.
 
 ## Getting Help
@@ -375,4 +382,4 @@ If you have questions about contributing, feel free to start a thread in [GitHub
 
 ## License
 
-Conary is licensed under the [MIT License](LICENSE). By submitting a pull request, you agree that your contributions will be licensed under the same terms.
+Conary is licensed under the [MIT License](LICENSE-MIT). By submitting a pull request, you agree that your contributions will be licensed under the same terms.

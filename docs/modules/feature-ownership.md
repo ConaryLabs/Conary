@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-07-07
-revision: 22
-summary: Route native scriptlet support matrix ownership
+last_updated: 2026-07-15
+revision: 23
+summary: Route feature ownership through current canonical docs and focused interaction proof
 ---
 
 # Feature Ownership And Interaction Gates
@@ -340,7 +340,7 @@ install CCS packages, and preserve/replay legacy scriptlet metadata safely.
 `apps/conary/src/commands/ccs/payload_paths.rs`;
 `docs/modules/ccs.md`;
 `docs/modules/test-fixtures.md`;
-`docs/superpowers/plans/archive/2026-06-05-ccs-native-ecosystem-roadmap.md`.
+`docs/specs/static-repo-format-v1.md`.
 
 **Neighbor systems:** install orchestration, Remi publication, repository
 metadata, scriptlet sandboxing (`crates/conary-core/src/scriptlet/mod.rs`,
@@ -373,7 +373,8 @@ crosses Remi publication;
 `cargo test -p remi publication` when conversion output affects public serving.
 
 **Docs to update:** `docs/modules/ccs.md`; `docs/modules/test-fixtures.md`;
-`docs/llms/subsystem-map.md`; CCS roadmap child specs when active.
+`docs/specs/static-repo-format-v1.md`; `docs/llms/subsystem-map.md`; active CCS
+designs or plans when the change is still in flight.
 
 **Safety notes:** start in `crates/conary-core/src/ccs/v2/` for v2 authority,
 validation, diagnostics, archive reading, debug projection, and content
@@ -397,13 +398,9 @@ install packages only when their CCS signatures chain to active package keys
 pinned by the repository.
 
 **Start here:** `docs/specs/static-repo-format-v1.md`;
-`docs/superpowers/specs/archive/2026-06-10-packaging-toolchain-design.md`;
-`docs/superpowers/specs/archive/2026-06-15-m3-packaging-differentiators-design.md`;
-`docs/superpowers/specs/archive/2026-06-17-m3d-record-mode-spike-design.md`;
-`docs/superpowers/specs/archive/2026-06-13-m2-publish-hardening-remi-design.md`;
-`docs/superpowers/specs/archive/2026-06-14-m2a-builder-config-publish-divergence-design.md`;
-`docs/superpowers/plans/archive/2026-06-14-m2a-hermetic-publish-foundation-implementation-plan.md`;
 `docs/guides/first-package.md`;
+`docs/modules/recipe.md`;
+`docs/modules/remi.md`;
 `crates/conary-core/src/recipe/inference/`;
 `crates/conary-core/src/recipe/hermetic/`;
 `crates/conary-core/src/recipe/kitchen/`;
@@ -441,7 +438,7 @@ fetch/materialization, recipe Kitchen source fetching and provenance, try
 session SQLite state, generation building/current-generation selection, install
 acquisition and static package signature policy, repository sync
 orchestration, CCS signing/verification, TUF metadata verification, and
-docs-audit truth gates.
+documentation-truth and owning-card proof.
 
 **Paths:** `docs/specs/static-repo-format-v1.md`;
 `docs/guides/first-package.md`; `crates/conary-core/src/recipe/*`;
@@ -489,11 +486,8 @@ docs-audit truth gates.
 publish, trust establishment, sync, install, or package-signing boundaries.
 
 **Docs to update:** `docs/specs/static-repo-format-v1.md`;
-`docs/superpowers/specs/archive/2026-06-10-packaging-toolchain-design.md`;
-`docs/superpowers/specs/archive/2026-06-15-m3-packaging-differentiators-design.md`;
-`docs/superpowers/specs/archive/2026-06-13-m2-publish-hardening-remi-design.md`;
-`docs/superpowers/specs/archive/2026-06-14-m2a-builder-config-publish-divergence-design.md`;
 `docs/guides/first-package.md`;
+`docs/modules/recipe.md`; `docs/modules/remi.md`;
 `docs/ARCHITECTURE.md`; `docs/llms/subsystem-map.md`;
 `docs/modules/feature-ownership.md`.
 

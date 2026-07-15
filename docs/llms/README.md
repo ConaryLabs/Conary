@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-07-08
-revision: 13
-summary: Vendor-neutral fresh-agent landing map with feature ownership, bootstrap smoke, and routing ergonomics
+last_updated: 2026-07-15
+revision: 14
+summary: Vendor-neutral assistant map with neutral active planning, feature ownership, and documentation-truth routing
 ---
 
 # Conary For Coding Assistants
@@ -66,7 +66,9 @@ second subsystem manual.
 - Tool-specific entrypoints such as `CLAUDE.md`, `GEMINI.md`, `REASONIX.md`, and
   `.github/copilot-instructions.md` stay intentionally thin and point back to
   this layered doc system instead of becoming parallel manuals.
-- Historical tool notes belong under `docs/llms/archive/`.
+- Detailed roadmap state lives in `docs/roadmaps/`, active decision records in
+  `docs/designs/`, and active multi-step implementation plans in `docs/plans/`.
+  Stable public or persisted contracts remain in `docs/specs/`.
 
 ## Core Docs
 
@@ -80,6 +82,7 @@ second subsystem manual.
 - [`docs/modules/recipe.md`](../modules/recipe.md): recipe/build-system background
 - [`docs/modules/source-selection.md`](../modules/source-selection.md): source-policy inputs, runtime mirrors, and replatform/update behavior
 - [`docs/operations/infrastructure.md`](../operations/infrastructure.md): structured operations transport, deploy, and host notes
+- [`docs/roadmaps/development-roadmap.md`](../roadmaps/development-roadmap.md): current maturity, ordered workstreams, blockers, proof, and longer horizons
 - [`docs/llms/subsystem-map.md`](subsystem-map.md): stable "look here first" pointers distilled from legacy assistant docs
 
 ## Focused Docs
@@ -99,12 +102,14 @@ second subsystem manual.
 - **Canonical docs:** architecture, module, integration-testing, operations,
   guide, and `docs/specs/` contract docs that describe current repo behavior or
   intended active product contracts.
-- **Planning docs:** active files under `docs/superpowers/plans/` and
-  `docs/superpowers/specs/`. They define scoped future work and must not be
-  mistaken for already-shipped behavior.
-- **Historical docs:** archive directories and rows marked historical in the
-  documentation accuracy audit inventory. Use them for provenance, not current
-  instructions.
+- **Roadmap and planning docs:** `docs/roadmaps/` owns detailed current status,
+  `docs/designs/` owns active decisions, and `docs/plans/` owns active
+  multi-step execution. They must not be mistaken for already-shipped
+  behavior.
+- **Planning history:** after durable truth and resume facts move to canonical
+  owners, completed, superseded, or abandoned planning is deleted from the
+  current tree and recovered through Git history. Do not create a replacement
+  archive.
 
 ## Working Rules
 
@@ -147,7 +152,7 @@ second subsystem manual.
   CI failure condition.
 - Use `scripts/maintainability-drift-report.sh` before broad feature,
   refactor, or docs-routing changes to get warn-only changed-path owner hints,
-  docs-audit status, and current hotspot context.
+  documentation-truth status, and current hotspot context.
 
 ## Agent-Doc Proof Floor
 
@@ -155,9 +160,9 @@ For docs-only edits to assistant guidance, run:
 
 ```bash
 bash scripts/check-doc-truth.sh
-bash scripts/check-doc-audit-ledger.sh docs/superpowers/documentation-accuracy-audit-ledger.tsv --require-complete
-LC_ALL=C bash scripts/docs-audit-inventory.sh | diff -u docs/superpowers/documentation-accuracy-audit-inventory.tsv -
-bash scripts/check-coherency-ledger.sh docs/superpowers/feature-coherency-ledger.tsv
+bash scripts/test-doc-truth.sh
+bash scripts/test-agent-context.sh
+bash scripts/agent-context.sh --validate
 git diff --check
 ```
 
@@ -174,15 +179,10 @@ phrase touched by the edit.
   stale lore.
 - When version-specific library, SDK, MCP, model, or coding-agent behavior
   matters, check current external documentation before editing durable guidance.
-- For broad documentation work, use `scripts/docs-audit-inventory.sh` and
-  `scripts/check-doc-audit-ledger.sh` so the tracked doc set, audit ledger, and
-  current repo shape stay aligned.
-- For implementation-to-claim work, also check
-  `docs/superpowers/feature-coherency-ledger.tsv` with
-  `scripts/check-coherency-ledger.sh` and
-  `scripts/check-coherency-wave-scopes.sh`; grep the ledger for
-  `doc:<path>` or `path:<path>` before editing a doc or source file that may be
-  pinned by a coherency row.
+- For broad documentation work, run the doc-truth checker and its fixtures,
+  then validate feature-card routing and local-link/diff hygiene.
+- For implementation-to-claim work, use the owning feature card to select the
+  focused behavior proof and interaction gate in addition to doc truth.
 - When version-specific library, SDK, MCP, model, or coding-agent behavior
   matters, check current external documentation before editing durable
   guidance.

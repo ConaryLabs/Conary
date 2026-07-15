@@ -84,23 +84,15 @@ printf '# Maintainability Drift Report\n'
 printf 'base_ref: %s\n' "$base_ref"
 printf 'mode: %s\n' "$([[ "$scan_all" -eq 1 ]] && printf all || printf changed)"
 
-section "Docs Audit Health"
-ledger_out="$(mktemp)"
-inventory_out="$(mktemp)"
-trap 'rm -f "$ledger_out" "$inventory_out"' EXIT
+section "Documentation Truth"
+doc_truth_out="$(mktemp)"
+trap 'rm -f "$doc_truth_out"' EXIT
 
-if bash scripts/check-doc-audit-ledger.sh docs/superpowers/documentation-accuracy-audit-ledger.tsv --require-complete >"$ledger_out" 2>&1; then
-    printf '[ok] docs-audit ledger complete\n'
+if bash scripts/check-doc-truth.sh >"$doc_truth_out" 2>&1; then
+    printf '[ok] documentation truth check passed\n'
 else
-    warn "docs-audit ledger check reported an issue"
-    sed 's/^/  /' "$ledger_out"
-fi
-
-if bash scripts/docs-audit-inventory.sh | diff -u docs/superpowers/documentation-accuracy-audit-inventory.tsv - >"$inventory_out" 2>&1; then
-    printf '[ok] docs-audit inventory matches regenerated output\n'
-else
-    warn "docs-audit inventory differs from regenerated output"
-    sed 's/^/  /' "$inventory_out"
+    warn "documentation truth check reported an issue"
+    sed 's/^/  /' "$doc_truth_out"
 fi
 
 section "Changed Path Hints"
