@@ -1,12 +1,12 @@
 ---
 last_updated: 2026-07-15
-revision: 1
+revision: 2
 summary: Approved design for a durable development roadmap, neutral planning lifecycle, Superpowers retirement, and an external-tester-first delivery sequence
 ---
 
 # Codebase Development Roadmap and Neutral Planning Migration Design
 
-**Status:** Approved design; implementation planning awaits committed-document review
+**Status:** Approved; Workstream 0 implementation plan ready for execution
 **Date:** 2026-07-15
 **First product milestone:** First external tester loop
 
