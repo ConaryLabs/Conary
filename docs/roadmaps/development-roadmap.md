@@ -87,8 +87,8 @@ the stated scope, not whether a workstream happens to be active.
   product, release, or branch-resume truth.
 - **Current truth:** execution began from clean `main` at `a610dcf8`, three
   commits ahead of `origin/main` at `ce6841ec`. The old planning tree contained
-  176 tracked files and `docs/llms/archive/` contained one file. The authority
-  worktree was clean at the pinned head. The public and detailed roadmap,
+  176 tracked files and the retired assistant archive contained one file. The
+  authority worktree was clean at the pinned head. The public and detailed roadmap,
   milestone tracker, and gated outreach draft are being established first.
   Comparison of the old limited-preview checkpoint with the release artifact
   matrix was `verified-no-change`: the matrix already carries newer artifact,
@@ -156,9 +156,9 @@ Branch canonical documentation to reconcile deliberately:
 7. `docs/modules/test-fixtures.md`
 8. `docs/operations/post-generation-export-follow-up-roadmap.md`
 
-Branch process changes to discard are the modified documentation inventory,
-documentation audit ledger, and feature-coherency ledger, plus the completed
-branch-only plans for file-capability public policy, generation file-capability
+Branch process changes to discard are the modified generated-document
+inventory, per-file documentation-audit registry, and feature-claim registry,
+plus the completed branch-only plans for file-capability public policy, generation file-capability
 xattrs, LSM policy semantics, network/package recursion authority, PAM
 authority, publication-summary schema/docs truth, Remi local-only test serving,
 and sysctl target-profile public policy.
@@ -238,7 +238,7 @@ Its final independent review found no Critical or Important issue and returned
 | --- | --- | --- |
 | Branch product source and tests | 58 paths outside the process set and canonical-doc set | Preserve the authority-head blob or deletion state byte-for-byte. |
 | Canonical documentation | The eight files listed under W1 | Integrate branch product truth, then retain only W0's neutral path and proof wording where the concerns overlap. |
-| Modified branch ledgers | `documentation-accuracy-audit-inventory.tsv`, `documentation-accuracy-audit-ledger.tsv`, and `feature-coherency-ledger.tsv` under `docs/superpowers/` | Delete as completed process bookkeeping. |
+| Modified branch registries | Generated-document inventory, per-file documentation-audit coverage, and feature-claim implementation truth | Delete as completed process bookkeeping. |
 | Completed branch-only plans | File-capability public policy, generation file-capability xattrs, LSM policy semantics, network/package recursion authority, PAM authority, publication-summary schema/docs truth, Remi local-only test serving, and sysctl target-profile public policy | Delete as completed process history; do not recreate under neutral planning paths. |
 | Remaining shipping gate | TGE05 Group O | W1 must pass the QEMU proof or record the exact affected behavior, rationale, missing proof, and expiration condition of a maintainer risk decision. |
 | Production integration | The later real merge | Retired planning, audit, coherency, and local execution paths may not return. |
@@ -272,9 +272,49 @@ assigns an explicit later owner:
 2. Decide whether balanced quoted environment assignments normalize to
    `<path>` or `<env-assignment>` for clustering invariance.
 
-The disposable rehearsal's migration head, merge result, conflict paths,
-canonical-doc resolutions, command results, selector counts, and clean-live-tree
-proof will be appended here before destructive cleanup.
+### Disposable Rehearsal Proof
+
+On 2026-07-15, migration head
+`b9530d681feea0af3f9139d3b294b250a8ea57b1` was cloned into a disposable
+repository. The rehearsal first committed deletion of the former planning
+tree, retired assistant archive, and five structural-registry scripts, then
+merged authority head `e6eeb4da9c560c34317b57b2a422717d4d556b37`
+with `--no-commit --no-ff`. The merge stopped on five expected conflicts:
+`docs/SCRIPTLET_SECURITY.md`, `docs/modules/test-fixtures.md`, and the three
+retired branch registries for generated-document inventory, per-file audit
+coverage, and feature-claim truth.
+
+The three registries and eight completed branch plans stayed deleted.
+`docs/SCRIPTLET_SECURITY.md` took the authority branch's complete product truth.
+`docs/modules/test-fixtures.md` took the authority fixture additions plus W0's
+neutral frontmatter and docs-only proof command. The other canonical-doc merges
+were clean: six of eight canonical docs match the authority head byte-for-byte;
+the intentional differences are the fixture reconciliation and W0's dead-link
+cleanup in `docs/conaryopedia-v2.md`. All 58 branch-owned product source/test
+paths matched the authority-head blob or deletion state. No retired path or
+caller survived the staged scan. Naming the discarded files in the handoff had
+initially collided with that final token scan, so their durable dispositions
+are expressed here by purpose while the temporary W0 design and execution plan
+retain the exact historical path inventory.
+
+The following rehearsal gates passed:
+
+- documentation truth, its fixtures, agent-context fixtures, and validation of
+  13 feature cards;
+- `cargo fmt --all -- --check` plus worktree and staged diff checks;
+- `cargo test -p conary-core public_policy` (15 matched tests) and
+  `cargo test -p conary-core file_capability` (11);
+- `cargo test -p conary generation_file_capabilities` (7);
+- `cargo test -p remi publication` (18),
+  `cargo test -p remi non_public_test_serving` (11), and
+  `cargo test -p remi scriptlet_corpus` (5); and
+- `cargo run -p conary-test -- list` (28 suites, 334 cases).
+
+No selector correction was required because every named focused filter matched
+tests. Rehearsal commit `5fb111b5f4b95758310dd8e44e6714d863afc924`
+has the authority head as its second parent, and the authority-head ancestry
+check passed. Before this proof record was edited, both live worktrees were
+confirmed clean and the authority worktree remained at the pinned head.
 
 ## Post-Milestone Horizons
 
