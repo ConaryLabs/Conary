@@ -103,10 +103,19 @@ the stated scope, not whether a workstream happens to be active.
   validation, and optional review-helper fixtures passed. The maintainability
   fixture reproduced its known federation `pipefail` false negative. Release
   audit failed on unwaived `RUSTSEC-2026-0204` through
-  `crossbeam-epoch 0.9.18`; W0 must preserve that blocker for W1.
+  `crossbeam-epoch 0.9.18`; W0 must preserve that blocker for W1. A NUL-safe
+  inventory covered all 182 ignored local files (6,485,292 bytes): 2 progress
+  files, 42 task briefs/reports, 75 review diffs, 6 final-verification reports,
+  55 local plan reviews, and 2 ignore-scaffolding files. Full progress review
+  found no unfinished main task and reduced the authority resume state to the
+  W1 handoff below. Every referenced implementation commit exists; four missing
+  full base IDs are obsolete pre-rebase markers, and one stale report's
+  `f519bc42` sysctl-versioning reference maps by subject and task range to
+  canonical commit `e56d71ac`. No unique blocker, decision, or follow-up exists
+  only in local scratch.
 - **Limitations:** the old tree and checks remain until rehearsal; the release
-  is not security-green; ignored local execution evidence remains until its
-  unique handoff facts are reviewed.
+  is not security-green; ignored local execution evidence remains until the
+  rehearsal proves its deletion safe.
 - **Non-goals:** Rust behavior changes, authority-branch integration, dependency
   remediation, a release, or tester launch.
 
@@ -114,7 +123,8 @@ the stated scope, not whether a workstream happens to be active.
 
 - **Outcome:** one clean integrated commit is safe to treat as the release
   candidate, with authority work reconciled and current release gates green.
-- **Current truth:** the reviewed authority implementation is isolated at
+- **Current truth:** the independently reviewed authority implementation is
+  isolated, tracked-clean, and ready to integrate at
   `e6eeb4da9c560c34317b57b2a422717d4d556b37`, with merge base `ce6841ec`.
   `RUSTSEC-2026-0204` remains unwaived against `crossbeam-epoch 0.9.18` and is
   fixed upstream in 0.9.20. Generation file-capability shipping still requires
@@ -153,12 +163,8 @@ xattrs, LSM policy semantics, network/package recursion authority, PAM
 authority, publication-summary schema/docs truth, Remi local-only test serving,
 and sysctl target-profile public policy.
 
-Retain two nonblocking review notes for W1 or an explicitly owned follow-up:
-
-1. Add one workflow regression that combines a raw private artifact writer
-   with a sanitized public/admin response route.
-2. Decide whether balanced quoted environment assignments normalize to
-   `<path>` or `<env-assignment>` for clustering invariance.
+The two nonblocking review notes for W1 or an explicitly owned follow-up are
+recorded exactly in the reconciliation map below.
 
 ### W2 Preview Release and Remi Readiness
 
@@ -225,19 +231,50 @@ The authority worktree is read-only during W0. Its pinned head is
 `e6eeb4da9c560c34317b57b2a422717d4d556b37`, its merge base with the W0
 baseline is `ce6841ec1dcfdddf12c68feefac648507fd1538d`, and it was tracked-clean
 on 2026-07-15. The branch contains 78 commits on its side of that merge base.
+Its final independent review found no Critical or Important issue and returned
+`Ready to merge? Yes`.
 
-| Class | W0 rehearsal and later W1 disposition |
+| Reconciliation class | Count or exact scope | W0 rehearsal and later W1 disposition |
+| --- | --- | --- |
+| Branch product source and tests | 58 paths outside the process set and canonical-doc set | Preserve the authority-head blob or deletion state byte-for-byte. |
+| Canonical documentation | The eight files listed under W1 | Integrate branch product truth, then retain only W0's neutral path and proof wording where the concerns overlap. |
+| Modified branch ledgers | `documentation-accuracy-audit-inventory.tsv`, `documentation-accuracy-audit-ledger.tsv`, and `feature-coherency-ledger.tsv` under `docs/superpowers/` | Delete as completed process bookkeeping. |
+| Completed branch-only plans | File-capability public policy, generation file-capability xattrs, LSM policy semantics, network/package recursion authority, PAM authority, publication-summary schema/docs truth, Remi local-only test serving, and sysctl target-profile public policy | Delete as completed process history; do not recreate under neutral planning paths. |
+| Remaining shipping gate | TGE05 Group O | W1 must pass the QEMU proof or record the exact affected behavior, rationale, missing proof, and expiration condition of a maintainer risk decision. |
+| Production integration | The later real merge | Retired planning, audit, coherency, and local execution paths may not return. |
+
+### Authority A-I Disposition
+
+| Area | Durable disposition and owner |
 | --- | --- |
-| Branch product source and tests | Preserve byte-for-byte unless an explicitly reviewed overlap is named. |
-| Eight canonical docs listed in W1 | Reconcile branch product truth with W0's neutral path and proof wording, file by file. |
-| Three modified ledgers and eight completed branch plans | Delete as process history; do not recreate under neutral planning paths. |
-| TGE05 Group O gate | W1 must pass it or record the exact shipping-risk decision. |
-| Two retained review minors | Keep visible in W1 until implemented or deliberately assigned to a later owner. |
-| Production integration | Retired planning, audit, and local execution paths may not return. |
+| A. File-capability policy precision | Implemented at the pinned head. Canonical owners are `docs/SCRIPTLET_SECURITY.md` and `docs/modules/ccs.md`. |
+| B. Generation xattr propagation | Implemented at the pinned head. W1 still requires TGE05 Group O or the named shipping-risk decision above. |
+| C. Sysctl target-profile policy | Implemented at the pinned head. Canonical owner is `docs/modules/ccs.md`, backed by target-profile policy and conversion tests. |
+| D. LSM policy semantics | Implemented at the pinned head. Canonical owners are `docs/SCRIPTLET_SECURITY.md`, `docs/modules/ccs.md`, and `docs/modules/remi.md`. |
+| E. PAM, kernel, initramfs, and bootloader | PAM remains deliberately non-public. Later boot and security outcomes remain in the post-M1 horizon rather than becoming implied authority. |
+| F. Network and package-manager recursion | Deliberately blocked and non-public; exact owners and proof are transferred below. |
+| G. Remi non-public test serving | Implemented at the pinned head and canonical in `docs/modules/remi.md`. |
+| H. Publication schema and docs truth | Implemented at the pinned head. W1 retains the two nonblocking review minors below until implementation or explicit follow-up ownership. |
+| I. Enabling refactors | No standalone work item. Apply the existing maintainability boundary only when a product slice touches the hotspot. |
 
-The disposable rehearsal, exhaustive authority A-I disposition, branch-only
-claim transfer, ignored-local-state review, conflicts, command results, and
-canonical-doc resolutions will be appended here before destructive cleanup.
+### Branch-Only Claim Transfer
+
+| Claim | Canonical owners | Required focused proof |
+| --- | --- | --- |
+| Network fetch and package-manager recursion remain non-public and blocked. | `docs/SCRIPTLET_SECURITY.md`, `docs/modules/ccs.md`, and the CCS/Remi feature cards | `blocked_classes_block_live_fetch_and_package_manager_recursion`; `live_fetch_and_package_manager_classes_remain_blocked_without_native_adapters` and its fake-Known-row guard; `corpus_summary_marks_live_fetch_and_package_manager_recursion`; and `blocked_live_fetch_and_package_manager_reports_stay_private_and_non_public_only`. |
+| Stale publication summaries fail closed; public responses are sanitized while raw review artifacts remain private. | `docs/modules/remi.md` and `docs/SCRIPTLET_SECURITY.md` | `converted_ccs_path_for_download_rejects_stale_conversion_records`; `stale_converted_rows_are_not_scriptlet_public_ready`; `publication_report_sanitizes_boot_and_security_policy_intents`; `publication_report_sanitizes_unknown_commands_and_reasons_while_raw_report_retains_them`; `raw_publication_report_retains_private_intents_for_review_artifacts`; and the non-public/admin sanitization tests `non_public_test_serving_manifest_returns_sanitized_blocked_metadata` and `non_public_test_serving_manifest_sanitizes_private_intent_values`. |
+
+Retain these two nonblocking review notes exactly until W1 implements them or
+assigns an explicit later owner:
+
+1. Add one workflow regression that combines a raw private artifact writer
+   with a sanitized public/admin response route.
+2. Decide whether balanced quoted environment assignments normalize to
+   `<path>` or `<env-assignment>` for clustering invariance.
+
+The disposable rehearsal's migration head, merge result, conflict paths,
+canonical-doc resolutions, command results, selector counts, and clean-live-tree
+proof will be appended here before destructive cleanup.
 
 ## Post-Milestone Horizons
 
