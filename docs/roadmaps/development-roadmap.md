@@ -2,7 +2,8 @@
 last_updated: 2026-07-15
 proof_baseline: a610dcf8b76f0c555086e9bab09e07644ac23b5d
 current_milestone: first external tester loop
-active_workstream: W0 Neutral Planning Migration
+active_workstream: none
+next_workstream: W1 Integrated Release-Green Baseline
 ---
 
 # Codebase Development Roadmap
@@ -88,17 +89,16 @@ the stated scope, not whether a workstream happens to be active.
 - **Current truth:** execution began from clean `main` at `a610dcf8`, three
   commits ahead of `origin/main` at `ce6841ec`. The old planning tree contained
   176 tracked files and the retired assistant archive contained one file. The
-  authority worktree was clean at the pinned head. The public and detailed roadmap,
-  milestone tracker, and gated outreach draft are being established first.
+  authority worktree was clean at the pinned head. The public and detailed
+  roadmap, milestone tracker, and gated outreach draft are now active.
   Comparison of the old limited-preview checkpoint with the release artifact
   matrix was `verified-no-change`: the matrix already carries newer artifact,
   checksum, signature, self-update, SBOM/provenance, source, and caveat truth.
-- **Execution status:** active.
-- **Dependencies:** the approved roadmap design and committed W0 execution
-  plan; both are temporary and close with this workstream.
-- **Next gate:** replace live routing and planning conventions, preserve release
-  security policy, then pass the disposable authority-branch reconciliation
-  rehearsal before deleting retired paths or local resume state.
+- **Execution status:** complete.
+- **Dependencies:** none remain inside W0.
+- **Next gate:** W1 remains queued. Its first integrated candidate must resolve
+  the crossbeam blocker, reconcile the authority head without restoring retired
+  process files, and satisfy TGE05 or the exact shipping-risk decision.
 - **Proof:** on 2026-07-15, doc truth, its fixtures, agent-context fixtures and
   validation, and optional review-helper fixtures passed. The maintainability
   fixture reproduced its known federation `pipefail` false negative. Release
@@ -112,10 +112,23 @@ the stated scope, not whether a workstream happens to be active.
   full base IDs are obsolete pre-rebase markers, and one stale report's
   `f519bc42` sysctl-versioning reference maps by subject and task range to
   canonical commit `e56d71ac`. No unique blocker, decision, or follow-up exists
-  only in local scratch.
-- **Limitations:** the old tree and checks remain until rehearsal; the release
-  is not security-green; ignored local execution evidence remains until the
-  rehearsal proves its deletion safe.
+  only in local scratch. Head `14b50fbd198b5e52955f57dffad318e7e1344719`
+  immediately precedes self-deletion: it removed the remaining 179 tracked
+  history/registry files after rehearsal, and the ignored main/authority SDD
+  state and local reviews were removed after handoff preservation. No
+  replacement planning archive exists. A permanent neutral-layout check and
+  its clean plus six negative fixture cases are implemented in the closeout
+  tree. Final 2026-07-15 acceptance passed shell syntax; documentation truth and
+  fixtures; 13-card routing validation and CCS/packaging packets; optional
+  review, support-bundle, line-count, maintainability, and workflow-runtime
+  fixtures; Rust formatting; the 28-suite/333-case harness inventory; tracked
+  Markdown local links; neutral-layout, archive, ignore, and stale-token scans;
+  workflow lint; diff hygiene; and the pinned clean authority-worktree check.
+  The release audit separately reproduced only unwaived `RUSTSEC-2026-0204`
+  plus the documented `RUSTSEC-2026-0173` and yanked-crate warnings. The final
+  live clean-worktree proof runs immediately after the closeout commit.
+- **Limitations:** the release is not security-green; W1 still owns crossbeam
+  remediation, authority integration, and TGE05 or the exact risk decision.
 - **Non-goals:** Rust behavior changes, authority-branch integration, dependency
   remediation, a release, or tester launch.
 

@@ -9,6 +9,26 @@ fail() {
     exit 1
 }
 
+retired_provider_name() {
+    printf '%s%s' 'super' 'powers'
+}
+
+retired_planning_root() {
+    printf 'docs/%s' "$(retired_provider_name)"
+}
+
+assistant_history_root() {
+    printf 'docs/llms/%s' 'archive'
+}
+
+deleted_validator_name() {
+    printf '%s%s' 'check-doc-audit-' 'ledger.sh'
+}
+
+stage_fixture() {
+    git -C "$1" add -A
+}
+
 make_good_repo() {
     local root="$1"
 
@@ -284,6 +304,9 @@ GET /v1/history | Changeset history
 GET /v1/events | SSE events
 <!-- conaryd-routes:end -->
 EOF
+
+    git -C "$root" init -q
+    stage_fixture "$root"
 }
 
 run_truth() {
@@ -311,6 +334,7 @@ expect_failure() {
     tmp="$(mktemp -d)"
     make_good_repo "$tmp"
     "$mutator" "$tmp"
+    stage_fixture "$tmp"
     if run_truth "$tmp" > "$tmp/out" 2>&1; then
         cat "$tmp/out" >&2
         rm -rf "$tmp"
@@ -428,6 +452,37 @@ break_required_scan_path() {
     rm -rf "$1/docs/operations"
 }
 
+break_retired_tracked_path() {
+    local old_root
+    old_root="$(retired_planning_root)"
+    mkdir -p "$1/$old_root"
+    printf '# Retired planning artifact\n' > "$1/$old_root/old-plan.md"
+}
+
+break_live_provider_reference() {
+    printf '\nRetired provider brand: %s\n' "$(retired_provider_name)" >> "$1/README.md"
+}
+
+break_assistant_history_link() {
+    local old_root
+    old_root="$(assistant_history_root)"
+    printf '\nSee %s/old-notes.md.\n' "$old_root" >> "$1/README.md"
+}
+
+break_deleted_validator_reference() {
+    printf '\nRun scripts/%s before review.\n' "$(deleted_validator_name)" >> "$1/README.md"
+}
+
+break_mandatory_provider_skill() {
+    printf '\nYou MUST use the %s:brainstorming skill before editing.\n' \
+        "$(retired_provider_name)" >> "$1/README.md"
+}
+
+break_planning_archive_directory() {
+    mkdir -p "$1/docs/plans/archive"
+    printf '# Archived active plan\n' > "$1/docs/plans/archive/old-plan.md"
+}
+
 expect_pass
 expect_failure "schema drift" break_schema_version 'schema.*68.*SCHEMA_VERSION.*69'
 expect_failure "unknown CLI command reference" break_cli_command_reference 'unknown conary root command'
@@ -454,5 +509,11 @@ expect_failure "every install EROFS claim" break_every_install_erofs_claim 'ever
 expect_failure "under a minute claim" break_under_a_minute_claim 'under-a-minute preview claim'
 expect_failure "atomic takeover claim" break_atomic_takeover_claim 'atomically absorbed/taken over'
 expect_failure "missing required scan path" break_required_scan_path 'required path is missing: docs/operations'
+expect_failure "retired tracked path" break_retired_tracked_path 'neutral layout.*retired planning path'
+expect_failure "live retired provider reference" break_live_provider_reference 'neutral layout.*retired provider reference'
+expect_failure "assistant history archive link" break_assistant_history_link 'neutral layout.*assistant history archive'
+expect_failure "deleted validator reference" break_deleted_validator_reference 'neutral layout.*deleted structural validator'
+expect_failure "mandatory provider skill" break_mandatory_provider_skill 'neutral layout.*mandatory provider skill directive'
+expect_failure "planning archive directory" break_planning_archive_directory 'neutral layout.*planning archive path'
 
 echo "docs truth self-tests passed."

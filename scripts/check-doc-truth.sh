@@ -559,6 +559,84 @@ check_conary_core_surface() {
     done < <(rg -n -i -- "$pattern" "${active_paths[@]}" || true)
 }
 
+check_neutral_planning_layout() {
+    local provider_name
+    local old_planning_root
+    local old_local_root
+    local assistant_history_root
+    provider_name="$(printf '%s%s' 'super' 'powers')"
+    old_planning_root="docs/${provider_name}"
+    old_local_root=".${provider_name}"
+    assistant_history_root="docs/llms/$(printf '%s' 'archive')"
+
+    require_file "ROADMAP.md" || true
+    require_file "docs/roadmaps/development-roadmap.md" || true
+
+    if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        report_error "neutral layout: tracked-tree check requires a Git worktree"
+        return
+    fi
+
+    local path
+    while IFS= read -r path; do
+        [[ -n "$path" ]] || continue
+        report_error "neutral layout: retired planning path is tracked: $path"
+    done < <(git ls-files -- "${old_planning_root}/**")
+
+    while IFS= read -r path; do
+        [[ -n "$path" ]] || continue
+        report_error "neutral layout: retired local SDD path is tracked: $path"
+    done < <(git ls-files -- "${old_local_root}/**")
+
+    while IFS= read -r path; do
+        [[ -n "$path" ]] || continue
+        report_error "neutral layout: assistant history archive path is tracked: $path"
+    done < <(git ls-files -- "${assistant_history_root}/**")
+
+    while IFS= read -r path; do
+        [[ -n "$path" ]] || continue
+        report_error "neutral layout: planning archive path is tracked: $path"
+    done < <(git ls-files -- "docs/designs/archive/**" "docs/plans/archive/**")
+
+    local mandatory_skill_pattern
+    mandatory_skill_pattern="(must|required).{0,80}${provider_name}:[A-Za-z0-9_-]+.{0,40}skill"
+    local file line_no text
+    while IFS=: read -r file line_no text; do
+        report_error "neutral layout: mandatory provider skill directive in $file:$line_no: $text"
+    done < <(git grep -n -I -i -E -e "$mandatory_skill_pattern" -- . || true)
+
+    local provider_skill_pattern="${provider_name}:[A-Za-z0-9_-]+"
+    while IFS=: read -r file line_no text; do
+        report_error "neutral layout: provider-prefixed skill token in $file:$line_no: $text"
+    done < <(git grep -n -I -i -E -e "$provider_skill_pattern" -- . || true)
+
+    local deleted_names=(
+        "$(printf '%s%s' 'check-doc-audit-' 'ledger')"
+        "$(printf '%s%s' 'docs-audit-' 'inventory')"
+        "$(printf '%s%s' 'check-coherency-' 'ledger')"
+        "$(printf '%s%s' 'check-coherency-' 'wave-scopes')"
+        "$(printf '%s%s' 'test-coherency-' 'ledger')"
+        "$(printf '%s%s' 'documentation-accuracy-' 'audit')"
+        "$(printf '%s%s' 'feature-' 'coherency')"
+        "$(printf '%s%s' 'coherency-' 'wave')"
+    )
+    local deleted_name
+    for deleted_name in "${deleted_names[@]}"; do
+        while IFS=: read -r file line_no text; do
+            report_error "neutral layout: deleted structural validator reference in $file:$line_no: $text"
+        done < <(git grep -n -I -i -F -e "$deleted_name" -- . || true)
+    done
+
+    while IFS=: read -r file line_no text; do
+        report_error "neutral layout: assistant history archive reference in $file:$line_no: $text"
+    done < <(git grep -n -I -i -F -e "$assistant_history_root" -- . || true)
+
+    while IFS=: read -r file line_no text; do
+        report_error "neutral layout: retired provider reference in $file:$line_no: $text"
+    done < <(git grep -n -I -i -F -e "$provider_name" -- . || true)
+}
+
+check_neutral_planning_layout
 check_required_scan_paths
 check_schema_versions
 check_retired_commands
