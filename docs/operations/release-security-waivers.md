@@ -1,7 +1,24 @@
-# Release Security Waivers - 2026-05-06
+---
+last_updated: 2026-07-15
+status: active
+summary: Limited-preview RustSec waiver policy and current unwaived release blockers
+---
+
+# Release Security Waivers
 
 This file records temporary RustSec exceptions for the limited public preview
 readiness gate. Waivers here are not blanket approval for a wider release.
+
+## Current Unwaived Blocker
+
+### RUSTSEC-2026-0204 - crossbeam-epoch 0.9.18
+
+The 2026-07-15 release audit reports an invalid-pointer-dereference
+vulnerability in `crossbeam-epoch 0.9.18`; RustSec identifies 0.9.20 as the
+fixed version. This advisory is not waived and is not listed in the audit
+script's `--ignore` arguments. It blocks W1 release-green acceptance until the
+lockfile resolves to a fixed version and the release audit passes from the
+integrated candidate.
 
 ## Active Waivers
 
@@ -32,9 +49,10 @@ readiness gate. Waivers here are not blanket approval for a wider release.
   Rust dependencies or expand RSA private-key operations. The release gate
   remains `bash scripts/release-cargo-audit.sh`, with this waiver as the only
   ignored RustSec vulnerability.
-- **2026-07-03 audit refresh:** The RSA paths above still have no compatible
-  fixed path. `bash scripts/release-cargo-audit.sh` remains green with this as
-  the only ignored RustSec vulnerability.
+- **2026-07-03 audit refresh:** At that checkpoint the RSA paths above still
+  had no compatible fixed path and this remained the only ignored RustSec
+  vulnerability. The current release audit is not green because the unwaived
+  crossbeam blocker above was reported later.
 
 ## Resolved Advisory Follow-Ups
 
