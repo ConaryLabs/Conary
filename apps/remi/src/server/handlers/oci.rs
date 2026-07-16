@@ -525,12 +525,8 @@ fn build_manifest(
         ConvertedPackage::find_by_content_hash_identity(&conn, distro, package, reference)?
     };
 
-    let converted = converted.and_then(|converted| {
-        if converted.needs_reconversion() || !converted.is_scriptlet_public_ready() {
-            None
-        } else {
-            Some(converted)
-        }
+    let converted = converted.filter(|converted| {
+        !converted.needs_reconversion() && converted.is_scriptlet_public_ready()
     });
 
     let converted = match converted {

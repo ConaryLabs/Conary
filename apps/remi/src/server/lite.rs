@@ -293,7 +293,7 @@ fn advertise_mdns(port: u16) -> Result<MdnsDiscovery> {
     let mut mdns = MdnsDiscovery::new()?;
 
     let hostname = gethostname_safe();
-    let instance_name = format!("remi-lite-{}", &hostname);
+    let instance_name = format!("remi-lite-{hostname}");
     let node_id = conary_core::hash::sha256(instance_name.as_bytes());
 
     mdns.register(

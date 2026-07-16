@@ -493,7 +493,7 @@ pub async fn cmd_federation_scan(db_path: &str, duration_secs: u64, add_peers: b
             truncate(&peer.instance_name, 20),
             truncate(&addr, 30),
             peer.tier,
-            &peer.version
+            peer.version
         );
     }
 

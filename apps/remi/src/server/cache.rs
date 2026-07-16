@@ -590,14 +590,14 @@ mod tests {
         cache.store_chunk(&hash, data).await.unwrap();
 
         // Protect the chunk
-        cache.protect_chunks(&[hash.to_string()]).await;
+        cache.protect_chunks(std::slice::from_ref(&hash)).await;
 
         // Verify it's protected via stats
         let stats = cache.stats().await.unwrap();
         assert_eq!(stats.protected_chunks, 1);
 
         // Unprotect
-        cache.unprotect_chunks(&[hash.to_string()]).await;
+        cache.unprotect_chunks(std::slice::from_ref(&hash)).await;
 
         let stats = cache.stats().await.unwrap();
         assert_eq!(stats.protected_chunks, 0);
@@ -704,7 +704,7 @@ mod tests {
         cache.store_chunk(&hash2, &chunk_b).await.unwrap();
 
         // Protect one chunk
-        cache.protect_chunks(&[hash1.to_string()]).await;
+        cache.protect_chunks(std::slice::from_ref(&hash1)).await;
 
         // Total: 400 bytes, max: 300 bytes
         let _result = cache.run_eviction().await.unwrap();
