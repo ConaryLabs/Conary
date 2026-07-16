@@ -2,7 +2,7 @@
 
 [![PR Gate](https://github.com/ConaryLabs/Conary/actions/workflows/pr-gate.yml/badge.svg)](https://github.com/ConaryLabs/Conary/actions/workflows/pr-gate.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![v0.10.1](https://img.shields.io/badge/version-0.10.1-orange.svg)](CHANGELOG.md)
+[![v0.11.0](https://img.shields.io/badge/version-0.11.0-orange.svg)](CHANGELOG.md)
 
 **Website:** [conary.io](https://conary.io) | **Packages:** [remi.conary.io](https://remi.conary.io) | **Discussions:** [GitHub Discussions](https://github.com/ConaryLabs/Conary/discussions)
 
@@ -46,7 +46,7 @@ attach only a reviewed support bundle.
 ## Try It
 
 Download the pinned preview release from
-[v0.10.1](https://github.com/ConaryLabs/Conary/releases/tag/v0.10.1), verify
+[v0.11.0](https://github.com/ConaryLabs/Conary/releases/tag/v0.11.0), verify
 `SHA256SUMS`, and install the package for your test VM. Release artifact
 expectations are tracked in
 [docs/operations/release-artifact-matrix.md](docs/operations/release-artifact-matrix.md).

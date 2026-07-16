@@ -4,6 +4,49 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v0.11.0] - 2026-07-17
+
+### Security
+- integrate release-green authority baseline
+- version sysctl target-profile policy
+- route sysctl conversion through target profiles
+- apply sysctl target policy to scriptlet bundles
+- harden sysctl public policy matching
+- require target policy for sysctl public status
+- record scriptlet public target profile
+- preflight generation capability target type
+- preflight ccs capabilities before hooks
+- normalize ccs capability target paths
+- reject excluded generation capability targets
+- allow generation file capabilities after xattr preflight
+- preserve file capability xattrs in generations
+- encode generation file capability xattrs
+- require regular file capability targets
+- record ccs file capabilities during install
+- persist installed file capability authority
+- require typed scriptlet publication summaries
+- close stale scriptlet publication gaps
+- stale scriptlet conversions before public serving
+- gate high risk file capabilities from public status
+- add file capability public policy helper
+
+### Other
+- fix(repository): normalize Remi public targets
+- fix(scriptlets): catch git --config-env clone
+- test(ccs): satisfy PAM support matrix lint
+- test(ccs): guard against known pam support rows
+- style: satisfy workspace clippy lints
+- style: format scriptlet bundle policy helpers
+- feat(conversion): model security-sensitive scriptlets
+- ux(cli): quiet logs and normalize status output
+- fix(ccs): keep security policy fixtures complete
+- feat(remi): queue generic LSM policy intent evidence
+- feat(ccs): capture AppArmor helpers as policy review intent
+- feat(ccs): bridge SELinux effects to generic policy intent
+- feat(ccs): add generic LSM policy intent metadata
+- feat(ccs): model optional SELinux policy intent
+- feat(ccs): model native and Debian scriptlet evidence
+- docs(release): refresh preview docs for v0.10.1
 ## [v0.10.1] - 2026-07-07
 
 ### Other

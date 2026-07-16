@@ -1047,7 +1047,7 @@ checksum = "cc14f565cf027a105f7a44ccf9e5b424348421a1d8952a8fc9d499d313107789"
 
 [[package]]
 name = "conary"
-version = "0.10.1"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -1109,7 +1109,7 @@ dependencies = [
 
 [[package]]
 name = "conary-bootstrap"
-version = "0.10.1"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "tokio",
@@ -1118,7 +1118,7 @@ dependencies = [
 
 [[package]]
 name = "conary-core"
-version = "0.10.1"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "ar",

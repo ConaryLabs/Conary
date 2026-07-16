@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-07-15
+last_updated: 2026-07-17
 status: queued
 current_result: 0/10
 summary: Outcome tracker for Conary's first external tester milestone
@@ -29,10 +29,16 @@ useful evidence but does not count as a completion.
 
 ## Launch Record
 
-- Pinned Conary release: `v0.10.1` is the current repository truth while W2 is
-  queued; W2 must replace this with the post-integration release before launch.
-- Compatible Remi commit: pending W2.
-- Prewarmed package set: pending W2.
+- Pinned Conary release: `v0.11.0`; artifact publication and installed-binary
+  self-update proof remain W2 gates before launch.
+- Compatible Remi commit: `c001f8d69b9e8ef34fba39139576a9809800a9a6`,
+  deployed with binary SHA-256
+  `c955a24ff6b90f98ba5f20b37e6a67b79bdde199ec0dcbfac0ce78b001d0f485`.
+- Prewarmed package set: `curl`, `htop`, `nano`, and `zstd` for Fedora, Ubuntu,
+  and Arch. Eleven conversion-version-6 rows are public; Ubuntu `nano` remains
+  correctly fail-closed as `private-review`.
+- Clean-host proof: Fedora 44 installed, executed, and removed the public
+  `htop 3.4.1` conversion after the exact public-target compatibility fix.
 - Supported hosts: Fedora 44, Ubuntu 26.04 LTS, and Arch Linux on the release's
   supported architecture and compatibility baseline.
 - Venue: not launched.
