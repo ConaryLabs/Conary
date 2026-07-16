@@ -135,6 +135,7 @@ mod tests {
                 fsverity_enabled: false,
                 erofs_verity_digest: None,
                 artifact_manifest_sha256: Some(artifact_digest),
+                security_capability_xattr_count: None,
                 created_at: "2026-04-22T00:00:00Z".to_string(),
                 package_count: 1,
                 kernel_version: Some("6.19.8-conary".to_string()),

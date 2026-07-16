@@ -348,6 +348,7 @@ mod tests {
                     permissions: 0o100644,
                     owner: None,
                     group_name: None,
+                    xattrs: std::collections::BTreeMap::new(),
                 },
                 FileEntryRef {
                     path: format!("/boot/initramfs-{release}.img"),
@@ -356,6 +357,7 @@ mod tests {
                     permissions: 0o100644,
                     owner: None,
                     group_name: None,
+                    xattrs: std::collections::BTreeMap::new(),
                 },
                 FileEntryRef {
                     path: "/boot/EFI/BOOT/BOOTX64.EFI".to_string(),
@@ -364,6 +366,7 @@ mod tests {
                     permissions: 0o100644,
                     owner: None,
                     group_name: None,
+                    xattrs: std::collections::BTreeMap::new(),
                 },
                 FileEntryRef {
                     path: format!("/usr/lib/modules/{release}/modules.dep"),
@@ -372,6 +375,7 @@ mod tests {
                     permissions: 0o100644,
                     owner: None,
                     group_name: None,
+                    xattrs: std::collections::BTreeMap::new(),
                 },
             ],
             symlink_refs: Vec::new(),
@@ -443,6 +447,7 @@ mod tests {
                     permissions: 0o100644,
                     owner: None,
                     group_name: None,
+                    xattrs: std::collections::BTreeMap::new(),
                 },
                 FileEntryRef {
                     path: format!("/boot/initramfs-{release}.img"),
@@ -451,6 +456,7 @@ mod tests {
                     permissions: 0o100644,
                     owner: None,
                     group_name: None,
+                    xattrs: std::collections::BTreeMap::new(),
                 },
                 FileEntryRef {
                     path: "/boot/EFI/BOOT/BOOTX64.EFI".to_string(),
@@ -459,6 +465,7 @@ mod tests {
                     permissions: 0o100644,
                     owner: None,
                     group_name: None,
+                    xattrs: std::collections::BTreeMap::new(),
                 },
                 FileEntryRef {
                     path: format!("/usr/lib/modules/{release}/modules.dep"),
@@ -467,6 +474,7 @@ mod tests {
                     permissions: 0o100644,
                     owner: None,
                     group_name: None,
+                    xattrs: std::collections::BTreeMap::new(),
                 },
             ],
             symlink_refs: Vec::new(),

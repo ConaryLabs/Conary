@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-07-15
 status: active
-summary: Limited-preview RustSec waiver policy and current unwaived release blockers
+summary: Limited-preview RustSec waiver policy and resolved W1 crossbeam blocker
 ---
 
 # Release Security Waivers
@@ -9,16 +9,10 @@ summary: Limited-preview RustSec waiver policy and current unwaived release bloc
 This file records temporary RustSec exceptions for the limited public preview
 readiness gate. Waivers here are not blanket approval for a wider release.
 
-## Current Unwaived Blocker
+## Current Unwaived Blockers
 
-### RUSTSEC-2026-0204 - crossbeam-epoch 0.9.18
-
-The 2026-07-15 release audit reports an invalid-pointer-dereference
-vulnerability in `crossbeam-epoch 0.9.18`; RustSec identifies 0.9.20 as the
-fixed version. This advisory is not waived and is not listed in the audit
-script's `--ignore` arguments. It blocks W1 release-green acceptance until the
-lockfile resolves to a fixed version and the release audit passes from the
-integrated candidate.
+None. The fresh 2026-07-15 W1 release audit passed after the crossbeam
+remediation below. The active RSA waiver and non-blocking warnings remain.
 
 ## Active Waivers
 
@@ -51,10 +45,18 @@ integrated candidate.
   ignored RustSec vulnerability.
 - **2026-07-03 audit refresh:** At that checkpoint the RSA paths above still
   had no compatible fixed path and this remained the only ignored RustSec
-  vulnerability. The current release audit is not green because the unwaived
-  crossbeam blocker above was reported later.
+  vulnerability. The later W1 audit resolved the separate unwaived crossbeam
+  blocker; this RSA waiver remains active.
 
 ## Resolved Advisory Follow-Ups
+
+### RUSTSEC-2026-0204 - crossbeam-epoch
+
+The W1 candidate updates `crossbeam-epoch` from vulnerable version 0.9.18 to
+fixed version 0.9.20 in `Cargo.lock`. The fresh 2026-07-15 release audit no
+longer reports the invalid-pointer-dereference advisory. The dependency remains
+transitive through `crossbeam-deque` and Rayon; no waiver or audit ignore was
+added.
 
 ### RUSTSEC-2026-0194 and RUSTSEC-2026-0195 - quick-xml
 
@@ -70,5 +72,6 @@ advisories against `quick-xml 0.38.4` and `0.40.1`.
 ## Non-Blocking Warnings
 
 `cargo audit` also reports `RUSTSEC-2026-0173` for unmaintained
-`proc-macro-error2 2.0.1`. This is an unmaintained warning, not a vulnerability
-gate failure, and is not ignored by `scripts/release-cargo-audit.sh`.
+`proc-macro-error2 2.0.1` and reports yanked `spin 0.9.8`. These are warnings,
+not vulnerability gate failures, and are not ignored by
+`scripts/release-cargo-audit.sh`.

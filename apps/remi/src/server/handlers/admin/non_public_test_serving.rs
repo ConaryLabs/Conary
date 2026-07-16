@@ -465,6 +465,16 @@ mod tests {
         }
     }
 
+    fn local_only_summary() -> ScriptletBundleSummary {
+        ScriptletBundleSummary {
+            publication_status: "local-only".to_string(),
+            scriptlet_fidelity: "local-only".to_string(),
+            target_compatibility: "local-only".to_string(),
+            review_artifact_path: Some("/tmp/private-review-secret.json".to_string()),
+            ..ScriptletBundleSummary::default()
+        }
+    }
+
     fn issue35_boot_security_summary() -> ScriptletBundleSummary {
         ScriptletBundleSummary {
             publication_status: "blocked".to_string(),
@@ -636,6 +646,68 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn non_public_test_serving_manifest_and_download_allow_local_only_rows() {
+        let (app, db_path) = test_app_with_non_public_test_serving(true).await;
+        seed_non_public_test_row_with_summary(
+            &db_path,
+            "x86_64",
+            "pkg-local-only.ccs",
+            local_only_summary(),
+            true,
+        );
+
+        let manifest_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/v1/admin/packages/fedora/pkg/test-manifest?version=1.0&arch=x86_64")
+                    .header(header::AUTHORIZATION, "Bearer test-admin-token-12345")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(manifest_response.status(), StatusCode::OK);
+        let body = to_bytes(manifest_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body = String::from_utf8(body.to_vec()).unwrap();
+
+        assert!(body.contains("\"status\":\"non-public-test-serving\""));
+        assert!(body.contains("\"publication_status\":\"local-only\""));
+        assert!(body.contains("\"review_artifact_available\":true"));
+        assert!(!body.contains("review_artifact_path"));
+        assert!(!body.contains("private-review-secret"));
+
+        let download_response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/v1/admin/packages/fedora/pkg/test-download?version=1.0&arch=x86_64")
+                    .header(header::AUTHORIZATION, "Bearer test-admin-token-12345")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(download_response.status(), StatusCode::OK);
+        assert_eq!(
+            download_response
+                .headers()
+                .get(header::CACHE_CONTROL)
+                .unwrap(),
+            "no-store"
+        );
+        let body = to_bytes(download_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(&body[..], b"non-public ccs");
+    }
+
+    #[tokio::test]
     async fn non_public_test_manifest_preserves_apparmor_review_policy_fallback() {
         let (app, db_path) = test_app_with_non_public_test_serving(true).await;
         seed_non_public_test_row_with_summary(
@@ -669,6 +741,123 @@ mod tests {
         assert!(body.contains("\"blocked-class-apparmor\""));
         assert!(!body.contains("review_artifact_path"));
         assert!(!body.contains("private-review-secret"));
+    }
+
+    #[tokio::test]
+    async fn non_public_test_serving_manifest_sanitizes_private_intent_values() {
+        let (app, db_path) = test_app_with_non_public_test_serving(true).await;
+        let mut summary = apparmor_review_summary();
+        summary.security_policy_intents[0]
+            .source
+            .argv
+            .push("SECRET=/home/remi/token".to_string());
+        summary.security_policy_intents[0].source.argv.extend([
+            r#"--replace="/home/remi/quoted-private.pp""#.to_string(),
+            "--flag='TOKEN=value'".to_string(),
+            r#"--profile="/etc/apparmor.d/vendor.1.2.3"#.to_string(),
+        ]);
+        summary.security_policy_intents[0]
+            .scope
+            .paths
+            .push("/home/remi/private.pp".to_string());
+        summary.security_policy_intents[0].scope.extra.insert(
+            "quoted_private_path".to_string(),
+            toml::Value::String(r#""/home/remi/dynamic-private.pp""#.to_string()),
+        );
+        summary.security_policy_intents[0]
+            .payload_evidence
+            .paths
+            .push("/home/remi/private.pp".to_string());
+        seed_non_public_test_row_with_summary(&db_path, "x86_64", "pkg.ccs", summary, true);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/v1/admin/packages/fedora/pkg/test-manifest?version=1.0&arch=x86_64")
+                    .header(header::AUTHORIZATION, "Bearer test-admin-token-12345")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = String::from_utf8(body.to_vec()).unwrap();
+
+        assert!(body.contains("\"provider\":\"apparmor\""));
+        assert!(body.contains("\"operation\":\"profile-reload\""));
+        assert!(body.contains("/etc/apparmor.d/usr.bin.demo"));
+        assert!(body.contains("/etc/apparmor.d/vendor.1.2.3"));
+        assert!(body.contains("\"<path>\""));
+        assert!(!body.contains("/home/remi"));
+        assert!(!body.contains(r#"\"/home/remi/dynamic-private.pp\""#));
+        assert!(!body.contains("TOKEN="));
+        assert!(!body.contains("SECRET="));
+        assert!(!body.contains("review_artifact_path"));
+        assert!(!body.contains("private-review-secret"));
+    }
+
+    #[tokio::test]
+    async fn raw_review_artifact_and_admin_response_keep_separate_visibility() {
+        let (app, db_path) = test_app_with_non_public_test_serving(true).await;
+        let mut summary = apparmor_review_summary();
+        summary.security_policy_intents[0]
+            .source
+            .argv
+            .push("SECRET=/home/remi/raw-private-token".to_string());
+        summary.security_policy_intents[0]
+            .scope
+            .paths
+            .push("/home/remi/raw-private-policy.pp".to_string());
+
+        let mut raw_report = crate::server::publication::raw_report_from_summary(&summary, true);
+        raw_report.review_artifact_available = true;
+        let cache_dir = db_path.parent().unwrap().join("cache");
+        let artifact_path = crate::server::publication::write_review_artifact(
+            &cache_dir,
+            crate::server::publication::ReviewArtifactInput {
+                distro: "fedora",
+                package: "pkg",
+                version: "1.0",
+                architecture: Some("x86_64"),
+                original_format: "rpm",
+                conversion_fidelity: "blocked",
+                conversion_version: conary_core::db::models::CONVERSION_VERSION,
+                ccs_content_hash: "sha256:raw-private-workflow",
+                ccs_total_size: 14,
+                publication: raw_report,
+            },
+        )
+        .unwrap();
+        summary.review_artifact_path = Some(artifact_path.to_string_lossy().to_string());
+        seed_non_public_test_row_with_summary(&db_path, "x86_64", "pkg.ccs", summary, true);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/v1/admin/packages/fedora/pkg/test-manifest?version=1.0&arch=x86_64")
+                    .header(header::AUTHORIZATION, "Bearer test-admin-token-12345")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let response_body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let response_body = String::from_utf8(response_body.to_vec()).unwrap();
+        let artifact_body = std::fs::read_to_string(&artifact_path).unwrap();
+
+        assert!(artifact_body.contains("SECRET=/home/remi/raw-private-token"));
+        assert!(artifact_body.contains("/home/remi/raw-private-policy.pp"));
+        assert!(response_body.contains("<env-assignment>"));
+        assert!(response_body.contains("<path>"));
+        assert!(response_body.contains("\"review_artifact_available\":true"));
+        assert!(!response_body.contains("/home/remi"));
+        assert!(!response_body.contains("review_artifact_path"));
     }
 
     #[tokio::test]

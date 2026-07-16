@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-05-27
-revision: 28
-summary: Add first-tester release evidence support loop
+last_updated: 2026-07-16
+revision: 31
+summary: Record the green W1 Group O v4 public fresh-cache KVM gate
 ---
 
 # Integration Testing
@@ -63,13 +63,33 @@ baseline covered `TGE01` and `TGE02`. The active Fedora 44 suite now covers:
 
 - `TGE01`: metadata-only installed generations fail closed before artifact publication
 - `TGE03`: CAS-backed installed generations fail closed when an included CAS object is missing
-- `TGE04`: intended proof that a full CAS-backed installed runtime generation exports to qcow2 and boots under UEFI
+- `TGE04`: a full CAS-backed installed runtime generation exports to qcow2 and boots under UEFI
+- `TGE05`: exported installed-runtime generations preserve capability-absent and capability-present `security.capability` state for the same payload path, with rollback-equivalent proof through separate exported artifacts
 - `TGE02`: bootstrap-run generation artifact exports to qcow2 and boots under UEFI
 
 Keep this suite in the Phase 3 rotation for regressions in generation artifact
 export, QEMU fixture copying, scratch-disk handling, CAS integrity checks,
-guest SSH access, and exported-image boot. Group P adds the focused ISO
-generation-carrier path:
+guest SSH access, exported-image boot, and generation file-capability xattr
+preservation. Group P adds the focused ISO generation-carrier path:
+
+Current 2026-07-16 W1 Group O local KVM evidence is green. The source fixture
+is `minimal-boot-v4`, expanded to 20 GiB for full CAS adoption and paired with
+the versioned disposable `conaryos-test-key-v4` identity. The runner discovers
+Fedora's `/usr/share/edk2/x64/OVMF_CODE.4m.fd`, attaches OVMF as read-only
+pflash, fails when no supported firmware exists, and waits for the systemd boot
+transaction to finish before it stages binaries or adopts the live root.
+
+The complete Fedora 44 suite passed 5 / failed 0 / skipped 0 / cancelled 0.
+`TGE05` passed twice: a focused run in 3,060,588 ms and the complete-suite run
+in 3,024,480 ms. Both exported generations booted, the baseline executable had
+no file capability, and the enabled executable reported
+`cap_net_bind_service=ep`. A focused TGE01 rerun with the recompiled versioned
+key contract passed in 36,068 ms. The v4 image and private/public disposable
+test-key artifacts were then staged to Remi over authenticated SSH, verified
+against their local SHA-256 values, and atomically published under
+`https://remi.conary.io/test-artifacts/`. An isolated empty cache downloaded
+the image and private test key from those public URLs with matching hashes;
+TGE01 booted the downloaded image under KVM and passed in 63,320 ms.
 
 - `TISO01`: bootstrap-run generation artifact exports to ISO, emits an output
   provenance sidecar, and boots under UEFI through `image_format = "iso"`
@@ -200,9 +220,9 @@ Current composefs modernization evidence from 2026-05-21:
 
 Current Group N QEMU evidence from 2026-05-21:
 
-- `minimal-boot-v3`: active source fixture with the generation-builder
-  toolchain baked in for Groups N and O; Group P provisions ISO helper packages
-  through Conary when `xorriso`/`mtools` are absent
+- `minimal-boot-v3`: source fixture used by this historical run, with the
+  generation-builder toolchain baked in for Groups N and O; Group P provisions
+  ISO helper packages through Conary when `xorriso`/`mtools` are absent
 - `scripts/local-qemu-validation.sh`:
   passed 5 / failed 0 / skipped 0
 - Passed cases:
@@ -218,7 +238,26 @@ Current Group N QEMU evidence from 2026-05-21:
   no-generation live-root installs, matching the current package-manager
   contract instead of assuming `conary install` publishes `/conary/current`.
 
-Current Group O QEMU export evidence from 2026-05-21:
+Current Group O QEMU export evidence from 2026-07-16:
+
+- `cargo run -p conary-test -- run --suite phase3-group-o-generation-export --distro fedora44 --phase 3`:
+  passed 5 / failed 0 / skipped 0 / cancelled 0 against `minimal-boot-v4`
+- Passed cases:
+  - `TGE01` `installed_generation_export_fails_closed_without_self_contained_root`: 36281ms
+  - `TGE03` `installed_generation_build_rejects_missing_runtime_cas_object`: 625760ms
+  - `TGE04` `installed_runtime_generation_export_boots`: 1725736ms
+  - `TGE05` `installed_runtime_generation_export_preserves_file_capability_xattrs`: 3024480ms
+  - `TGE02` `bootstrap_run_generation_export_boots`: 1914811ms
+- TGE04 booted generation 1 from the exported installed-runtime qcow2 under
+  UEFI; TGE05 booted capability-absent and capability-enabled generations and
+  observed `cap_net_bind_service=ep` only in the enabled artifact; TGE02
+  substituted the rotated fixture public key into the bootstrap recipe before
+  export and boot.
+- The v4 qcow2 and versioned private/public test-key artifacts are publicly
+  available from `https://remi.conary.io/test-artifacts/`. An isolated-cache
+  download matched the source hashes and passed a 63,320 ms TGE01 KVM boot.
+
+Historical Group O QEMU export evidence from 2026-05-21:
 
 - `scripts/local-qemu-validation.sh`:
   passed 4 / failed 0 / skipped 0 / cancelled 0
@@ -551,7 +590,7 @@ guest, and then boot a host-local qcow2 or ISO produced by an earlier step:
 ```toml
 [[test.step]]
 [test.step.qemu_boot]
-image = "minimal-boot-v3"
+image = "minimal-boot-v4"
 scratch_disk_mb = 65536
 local_image_path = "/tmp/conary-generation-export/generated.qcow2"
 copy_to_guest = [

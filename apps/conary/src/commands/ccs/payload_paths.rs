@@ -4,6 +4,7 @@
 
 use anyhow::{Context, Result};
 use conary_core::ccs::CcsPackage;
+use conary_core::ccs::manifest::FileCapability;
 use conary_core::packages::traits::{ExtractedFile, PackageFormat};
 use std::collections::{HashMap, HashSet};
 use std::path::{Component as PathComponent, Path, PathBuf};
@@ -111,6 +112,21 @@ fn deployment_path_to_package_path(relative_path: &Path) -> Result<String> {
 pub(crate) fn normalize_ccs_package_path(root_path: &Path, package_path: &str) -> Result<String> {
     let relative_path = package_deployment_relative_path(root_path, package_path)?;
     deployment_path_to_package_path(&relative_path)
+}
+
+pub(crate) fn normalize_ccs_file_capabilities(
+    root_path: &Path,
+    file_capabilities: &[FileCapability],
+) -> Result<Vec<FileCapability>> {
+    file_capabilities
+        .iter()
+        .map(|capability| {
+            capability.validate()?;
+            let mut normalized = capability.clone();
+            normalized.path = normalize_ccs_package_path(root_path, &capability.path)?;
+            Ok(normalized)
+        })
+        .collect()
 }
 
 fn package_deployment_relative_path(_root_path: &Path, package_path: &str) -> Result<PathBuf> {
@@ -294,8 +310,19 @@ pub(crate) fn normalize_ccs_extracted_files(
 
 #[cfg(test)]
 mod tests {
-    use super::sanitize_package_relative_path;
+    use super::{normalize_ccs_file_capabilities, sanitize_package_relative_path};
+    use conary_core::ccs::manifest::FileCapability;
     use std::path::PathBuf;
+
+    fn file_capability(path: &str) -> FileCapability {
+        FileCapability {
+            path: path.to_string(),
+            capabilities: vec!["cap_net_bind_service".to_string()],
+            permitted: true,
+            effective: true,
+            inheritable: false,
+        }
+    }
 
     #[test]
     fn sanitize_rejects_path_traversal() {
@@ -326,5 +353,27 @@ mod tests {
     fn sanitize_rejects_empty_path() {
         let err = sanitize_package_relative_path("").unwrap_err();
         assert!(err.to_string().contains("empty package path"));
+    }
+
+    #[test]
+    fn normalize_file_capabilities_follows_usrmerge_payload_paths() {
+        let root = tempfile::tempdir().unwrap();
+        let normalized = normalize_ccs_file_capabilities(
+            root.path(),
+            &[
+                file_capability("/bin/demo"),
+                file_capability("/sbin/admin-tool"),
+                file_capability("/usr/bin/kept"),
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(normalized[0].path, "/usr/bin/demo");
+        assert_eq!(normalized[1].path, "/usr/sbin/admin-tool");
+        assert_eq!(normalized[2].path, "/usr/bin/kept");
+        assert_eq!(
+            normalized[0].capabilities,
+            vec!["cap_net_bind_service".to_string()]
+        );
     }
 }

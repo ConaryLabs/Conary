@@ -139,7 +139,7 @@ async-trait.workspace = true
 futures.workspace = true
 
 # composefs-rs: EROFS image builder for composefs (optional, feature-gated)
-composefs = { version = "0.4", default-features = false, optional = true }
+composefs = { version = "0.7", default-features = false, optional = true }
 
 [[bench]]
 name = "erofs_build"

@@ -72,6 +72,9 @@ pub struct GenerationMetadata {
     /// SHA-256 of the exact on-disk `.conary-artifact.json` bytes.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub artifact_manifest_sha256: Option<String>,
+    /// Number of regular files in the image carrying `security.capability`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub security_capability_xattr_count: Option<i64>,
     pub created_at: String,
     pub package_count: i64,
     pub kernel_version: Option<String>,
@@ -394,6 +397,7 @@ mod tests {
             artifact_manifest_sha256: Some(
                 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
             ),
+            security_capability_xattr_count: Some(2),
             created_at: "2026-03-04T12:00:00Z".to_string(),
             package_count: 150,
             kernel_version: Some("6.12.1-arch1-1".to_string()),
@@ -413,6 +417,7 @@ mod tests {
             loaded.artifact_manifest_sha256.as_deref(),
             Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
         );
+        assert_eq!(loaded.security_capability_xattr_count, Some(2));
         assert_eq!(loaded.created_at, "2026-03-04T12:00:00Z");
         assert_eq!(loaded.package_count, 150);
         assert_eq!(loaded.kernel_version.as_deref(), Some("6.12.1-arch1-1"));
@@ -430,6 +435,7 @@ mod tests {
             fsverity_enabled: false,
             erofs_verity_digest: None,
             artifact_manifest_sha256: None,
+            security_capability_xattr_count: None,
             created_at: "2026-03-17T10:00:00Z".to_string(),
             package_count: 80,
             kernel_version: None,
@@ -460,6 +466,7 @@ mod tests {
             fsverity_enabled: false,
             erofs_verity_digest: None,
             artifact_manifest_sha256: None,
+            security_capability_xattr_count: None,
             created_at: "2026-05-26T00:00:00Z".to_string(),
             package_count: 0,
             kernel_version: None,
@@ -492,6 +499,7 @@ mod tests {
         assert!(!loaded.fsverity_enabled); // serde(default) gives false
         assert_eq!(loaded.erofs_verity_digest, None);
         assert_eq!(loaded.artifact_manifest_sha256, None);
+        assert_eq!(loaded.security_capability_xattr_count, None);
         assert_eq!(loaded.summary, "old generation");
     }
 
@@ -539,6 +547,7 @@ mod tests {
             fsverity_enabled: true,
             erofs_verity_digest: Some("abcd".to_string()),
             artifact_manifest_sha256: None,
+            security_capability_xattr_count: Some(1),
             created_at: "2026-03-27T12:00:00Z".to_string(),
             package_count: 3,
             kernel_version: Some("6.13.0".to_string()),
@@ -569,6 +578,7 @@ mod tests {
             fsverity_enabled: false,
             erofs_verity_digest: None,
             artifact_manifest_sha256: None,
+            security_capability_xattr_count: Some(4),
             created_at: "2026-03-27T12:00:00Z".to_string(),
             package_count: 1,
             kernel_version: None,
@@ -607,6 +617,7 @@ mod tests {
             fsverity_enabled: false,
             erofs_verity_digest: None,
             artifact_manifest_sha256: None,
+            security_capability_xattr_count: None,
             created_at: "2026-03-27T12:00:00Z".to_string(),
             package_count: 2,
             kernel_version: None,
@@ -618,6 +629,29 @@ mod tests {
         let err = GenerationMetadata::read_from_with_key_paths(tmp.path(), Some(&public_key), None)
             .unwrap_err();
         assert!(err.to_string().contains("unsigned"));
+    }
+
+    #[test]
+    fn test_metadata_serialization_skips_capability_count_when_absent() {
+        let tmp = TempDir::new().unwrap();
+        let metadata = GenerationMetadata {
+            generation: 99,
+            format: GENERATION_FORMAT.to_string(),
+            erofs_size: Some(4096),
+            cas_objects_referenced: Some(3),
+            fsverity_enabled: false,
+            erofs_verity_digest: None,
+            artifact_manifest_sha256: None,
+            security_capability_xattr_count: None,
+            created_at: "2026-07-08T00:00:00Z".to_string(),
+            package_count: 7,
+            kernel_version: None,
+            summary: "no capability xattrs".to_string(),
+        };
+
+        metadata.write_to_with_key_paths(tmp.path(), None).unwrap();
+        let json = std::fs::read_to_string(tmp.path().join(GENERATION_METADATA_FILE)).unwrap();
+        assert!(!json.contains("security_capability_xattr_count"));
     }
 
     #[test]

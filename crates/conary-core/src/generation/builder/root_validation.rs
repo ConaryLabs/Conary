@@ -137,6 +137,7 @@ mod tests {
             permissions: 0o755,
             owner: None,
             group_name: None,
+            xattrs: std::collections::BTreeMap::new(),
         }];
         let symlink_refs = vec![SymlinkEntryRef {
             path: "/usr/sbin/init".to_string(),

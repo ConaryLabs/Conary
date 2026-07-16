@@ -125,6 +125,7 @@ pub struct LegacyConverter {
     analyzer: ScriptletAnalyzer,
     source_distro: Option<String>,
     source_release: Option<String>,
+    target_profile_id: Option<String>,
     conversion_tool: String,
 }
 
@@ -136,6 +137,7 @@ impl LegacyConverter {
             analyzer: ScriptletAnalyzer::new(),
             source_distro: None,
             source_release: None,
+            target_profile_id: None,
             conversion_tool: "conary".to_string(),
         }
     }
@@ -154,6 +156,12 @@ impl LegacyConverter {
     /// Attach source release context for passive scriptlet bundle metadata.
     pub fn with_source_release(mut self, release: impl Into<String>) -> Self {
         self.source_release = Some(release.into());
+        self
+    }
+
+    /// Attach target profile context for passive scriptlet bundle policy review.
+    pub fn with_target_profile_id(mut self, profile_id: impl Into<String>) -> Self {
+        self.target_profile_id = Some(profile_id.into());
         self
     }
 
@@ -362,6 +370,7 @@ impl LegacyConverter {
             source_arch: metadata.architecture.as_deref(),
             source_checksum: Some(checksum),
             classification: &scriptlet_classification,
+            target_profile_id: self.target_profile_id.as_deref(),
             conversion_tool: self.conversion_tool.as_str(),
             conversion_tool_version: env!("CARGO_PKG_VERSION"),
         })
@@ -1906,22 +1915,13 @@ update-mime-database /usr/share/mime
     #[test]
     fn conversion_integration_projects_safe_sysctl_write_into_manifest_hook() {
         let temp_dir = tempfile::tempdir().unwrap();
-        let mut metadata = make_test_metadata();
-        metadata.scriptlets = vec![Scriptlet {
-            phase: ScriptletPhase::PostInstall,
-            interpreter: "/bin/sh".to_string(),
-            content: "sysctl -w net.ipv4.ip_forward=1\n".to_string(),
-            flags: None,
-        }];
-        let converter = passive_test_converter(temp_dir.path());
+        let converter = passive_test_converter(temp_dir.path()).with_target_profile_id("fedora-44");
 
-        let result = converter
-            .convert(&metadata, &make_test_files(), "rpm", "sha256:test")
-            .expect("conversion succeeds");
+        let result = convert_scriptlet_body(&converter, "sysctl -w kernel.example=1\n");
 
         let sysctl_hooks = &result.build_result.manifest.hooks.sysctl;
         assert_eq!(sysctl_hooks.len(), 1);
-        assert_eq!(sysctl_hooks[0].key, "net.ipv4.ip_forward");
+        assert_eq!(sysctl_hooks[0].key, "kernel.example");
         assert_eq!(sysctl_hooks[0].value, "1");
         assert!(!sysctl_hooks[0].only_if_lower);
 
@@ -1939,7 +1939,62 @@ update-mime-database /usr/share/mime
             bundle.entries[0].effects[0].adapter_id.as_deref(),
             Some("sysctl/v1")
         );
+        assert_eq!(bundle.publication_status.as_str(), "public");
         assert_eq!(result.scriptlet_metadata.publication_status, "public");
+    }
+
+    fn convert_scriptlet_body(converter: &LegacyConverter, content: &str) -> ConversionResult {
+        let mut metadata = make_test_metadata();
+        metadata.scriptlets = vec![Scriptlet {
+            phase: ScriptletPhase::PostInstall,
+            interpreter: "/bin/sh".to_string(),
+            content: content.to_string(),
+            flags: None,
+        }];
+        converter
+            .convert(&metadata, &make_test_files(), "rpm", "sha256:test")
+            .expect("conversion succeeds")
+    }
+
+    #[test]
+    fn conversion_public_ready_for_profile_allowed_sysctl_key() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let converter = passive_test_converter(temp_dir.path()).with_target_profile_id("fedora-44");
+
+        let result = convert_scriptlet_body(&converter, "sysctl -w kernel.example=1\n");
+
+        let sysctl_hooks = &result.build_result.manifest.hooks.sysctl;
+        assert_eq!(sysctl_hooks.len(), 1);
+        assert_eq!(sysctl_hooks[0].key, "kernel.example");
+        let bundle = result.legacy_scriptlets.as_ref().expect("scriptlet bundle");
+        assert_eq!(bundle.publication_status.as_str(), "public");
+        assert_eq!(result.scriptlet_metadata.publication_status, "public");
+    }
+
+    #[test]
+    fn adapter_sysctl_target_profile_private_review_reports_public_policy_reason() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let converter = passive_test_converter(temp_dir.path()).with_target_profile_id("fedora-44");
+
+        let result = convert_scriptlet_body(&converter, "sysctl -w net.ipv4.ip_forward=1\n");
+
+        let sysctl_hooks = &result.build_result.manifest.hooks.sysctl;
+        assert_eq!(sysctl_hooks.len(), 1);
+        assert_eq!(sysctl_hooks[0].key, "net.ipv4.ip_forward");
+        let bundle = result.legacy_scriptlets.as_ref().expect("scriptlet bundle");
+        assert_eq!(bundle.decision_counts.replaced, 1);
+        assert_eq!(bundle.publication_status.as_str(), "private-review");
+        assert_eq!(
+            result.scriptlet_metadata.review_reason_codes,
+            vec!["public-policy-sysctl-target-profile-unsupported".to_string()]
+        );
+        let bundle_summary =
+            ScriptletBundleSummary::from_bundle(bundle, bundle.evidence_digest.clone());
+        assert_eq!(bundle_summary.publication_status, "private-review");
+        assert_eq!(
+            bundle_summary.review_reason_codes,
+            vec!["public-policy-sysctl-target-profile-unsupported".to_string()]
+        );
     }
 
     #[test]
@@ -2003,6 +2058,19 @@ update-mime-database /usr/share/mime
             .convert(&metadata, &make_test_files(), "rpm", "sha256:test")
             .expect("conversion succeeds");
 
+        assert_eq!(
+            result.scriptlet_metadata.scriptlet_fidelity,
+            "fully-replaced"
+        );
+        assert_eq!(
+            result.scriptlet_metadata.target_compatibility,
+            "conary-portable"
+        );
+        assert_eq!(result.scriptlet_metadata.publication_status, "public");
+        assert!(result.scriptlet_metadata.review_reason_codes.is_empty());
+        assert_eq!(result.scriptlet_metadata.decision_counts.replaced, 1);
+        assert_eq!(result.scriptlet_metadata.decision_counts.review, 0);
+
         let file_capabilities = &result.build_result.manifest.file_capabilities;
         assert_eq!(file_capabilities.len(), 1);
         assert_eq!(file_capabilities[0].path, "/usr/bin/test");
@@ -2032,6 +2100,67 @@ update-mime-database /usr/share/mime
             Some("file-capability/v1")
         );
         assert_eq!(result.scriptlet_metadata.publication_status, "public");
+    }
+
+    #[test]
+    fn conversion_integration_keeps_high_risk_setcap_replaced_but_private_review() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut metadata = make_test_metadata();
+        metadata.scriptlets = vec![Scriptlet {
+            phase: ScriptletPhase::PostInstall,
+            interpreter: "/bin/sh".to_string(),
+            content: "setcap cap_sys_admin=+ep /usr/bin/test\n".to_string(),
+            flags: None,
+        }];
+        let converter = passive_test_converter(temp_dir.path());
+
+        let result = converter
+            .convert(&metadata, &make_test_files(), "rpm", "sha256:test")
+            .expect("conversion succeeds");
+
+        assert_eq!(
+            result.scriptlet_metadata.scriptlet_fidelity,
+            "fully-replaced"
+        );
+        assert_eq!(
+            result.scriptlet_metadata.target_compatibility,
+            "conary-portable"
+        );
+        assert_eq!(
+            result.scriptlet_metadata.publication_status,
+            "private-review"
+        );
+        assert_eq!(result.scriptlet_metadata.decision_counts.replaced, 1);
+        assert_eq!(result.scriptlet_metadata.decision_counts.review, 0);
+        assert_eq!(
+            result.scriptlet_metadata.review_reason_codes,
+            vec!["public-policy-file-capability-private-review".to_string()]
+        );
+
+        let file_capabilities = &result.build_result.manifest.file_capabilities;
+        assert_eq!(file_capabilities.len(), 1);
+        assert_eq!(file_capabilities[0].path, "/usr/bin/test");
+        assert_eq!(
+            file_capabilities[0].capabilities,
+            vec!["cap_sys_admin".to_string()]
+        );
+
+        let bundle = result
+            .build_result
+            .manifest
+            .legacy_scriptlets
+            .as_ref()
+            .expect("conversion should embed passive scriptlet bundle");
+        assert_eq!(bundle.entries.len(), 1);
+        assert_eq!(bundle.entries[0].decision.as_str(), "replaced");
+        assert_eq!(
+            bundle.entries[0].reason_code,
+            "helper-complete-file-capability"
+        );
+        assert_eq!(
+            bundle.entries[0].effects[0].adapter_id.as_deref(),
+            Some("file-capability/v1")
+        );
     }
 
     #[test]
@@ -2158,6 +2287,177 @@ setsebool -P demo_can_network on
             result.scriptlet_metadata.security_policy_intents,
             vec![intent.clone()]
         );
+    }
+
+    #[test]
+    fn apparmor_mode_helper_remains_blocked_with_review_policy_intent() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut metadata = make_test_metadata();
+        metadata.scriptlets = vec![Scriptlet {
+            phase: ScriptletPhase::PostInstall,
+            interpreter: "/bin/sh".to_string(),
+            content: "aa-enforce /etc/apparmor.d/usr.bin.demo\n".to_string(),
+            flags: None,
+        }];
+        let mut files = make_test_files();
+        files.push(ExtractedFile {
+            path: "/etc/apparmor.d/usr.bin.demo".to_string(),
+            content: b"profile usr.bin.demo /usr/bin/demo { }\n".to_vec(),
+            size: 38,
+            mode: 0o644,
+            sha256: None,
+            symlink_target: None,
+        });
+        let converter = passive_test_converter(temp_dir.path());
+
+        let result = converter
+            .convert(&metadata, &files, "deb", "sha256:test")
+            .expect("conversion succeeds");
+        let package =
+            crate::ccs::CcsPackage::parse(result.package_path.as_ref().unwrap().to_str().unwrap())
+                .expect("converted CCS package should parse");
+        let bundle = package
+            .manifest()
+            .legacy_scriptlets
+            .as_ref()
+            .expect("written CCS archive should carry passive scriptlet bundle");
+
+        assert_eq!(bundle.publication_status.as_str(), "blocked");
+        assert_eq!(bundle.decision_counts.blocked, 1);
+        assert_eq!(bundle.entries.len(), 1);
+        let entry = &bundle.entries[0];
+        assert_eq!(entry.decision.as_str(), "blocked");
+        assert_eq!(entry.reason_code, "blocked-class-apparmor");
+        assert_eq!(entry.blocked_classes, vec!["apparmor"]);
+        assert!(entry.effects.is_empty());
+        assert_eq!(entry.security_policy_intents.len(), 1);
+        let intent = &entry.security_policy_intents[0];
+        assert_eq!(intent.provider.as_str(), "apparmor");
+        assert_eq!(intent.operation, "mode-enforce");
+        assert_eq!(intent.fallback.as_str(), "block-on-enforcing-target");
+        assert_eq!(intent.reconciliation.state.as_str(), "review");
+        assert!(!intent.payload_evidence.payload_backed);
+        assert_eq!(bundle.security_policy_intents, vec![intent.clone()]);
+        assert_eq!(result.scriptlet_metadata.publication_status, "blocked");
+        assert_ne!(result.scriptlet_metadata.publication_status, "public");
+        assert_eq!(
+            result.scriptlet_metadata.security_policy_intents,
+            vec![intent.clone()]
+        );
+    }
+
+    fn assert_blocked_scriptlet_has_no_native_authority(
+        scriptlet_content: &str,
+        expected_class: &str,
+        expected_reason: &str,
+    ) {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut metadata = make_test_metadata();
+        metadata.scriptlets = vec![Scriptlet {
+            phase: ScriptletPhase::PostInstall,
+            interpreter: "/bin/sh".to_string(),
+            content: scriptlet_content.to_string(),
+            flags: None,
+        }];
+        let files = make_test_files();
+        let converter = passive_test_converter(temp_dir.path());
+
+        let result = converter
+            .convert(&metadata, &files, "rpm", "sha256:test")
+            .expect("conversion succeeds");
+        let package =
+            crate::ccs::CcsPackage::parse(result.package_path.as_ref().unwrap().to_str().unwrap())
+                .expect("converted CCS package should parse");
+        let bundle = package
+            .manifest()
+            .legacy_scriptlets
+            .as_ref()
+            .expect("written CCS archive should carry passive scriptlet bundle");
+        let bundle_summary =
+            ScriptletBundleSummary::from_bundle(bundle, bundle.evidence_digest.clone());
+
+        assert_eq!(bundle.publication_status.as_str(), "blocked");
+        assert_eq!(bundle.decision_counts.blocked, 1);
+        assert_eq!(bundle.entries.len(), 1);
+        let entry = &bundle.entries[0];
+        assert_eq!(entry.decision.as_str(), "blocked");
+        assert_eq!(entry.reason_code, expected_reason);
+        assert_eq!(entry.blocked_classes, vec![expected_class]);
+        assert!(entry.effects.is_empty());
+        assert!(entry.boot_security_intents.is_empty());
+        assert!(entry.security_policy_intents.is_empty());
+        assert!(bundle_summary.boot_security_intents.is_empty());
+        assert!(bundle_summary.security_policy_intents.is_empty());
+        assert!(bundle.security_policy_intents.is_empty());
+        assert_eq!(result.scriptlet_metadata.publication_status, "blocked");
+        assert_eq!(
+            result.scriptlet_metadata.blocked_classes,
+            vec![expected_class.to_string()]
+        );
+        assert!(result.scriptlet_metadata.boot_security_intents.is_empty());
+        assert!(result.scriptlet_metadata.security_policy_intents.is_empty());
+        assert_ne!(result.scriptlet_metadata.publication_status, "public");
+    }
+
+    #[test]
+    fn live_fetch_and_package_manager_helpers_remain_blocked_without_manifest_authority() {
+        assert_blocked_scriptlet_has_no_native_authority(
+            "git -C /tmp clone https://example.invalid/repo.git\n",
+            "network",
+            "blocked-class-network",
+        );
+        assert_blocked_scriptlet_has_no_native_authority(
+            "microdnf install demo\n",
+            "package-manager-recursion",
+            "blocked-class-package-manager-recursion",
+        );
+    }
+
+    #[test]
+    fn pam_helper_remains_blocked_without_manifest_authority() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut metadata = make_test_metadata();
+        metadata.scriptlets = vec![Scriptlet {
+            phase: ScriptletPhase::PostInstall,
+            interpreter: "/bin/sh".to_string(),
+            content: "authconfig --enablefaillock --update\n".to_string(),
+            flags: None,
+        }];
+        let files = make_test_files();
+        let converter = passive_test_converter(temp_dir.path());
+
+        let result = converter
+            .convert(&metadata, &files, "rpm", "sha256:test")
+            .expect("conversion succeeds");
+        let package =
+            crate::ccs::CcsPackage::parse(result.package_path.as_ref().unwrap().to_str().unwrap())
+                .expect("converted CCS package should parse");
+        let bundle = package
+            .manifest()
+            .legacy_scriptlets
+            .as_ref()
+            .expect("written CCS archive should carry passive scriptlet bundle");
+        let bundle_summary =
+            ScriptletBundleSummary::from_bundle(bundle, bundle.evidence_digest.clone());
+
+        assert_eq!(bundle.publication_status.as_str(), "blocked");
+        assert_eq!(bundle.decision_counts.blocked, 1);
+        assert_eq!(bundle.entries.len(), 1);
+        let entry = &bundle.entries[0];
+        assert_eq!(entry.decision.as_str(), "blocked");
+        assert_eq!(entry.reason_code, "blocked-class-pam");
+        assert_eq!(entry.blocked_classes, vec!["pam"]);
+        assert!(entry.effects.is_empty());
+        assert!(entry.boot_security_intents.is_empty());
+        assert!(entry.security_policy_intents.is_empty());
+        assert!(bundle_summary.boot_security_intents.is_empty());
+        assert!(bundle_summary.security_policy_intents.is_empty());
+        assert!(bundle.security_policy_intents.is_empty());
+        assert_eq!(result.scriptlet_metadata.publication_status, "blocked");
+        assert_eq!(result.scriptlet_metadata.blocked_classes, vec!["pam"]);
+        assert!(result.scriptlet_metadata.boot_security_intents.is_empty());
+        assert!(result.scriptlet_metadata.security_policy_intents.is_empty());
+        assert_ne!(result.scriptlet_metadata.publication_status, "public");
     }
 
     #[test]

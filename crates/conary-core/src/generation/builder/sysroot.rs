@@ -45,12 +45,40 @@ fn materialize_runtime_regular_file(
         std::fs::create_dir_all(parent)?;
     }
 
-    match std::fs::hard_link(&source, &dest) {
-        Ok(()) => Ok(()),
-        Err(_) => std::fs::copy(&source, &dest)
-            .map(|_| ())
-            .map_err(crate::error::Error::Io),
+    if runtime_file_modes_match(&source, file.permissions)?
+        && std::fs::hard_link(&source, &dest).is_ok()
+    {
+        return Ok(());
     }
+
+    std::fs::copy(&source, &dest)?;
+    set_runtime_file_permissions(&dest, file.permissions)
+}
+
+#[cfg(unix)]
+fn runtime_file_modes_match(source: &Path, desired_mode: u32) -> crate::Result<bool> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let source_mode = std::fs::metadata(source)?.permissions().mode() & 0o7777;
+    Ok(source_mode == desired_mode & 0o7777)
+}
+
+#[cfg(not(unix))]
+fn runtime_file_modes_match(_source: &Path, _desired_mode: u32) -> crate::Result<bool> {
+    Ok(false)
+}
+
+#[cfg(unix)]
+fn set_runtime_file_permissions(path: &Path, desired_mode: u32) -> crate::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(desired_mode & 0o7777))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn set_runtime_file_permissions(_path: &Path, _desired_mode: u32) -> crate::Result<()> {
+    Ok(())
 }
 
 fn materialize_runtime_symlink(sysroot: &Path, symlink: &SymlinkEntryRef) -> crate::Result<()> {
@@ -144,5 +172,77 @@ pub(super) fn runtime_generation_architecture() -> crate::Result<&'static str> {
         other => Err(crate::error::Error::NotImplemented(format!(
             "unsupported runtime architecture for generation export: {other}"
         ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    #[cfg(unix)]
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    fn fixture_file(path: &str, hash: &str, permissions: u32) -> FileEntryRef {
+        FileEntryRef {
+            path: path.to_string(),
+            sha256_hash: hash.to_string(),
+            size: 7,
+            permissions,
+            owner: Some("root".to_string()),
+            group_name: Some("root".to_string()),
+            xattrs: BTreeMap::new(),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn executable_materialization_preserves_cas_mode_and_applies_recorded_mode() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let objects = temp.path().join("objects");
+        let sysroot = temp.path().join("sysroot");
+        let hash = "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899";
+        let object = crate::filesystem::object_path(&objects, hash).expect("object path");
+        std::fs::create_dir_all(object.parent().expect("object parent"))
+            .expect("create object parent");
+        std::fs::write(&object, b"fixture").expect("write object");
+        std::fs::set_permissions(&object, std::fs::Permissions::from_mode(0o644))
+            .expect("set object mode");
+
+        let file = fixture_file("/usr/bin/fixture", hash, 0o100755);
+        materialize_runtime_regular_file(&sysroot, &objects, &file).expect("materialize file");
+
+        let materialized = sysroot.join("usr/bin/fixture");
+        let object_metadata = std::fs::metadata(&object).expect("object metadata");
+        let materialized_metadata =
+            std::fs::metadata(&materialized).expect("materialized metadata");
+        assert_eq!(object_metadata.permissions().mode() & 0o7777, 0o644);
+        assert_eq!(materialized_metadata.permissions().mode() & 0o7777, 0o755);
+        assert_ne!(object_metadata.ino(), materialized_metadata.ino());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn matching_mode_materialization_retains_safe_hardlink_deduplication() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let objects = temp.path().join("objects");
+        let sysroot = temp.path().join("sysroot");
+        let hash = "bbccddeeff00112233445566778899aabbccddeeff00112233445566778899aa";
+        let object = crate::filesystem::object_path(&objects, hash).expect("object path");
+        std::fs::create_dir_all(object.parent().expect("object parent"))
+            .expect("create object parent");
+        std::fs::write(&object, b"fixture").expect("write object");
+        std::fs::set_permissions(&object, std::fs::Permissions::from_mode(0o644))
+            .expect("set object mode");
+
+        let file = fixture_file("/usr/share/fixture", hash, 0o100644);
+        materialize_runtime_regular_file(&sysroot, &objects, &file).expect("materialize file");
+
+        let materialized = sysroot.join("usr/share/fixture");
+        let object_metadata = std::fs::metadata(&object).expect("object metadata");
+        let materialized_metadata =
+            std::fs::metadata(&materialized).expect("materialized metadata");
+        assert_eq!(materialized_metadata.permissions().mode() & 0o7777, 0o644);
+        assert_eq!(object_metadata.ino(), materialized_metadata.ino());
     }
 }

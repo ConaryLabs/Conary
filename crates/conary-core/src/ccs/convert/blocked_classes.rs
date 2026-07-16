@@ -42,7 +42,10 @@ impl Default for BlockedClassRegistry {
                 "package-manager-recursion",
                 "Scriptlets must not invoke a foreign or nested package manager.",
                 "blocked-class-package-manager-recursion",
-                &["dnf", "yum", "rpm", "apt", "apt-get", "dpkg", "pacman"],
+                &[
+                    "apk", "apt", "apt-get", "dnf", "dnf5", "dpkg", "microdnf", "pacman", "rpm",
+                    "yum", "zypper",
+                ],
                 &[],
                 "Model the dependency or transaction effect in Conary rather than nesting a package manager.",
             ),
@@ -50,7 +53,7 @@ impl Default for BlockedClassRegistry {
                 "pam",
                 "Authentication stack mutation requires explicit policy support.",
                 "blocked-class-pam",
-                &["authselect", "pam-auth-update"],
+                &["authconfig", "authselect", "pam-auth-update", "pam-config"],
                 &[],
                 "Add a native PAM policy adapter with operator-visible review.",
             ),
@@ -360,16 +363,50 @@ impl BlockedClassRegistry {
     pub fn match_invocation(&self, invocation: &CommandInvocation) -> Option<&BlockedClass> {
         let form = invocation_form(invocation);
         self.classes.iter().find(|class| {
-            class
-                .command_names
-                .iter()
-                .any(|command| *command == invocation.command)
+            (class.id == "network" && git_clone_subcommand_after_global_options(invocation))
+                || class
+                    .command_names
+                    .iter()
+                    .any(|command| *command == invocation.command)
                 || class
                     .command_forms
                     .iter()
                     .any(|pattern| form_matches(pattern, &form))
         })
     }
+}
+
+fn git_clone_subcommand_after_global_options(invocation: &CommandInvocation) -> bool {
+    if invocation.command != "git" {
+        return false;
+    }
+
+    let mut index = 0;
+    while index < invocation.argv.len() {
+        let arg = invocation.argv[index].as_str();
+        match arg {
+            "-C" | "-c" => {
+                index += 2;
+                continue;
+            }
+            "--config-env" | "--exec-path" | "--git-dir" | "--namespace" | "--super-prefix"
+            | "--work-tree" => {
+                index += 2;
+                continue;
+            }
+            value if value.starts_with("--") && value.contains('=') => {
+                index += 1;
+                continue;
+            }
+            value if value.starts_with('-') => {
+                index += 1;
+                continue;
+            }
+            _ => break,
+        }
+    }
+
+    invocation.argv.get(index).is_some_and(|arg| arg == "clone")
 }
 
 fn blocked_class(
@@ -511,17 +548,111 @@ mod tests {
     }
 
     #[test]
-    fn blocked_classes_block_network_and_package_manager_recursion() {
+    fn blocked_classes_block_live_fetch_and_package_manager_recursion() {
         let registry = BlockedClassRegistry::default();
 
-        let network = registry.match_invocation(&invocation("curl", &["https://example.invalid"]));
-        assert_eq!(network.unwrap().reason_code, "blocked-class-network");
+        for (command, argv) in [
+            ("curl", vec!["https://example.invalid"]),
+            ("wget", vec!["https://example.invalid/package.tar.gz"]),
+            ("scp", vec!["host:/tmp/pkg", "/tmp/pkg"]),
+            ("ssh", vec!["builder.example.invalid", "true"]),
+            ("git", vec!["clone", "https://example.invalid/repo.git"]),
+            (
+                "git",
+                vec!["-C", "/tmp", "clone", "https://example.invalid/repo.git"],
+            ),
+            (
+                "git",
+                vec![
+                    "-c",
+                    "http.sslVerify=false",
+                    "clone",
+                    "https://example.invalid/repo.git",
+                ],
+            ),
+            (
+                "git",
+                vec![
+                    "--git-dir",
+                    "/tmp/repo",
+                    "clone",
+                    "https://example.invalid/repo.git",
+                ],
+            ),
+            (
+                "git",
+                vec![
+                    "--work-tree",
+                    "/tmp/work",
+                    "clone",
+                    "https://example.invalid/repo.git",
+                ],
+            ),
+            (
+                "git",
+                vec![
+                    "--config-env",
+                    "foo=BAR",
+                    "clone",
+                    "https://example.invalid/repo.git",
+                ],
+            ),
+        ] {
+            let class = registry
+                .match_invocation(&invocation(command, &argv))
+                .unwrap_or_else(|| panic!("missing network blocked class for {command}"));
+            assert_eq!(class.id, "network");
+            assert_eq!(class.reason_code, "blocked-class-network");
+            assert_eq!(class.default_outcome, BlockedClassOutcome::Blocked);
+        }
 
-        let pm = registry.match_invocation(&invocation("dnf", &["install", "foo"]));
-        assert_eq!(
-            pm.unwrap().reason_code,
-            "blocked-class-package-manager-recursion"
+        assert!(
+            registry
+                .match_invocation(&invocation(
+                    "git",
+                    &["config", "--global", "demo.value", "1"]
+                ))
+                .is_none(),
+            "only live-fetch git forms are blocked in this slice"
         );
+        assert!(
+            registry
+                .match_invocation(&invocation("git", &["help", "clone"]))
+                .is_none(),
+            "git help clone is not a live-fetch clone form"
+        );
+        assert!(
+            registry
+                .match_invocation(&invocation(
+                    "git",
+                    &["config", "remote.origin.tagOpt", "clone"]
+                ))
+                .is_none(),
+            "git config ... clone is not a live-fetch clone form"
+        );
+
+        for (command, argv) in [
+            ("apk", vec!["add", "demo"]),
+            ("apt", vec!["install", "demo"]),
+            ("apt-get", vec!["install", "demo"]),
+            ("dnf", vec!["install", "demo"]),
+            ("dnf5", vec!["install", "demo"]),
+            ("dpkg", vec!["-i", "demo.deb"]),
+            ("microdnf", vec!["install", "demo"]),
+            ("pacman", vec!["-S", "demo"]),
+            ("rpm", vec!["-Uvh", "demo.rpm"]),
+            ("yum", vec!["install", "demo"]),
+            ("zypper", vec!["install", "demo"]),
+        ] {
+            let class = registry
+                .match_invocation(&invocation(command, &argv))
+                .unwrap_or_else(|| {
+                    panic!("missing package-manager recursion blocked class for {command}")
+                });
+            assert_eq!(class.id, "package-manager-recursion");
+            assert_eq!(class.reason_code, "blocked-class-package-manager-recursion");
+            assert_eq!(class.default_outcome, BlockedClassOutcome::Blocked);
+        }
     }
 
     #[test]
@@ -615,6 +746,25 @@ mod tests {
                 .match_invocation(&invocation(command, &argv))
                 .unwrap_or_else(|| panic!("missing blocked class for {command}"));
             assert_eq!(class.id, class_id);
+            assert_eq!(class.default_outcome, BlockedClassOutcome::Blocked);
+        }
+    }
+
+    #[test]
+    fn blocked_classes_cover_common_pam_stack_helpers() {
+        let registry = BlockedClassRegistry::default();
+
+        for (command, argv) in [
+            ("authselect", vec!["select", "sssd", "with-mkhomedir"]),
+            ("authconfig", vec!["--enablefaillock", "--update"]),
+            ("pam-auth-update", vec!["--package"]),
+            ("pam-config", vec!["--add", "--mkhomedir"]),
+        ] {
+            let class = registry
+                .match_invocation(&invocation(command, &argv))
+                .unwrap_or_else(|| panic!("missing blocked class for {command}"));
+            assert_eq!(class.id, "pam");
+            assert_eq!(class.reason_code, "blocked-class-pam");
             assert_eq!(class.default_outcome, BlockedClassOutcome::Blocked);
         }
     }

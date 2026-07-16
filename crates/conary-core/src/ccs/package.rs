@@ -58,7 +58,7 @@ pub struct CcsPackage {
 /// The following fields are unavailable from CBOR and will use defaults:
 /// `homepage`, `repository`, `authors`, `build.environment`, `build.commands`,
 /// `suggests`, `components`, `scriptlets`, `legacy_scriptlets`, `config`,
-/// `legacy`, `policy`, `provenance`, and `redirects`.
+/// `legacy`, `policy`, `file_capabilities`, `provenance`, and `redirects`.
 pub fn convert_binary_to_ccs_manifest(
     bin: &crate::ccs::binary_manifest::BinaryManifest,
 ) -> CcsManifest {

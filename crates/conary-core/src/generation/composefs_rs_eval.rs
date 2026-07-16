@@ -11,7 +11,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::ffi::OsStr;
 
-    use composefs::erofs::writer::mkfs_erofs;
+    use composefs::erofs::writer::{ValidatedFileSystem, mkfs_erofs};
     use composefs::fsverity::{FsVerityHashValue, Sha256HashValue};
     use composefs::tree::{Directory, FileSystem, Inode, LeafContent, RegularFile, Stat};
 
@@ -22,6 +22,7 @@ mod tests {
             st_uid: 0,
             st_gid: 0,
             st_mtim_sec: 0,
+            st_mtim_nsec: 0,
             xattrs: BTreeMap::new(),
         }
     }
@@ -39,6 +40,7 @@ mod tests {
                 st_uid: 0,
                 st_gid: 0,
                 st_mtim_sec: 0,
+                st_mtim_nsec: 0,
                 xattrs: BTreeMap::new(),
             },
             content,
@@ -64,6 +66,7 @@ mod tests {
             st_uid: 0,
             st_gid: 0,
             st_mtim_sec: 1000,
+            st_mtim_nsec: 0,
             xattrs: BTreeMap::new(),
         };
         let mut usr_dir = Directory::new(usr_stat);
@@ -73,6 +76,7 @@ mod tests {
             st_uid: 0,
             st_gid: 0,
             st_mtim_sec: 1000,
+            st_mtim_nsec: 0,
             xattrs: BTreeMap::new(),
         };
         let mut bin_dir = Directory::new(bin_stat);
@@ -102,7 +106,7 @@ mod tests {
     // ---------------------------------------------------------------
     #[test]
     fn test_bloom_filter_feature_flag() {
-        let fs = build_cas_only_tree();
+        let fs = ValidatedFileSystem::new(build_cas_only_tree()).unwrap();
         let image = mkfs_erofs(&fs);
 
         // feature_compat is at superblock offset +8 (after magic U32 and checksum U32)

@@ -92,7 +92,7 @@ crates/conary-core/      Core library crate
     +-- lib.rs           Internal workspace crate surface, not a stable external API
     +-- operations.rs    Shared operation vocabulary across CLI and daemon boundaries
     +-- db/              Database layer
-    |   +-- schema.rs    Schema v76, migration dispatcher
+    |   +-- schema.rs    Schema v77, migration dispatcher
     |   +-- migrations/  Migration functions grouped into v1_v20.rs, v21_v40.rs, v41_current.rs
     |   +-- models/      ORM-style model structs
     |   |   +-- try_session.rs M1b package try session state
@@ -108,7 +108,7 @@ crates/conary-core/      Core library crate
     |   +-- builder/kernel.rs Kernel release discovery
     |   +-- builder/root_validation.rs Self-contained runtime root validation
     |   +-- builder/sysroot.rs CAS-backed runtime sysroot materialization
-    |   +-- builder/runtime_inputs.rs CAS-backed runtime input classification and validation
+    |   +-- builder/runtime_inputs.rs CAS-backed runtime input classification, validation, and security.capability xattr attachment for persisted file capabilities
     |   +-- builder/erofs.rs Low-level EROFS image construction
     |   +-- artifact.rs  Generation artifact contract, CAS manifest, and boot assets
     |   +-- export.rs    Raw/qcow2 generation artifact disk export
@@ -474,7 +474,7 @@ itself.
 Supports x86_64, aarch64, and riscv64 targets. Dry-run mode
 (`--dry-run`) validates the full pipeline without building.
 
-## Database Schema (v76)
+## Database Schema (v77)
 
 All runtime state lives in SQLite, and migrations are dispatched from
 `crates/conary-core/src/db/schema.rs`.
@@ -530,6 +530,11 @@ is no transaction journal or staging directory; DB backups are recovery
 artifacts, not a second mutable source of truth.
 Runtime mutation is DB/CAS/generation/active-pointer first; direct mutation of
 the live root is not a supported release path.
+Generation-aware CCS installs follow the same model for file capabilities by
+persisting file-capability authority in SQLite first, attaching
+`security.capability` during runtime-input collection, requiring immediate
+publication instead of `--defer-generation`, and surfacing the resulting
+capability-xattr count through generation inspection metadata.
 
 SQLite-native backups recover Conary manager visibility for packages and
 generations represented by the backed-up DB. They do not recover missing

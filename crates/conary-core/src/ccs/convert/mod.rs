@@ -37,6 +37,7 @@ mod golden_fixtures;
 pub mod legacy_provenance;
 pub mod mock;
 pub mod payload_hints;
+mod public_policy;
 pub mod scriptlet_bundle;
 mod security_policy;
 mod selinux_adapters;

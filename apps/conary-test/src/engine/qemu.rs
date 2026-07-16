@@ -18,9 +18,24 @@ const DEFAULT_ARTIFACT_BASE_URL: &str = "https://remi.conary.io/test-artifacts";
 const GUEST_CONARY_STAGING_PATH: &str = "/tmp/conary-host";
 const GUEST_CONARY_INSTALL_PATH: &str = "/usr/bin/conary";
 pub const QEMU_SKIP_EXIT_CODE: i32 = 77;
+const SYSTEM_READY_TIMEOUT_SECONDS: u64 = 300;
+const SYSTEM_READY_COMMAND: &str = "if command -v systemctl >/dev/null 2>&1; then systemctl is-system-running --wait >/dev/null 2>&1; state=$(systemctl is-system-running 2>/dev/null || true); case \"$state\" in running|degraded) ;; *) echo \"systemd did not finish booting: $state\" >&2; exit 1;; esac; fi";
 
-/// Well-known filename for the conaryOS test SSH private key.
-const TEST_SSH_KEY_NAME: &str = "conaryos-test-key";
+const OVMF_CODE_PATHS: &[&str] = &[
+    "/usr/share/edk2/x64/OVMF_CODE.4m.fd",
+    "/usr/share/edk2/x64/OVMF_CODE.fd",
+    "/usr/share/edk2/ovmf/OVMF_CODE.fd",
+    "/usr/share/OVMF/OVMF_CODE_4M.fd",
+    "/usr/share/OVMF/OVMF_CODE.fd",
+    "/usr/share/edk2-ovmf/x64/OVMF_CODE.fd",
+    "/usr/share/qemu/OVMF_CODE.fd",
+];
+
+/// Versioned filename for the active conaryOS test SSH private key.
+///
+/// Keep this aligned with the active `minimal-boot-vN` fixture so a cached key
+/// from an older image cannot silently survive an identity rotation.
+const TEST_SSH_KEY_NAME: &str = "conaryos-test-key-v4";
 
 struct ScratchDisk {
     path: PathBuf,
@@ -67,13 +82,29 @@ pub async fn run_qemu_boot(config: &QemuBoot) -> Result<ExecResult> {
     };
 
     // Locate UEFI firmware — bootstrap images use GPT + EFI boot
-    let ovmf_paths = [
-        "/usr/share/edk2/ovmf/OVMF_CODE.fd",
-        "/usr/share/OVMF/OVMF_CODE.fd",
-        "/usr/share/edk2-ovmf/x64/OVMF_CODE.fd",
-        "/usr/share/qemu/OVMF_CODE.fd",
-    ];
-    let ovmf_code = ovmf_paths.iter().find(|p| Path::new(p).exists());
+    let Some(ovmf_code) = OVMF_CODE_PATHS
+        .iter()
+        .find(|path| Path::new(path).is_file())
+    else {
+        return Ok(ExecResult {
+            exit_code: 1,
+            stdout: String::new(),
+            stderr: format!(
+                "UEFI firmware not found; checked {}",
+                OVMF_CODE_PATHS.join(", ")
+            ),
+        });
+    };
+    let key_path = match test_ssh_key_path().await {
+        Ok(path) => path,
+        Err(err) => {
+            return Ok(ExecResult {
+                exit_code: 1,
+                stdout: String::new(),
+                stderr: format!("QEMU test SSH key unavailable: {err:#}"),
+            });
+        }
+    };
 
     let mut qemu = Command::new("qemu-system-x86_64");
     qemu.args([
@@ -93,10 +124,7 @@ pub async fn run_qemu_boot(config: &QemuBoot) -> Result<ExecResult> {
     if let Some(disk) = &scratch_disk {
         qemu.args(qemu_scratch_disk_args(&disk.path));
     }
-    // Add UEFI firmware if available (required for GPT/EFI boot images)
-    if let Some(fw) = ovmf_code {
-        qemu.args(["-bios", fw]);
-    }
+    qemu.args(qemu_firmware_args(Path::new(ovmf_code)));
     qemu.stdin(Stdio::null());
     qemu.stdout(Stdio::piped());
     qemu.stderr(Stdio::piped());
@@ -105,7 +133,14 @@ pub async fn run_qemu_boot(config: &QemuBoot) -> Result<ExecResult> {
         .spawn()
         .context("failed to launch qemu-system-x86_64")?;
 
-    if let Err(message) = wait_for_ssh(&mut child, config.ssh_port, config.timeout_seconds).await? {
+    if let Err(message) = wait_for_ssh(
+        &mut child,
+        config.ssh_port,
+        config.timeout_seconds,
+        &key_path,
+    )
+    .await?
+    {
         let output = stop_qemu(child).await?;
         return Ok(ExecResult {
             exit_code: 1,
@@ -119,7 +154,34 @@ pub async fn run_qemu_boot(config: &QemuBoot) -> Result<ExecResult> {
         });
     }
 
-    let key_path = test_ssh_key_path().await.ok();
+    // SSH socket activation can become available while boot-time oneshot
+    // services are still mutating the root filesystem. Wait for systemd to
+    // finish the boot transaction before staging binaries or running tests so
+    // full-root adoption sees a stable filesystem snapshot.
+    let readiness_timeout =
+        Duration::from_secs(config.timeout_seconds.min(SYSTEM_READY_TIMEOUT_SECONDS));
+    let readiness = run_ssh_command(
+        config.ssh_port,
+        SYSTEM_READY_COMMAND,
+        Some(&key_path),
+        readiness_timeout,
+    )
+    .await?;
+    if readiness.exit_code != 0 {
+        let output = stop_qemu(child).await?;
+        return Ok(ExecResult {
+            exit_code: readiness.exit_code,
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: format!(
+                "guest did not become system-ready: {}\n{}",
+                readiness.stderr.trim(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            )
+            .trim()
+            .to_string(),
+        });
+    }
+
     let mut stdout = String::new();
     let mut stderr = String::new();
     let mut exit_code = 0;
@@ -128,7 +190,7 @@ pub async fn run_qemu_boot(config: &QemuBoot) -> Result<ExecResult> {
     if config.stage_conary {
         match stage_conary_binary(
             config.ssh_port,
-            key_path.as_deref(),
+            Some(&key_path),
             command_timeout,
             &mut stdout,
             &mut stderr,
@@ -151,7 +213,7 @@ pub async fn run_qemu_boot(config: &QemuBoot) -> Result<ExecResult> {
             let prepare = prepare_guest_copy_target(
                 config.ssh_port,
                 &copy.dest,
-                key_path.as_deref(),
+                Some(&key_path),
                 command_timeout,
             )
             .await?;
@@ -168,7 +230,7 @@ pub async fn run_qemu_boot(config: &QemuBoot) -> Result<ExecResult> {
                 config.ssh_port,
                 source,
                 &copy.dest,
-                key_path.as_deref(),
+                Some(&key_path),
                 command_timeout,
             )
             .await?;
@@ -182,13 +244,8 @@ pub async fn run_qemu_boot(config: &QemuBoot) -> Result<ExecResult> {
 
     if exit_code == 0 {
         for command in &config.commands {
-            let result = run_ssh_command(
-                config.ssh_port,
-                command,
-                key_path.as_deref(),
-                command_timeout,
-            )
-            .await?;
+            let result =
+                run_ssh_command(config.ssh_port, command, Some(&key_path), command_timeout).await?;
             append_command_output(&mut stdout, &mut stderr, command, &result);
             if result.exit_code != 0 {
                 exit_code = result.exit_code;
@@ -200,7 +257,7 @@ pub async fn run_qemu_boot(config: &QemuBoot) -> Result<ExecResult> {
     if exit_code == 0 {
         for copy in &config.copy_from_guest {
             let result =
-                copy_file_from_guest(config.ssh_port, copy, key_path.as_deref(), command_timeout)
+                copy_file_from_guest(config.ssh_port, copy, Some(&key_path), command_timeout)
                     .await?;
             append_guest_copy_output(&mut stdout, &mut stderr, copy, &result);
             if result.exit_code != 0 {
@@ -287,6 +344,16 @@ fn qemu_scratch_disk_args(image_path: &Path) -> [String; 4] {
         ),
         "-device".to_string(),
         "virtio-blk-pci,drive=conary-scratch,serial=conary-scratch".to_string(),
+    ]
+}
+
+fn qemu_firmware_args(firmware_path: &Path) -> [String; 2] {
+    [
+        "-drive".to_string(),
+        format!(
+            "if=pflash,format=raw,readonly=on,file={}",
+            firmware_path.display()
+        ),
     ]
 }
 
@@ -521,8 +588,8 @@ async fn wait_for_ssh(
     child: &mut Child,
     ssh_port: u16,
     timeout_seconds: u64,
+    key_path: &Path,
 ) -> Result<std::result::Result<(), String>> {
-    let key_path = test_ssh_key_path().await.ok();
     let deadline = Instant::now() + Duration::from_secs(timeout_seconds);
     let mut last_error = "ssh not ready".to_string();
 
@@ -533,13 +600,8 @@ async fn wait_for_ssh(
             )));
         }
 
-        let probe = run_ssh_command(
-            ssh_port,
-            "true",
-            key_path.as_deref(),
-            Duration::from_secs(5),
-        )
-        .await?;
+        let probe =
+            run_ssh_command(ssh_port, "true", Some(key_path), Duration::from_secs(5)).await?;
         if probe.exit_code == 0 {
             return Ok(Ok(()));
         }
@@ -863,6 +925,11 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_ssh_key_name_tracks_active_fixture() {
+        assert_eq!(TEST_SSH_KEY_NAME, "conaryos-test-key-v4");
+    }
+
+    #[test]
     fn test_image_filename_appends_qcow2() {
         assert_eq!(
             image_filename("minimal-boot-v1", QemuImageFormat::Qcow2),
@@ -996,6 +1063,32 @@ mod tests {
         assert_eq!(args[0], "-snapshot");
         assert_eq!(args[1], "-drive");
         assert_eq!(args[2], "file=/tmp/minimal-boot-v2.qcow2,format=qcow2");
+    }
+
+    #[test]
+    fn test_ovmf_paths_cover_fedora_edk2_layout() {
+        assert!(
+            OVMF_CODE_PATHS.contains(&"/usr/share/edk2/x64/OVMF_CODE.4m.fd"),
+            "Fedora installs non-secure x86_64 OVMF at the 4 MiB edk2 path"
+        );
+    }
+
+    #[test]
+    fn test_qemu_firmware_args_use_readonly_pflash() {
+        assert_eq!(
+            qemu_firmware_args(Path::new("/usr/share/edk2/x64/OVMF_CODE.4m.fd")),
+            [
+                "-drive",
+                "if=pflash,format=raw,readonly=on,file=/usr/share/edk2/x64/OVMF_CODE.4m.fd"
+            ]
+        );
+    }
+
+    #[test]
+    fn test_system_ready_probe_waits_for_boot_transaction() {
+        assert!(SYSTEM_READY_COMMAND.contains("is-system-running --wait"));
+        assert!(SYSTEM_READY_COMMAND.contains("running|degraded"));
+        const { assert!(SYSTEM_READY_TIMEOUT_SECONDS < 600) };
     }
 
     #[test]

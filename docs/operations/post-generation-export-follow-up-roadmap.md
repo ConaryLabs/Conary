@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-05-27
-revision: 12
-summary: Follow-up roadmap after ISO export and output provenance landed
+last_updated: 2026-07-16
+revision: 15
+summary: Record the green W1 Group O v4 public fresh-cache KVM gate
 ---
 
 # Post-Generation-Export Follow-Up Roadmap
@@ -92,13 +92,27 @@ Historical operational validation:
 Current active validation:
 
 - `cargo run -p conary-test -- run --suite phase3-group-o-generation-export --distro fedora44 --phase 3`
-- covered cases: `TGE01`, `TGE03`, `TGE04`, and `TGE02`
-- when the source fixture is generation-builder-ready, `TGE04` is the intended
-  proof that installed-runtime qcow2 export boots under UEFI
-- the active manifests use the generation-builder-ready `minimal-boot-v3`
+- covered cases: `TGE01`, `TGE03`, `TGE04`, `TGE05`, and `TGE02`
+- `TGE04` proves that installed-runtime qcow2 export boots under UEFI
+- `TGE05` proves rollback-equivalent absence and presence of
+  `security.capability` for the same payload executable through separate
+  baseline and capability-enabled exported artifacts
+- the 2026-07-16 Fedora 44 local KVM run passed `TGE01`, `TGE03`, `TGE04`,
+  `TGE05`, and `TGE02`: 5 passed / 0 failed / 0 skipped / 0 cancelled
+- `TGE05` passed in 3,024,480 ms; the enabled boot reported
+  `cap_net_bind_service=ep`, while the baseline boot had no file capability
+- the runner now attaches Fedora's 4 MiB OVMF firmware as read-only pflash,
+  fails when supported firmware is absent, and waits for the systemd boot
+  transaction before staging or full-root adoption
+- the active manifests use the generation-builder-ready `minimal-boot-v4`
   source image; they no longer install `cpio`, `dracut`, `qemu-img`,
   `dosfstools`, or related helper libraries through Conary before the runtime
   is generation-owned
+- v4 uses a 20 GiB root filesystem plus a rotated, versioned
+  `conaryos-test-key-v4` identity; the image and private/public disposable
+  test-key artifacts are published from Remi's public test-artifact path
+- an isolated empty cache downloaded the public v4 image and private test key,
+  matched both source SHA-256 values, and passed TGE01 under KVM in 63,320 ms
 - historical local Group O evidence includes the 2026-05-09 pass of `TGE01`,
   `TGE02`, `TGE03`, and `TGE04` with 0 failures and 0 skipped results
 - current Group O evidence from 2026-05-19 passed `TGE01`, `TGE03`, `TGE04`,
@@ -148,10 +162,13 @@ than the headline public-preview ask.
 
 Remaining work:
 
-- keep the `minimal-boot-v3` QEMU source image generation-builder-ready for
+- keep the `minimal-boot-v4` QEMU source image generation-builder-ready for
   Groups N and O, and keep Group P helper provisioning covered while the source
   fixture remains minimal
-- keep `TGE01`, `TGE03`, and `TGE04` in the active Phase 3 rotation
+- keep `TGE01`, `TGE03`, `TGE04`, and `TGE05` in the active Phase 3 rotation
+- keep the exported capability-absent and capability-present generation pair
+  in rotation as the proof for `security.capability` preservation plus
+  rollback-equivalent behavior for the same payload path
 - preserve usr-merge and package symlink handling for runtime generations
 - keep missing-CAS and checksum/size mismatch failures before artifact
   publication

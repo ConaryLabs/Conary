@@ -40,7 +40,8 @@ fn generation_export_fixture_recipe_parses_and_loads() {
         install.contains("sshd_config=\"$dest/etc/ssh/sshd_config\"")
             && install
                 .contains("AuthorizedKeysFile .ssh/authorized_keys /etc/ssh/authorized_keys/%u")
-            && install.contains("conary-selfhost-vm"),
+            && install.contains("__CONARY_QEMU_TEST_PUBLIC_KEY__")
+            && !install.contains("/var/lib/conary/bootstrap-inputs/conaryos-test-key.pub"),
         "generation export fixture must put QEMU SSH access in generation-owned /etc and inject the main sshd_config because the adopted test config does not include drop-ins"
     );
 

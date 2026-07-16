@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-07-03
-revision: 22
-summary: Document CCS AppArmor profile conversion authority
+last_updated: 2026-07-08
+revision: 24
+summary: Document scriptlet publication summary shape and sanitized intent reports
 ---
 
 # CCS Module (conary-core/src/ccs/)
@@ -78,14 +78,27 @@ remain advisory metadata for review diagnostics. Remaining scripts are
 preserved for guarded local replay or review when they cannot be safely
 captured. The `sysctl/v1` adapter projects only narrow, validated
 `sysctl -w <key>=<value>` invocations into native `hooks.sysctl`; broad forms
-such as `sysctl -p` and denied security-sensitive keys remain blocked.
+such as `sysctl -p` and denied security-sensitive keys remain blocked. One
+validated write still counts as complete native replacement evidence, but
+public-ready conversion additionally requires the target profile to allow the
+exact sysctl key. Missing target-profile context and supported-but-unallowed
+keys stay `private-review`; the current public fixture uses `kernel.example`,
+while `net.ipv4.ip_forward` remains private-review evidence.
 The `setuid-mode/v1` adapter projects only payload-executable
 `chmod u+s` or `chmod 4xxx` forms into native file mode authority plus an exact
 `policy.allow_setuid_paths` build-policy allowlist entry. The
 `file-capability/v1` adapter separately projects known Linux
 `setcap cap_*=+ep <payload-executable>` grants into
-`[[file_capabilities]]`, and mutable live-root installs apply that authority
-after file deployment and before DB commit. Setcap removal,
+`[[file_capabilities]]`. The manifest still validates `[[file_capabilities]]`
+against the known Linux capability table. Public-ready conversion is narrower:
+the first public allowlist is `cap_net_bind_service`; other known capability
+names remain valid native manifest authority but non-public conversion
+evidence. Mutable live-root installs apply that authority after file deployment
+and before DB commit. Generation-aware installs preserve the same authority
+only when Conary persists the installed file-capability rows, attaches
+`security.capability` during generation runtime-input collection, publishes a
+non-deferred generation, and emits the expected capability-xattr count through
+generation inspection metadata. Setcap removal,
 inheritable/process/ambient capability forms, setgid, broad `chmod +s`, unknown
 capability names, and non-payload privilege mutations remain blocked/private.
 Supported SELinux scriptlet forms are modeled as
@@ -101,6 +114,15 @@ mode changes, disable/status helpers, broad reloads, and unbacked paths remain
 blocked/private and use `block-on-enforcing-target` fallback when captured as
 review intent. Tracks conversion fidelity (High/Medium/Low) via
 `FidelityReport`.
+Future LSM expansion must add target-provider facts and content semantics
+before any mode change, status, disable, directory reload, or policy-store
+mutation can become public-ready.
+
+Non-default scriptlet publication summaries must include both
+`boot_security_intents` and `security_policy_intents`; rows that predate the
+current conversion version are stale and must be reconverted before they can be
+public-ready. The empty `{}` summary shape remains a constructor compatibility
+path for native/default rows without scriptlet evidence.
 
 **legacy_scriptlets.rs** -- Versioned metadata for converted package scriptlet
 semantics and local replay planning. The v1 bundle lives in the TOML manifest as
@@ -243,10 +265,25 @@ public source targets are `fedora-44`, `ubuntu-26.04`, and `arch`. A converted
 artifact is public-ready only when the scriptlet outcome is native-free or
 fully replaced by adapter/support-matrix evidence for the exact source and
 target, such as validated `sysctl/v1` evidence projected into native
-`hooks.sysctl` or validated `setuid-mode/v1` evidence projected into payload
-file mode plus `policy.allow_setuid_paths`. Legacy replay, review-required,
+`hooks.sysctl` plus target-profile approval for the exact key, or validated
+`setuid-mode/v1` evidence projected into payload file mode plus
+`policy.allow_setuid_paths`. For the current public sysctl proof corpus,
+`kernel.example` is allowed and `net.ipv4.ip_forward` stays private-review
+until a supported profile explicitly allows it. Legacy replay, review-required,
 blocked, malformed, or local-only scriptlet outcomes remain private conversion
 results.
+
+Common PAM stack helpers (`authselect`, `authconfig`, `pam-auth-update`, and
+`pam-config`) remain `blocked-class-pam` evidence. They do not project native
+manifest authority or public Remi eligibility without a future native PAM
+policy adapter and target-profile PAM facts.
+
+Live network fetches and nested package-manager calls remain blocked conversion
+evidence. A scriptlet that fetches content with `curl`, `wget`, `scp`, `ssh`, or
+`git clone`, or that invokes a nested package manager such as `dnf`, `apt`,
+`dpkg`, `rpm`, `pacman`, `apk`, `microdnf`, or `zypper`, does not project native
+manifest authority and cannot become public-ready without a future dependency
+or offline-artifact authority model.
 
 Foreign raw replay has a second gate. If the bundle source target differs from
 the host target and the host is not listed in `allowed_targets`, the operation
@@ -298,6 +335,14 @@ conary ccs install package.ccs --dry-run     # Preview without applying
 The `--reinstall` flag forces reinstallation even when the same version is
 already present. This is useful for repairing corrupted files or re-running
 hooks without bumping the version.
+
+For `[[file_capabilities]]`, the install boundary depends on the execution
+path. Mutable live-root installs still apply the manifest authority with a
+controlled `setcap` call after deployment. Generation-aware installs preserve
+the same authority only through immediate generation publication: Conary
+persists the installed file-capability rows, attaches `security.capability`
+while building the runtime generation inputs, and reports the resulting xattr
+count through `conary system generation info`.
 
 Implementation routing: `apps/conary/src/commands/ccs/install.rs` is the
 stable command hub. Command execution lives in

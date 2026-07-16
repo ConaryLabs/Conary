@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-07-15
-revision: 11
-summary: Non-secret infrastructure, agent-operations transport, release, Remi deploy, remote development, and Forge staging guidance for Conary contributors and coding assistants
+last_updated: 2026-07-16
+revision: 12
+summary: Non-secret infrastructure, agent-operations transport, release, Remi deploy, TLS renewal, remote development, and Forge staging guidance for Conary contributors and coding assistants
 ---
 
 # Infrastructure Overview
@@ -174,6 +174,14 @@ not cover the task or when you are debugging the underlying service path itself.
   the same host
 - `packages.conary.io` should be treated as the public compatibility alias for
   the same Remi origin, not as a separate host or deployment target
+- The production certificate currently uses Certbot's standalone authenticator,
+  so `/etc/letsencrypt/renewal-hooks/pre/10-nginx-stop` must stop nginx before
+  an attempted renewal and
+  `/etc/letsencrypt/renewal-hooks/post/90-nginx-start` must start it afterward,
+  including after a failed attempt. Validate this host-local contract with
+  `sudo certbot renew --dry-run --cert-name remi.conary.io --non-interactive --no-random-sleep-on-renew`;
+  the 2026-07-16 production repair passed that simulation and restored public
+  health for all three certificate names.
 
 #### Remi Remote Development Workbench
 

@@ -332,6 +332,27 @@ fn install_ccs_package_transactionally_inner(
         prepare_install_environment_before_scriptlets(conn, opts.db_path, opts.root)?
     };
     preflight_extracted_live_root_file_ownership(conn, pkg, &extraction, execution_path)?;
+    let normalized_file_capabilities = crate::commands::ccs::normalize_ccs_file_capabilities(
+        Path::new(opts.root),
+        &pkg.manifest().file_capabilities,
+    )?;
+    let tx_ctx = TransactionContext {
+        db_path: opts.db_path,
+        root: opts.root,
+        semantics,
+        selection_reason: opts.selection_reason,
+        old_trove_to_upgrade: old_trove,
+        ccs_manifest_provides: Some(&pkg.manifest().provides),
+        ccs_capabilities: pkg.manifest().capabilities.as_ref(),
+        ccs_file_capabilities: Some(&normalized_file_capabilities),
+        execution_path,
+        defer_generation: opts.defer_generation,
+        repository_provenance: opts.repository_provenance,
+        legacy_replay: opts.legacy_replay,
+        accepted_legacy_bundle: legacy_replay_state.accepted_bundle_to_persist.as_ref(),
+    };
+    super::preflight_generation_file_capabilities_for_install(&tx_ctx, &extraction)?;
+
     let legacy_execution_mode = build_execution_mode(old_trove.map(|trove| trove.version.as_str()));
     let old_legacy_pre_outcomes = if let Some(old_trove) = old_trove {
         execute_legacy_replay_plan_entries(
@@ -397,22 +418,6 @@ fn install_ccs_package_transactionally_inner(
         &scriptlet_ctx,
         &progress,
     )?;
-
-    let tx_ctx = TransactionContext {
-        db_path: opts.db_path,
-        root: opts.root,
-        semantics,
-        selection_reason: opts.selection_reason,
-        old_trove_to_upgrade: old_trove,
-        ccs_manifest_provides: Some(&pkg.manifest().provides),
-        ccs_capabilities: pkg.manifest().capabilities.as_ref(),
-        ccs_file_capabilities: Some(&pkg.manifest().file_capabilities),
-        execution_path,
-        defer_generation: opts.defer_generation,
-        repository_provenance: opts.repository_provenance,
-        legacy_replay: opts.legacy_replay,
-        accepted_legacy_bundle: legacy_replay_state.accepted_bundle_to_persist.as_ref(),
-    };
     let tx_result = match if let Some(transaction_config_override) = transaction_config_override {
         execute_install_transaction_with_config(
             conn,
@@ -586,6 +591,42 @@ mod tests {
                 && preflight_pos < ccs_hook_pos
                 && preflight_pos < scriptlet_pos,
             "CCS transaction installs must preflight live-root ownership before hooks and scriptlets"
+        );
+    }
+
+    #[test]
+    fn ccs_transaction_preflights_generation_file_capabilities_before_pre_mutation() {
+        let source = include_str!("ccs_transaction.rs");
+        let install_start = source
+            .find("install_ccs_package_transactionally")
+            .expect("install_ccs_package_transactionally should exist");
+        let test_module_start = source[install_start..]
+            .find("#[cfg(test)]")
+            .unwrap_or(source[install_start..].len());
+        let install_source = &source[install_start..install_start + test_module_start];
+
+        let normalize_pos = install_source
+            .find("normalize_ccs_file_capabilities")
+            .expect("CCS transaction install should normalize file capabilities");
+        let preflight_pos = install_source
+            .find("preflight_generation_file_capabilities_for_install")
+            .expect("CCS transaction install should preflight generation file capabilities");
+        let legacy_replay_pos = install_source
+            .find("execute_legacy_replay_plan_entries")
+            .expect("CCS transaction install can execute legacy pre replay");
+        let ccs_hook_pos = install_source
+            .find("hook_executor.execute_pre_hooks")
+            .expect("CCS transaction install can execute CCS pre-hooks");
+        let scriptlet_pos = install_source
+            .find("run_pre_install_phase(")
+            .expect("CCS transaction install can run pre-install scriptlets");
+
+        assert!(
+            normalize_pos < preflight_pos
+                && preflight_pos < legacy_replay_pos
+                && preflight_pos < ccs_hook_pos
+                && preflight_pos < scriptlet_pos,
+            "generation file capability preflight must run before legacy replay, CCS pre-hooks, and package pre-install scriptlets"
         );
     }
 }

@@ -372,4 +372,66 @@ mod tests {
         assert_eq!(intent.reconciliation.state.as_str(), "review");
         assert_eq!(intent.source.command.as_deref(), Some("apparmor_parser"));
     }
+
+    #[test]
+    fn blocked_apparmor_lifecycle_helpers_project_review_policy_operations() {
+        for (command, argv, operation, expected_name, paths) in [
+            (
+                "aa-enforce",
+                vec!["/etc/apparmor.d/usr.bin.demo"],
+                "mode-enforce",
+                Some("/etc/apparmor.d/usr.bin.demo".to_string()),
+                vec!["/etc/apparmor.d/usr.bin.demo".to_string()],
+            ),
+            (
+                "aa-complain",
+                vec!["/etc/apparmor.d/usr.bin.demo"],
+                "mode-complain",
+                Some("/etc/apparmor.d/usr.bin.demo".to_string()),
+                vec!["/etc/apparmor.d/usr.bin.demo".to_string()],
+            ),
+            (
+                "aa-disable",
+                vec!["/etc/apparmor.d/usr.bin.demo"],
+                "profile-disable",
+                Some("/etc/apparmor.d/usr.bin.demo".to_string()),
+                vec!["/etc/apparmor.d/usr.bin.demo".to_string()],
+            ),
+            ("aa-status", Vec::new(), "status-query", None, Vec::new()),
+        ] {
+            let classification = ScriptletClassification::Blocked {
+                reason_code: "blocked-class-apparmor".to_string(),
+                class_id: "apparmor".to_string(),
+                command: Some(ScriptletCommandEvidence {
+                    command: command.to_string(),
+                    argv: argv.into_iter().map(str::to_string).collect(),
+                    phase: Some("post-install".to_string()),
+                    lifecycle_paths: vec!["post-install".to_string()],
+                    raw_line: None,
+                    source: "static-signal".to_string(),
+                    environment: Vec::new(),
+                }),
+            };
+
+            let intent = security_policy_intent_from_classification(
+                "scriptlet:0:post-install",
+                &classification,
+            )
+            .expect("apparmor intent");
+
+            assert_eq!(intent.provider.as_str(), "apparmor");
+            assert_eq!(intent.operation, operation);
+            assert_eq!(intent.scope.kind, "profile");
+            assert_eq!(intent.scope.name, expected_name);
+            assert_eq!(intent.scope.paths, paths);
+            assert_eq!(intent.fallback.as_str(), "block-on-enforcing-target");
+            assert_eq!(intent.reconciliation.state.as_str(), "review");
+            assert_eq!(
+                intent.reconciliation.reason.as_deref(),
+                Some("blocked-class-apparmor")
+            );
+            assert!(!intent.payload_evidence.payload_backed);
+            assert_eq!(intent.source.command.as_deref(), Some(command));
+        }
+    }
 }

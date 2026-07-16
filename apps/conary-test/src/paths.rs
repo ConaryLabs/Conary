@@ -132,11 +132,26 @@ pub(crate) fn rollout_provenance_path_for(state_dir: &Path) -> PathBuf {
     state_dir.join(ROLLOUT_PROVENANCE_FILE)
 }
 
+fn sibling_conary_binary_for(executable: &Path) -> Option<PathBuf> {
+    let parent = executable.parent()?;
+    let profile_dir = if parent.file_name().is_some_and(|name| name == "deps") {
+        parent.parent()?
+    } else {
+        parent
+    };
+
+    Some(profile_dir.join(format!("conary{}", std::env::consts::EXE_SUFFIX)))
+}
+
 pub(crate) fn find_host_conary_binary(project_root: &Path) -> Result<PathBuf> {
+    let sibling_target_binary = std::env::current_exe()
+        .ok()
+        .and_then(|executable| sibling_conary_binary_for(&executable));
     let candidates = [
         std::env::var_os("CONARY_HOST_BIN").map(PathBuf::from),
         std::env::var_os("CONARY_BIN").map(PathBuf::from),
         Some(project_root.join("conary")),
+        sibling_target_binary,
         Some(project_root.join("target/debug/conary")),
         Some(project_root.join("target/release/conary")),
     ];
@@ -148,7 +163,7 @@ pub(crate) fn find_host_conary_binary(project_root: &Path) -> Result<PathBuf> {
     }
 
     anyhow::bail!(
-        "failed to locate host conary binary; tried CONARY_HOST_BIN, CONARY_BIN, ./conary, target/debug/conary, and target/release/conary"
+        "failed to locate host conary binary; tried CONARY_HOST_BIN, CONARY_BIN, ./conary, the current executable's Cargo profile directory, target/debug/conary, and target/release/conary"
     )
 }
 
@@ -195,5 +210,22 @@ mod tests {
         let provenance_path = rollout_provenance_path_for(&state_root);
 
         assert_eq!(provenance_path, state_root.join(ROLLOUT_PROVENANCE_FILE));
+    }
+
+    #[test]
+    fn sibling_conary_binary_uses_shared_cargo_profile_directory() {
+        let profile_dir = Path::new("/cache/target/Conary/debug");
+        let expected = profile_dir.join(format!("conary{}", std::env::consts::EXE_SUFFIX));
+
+        assert_eq!(
+            sibling_conary_binary_for(
+                &profile_dir.join(format!("conary-test{}", std::env::consts::EXE_SUFFIX))
+            ),
+            Some(expected.clone())
+        );
+        assert_eq!(
+            sibling_conary_binary_for(&profile_dir.join("deps/conary_test-hash")),
+            Some(expected)
+        );
     }
 }

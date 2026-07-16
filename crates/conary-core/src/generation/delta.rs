@@ -184,6 +184,7 @@ mod tests {
                 permissions: 0o755,
                 owner: None,
                 group_name: None,
+                xattrs: std::collections::BTreeMap::new(),
             },
             FileEntryRef {
                 path: "/usr/lib/libfoo.so".to_string(),
@@ -193,6 +194,7 @@ mod tests {
                 permissions: 0o644,
                 owner: None,
                 group_name: None,
+                xattrs: std::collections::BTreeMap::new(),
             },
         ];
         let entries_v2 = vec![
@@ -204,6 +206,7 @@ mod tests {
                 permissions: 0o755,
                 owner: None,
                 group_name: None,
+                xattrs: std::collections::BTreeMap::new(),
             },
             FileEntryRef {
                 path: "/usr/lib/libfoo.so".to_string(),
@@ -213,6 +216,7 @@ mod tests {
                 permissions: 0o644,
                 owner: None,
                 group_name: None,
+                xattrs: std::collections::BTreeMap::new(),
             },
             FileEntryRef {
                 path: "/usr/bin/world".to_string(),
@@ -222,6 +226,7 @@ mod tests {
                 permissions: 0o755,
                 owner: None,
                 group_name: None,
+                xattrs: std::collections::BTreeMap::new(),
             },
         ];
 

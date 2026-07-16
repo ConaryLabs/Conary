@@ -55,11 +55,26 @@ rows through a sanitized `scriptlets` object. Local `review_artifact_path`
 values remain private server state and are represented publicly only as
 `review_artifact_available`.
 
+Publication refusal responses and the default-off admin non-public test-serving
+manifest share the same sanitized `PublicationGateReport`: boot-security and
+generic LSM security-policy intent metadata is normalized before serialization,
+private paths and secret-bearing tokens are redacted, and local
+`review_artifact_path` values remain private. Private review artifact files use
+the raw report helper so operators can still inspect exact blocked paths during
+triage. Approved system policy paths are preserved only when absolute and free
+of `..` traversal components. Preserving `/etc/apparmor.d/<profile>` changes the
+shape of newly observed scriptlet-evidence samples. The bounded admin backfill
+resumes after its stored converted-package high-water mark and does not rebuild
+existing samples; because observation identity includes the normalization-derived
+cluster key, historical AppArmor clusters may retain the older `<path>` shape.
+Consistent historical rematerialization requires a future explicit, versioned
+rebuild or reconciliation path.
+
 ### Scriptlet Evidence Queue
 
 Remi maintains an admin/operator-only scriptlet evidence queue for adapter
-planning. Schema v76 stores `scriptlet_evidence_*` queue samples with sanitized
-boot/security and generic LSM intent evidence, clustering blocked,
+planning. Schema v76 and later store `scriptlet_evidence_*` queue samples with
+sanitized boot/security and generic LSM intent evidence, clustering blocked,
 review-required, and malformed conversion evidence by stable command shape,
 blocked class, distro, target profile, and lifecycle phase. Conary-core owns the
 database schema and model helpers; Remi owns the normalization, aggregation,
@@ -101,25 +116,38 @@ by adapter/support-matrix evidence. Rows with `private-review`, `blocked`,
 an explicit summary are terminal review/blocked conversion outcomes and are not
 public-ready.
 For sysctl, public-ready means the converter produced complete `sysctl/v1`
-evidence and projected it into native `hooks.sysctl`; broad or denied sysctl
-forms remain blocked/private.
+evidence, projected it into native `hooks.sysctl`, and the target profile
+derived from the public route slug allows that exact sysctl key. Missing
+profile context or unsupported keys stay `private-review`, not public. The
+current public proof key is `kernel.example`; `net.ipv4.ip_forward` remains
+valid private-review evidence and reports
+`public-policy-sysctl-target-profile-unsupported` unless a future target
+profile allows it. Broad or denied sysctl forms remain blocked/private.
 For setuid, public-ready means the converter produced complete
 `setuid-mode/v1` evidence for a payload executable and projected it into native
 file mode plus `policy.allow_setuid_paths`.
-For file capabilities, public-ready means the converter produced complete
-`file-capability/v1` evidence for known Linux `+ep` grants on a payload
-executable and projected it into `[[file_capabilities]]`; setcap removal,
-inheritable/process/ambient capability forms, setpriv, setgid, broad chmod,
-unknown capability names, and non-payload privilege forms remain
-blocked/private.
+Fully replaced scriptlets are public only when their projected authority also
+passes public policy. For `file-capability/v1`, `cap_net_bind_service` may be
+public-ready; high-risk known capabilities produce valid replacement evidence
+and valid CCS manifest authority but Remi treats the converted row as
+private-review. Setcap removal, inheritable/process/ambient capability forms,
+setpriv, setgid, broad chmod, unknown capability names, and non-payload
+privilege forms remain blocked/private.
 For AppArmor, public-ready means the converter produced complete
 `apparmor-policy/v1` evidence for a payload-backed
 `apparmor_parser -r|--replace /etc/apparmor.d/<profile>` reload. Mode changes,
 profile disable/status helpers, broad reloads, and non-payload profile paths
 remain blocked/private.
+Remi treats those broader LSM forms as non-public until a later target-provider
+policy model proves the provider behavior and fallback semantics.
 
 This gate is publication-only. It does not replay scriptlets, promote reviewed
 packages, or change client install/update/remove behavior.
+
+PAM helper conversions are blocked/non-public under the same gate. The
+default-off admin test lane may expose sanitized blocked metadata to maintainers,
+but public package, detail, index, sparse, OCI, and chunk routes continue to
+require public-ready status.
 
 Sparse-index and search responses use `converted=true` only for rows that do
 not need reconversion and pass the same public-ready scriptlet gate. A completed
@@ -238,6 +266,12 @@ cargo run -p remi -- conversion-benchmark \
 The scriptlet corpus summary is evidence for adapter planning only. It is not
 the authority for declaring a scriptlet `replaced`; that authority belongs to
 the legacy scriptlet semantics bundle decision model.
+
+Scan-only network and package-manager hints are advisory. They help maintainers
+find packages that attempted live fetch or nested package-manager recursion,
+but those hints do not make a conversion `replaced` and do not bypass the
+public-ready gate. Valid blocked rows remain available only through the
+default-off admin test lane.
 
 Running without `--scan-only` performs real conversions and writes CCS/CAS cache
 artifacts under the supplied cache and chunk directories. Use scratch paths for

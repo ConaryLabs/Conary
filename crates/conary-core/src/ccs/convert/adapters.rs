@@ -1599,6 +1599,13 @@ mod tests {
             GoldenAdapterCase {
                 fixture_id: "adapter-sysctl",
                 command: "sysctl",
+                argv: &["-w", "kernel.example=1"],
+                adapter_id: "sysctl/v1",
+                reason_code: "helper-complete-sysctl",
+            },
+            GoldenAdapterCase {
+                fixture_id: "adapter-sysctl-target-profile-private-review",
+                command: "sysctl",
                 argv: &["-w", "net.ipv4.ip_forward=1"],
                 adapter_id: "sysctl/v1",
                 reason_code: "helper-complete-sysctl",
@@ -1614,6 +1621,13 @@ mod tests {
                 fixture_id: "adapter-file-capability",
                 command: "setcap",
                 argv: &["cap_net_bind_service=+ep", "/usr/bin/demo"],
+                adapter_id: "file-capability/v1",
+                reason_code: "helper-complete-file-capability",
+            },
+            GoldenAdapterCase {
+                fixture_id: "adapter-file-capability-high-risk",
+                command: "setcap",
+                argv: &["cap_sys_admin=+ep", "/usr/bin/demo"],
                 adapter_id: "file-capability/v1",
                 reason_code: "helper-complete-file-capability",
             },
@@ -1774,8 +1788,11 @@ mod tests {
 
         for (command, argv) in [
             ("restorecon", vec!["-R", "/"]),
+            ("restorecon", vec!["-Rv", "/usr"]),
             ("semodule", vec!["-i", "/tmp/demo.pp"]),
+            ("semodule", vec!["-r", "demo"]),
             ("semanage", vec!["permissive", "-a", "demo_t"]),
+            ("setsebool", vec!["demo_can_network", "on"]),
             ("fixfiles", vec!["restore"]),
         ] {
             let classification = registry.classify_invocation_with_context(AdapterInput {
@@ -1847,7 +1864,21 @@ mod tests {
                 "apparmor_parser",
                 vec!["-R", "/etc/apparmor.d/usr.bin.demo"],
             ),
+            (
+                "apparmor_parser",
+                vec![
+                    "--replace",
+                    "/etc/apparmor.d/usr.bin.demo",
+                    "/etc/apparmor.d/usr.bin.other",
+                ],
+            ),
+            (
+                "apparmor_parser",
+                vec!["--replace", "/etc/apparmor.d/subdir/usr.bin.demo"],
+            ),
             ("aa-enforce", vec!["/etc/apparmor.d/usr.bin.demo"]),
+            ("aa-complain", vec!["/etc/apparmor.d/usr.bin.demo"]),
+            ("aa-disable", vec!["/etc/apparmor.d/usr.bin.demo"]),
             ("aa-status", vec![]),
         ] {
             let classification = registry.classify_invocation_with_context(AdapterInput {

@@ -18,6 +18,7 @@ pub struct ScriptletBundleInput<'a> {
     pub source_arch: Option<&'a str>,
     pub source_checksum: Option<&'a str>,
     pub classification: &'a ScriptletClassificationReport,
+    pub target_profile_id: Option<&'a str>,
     pub conversion_tool: &'a str,
     pub conversion_tool_version: &'a str,
 }

@@ -3,8 +3,8 @@
 
 use super::{ConversionService, ScriptletPackageMetadata, ServerConversionResult};
 use crate::server::publication::{
-    PublicationDecision, PublicationRefusal, ReviewArtifactInput, ServerConversionOutcome,
-    classify_converted_package, decision_refusal, write_review_artifact,
+    PublicationDecision, ReviewArtifactInput, ServerConversionOutcome, classify_converted_package,
+    classify_summary, decision_refusal, raw_report_from_summary, write_review_artifact,
 };
 use anyhow::{Result, anyhow};
 use conary_core::ccs::convert::ConversionResult;
@@ -122,12 +122,10 @@ impl ConversionService {
         converted.detected_hooks = Some(serde_json::to_string(&conversion_result.detected_hooks)?);
         converted.set_scriptlet_metadata(&conversion_result.scriptlet_metadata)?;
         converted.package_architecture = package_architecture;
-        let decision = classify_converted_package(&converted);
-        if let Some(refusal) = decision_refusal(decision) {
-            let mut report = match refusal {
-                PublicationRefusal::ReviewRequired(report)
-                | PublicationRefusal::Blocked(report) => report,
-            };
+        let publication = converted.scriptlet_summary_for_publication();
+        let decision = classify_summary(publication.clone());
+        if decision_refusal(decision).is_some() {
+            let mut report = raw_report_from_summary(&publication.summary, publication.valid);
             report.review_artifact_available = true;
             let conversion_fidelity = conversion_result.fidelity.level.to_string();
             let artifact_path = write_review_artifact(

@@ -65,13 +65,12 @@ if [ ! -e "$dest/usr/lib64/ld-linux-x86-64.so.2" ] && [ -e "$dest/usr/lib/ld-lin
 fi
 
 # /root is intentionally outside the immutable generation contract, so expose
-# the QEMU test public key through generation-owned /etc instead. The adopted
-# test image's generated sshd_config does not Include sshd_config.d/*.conf, so
-# place the AuthorizedKeysFile override at the top of the main config.
+# the QEMU test public key injected by the harness through generation-owned
+# /etc instead. The adopted test image's generated sshd_config does not Include
+# sshd_config.d/*.conf, so place the AuthorizedKeysFile override at the top of
+# the main config.
 mkdir -p "$dest/etc/ssh/authorized_keys" "$dest/etc/ssh/sshd_config.d"
-cat > "$dest/etc/ssh/authorized_keys/root" <<'KEY'
-ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOecLi4OI3cU2UfbmkwCdsxHQFUqf17093qkq6g1fx6W conary-selfhost-vm
-KEY
+printf '%s\n' '__CONARY_QEMU_TEST_PUBLIC_KEY__' > "$dest/etc/ssh/authorized_keys/root"
 chmod 0644 "$dest/etc/ssh/authorized_keys/root"
 sshd_config="$dest/etc/ssh/sshd_config"
 sshd_config_tmp="$dest/etc/ssh/sshd_config.conary-test"

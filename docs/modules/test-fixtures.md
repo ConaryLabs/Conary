@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-07-15
-revision: 8
-summary: Map fixture ownership, regeneration, and focused proof without historical process dependencies
+last_updated: 2026-07-16
+revision: 11
+summary: Map fixture ownership, including the public versioned v4 QEMU image and SSH identity contract
 ---
 
 # Test Fixtures And Proof Maps
@@ -42,6 +42,7 @@ Each fixture family should record:
 | `remi-native-ccs-publication` | Remi native publication | `cargo test -p remi release_upload_`; `cargo test -p conary --test packaging_m4c` |
 | `remi-scriptlet-publication-gate` | Remi server publication | `cargo test -p remi publication` |
 | `remi-test-artifact-fixtures` | Remi artifact handlers | `cargo test -p remi test_upload_fixture`; `cargo test -p remi test_public_fixture_get_and_head` |
+| `qemu-source-image-fixtures` | Bootstrap/QEMU fixture maintenance | `bash -n scripts/bootstrap-vm/rotate-qemu-test-identity.sh`; `cargo run -p conary-test -- list` |
 | `conary-test-remi-manifests` | Integration harness | `cargo run -p conary-test -- list`; `cargo test -p conary-test suite_inventory` |
 
 ### ccs-convert-golden-cases
@@ -67,7 +68,28 @@ Each fixture family should record:
   SELinux intent remains portable when the target does not require SELinux. The
   `adapter-apparmor-policy` fixture covers only payload-backed
   `apparmor_parser -r|--replace /etc/apparmor.d/<profile>` evidence; broader
-  AppArmor helper forms stay in blocked/private fixtures.
+  AppArmor helper forms stay in blocked/private fixtures. The public sysctl
+  fixture now uses `kernel.example`; `net.ipv4.ip_forward` remains a
+  private-review fixture because target-profile policy does not yet allow it.
+- `adapter-file-capability`: allowlisted `cap_net_bind_service` replacement
+  evidence, expected public-ready fully replaced outcome.
+- `adapter-file-capability-high-risk`: known high-risk capability replacement
+  evidence, expected private-review outcome while preserving adapter evidence.
+- `adapter-sysctl`: one validated `sysctl -w kernel.example=1` write, expected
+  public-ready fully replaced outcome because the target profile allows the
+  exact key.
+- `adapter-sysctl-target-profile-private-review`: one validated
+  `sysctl -w net.ipv4.ip_forward=1` write, expected private-review outcome
+  while preserving complete native replacement evidence.
+- `blocked-class-pam`: common PAM stack helper evidence such as `authconfig`
+  or `pam-config`, expected blocked outcome until native PAM policy authority is
+  modeled.
+- `blocked-class-network`: live-fetch evidence such as `curl` or `git clone`,
+  expected blocked outcome until dependency intent or curated offline artifact
+  authority is modeled.
+- `blocked-class-package-manager-recursion`: nested package-manager evidence
+  such as `dnf`, `apt`, `pacman`, `apk`, or `microdnf`, expected blocked
+  outcome until native dependency or artifact authority is modeled.
 
 ### ccs-v2-native-authority-fixtures
 
@@ -244,6 +266,10 @@ Each fixture family should record:
   `apps/remi/src/server/handlers/`.
 - **Consumes:** Remi publication, conversion, generated-index,
   sparse/detail/search/chunk serving, and prewarm tests.
+- `publication-summary-schema-and-sanitized-intents`: converted-package summary
+  shape tests require `security_policy_intents` for non-default metadata and
+  Remi publication/admin-test tests prove boot/security intent responses are
+  sanitized before serialization.
 - **Fast proof:** `cargo test -p remi publication`.
 - **Medium proof:**
   `cargo test -p remi persisted_goal8a_golden_outcomes_respect_publication_gate`;
@@ -303,6 +329,47 @@ Each fixture family should record:
   configuration; changes need parser/list proof and an explicit migration or
   defaulting decision.
 
+### qemu-source-image-fixtures
+
+- **Owner:** unprivileged identity/size rotation:
+  `scripts/bootstrap-vm/rotate-qemu-test-identity.sh`; QEMU execution and
+  download cache: `apps/conary-test/src/engine/qemu.rs`.
+- **Purpose:** Keep a versioned, generation-builder-ready qcow2 source image
+  paired with a disposable SSH identity and enough root-filesystem headroom
+  for full live-root adoption into CAS.
+- **Fixture sources:** versioned `minimal-boot-vN.qcow2` artifacts and the
+  matching versioned `conaryos-test-key-vN` test artifact served by Remi;
+  active consumers
+  are the Phase 3 QEMU manifests under
+  `apps/conary/tests/integration/remi/manifests/`.
+- **Consumes:** Groups N, O, and P plus composefs modernization QEMU steps.
+- **Fast proof:** `bash -n scripts/bootstrap-vm/rotate-qemu-test-identity.sh`;
+  `scripts/bootstrap-vm/rotate-qemu-test-identity.sh --help`;
+  `cargo run -p conary-test -- list`;
+  `cargo test -p conary-test suite_inventory`.
+- **Medium proof:** direct KVM boot with the generated key, verification of
+  root free space, and presence of `sqlite3`, `cpio`, `dracut`, `depmod`,
+  `systemd-repart`, `qemu-img`, ext4/FAT mkfs helpers, `composefs-info`, and
+  `/usr/lib/dracut`.
+- **Slow proof:** `cargo run -p conary-test -- run --suite phase3-group-o-generation-export --distro fedora44 --phase 3`.
+- **Regeneration:** Start from the prior immutable qcow2 and choose new output
+  paths; for the 2026-07-15 v4 rotation, pass `--disk-size-gib 20` so full
+  adoption has CAS headroom. The helper relocates GPT backup data, grows the
+  final `CONARY_ROOT` partition and ext4 filesystem without mounting it,
+  replaces only `/root/.ssh/authorized_keys`, verifies the inserted public
+  key, compresses the new qcow2, and runs `qemu-img check` before promotion.
+- **Current evidence:** the 2026-07-16 Fedora 44 Group O local KVM run passed
+  all five cases against `minimal-boot-v4`; a focused recompiled-harness TGE01
+  rerun also passed with the `conaryos-test-key-v4` cache/artifact name. Remi
+  serves the v4 image and private/public disposable test-key artifacts from its
+  public test-artifact path; an isolated cache downloaded the image and private
+  key with matching hashes and passed TGE01 under KVM in 63,320 ms.
+- **Safety notes:** Never overwrite the source image. Keep the generated
+  private key mode `0600`; it is a disposable test credential, not a Remi,
+  federation, release-signing, or operator identity. Publish image/key
+  replacements only through the authenticated Remi admin test-artifact route,
+  and update every active manifest to one version before accepting the gate.
+
 ## How To Use This Map
 
 - For docs-only edits to this map, run `bash scripts/check-doc-truth.sh` and
@@ -336,7 +403,6 @@ roots and proof commands before treating them as committed gates:
   `apps/conary/tests/cli_daily_ux.rs`.
 - `conary-test` bootstrap check and smoke fixtures documented in
   `docs/INTEGRATION-TESTING.md`.
-- Bootstrap and QEMU source-image fixtures.
 - Generation export and ISO carrier fixtures.
 - Recipe and source-selection fixtures.
 - conaryd daemon job fixtures.

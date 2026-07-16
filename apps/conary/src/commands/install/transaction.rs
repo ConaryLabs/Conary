@@ -73,7 +73,7 @@ fn execute_install_transaction_inner(
     progress: &InstallProgress,
     transaction_config_override: Option<TransactionConfig>,
 ) -> Result<InstallTransactionResult> {
-    reject_unsupported_generation_file_capabilities(ctx)?;
+    preflight_generation_file_capabilities_for_install(ctx, extraction)?;
 
     let _legacy_replay = ctx.legacy_replay;
     if ctx.execution_path == PackageExecutionPath::MutableLiveRoot {
@@ -138,7 +138,7 @@ fn execute_install_transaction_inner(
                 let applied = super::file_capabilities::apply_selected_file_capabilities(
                     Path::new(ctx.root),
                     file_capabilities,
-                    live_files.iter().map(|file| file.path.as_str()),
+                    live_files.iter(),
                 )?;
                 if applied > 0 {
                     info!(
@@ -292,15 +292,89 @@ fn execute_install_transaction_inner(
     Ok(InstallTransactionResult { changeset_id })
 }
 
-fn reject_unsupported_generation_file_capabilities(ctx: &TransactionContext<'_>) -> Result<()> {
-    if ctx.execution_path == PackageExecutionPath::GenerationAware
-        && matches!(ctx.ccs_file_capabilities, Some(file_capabilities) if !file_capabilities.is_empty())
-    {
-        anyhow::bail!(
-            "CCS file_capabilities cannot be applied by generation-aware installs yet; generation image xattr propagation is required"
-        );
+pub(super) fn preflight_generation_file_capabilities_for_install(
+    ctx: &TransactionContext<'_>,
+    extraction: &ExtractionResult,
+) -> Result<()> {
+    preflight_generation_file_capabilities(ctx)?;
+    preflight_selected_generation_file_capability_targets(ctx, extraction)
+}
+
+fn preflight_generation_file_capabilities(ctx: &TransactionContext<'_>) -> Result<()> {
+    preflight_generation_file_capabilities_with_xattr_support(
+        ctx,
+        conary_core::generation::builder::erofs_xattr_image_support_available(),
+    )
+}
+
+fn preflight_selected_generation_file_capability_targets(
+    ctx: &TransactionContext<'_>,
+    extraction: &ExtractionResult,
+) -> Result<()> {
+    if ctx.execution_path != PackageExecutionPath::GenerationAware {
+        return Ok(());
+    }
+    let Some(file_capabilities) = ctx.ccs_file_capabilities else {
+        return Ok(());
+    };
+    if file_capabilities.is_empty() {
+        return Ok(());
     }
 
+    for capability in file_capabilities {
+        let Some(selected_file) = extraction
+            .extracted_files
+            .iter()
+            .find(|file| file.path == capability.path)
+        else {
+            continue;
+        };
+        if conary_core::generation::metadata::is_excluded(&capability.path) {
+            anyhow::bail!(
+                "CCS file_capabilities target {} is excluded from generation; generation-aware installs require file capability authority to be represented in the generated artifact",
+                capability.path
+            );
+        }
+        if !super::file_capabilities::is_regular_file_capability_payload(
+            selected_file.mode,
+            selected_file.symlink_target.as_deref(),
+        ) {
+            anyhow::bail!(
+                "CCS file_capabilities target {} is not a regular installed file; generation-aware installs require file capability authority to be represented on regular generated payload files",
+                capability.path
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn preflight_generation_file_capabilities_with_xattr_support(
+    ctx: &TransactionContext<'_>,
+    xattr_image_support_available: bool,
+) -> Result<()> {
+    let Some(file_capabilities) = ctx.ccs_file_capabilities else {
+        return Ok(());
+    };
+    if file_capabilities.is_empty() {
+        return Ok(());
+    }
+    for capability in file_capabilities {
+        capability.validate()?;
+    }
+    if ctx.execution_path != PackageExecutionPath::GenerationAware {
+        return Ok(());
+    }
+    if ctx.defer_generation {
+        anyhow::bail!(
+            "CCS file_capabilities require immediate generation publication; generation-aware installs cannot use --defer-generation"
+        );
+    }
+    if !xattr_image_support_available {
+        anyhow::bail!(
+            "CCS file_capabilities require generation image xattr propagation, but generation image xattr propagation is unavailable in this build"
+        );
+    }
     Ok(())
 }
 
@@ -363,17 +437,24 @@ fn insert_ccs_manifest_typed_provide(
 mod tests {
     use super::*;
     use crate::commands::PackageFormatType;
+    use std::ffi::OsString;
 
-    #[test]
-    fn reject_unsupported_generation_file_capabilities_requires_mutable_live_root() {
-        let file_capabilities = vec![conary_core::ccs::manifest::FileCapability {
+    fn sample_file_capabilities() -> Vec<conary_core::ccs::manifest::FileCapability> {
+        vec![conary_core::ccs::manifest::FileCapability {
             path: "/usr/bin/server".to_string(),
             capabilities: vec!["cap_net_bind_service".to_string()],
             permitted: true,
             effective: true,
             inheritable: false,
-        }];
-        let ctx = TransactionContext {
+        }]
+    }
+
+    fn transaction_context_with_file_capabilities<'a>(
+        file_capabilities: &'a [conary_core::ccs::manifest::FileCapability],
+        execution_path: PackageExecutionPath,
+        defer_generation: bool,
+    ) -> TransactionContext<'a> {
+        TransactionContext {
             db_path: "/tmp/conary.db",
             root: "/",
             semantics: InstallSemantics::legacy(PackageFormatType::Rpm),
@@ -381,31 +462,111 @@ mod tests {
             old_trove_to_upgrade: None,
             ccs_manifest_provides: None,
             ccs_capabilities: None,
-            ccs_file_capabilities: Some(&file_capabilities),
-            execution_path: PackageExecutionPath::GenerationAware,
-            defer_generation: false,
+            ccs_file_capabilities: Some(file_capabilities),
+            execution_path,
+            defer_generation,
             repository_provenance: None,
             legacy_replay: LegacyReplayOptions::default(),
             accepted_legacy_bundle: None,
-        };
+        }
+    }
 
-        let error = reject_unsupported_generation_file_capabilities(&ctx).unwrap_err();
+    #[test]
+    fn reject_unsupported_generation_file_capabilities_allows_generation_file_capabilities_when_xattr_image_support_available()
+     {
+        let file_capabilities = sample_file_capabilities();
+        let ctx = transaction_context_with_file_capabilities(
+            &file_capabilities,
+            PackageExecutionPath::GenerationAware,
+            false,
+        );
+
+        preflight_generation_file_capabilities(&ctx)
+            .expect("generation-aware install should allow file capabilities when xattr image support is available");
+    }
+
+    #[test]
+    fn reject_unsupported_generation_file_capabilities_rejects_generation_file_capabilities_when_deferred_generation_is_requested()
+     {
+        let file_capabilities = sample_file_capabilities();
+        let ctx = transaction_context_with_file_capabilities(
+            &file_capabilities,
+            PackageExecutionPath::GenerationAware,
+            true,
+        );
+
+        let error = preflight_generation_file_capabilities(&ctx)
+            .expect_err("deferred generation-aware install must reject file capabilities");
+
+        assert!(error.to_string().contains("--defer-generation"), "{error}");
+    }
+
+    #[test]
+    fn reject_unsupported_generation_file_capabilities_rejects_generation_file_capabilities_when_xattr_image_support_is_unavailable()
+     {
+        let file_capabilities = sample_file_capabilities();
+        let ctx = transaction_context_with_file_capabilities(
+            &file_capabilities,
+            PackageExecutionPath::GenerationAware,
+            false,
+        );
+
+        let error = preflight_generation_file_capabilities_with_xattr_support(&ctx, false)
+            .expect_err("generation-aware install must reject file capabilities without xattr image support");
 
         assert!(
             error
                 .to_string()
-                .contains("generation image xattr propagation is required"),
+                .contains("generation image xattr propagation is unavailable"),
             "{error}"
         );
     }
 
     #[test]
-    fn no_generation_install_transaction_materializes_live_root_file() {
-        use conary_core::db::models::{Changeset, ChangesetStatus, FileEntry, Trove, TroveType};
-        use conary_core::packages::traits::{
-            Dependency, ExtractedFile, PackageFile, PackageFormat, Scriptlet,
-        };
-        use std::collections::HashMap;
+    fn reject_unsupported_generation_file_capabilities_keeps_generation_file_capabilities_available_to_mutable_live_root()
+     {
+        let file_capabilities = sample_file_capabilities();
+        let ctx = transaction_context_with_file_capabilities(
+            &file_capabilities,
+            PackageExecutionPath::MutableLiveRoot,
+            false,
+        );
+
+        preflight_generation_file_capabilities_with_xattr_support(&ctx, false).expect(
+            "mutable live-root installs should skip generation-only file capability preflight",
+        );
+    }
+
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+            let previous = std::env::var_os(key);
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            unsafe {
+                if let Some(previous) = &self.previous {
+                    std::env::set_var(self.key, previous);
+                } else {
+                    std::env::remove_var(self.key);
+                }
+            }
+        }
+    }
+
+    fn fake_package() -> impl PackageFormat {
+        use conary_core::db::models::{Trove, TroveType};
+        use conary_core::packages::traits::{Dependency, ExtractedFile, PackageFile, Scriptlet};
 
         struct FakePackage;
 
@@ -454,6 +615,15 @@ mod tests {
                 )
             }
         }
+
+        FakePackage
+    }
+
+    #[test]
+    fn no_generation_install_transaction_materializes_live_root_file() {
+        use conary_core::db::models::{Changeset, ChangesetStatus, FileEntry};
+        use conary_core::packages::traits::ExtractedFile;
+        use std::collections::HashMap;
 
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("root");
@@ -503,7 +673,7 @@ mod tests {
 
         let result = execute_install_transaction(
             &mut conn,
-            &FakePackage,
+            &fake_package(),
             &extraction,
             &ctx,
             &InstallProgress::single("Installing"),
@@ -530,59 +700,9 @@ mod tests {
     #[test]
     fn no_generation_install_conflict_preflight_preserves_live_root_file() {
         use conary_core::db::models::{FileEntry, Trove, TroveType};
-        use conary_core::packages::traits::{
-            Dependency, ExtractedFile, PackageFile, PackageFormat, Scriptlet,
-        };
+        use conary_core::packages::traits::ExtractedFile;
         use std::collections::HashMap;
         use std::os::unix::fs::PermissionsExt;
-
-        struct FakePackage;
-
-        impl PackageFormat for FakePackage {
-            fn parse(_path: &str) -> conary_core::Result<Self> {
-                unreachable!("test constructs package directly")
-            }
-
-            fn name(&self) -> &str {
-                "fixture"
-            }
-
-            fn version(&self) -> &str {
-                "1.0.0"
-            }
-
-            fn architecture(&self) -> Option<&str> {
-                Some("x86_64")
-            }
-
-            fn description(&self) -> Option<&str> {
-                None
-            }
-
-            fn files(&self) -> &[PackageFile] {
-                &[]
-            }
-
-            fn dependencies(&self) -> &[Dependency] {
-                &[]
-            }
-
-            fn extract_file_contents(&self) -> conary_core::Result<Vec<ExtractedFile>> {
-                Ok(vec![])
-            }
-
-            fn scriptlets(&self) -> &[Scriptlet] {
-                &[]
-            }
-
-            fn to_trove(&self) -> Trove {
-                Trove::new(
-                    "fixture".to_string(),
-                    "1.0.0".to_string(),
-                    TroveType::Package,
-                )
-            }
-        }
 
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("root");
@@ -654,7 +774,7 @@ mod tests {
 
         let error = match execute_install_transaction(
             &mut conn,
-            &FakePackage,
+            &fake_package(),
             &extraction,
             &ctx,
             &InstallProgress::single("Installing"),
@@ -678,6 +798,305 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(root.join("usr/bin/fixture")).unwrap(),
             "owned elsewhere"
+        );
+    }
+
+    #[test]
+    fn file_capabilities_mutable_live_root_transaction_applies_selected_capabilities_after_live_file_deploy()
+     {
+        use conary_core::db::models::FileEntry;
+        use conary_core::packages::traits::ExtractedFile;
+        use std::collections::HashMap;
+        use std::os::unix::fs::PermissionsExt;
+
+        let _env_lock = crate::commands::composefs_ops::test_mount_env_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("root");
+        let db_path = temp.path().join("conary.db");
+        let bin_dir = temp.path().join("bin");
+        let setcap = bin_dir.join("setcap");
+        let args_file = temp.path().join("setcap.args");
+        let target_file = temp.path().join("setcap.target");
+        std::fs::create_dir_all(root.join("usr/bin")).unwrap();
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        std::fs::write(
+            &setcap,
+            "#!/bin/sh\nprintf '%s\\n' \"$1\" > \"$SETCAP_ARGS_FILE\"\nprintf '%s\\n' \"$2\" > \"$SETCAP_TARGET_FILE\"\n[ -f \"$2\" ] || exit 41\n[ \"$(cat \"$2\")\" = \"server-bytes\" ] || exit 42\n",
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&setcap).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&setcap, permissions).unwrap();
+
+        let path_entries = match std::env::var_os("PATH") {
+            Some(existing) => std::iter::once(bin_dir.clone())
+                .chain(std::env::split_paths(&existing))
+                .collect::<Vec<_>>(),
+            None => vec![bin_dir.clone()],
+        };
+        let path = std::env::join_paths(path_entries).unwrap();
+        let _path_guard = EnvVarGuard::set("PATH", &path);
+        let _args_guard = EnvVarGuard::set("SETCAP_ARGS_FILE", &args_file);
+        let _target_guard = EnvVarGuard::set("SETCAP_TARGET_FILE", &target_file);
+
+        conary_core::db::init(&db_path).unwrap();
+        let mut conn = conary_core::db::open(&db_path).unwrap();
+        let extraction = ExtractionResult {
+            extracted_files: vec![ExtractedFile {
+                path: "/usr/bin/server".to_string(),
+                content: b"server-bytes".to_vec(),
+                size: 12,
+                mode: 0o100755,
+                sha256: None,
+                symlink_target: None,
+            }],
+            classified: HashMap::from([(
+                conary_core::components::ComponentType::Runtime,
+                vec!["/usr/bin/server".to_string()],
+            )]),
+            component_names_by_path: None,
+            installed_component_names: None,
+            ccs_pre_remove_script: None,
+            installed_component_types: vec![conary_core::components::ComponentType::Runtime],
+            skipped_components: Vec::new(),
+            language_provides: Vec::new(),
+        };
+        let file_capabilities = sample_file_capabilities();
+        let db_path_string = db_path.to_string_lossy().into_owned();
+        let root_string = root.to_string_lossy().into_owned();
+        let ctx = TransactionContext {
+            db_path: &db_path_string,
+            root: &root_string,
+            semantics: InstallSemantics::legacy(PackageFormatType::Rpm),
+            selection_reason: None,
+            old_trove_to_upgrade: None,
+            ccs_manifest_provides: None,
+            ccs_capabilities: None,
+            ccs_file_capabilities: Some(&file_capabilities),
+            execution_path: PackageExecutionPath::MutableLiveRoot,
+            defer_generation: false,
+            repository_provenance: None,
+            legacy_replay: LegacyReplayOptions::default(),
+            accepted_legacy_bundle: None,
+        };
+
+        execute_install_transaction(
+            &mut conn,
+            &fake_package(),
+            &extraction,
+            &ctx,
+            &InstallProgress::single("Installing"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(root.join("usr/bin/server")).unwrap(),
+            "server-bytes"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&args_file).unwrap().trim(),
+            "cap_net_bind_service=+ep"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&target_file).unwrap().trim(),
+            root.join("usr/bin/server").display().to_string()
+        );
+        assert!(
+            FileEntry::find_by_path(&conn, "/usr/bin/server")
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn generation_file_capabilities_reject_selected_excluded_path_before_db_commit() {
+        use conary_core::db::models::{FileEntry, InstalledFileCapability};
+        use conary_core::packages::traits::ExtractedFile;
+        use std::collections::HashMap;
+
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("root");
+        let db_path = temp.path().join("conary.db");
+        std::fs::create_dir_all(&root).unwrap();
+        conary_core::db::init(&db_path).unwrap();
+        let mut conn = conary_core::db::open(&db_path).unwrap();
+        let extraction = ExtractionResult {
+            extracted_files: vec![ExtractedFile {
+                path: "/var/lib/server".to_string(),
+                content: b"server-bytes".to_vec(),
+                size: 12,
+                mode: 0o100755,
+                sha256: None,
+                symlink_target: None,
+            }],
+            classified: HashMap::from([(
+                conary_core::components::ComponentType::Runtime,
+                vec!["/var/lib/server".to_string()],
+            )]),
+            component_names_by_path: None,
+            installed_component_names: None,
+            ccs_pre_remove_script: None,
+            installed_component_types: vec![conary_core::components::ComponentType::Runtime],
+            skipped_components: Vec::new(),
+            language_provides: Vec::new(),
+        };
+        let file_capabilities = vec![conary_core::ccs::manifest::FileCapability {
+            path: "/var/lib/server".to_string(),
+            capabilities: vec!["cap_net_bind_service".to_string()],
+            permitted: true,
+            effective: true,
+            inheritable: false,
+        }];
+        let db_path_string = db_path.to_string_lossy().into_owned();
+        let root_string = root.to_string_lossy().into_owned();
+        let ctx = TransactionContext {
+            db_path: &db_path_string,
+            root: &root_string,
+            semantics: InstallSemantics::legacy(PackageFormatType::Rpm),
+            selection_reason: None,
+            old_trove_to_upgrade: None,
+            ccs_manifest_provides: None,
+            ccs_capabilities: None,
+            ccs_file_capabilities: Some(&file_capabilities),
+            execution_path: PackageExecutionPath::GenerationAware,
+            defer_generation: false,
+            repository_provenance: None,
+            legacy_replay: LegacyReplayOptions::default(),
+            accepted_legacy_bundle: None,
+        };
+
+        let error = match execute_install_transaction(
+            &mut conn,
+            &fake_package(),
+            &extraction,
+            &ctx,
+            &InstallProgress::single("Installing"),
+        ) {
+            Ok(_) => {
+                panic!("excluded generation file capability target must fail before DB commit")
+            }
+            Err(error) => error,
+        };
+
+        assert!(
+            error.to_string().contains("excluded from generation"),
+            "{error}"
+        );
+        assert!(
+            FileEntry::find_by_path(&conn, "/var/lib/server")
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            InstalledFileCapability::find_all_ordered(&conn)
+                .unwrap()
+                .is_empty()
+        );
+        let publication_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM generation_publications", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(
+            publication_count, 0,
+            "excluded capability target must not leave deferred generation publication debt"
+        );
+    }
+
+    #[test]
+    fn generation_file_capabilities_reject_selected_symlink_before_db_commit() {
+        use conary_core::db::models::{FileEntry, InstalledFileCapability};
+        use conary_core::packages::traits::ExtractedFile;
+        use std::collections::HashMap;
+
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("root");
+        let db_path = temp.path().join("conary.db");
+        std::fs::create_dir_all(&root).unwrap();
+        conary_core::db::init(&db_path).unwrap();
+        let mut conn = conary_core::db::open(&db_path).unwrap();
+        let extraction = ExtractionResult {
+            extracted_files: vec![ExtractedFile {
+                path: "/usr/bin/server-link".to_string(),
+                content: Vec::new(),
+                size: 6,
+                mode: 0o120777,
+                sha256: None,
+                symlink_target: Some("server".to_string()),
+            }],
+            classified: HashMap::from([(
+                conary_core::components::ComponentType::Runtime,
+                vec!["/usr/bin/server-link".to_string()],
+            )]),
+            component_names_by_path: None,
+            installed_component_names: None,
+            ccs_pre_remove_script: None,
+            installed_component_types: vec![conary_core::components::ComponentType::Runtime],
+            skipped_components: Vec::new(),
+            language_provides: Vec::new(),
+        };
+        let file_capabilities = vec![conary_core::ccs::manifest::FileCapability {
+            path: "/usr/bin/server-link".to_string(),
+            capabilities: vec!["cap_net_bind_service".to_string()],
+            permitted: true,
+            effective: true,
+            inheritable: false,
+        }];
+        let db_path_string = db_path.to_string_lossy().into_owned();
+        let root_string = root.to_string_lossy().into_owned();
+        let ctx = TransactionContext {
+            db_path: &db_path_string,
+            root: &root_string,
+            semantics: InstallSemantics::legacy(PackageFormatType::Rpm),
+            selection_reason: None,
+            old_trove_to_upgrade: None,
+            ccs_manifest_provides: None,
+            ccs_capabilities: None,
+            ccs_file_capabilities: Some(&file_capabilities),
+            execution_path: PackageExecutionPath::GenerationAware,
+            defer_generation: false,
+            repository_provenance: None,
+            legacy_replay: LegacyReplayOptions::default(),
+            accepted_legacy_bundle: None,
+        };
+
+        let error = match execute_install_transaction(
+            &mut conn,
+            &fake_package(),
+            &extraction,
+            &ctx,
+            &InstallProgress::single("Installing"),
+        ) {
+            Ok(_) => {
+                panic!("symlink generation file capability target must fail before DB commit")
+            }
+            Err(error) => error,
+        };
+
+        assert!(
+            error
+                .to_string()
+                .contains("is not a regular installed file"),
+            "{error}"
+        );
+        assert!(
+            FileEntry::find_by_path(&conn, "/usr/bin/server-link")
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            InstalledFileCapability::find_all_ordered(&conn)
+                .unwrap()
+                .is_empty()
+        );
+        let publication_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM generation_publications", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(
+            publication_count, 0,
+            "symlink capability target must not leave deferred generation publication debt"
         );
     }
 }

@@ -10,6 +10,7 @@ mod boot_assets;
 mod cas;
 mod create;
 mod erofs;
+mod file_capabilities;
 mod initramfs;
 mod kernel;
 mod rebuild;
@@ -26,7 +27,10 @@ pub use create::{
     build_generation_from_db_with_boot_root,
     build_generation_from_db_with_boot_root_and_activation,
 };
-pub use erofs::{BuildResult, FileEntryRef, SymlinkEntryRef, build_erofs_image, hex_to_digest};
+pub use erofs::{
+    BuildResult, FileEntryRef, SymlinkEntryRef, build_erofs_image,
+    erofs_xattr_image_support_available, hex_to_digest,
+};
 pub use kernel::detect_kernel_version_from_troves;
 
 pub(crate) use rebuild::rebuild_generation_image;

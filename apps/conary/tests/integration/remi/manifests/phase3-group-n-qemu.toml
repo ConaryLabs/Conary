@@ -33,7 +33,7 @@ fatal = true
 
 [[test.step]]
 [test.step.qemu_boot]
-image = "minimal-boot-v3"
+image = "minimal-boot-v4"
 memory_mb = 2048
 timeout_seconds = 1800
 ssh_port = 2230
@@ -74,7 +74,7 @@ depends_on = ["T150"]
 
 [[test.step]]
 [test.step.qemu_boot]
-image = "minimal-boot-v3"
+image = "minimal-boot-v4"
 memory_mb = 2048
 timeout_seconds = 1800
 ssh_port = 2231
@@ -114,7 +114,7 @@ depends_on = ["T150"]
 
 [[test.step]]
 [test.step.qemu_boot]
-image = "minimal-boot-v3"
+image = "minimal-boot-v4"
 memory_mb = 2048
 timeout_seconds = 1800
 ssh_port = 2232
@@ -157,7 +157,7 @@ depends_on = ["T150"]
 
 [[test.step]]
 [test.step.qemu_boot]
-image = "minimal-boot-v3"
+image = "minimal-boot-v4"
 memory_mb = 2048
 timeout_seconds = 1800
 ssh_port = 2233
@@ -198,7 +198,7 @@ group = "N"
 
 [[test.step]]
 [test.step.qemu_boot]
-image = "minimal-boot-v3"
+image = "minimal-boot-v4"
 memory_mb = 1024
 timeout_seconds = 180
 ssh_port = 2222

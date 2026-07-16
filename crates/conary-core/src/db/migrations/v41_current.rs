@@ -1334,6 +1334,32 @@ pub fn migrate_v76(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Version 77: Installed CCS file capability authority
+pub fn migrate_v77(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "
+        CREATE TABLE installed_file_capabilities (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            trove_id INTEGER NOT NULL REFERENCES troves(id) ON DELETE CASCADE,
+            path TEXT NOT NULL,
+            capabilities_json TEXT NOT NULL,
+            permitted INTEGER NOT NULL DEFAULT 1,
+            effective INTEGER NOT NULL DEFAULT 1,
+            inheritable INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(trove_id, path)
+        );
+        CREATE INDEX idx_installed_file_capabilities_trove
+            ON installed_file_capabilities(trove_id);
+        CREATE INDEX idx_installed_file_capabilities_path
+            ON installed_file_capabilities(path);
+        ",
+    )?;
+
+    info!("Schema version 77 applied successfully (installed file capability authority)");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

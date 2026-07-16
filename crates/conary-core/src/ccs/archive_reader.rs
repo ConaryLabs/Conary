@@ -365,6 +365,7 @@ fn read_ccs_archive_with_limits<R: Read>(
             merged.legacy_scriptlets = toml.legacy_scriptlets;
             merged.config = toml.config;
             merged.policy = toml.policy;
+            merged.file_capabilities = toml.file_capabilities;
             merged.provenance = toml.provenance;
             merged.redirects = toml.redirects;
             merged.legacy = toml.legacy;
@@ -631,6 +632,42 @@ license = "MIT"
 
         assert!(toml_raw.contains("[legacy_scriptlets]"));
         assert!(contents.manifest.legacy_scriptlets.is_some());
+    }
+
+    #[test]
+    fn archive_reader_preserves_file_capabilities_from_toml_overlay() {
+        let manifest = CcsManifest::parse(
+            r#"
+[package]
+name = "test-reader"
+version = "1.0.0"
+description = "archive reader test"
+license = "MIT"
+
+[[file_capabilities]]
+path = "/usr/bin/hello"
+capabilities = ["cap_net_bind_service"]
+permitted = true
+effective = true
+inheritable = false
+"#,
+        )
+        .unwrap();
+        manifest.validate().unwrap();
+        let (_temp, path) = build_test_package_with_manifest(manifest);
+        let file = std::fs::File::open(&path).unwrap();
+
+        let contents = read_ccs_archive(file).unwrap();
+
+        assert_eq!(contents.manifest.file_capabilities.len(), 1);
+        assert_eq!(
+            contents.manifest.file_capabilities[0].path,
+            "/usr/bin/hello"
+        );
+        assert_eq!(
+            contents.manifest.file_capabilities[0].capabilities,
+            vec!["cap_net_bind_service"]
+        );
     }
 
     #[test]

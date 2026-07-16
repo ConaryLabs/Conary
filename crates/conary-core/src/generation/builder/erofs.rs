@@ -1,5 +1,6 @@
 // conary-core/src/generation/builder/erofs.rs
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use tracing::{debug, info, warn};
@@ -7,6 +8,12 @@ use tracing::{debug, info, warn};
 use crate::generation::metadata::EROFS_IMAGE_NAME;
 #[cfg(feature = "composefs-rs")]
 use crate::generation::metadata::{ROOT_SYMLINKS, is_excluded};
+
+#[cfg_attr(feature = "composefs-rs", allow(dead_code))]
+#[must_use]
+pub fn erofs_xattr_image_support_available() -> bool {
+    cfg!(feature = "composefs-rs")
+}
 
 /// A lightweight view of a file entry for EROFS building.
 ///
@@ -28,6 +35,8 @@ pub struct FileEntryRef {
     /// Group name (e.g., `"wheel"`). Resolved to numeric GID at EROFS
     /// build time via `getgrnam_r`. Defaults to root (GID 0) when `None`.
     pub group_name: Option<String>,
+    /// Extended attributes to preserve for this regular file.
+    pub xattrs: BTreeMap<String, Vec<u8>>,
 }
 
 /// A symbolic link entry for EROFS building.
@@ -176,7 +185,7 @@ pub fn build_erofs_image(
     use std::collections::BTreeMap;
     use std::ffi::OsStr;
 
-    use composefs::erofs::writer::mkfs_erofs;
+    use composefs::erofs::writer::{ValidatedFileSystem, mkfs_erofs};
     use composefs::fsverity::{FsVerityHashValue, Sha256HashValue};
     use composefs::tree::{Directory, FileSystem, Inode, LeafContent, RegularFile, Stat};
 
@@ -186,17 +195,22 @@ pub fn build_erofs_image(
             st_uid: 0,
             st_gid: 0,
             st_mtim_sec: 0,
+            st_mtim_nsec: 0,
             xattrs: BTreeMap::new(),
         }
     }
 
-    fn file_stat(mode: u32, uid: u32, gid: u32) -> Stat {
+    fn file_stat(mode: u32, uid: u32, gid: u32, xattrs: &BTreeMap<String, Vec<u8>>) -> Stat {
         Stat {
             st_mode: mode,
             st_uid: uid,
             st_gid: gid,
             st_mtim_sec: 0,
-            xattrs: BTreeMap::new(),
+            st_mtim_nsec: 0,
+            xattrs: xattrs
+                .iter()
+                .map(|(name, value)| (std::ffi::OsStr::new(name).into(), value.clone().into()))
+                .collect(),
         }
     }
 
@@ -287,7 +301,7 @@ pub fn build_erofs_image(
         let uid = resolve_uid(entry.owner.as_deref());
         let gid = resolve_gid(entry.group_name.as_deref());
         let leaf_id = fs.push_leaf(
-            file_stat(entry.permissions, uid, gid),
+            file_stat(entry.permissions, uid, gid, &entry.xattrs),
             LeafContent::Regular(RegularFile::External(hash, entry.size)),
         );
         let parent_dir = get_parent_dir(&mut fs.root, &dir_path, &entry.path)?;
@@ -320,6 +334,18 @@ pub fn build_erofs_image(
         fs.root.insert(OsStr::new(link), Inode::leaf(leaf_id));
     }
 
+    // Package metadata can contain an entry that is later replaced by a
+    // symlink, and the standard root symlinks intentionally replace any
+    // package-provided copies. `Directory::insert` updates the tree but leaves
+    // the replaced leaf in the flat table. composefs 0.7 validates that every
+    // leaf is reachable, so remove those superseded leaves before validation.
+    fs.compact();
+
+    let fs = ValidatedFileSystem::new(fs).map_err(|error| {
+        crate::error::Error::InternalError(format!(
+            "invalid composefs tree before EROFS serialization: {error}"
+        ))
+    })?;
     let image_bytes = mkfs_erofs(&fs);
     let image_size = image_bytes.len() as u64;
     let erofs_verity_digest =
@@ -454,6 +480,10 @@ mod tests {
     #[cfg(feature = "composefs-rs")]
     mod composefs_tests {
         use super::*;
+        use std::ffi::OsStr;
+
+        use composefs::erofs::reader::erofs_to_filesystem;
+        use composefs::fsverity::Sha256HashValue;
         use tempfile::TempDir;
 
         #[test]
@@ -468,6 +498,7 @@ mod tests {
                     permissions: 0o755,
                     owner: None,
                     group_name: None,
+                    xattrs: BTreeMap::new(),
                 },
                 FileEntryRef {
                     path: "/usr/lib/libfoo.so".to_string(),
@@ -477,6 +508,7 @@ mod tests {
                     permissions: 0o644,
                     owner: None,
                     group_name: None,
+                    xattrs: BTreeMap::new(),
                 },
             ];
 
@@ -512,6 +544,7 @@ mod tests {
                     permissions: 0o755,
                     owner: None,
                     group_name: None,
+                    xattrs: BTreeMap::new(),
                 },
                 FileEntryRef {
                     path: "/var/log/messages".to_string(),
@@ -521,6 +554,7 @@ mod tests {
                     permissions: 0o644,
                     owner: None,
                     group_name: None,
+                    xattrs: BTreeMap::new(),
                 },
             ];
 
@@ -540,6 +574,23 @@ mod tests {
         }
 
         #[test]
+        fn package_root_symlinks_are_replaced_without_orphaned_leaves() {
+            let tmp = TempDir::new().unwrap();
+            let symlinks = ROOT_SYMLINKS
+                .iter()
+                .map(|(path, target)| SymlinkEntryRef {
+                    path: format!("/{path}"),
+                    target: (*target).to_string(),
+                })
+                .collect::<Vec<_>>();
+
+            let result = build_erofs_image(&[], &symlinks, tmp.path()).unwrap();
+
+            assert!(result.image_size > 0);
+            assert_eq!(result.cas_objects_referenced, 0);
+        }
+
+        #[test]
         fn deterministic_builds() {
             let tmp1 = TempDir::new().unwrap();
             let tmp2 = TempDir::new().unwrap();
@@ -552,6 +603,7 @@ mod tests {
                     permissions: 0o755,
                     owner: None,
                     group_name: None,
+                    xattrs: BTreeMap::new(),
                 },
                 FileEntryRef {
                     path: "/usr/lib/libfoo.so".to_string(),
@@ -561,6 +613,7 @@ mod tests {
                     permissions: 0o644,
                     owner: None,
                     group_name: None,
+                    xattrs: BTreeMap::new(),
                 },
             ];
 
@@ -584,6 +637,7 @@ mod tests {
                 permissions: 0o755,
                 owner: Some("root".to_string()),
                 group_name: Some("root".to_string()),
+                xattrs: BTreeMap::new(),
             }];
 
             let result = build_erofs_image(&entries, &[], tmp.path()).unwrap();
@@ -602,6 +656,7 @@ mod tests {
                 permissions: 0o755,
                 owner: None,
                 group_name: None,
+                xattrs: BTreeMap::new(),
             }];
 
             let r1 = build_erofs_image(&entries, &[], tmp1.path()).unwrap();
@@ -609,5 +664,48 @@ mod tests {
 
             assert_eq!(r1.erofs_verity_digest, r2.erofs_verity_digest);
         }
+
+        #[test]
+        fn build_erofs_preserves_regular_file_xattrs() {
+            let tmp = TempDir::new().unwrap();
+            let xattrs = BTreeMap::from([(
+                "security.capability".to_string(),
+                vec![0x01, 0x00, 0x00, 0x00, 0xaa, 0xbb, 0xcc, 0xdd],
+            )]);
+            let entries = vec![FileEntryRef {
+                path: "/usr/bin/hello".to_string(),
+                sha256_hash: "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd"
+                    .to_string(),
+                size: 1024,
+                permissions: 0o100755,
+                owner: None,
+                group_name: None,
+                xattrs: xattrs.clone(),
+            }];
+
+            let result = build_erofs_image(&entries, &[], tmp.path()).unwrap();
+            let image_bytes = std::fs::read(&result.image_path).unwrap();
+            let fs = erofs_to_filesystem::<Sha256HashValue>(&image_bytes).unwrap();
+            let usr = fs.as_dir().get_directory_ref(OsStr::new("usr")).unwrap();
+            let bin = usr.get_directory_ref(OsStr::new("bin")).unwrap();
+            let leaf = bin.leaf(bin.leaf_id(OsStr::new("hello")).unwrap());
+
+            assert_eq!(
+                leaf.stat.xattrs.get(OsStr::new("security.capability")),
+                Some(
+                    &xattrs
+                        .get("security.capability")
+                        .unwrap()
+                        .clone()
+                        .into_boxed_slice()
+                )
+            );
+        }
+    }
+
+    #[cfg(not(feature = "composefs-rs"))]
+    #[test]
+    fn composefs_feature_reports_xattr_image_support_unavailable() {
+        assert!(!erofs_xattr_image_support_available());
     }
 }

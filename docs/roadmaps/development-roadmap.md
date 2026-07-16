@@ -1,9 +1,9 @@
 ---
-last_updated: 2026-07-15
-proof_baseline: a610dcf8b76f0c555086e9bab09e07644ac23b5d
+last_updated: 2026-07-16
+proof_baseline: ffb69d938391f2bc49541f4f16b0e7eecd64fe9c
 current_milestone: first external tester loop
-active_workstream: none
-next_workstream: W1 Integrated Release-Green Baseline
+active_workstream: W2 Preview Release and Remi Readiness
+next_workstream: W3 First External Tester Loop
 ---
 
 # Codebase Development Roadmap
@@ -22,11 +22,14 @@ an explicit takeover decision. Generation, conaryd, and federation claims stay
 inside the narrower limits recorded below.
 
 Remote Forge validation is paused pending a KVM-capable runner. The dated
-2026-05-21 Group O QEMU run passed installed-runtime and bootstrap-run
-raw/qcow2 boot proof, and the dated 2026-05-21 Group P QEMU run passed ISO
-generation-carrier, provenance-sidecar, copy-back, read-only carrier boot, and
-writable `/etc` overlay proof. These are local x86_64 evidence, not a broad or
-current remote-validation claim.
+2026-05-21 Group O local QEMU run established the earlier export baseline. The
+dated 2026-07-16 Group O local KVM run superseded it by passing all five
+installed-runtime, file-capability, and bootstrap-run raw/qcow2 cases against
+`minimal-boot-v4`.
+The dated 2026-05-21 Group P QEMU run passed ISO generation-carrier,
+provenance-sidecar, copy-back, read-only carrier boot, and writable `/etc`
+overlay proof. These are local x86_64 evidence, not a broad or current
+remote-validation claim.
 
 ## Milestone 1 Exit Condition
 
@@ -60,7 +63,7 @@ ordinary outreach difficulty does not satisfy the milestone. The active
 
 ## Subsystem Maturity
 
-This is the dated 2026-07-15 baseline. The label describes reliability within
+This is the dated 2026-07-16 baseline. The label describes reliability within
 the stated scope, not whether a workstream happens to be active.
 
 | Subsystem | Maturity | Current limitation or next proof |
@@ -69,7 +72,7 @@ the stated scope, not whether a workstream happens to be active.
 | Adoption, unadoption, and native handoff | solid | Proof covers the current three-distro scope and is dated; revalidate on the integrated release candidate. |
 | Database, CAS, native parsing, and resolution | solid | Some advanced repository-policy abstractions and integration edges remain incomplete. |
 | Packaging, static repositories, trust, and self-update | solid | Preview scope only; refresh release evidence and keep supply-chain caveats explicit. |
-| CCS conversion and scriptlet authority | limited | The isolated authority branch is materially stronger than `main`; integrate it and close the QEMU shipping-proof gap. |
+| CCS conversion and scriptlet authority | limited | The W1 candidate integrates the reviewed authority work and has green local plus public-redownload QEMU file-capability fixture proof; W2 owns release and clean-host acceptance. |
 | Generation build and export | limited | Proven paths are x86_64; non-x86 assets, signed boot authority, and persistent-effect rollback remain later work. |
 | Model, source selection, and replatforming | limited | Some resolution deltas and builder inputs are not wired end to end. |
 | Bootstrap and self-hosting | limited | Rootful, chroot, fixture, and QEMU dependencies need repeatable current proof. |
@@ -96,9 +99,9 @@ the stated scope, not whether a workstream happens to be active.
   checksum, signature, self-update, SBOM/provenance, source, and caveat truth.
 - **Execution status:** complete.
 - **Dependencies:** none remain inside W0.
-- **Next gate:** W1 remains queued. Its first integrated candidate must resolve
-  the crossbeam blocker, reconcile the authority head without restoring retired
-  process files, and satisfy TGE05 or the exact shipping-risk decision.
+- **Next gate:** W1 completed the integrated candidate, authority reconciliation,
+  TGE05 proof, public v4 fixture publication, fresh-cache boot, and final
+  integrated gates. W2 is active.
 - **Proof:** on 2026-07-15, doc truth, its fixtures, agent-context fixtures and
   validation, and optional review-helper fixtures passed. The maintainability
   fixture reproduced its known federation `pipefail` false negative. Release
@@ -127,8 +130,10 @@ the stated scope, not whether a workstream happens to be active.
   The release audit separately reproduced only unwaived `RUSTSEC-2026-0204`
   plus the documented `RUSTSEC-2026-0173` and yanked-crate warnings. The final
   live clean-worktree proof runs immediately after the closeout commit.
-- **Limitations:** the release is not security-green; W1 still owns crossbeam
-  remediation, authority integration, and TGE05 or the exact risk decision.
+- **Limitations:** at W0 closeout the release was not security-green and W1
+  still owned crossbeam remediation, authority integration, and TGE05 or the
+  exact risk decision. W1 has since closed those items plus authenticated v4
+  fixture publication and public fresh-cache proof.
 - **Non-goals:** Rust behavior changes, authority-branch integration, dependency
   remediation, a release, or tester launch.
 
@@ -136,25 +141,41 @@ the stated scope, not whether a workstream happens to be active.
 
 - **Outcome:** one clean integrated commit is safe to treat as the release
   candidate, with authority work reconciled and current release gates green.
-- **Current truth:** the independently reviewed authority implementation is
-  isolated, tracked-clean, and ready to integrate at
-  `e6eeb4da9c560c34317b57b2a422717d4d556b37`, with merge base `ce6841ec`.
-  `RUSTSEC-2026-0204` remains unwaived against `crossbeam-epoch 0.9.18` and is
-  fixed upstream in 0.9.20. Generation file-capability shipping still requires
-  a TGE05 Group O QEMU success or an explicit maintainer decision naming the
-  missing proof, affected behavior, rationale, and expiration condition.
-- **Execution status:** queued behind W0.
-- **Dependencies:** W0 closeout; a non-vulnerable dependency resolution; the
-  authority reconciliation contract below; TGE05 or the precise risk decision.
-- **Next gate:** an exact integrated candidate with the crossbeam advisory
-  absent from the release audit and the generation file-capability shipping
-  decision recorded.
-- **Proof:** run formatting, workspace Clippy with warnings denied, owning
-  Conary/core/Remi/conaryd tests, `conary-test` inventory parsing, release
-  audit, release-matrix validation, neutral documentation/routing gates, and
-  routed scriptlet/generation interaction proof from the integrated head.
-- **Limitations:** focused tests are not equivalent to the outstanding real-VM
-  gate. The later production merge may not resurrect retired process paths.
+- **Current truth:** W1 started from clean `main` at `ffb69d93` and reconciles
+  the independently reviewed authority head
+  `e6eeb4da9c560c34317b57b2a422717d4d556b37` without restoring retired process
+  files. `Cargo.lock` now resolves `crossbeam-epoch 0.9.20`; the fresh release
+  audit no longer reports `RUSTSEC-2026-0204`. Both nonblocking authority-review
+  notes are closed: one regression crosses the raw private artifact writer and
+  sanitized admin response, and balanced quoted environment assignments now
+  cluster as `<env-assignment>`. The 2026-07-16 Fedora 44 local KVM Group O run
+  passed all five cases against `minimal-boot-v4`, including capability-absent
+  and capability-enabled TGE05 boots.
+- **Execution status:** complete; the integrated merge commit is the
+  release-green candidate consumed by W2.
+- **Dependencies:** none remain inside W1.
+- **Next gate:** W2 is active and owns the post-integration preview release,
+  compatible Remi deployment, and representative clean-host smoke.
+- **Proof:** formatting, workspace Clippy with warnings denied, owning
+  Conary/core/Remi/conaryd tests, the 28-suite/334-case `conary-test` inventory,
+  release audit, release-matrix validation, neutral documentation/routing
+  gates, and routed scriptlet/generation interaction proof passed on the W1
+  tree. The repaired runner uses Fedora's 4 MiB OVMF path as read-only pflash,
+  waits for systemd boot completion before adoption, and versions the cached
+  test identity with the active source image. On 2026-07-16 the complete Group
+  O run passed 5 / failed 0 / skipped 0 / cancelled 0: TGE01 36,281 ms, TGE03
+  625,760 ms, TGE04 1,725,736 ms, TGE05 3,024,480 ms, and TGE02 1,914,811 ms.
+  TGE05 also passed a focused run in 3,060,588 ms, and a recompiled-harness
+  TGE01 rerun passed in 36,068 ms with `conaryos-test-key-v4`. Authenticated
+  Remi staging and destination verification preserved the image and key hashes;
+  all three v4 artifact URLs returned HTTP 200. An isolated empty cache then
+  downloaded the public image and private test key with matching SHA-256 values
+  and passed TGE01 under KVM in 63,320 ms. The final formatting, Clippy,
+  owning-package, documentation, routing, release-matrix, and release-audit
+  gates passed after that proof.
+- **Limitations:** W1 establishes an integrated release candidate, not a new
+  tagged preview or stranger-operated service claim. W2 owns those outcomes.
+  The production merge did not resurrect retired process paths.
 - **Non-goals:** expanding public scriptlet authority, enabling federation, or
   adding unrelated package-manager features.
 
@@ -189,8 +210,9 @@ recorded exactly in the reconciliation map below.
   self-update evidence. It predates the integrated W1 candidate. Remi remains
   a maintainer/operator-run path with source-build fallbacks and no public
   operator artifact decision.
-- **Execution status:** queued behind W1.
-- **Dependencies:** a clean W1 candidate and release-green audit.
+- **Execution status:** active.
+- **Dependencies:** none remain inside W1; W2 must preserve the release-green
+  candidate while producing the release and service evidence below.
 - **Next gate:** publish a fresh post-integration release and prove a prewarmed,
   compatible Remi path from a clean supported host.
 - **Proof:** require identity equality among the source commit, tag, published
@@ -253,7 +275,7 @@ Its final independent review found no Critical or Important issue and returned
 | Canonical documentation | The eight files listed under W1 | Integrate branch product truth, then retain only W0's neutral path and proof wording where the concerns overlap. |
 | Modified branch registries | Generated-document inventory, per-file documentation-audit coverage, and feature-claim implementation truth | Delete as completed process bookkeeping. |
 | Completed branch-only plans | File-capability public policy, generation file-capability xattrs, LSM policy semantics, network/package recursion authority, PAM authority, publication-summary schema/docs truth, Remi local-only test serving, and sysctl target-profile public policy | Delete as completed process history; do not recreate under neutral planning paths. |
-| Remaining shipping gate | TGE05 Group O | W1 must pass the QEMU proof or record the exact affected behavior, rationale, missing proof, and expiration condition of a maintainer risk decision. |
+| Remaining shipping gate | v4 fixture publication | Closed on 2026-07-16: the versioned v4 image/key set is public, an isolated download matched the source hashes, and TGE01 booted it under KVM. |
 | Production integration | The later real merge | Retired planning, audit, coherency, and local execution paths may not return. |
 
 ### Authority A-I Disposition
@@ -261,13 +283,13 @@ Its final independent review found no Critical or Important issue and returned
 | Area | Durable disposition and owner |
 | --- | --- |
 | A. File-capability policy precision | Implemented at the pinned head. Canonical owners are `docs/SCRIPTLET_SECURITY.md` and `docs/modules/ccs.md`. |
-| B. Generation xattr propagation | Implemented at the pinned head. W1 still requires TGE05 Group O or the named shipping-risk decision above. |
+| B. Generation xattr propagation | Implemented at the pinned head and proven by the 2026-07-16 TGE05 local KVM pass plus public fixture redownload and KVM boot. |
 | C. Sysctl target-profile policy | Implemented at the pinned head. Canonical owner is `docs/modules/ccs.md`, backed by target-profile policy and conversion tests. |
 | D. LSM policy semantics | Implemented at the pinned head. Canonical owners are `docs/SCRIPTLET_SECURITY.md`, `docs/modules/ccs.md`, and `docs/modules/remi.md`. |
 | E. PAM, kernel, initramfs, and bootloader | PAM remains deliberately non-public. Later boot and security outcomes remain in the post-M1 horizon rather than becoming implied authority. |
 | F. Network and package-manager recursion | Deliberately blocked and non-public; exact owners and proof are transferred below. |
 | G. Remi non-public test serving | Implemented at the pinned head and canonical in `docs/modules/remi.md`. |
-| H. Publication schema and docs truth | Implemented at the pinned head. W1 retains the two nonblocking review minors below until implementation or explicit follow-up ownership. |
+| H. Publication schema and docs truth | Implemented at the pinned head. W1 closed both nonblocking review minors with the cross-boundary route regression and quoted-assignment normalization decision below. |
 | I. Enabling refactors | No standalone work item. Apply the existing maintainability boundary only when a product slice touches the hotspot. |
 
 ### Branch-Only Claim Transfer
@@ -277,13 +299,14 @@ Its final independent review found no Critical or Important issue and returned
 | Network fetch and package-manager recursion remain non-public and blocked. | `docs/SCRIPTLET_SECURITY.md`, `docs/modules/ccs.md`, and the CCS/Remi feature cards | `blocked_classes_block_live_fetch_and_package_manager_recursion`; `live_fetch_and_package_manager_classes_remain_blocked_without_native_adapters` and its fake-Known-row guard; `corpus_summary_marks_live_fetch_and_package_manager_recursion`; and `blocked_live_fetch_and_package_manager_reports_stay_private_and_non_public_only`. |
 | Stale publication summaries fail closed; public responses are sanitized while raw review artifacts remain private. | `docs/modules/remi.md` and `docs/SCRIPTLET_SECURITY.md` | `converted_ccs_path_for_download_rejects_stale_conversion_records`; `stale_converted_rows_are_not_scriptlet_public_ready`; `publication_report_sanitizes_boot_and_security_policy_intents`; `publication_report_sanitizes_unknown_commands_and_reasons_while_raw_report_retains_them`; `raw_publication_report_retains_private_intents_for_review_artifacts`; and the non-public/admin sanitization tests `non_public_test_serving_manifest_returns_sanitized_blocked_metadata` and `non_public_test_serving_manifest_sanitizes_private_intent_values`. |
 
-Retain these two nonblocking review notes exactly until W1 implements them or
-assigns an explicit later owner:
+W1 closed the two nonblocking review notes as follows:
 
-1. Add one workflow regression that combines a raw private artifact writer
-   with a sanitized public/admin response route.
-2. Decide whether balanced quoted environment assignments normalize to
-   `<path>` or `<env-assignment>` for clustering invariance.
+1. `raw_review_artifact_and_admin_response_keep_separate_visibility` combines
+   the real raw private artifact writer with the authenticated admin response
+   route and proves the raw path and values remain absent from the response.
+2. Balanced quoted and unquoted environment assignments normalize to
+   `<env-assignment>` for clustering invariance, covered by
+   `balanced_quoted_env_assignments_cluster_with_unquoted_forms`.
 
 ### Disposable Rehearsal Proof
 
@@ -417,6 +440,7 @@ decision record is needed. Do not create a replacement planning archive.
 
 New work enters the ordered sequence only when it advances the current
 milestone, resolves a safety or release blocker, or is explicitly accepted as
-a post-milestone horizon. W0 closes only after the authority rehearsal and
-neutral-layout acceptance pass; W1 remains the next queued workstream until
-then.
+a post-milestone horizon. W0 closed after the authority rehearsal and
+neutral-layout acceptance pass; W1 closed after authenticated v4 fixture
+publication, public fresh-cache KVM proof, and final integrated release gates.
+W2 is now active.

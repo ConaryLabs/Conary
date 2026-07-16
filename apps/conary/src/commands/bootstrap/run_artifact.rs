@@ -113,6 +113,7 @@ pub(super) fn write_bootstrap_run_generation_artifact(
         fsverity_enabled: false,
         erofs_verity_digest: None,
         artifact_manifest_sha256: Some(artifact_manifest_sha256),
+        security_capability_xattr_count: None,
         created_at: chrono::Utc::now().to_rfc3339(),
         package_count: i64::try_from(package_count).unwrap_or(i64::MAX),
         kernel_version: Some("bootstrap".to_string()),

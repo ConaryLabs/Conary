@@ -180,10 +180,47 @@ pub fn decision_refusal(decision: PublicationDecision) -> Option<PublicationRefu
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReportIntentVisibility {
+    Sanitized,
+    Raw,
+}
+
 pub fn report_from_summary(
     summary: &ScriptletBundleSummary,
     summary_valid: bool,
 ) -> PublicationGateReport {
+    report_from_summary_with_intent_visibility(
+        summary,
+        summary_valid,
+        ReportIntentVisibility::Sanitized,
+    )
+}
+
+pub fn raw_report_from_summary(
+    summary: &ScriptletBundleSummary,
+    summary_valid: bool,
+) -> PublicationGateReport {
+    report_from_summary_with_intent_visibility(summary, summary_valid, ReportIntentVisibility::Raw)
+}
+
+fn report_from_summary_with_intent_visibility(
+    summary: &ScriptletBundleSummary,
+    summary_valid: bool,
+    intent_visibility: ReportIntentVisibility,
+) -> PublicationGateReport {
+    let unknown_commands = match intent_visibility {
+        ReportIntentVisibility::Sanitized => summary
+            .unknown_commands
+            .iter()
+            .filter_map(|command| {
+                crate::server::scriptlet_evidence_queue::normalization::normalize_token(command)
+            })
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect(),
+        ReportIntentVisibility::Raw => sorted(&summary.unknown_commands),
+    };
     let mut reason_codes = Vec::new();
     let mut seen = BTreeSet::new();
     for code in &summary.blocked_reason_codes {
@@ -192,7 +229,7 @@ pub fn report_from_summary(
     for code in &summary.review_reason_codes {
         push_reason(&mut reason_codes, &mut seen, code.clone());
     }
-    for command in sorted(&summary.unknown_commands) {
+    for command in &unknown_commands {
         push_reason(
             &mut reason_codes,
             &mut seen,
@@ -210,6 +247,21 @@ pub fn report_from_summary(
         );
     }
 
+    let (boot_security_intents, security_policy_intents) = match intent_visibility {
+        ReportIntentVisibility::Sanitized => (
+            crate::server::scriptlet_evidence_queue::normalization::sanitize_boot_security_intents(
+                &summary.boot_security_intents,
+            ),
+            crate::server::scriptlet_evidence_queue::normalization::sanitize_security_policy_intents(
+                &summary.security_policy_intents,
+            ),
+        ),
+        ReportIntentVisibility::Raw => (
+            summary.boot_security_intents.clone(),
+            summary.security_policy_intents.clone(),
+        ),
+    };
+
     PublicationGateReport {
         publication_status: summary.publication_status.clone(),
         scriptlet_fidelity: summary.scriptlet_fidelity.clone(),
@@ -219,10 +271,10 @@ pub fn report_from_summary(
         reason_codes,
         blocked_reason_codes: summary.blocked_reason_codes.clone(),
         review_reason_codes: summary.review_reason_codes.clone(),
-        unknown_commands: sorted(&summary.unknown_commands),
+        unknown_commands,
         blocked_classes: sorted(&summary.blocked_classes),
-        boot_security_intents: summary.boot_security_intents.clone(),
-        security_policy_intents: summary.security_policy_intents.clone(),
+        boot_security_intents,
+        security_policy_intents,
         evidence_digest: summary.evidence_digest.clone(),
         curation_evidence_digest: summary.curation_evidence_digest.clone(),
         review_artifact_available: summary.review_artifact_path.is_some(),
@@ -426,6 +478,13 @@ mod tests {
         ));
         assert!(matches!(
             classify_summary(ScriptletSummaryForPublication {
+                summary: summary("local-only"),
+                valid: true,
+            }),
+            PublicationDecision::ReviewRequired(_)
+        ));
+        assert!(matches!(
+            classify_summary(ScriptletSummaryForPublication {
                 summary: summary("blocked"),
                 valid: true,
             }),
@@ -474,6 +533,8 @@ mod tests {
             .review_reason_codes
             .push("review-class-deb-trigger".to_string());
 
+        let local_only = golden_summary("local-only", "local-only", "local-only");
+
         let mut blocked = golden_summary("blocked", "blocked", "blocked");
         blocked.decision_counts = ScriptletDecisionCountsSummary {
             blocked: 1,
@@ -503,6 +564,7 @@ mod tests {
                 review_required,
                 false,
             ),
+            ("goal8a-local-only", "local-only-chunk", local_only, false),
             ("goal8a-blocked", "blocked-chunk", blocked, false),
         ];
 
@@ -633,6 +695,97 @@ mod tests {
     }
 
     #[test]
+    fn blocked_pam_report_stays_private_and_non_public_only() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let db_path = temp.path().join("remi.db");
+        conary_core::db::init(&db_path).unwrap();
+        let conn = conary_core::db::open(&db_path).unwrap();
+        let mut summary = golden_summary("blocked", "blocked", "blocked");
+        summary.decision_counts = ScriptletDecisionCountsSummary {
+            blocked: 1,
+            ..ScriptletDecisionCountsSummary::default()
+        };
+        summary
+            .blocked_reason_codes
+            .push("blocked-class-pam".to_string());
+        summary.blocked_classes.push("pam".to_string());
+        insert_golden_converted(&conn, "pam-private", "pam-chunk", &summary);
+
+        let converted = ConvertedPackage::find_publication_candidates(&conn, "fedora", None)
+            .unwrap()
+            .into_iter()
+            .find(|converted| converted.package_name.as_deref() == Some("pam-private"))
+            .expect("private converted PAM row should remain queryable as server state");
+        assert!(!converted.is_scriptlet_public_ready());
+        assert_eq!(
+            ConvertedPackage::chunk_publication_state(&conn, "pam-chunk").unwrap(),
+            ChunkPublicationState::NonPublicOnly
+        );
+
+        let report = match classify_converted_package(&converted) {
+            PublicationDecision::Blocked(report) => report,
+            other => panic!("expected blocked PAM report, got {other:?}"),
+        };
+        assert_eq!(report.publication_status, "blocked");
+        assert_eq!(report.blocked_classes, vec!["pam"]);
+        assert!(report.boot_security_intents.is_empty());
+        assert!(report.security_policy_intents.is_empty());
+        assert!(report.message.contains("pam"));
+    }
+
+    #[test]
+    fn blocked_live_fetch_and_package_manager_reports_stay_private_and_non_public_only() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let db_path = temp.path().join("remi.db");
+        conary_core::db::init(&db_path).unwrap();
+        let conn = conary_core::db::open(&db_path).unwrap();
+
+        for (name, chunk, class_id, reason_code) in [
+            (
+                "network-private",
+                "network-chunk",
+                "network",
+                "blocked-class-network",
+            ),
+            (
+                "pm-private",
+                "pm-chunk",
+                "package-manager-recursion",
+                "blocked-class-package-manager-recursion",
+            ),
+        ] {
+            let mut summary = golden_summary("blocked", "blocked", "blocked");
+            summary.decision_counts = ScriptletDecisionCountsSummary {
+                blocked: 1,
+                ..ScriptletDecisionCountsSummary::default()
+            };
+            summary.blocked_reason_codes.push(reason_code.to_string());
+            summary.blocked_classes.push(class_id.to_string());
+            insert_golden_converted(&conn, name, chunk, &summary);
+
+            let converted = ConvertedPackage::find_publication_candidates(&conn, "fedora", None)
+                .unwrap()
+                .into_iter()
+                .find(|converted| converted.package_name.as_deref() == Some(name))
+                .unwrap_or_else(|| panic!("private converted row {name} should remain queryable"));
+            assert!(!converted.is_scriptlet_public_ready());
+            assert_eq!(
+                ConvertedPackage::chunk_publication_state(&conn, chunk).unwrap(),
+                ChunkPublicationState::NonPublicOnly
+            );
+
+            let report = match classify_converted_package(&converted) {
+                PublicationDecision::Blocked(report) => report,
+                other => panic!("expected blocked {class_id} report, got {other:?}"),
+            };
+            assert_eq!(report.publication_status, "blocked");
+            assert_eq!(report.blocked_classes, vec![class_id.to_string()]);
+            assert!(report.boot_security_intents.is_empty());
+            assert!(report.security_policy_intents.is_empty());
+        }
+    }
+
+    #[test]
     fn publication_report_reasons_are_deterministic_and_deduplicated() {
         let summary = ScriptletBundleSummary {
             publication_status: "private-review".to_string(),
@@ -701,6 +854,129 @@ mod tests {
         assert_eq!(report.boot_security_intents.len(), 1);
         assert_eq!(report.boot_security_intents[0].class_id, "initramfs");
         assert_eq!(report.boot_security_intents[0].command, "dracut");
+    }
+
+    #[test]
+    fn publication_report_sanitizes_boot_and_security_policy_intents() {
+        let mut summary = ScriptletBundleSummary {
+            publication_status: "blocked".to_string(),
+            blocked_classes: vec!["apparmor".to_string(), "initramfs".to_string()],
+            boot_security_intents: vec![
+                conary_core::ccs::legacy_scriptlets::BootSecurityIntentEvidence {
+                    class_id: "initramfs".to_string(),
+                    reason_code: "blocked-class-initramfs".to_string(),
+                    command: "dracut".to_string(),
+                    argv: vec![
+                        "--force".to_string(),
+                        "/home/remi/private-initramfs.img".to_string(),
+                        "SECRET=/home/remi/token".to_string(),
+                    ],
+                    phase: Some("post-install".to_string()),
+                    lifecycle_paths: vec!["/home/remi/private-phase".to_string()],
+                },
+            ],
+            security_policy_intents: vec![apparmor_policy_intent()],
+            review_artifact_path: Some("/tmp/private-review-secret.json".to_string()),
+            ..ScriptletBundleSummary::default()
+        };
+        summary.security_policy_intents[0]
+            .source
+            .argv
+            .push("SECRET=/home/remi/token".to_string());
+        summary.security_policy_intents[0]
+            .scope
+            .paths
+            .push("/home/remi/private.pp".to_string());
+        summary.security_policy_intents[0]
+            .payload_evidence
+            .paths
+            .push("/home/remi/private.pp".to_string());
+
+        let report = report_from_summary(&summary, true);
+        let json = serde_json::to_string(&report).unwrap();
+
+        assert!(report.review_artifact_available);
+        assert_eq!(report.boot_security_intents[0].argv[1], "<path>");
+        assert_eq!(report.boot_security_intents[0].argv[2], "<env-assignment>");
+        assert_eq!(
+            report.boot_security_intents[0].lifecycle_paths,
+            vec!["<path>"]
+        );
+        assert!(
+            report.security_policy_intents[0]
+                .scope
+                .paths
+                .contains(&"/etc/apparmor.d/usr.bin.demo".to_string())
+        );
+        assert!(
+            report.security_policy_intents[0]
+                .scope
+                .paths
+                .contains(&"<path>".to_string())
+        );
+        assert!(!json.contains("/home/remi"));
+        assert!(!json.contains("SECRET="));
+        assert!(!json.contains("review_artifact_path"));
+        assert!(!json.contains("private-review-secret"));
+    }
+
+    #[test]
+    fn publication_report_sanitizes_unknown_commands_and_reasons_while_raw_report_retains_them() {
+        let raw_commands = ["/home/remi/private-helper", "note:SECRET=/home/remi/token"];
+        let summary = ScriptletBundleSummary {
+            publication_status: "blocked".to_string(),
+            unknown_commands: raw_commands.iter().map(|value| value.to_string()).collect(),
+            ..ScriptletBundleSummary::default()
+        };
+
+        let sanitized = report_from_summary(&summary, true);
+        let sanitized_json = serde_json::to_string(&sanitized).unwrap();
+        let raw = raw_report_from_summary(&summary, true);
+
+        for command in raw_commands {
+            assert!(
+                !sanitized
+                    .unknown_commands
+                    .iter()
+                    .any(|value| value == command)
+            );
+            assert!(
+                !sanitized
+                    .reason_codes
+                    .iter()
+                    .any(|reason| reason.contains(command))
+            );
+            assert!(!sanitized_json.contains(command));
+            assert!(raw.unknown_commands.iter().any(|value| value == command));
+            assert!(
+                raw.reason_codes
+                    .contains(&format!("unknown-command:{command}"))
+            );
+        }
+    }
+
+    #[test]
+    fn raw_publication_report_retains_private_intents_for_review_artifacts() {
+        let mut summary = ScriptletBundleSummary {
+            publication_status: "blocked".to_string(),
+            blocked_classes: vec!["apparmor".to_string()],
+            security_policy_intents: vec![apparmor_policy_intent()],
+            ..ScriptletBundleSummary::default()
+        };
+        summary.security_policy_intents[0]
+            .source
+            .argv
+            .push("SECRET=/home/remi/token".to_string());
+        summary.security_policy_intents[0]
+            .scope
+            .paths
+            .push("/home/remi/private.pp".to_string());
+
+        let report = raw_report_from_summary(&summary, true);
+        let json = serde_json::to_string(&report).unwrap();
+
+        assert!(json.contains("/home/remi/private.pp"));
+        assert!(json.contains("SECRET=/home/remi/token"));
     }
 
     fn apparmor_policy_intent() -> SecurityPolicyIntent {

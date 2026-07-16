@@ -76,6 +76,7 @@ pub async fn cmd_bootstrap_seed(from: &str, output: &str, target: &str) -> Resul
                 permissions: metadata.mode() & 0o7777,
                 owner: None,
                 group_name: None,
+                xattrs: std::collections::BTreeMap::new(),
             });
             file_count += 1;
         }

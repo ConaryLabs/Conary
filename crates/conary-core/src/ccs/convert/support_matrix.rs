@@ -119,8 +119,11 @@ fn adapter_entry(adapter_id: &'static str) -> SupportMatrixEntry {
         "sysctl/v1" => (
             Some("sysctl -w <key>=<value>"),
             "helper-complete-sysctl",
-            "Narrow sysctl writes are complete only when the key and value validate and conversion projects the effect into native hooks.sysctl.",
-            &["adapter-sysctl"],
+            "Narrow sysctl writes are complete when the key and value validate and conversion projects the effect into native hooks.sysctl; public-ready status also requires target-profile policy to accept the exact key.",
+            &[
+                "adapter-sysctl",
+                "adapter-sysctl-target-profile-private-review",
+            ],
             &["rpm", "deb", "arch"],
         ),
         "setuid-mode/v1" => (
@@ -134,7 +137,10 @@ fn adapter_entry(adapter_id: &'static str) -> SupportMatrixEntry {
             Some("setcap cap_*=+ep <payload-executable>"),
             "helper-complete-file-capability",
             "Narrow Linux file capability grants are complete only for known capabilities on payload executables and project into manifest file_capabilities authority.",
-            &["adapter-file-capability"],
+            &[
+                "adapter-file-capability",
+                "adapter-file-capability-high-risk",
+            ],
             &["rpm", "deb", "arch"],
         ),
         "selinux-policy/v1" => (
@@ -254,6 +260,50 @@ mod tests {
     use crate::ccs::convert::blocked_classes::BlockedClassRegistry;
     use crate::ccs::convert::golden_fixtures;
 
+    fn pam_associated_known_rows(entries: &[SupportMatrixEntry]) -> Vec<&SupportMatrixEntry> {
+        entries
+            .iter()
+            .filter(|entry| {
+                entry.outcome == SupportOutcome::Known
+                    && (entry.class_id == Some("pam")
+                        || entry
+                            .adapter_id
+                            .is_some_and(|adapter_id| adapter_id.contains("pam"))
+                        || entry.command.is_some_and(|command| command.contains("pam"))
+                        || entry.reason_code.contains("pam")
+                        || entry
+                            .fixture_names
+                            .iter()
+                            .any(|fixture_name| fixture_name.contains("pam"))
+                        || entry.lifecycle_notes.contains("PAM"))
+            })
+            .collect()
+    }
+
+    fn has_live_fetch_or_package_manager_identity(identity: Option<&str>) -> bool {
+        matches!(identity, Some("network" | "package-manager-recursion"))
+            || identity.is_some_and(|identity| {
+                identity.contains("network")
+                    || identity.contains("package-manager")
+                    || identity.contains("live-fetch")
+                    || identity.contains("dependency-intent")
+                    || identity.contains("offline-artifact")
+            })
+    }
+
+    fn live_fetch_or_package_manager_known_rows(
+        entries: &[SupportMatrixEntry],
+    ) -> Vec<&SupportMatrixEntry> {
+        entries
+            .iter()
+            .filter(|entry| {
+                entry.outcome == SupportOutcome::Known
+                    && (has_live_fetch_or_package_manager_identity(entry.class_id)
+                        || has_live_fetch_or_package_manager_identity(entry.adapter_id))
+            })
+            .collect()
+    }
+
     #[test]
     fn support_matrix_covers_every_builtin_adapter() {
         let matrix = SupportMatrix::default();
@@ -333,6 +383,68 @@ mod tests {
     }
 
     #[test]
+    fn file_capability_support_matrix_distinguishes_public_and_private_review_fixtures() {
+        let matrix = SupportMatrix::default();
+        let row = matrix
+            .entries()
+            .iter()
+            .find(|entry| entry.adapter_id == Some("file-capability/v1"))
+            .expect("file-capability adapter row exists");
+
+        assert_eq!(
+            row.fixture_names,
+            &[
+                "adapter-file-capability",
+                "adapter-file-capability-high-risk"
+            ]
+        );
+
+        let fixtures: std::collections::BTreeMap<_, _> = golden_fixtures::all_cases()
+            .iter()
+            .map(|case| (case.id, case.expected_outcome))
+            .collect();
+        assert_eq!(
+            fixtures.get("adapter-file-capability"),
+            Some(&golden_fixtures::GoldenFixtureOutcome::FullyReplaced)
+        );
+        assert_eq!(
+            fixtures.get("adapter-file-capability-high-risk"),
+            Some(&golden_fixtures::GoldenFixtureOutcome::ReviewRequired)
+        );
+    }
+
+    #[test]
+    fn sysctl_support_matrix_distinguishes_public_and_private_review_fixtures() {
+        let matrix = SupportMatrix::default();
+        let row = matrix
+            .entries()
+            .iter()
+            .find(|entry| entry.adapter_id == Some("sysctl/v1"))
+            .expect("sysctl adapter row exists");
+
+        assert_eq!(
+            row.fixture_names,
+            &[
+                "adapter-sysctl",
+                "adapter-sysctl-target-profile-private-review"
+            ]
+        );
+
+        let fixtures: std::collections::BTreeMap<_, _> = golden_fixtures::all_cases()
+            .iter()
+            .map(|case| (case.id, case.expected_outcome))
+            .collect();
+        assert_eq!(
+            fixtures.get("adapter-sysctl"),
+            Some(&golden_fixtures::GoldenFixtureOutcome::FullyReplaced)
+        );
+        assert_eq!(
+            fixtures.get("adapter-sysctl-target-profile-private-review"),
+            Some(&golden_fixtures::GoldenFixtureOutcome::ReviewRequired)
+        );
+    }
+
+    #[test]
     fn public_ready_adapter_rows_have_golden_fixture_evidence() {
         let fixtures: std::collections::BTreeMap<_, _> = golden_fixtures::all_cases()
             .iter()
@@ -351,25 +463,29 @@ mod tests {
                 !entry.fixture_names.is_empty(),
                 "adapter {adapter_id} has no golden fixture evidence"
             );
+            let expected = if adapter_id == "native-free/v1" {
+                golden_fixtures::GoldenFixtureOutcome::NativeFree
+            } else {
+                golden_fixtures::GoldenFixtureOutcome::FullyReplaced
+            };
 
+            let mut has_public_ready_fixture = false;
             for fixture_name in entry.fixture_names {
                 let fixture = fixtures.get(fixture_name).unwrap_or_else(|| {
                     panic!("adapter {adapter_id} fixture {fixture_name} is not declared")
                 });
-                let expected = if adapter_id == "native-free/v1" {
-                    golden_fixtures::GoldenFixtureOutcome::NativeFree
-                } else {
-                    golden_fixtures::GoldenFixtureOutcome::FullyReplaced
-                };
-                assert_eq!(
-                    fixture.expected_outcome, expected,
-                    "adapter {adapter_id} fixture {fixture_name} has wrong public-ready outcome"
-                );
-                assert!(
-                    fixture.source_distro_id.is_some() && fixture.target_distro_id.is_some(),
-                    "public-ready fixture {fixture_name} must use exact source and target distro ids"
-                );
+                if fixture.expected_outcome == expected {
+                    has_public_ready_fixture = true;
+                    assert!(
+                        fixture.source_distro_id.is_some() && fixture.target_distro_id.is_some(),
+                        "public-ready fixture {fixture_name} must use exact source and target distro ids"
+                    );
+                }
             }
+            assert!(
+                has_public_ready_fixture,
+                "adapter {adapter_id} has no public-ready golden fixture evidence"
+            );
         }
     }
 
@@ -469,6 +585,106 @@ mod tests {
             assert_eq!(row.outcome, SupportOutcome::Blocked);
             assert!(row.adapter_id.is_none());
         }
+    }
+
+    #[test]
+    fn pam_class_remains_blocked_without_native_adapter() {
+        let matrix = SupportMatrix::default();
+
+        let row = matrix
+            .entries()
+            .iter()
+            .find(|entry| entry.class_id == Some("pam"))
+            .expect("missing support row for pam");
+
+        assert_eq!(row.outcome, SupportOutcome::Blocked);
+        assert!(row.adapter_id.is_none());
+        assert_eq!(row.fixture_names, &["blocked-class-pam"]);
+
+        let known_rows = pam_associated_known_rows(matrix.entries());
+        assert!(
+            known_rows.is_empty(),
+            "PAM should not have any known adapter/support rows: {:?}",
+            known_rows.iter().map(|entry| entry.id).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn live_fetch_and_package_manager_known_row_guard_rejects_fake_rows() {
+        let mut entries = SupportMatrix::default().entries().to_vec();
+        entries.push(SupportMatrixEntry {
+            id: "network-fetch/v0-test-only",
+            command: Some("git clone"),
+            class_id: None,
+            adapter_id: Some("network-fetch/v0-test-only"),
+            outcome: SupportOutcome::Known,
+            reason_code: "helper-complete-network-fetch",
+            source_families: &["rpm", "deb", "arch"],
+            lifecycle_notes: "temporary in-test support row",
+            fixture_names: &["adapter-network-fetch-test-only"],
+        });
+        entries.push(SupportMatrixEntry {
+            id: "dependency-intent/v0-test-only",
+            command: None,
+            class_id: Some("dependency-intent/v0-test-only"),
+            adapter_id: None,
+            outcome: SupportOutcome::Known,
+            reason_code: "helper-complete-dependency-intent",
+            source_families: &["rpm", "deb", "arch"],
+            lifecycle_notes: "temporary in-test support row",
+            fixture_names: &["adapter-dependency-intent-test-only"],
+        });
+        entries.push(SupportMatrixEntry {
+            id: "package-manager-recursion/v0-test-only",
+            command: Some("microdnf install"),
+            class_id: None,
+            adapter_id: Some("package-manager-recursion/v0-test-only"),
+            outcome: SupportOutcome::Known,
+            reason_code: "helper-complete-package-manager-recursion",
+            source_families: &["rpm", "deb", "arch"],
+            lifecycle_notes: "temporary in-test support row",
+            fixture_names: &["adapter-package-manager-test-only"],
+        });
+
+        let known_rows = live_fetch_or_package_manager_known_rows(&entries);
+        assert_eq!(
+            known_rows.iter().map(|entry| entry.id).collect::<Vec<_>>(),
+            vec![
+                "network-fetch/v0-test-only",
+                "dependency-intent/v0-test-only",
+                "package-manager-recursion/v0-test-only"
+            ]
+        );
+    }
+
+    #[test]
+    fn live_fetch_and_package_manager_classes_remain_blocked_without_native_adapters() {
+        let matrix = SupportMatrix::default();
+
+        for (class_id, fixture_name) in [
+            ("network", "blocked-class-network"),
+            (
+                "package-manager-recursion",
+                "blocked-class-package-manager-recursion",
+            ),
+        ] {
+            let row = matrix
+                .entries()
+                .iter()
+                .find(|entry| entry.class_id == Some(class_id))
+                .unwrap_or_else(|| panic!("missing support row for {class_id}"));
+
+            assert_eq!(row.outcome, SupportOutcome::Blocked);
+            assert!(row.adapter_id.is_none());
+            assert_eq!(row.fixture_names, &[fixture_name]);
+        }
+
+        let known_rows = live_fetch_or_package_manager_known_rows(matrix.entries());
+        assert!(
+            known_rows.is_empty(),
+            "live fetch and package-manager recursion should not have Known support rows: {:?}",
+            known_rows.iter().map(|entry| entry.id).collect::<Vec<_>>()
+        );
     }
 
     #[test]

@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-07-08
-revision: 10
-summary: Document narrow AppArmor profile conversion authority
+last_updated: 2026-07-16
+revision: 14
+summary: Record file-capability policy and the green public Group O shipping proof
 ---
 
 # Scriptlet Security Model
@@ -158,6 +158,19 @@ classes until native adapter and target-profile evidence proves complete
 replacement. Raw replay, `--no-scripts`, or malformed summary metadata must not
 make these packages public-ready.
 
+PAM stack helpers such as `authselect`, `authconfig`, `pam-auth-update`, and
+`pam-config` are also blocked for public serving. Public-ready PAM conversion
+requires a future native PAM adapter with target-profile PAM stack facts,
+rollback semantics, and operator-visible review.
+
+Live network fetches and nested package-manager calls are also blocked for
+public serving. Commands such as `curl`, `wget`, `scp`, `ssh`, `git clone`,
+`dnf`, `apt`, `dpkg`, `rpm`, `pacman`, `apk`, `microdnf`, and `zypper` may be
+preserved as sanitized refusal evidence, but they are not native authority.
+Future support must model dependency intent or curated offline artifacts; it
+must not run a foreign package manager or fetch live network content during
+conversion or install.
+
 Supported SELinux forms are different: `selinux-policy/v1` records
 payload-scoped label refresh, payload-backed file-context rules, persistent boolean
 declarations, and payload-backed policy-module installs as optional policy
@@ -174,11 +187,21 @@ never runs `apparmor_parser` against the host policy store. Mode changes such
 as `aa-enforce` and `aa-complain`, profile disable/status helpers, broad
 directory reloads, and non-payload profile paths remain blocked/private and use
 `block-on-enforcing-target` fallback when captured as review intent.
+Promoting any broader SELinux or AppArmor form requires target-provider facts
+for availability, mode, policy store behavior, profile or module content
+validation where applicable, and an operator-visible absent-provider fallback.
 
 Sysctl handling has a narrow native-authority bridge. Conversion may replace a
 simple `sysctl -w <key>=<value>` scriptlet with a validated native
 `hooks.sysctl` declaration when the key and value pass the same CCS sysctl
-validators used at install time. Broad loads such as `sysctl -p`, multiple
+validators used at install time, and one validated write still counts as
+complete native replacement evidence for `sysctl/v1`. Public-ready serving is
+narrower: the converted package is public only when the target profile accepts
+that exact sysctl key. Missing target-profile context or keys the profile does
+not allow stay `private-review`, even when the native hook projection is
+otherwise complete. Today the public catalog proof key is `kernel.example`;
+`net.ipv4.ip_forward` remains valid private-review evidence unless a future
+target profile explicitly allows it. Broad loads such as `sysctl -p`, multiple
 assignment batches, and denied security-sensitive keys remain blocked and can
 only be fetched through the non-public admin/test lane.
 
@@ -190,12 +213,30 @@ that authority into the CCS file mode and adds the exact path to
 setuid bit while still stripping unapproved setuid and all setgid bits.
 
 File-capability handling is separate manifest authority, not package dependency
-capabilities. Conversion may replace
-`setcap cap_net_bind_service=+ep <payload-executable>` and other known
-Linux-capability `+ep` grants only when the target is an executable shipped by
-the package payload. The converter records that authority in
+capabilities. `file-capability/v1` still recognizes known Linux
+`setcap cap_*=+ep <payload-executable>` grants as complete replacement
+evidence, but only `cap_net_bind_service` is public-ready by default. High-risk
+known capabilities such as `cap_sys_admin`, `cap_sys_module`, `cap_sys_rawio`,
+`cap_sys_boot`, `cap_sys_ptrace`, `cap_bpf`, `cap_net_admin`, `cap_setpcap`,
+and `cap_setfcap` remain private-review until a future target-profile policy
+explicitly allows them. The converter records recognized authority in
 `[[file_capabilities]]`, and mutable live-root CCS installs apply it through a
 controlled `setcap` invocation after file deployment and before DB commit.
+Generation-aware CCS installs now support the same manifest authority only when
+the install persists file-capability rows, publishes a generation immediately
+instead of using `--defer-generation`, attaches `security.capability` during
+generation runtime-input collection, and writes the generation image through an
+xattr-preserving format. `conary system generation info` reports the resulting
+capability-xattr count for published generations. Group O includes a QEMU
+export proof for both capability-present and capability-absent exported
+artifacts as rollback-equivalent evidence. The 2026-07-16 W1 Fedora 44 local
+KVM run passed all five Group O cases against `minimal-boot-v4`. TGE05 booted
+both exported generations, observed no file capability in the baseline, and
+reported `cap_net_bind_service=ep` in the enabled artifact. That closes the
+local generation file-capability shipping proof. The versioned v4 image and
+disposable test-key artifacts are publicly available from Remi; an isolated
+cache downloaded them with matching hashes and passed TGE01 under KVM in
+63,320 ms. That closes the fixture-publication side of the shipping proof.
 Capability removal, inheritable/process/ambient capability forms, `setpriv`,
 setgid modes, broad `chmod +s`, unknown capability names, and non-payload
 targets remain blocked/private.
@@ -210,6 +251,14 @@ private-review, or local-only converted CCS files for inspection. That lane is
 disabled by default, requires admin access, and preserves the original
 scriptlet publication status. It is not public publication authority and does
 not permit raw legacy scriptlet replay.
+
+Publication refusal reports and Remi non-public test-serving manifests expose
+boot/security and generic LSM `security_policy_intents` only after Remi's
+shared scriptlet-evidence sanitizer runs. Raw review artifact paths, private
+local paths, and secret-bearing environment assignments stay private server
+state; responses expose only `review_artifact_available` and normalized intent
+metadata. Private scriptlet review artifact JSON remains an operator diagnostic
+surface and may retain raw path evidence under admin-only artifact access.
 
 ### 5. Basic Protections (Always Active)
 
