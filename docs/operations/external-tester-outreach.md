@@ -7,7 +7,7 @@ summary: Gated draft copy for the first external tester launch
 # External Tester Outreach Draft
 
 > **DO NOT PUBLISH:** W2 must first record and repin the post-integration
-> `v0.11.0` artifact publication and installed-binary self-update proof. The
+> `v0.11.1` artifact publication and installed-binary self-update proof. The
 > compatible Remi commit, prewarmed package set, and clean-host smoke are
 > recorded, but they are not launch approval by themselves.
 
@@ -35,7 +35,7 @@ ask is intentionally narrow: can its existing-system package-manager loop feel
 safe and unsurprising on a supported Fedora, Ubuntu, or Arch system?
 
 The tested preview targets are Fedora 44, Ubuntu 26.04 LTS, and Arch Linux. The
-pinned release is `v0.11.0`, but this draft stays blocked until its artifacts
+pinned release is `v0.11.1`, but this draft stays blocked until its artifacts
 and installed-binary self-update path are verified. At launch, use only the
 exact pinned release and verification instructions in the release artifact
 matrix.

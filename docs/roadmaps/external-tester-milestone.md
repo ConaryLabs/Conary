@@ -29,7 +29,7 @@ useful evidence but does not count as a completion.
 
 ## Launch Record
 
-- Pinned Conary release: `v0.11.0`; artifact publication and installed-binary
+- Pinned Conary release: `v0.11.1`; artifact publication and installed-binary
   self-update proof remain W2 gates before launch.
 - Compatible Remi commit: `c001f8d69b9e8ef34fba39139576a9809800a9a6`,
   deployed with binary SHA-256
