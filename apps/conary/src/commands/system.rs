@@ -46,7 +46,7 @@ pub async fn cmd_init(db_path: &str) -> Result<()> {
         remi_repo.priority = 110;
         remi_repo.default_strategy = Some("remi".to_string());
         remi_repo.default_strategy_endpoint = Some("https://remi.conary.io".to_string());
-        remi_repo.default_strategy_distro = Some("fedora".to_string());
+        remi_repo.default_strategy_distro = Some("fedora-44".to_string());
         match remi_repo.insert(tx) {
             Ok(_) => messages.push((false, "  Added: remi (Conary Remi (CCS))".to_string())),
             Err(e) => messages.push((true, format!("Could not add remi: {e}"))),
@@ -1288,7 +1288,7 @@ mod tests {
             repo.default_strategy_endpoint.as_deref(),
             Some("https://remi.conary.io")
         );
-        assert_eq!(repo.default_strategy_distro.as_deref(), Some("fedora"));
+        assert_eq!(repo.default_strategy_distro.as_deref(), Some("fedora-44"));
     }
 
     #[tokio::test]

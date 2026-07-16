@@ -67,6 +67,23 @@ fn family_slug_lookup_does_not_accept_public_ids() {
 }
 
 #[test]
+fn remi_target_lookup_normalizes_legacy_route_slugs_to_public_ids() {
+    assert_eq!(
+        profile_for_remi_target("fedora-44").map(SupportedProfile::id),
+        Some("fedora-44")
+    );
+    assert_eq!(
+        profile_for_remi_target("fedora").map(SupportedProfile::id),
+        Some("fedora-44")
+    );
+    assert_eq!(
+        profile_for_remi_target("ubuntu").map(SupportedProfile::id),
+        Some("ubuntu-26.04")
+    );
+    assert!(profile_for_remi_target("debian").is_none());
+}
+
+#[test]
 fn repository_hints_are_profile_owned() {
     assert_eq!(
         profile_by_public_id("fedora-44")

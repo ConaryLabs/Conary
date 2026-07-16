@@ -26,6 +26,10 @@ pub(super) fn remi_sync_row(
     distro: String,
     entry: RemiPackageEntry,
 ) -> Result<SyncedPackageRow> {
+    let profile = crate::repository::supported_profiles::profile_for_remi_target(&distro)
+        .ok_or_else(|| Error::ConfigError(format!("unsupported Remi target: {distro}")))?;
+    let route_slug = profile.remi_route_slug();
+    let public_profile_id = profile.id();
     let architecture = entry.architecture.clone();
     let package_release = entry
         .release
@@ -47,7 +51,7 @@ pub(super) fn remi_sync_row(
         query.push(format!("arch={}", urlencoding::encode(architecture)));
     }
     let download_url = format!(
-        "{endpoint}/v1/{distro}/packages/{}/download?{}",
+        "{endpoint}/v1/{route_slug}/packages/{}/download?{}",
         urlencoding::encode(&entry.name),
         query.join("&")
     );
@@ -103,24 +107,13 @@ pub(super) fn remi_sync_row(
         ref value => Some(value.to_string()),
     };
 
-    let route = crate::repository::supported_profiles::route_by_slug(&distro)
-        .ok_or_else(|| Error::ConfigError(format!("unsupported Remi distro route: {distro}")))?;
-    let profile_id = route.public_profile_ids().first().ok_or_else(|| {
-        Error::ConfigError(format!("no public profile for Remi distro route: {distro}"))
-    })?;
-    let profile = crate::repository::supported_profiles::profile_by_public_id(profile_id)
-        .ok_or_else(|| {
-            Error::ConfigError(format!(
-                "profile disappeared for Remi distro route: {distro}"
-            ))
-        })?;
     let scheme = profile.version_scheme();
     let scheme_str = Some(match scheme {
         crate::repository::versioning::VersionScheme::Rpm => "rpm".to_string(),
         crate::repository::versioning::VersionScheme::Debian => "debian".to_string(),
         crate::repository::versioning::VersionScheme::Arch => "arch".to_string(),
     });
-    package.distro = Some(distro.clone());
+    package.distro = Some(public_profile_id.to_string());
     package.version_scheme = scheme_str.clone();
 
     let mut self_provide = RepositoryProvide::new(
@@ -185,12 +178,17 @@ pub(super) fn parse_raw_dependency_entry(entry: &str) -> (String, Option<String>
 /// the Remi server's `/v1/{distro}/metadata` endpoint instead of parsing
 /// traditional repo formats (repomd.xml, Packages, etc.).
 pub(super) async fn fetch_remi_sync_rows(repo: &Repository) -> Result<Vec<SyncedPackageRow>> {
-    let distro = repo.default_strategy_distro.as_deref().ok_or_else(|| {
+    let configured_target = repo.default_strategy_distro.as_deref().ok_or_else(|| {
         Error::ConfigError(format!(
             "Repository '{}' has strategy 'remi' but no distro configured (use --remi-distro)",
             repo.name
         ))
     })?;
+    let profile = crate::repository::supported_profiles::profile_for_remi_target(configured_target)
+        .ok_or_else(|| {
+            Error::ConfigError(format!("unsupported Remi target: {configured_target}"))
+        })?;
+    let route_slug = profile.remi_route_slug();
 
     let endpoint = repo
         .default_strategy_endpoint
@@ -198,7 +196,7 @@ pub(super) async fn fetch_remi_sync_rows(repo: &Repository) -> Result<Vec<Synced
         .unwrap_or(&repo.url)
         .trim_end_matches('/');
 
-    let metadata_url = format!("{endpoint}/v1/{distro}/metadata");
+    let metadata_url = format!("{endpoint}/v1/{route_slug}/metadata");
     info!(
         "Syncing repository {} from Remi metadata: {}",
         repo.name, metadata_url
@@ -227,7 +225,7 @@ pub(super) async fn fetch_remi_sync_rows(repo: &Repository) -> Result<Vec<Synced
         synced_packages.push(remi_sync_row(
             repo_id,
             endpoint.to_string(),
-            distro.to_string(),
+            configured_target.to_string(),
             entry,
         )?);
     }
@@ -420,7 +418,7 @@ mod tests {
     }
 
     #[test]
-    fn remi_sync_row_records_requested_distro_and_version_scheme() {
+    fn remi_sync_row_records_public_distro_and_version_scheme() {
         let row = remi_sync_row(
             7,
             "http://remi.test".to_string(),
@@ -437,27 +435,32 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(row.package.distro.as_deref(), Some("ubuntu"));
+        assert_eq!(row.package.distro.as_deref(), Some("ubuntu-26.04"));
         assert_eq!(row.package.version_scheme.as_deref(), Some("debian"));
     }
 
     #[test]
-    fn remi_sync_row_rejects_public_profile_id_as_route_slug() {
-        for public_id in ["fedora-44", "ubuntu-26.04"] {
-            let err = remi_sync_row(
+    fn remi_sync_row_accepts_public_profile_id_and_uses_route_slug() {
+        for (public_id, route_slug) in [("fedora-44", "fedora"), ("ubuntu-26.04", "ubuntu")] {
+            let row = remi_sync_row(
                 1,
                 "https://remi.example.test".to_string(),
                 public_id.to_string(),
                 remi_entry_for_tests("bash", "5.2.0"),
             )
-            .unwrap_err();
+            .unwrap();
 
-            assert!(err.to_string().contains("unsupported Remi distro route"));
+            assert_eq!(row.package.distro.as_deref(), Some(public_id));
+            assert!(
+                row.package
+                    .download_url
+                    .contains(&format!("/v1/{route_slug}/"))
+            );
         }
     }
 
     #[test]
-    fn remi_sync_row_accepts_route_slug_and_uses_profile_scheme() {
+    fn remi_sync_row_normalizes_legacy_route_slug_to_public_profile() {
         let row = remi_sync_row(
             1,
             "https://remi.example.test".to_string(),
@@ -466,7 +469,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(row.package.distro.as_deref(), Some("ubuntu"));
+        assert_eq!(row.package.distro.as_deref(), Some("ubuntu-26.04"));
         assert_eq!(row.package.version_scheme.as_deref(), Some("debian"));
     }
 

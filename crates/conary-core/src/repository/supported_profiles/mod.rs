@@ -73,6 +73,24 @@ pub fn profile_by_family_slug(slug: &str) -> Option<&'static SupportedProfile> {
         .find(|profile| profile.family_slug() == slug)
 }
 
+/// Resolve a configured Remi target to one exact public profile.
+///
+/// New configuration stores public profile IDs. Family/route slugs remain
+/// accepted here only for compatibility with repository rows written by older
+/// Conary releases, and only while the slug maps to exactly one public profile.
+#[must_use]
+pub fn profile_for_remi_target(target: &str) -> Option<&'static SupportedProfile> {
+    if let Some(profile) = profile_by_public_id(target) {
+        return Some(profile);
+    }
+
+    let route = route_by_slug(target)?;
+    let [profile_id] = route.public_profile_ids() else {
+        return None;
+    };
+    profile_by_public_id(profile_id)
+}
+
 #[must_use]
 pub fn route_by_slug(slug: &str) -> Option<SupportedRoute> {
     let slug = slug.trim();

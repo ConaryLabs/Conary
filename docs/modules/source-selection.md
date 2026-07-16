@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-06-18
-revision: 5
+last_updated: 2026-07-16
+revision: 6
 summary: Route supported distro policy through M4d profiles
 ---
 
@@ -97,7 +97,11 @@ M4d supported-target profiles make
 public distro IDs, dependency flavor, version scheme, and Remi route-family
 mapping. Fedora 44, Ubuntu 26.04, and Arch are the only public targets.
 Internal route slugs such as `fedora` and `ubuntu` are not public IDs. The
-older `data/distros.toml` catalog was deleted in M4d.
+`repo add --remi-distro` surface accepts only those exact public IDs. Remi
+sync and package fetches translate the stored public ID to the profile-owned
+route slug; runtime lookup still normalizes unambiguous legacy route-slug rows
+written by older Conary releases. The older `data/distros.toml` catalog was
+deleted in M4d.
 
 ## Transitional Defaults
 

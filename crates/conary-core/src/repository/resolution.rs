@@ -597,9 +597,18 @@ impl<'a> PackageResolver<'a> {
         let version = effective_remi_version(pkg_with_repo, options);
         let architecture = pkg_with_repo.package.architecture.as_deref();
 
+        let profile = crate::repository::supported_profiles::profile_for_remi_target(distro)
+            .ok_or_else(|| Error::ConfigError(format!("unsupported Remi target: {distro}")))?;
+
         let client = RemiClient::new(endpoint)?;
         let path = client
-            .fetch_package(distro, name, version, architecture, &output_dir)
+            .fetch_package(
+                profile.remi_route_slug(),
+                name,
+                version,
+                architecture,
+                &output_dir,
+            )
             .await?;
 
         Ok(PackageSource::Ccs {

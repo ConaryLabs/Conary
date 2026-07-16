@@ -1296,6 +1296,46 @@ mod tests {
     }
 
     #[test]
+    fn repo_add_accepts_exact_public_remi_distro() {
+        assert!(
+            parse_cli([
+                "conary",
+                "repo",
+                "add",
+                "remi-fedora",
+                "https://remi.example.invalid",
+                "--default-strategy",
+                "remi",
+                "--remi-endpoint",
+                "https://remi.example.invalid",
+                "--remi-distro",
+                "fedora-44",
+            ])
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn repo_add_rejects_internal_remi_route_slug_at_parse_time() {
+        assert!(
+            parse_cli([
+                "conary",
+                "repo",
+                "add",
+                "remi-fedora",
+                "https://remi.example.invalid",
+                "--default-strategy",
+                "remi",
+                "--remi-endpoint",
+                "https://remi.example.invalid",
+                "--remi-distro",
+                "fedora",
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
     fn install_defaults_to_always_sandbox() {
         let cli = parse_cli(["conary", "install", "bash"]).unwrap();
         match cli.command {

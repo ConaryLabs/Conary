@@ -333,7 +333,11 @@ fn candidate_matches_allowed_distros(
 
     policy.allowed_distros.iter().any(|allowed| {
         allowed == &repo.name
-            || candidate_distro_identifier(pkg, repo).is_some_and(|distro| allowed == distro)
+            || candidate_distro_identifier(pkg, repo).is_some_and(|distro| {
+                allowed == distro
+                    || crate::repository::supported_profiles::profile_for_remi_target(distro)
+                        .is_some_and(|profile| allowed == profile.id())
+            })
     })
 }
 
@@ -1057,5 +1061,21 @@ mod tests {
 
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].repository.name, "arch-core");
+
+        let candidates = PackageSelector::search_packages(
+            &conn,
+            "python",
+            &SelectionOptions {
+                policy: Some(
+                    ResolutionPolicy::new().with_allowed_distros(vec!["fedora-44".to_string()]),
+                ),
+                is_root: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].repository.name, "fedora-remi");
     }
 }

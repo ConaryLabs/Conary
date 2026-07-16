@@ -34,6 +34,26 @@ pub struct RepoAddOptions {
 pub async fn cmd_repo_add(opts: RepoAddOptions) -> Result<()> {
     info!("Adding repository: {} ({})", opts.name, opts.url);
 
+    // Validate Remi strategy configuration before any static-repository probe.
+    if let Some(ref strategy) = opts.default_strategy
+        && strategy == "remi"
+    {
+        if opts.remi_endpoint.is_none() {
+            anyhow::bail!("--remi-endpoint is required when --default-strategy=remi");
+        }
+        if opts.remi_distro.is_none() {
+            anyhow::bail!("--remi-distro is required when --default-strategy=remi");
+        }
+        if let Some(distro) = opts.remi_distro.as_deref()
+            && conary_core::repository::supported_profiles::profile_by_public_id(distro).is_none()
+        {
+            anyhow::bail!(
+                "unsupported Remi distro '{}'; use an exact public distro ID",
+                distro
+            );
+        }
+    }
+
     if super::repo_static::try_cmd_repo_add_static(&opts).await? {
         return Ok(());
     }
@@ -44,18 +64,6 @@ pub async fn cmd_repo_add(opts: RepoAddOptions) -> Result<()> {
 
     if opts.replace {
         anyhow::bail!("--replace is only supported for static repositories");
-    }
-
-    // Validate remi strategy configuration
-    if let Some(ref strategy) = opts.default_strategy
-        && strategy == "remi"
-    {
-        if opts.remi_endpoint.is_none() {
-            anyhow::bail!("--remi-endpoint is required when --default-strategy=remi");
-        }
-        if opts.remi_distro.is_none() {
-            anyhow::bail!("--remi-distro is required when --default-strategy=remi");
-        }
     }
 
     // Save values needed after opts is partially moved
@@ -476,6 +484,32 @@ pub async fn cmd_key_remove(repository: &str, db_path: &str) -> Result<()> {
 mod tests {
     use super::*;
     use conary_core::db::models::{Repository, SecurityAdvisorySupport};
+
+    #[tokio::test]
+    async fn repo_add_rejects_internal_remi_route_slug() {
+        let err = cmd_repo_add(RepoAddOptions {
+            name: "remi-fedora".to_string(),
+            url: "https://remi.example.invalid".to_string(),
+            db_path: "/unused/conary.db".to_string(),
+            content_url: None,
+            priority: 50,
+            disabled: false,
+            gpg_key: None,
+            no_gpg_check: false,
+            gpg_strict: false,
+            fingerprints: Vec::new(),
+            yes: false,
+            replace: false,
+            default_strategy: Some("remi".to_string()),
+            remi_endpoint: Some("https://remi.example.invalid".to_string()),
+            remi_distro: Some("fedora".to_string()),
+            security_advisory_support: SecurityAdvisorySupport::Unknown,
+        })
+        .await
+        .unwrap_err();
+
+        assert!(err.to_string().contains("exact public distro ID"));
+    }
 
     #[tokio::test]
     async fn repo_add_persists_security_advisory_support() {

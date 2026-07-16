@@ -923,7 +923,7 @@ Repositories can specify how packages are resolved:
 conary repo add remi-fed https://remi.conary.io \
     --default-strategy remi \
     --remi-endpoint https://remi.conary.io \
-    --remi-distro fedora
+    --remi-distro fedora-44
 ```
 
 | Strategy | Behavior |
