@@ -1,15 +1,15 @@
 ---
 last_updated: 2026-07-17
-status: blocked
+status: ready
 summary: Gated draft copy for the first external tester launch
 ---
 
 # External Tester Outreach Draft
 
-> **DO NOT PUBLISH:** W2 must first record and repin the post-integration
-> `v0.11.1` artifact publication and installed-binary self-update proof. The
-> compatible Remi commit, prewarmed package set, and clean-host smoke are
-> recorded, but they are not launch approval by themselves.
+> **READY FOR MAINTAINER LAUNCH:** W2's `v0.11.1` artifact, signature,
+> deployment, installed-binary self-update, compatible Remi, rollback,
+> prewarm, and clean-host evidence are recorded. Do not publish automatically;
+> the maintainer still chooses the venue and launch timestamp.
 
 Automation may prepare and verify this copy, but a maintainer decides when and
 where to post it. Adapt the title and tone to the chosen venue without
@@ -35,10 +35,14 @@ ask is intentionally narrow: can its existing-system package-manager loop feel
 safe and unsurprising on a supported Fedora, Ubuntu, or Arch system?
 
 The tested preview targets are Fedora 44, Ubuntu 26.04 LTS, and Arch Linux. The
-pinned release is `v0.11.1`, but this draft stays blocked until its artifacts
-and installed-binary self-update path are verified. At launch, use only the
-exact pinned release and verification instructions in the release artifact
-matrix.
+pinned [v0.11.1 release](https://github.com/ConaryLabs/Conary/releases/tag/v0.11.1)
+and its installed-binary self-update path are verified. At launch, use only
+that release and the verification instructions in the
+[release artifact matrix](release-artifact-matrix.md).
+
+Give testers the [compatibility checklist](../guides/compatibility-checklist.md),
+the [agent-assisted tester loop](../guides/agent-assisted-tester-loop.md), and
+the [beta-feedback form](https://github.com/ConaryLabs/Conary/issues/new?template=beta_feedback.md).
 
 Please start with a VM, snapshot, spare system, or other non-critical host. Do
 not test first on an irreplaceable daily driver.
@@ -84,12 +88,12 @@ and failed attempts are useful evidence.
 
 ## Launch Checklist
 
-- Replace every release reference with the exact W2 release.
-- Link the release artifact matrix and checksum/signature instructions.
-- Pin the compatible Remi commit and prewarmed package set.
-- Link the compatibility checklist, tester guide, and beta-feedback template.
-- Record the clean-host smoke and rollback evidence.
-- Record the maintainer-chosen venue and launch timestamp in the milestone
+- [x] Replace every release reference with the exact W2 release.
+- [x] Link the release artifact matrix and checksum/signature instructions.
+- [x] Pin the compatible Remi commit and prewarmed package set.
+- [x] Link the compatibility checklist, tester guide, and beta-feedback template.
+- [x] Record the clean-host smoke and rollback evidence.
+- [ ] Record the maintainer-chosen venue and launch timestamp in the milestone
   tracker.
 
 ## Closeout

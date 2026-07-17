@@ -1,9 +1,9 @@
 ---
-last_updated: 2026-07-16
-proof_baseline: ffb69d938391f2bc49541f4f16b0e7eecd64fe9c
+last_updated: 2026-07-17
+proof_baseline: 4d4b422b45b055fa07a3885a68a4ab8e8d16b526
 current_milestone: first external tester loop
-active_workstream: W2 Preview Release and Remi Readiness
-next_workstream: W3 First External Tester Loop
+active_workstream: W3 First External Tester Loop
+next_workstream: post-milestone work selected from tester evidence
 ---
 
 # Codebase Development Roadmap
@@ -205,27 +205,33 @@ recorded exactly in the reconciliation map below.
 - **Outcome:** external testers have one current pinned post-integration
   release and a prepared compatible service path matching the integrated code
   and documentation.
-- **Current truth:** `v0.10.1` is the current documented preview and includes
-  multi-distro artifacts, checksums, a CCS signature, and installed-binary
-  self-update evidence. It predates the integrated W1 candidate. Remi remains
-  a maintainer/operator-run path with source-build fallbacks and no public
-  operator artifact decision.
-- **Execution status:** active.
-- **Dependencies:** none remain inside W1; W2 must preserve the release-green
-  candidate while producing the release and service evidence below.
-- **Next gate:** publish a fresh post-integration release and prove a prewarmed,
-  compatible Remi path from a clean supported host.
-- **Proof:** require identity equality among the source commit, tag, published
-  metadata, and artifacts; distro artifact checksums and signatures; an
-  explicit SBOM/provenance publication or caveat decision; installed-binary
-  self-update from the actual preceding preview; canonical installation
-  guidance; rollback evidence; exact compatible Remi commit; stale-row
-  handling for the integrated `CONVERSION_VERSION`; prewarmed package set; and
-  representative clean-host conversion/install smoke.
-- **Limitations:** release copy and the outreach draft cannot be published
-  until compatibility, tester, feedback, and launch material are repinned.
-  W2 must explicitly choose between a proven Remi operator artifact and honest
-  service-operator/source-build-preview status.
+- **Current truth:** `v0.11.1` is the pinned post-integration preview. Its exact
+  source/tag commit is `4d4b422b45b055fa07a3885a68a4ab8e8d16b526`;
+  the GitHub Release publishes Fedora 44, Ubuntu 26.04 LTS, Arch, and CCS
+  artifacts with `SHA256SUMS` and a detached CCS signature. Remi remains the
+  deliberately chosen maintainer-operated service and source-build preview,
+  not a public operator-artifact claim.
+- **Execution status:** complete.
+- **Dependencies:** none remain inside W2.
+- **Next gate:** W3 is active and awaits the maintainer's venue and launch-time
+  decision before the verified outreach copy is posted.
+- **Proof:** release-build run `29540722051` and deploy-and-verify run
+  `29542934278` succeeded for the exact release commit. Independent downloads
+  matched every entry in `SHA256SUMS`; the detached CCS signature verified
+  against the published CCS digest. The official preceding-preview Fedora RPM
+  binary, using an isolated schema-75 database, detected `v0.11.1`, printed
+  `Signature verified`, replaced itself, reported `conary 0.11.1`, and then
+  reported itself up to date. The release records the explicit decision not to
+  publish SBOM/provenance sidecars for this limited preview. Compatible Remi
+  commit `c001f8d69b9e8ef34fba39139576a9809800a9a6` is deployed as binary
+  SHA-256 `c955a24ff6b90f98ba5f20b37e6a67b79bdde199ec0dcbfac0ce78b001d0f485`;
+  its rollback/redeploy rehearsal and 10/10 public health passed, its
+  conversion-version-6 prewarm state contains 11 public rows and one
+  fail-closed private-review row, and a clean Fedora 44 host installed, ran,
+  and removed public `htop 3.4.1` after target normalization was corrected.
+- **Limitations:** the Remi operator path remains maintainer-led with a
+  source-build fallback, and `v0.11.1` has no SBOM/provenance sidecars. W2
+  completion prepares outreach but does not authorize or automate posting it.
 - **Non-goals:** distributing every workspace binary or claiming broad
   production support.
 
@@ -241,11 +247,14 @@ and creates no roadmap item.
 
 - **Outcome:** Conary has external evidence about whether its adoption-led
   preview works for strangers on supported systems.
-- **Current truth:** preparation exists, but the launch venue and timestamp are
-  unset and the tracker remains 0/10.
-- **Execution status:** queued behind W2.
-- **Dependencies:** W2's pinned release, compatible prewarmed Remi path,
-  clean-host smoke, and maintainer posting decision.
+- **Current truth:** W2's pinned release, compatible prewarmed Remi path,
+  clean-host smoke, rollback, artifact, signature, deployment, and
+  installed-binary self-update evidence are complete. The verified outreach
+  copy is ready, but the launch venue and timestamp are unset and the tracker
+  remains 0/10.
+- **Execution status:** active; ready for the maintainer launch decision.
+- **Dependencies:** only the maintainer's posting venue and timestamp decision
+  remain before launch.
 - **Next gate:** manually launch the verified copy, record venue and timestamp,
   and obtain the first privacy-safe qualifying report.
 - **Proof:** each completion belongs to a unique outsider and covers exactly
@@ -443,4 +452,7 @@ milestone, resolves a safety or release blocker, or is explicitly accepted as
 a post-milestone horizon. W0 closed after the authority rehearsal and
 neutral-layout acceptance pass; W1 closed after authenticated v4 fixture
 publication, public fresh-cache KVM proof, and final integrated release gates.
-W2 is now active.
+W2 closed after exact release identity, multi-distro artifact publication,
+checksum and CCS-signature verification, production deployment, official
+installed-binary self-update, compatible prewarmed Remi, rollback, and
+clean-host proof. W3 is now active and awaits the maintainer launch decision.

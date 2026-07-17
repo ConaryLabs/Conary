@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-07-17
-status: queued
+status: ready
 current_result: 0/10
 summary: Outcome tracker for Conary's first external tester milestone
 ---
@@ -29,8 +29,15 @@ useful evidence but does not count as a completion.
 
 ## Launch Record
 
-- Pinned Conary release: `v0.11.1`; artifact publication and installed-binary
-  self-update proof remain W2 gates before launch.
+- Pinned Conary release: `v0.11.1`, exact commit
+  `4d4b422b45b055fa07a3885a68a4ab8e8d16b526`. Release-build run
+  `29540722051` published the Fedora 44, Ubuntu 26.04 LTS, Arch, and signed CCS
+  artifacts; deploy-and-verify run `29542934278` installed the release bundle
+  and verified Remi's self-update endpoint.
+- Installed-binary proof: the official preceding-preview Fedora RPM binary
+  verified the update signature, replaced itself with `v0.11.1`, and then
+  reported itself up to date. Independent downloads matched `SHA256SUMS`, and
+  the detached CCS signature verified offline.
 - Compatible Remi commit: `c001f8d69b9e8ef34fba39139576a9809800a9a6`,
   deployed with binary SHA-256
   `c955a24ff6b90f98ba5f20b37e6a67b79bdde199ec0dcbfac0ce78b001d0f485`.
