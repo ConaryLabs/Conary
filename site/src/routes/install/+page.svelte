@@ -59,9 +59,9 @@
 					<div class="terminal-line t-blank"></div>
 					<div class="terminal-line">
 						<span class="t-prompt">$</span>
-						<span class="t-cmd">conary system adopt --system --yes</span>
+						<span class="t-cmd">conary system adopt --system</span>
 					</div>
-					<div class="terminal-line t-output">Use --dry-run first, then --yes when applying active-host changes.</div>
+					<div class="terminal-line t-output">Use --dry-run first; unadopt requires --yes when applying the reversal.</div>
 					<div class="terminal-line">
 						<span class="t-prompt">$</span>
 						<span class="t-cmd">conary system unadopt --all --dry-run</span>

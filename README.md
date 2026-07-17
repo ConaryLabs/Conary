@@ -66,7 +66,7 @@ To test reversible adoption without handing package ownership to Conary:
 
 ```bash
 conary system adopt --system --dry-run
-conary system adopt --system --yes
+conary system adopt --system
 conary system adopt --status
 conary system unadopt --all --dry-run
 conary system unadopt --all --yes

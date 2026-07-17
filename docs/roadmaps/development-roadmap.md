@@ -213,8 +213,9 @@ recorded exactly in the reconciliation map below.
   not a public operator-artifact claim.
 - **Execution status:** complete.
 - **Dependencies:** none remain inside W2.
-- **Next gate:** W3 is active and awaits the maintainer's venue and launch-time
-  decision before the verified outreach copy is posted.
+- **Next gate:** W3 is scheduled for a manual Show HN launch on 2026-07-20 at
+  15:00 CEST (`13:00 UTC`), followed by venue-specific r/codex and r/ClaudeAI
+  posts on the next two days.
 - **Proof:** release-build run `29540722051` and deploy-and-verify run
   `29542934278` succeeded for the exact release commit. Independent downloads
   matched every entry in `SHA256SUMS`; the detached CCS signature verified
@@ -249,14 +250,16 @@ and creates no roadmap item.
   preview works for strangers on supported systems.
 - **Current truth:** W2's pinned release, compatible prewarmed Remi path,
   clean-host smoke, rollback, artifact, signature, deployment, and
-  installed-binary self-update evidence are complete. The verified outreach
-  copy is ready, but the launch venue and timestamp are unset and the tracker
-  remains 0/10.
-- **Execution status:** active; ready for the maintainer launch decision.
-- **Dependencies:** only the maintainer's posting venue and timestamp decision
-  remain before launch.
-- **Next gate:** manually launch the verified copy, record venue and timestamp,
-  and obtain the first privacy-safe qualifying report.
+  installed-binary self-update evidence are complete. The verified launch
+  sequence is scheduled for Show HN on Monday, 2026-07-20 at 15:00 CEST
+  (`13:00 UTC`), r/codex at the same time on Tuesday, and r/ClaudeAI at the
+  same time on Wednesday. Nothing has been posted and the tracker remains
+  0/10.
+- **Execution status:** active; scheduled for manual launch.
+- **Dependencies:** only the maintainer's manual submissions and each venue's
+  current account/rule eligibility remain before the scheduled launch sequence.
+- **Next gate:** submit the verified Show HN packet, record every actual post
+  URL and timestamp, and obtain the first privacy-safe qualifying report.
 - **Proof:** each completion belongs to a unique outsider and covers exactly
   `install -> adopt -> list/search -> update --dry-run -> unadopt` on a
   supported host with the pinned release. Record failed attempts and triage
@@ -455,4 +458,6 @@ publication, public fresh-cache KVM proof, and final integrated release gates.
 W2 closed after exact release identity, multi-distro artifact publication,
 checksum and CCS-signature verification, production deployment, official
 installed-binary self-update, compatible prewarmed Remi, rollback, and
-clean-host proof. W3 is now active and awaits the maintainer launch decision.
+clean-host proof. W3 is now active and scheduled for a manual Show HN launch
+on 2026-07-20 at 15:00 CEST (`13:00 UTC`), followed by r/codex and r/ClaudeAI
+on the next two days.

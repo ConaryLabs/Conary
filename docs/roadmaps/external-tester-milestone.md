@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-07-17
-status: ready
+status: scheduled
 current_result: 0/10
 summary: Outcome tracker for Conary's first external tester milestone
 ---
@@ -48,8 +48,18 @@ useful evidence but does not count as a completion.
   `htop 3.4.1` conversion after the exact public-target compatibility fix.
 - Supported hosts: Fedora 44, Ubuntu 26.04 LTS, and Arch Linux on the release's
   supported architecture and compatibility baseline.
-- Venue: not launched.
-- Launch timestamp: not launched.
+- Planned launch sequence, using the venue-specific copy in
+  `docs/operations/external-tester-outreach.md`:
+
+  | Venue | Planned timestamp | State |
+  | --- | --- | --- |
+  | Show HN | Monday, 2026-07-20 at 15:00 CEST (`13:00 UTC`) | scheduled |
+  | r/codex | Tuesday, 2026-07-21 at 15:00 CEST (`13:00 UTC`) | scheduled; re-check rules and posting eligibility |
+  | r/ClaudeAI | Wednesday, 2026-07-22 at 15:00 CEST (`13:00 UTC`) | scheduled; requires current showcase eligibility and posting-account karma over 50 |
+
+- Actual post URLs and launch timestamps: not launched; record each
+  immediately after submission. The three-week stall clock starts from the
+  first actual launch timestamp.
 - Privacy-safe feedback path: the beta-feedback issue template and a reviewed
   support bundle; never request secrets, credential files, private keys, broad
   environment dumps, or a live database by default.

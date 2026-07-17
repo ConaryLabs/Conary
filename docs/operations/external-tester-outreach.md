@@ -1,65 +1,194 @@
 ---
 last_updated: 2026-07-17
-status: ready
-summary: Gated draft copy for the first external tester launch
+status: scheduled
+summary: Multi-venue launch packet for the first external tester loop
 ---
 
-# External Tester Outreach Draft
+# External Tester Launch Packet
 
-> **READY FOR MAINTAINER LAUNCH:** W2's `v0.11.1` artifact, signature,
-> deployment, installed-binary self-update, compatible Remi, rollback,
-> prewarm, and clean-host evidence are recorded. Do not publish automatically;
-> the maintainer still chooses the venue and launch timestamp.
+> **SCHEDULED FOR MANUAL LAUNCH:** begin with Show HN on Monday, 2026-07-20 at
+> 15:00 CEST (`13:00 UTC`), then use the venue-specific Reddit follow-ups below.
+> W2's `v0.11.1` artifact, signature, deployment, installed-binary self-update,
+> compatible Remi, rollback, prewarm, and clean-host evidence are recorded. Do
+> not publish automatically.
 
-Automation may prepare and verify this copy, but a maintainer decides when and
-where to post it. Adapt the title and tone to the chosen venue without
-weakening the scope or safety caveats.
+The maintainer posts this manually and remains available to answer comments.
+After submission, record the actual HN URL and timestamp in the milestone
+tracker before treating W3 as launched.
 
-## Title Options
+## Show HN Submission
 
-- Looking for a few Linux package-manager testers for Conary
-- Conary: a reversible package-manager preview for Fedora, Ubuntu, and Arch VMs
-- Try a bounded Conary package-manager loop in a disposable Linux VM
+- **Title:** `Show HN: Conary - reversible package management for Fedora, Ubuntu, and Arch`
+- **URL:** `https://github.com/ConaryLabs/Conary`
+- **Planned submission:** Monday, 2026-07-20 at 15:00 CEST (`13:00 UTC`)
 
-## Draft
+The title is 76 characters and keeps the required `Show HN:` prefix. Submit the
+repository URL, then add the following as the opening comment.
 
-I am looking for a small number of testers for Conary, a Rust package manager
-and Linux system manager I have been building.
+## Opening Comment
 
+```text
+I've been building Conary, a Rust package manager and Linux system manager.
 This is an independent project, not a resurrection or continuation of the old
-rPath Conary codebase. It is not affiliated with, endorsed by, or maintained
-by rPath, SAS, or the original Conary developers.
+rPath Conary codebase, and it is not affiliated with rPath, SAS, or the original
+Conary developers.
 
-Conary has broader generation, package-format, and repository work, but this
-ask is intentionally narrow: can its existing-system package-manager loop feel
-safe and unsurprising on a supported Fedora, Ubuntu, or Arch system?
+The larger project includes generation-style system management, a native CCS
+package format, repository tooling, and Remi conversion services. For this Show
+HN I want to keep the test deliberately narrow: does an adoption-led package
+manager loop feel safe and unsurprising on an existing Linux system?
 
-The tested preview targets are Fedora 44, Ubuntu 26.04 LTS, and Arch Linux. The
-pinned [v0.11.1 release](https://github.com/ConaryLabs/Conary/releases/tag/v0.11.1)
-and its installed-binary self-update path are verified. At launch, use only
-that release and the verification instructions in the
-[release artifact matrix](release-artifact-matrix.md).
+Conary can track packages already owned by dnf, apt, or pacman without silently
+taking authority from the native package manager. You can inspect the result
+and then unadopt everything again. The native package manager remains
+authoritative unless you explicitly choose takeover.
 
-Give testers the [compatibility checklist](../guides/compatibility-checklist.md),
-the [agent-assisted tester loop](../guides/agent-assisted-tester-loop.md), and
-the [beta-feedback form](https://github.com/ConaryLabs/Conary/issues/new?template=beta_feedback.md).
+The current limited preview supports x86_64 Fedora 44, Ubuntu 26.04 LTS, and
+Arch Linux. Please use a disposable VM, snapshot, spare system, or other
+non-critical host, not an irreplaceable daily driver.
 
-Please start with a VM, snapshot, spare system, or other non-critical host. Do
-not test first on an irreplaceable daily driver.
+The bounded loop is:
 
-The bounded flow is:
+  conary install htop --dry-run
+  conary install htop --yes
+  conary system adopt --system --dry-run
+  conary system adopt --system
+  conary list
+  conary search htop
+  conary update --dry-run
+  conary system unadopt --all --dry-run
+  conary system unadopt --all --yes
 
-```bash
-conary install htop --dry-run
-conary install htop --yes
-conary system adopt --system --dry-run
-conary system adopt --system --yes
-conary list
-conary search htop
-conary update --dry-run
-conary system unadopt --all --dry-run
-conary system unadopt --all --yes
+The agent-assisted walkthrough, including downloads and checksum verification:
+https://github.com/ConaryLabs/Conary/blob/main/docs/guides/agent-assisted-tester-loop.md
+
+Host compatibility checklist:
+https://github.com/ConaryLabs/Conary/blob/main/docs/guides/compatibility-checklist.md
+
+Pinned v0.11.1 release:
+https://github.com/ConaryLabs/Conary/releases/tag/v0.11.1
+
+Privacy-safe feedback form:
+https://github.com/ConaryLabs/Conary/issues/new?template=beta_feedback.md
+
+The release has RPM, DEB, Arch, and CCS artifacts, SHA256SUMS, and a detached
+CCS signature. I independently verified the checksums, signature, clean-host
+install path, rollback, and installed-binary self-update. It does not publish
+SBOM or provenance sidecars, which remains an explicit preview caveat.
+
+The feedback I care about most is where adoption feels risky, where dry runs or
+warnings are unclear, which everyday package-manager operation is missing
+first, and whether anything appears to succeed while doing nothing. Failed or
+partial attempts are useful too. I'll be around to answer questions and triage
+reports.
 ```
+
+## r/codex Follow-Up
+
+- **Planned submission:** Tuesday, 2026-07-21 at 15:00 CEST (`13:00 UTC`)
+- **Title:** `I used Codex to help build a Rust package manager; now I want agent-assisted testers`
+- **Post type:** text post with the closest project or use-case flair available
+- **Pre-post check:** confirm the account can submit, re-read the current rules,
+  and select the required flair. Post manually; do not use a bot.
+
+```text
+I've been using Codex as one of the coding and review agents while building
+Conary, a free, MIT-licensed Rust package manager and Linux system manager.
+
+This is a real multi-crate systems project rather than a generated demo. The
+workflow I used with Codex is deliberately evidence-heavy: AGENTS.md defines the
+repository-wide safety and verification contract, a path router points an agent
+to the owning subsystem and focused tests, and the human keeps control of scope
+and any live or destructive action. I used Codex for repository orientation,
+bounded implementation and review passes, documentation/release truth checks,
+and verification-backed closeout.
+
+Conary itself can install packages, track packages already owned by dnf, apt,
+or pacman, and unadopt them without silently taking authority from the native
+package manager. It also has broader generation, CCS package, and repository
+work, but the external test is intentionally limited to the reversible local
+package-manager loop.
+
+I'm now trying the same agent contract from the tester side. The guide below
+asks Codex to preflight a disposable VM, verify the pinned release checksum,
+explain each command, ask the human before every live mutation, keep a
+transcript, and draft privacy-safe feedback.
+
+Agent-assisted tester guide:
+https://github.com/ConaryLabs/Conary/blob/main/docs/guides/agent-assisted-tester-loop.md
+
+Repository:
+https://github.com/ConaryLabs/Conary
+
+Pinned v0.11.1 release:
+https://github.com/ConaryLabs/Conary/releases/tag/v0.11.1
+
+The supported test hosts are x86_64 Fedora 44, Ubuntu 26.04 LTS, and Arch
+Linux. Please use a VM, snapshot, spare system, or other non-critical host. The
+release has checksums and a detached CCS signature, but no SBOM or provenance
+sidecars; this is explicitly an early preview.
+
+I'm interested in two kinds of feedback: where Conary's adoption/reversal flow
+feels unclear, and whether the repo-level instructions plus explicit human
+approval make Codex useful as a supervised systems-test operator. Failed and
+partial attempts are useful too.
+```
+
+## r/ClaudeAI Follow-Up
+
+- **Planned submission:** Wednesday, 2026-07-22 at 15:00 CEST (`13:00 UTC`)
+- **Title:** `Built with Claude Code: a reversible Linux package-manager preview to test in a VM`
+- **Post type:** text post with the `Showcase` flair, if that remains the
+  matching flair at submission time
+- **Pre-post check:** the posting account must have more than 50 karma. Re-read
+  the current showcase rules and confirm the post is still eligible.
+
+```text
+I built Conary, a Rust package manager and Linux system manager, with Claude
+Code as one of the coding and review agents used during development. It is free
+to try, MIT-licensed, has no paid tier, and requires no sign-up.
+
+Claude Code helped me work through a large multi-crate repository using a
+repo-owned contract instead of one enormous prompt. CLAUDE.md imports the
+shared AGENTS.md rules, and a path router points the agent to the owning
+subsystem, its safety invariants, focused tests, and cross-system verification
+gate. I used Claude Code for repository navigation, scoped implementation and
+review passes, and checking that documentation and release claims matched the
+code and test evidence. The human remained responsible for scope and approval
+of live or destructive actions.
+
+What Conary does: it installs packages, can track packages already owned by
+dnf, apt, or pacman, and can unadopt them again without silently taking package
+authority from the native manager. It has broader immutable-generation and
+native-package work, but the test I'm launching is deliberately smaller.
+
+I'd like Claude Code users to try the bounded package-manager loop as a
+supervised operator. The guide tells Claude Code to check that the host is a
+disposable VM or snapshot, verify the pinned release checksum, explain each
+step, ask before every live mutation, retain a transcript, and draft
+privacy-safe feedback.
+
+Agent-assisted tester guide:
+https://github.com/ConaryLabs/Conary/blob/main/docs/guides/agent-assisted-tester-loop.md
+
+Repository and source:
+https://github.com/ConaryLabs/Conary
+
+Pinned v0.11.1 release:
+https://github.com/ConaryLabs/Conary/releases/tag/v0.11.1
+
+The supported hosts are x86_64 Fedora 44, Ubuntu 26.04 LTS, and Arch Linux.
+Please use a VM, snapshot, spare system, or other non-critical host. This is an
+early preview: release checksums and a detached CCS signature are published,
+but SBOM and provenance sidecars are not.
+
+The useful feedback is both product-level and workflow-level: where adoption
+or reversal feels risky, whether dry runs and warnings are clear, and whether
+Claude Code's repo instructions and approval boundary make the test easier to
+understand without hiding what changes on the machine.
+```
+
+## Scope And Safety Notes
 
 Native package managers remain authoritative for adopted packages unless a
 user explicitly chooses takeover. Before selecting a Conary generation,
@@ -74,14 +203,6 @@ release, the exact failing command, and the refusal or error text. Review the
 support bundle before attaching it. Do not include credentials, private keys,
 host-local secret files, broad environment dumps, or a live Conary database.
 
-The feedback that matters most:
-
-- Does adoption feel understandable or risky?
-- Are command names, dry runs, and warnings honest?
-- Which everyday `dnf`, `apt`, or `pacman` operation is missing first?
-- Did anything appear to succeed while doing nothing?
-- Where does the reversal story remain weak?
-
 The local CLI path is the preview surface. conaryd fleet behavior, federation,
 and generation-carrier export are not part of this tester ask. Sharp criticism
 and failed attempts are useful evidence.
@@ -93,8 +214,11 @@ and failed attempts are useful evidence.
 - [x] Pin the compatible Remi commit and prewarmed package set.
 - [x] Link the compatibility checklist, tester guide, and beta-feedback template.
 - [x] Record the clean-host smoke and rollback evidence.
-- [ ] Record the maintainer-chosen venue and launch timestamp in the milestone
-  tracker.
+- [x] Record Show HN, r/codex, r/ClaudeAI, and their planned launch timestamps
+  in the milestone tracker.
+- [ ] Re-check each venue's current rules and account eligibility immediately
+  before posting.
+- [ ] After publication, record every actual post URL and launch timestamp.
 
 ## Closeout
 
