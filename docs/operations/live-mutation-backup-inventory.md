@@ -1,20 +1,24 @@
 ---
-last_updated: 2026-05-27
-revision: 2
-summary: First-wave live-mutation backup coverage and release-scope decisions for Conary
+last_updated: 2026-07-18
+revision: 3
+summary: Limited-preview mutation scope and the narrower database-backup guarantees
 ---
 
 # Live-Mutation Backup Inventory
 
-This inventory is the release-hardening boundary for the limited preview. It
-maps commands that can mutate the active host or live Conary database to their
-current database-checkpoint coverage and first-wave documentation scope.
+This inventory maps commands that can mutate the active host or live Conary
+database to their current database-checkpoint coverage and limited-preview
+documentation scope. It records backup guarantees, not a general claim that
+every package operation is automatically reversible.
 
-The first-wave public path should stay centered on adoption, refresh,
-unadoption, native handoff, and the explicit DB backup recovery commands.
-Generation publication now writes a generation-bound SQLite backup for the
-selected artifact, but generation switching remains VM/debug-scoped until
-broader boot-selection recovery evidence lands.
+The W2 acceptance work expanded the qualifying tester loop to packaged-host
+initialization and sync, a guarded package install, adoption, list/search,
+`update --dry-run`, and unadoption on disposable, snapshotted, or explicitly
+non-critical hosts. The database-checkpoint guarantee remains narrower: it is
+centered on adoption, refresh, unadoption, native handoff, and the explicit DB
+backup recovery commands. Generation publication writes a generation-bound
+SQLite backup for the selected artifact, but generation switching remains
+VM/debug-scoped until broader boot-selection recovery evidence lands.
 
 ## Covered Before First Tester Post
 
@@ -39,17 +43,17 @@ These paths write pre-mutation and post-success SQLite checkpoint backups via
 | `conary system generation recover-db --generation <n> --dry-run` | `ReadOnly` | Copies and verifies a generation-bound DB backup without touching the live DB. |
 | `conary system generation recover-db --generation <n> --yes` | `AlwaysLive` | Restores a missing/corrupt live DB from a verified generation-bound backup after taking the transaction lock and quarantining existing DB/WAL/SHM sidecars. |
 
-## Excluded From First-Wave Public Docs
+## Scoped Or Excluded From Limited-Preview Docs
 
-These paths are intentionally not first-wave quickstart material. They either
-need their own DB checkpoint coverage, generation-bound DB backup work, or a
-clear VM-only story before they become daily-driver guidance.
+These paths do not inherit the adoption-lane checkpoint guarantee. A path may
+appear in preview documentation only with the scope below; that does not make
+it production guidance or promise automatic rollback.
 
-| Surface | Risk class | First-wave decision |
+| Surface | Risk class | Limited-preview decision |
 | --- | --- | --- |
-| `conary install` and `conary install @collection` | `ActiveHostMutation` | VM-only/follow-up until package mutation recovery evidence is covered end to end. |
+| `conary install` and `conary install @collection` | `ActiveHostMutation` | A single guarded install is part of the tester loop on a disposable, snapshotted, or explicitly non-critical supported host. Preview with `--dry-run` before explicit `--yes`; no automatic rollback guarantee is made. |
 | `conary remove` | `ActiveHostMutation` | VM-only/follow-up for the same package-mutation recovery gap. |
-| `conary update` and `conary update @collection` | `ActiveHostMutation` | VM-only/follow-up until update/package mutation recovery is covered. |
+| `conary update` and `conary update @collection` | `ActiveHostMutation` | `update --dry-run` is part of the qualifying loop. Apply mode is not required for qualification and is limited to disposable or snapshotted hosts with explicit `--yes`; no automatic rollback guarantee is made. |
 | `conary autoremove` | `ActiveHostMutation` | VM-only/follow-up until package removal recovery is covered. |
 | `conary ccs install` | `ActiveHostMutation` | VM-only/follow-up; not part of the adoption escape-hatch story. |
 | `conary model apply` | `ActiveHostMutation` | VM-only/follow-up until model apply has the same recovery evidence as package mutation. |
@@ -57,7 +61,7 @@ clear VM-only story before they become daily-driver guidance.
 | `conary system restore` | `ActiveHostMutation` | Follow-up before widened beta; touches live files and needs separate recovery evidence. |
 | `conary system state revert` | `ActiveHostMutation` | VM-only/follow-up until state restore has DB backup and live-file recovery evidence. |
 | `conary system state rollback` | `ActiveHostMutation` | VM-only/follow-up until rollback has backup coverage and live-root evidence. |
-| `conary self-update` | `ActiveHostMutation` | Excluded from first-wave docs; binary update recovery belongs to release tooling. |
+| `conary self-update` | `ActiveHostMutation` | Documented for signed installed-binary and release validation, but not part of the qualifying tester loop. Its atomic binary-replacement proof is separate from SQLite checkpoint coverage. |
 
 ## Generation Switching And Takeover Follow-Up
 

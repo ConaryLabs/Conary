@@ -50,10 +50,11 @@ Troves are stored in the `troves` table with install reason tracking
 
 ### Changeset
 
-An atomic transaction record. Every install, remove, or update creates a
-changeset entry. Changesets enable full rollback of both database and
-filesystem state. Each changeset carries a UUID for crash recovery
-correlation.
+A durable transaction record. Install, remove, and update paths create a
+changeset entry so pending, applied, failed, and rolled-back outcomes remain
+explicit. Database, guarded live-root, and generation paths have different
+recovery guarantees; a changeset does not promise universal filesystem
+rollback. Each changeset carries a UUID for crash-recovery correlation.
 
 ### Flavor
 
@@ -361,8 +362,9 @@ publish gates land.
 
 ## System Generations
 
-Conary can manage the entire system filesystem as immutable, atomic
-generations using EROFS images and Linux composefs.
+Conary can build and select immutable system-generation artifacts using EROFS
+images and Linux composefs. This remains an advanced, explicitly gated path in
+the limited preview.
 
 ### Architecture
 
@@ -528,8 +530,9 @@ then explicitly restore it with live-host acknowledgement. Explicit
 boot-selection recovery is the path that scans, promotes, and remounts. There
 is no transaction journal or staging directory; DB backups are recovery
 artifacts, not a second mutable source of truth.
-Runtime mutation is DB/CAS/generation/active-pointer first; direct mutation of
-the live root is not a supported release path.
+Runtime mutation is DB/CAS first and then follows either a guarded live-root
+journal or generation publication, depending on the command and mode. Direct,
+unjournaled live-root mutation is not a supported release path.
 Generation-aware CCS installs follow the same model for file capabilities by
 persisting file-capability authority in SQLite first, attaching
 `security.capability` during runtime-input collection, requiring immediate
@@ -542,8 +545,9 @@ package payloads, private keys, remote repository history, or native
 package-manager transaction history.
 
 **Content-addressable storage**: Files are stored by SHA-256 hash in a flat
-CAS directory. This enables deduplication across packages, instant rollback
-by preserving old content, and integrity verification.
+CAS directory. This enables deduplication across packages, integrity
+verification, and rollback-oriented recovery when the required content and
+state references have been preserved.
 
 **Chunk-level distribution**: Packages are split into variable-size chunks
 via FastCDC. Clients only download chunks they don't already have, giving

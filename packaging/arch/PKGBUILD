@@ -6,10 +6,10 @@
 pkgname=conary
 pkgver=0.11.1
 pkgrel=1
-pkgdesc='Modern package manager with atomic operations, rollback, and delta updates'
-arch=('x86_64' 'aarch64')
+pkgdesc='Early-preview Linux package manager with native-package adoption'
+arch=('x86_64')
 url='https://github.com/ConaryLabs/Conary'
-license=('MIT' 'Apache-2.0')
+license=('MIT')
 depends=('openssl' 'xz')
 makedepends=('cargo' 'pkg-config' 'cmake' 'perl')
 options=(!lto)
@@ -57,9 +57,8 @@ package() {
     target/release/$pkgname system completions zsh  > "$pkgdir/usr/share/zsh/site-functions/_$pkgname"
     target/release/$pkgname system completions fish > "$pkgdir/usr/share/fish/vendor_completions.d/$pkgname.fish"
 
-    # Licenses
-    install -Dm644 LICENSE-MIT "$pkgdir/usr/share/licenses/$pkgname/LICENSE-MIT"
-    install -Dm644 LICENSE-APACHE "$pkgdir/usr/share/licenses/$pkgname/LICENSE-APACHE"
+    # License
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 
     # Config and data directories
     install -d "$pkgdir/etc/$pkgname"

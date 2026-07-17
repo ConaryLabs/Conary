@@ -106,9 +106,10 @@ the managed `conary-test` rollout groups above.
   SSH copy/paste or public endpoint curls
 - Verification uses `scripts/conaryd-health.sh`, which checks the
   Forge-local Unix socket at `/run/conary/conaryd.sock`
-- The tracked bootstrap prerequisites are `deploy/ssh/forge-known-hosts` for
-  pinned SSH host trust and `deploy/sudoers/conaryd-forge` for the narrowed
-  non-interactive install/verify command surface
+- The retired host key is not retained. Before re-enabling this lane, verify a
+  replacement host key out of band and install it in the deploy account's
+  host-local `known_hosts`; `deploy/sudoers/conaryd-forge` retains the dormant,
+  narrowed install/verify command surface for review.
 - The staging service is local-only on Forge; this does not imply that public
   production hosting for `conaryd` is solved
 

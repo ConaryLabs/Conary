@@ -11,7 +11,7 @@ phase = 4
 
 # Setup: initialize DB so commands have a database to query
 [[suite.setup]]
-conary = "system init"
+conary = "system init --profile ${REMI_DISTRO}"
 
 [[suite.setup]]
 run = "rm -rf /tmp/phase4-runtime-fixture-output && mkdir -p /tmp/phase4-runtime-fixture-output && ${CONARY_BIN} ccs build /opt/remi-tests/fixtures/phase4-runtime-fixture --output /tmp/phase4-runtime-fixture-output --source /opt/remi-tests/fixtures/phase4-runtime-fixture/stage"

@@ -90,7 +90,7 @@ pub async fn fetch_appstream_data(db_path: &Path) -> Result<usize> {
 }
 
 async fn fetch_ubuntu_appstream(client: &reqwest::Client, db_path: &Path) -> Result<usize> {
-    let url = "http://archive.ubuntu.com/ubuntu/dists/resolute/main/dep11/Components-amd64.yml.gz";
+    let url = "https://archive.ubuntu.com/ubuntu/dists/resolute/main/dep11/Components-amd64.yml.gz";
 
     let response = client.get(url).send().await?;
     if !response.status().is_success() {

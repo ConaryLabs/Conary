@@ -11,6 +11,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+OUTPUT="$SCRIPT_DIR/output"
 
 VERSION=$(grep '^version' "$REPO_ROOT/apps/conary/Cargo.toml" | head -1 | sed 's/.*"\(.*\)".*/\1/')
 NAME="conary"
@@ -25,6 +26,9 @@ for arg in "$@"; do
 done
 
 echo "Building $NAME $VERSION Arch package"
+
+mkdir -p "$OUTPUT"
+find "$OUTPUT" -maxdepth 1 -name '*.pkg.tar.zst' -delete
 
 # --- Vendor dependencies ---
 echo "[1/4] Vendoring dependencies..."
@@ -61,8 +65,6 @@ cp -a "$REPO_ROOT/vendor" "$TMPDIR/vendor"
 tar czf "$TMPDIR/vendor.tar.gz" -C "$TMPDIR" vendor
 rm -rf "$TMPDIR/vendor"
 
-mkdir -p "$SCRIPT_DIR/output"
-
 if $USE_PODMAN; then
     # --- Podman build ---
     echo "[3/4] Building in Podman container..."
@@ -75,7 +77,7 @@ if $USE_PODMAN; then
         -v "$TMPDIR/vendor.tar.gz:/build/vendor.tar.gz:ro,Z" \
         -v "$SCRIPT_DIR/PKGBUILD:/build/PKGBUILD:ro,Z" \
         -v "$SCRIPT_DIR/conary.install:/build/conary.install:ro,Z" \
-        -v "$SCRIPT_DIR/output:/output:Z" \
+        -v "$OUTPUT:/output:Z" \
         "$IMAGE" \
         bash -c '
             cd /build && \
@@ -84,8 +86,6 @@ if $USE_PODMAN; then
         '
 
     echo "[4/4] Done."
-    echo "Package written to: $SCRIPT_DIR/output/"
-    ls -lh "$SCRIPT_DIR/output/"*.pkg.tar.zst 2>/dev/null || echo "(no package found -- check build output)"
 else
     # --- Local makepkg ---
     echo "[3/4] Running makepkg..."
@@ -100,9 +100,16 @@ else
     cd "$BUILDDIR"
     makepkg -sf --noconfirm --skipchecksums
 
-    cp "$BUILDDIR"/*.pkg.tar.zst "$SCRIPT_DIR/output/" 2>/dev/null || true
+    cp "$BUILDDIR"/*.pkg.tar.zst "$OUTPUT/"
 
     echo "[4/4] Done."
-    echo "Package written to: $SCRIPT_DIR/output/"
-    ls -lh "$SCRIPT_DIR/output/"*.pkg.tar.zst 2>/dev/null || echo "(no package found -- check build output)"
 fi
+
+EXPECTED_PACKAGE="$OUTPUT/${NAME}-${VERSION}-1-x86_64.pkg.tar.zst"
+if [[ ! -s "$EXPECTED_PACKAGE" || -L "$EXPECTED_PACKAGE" ]]; then
+    echo "Expected Arch package not found: $EXPECTED_PACKAGE" >&2
+    exit 1
+fi
+
+echo "Arch package written to: $EXPECTED_PACKAGE"
+ls -lh "$EXPECTED_PACKAGE"

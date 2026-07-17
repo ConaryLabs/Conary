@@ -63,6 +63,10 @@ case "${1:-} ${2:-}" in
     "repo remove")
         exit 0
         ;;
+    "repo list")
+        printf 'Repositories:\n  [x] remi (priority: 110, never synced)\n'
+        exit 0
+        ;;
     *)
         ;;
 esac
@@ -94,16 +98,25 @@ export TEST_DB_INIT_MARKER="$DB_INIT_MARKER"
 export TEST_FAKE_CONARY="$FAKE_CONARY"
 
 bash "$TARGET_SCRIPT" \
-    --repo-name fedora-remi \
+    --repo-name remi \
     --repo-url https://remi.conary.io \
     --remi-endpoint https://remi.conary.io \
-    --remi-distro fedora
+    --remi-distro fedora-44
 
 assert_contains() {
     local file="$1"
     local needle="$2"
     if ! grep -Fq -- "$needle" "$file"; then
         echo "expected '$needle' in $file" >&2
+        exit 1
+    fi
+}
+
+assert_not_contains() {
+    local file="$1"
+    local needle="$2"
+    if grep -Fq -- "$needle" "$file"; then
+        echo "did not expect '$needle' in $file" >&2
         exit 1
     fi
 }
@@ -130,17 +143,18 @@ assert_order() {
     fi
 }
 
-assert_contains "$CONARY_LOG" "system init"
-assert_contains "$CONARY_LOG" "repo add fedora-remi https://remi.conary.io --default-strategy remi --remi-endpoint https://remi.conary.io --remi-distro fedora"
-assert_contains "$CONARY_LOG" "trust init fedora-remi --root $INPUTS_DIR/root.json"
-assert_contains "$CONARY_LOG" "repo sync fedora-remi --force"
+assert_contains "$CONARY_LOG" "system init --profile fedora-44"
+assert_not_contains "$CONARY_LOG" "repo add"
+assert_contains "$CONARY_LOG" "repo list --all"
+assert_contains "$CONARY_LOG" "trust init remi --root $INPUTS_DIR/root.json"
+assert_contains "$CONARY_LOG" "repo sync remi --force"
 assert_contains "$CONARY_LOG" "query label list"
 assert_contains "$CONARY_LOG" "cook $INPUTS_DIR/conary-workspace/recipes/bootstrap-smoke/simple-hello.toml --output /var/tmp/conary-smoke-output --source-cache /var/tmp/conary-smoke-cache --no-isolation"
 
-assert_order "$CONARY_LOG" "system init" "repo add fedora-remi"
-assert_order "$CONARY_LOG" "repo add fedora-remi" "trust init fedora-remi"
-assert_order "$CONARY_LOG" "trust init fedora-remi" "repo sync fedora-remi --force"
-assert_order "$CONARY_LOG" "repo sync fedora-remi --force" "query label list"
+assert_order "$CONARY_LOG" "system init --profile fedora-44" "repo list --all"
+assert_order "$CONARY_LOG" "repo list --all" "trust init remi"
+assert_order "$CONARY_LOG" "trust init remi" "repo sync remi --force"
+assert_order "$CONARY_LOG" "repo sync remi --force" "query label list"
 
 assert_contains "$CARGO_LOG" "build --locked"
 assert_contains "$CONARY_LOG" "--version"

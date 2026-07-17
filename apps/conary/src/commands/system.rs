@@ -1,4 +1,4 @@
-// src/commands/system.rs
+// apps/conary/src/commands/system.rs
 //! System management commands (init, verify, rollback)
 
 #[cfg(test)]
@@ -11,9 +11,12 @@ use anyhow::{Result, anyhow};
 use conary_core::ccs::legacy_replay::{
     LegacyReplayLifecycle, LegacyReplayPreflight, LegacyReplayRefusal, plan_legacy_replay,
 };
-use conary_core::db::models::InstalledLegacyScriptletBundle;
+use conary_core::db::models::{
+    InstalledLegacyScriptletBundle, PackageResolution, Repository, RepositoryPackage,
+};
 use conary_core::db::paths::objects_dir;
 use conary_core::filesystem::CasStore;
+use conary_core::repository::supported_profiles::{SupportedProfile, profile_by_public_id};
 use conary_core::runtime_root::ConaryRuntimeRoot;
 use conary_core::scriptlet::SandboxMode;
 use std::cell::RefCell;
@@ -22,14 +25,82 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tracing::info;
 
+const REMI_REPOSITORY_NAME: &str = "remi";
+const REMI_ENDPOINT: &str = "https://remi.conary.io";
+const HOST_PROFILE_SETTING: &str = "system.host-profile";
+const MAX_INIT_SYMLINK_DEPTH: usize = 40;
+
+#[derive(Clone, Copy)]
+struct NativeRepositorySeed {
+    name: &'static str,
+    url: &'static str,
+    legacy_urls: &'static [&'static str],
+    priority: i32,
+    description: &'static str,
+}
+
+impl NativeRepositorySeed {
+    fn owns_url(self, url: &str) -> bool {
+        url == self.url || self.legacy_urls.contains(&url)
+    }
+}
+
+const NATIVE_REPOSITORY_SEEDS: &[NativeRepositorySeed] = &[
+    NativeRepositorySeed {
+        name: "arch-core",
+        url: "https://geo.mirror.pkgbuild.com/core/os/x86_64",
+        legacy_urls: &[],
+        priority: 100,
+        description: "Arch Linux",
+    },
+    NativeRepositorySeed {
+        name: "arch-extra",
+        url: "https://geo.mirror.pkgbuild.com/extra/os/x86_64",
+        legacy_urls: &[],
+        priority: 95,
+        description: "Arch Linux",
+    },
+    NativeRepositorySeed {
+        name: "fedora-44",
+        url: "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/x86_64/os",
+        legacy_urls: &[],
+        priority: 90,
+        description: "Fedora 44",
+    },
+    NativeRepositorySeed {
+        name: "arch-multilib",
+        url: "https://geo.mirror.pkgbuild.com/multilib/os/x86_64",
+        legacy_urls: &[],
+        priority: 85,
+        description: "Arch Linux",
+    },
+    NativeRepositorySeed {
+        name: "ubuntu-26.04",
+        url: "https://archive.ubuntu.com/ubuntu",
+        legacy_urls: &["http://archive.ubuntu.com/ubuntu"],
+        priority: 80,
+        description: "Ubuntu 26.04 LTS",
+    },
+];
+
 /// Initialize the Conary database and add default repositories
-pub async fn cmd_init(db_path: &str) -> Result<()> {
+pub async fn cmd_init(db_path: &str, profile_id: &str) -> Result<()> {
+    let profile = profile_by_public_id(profile_id).ok_or_else(|| {
+        let supported = conary_core::repository::supported_profiles::public_profiles()
+            .iter()
+            .map(SupportedProfile::id)
+            .collect::<Vec<_>>()
+            .join(", ");
+        anyhow!("unsupported host profile '{profile_id}'; expected one of: {supported}")
+    })?;
+
     info!("Initializing Conary database at: {}", db_path);
     let db_path_ref = Path::new(db_path);
     let runtime_root = ConaryRuntimeRoot::from_db_path(db_path_ref.to_path_buf());
+    require_init_privileges(db_path_ref)?;
     conary_core::db::init(db_path)
         .map_err(|err| init_failure_context(db_path_ref, &runtime_root, err))?;
-    println!("Database initialized successfully at: {}", db_path);
+    crate::ui::status("Initialized", &format!("database at {db_path}"));
 
     let mut conn = open_db(db_path)?;
     info!("Adding default repositories...");
@@ -39,64 +110,9 @@ pub async fn cmd_init(db_path: &str) -> Result<()> {
     let mut messages: Vec<(bool, String)> = Vec::new();
 
     conary_core::db::transaction(&mut conn, |tx| {
-        let mut remi_repo = conary_core::db::models::Repository::new(
-            "remi".to_string(),
-            "https://remi.conary.io".to_string(),
-        );
-        remi_repo.priority = 110;
-        remi_repo.default_strategy = Some("remi".to_string());
-        remi_repo.default_strategy_endpoint = Some("https://remi.conary.io".to_string());
-        remi_repo.default_strategy_distro = Some("fedora-44".to_string());
-        match remi_repo.insert(tx) {
-            Ok(_) => messages.push((false, "  Added: remi (Conary Remi (CCS))".to_string())),
-            Err(e) => messages.push((true, format!("Could not add remi: {e}"))),
-        }
-
-        let default_repos = [
-            (
-                "arch-core",
-                "https://geo.mirror.pkgbuild.com/core/os/x86_64",
-                100,
-                "Arch Linux",
-            ),
-            (
-                "arch-extra",
-                "https://geo.mirror.pkgbuild.com/extra/os/x86_64",
-                95,
-                "Arch Linux",
-            ),
-            (
-                "fedora-44",
-                "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/x86_64/os",
-                90,
-                "Fedora 44",
-            ),
-            (
-                "arch-multilib",
-                "https://geo.mirror.pkgbuild.com/multilib/os/x86_64",
-                85,
-                "Arch Linux",
-            ),
-            (
-                "ubuntu-26.04",
-                "http://archive.ubuntu.com/ubuntu",
-                80,
-                "Ubuntu 26.04 LTS",
-            ),
-        ];
-
-        for (name, url, priority, desc) in default_repos {
-            match conary_core::repository::add_repository(
-                tx,
-                name.to_string(),
-                url.to_string(),
-                true,
-                priority,
-            ) {
-                Ok(_) => messages.push((false, format!("  Added: {name} ({desc})"))),
-                Err(e) => messages.push((true, format!("Could not add {name}: {e}"))),
-            }
-        }
+        reconcile_remi_seed(tx, profile, &mut messages)?;
+        reconcile_native_repository_seeds(tx, profile, &mut messages)?;
+        conary_core::db::models::settings::set(tx, HOST_PROFILE_SETTING, profile.id())?;
 
         Ok(())
     })?;
@@ -105,11 +121,252 @@ pub async fn cmd_init(db_path: &str) -> Result<()> {
         if *is_warning {
             crate::ui::warn(msg);
         } else {
-            println!("{msg}");
+            crate::ui::row(crate::ui::Status::Ok, &[msg.trim()]);
         }
     }
 
-    println!("\nDefault repositories added. Use 'conary repo sync' to download metadata.");
+    crate::ui::status(
+        "Configured",
+        &format!("repositories for profile {}", profile.id()),
+    );
+    crate::ui::note("Run 'conary repo sync remi' to download preview metadata.");
+    crate::ui::note(
+        "Native metadata sources stay disabled until their signing trust is configured.",
+    );
+    Ok(())
+}
+
+fn require_init_privileges(db_path: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        validate_init_privileges(db_path, nix::unistd::Uid::effective().is_root())?;
+    }
+    Ok(())
+}
+
+fn validate_init_privileges(db_path: &Path, is_root: bool) -> Result<()> {
+    let default_db_path = ConaryRuntimeRoot::default().db_path().to_path_buf();
+    if paths_refer_to_same_location(db_path, &default_db_path)? {
+        let absolute_input = if db_path.is_absolute() {
+            db_path.to_path_buf()
+        } else {
+            std::env::current_dir()?.join(db_path)
+        };
+        if lexically_normalize_path(&absolute_input) != default_db_path {
+            return Err(anyhow!(
+                "the system database must be addressed by its canonical path {}; refusing alias {} so database and runtime state cannot diverge",
+                default_db_path.display(),
+                db_path.display()
+            ));
+        }
+        if !is_root {
+            return Err(anyhow!(
+                "initializing the system database at {} requires root privileges; re-run with sudo, or pass --db-path to an isolated writable database for source-build and test workflows",
+                db_path.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn paths_refer_to_same_location(left: &Path, right: &Path) -> Result<bool> {
+    Ok(resolve_path_for_comparison(left, 0)? == resolve_path_for_comparison(right, 0)?)
+}
+
+fn resolve_path_for_comparison(path: &Path, symlink_depth: usize) -> Result<PathBuf> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+    let normalized = lexically_normalize_path(&absolute);
+
+    if let Ok(canonical) = std::fs::canonicalize(&normalized) {
+        return Ok(canonical);
+    }
+
+    // `canonicalize` cannot follow a dangling final symlink. Resolve that link
+    // explicitly so a non-root caller cannot spell the system DB through a
+    // writable alias before the target exists.
+    if std::fs::symlink_metadata(&normalized)
+        .is_ok_and(|metadata| metadata.file_type().is_symlink())
+    {
+        if symlink_depth >= MAX_INIT_SYMLINK_DEPTH {
+            return Err(anyhow!(
+                "refusing to initialize through a symlink chain deeper than {MAX_INIT_SYMLINK_DEPTH}: {}",
+                path.display()
+            ));
+        }
+        let target = std::fs::read_link(&normalized).map_err(|error| {
+            anyhow!(
+                "could not safely resolve database symlink {}: {error}",
+                normalized.display()
+            )
+        })?;
+        let target = if target.is_absolute() {
+            target
+        } else {
+            normalized
+                .parent()
+                .unwrap_or_else(|| Path::new("/"))
+                .join(target)
+        };
+        return resolve_path_for_comparison(&target, symlink_depth + 1);
+    }
+
+    if let (Some(parent), Some(file_name)) = (normalized.parent(), normalized.file_name())
+        && let Ok(canonical_parent) = std::fs::canonicalize(parent)
+    {
+        return Ok(canonical_parent.join(file_name));
+    }
+
+    Ok(normalized)
+}
+
+fn lexically_normalize_path(path: &Path) -> PathBuf {
+    use std::path::Component;
+
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                let can_pop = normalized
+                    .file_name()
+                    .is_some_and(|name| name != std::ffi::OsStr::new(".."));
+                if can_pop {
+                    normalized.pop();
+                } else if !path.is_absolute() {
+                    normalized.push("..");
+                }
+            }
+            _ => normalized.push(component.as_os_str()),
+        }
+    }
+    normalized
+}
+
+fn reconcile_remi_seed(
+    conn: &rusqlite::Connection,
+    profile: &SupportedProfile,
+    messages: &mut Vec<(bool, String)>,
+) -> conary_core::Result<()> {
+    let Some(mut repo) = Repository::find_by_name(conn, REMI_REPOSITORY_NAME)? else {
+        let mut repo = Repository::new(REMI_REPOSITORY_NAME.to_string(), REMI_ENDPOINT.to_string());
+        repo.priority = 110;
+        repo.default_strategy = Some("remi".to_string());
+        repo.default_strategy_endpoint = Some(REMI_ENDPOINT.to_string());
+        repo.default_strategy_distro = Some(profile.id().to_string());
+        repo.insert(conn)?;
+        messages.push((false, "  Added: remi (Conary Remi (CCS))".to_string()));
+        return Ok(());
+    };
+
+    let canonical_seed = repo.url == REMI_ENDPOINT
+        && repo.default_strategy.as_deref() == Some("remi")
+        && repo.default_strategy_endpoint.as_deref() == Some(REMI_ENDPOINT);
+    if !canonical_seed {
+        messages.push((
+            true,
+            "Existing repository 'remi' is user-managed; leaving its endpoint and target unchanged"
+                .to_string(),
+        ));
+        return Ok(());
+    }
+
+    if repo.default_strategy_distro.as_deref() != Some(profile.id()) {
+        let repo_id = repo.id.ok_or_else(|| {
+            conary_core::Error::MissingId("Remi repository has no ID".to_string())
+        })?;
+        RepositoryPackage::delete_by_repository(conn, repo_id)?;
+        PackageResolution::delete_by_repository(conn, repo_id)?;
+        conn.execute(
+            "DELETE FROM repository_package_keys WHERE repository_id = ?1",
+            [repo_id],
+        )?;
+        repo.default_strategy_distro = Some(profile.id().to_string());
+        repo.last_sync = None;
+        repo.update(conn)?;
+        messages.push((false, format!("  Updated: remi target ({})", profile.id())));
+    }
+
+    Ok(())
+}
+
+fn reconcile_native_repository_seeds(
+    conn: &rusqlite::Connection,
+    profile: &SupportedProfile,
+    messages: &mut Vec<(bool, String)>,
+) -> conary_core::Result<()> {
+    let previous_profile = conary_core::db::models::settings::get(conn, HOST_PROFILE_SETTING)?;
+    let profile_changed = previous_profile.as_deref() != Some(profile.id());
+
+    for seed in NATIVE_REPOSITORY_SEEDS {
+        let selected = profile.matches_repository_name(seed.name);
+        let existing = Repository::find_by_name(conn, seed.name)?;
+
+        match existing {
+            None if selected => {
+                conary_core::repository::add_repository(
+                    conn,
+                    seed.name.to_string(),
+                    seed.url.to_string(),
+                    false,
+                    seed.priority,
+                )?;
+                messages.push((
+                    false,
+                    format!(
+                        "  Added: {} ({}, disabled pending signing trust)",
+                        seed.name, seed.description
+                    ),
+                ));
+            }
+            Some(mut repo) if seed.owns_url(&repo.url) => {
+                let mut changed = false;
+                if repo.url != seed.url {
+                    let repo_id = repo.id.ok_or_else(|| {
+                        conary_core::Error::MissingId(format!(
+                            "Repository '{}' has no ID",
+                            seed.name
+                        ))
+                    })?;
+                    RepositoryPackage::delete_by_repository(conn, repo_id)?;
+                    PackageResolution::delete_by_repository(conn, repo_id)?;
+                    repo.url = seed.url.to_string();
+                    repo.last_sync = None;
+                    changed = true;
+                    messages.push((
+                        false,
+                        format!(
+                            "  Updated: {} secure endpoint ({})",
+                            seed.name, seed.description
+                        ),
+                    ));
+                }
+                if profile_changed && repo.enabled {
+                    repo.enabled = false;
+                    changed = true;
+                    messages.push((
+                        false,
+                        format!("  Disabled: {} ({})", seed.name, seed.description),
+                    ));
+                }
+                if changed {
+                    repo.update(conn)?;
+                }
+            }
+            Some(repo) if selected && repo.url != seed.url => messages.push((
+                true,
+                format!(
+                    "Existing repository '{}' is user-managed; leaving it unchanged",
+                    seed.name
+                ),
+            )),
+            _ => {}
+        }
+    }
+
     Ok(())
 }
 
@@ -1252,7 +1509,11 @@ use super::format_bytes;
 
 #[cfg(test)]
 mod tests {
-    use super::{cmd_init, cmd_rollback, restore_snapshots_to_live_root, rollback_claim_statuses};
+    use super::{
+        HOST_PROFILE_SETTING, NATIVE_REPOSITORY_SEEDS, cmd_init, cmd_rollback,
+        paths_refer_to_same_location, restore_snapshots_to_live_root, rollback_claim_statuses,
+        validate_init_privileges,
+    };
     use crate::commands::{FileSnapshot, RevertMetadata, TroveSnapshot, parse_rollback_snapshots};
     use conary_core::ccs::legacy_scriptlets::{
         DecisionCounts, ForeignReplayPolicy, LEGACY_SCRIPTLET_SCHEMA_V1, LegacyScriptletBundle,
@@ -1262,33 +1523,315 @@ mod tests {
     };
     use conary_core::db::models::{
         Changeset, ChangesetStatus, FileEntry, InstallSource, InstalledLegacyScriptletBundle,
-        Trove, TroveType,
+        PackageResolution, Repository, RepositoryPackage, Trove, TroveType, settings,
     };
     use conary_core::db::paths::objects_dir;
     use conary_core::filesystem::CasStore;
     use rusqlite::params;
     use std::collections::BTreeMap;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
     #[tokio::test]
-    async fn init_adds_remi_with_strategy_defaults() {
+    async fn init_seeds_only_the_selected_profile_repositories() {
+        let cases: [(&str, &[&str]); 3] = [
+            ("fedora-44", &["fedora-44"]),
+            ("ubuntu-26.04", &["ubuntu-26.04"]),
+            ("arch", &["arch-core", "arch-extra", "arch-multilib"]),
+        ];
+
+        for (profile_id, expected_native_repos) in cases {
+            let temp_dir = tempfile::tempdir().unwrap();
+            let db_path = temp_dir.path().join("conary.db");
+            let db_path_str = db_path.to_str().unwrap();
+
+            cmd_init(db_path_str, profile_id).await.unwrap();
+
+            let conn = conary_core::db::open(db_path_str).unwrap();
+            let remi = Repository::find_by_name(&conn, "remi").unwrap().unwrap();
+            assert_eq!(remi.url, "https://remi.conary.io");
+            assert_eq!(remi.default_strategy.as_deref(), Some("remi"));
+            assert_eq!(
+                remi.default_strategy_endpoint.as_deref(),
+                Some("https://remi.conary.io")
+            );
+            assert_eq!(remi.default_strategy_distro.as_deref(), Some(profile_id));
+
+            let native_repos = Repository::list_all(&conn)
+                .unwrap()
+                .into_iter()
+                .filter(|repo| repo.name != "remi")
+                .map(|repo| {
+                    assert!(!repo.enabled, "{} should start disabled", repo.name);
+                    repo.name
+                })
+                .collect::<std::collections::BTreeSet<_>>();
+            let expected = expected_native_repos
+                .iter()
+                .map(|name| (*name).to_string())
+                .collect::<std::collections::BTreeSet<_>>();
+            assert_eq!(native_repos, expected, "profile {profile_id}");
+            assert_eq!(
+                settings::get(&conn, HOST_PROFILE_SETTING)
+                    .unwrap()
+                    .as_deref(),
+                Some(profile_id)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn init_reconciles_the_legacy_all_distro_seed_to_the_selected_profile() {
         let temp_dir = tempfile::tempdir().unwrap();
         let db_path = temp_dir.path().join("conary.db");
         let db_path_str = db_path.to_str().unwrap();
 
-        cmd_init(db_path_str).await.unwrap();
+        cmd_init(db_path_str, "fedora-44").await.unwrap();
+        {
+            let conn = conary_core::db::open(db_path_str).unwrap();
+            for seed in NATIVE_REPOSITORY_SEEDS {
+                if Repository::find_by_name(&conn, seed.name)
+                    .unwrap()
+                    .is_none()
+                {
+                    conary_core::repository::add_repository(
+                        &conn,
+                        seed.name.to_string(),
+                        seed.legacy_urls
+                            .first()
+                            .copied()
+                            .unwrap_or(seed.url)
+                            .to_string(),
+                        true,
+                        seed.priority,
+                    )
+                    .unwrap();
+                }
+            }
+
+            let mut ubuntu = Repository::find_by_name(&conn, "ubuntu-26.04")
+                .unwrap()
+                .unwrap();
+            ubuntu.last_sync = Some("2026-07-18T00:00:00Z".to_string());
+            ubuntu.update(&conn).unwrap();
+            let ubuntu_id = ubuntu.id.unwrap();
+            let mut package = RepositoryPackage::new(
+                ubuntu_id,
+                "legacy-http-package".to_string(),
+                "1".to_string(),
+                "sha256:test".to_string(),
+                1,
+                "http://archive.ubuntu.com/ubuntu/pool/legacy-http-package.deb".to_string(),
+            );
+            package.insert(&conn).unwrap();
+            let mut resolution = PackageResolution::binary(
+                ubuntu_id,
+                "legacy-http-package".to_string(),
+                "http://archive.ubuntu.com/ubuntu/pool/legacy-http-package.deb".to_string(),
+                "sha256:test".to_string(),
+            );
+            resolution.insert(&conn).unwrap();
+            settings::delete(&conn, HOST_PROFILE_SETTING).unwrap();
+
+            let mut remi = Repository::find_by_name(&conn, "remi").unwrap().unwrap();
+            remi.last_sync = Some("2026-07-17T00:00:00Z".to_string());
+            remi.update(&conn).unwrap();
+            let mut package = RepositoryPackage::new(
+                remi.id.unwrap(),
+                "fedora-only".to_string(),
+                "1".to_string(),
+                "sha256:test".to_string(),
+                1,
+                "https://example.invalid/fedora-only".to_string(),
+            );
+            package.insert(&conn).unwrap();
+            let mut resolution = PackageResolution::remi(
+                remi.id.unwrap(),
+                "fedora-only".to_string(),
+                "https://remi.conary.io".to_string(),
+                "fedora-44".to_string(),
+            );
+            resolution.insert(&conn).unwrap();
+            conn.execute(
+                "INSERT INTO repository_package_keys
+                    (repository_id, public_key, key_id, status)
+                 VALUES (?1, 'stale-fedora-key', 'stale-fedora-key-id', 'active')",
+                [remi.id.unwrap()],
+            )
+            .unwrap();
+        }
+
+        cmd_init(db_path_str, "ubuntu-26.04").await.unwrap();
 
         let conn = conary_core::db::open(db_path_str).unwrap();
-        let repo = conary_core::db::models::Repository::find_by_name(&conn, "remi")
+        let remi = Repository::find_by_name(&conn, "remi").unwrap().unwrap();
+        assert_eq!(
+            remi.default_strategy_distro.as_deref(),
+            Some("ubuntu-26.04")
+        );
+        assert!(remi.last_sync.is_none());
+        assert!(
+            RepositoryPackage::find_by_repository(&conn, remi.id.unwrap())
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            PackageResolution::find_by_repository(&conn, remi.id.unwrap())
+                .unwrap()
+                .is_empty()
+        );
+        let package_key_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM repository_package_keys WHERE repository_id = ?1",
+                [remi.id.unwrap()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(package_key_count, 0);
+
+        let enabled_native_repos = Repository::list_all(&conn)
+            .unwrap()
+            .into_iter()
+            .filter(|repo| repo.name != "remi" && repo.enabled)
+            .map(|repo| repo.name)
+            .collect::<Vec<_>>();
+        assert!(enabled_native_repos.is_empty());
+        assert_eq!(
+            Repository::find_by_name(&conn, "ubuntu-26.04")
+                .unwrap()
+                .unwrap()
+                .url,
+            "https://archive.ubuntu.com/ubuntu"
+        );
+        let ubuntu = Repository::find_by_name(&conn, "ubuntu-26.04")
             .unwrap()
             .unwrap();
-        assert_eq!(repo.url, "https://remi.conary.io");
-        assert_eq!(repo.default_strategy.as_deref(), Some("remi"));
-        assert_eq!(
-            repo.default_strategy_endpoint.as_deref(),
-            Some("https://remi.conary.io")
+        assert!(ubuntu.last_sync.is_none());
+        assert!(
+            RepositoryPackage::find_by_repository(&conn, ubuntu.id.unwrap())
+                .unwrap()
+                .is_empty()
         );
-        assert_eq!(repo.default_strategy_distro.as_deref(), Some("fedora-44"));
+        assert!(
+            PackageResolution::find_by_repository(&conn, ubuntu.id.unwrap())
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            settings::get(&conn, HOST_PROFILE_SETTING)
+                .unwrap()
+                .as_deref(),
+            Some("ubuntu-26.04")
+        );
+    }
+
+    #[tokio::test]
+    async fn init_rerun_preserves_same_profile_repository_choices() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("conary.db");
+        let db_path_str = db_path.to_str().unwrap();
+
+        cmd_init(db_path_str, "arch").await.unwrap();
+        {
+            let conn = conary_core::db::open(db_path_str).unwrap();
+
+            let mut arch_core = Repository::find_by_name(&conn, "arch-core")
+                .unwrap()
+                .unwrap();
+            arch_core.enabled = false;
+            arch_core.update(&conn).unwrap();
+
+            let mut arch_extra = Repository::find_by_name(&conn, "arch-extra")
+                .unwrap()
+                .unwrap();
+            arch_extra.url = "https://mirror.example.invalid/arch-extra".to_string();
+            arch_extra.update(&conn).unwrap();
+
+            let mut remi = Repository::find_by_name(&conn, "remi").unwrap().unwrap();
+            remi.url = "https://mirror.example.invalid/remi".to_string();
+            remi.default_strategy_endpoint = Some(remi.url.clone());
+            remi.default_strategy_distro = Some("fedora-44".to_string());
+            remi.update(&conn).unwrap();
+        }
+
+        cmd_init(db_path_str, "arch").await.unwrap();
+
+        let conn = conary_core::db::open(db_path_str).unwrap();
+        let arch_core = Repository::find_by_name(&conn, "arch-core")
+            .unwrap()
+            .unwrap();
+        assert!(!arch_core.enabled);
+        let arch_extra = Repository::find_by_name(&conn, "arch-extra")
+            .unwrap()
+            .unwrap();
+        assert_eq!(arch_extra.url, "https://mirror.example.invalid/arch-extra");
+        let remi = Repository::find_by_name(&conn, "remi").unwrap().unwrap();
+        assert_eq!(remi.url, "https://mirror.example.invalid/remi");
+        assert_eq!(remi.default_strategy_distro.as_deref(), Some("fedora-44"));
+    }
+
+    #[tokio::test]
+    async fn init_rejects_non_public_profile_before_creating_the_database() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("conary.db");
+
+        let err = cmd_init(db_path.to_str().unwrap(), "fedora")
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("unsupported host profile 'fedora'"));
+        assert!(!db_path.exists());
+    }
+
+    #[test]
+    fn system_database_init_requires_root_but_custom_test_databases_do_not() {
+        let default_db = Path::new("/var/lib/conary/conary.db");
+        let error = validate_init_privileges(default_db, false)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("requires root privileges"));
+        assert!(error.contains("re-run with sudo"));
+        assert!(validate_init_privileges(default_db, true).is_ok());
+        assert!(
+            validate_init_privileges(Path::new("/var/lib/conary/../conary/conary.db"), false)
+                .is_err()
+        );
+        assert!(validate_init_privileges(Path::new("/tmp/conary-test.db"), false).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn privilege_path_comparison_resolves_a_dangling_database_symlink() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let actual_dir = temp_dir.path().join("actual");
+        std::fs::create_dir(&actual_dir).unwrap();
+        let actual_db = actual_dir.join("conary.db");
+        let alias_db = temp_dir.path().join("database-alias");
+        std::os::unix::fs::symlink("actual/conary.db", &alias_db).unwrap();
+
+        assert!(paths_refer_to_same_location(&alias_db, &actual_db).unwrap());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn privilege_check_rejects_deep_aliases_and_root_runtime_aliases() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut target = PathBuf::from("/var/lib/conary/conary.db");
+        for index in (0..10).rev() {
+            let alias = temp_dir.path().join(format!("alias-{index}"));
+            std::os::unix::fs::symlink(&target, &alias).unwrap();
+            target = alias;
+        }
+
+        let non_root_error = validate_init_privileges(&target, false)
+            .unwrap_err()
+            .to_string();
+        assert!(non_root_error.contains("canonical path"));
+
+        let root_error = validate_init_privileges(&target, true)
+            .unwrap_err()
+            .to_string();
+        assert!(root_error.contains("runtime state cannot diverge"));
     }
 
     #[tokio::test]
@@ -1299,7 +1842,10 @@ mod tests {
         let db_path = parent_file.join("conary.db");
         let db_path_str = db_path.to_str().unwrap();
 
-        let err = cmd_init(db_path_str).await.unwrap_err().to_string();
+        let err = cmd_init(db_path_str, "fedora-44")
+            .await
+            .unwrap_err()
+            .to_string();
 
         assert!(err.contains(&parent_file.display().to_string()));
         assert!(err.contains("safe next step"));

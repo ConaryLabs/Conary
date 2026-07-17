@@ -9,7 +9,7 @@ phase = 4
 timeout = 3600
 
 [[suite.setup]]
-conary = "system init"
+conary = "system init --profile ${REMI_DISTRO}"
 
 [suite.setup.assert]
 exit_code = 0

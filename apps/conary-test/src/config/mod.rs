@@ -300,15 +300,15 @@ results_dir = "/tmp/results"
 remove_default_repos = ["fedora", "updates"]
 
 [distros.fedora44]
-remi_distro = "fedora"
-repo_name = "conary-fedora44"
+remi_distro = "fedora-44"
+repo_name = "remi"
 containerfile = "Containerfile.fedora44"
 test_package = "tree"
 test_binary = "/usr/bin/tree"
 
 [distros."ubuntu-26.04"]
-remi_distro = "ubuntu"
-repo_name = "conary-ubuntu-26.04"
+remi_distro = "ubuntu-26.04"
+repo_name = "remi"
 test_package = "tree"
 test_binary = "/usr/bin/tree"
 
@@ -327,7 +327,8 @@ ccs_file = "conary-test-fixture-1.0.0.ccs"
         assert_eq!(config.distros.len(), 2);
 
         let fedora = &config.distros["fedora44"];
-        assert_eq!(fedora.remi_distro, "fedora");
+        assert_eq!(fedora.remi_distro, "fedora-44");
+        assert_eq!(fedora.repo_name, "remi");
         assert_eq!(fedora.test_packages.len(), 1);
         assert_eq!(fedora.test_packages[0].package, "tree");
         assert_eq!(fedora.test_packages[0].binary, "/usr/bin/tree");
@@ -1174,7 +1175,7 @@ ccs_file = "conary-test-fixture-1.0.0.ccs"
                     .and_then(|overrides| overrides.get("small_package"))
                     .map(String::as_str),
                 Some("patch"),
-                "Ubuntu should use a package present in ubuntu-remi"
+                "Ubuntu should use a package present in its Remi preview lane"
             );
             assert_eq!(
                 manifest

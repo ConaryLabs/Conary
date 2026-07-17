@@ -176,7 +176,7 @@ fi
 
 log "Initializing Conary database..."
 if [[ ! -f /conary/metadata/conary.db ]]; then
-    sudo -u conary /usr/local/bin/conary system init -d /conary/metadata/conary.db || warn "Database init failed"
+    sudo -u conary /usr/local/bin/conary system init --profile ubuntu-26.04 -d /conary/metadata/conary.db || warn "Database init failed"
 fi
 
 # =============================================================================

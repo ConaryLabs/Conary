@@ -59,7 +59,7 @@ metadata_refresh = "6h"
 priority = 100
 
 [upstream.ubuntu]
-base_url = "http://archive.ubuntu.com/ubuntu"
+base_url = "https://archive.ubuntu.com/ubuntu"
 releases = ["resolute"]
 arches = ["amd64"]
 metadata_refresh = "6h"

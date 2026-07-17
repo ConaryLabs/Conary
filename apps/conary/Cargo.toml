@@ -4,9 +4,9 @@ version = "0.11.1"
 edition = "2024"
 rust-version = "1.96"
 authors = ["Conary Contributors"]
-description = "Modern package manager with atomic operations, rollback, and delta updates"
+description = "Early-preview Linux package manager with native-package adoption"
 repository = "https://github.com/ConaryLabs/Conary"
-license = "MIT OR Apache-2.0"
+license = "MIT"
 keywords = ["package-manager", "rpm", "deb", "system"]
 categories = ["command-line-utilities"]
 

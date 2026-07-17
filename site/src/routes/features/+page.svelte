@@ -1,13 +1,13 @@
 <svelte:head>
 	<title>Features - Conary</title>
-	<meta name="description" content="Complete feature reference for Conary -- system generations, package management, build tools, and infrastructure." />
+	<meta name="description" content="Conary limited-preview capabilities, advanced experimental surfaces, and safe command examples." />
 </svelte:head>
 
 <section class="page-hero">
 	<div class="container">
 		<h1 class="page-title animate-in" style="--stagger: 0">Features</h1>
 		<p class="page-desc animate-in" style="--stagger: 1">
-			Current package-manager and generation features, with examples.
+			Limited-preview capabilities and advanced surfaces, with their current boundaries.
 		</p>
 	</div>
 </section>
@@ -22,20 +22,20 @@
 			<div class="feature-card">
 				<h3>System Generations</h3>
 				<p>
-					Atomic, immutable filesystem snapshots using EROFS images and Linux composefs.
-					Build a generation from current system state, select it for the next boot,
-					or export it for image validation. Every generation is a complete, verified
-					filesystem snapshot.
+					The advanced generation path builds EROFS artifacts from current system state.
+					They can be selected for next boot or exported for image validation; composefs
+					and fs-verity integration depends on compatible host support. This path is
+					separate from the adoption-led package preview and should be tested in a VM.
 				</p>
 				<div class="feature-code">
-					<code>conary system generation build --summary "Post-update"</code>
-					<code>conary system generation list</code>
-					<code>conary system generation switch 2</code>
-					<code>conary system generation rollback</code>
-					<code>conary system generation gc --keep 3</code>
-					<code>conary system generation info 2</code>
+					<code>sudo conary system generation build --summary "Post-update" --yes</code>
+					<code>sudo conary system generation list</code>
+					<code>sudo conary system generation switch 2 --yes</code>
+					<code>sudo conary system generation rollback --yes</code>
+					<code>sudo conary system generation gc --keep 3 --yes</code>
+					<code>sudo conary system generation info 2</code>
 				</div>
-				<p class="feature-note">Only generation-model features require Linux 6.2+ with composefs support.</p>
+				<p class="feature-note">Generation experiments require Linux 6.2+ plus compatible EROFS, composefs, and fs-verity support. The basic package loop does not.</p>
 			</div>
 
 			<div class="feature-card">
@@ -47,9 +47,9 @@
 					workflow.
 				</p>
 				<div class="feature-code">
-					<code>conary system adopt --system --dry-run</code>
-					<code>conary system unadopt --all --dry-run</code>
-					<code>conary system takeover --dry-run</code>
+					<code>sudo conary system adopt --system --dry-run</code>
+					<code>sudo conary system unadopt --all --dry-run</code>
+					<code>sudo conary system takeover --dry-run</code>
 				</div>
 			</div>
 
@@ -60,8 +60,9 @@
 					cross-tools, temp-tools, system, config, image, and optional tier2 stages.
 					systemd-repart handles rootless image creation when available, with a
 					fallback to sfdisk/mkfs. Outputs include EROFS images, CAS state, and
-					SQLite metadata. Supports x86_64, aarch64, and riscv64 targets, and
-					dry-run mode validates the pipeline without building.
+					SQLite metadata. The source-build pipeline has experimental x86_64,
+					aarch64, and riscv64 targets; preview packages and the tester lane are
+					x86_64 only. Dry-run mode validates the pipeline without building.
 				</p>
 				<div class="feature-code">
 					<code>conary bootstrap init --target x86_64</code>
@@ -81,33 +82,33 @@
 			<div class="feature-card">
 				<h3>Generation Rollback</h3>
 				<p>
-					Every generation is an immutable EROFS image. Rolling back selects a
-					previous generation instead of copying package files back into place.
-					fs-verity and composefs belong to this generation-model path, not the
-					basic package-loop preview.
+					Rolling back selects a previous installed generation rather than copying
+					package files back into place. This is a VM/debug generation workflow;
+					it is not the rollback mechanism for every basic package operation.
 				</p>
 				<div class="feature-code">
-					<code>conary system generation rollback</code>
-					<code>conary system generation switch 2</code>
-					<code>conary system generation list</code>
-					<code>conary system generation gc --keep 3</code>
+					<code>sudo conary system generation rollback --yes</code>
+					<code>sudo conary system generation switch 2 --yes</code>
+					<code>sudo conary system generation list</code>
+					<code>sudo conary system generation gc --keep 3 --yes</code>
 				</div>
 			</div>
 
 			<div class="feature-card">
 				<h3>/etc Three-Way Merge</h3>
 				<p>
-					Configuration files in /etc are handled with a three-way merge (bootc model).
-					User modifications survive generation switches while upstream changes are
-					integrated cleanly.
+					The generation path has three-way merge machinery for configuration files
+					under /etc. Treat merge outcomes as advanced VM evidence and inspect them
+					before selecting a generation.
 				</p>
 			</div>
 
 			<div class="feature-card">
 				<h3>Boot Recovery</h3>
 				<p>
-					4-step fallback if the active generation fails to boot: try previous generation,
-					scan for any valid generation, emergency shell, Dracut module for early-boot repair.
+					Generation recovery can validate the selected artifact, rebuild it from DB
+					state, and scan older generation artifacts. The initramfs/Dracut integration
+					is an advanced recovery surface, not part of the first tester loop.
 				</p>
 			</div>
 		</div>
@@ -119,13 +120,14 @@
 			<div class="feature-card">
 				<h3>Multi-Format Install</h3>
 				<p>
-					Install packages from any major Linux distribution format. Dependencies are
-					resolved automatically using a SAT-based solver.
+					Conary parses RPM, DEB, Arch, and CCS inputs and resolves supported dependency
+					metadata with a SAT-based solver. An install can still be refused when package
+					behavior or conversion policy is unsupported.
 				</p>
 				<div class="feature-code">
-					<code>conary install ./package.rpm</code>
-					<code>conary install ./package.deb</code>
-					<code>conary install nginx postgresql redis</code>
+					<code>sudo conary install ./package.rpm --dry-run</code>
+					<code>sudo conary install ./package.deb --dry-run</code>
+					<code>sudo conary install nginx postgresql redis --dry-run</code>
 				</div>
 			</div>
 
@@ -145,12 +147,13 @@
 			<div class="feature-card">
 				<h3>Component Model</h3>
 				<p>
-					Packages are automatically split into components. Install only what you need.
+					CCS metadata can expose runtime, development, documentation, and other
+					components so a dry-run can select only the requested subset.
 				</p>
 				<div class="feature-code">
-					<code>conary install nginx:runtime</code>
-					<code>conary install openssl:devel</code>
-					<code>conary install bash:doc</code>
+					<code>sudo conary install nginx:runtime --dry-run</code>
+					<code>sudo conary install openssl:devel --dry-run</code>
+					<code>sudo conary install bash:doc --dry-run</code>
 				</div>
 			</div>
 
@@ -206,8 +209,8 @@
 			<div class="feature-card">
 				<h3>Recipe System</h3>
 				<p>
-					Build packages from source using TOML recipe files. Hermetic builds use Linux
-					namespaces for maximum isolation.
+					Build packages from source using TOML recipe files. The optional
+					<code>--hermetic</code> mode adds Linux namespace isolation. It is not a complete reproducibility or containment guarantee.
 				</p>
 				<div class="feature-code">
 					<code>conary cook recipe.toml</code>
@@ -251,12 +254,14 @@
 			<div class="feature-card">
 				<h3>Declarative System Model</h3>
 				<p>
-					Define your system in TOML and apply it atomically. Drift detection with
-					CI/CD-friendly exit codes.
+					Define desired package state in TOML and inspect drift with CI-friendly exit
+					codes. Live model application remains a VM-only follow-up until it has the
+					same recovery evidence as package mutation.
 				</p>
 				<div class="feature-code">
 					<code>conary model diff</code>
-					<code>conary model apply</code>
+					<code>sudo conary model apply --dry-run</code>
+					<code>sudo conary model apply --yes</code>
 					<code>conary model check</code>
 					<code>conary model snapshot</code>
 				</div>
@@ -282,10 +287,11 @@
 			</div>
 
 			<div class="feature-card">
-				<h3>CAS Federation</h3>
+				<h3>Experimental CAS Federation</h3>
 				<p>
-					Distributed chunk sharing across Conary nodes with mDNS LAN discovery and
-					hierarchical routing -- leaf to cell hub to region hub.
+					The source tree contains advanced peer discovery, chunk-sharing, and routing
+					surfaces. Federation is outside the reliable limited-preview path and is not
+					a supported onboarding workflow.
 				</p>
 				<div class="feature-code">
 					<code>conary federation status</code>
@@ -307,17 +313,19 @@
 			<div class="feature-card">
 				<h3>Trigger System</h3>
 				<p>
-					10+ built-in post-install triggers with DAG-ordered execution: ldconfig,
+					Built-in post-install trigger handlers include ldconfig,
 					systemd-reload, fc-cache, update-mime-database, gtk-update-icon-cache,
-					depmod, and more. Triggers fire automatically during install and remove.
+					depmod, and others. Execution depends on the package path and current
+					adapter/scriptlet policy.
 				</p>
 			</div>
 
 			<div class="feature-card">
 				<h3>Capability Enforcement</h3>
 				<p>
-					Packages declare runtime capabilities. Enforcement uses Landlock for filesystem
-					restrictions and seccomp-BPF for syscall filtering.
+					Packages can declare runtime capabilities. The explicit capability runner uses
+					Landlock and seccomp-BPF where the host kernel exposes the required support;
+					this does not sandbox every package operation automatically.
 				</p>
 				<div class="feature-code">
 					<code>conary capability show nginx</code>
@@ -328,11 +336,12 @@
 			<div class="feature-card">
 				<h3>Sandboxed Scriptlets</h3>
 				<p>
-					Package install scripts run in namespace isolation -- mount, PID, IPC, UTS --
-					with resource limits by default.
+					Supported package scriptlets can run through namespace and resource-limit
+					machinery. Scriptlet-heavy or policy-blocked packages may still be refused in
+					the limited preview.
 				</p>
 				<div class="feature-code">
-					<code>conary install pkg --sandbox=always</code>
+					<code>sudo conary install pkg --sandbox=always --dry-run</code>
 				</div>
 			</div>
 		</div>

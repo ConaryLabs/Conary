@@ -626,8 +626,8 @@ results_dir = "/results"
 fixture_dir = "/opt/remi-tests/fixtures"
 
 [distros.fedora44]
-remi_distro = "fedora"
-repo_name = "fedora-remi"
+remi_distro = "fedora-44"
+repo_name = "remi"
 test_package = "which"
 test_binary = "/usr/bin/which"
 # ... more test packages

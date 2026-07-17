@@ -5,7 +5,7 @@ edition = "2024"
 rust-version = "1.96"
 authors = ["Conary Contributors"]
 description = "Shared bootstrap helpers for Conary workspace binaries"
-license = "MIT OR Apache-2.0"
+license = "MIT"
 
 [dependencies]
 anyhow.workspace = true

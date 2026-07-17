@@ -51,7 +51,7 @@ name = "$name"
 version = "$version"
 edition = "2024"
 authors = ["Conary Contributors"]
-license = "MIT OR Apache-2.0"
+license = "MIT"
 EOF
 }
 
@@ -62,7 +62,7 @@ create_release_fixture() {
 
     mkdir -p \
         "$repo/scripts" \
-        "$repo/apps/conary" \
+        "$repo/apps/conary/man" \
         "$repo/apps/remi" \
         "$repo/apps/conaryd" \
         "$repo/apps/conary-test" \
@@ -72,7 +72,8 @@ create_release_fixture() {
         "$repo/packaging/rpm" \
         "$repo/packaging/arch" \
         "$repo/packaging/deb/debian" \
-        "$repo/packaging/ccs"
+        "$repo/packaging/ccs" \
+        "$repo/test-bin"
 
     cp "$REPO_ROOT/scripts/release.sh" "$repo/scripts/release.sh"
     cp "$REPO_ROOT/scripts/release-matrix.sh" "$repo/scripts/release-matrix.sh"
@@ -85,6 +86,33 @@ create_release_fixture() {
     write_cargo_manifest "$repo/apps/conaryd/Cargo.toml" "conaryd" "0.5.0"
     write_cargo_manifest "$repo/apps/conary-test/Cargo.toml" "conary-test" "0.7.0"
     write_cargo_manifest "$repo/crates/conary-mcp/Cargo.toml" "conary-mcp" "0.7.0"
+
+    printf 'fn main() {}\n' > "$repo/apps/conary/build.rs"
+    printf '.TH conary 1 "" "conary 0.7.0"\n' > "$repo/apps/conary/man/conary.1"
+    printf '# release fixture lockfile\n' > "$repo/Cargo.lock"
+    printf '/apps/conary/man/\n' > "$repo/.gitignore"
+
+    cat > "$repo/test-bin/cargo" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+case "${1:-}" in
+    update)
+        ;;
+    build)
+        version="$(sed -nE 's/^version[[:space:]]*=[[:space:]]*"([^"]+)"/\1/p' apps/conary/Cargo.toml | head -n1)"
+        if [[ "${RELEASE_FIXTURE_STALE_MAN:-0}" == "1" ]]; then
+            version="0.7.0"
+        fi
+        printf '.TH conary 1 "" "conary %s"\n' "$version" > apps/conary/man/conary.1
+        ;;
+    *)
+        printf 'unexpected cargo fixture command: %s\n' "$*" >&2
+        exit 1
+        ;;
+esac
+EOF
+    chmod +x "$repo/test-bin/cargo"
 
     cat > "$repo/packaging/rpm/conary.spec" <<'EOF'
 Name:           conary
@@ -170,6 +198,19 @@ run_release_dry_run() {
     )
 }
 
+run_release() {
+    local repo="$1"
+    local product="$2"
+    local stale_man="${RELEASE_FIXTURE_STALE_MAN:-0}"
+
+    (
+        cd "$repo"
+        export PATH="$repo/test-bin:$PATH"
+        export RELEASE_FIXTURE_STALE_MAN="$stale_man"
+        ./scripts/release.sh "$product"
+    )
+}
+
 run_repo_matrix() {
     local repo="$1"
     shift
@@ -184,14 +225,47 @@ create_release_policy_fixture() {
     local repo
 
     repo="$(mktemp -d "${REPO_ROOT}/.tmp-release-matrix-test.XXXXXX")"
-    mkdir -p "$repo/scripts" "$repo/.github/workflows" "$repo/docs/operations"
+    mkdir -p \
+        "$repo/scripts" \
+        "$repo/.github/workflows" \
+        "$repo/docs/operations" \
+        "$repo/packaging/rpm" \
+        "$repo/packaging/deb" \
+        "$repo/packaging/arch" \
+        "$repo/packaging/ccs"
     cp "$REPO_ROOT/scripts/release-matrix.sh" "$repo/scripts/release-matrix.sh"
     cp "$REPO_ROOT/.github/workflows/release-build.yml" "$repo/.github/workflows/release-build.yml"
     cp "$REPO_ROOT/.github/workflows/deploy-and-verify.yml" "$repo/.github/workflows/deploy-and-verify.yml"
     cp "$REPO_ROOT/.github/workflows/merge-validation.yml" "$repo/.github/workflows/merge-validation.yml"
     cp "$REPO_ROOT/docs/operations/release-artifact-matrix.md" "$repo/docs/operations/release-artifact-matrix.md"
+    cp "$REPO_ROOT/packaging/rpm/Containerfile.build" "$repo/packaging/rpm/Containerfile.build"
+    cp "$REPO_ROOT/packaging/deb/Containerfile.build" "$repo/packaging/deb/Containerfile.build"
+    cp "$REPO_ROOT/packaging/arch/Containerfile.build" "$repo/packaging/arch/Containerfile.build"
+    cp "$REPO_ROOT/packaging/rpm/build.sh" "$repo/packaging/rpm/build.sh"
+    cp "$REPO_ROOT/packaging/deb/build.sh" "$repo/packaging/deb/build.sh"
+    cp "$REPO_ROOT/packaging/arch/build.sh" "$repo/packaging/arch/build.sh"
+    cp "$REPO_ROOT/packaging/ccs/build.sh" "$repo/packaging/ccs/build.sh"
     chmod +x "$repo/scripts/release-matrix.sh"
     printf '%s\n' "$repo"
+}
+
+replace_fixture_text_once() {
+    local file="$1"
+    local old="$2"
+    local new="$3"
+
+    python3 - "$file" "$old" "$new" <<'PY'
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+old = sys.argv[2]
+new = sys.argv[3]
+text = path.read_text()
+if old not in text:
+    raise SystemExit(f"fixture could not find text to replace in {path}: {old}")
+path.write_text(text.replace(old, new, 1))
+PY
 }
 
 assert_check_release_matrix_fails() {
@@ -290,6 +364,33 @@ test_max_owned_version_in_fixture() {
     assert_eq "0.7.0" "$output" "fixture repo should report the highest owned conary-test version"
 }
 
+test_assert_owned_version_accepts_matching_manifests() {
+    local repo
+
+    repo="$(create_release_fixture)"
+    run_repo_matrix "$repo" assert-owned-version conary 0.7.0
+}
+
+test_assert_owned_version_rejects_mismatched_manifest() {
+    local repo output status
+
+    repo="$(create_release_fixture)"
+    write_cargo_manifest "$repo/crates/conary-core/Cargo.toml" "conary-core" "0.7.1"
+
+    set +e
+    output="$(run_repo_matrix "$repo" assert-owned-version conary 0.7.0 2>&1)"
+    status=$?
+    set -e
+
+    if [[ "$status" -eq 0 ]]; then
+        fail "assert-owned-version should reject a mismatched owned manifest"
+    fi
+    assert_contains \
+        "$output" \
+        "crates/conary-core/Cargo.toml is 0.7.1, expected 0.7.0" \
+        "owned-version mismatch should identify the manifest and versions"
+}
+
 test_release_dry_run_remi_legacy_history() {
     local repo
     local output
@@ -341,6 +442,64 @@ test_release_dry_run_conary_test_uses_owned_manifest_baseline() {
     assert_contains "$output" "Tag: conary-test-v0.7.1" "conary-test should bump from the owned-manifest baseline"
 }
 
+test_release_conary_regenerates_and_stages_man_page() {
+    local repo
+    local output
+    local committed_files
+    local tags
+
+    repo="$(create_release_fixture)"
+    assert_eq \
+        "apps/conary/man/conary.1" \
+        "$(git -C "$repo" check-ignore apps/conary/man/conary.1)" \
+        "release fixture must reproduce the repository's ignored generated man page"
+    tag_head "$repo" "v0.7.0"
+    commit_change "$repo" "apps/conary/changes.txt" "fix(conary): refresh command surface"
+
+    output="$(run_release "$repo" conary)"
+    assert_contains "$output" \
+        "Regenerated apps/conary/man/conary.1 for 0.7.1" \
+        "Conary release should regenerate the versioned man page"
+
+    assert_contains \
+        "$(<"$repo/apps/conary/man/conary.1")" \
+        "conary 0.7.1" \
+        "generated man page should contain the release version"
+
+    committed_files="$(git -C "$repo" show --pretty=format: --name-only HEAD)"
+    assert_contains "$committed_files" \
+        "apps/conary/man/conary.1" \
+        "Conary release commit should stage the generated man page"
+
+    tags="$(git -C "$repo" tag --points-at HEAD)"
+    assert_contains "$tags" "v0.7.1" "Conary release should tag the regenerated man page commit"
+}
+
+test_release_conary_rejects_stale_generated_man_page() {
+    local repo
+    local output
+    local status
+
+    repo="$(create_release_fixture)"
+    tag_head "$repo" "v0.7.0"
+    commit_change "$repo" "apps/conary/changes.txt" "fix(conary): refresh command surface"
+
+    set +e
+    output="$(RELEASE_FIXTURE_STALE_MAN=1 run_release "$repo" conary 2>&1)"
+    status=$?
+    set -e
+
+    if [[ "$status" -eq 0 ]]; then
+        fail "Conary release should reject a generated man page with the old version"
+    fi
+
+    assert_contains "$output" \
+        "does not contain Conary version 0.7.1" \
+        "stale generated man page should fail before commit and tag"
+    assert_eq "" "$(git -C "$repo" tag --list v0.7.1)" \
+        "stale generated man page should not create the release tag"
+}
+
 test_check_release_matrix_rejects_conaryd_deploy_jobs_when_paused() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -371,25 +530,158 @@ YAML
     assert_check_release_matrix_fails "$repo" "verify-conary-test"
 }
 
-test_check_release_matrix_rejects_stale_rpm_builder_distro() {
+test_check_release_matrix_rejects_unpinned_rpm_builder_image() {
     local repo
     repo="$(create_release_policy_fixture)"
-    python3 - "$repo/.github/workflows/release-build.yml" <<'PY'
-import sys
-from pathlib import Path
+    replace_fixture_text_once \
+        "$repo/.github/workflows/release-build.yml" \
+        'image: registry.fedoraproject.org/fedora@sha256:765b2260aa4b4eff379b9a6f983f15fcf41a6f9dda9b272b790e23e92fcbaafb' \
+        'image: registry.fedoraproject.org/fedora:44'
 
-path = Path(sys.argv[1])
-text = path.read_text()
-path.write_text(
-    text.replace(
-        "image: registry.fedoraproject.org/fedora:44",
-        "image: registry.fedoraproject.org/fedora:43",
-        1,
-    )
-)
-PY
+    assert_check_release_matrix_fails "$repo" "release-build RPM builder must use the pinned Fedora 44 image"
+}
 
-    assert_check_release_matrix_fails "$repo" "release-build RPM builder must use Fedora 44"
+test_check_release_matrix_rejects_unpinned_deb_builder_image() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/release-build.yml" \
+        'image: docker.io/library/ubuntu@sha256:3131b4cc82a783df6c9df078f86e01819a13594b865c2cad47bd1bca2b7063bb' \
+        'image: docker.io/library/ubuntu:26.04'
+
+    assert_check_release_matrix_fails "$repo" "release-build DEB builder must use the pinned Ubuntu 26.04 image"
+}
+
+test_check_release_matrix_rejects_unpinned_arch_builder_image() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/release-build.yml" \
+        'image: docker.io/library/archlinux@sha256:fe6972d4dc1f660c0c10f4c41b2de8986bab89e7e2955378f8beadb8ebcd7433' \
+        'image: docker.io/library/archlinux:latest'
+
+    assert_check_release_matrix_fails "$repo" "release-build Arch builder must use the pinned Arch image"
+}
+
+test_check_release_matrix_rejects_unverified_rustup_init() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/release-build.yml" \
+        '20a06e644b0d9bd2fbdbfd52d42540bdde820ea7df86e92e533c073da0cdd43c  /tmp/rustup-init' \
+        '0000000000000000000000000000000000000000000000000000000000000000  /tmp/rustup-init'
+
+    assert_check_release_matrix_fails "$repo" "release-build RPM builder checksum-pinned rustup-init flow"
+}
+
+test_check_release_matrix_rejects_unpinned_ccs_toolchain() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/release-build.yml" \
+        'toolchain: 1.96.0' \
+        'toolchain: stable'
+
+    assert_check_release_matrix_fails "$repo" "release-build CCS builder pinned Rust toolchain"
+}
+
+test_check_release_matrix_rejects_unpinned_arch_toolchain() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/release-build.yml" \
+        'rustup default 1.96.0' \
+        'rustup default stable'
+
+    assert_check_release_matrix_fails "$repo" "release-build Arch builder pinned Rust toolchain"
+}
+
+test_check_release_matrix_rejects_missing_live_version_assertion() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/release-build.yml" \
+        'bash scripts/release-matrix.sh assert-owned-version "$product" "$version"' \
+        'echo "owned version assertion removed"'
+
+    assert_check_release_matrix_fails "$repo" "live tag preparation must match every owned manifest"
+}
+
+test_check_release_matrix_rejects_non_failing_artifact_upload() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/release-build.yml" \
+        'if-no-files-found: error' \
+        'if-no-files-found: warn'
+
+    assert_check_release_matrix_fails "$repo" "fail-closed release artifact uploads"
+}
+
+test_check_release_matrix_rejects_missing_exact_ccs_asset_assertion() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/release-build.yml" \
+        '"release-packages/conary-${VERSION}.ccs"' \
+        '"release-packages/conary-${VERSION}.ccs.unchecked"'
+
+    assert_check_release_matrix_fails "$repo" "exact version-matching CCS release asset assertion"
+}
+
+test_check_release_matrix_rejects_unpinned_tester_guide_link() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/release-build.yml" \
+        'blob/${TAG_NAME}/docs/guides/agent-assisted-tester-loop.md' \
+        'blob/main/docs/guides/agent-assisted-tester-loop.md'
+
+    assert_check_release_matrix_fails "$repo" "tag-pinned tester guide release-note link"
+}
+
+test_check_release_matrix_rejects_missing_signer_trust_match() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/release-build.yml" \
+        'release signing key does not match an embedded trusted update key' \
+        'release signing key check removed'
+
+    assert_check_release_matrix_fails "$repo" "live signing key must match an embedded trusted update key"
+}
+
+test_check_release_matrix_rejects_stale_native_output_policy() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/packaging/rpm/build.sh" \
+        'find "$OUTPUT" -maxdepth 1 -name '\''*.rpm'\'' -delete' \
+        'echo "stale RPM output retained"'
+
+    assert_check_release_matrix_fails "$repo" "RPM build must clean stale package output"
+}
+
+test_check_release_matrix_rejects_direct_release_publication() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/release-build.yml" \
+        'gh release create "$TAG_NAME" --draft --generate-notes --verify-tag' \
+        'gh release create "$TAG_NAME" release-packages/* --generate-notes --verify-tag'
+
+    assert_check_release_matrix_fails "$repo" "immutable-compatible draft-upload-publish sequence for bundle-conary"
+}
+
+test_check_release_matrix_rejects_late_conary_release_notes() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/release-build.yml" \
+        'gh release edit "$TAG_NAME" --notes-file "$release_notes"' \
+        'gh release view "$TAG_NAME" --json body'
+
+    assert_check_release_matrix_fails "$repo" "Conary release notes must be finalized before immutable asset publication"
 }
 
 test_check_release_matrix_rejects_missing_artifact_row() {
@@ -432,13 +724,30 @@ main() {
         test_unknown_tag_prefix_fails
         test_latest_version_from_git_in_fixture
         test_max_owned_version_in_fixture
+        test_assert_owned_version_accepts_matching_manifests
+        test_assert_owned_version_rejects_mismatched_manifest
         test_release_dry_run_remi_legacy_history
         test_release_dry_run_remi_prefers_highest_numeric_history
         test_release_dry_run_conaryd_canonical_history
         test_release_dry_run_conary_test_uses_owned_manifest_baseline
+        test_release_conary_regenerates_and_stages_man_page
+        test_release_conary_rejects_stale_generated_man_page
         test_check_release_matrix_rejects_conaryd_deploy_jobs_when_paused
         test_check_release_matrix_rejects_conary_test_deploy_jobs
-        test_check_release_matrix_rejects_stale_rpm_builder_distro
+        test_check_release_matrix_rejects_unpinned_rpm_builder_image
+        test_check_release_matrix_rejects_unpinned_deb_builder_image
+        test_check_release_matrix_rejects_unpinned_arch_builder_image
+        test_check_release_matrix_rejects_unverified_rustup_init
+        test_check_release_matrix_rejects_unpinned_ccs_toolchain
+        test_check_release_matrix_rejects_unpinned_arch_toolchain
+        test_check_release_matrix_rejects_missing_live_version_assertion
+        test_check_release_matrix_rejects_non_failing_artifact_upload
+        test_check_release_matrix_rejects_missing_exact_ccs_asset_assertion
+        test_check_release_matrix_rejects_unpinned_tester_guide_link
+        test_check_release_matrix_rejects_missing_signer_trust_match
+        test_check_release_matrix_rejects_stale_native_output_policy
+        test_check_release_matrix_rejects_direct_release_publication
+        test_check_release_matrix_rejects_late_conary_release_notes
         test_check_release_matrix_rejects_missing_artifact_row
         test_check_release_matrix_rejects_unknown_deploy_route_pair
     )

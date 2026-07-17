@@ -16,6 +16,10 @@
 	<div class="container">
 		<!-- Feature matrix -->
 		<div class="compare-block animate-in" style="--stagger: 3">
+			<p class="matrix-note">
+				“Partial” includes capabilities that exist in the source tree but are experimental,
+				policy-limited, or outside the supported first-tester workflow.
+			</p>
 			<div class="compare-table-wrap">
 				<table class="compare-table">
 					<thead>
@@ -31,7 +35,7 @@
 					<tbody>
 						<tr>
 							<td class="feature-name">Cross-distribution</td>
-							<td class="highlight"><span class="check yes" aria-label="Yes"></span></td>
+							<td class="highlight"><span class="check partial" aria-label="Partial"></span></td>
 							<td><span class="check no" aria-label="No"></span></td>
 							<td><span class="check no" aria-label="No"></span></td>
 							<td><span class="check no" aria-label="No"></span></td>
@@ -54,16 +58,8 @@
 							<td><span class="check no" aria-label="No"></span></td>
 						</tr>
 						<tr>
-							<td class="feature-name">Package-state transaction boundary</td>
-							<td class="highlight"><span class="check yes" aria-label="Yes"></span></td>
-							<td><span class="check no" aria-label="No"></span></td>
-							<td><span class="check no" aria-label="No"></span></td>
-							<td><span class="check no" aria-label="No"></span></td>
-							<td><span class="check yes" aria-label="Yes"></span></td>
-						</tr>
-						<tr>
 							<td class="feature-name">Bootable generation rollback</td>
-							<td class="highlight"><span class="check yes" aria-label="Yes"></span></td>
+							<td class="highlight"><span class="check partial" aria-label="Partial"></span></td>
 							<td><span class="check no" aria-label="No"></span></td>
 							<td><span class="check no" aria-label="No"></span></td>
 							<td><span class="check no" aria-label="No"></span></td>
@@ -87,7 +83,7 @@
 						</tr>
 						<tr>
 							<td class="feature-name">Declarative system model</td>
-							<td class="highlight"><span class="check yes" aria-label="Yes"></span></td>
+							<td class="highlight"><span class="check partial" aria-label="Partial"></span></td>
 							<td><span class="check no" aria-label="No"></span></td>
 							<td><span class="check no" aria-label="No"></span></td>
 							<td><span class="check no" aria-label="No"></span></td>
@@ -95,7 +91,7 @@
 						</tr>
 						<tr>
 							<td class="feature-name">On-demand format conversion</td>
-							<td class="highlight"><span class="check yes" aria-label="Yes"></span></td>
+							<td class="highlight"><span class="check partial" aria-label="Partial"></span></td>
 							<td><span class="check no" aria-label="No"></span></td>
 							<td><span class="check no" aria-label="No"></span></td>
 							<td><span class="check no" aria-label="No"></span></td>
@@ -111,7 +107,7 @@
 						</tr>
 						<tr>
 							<td class="feature-name">Rollback / undo</td>
-							<td class="highlight"><span class="check yes" aria-label="Yes"></span></td>
+							<td class="highlight"><span class="check partial" aria-label="Partial"></span></td>
 							<td><span class="check no" aria-label="No"></span></td>
 							<td><span class="check partial" aria-label="Partial"></span></td>
 							<td><span class="check no" aria-label="No"></span></td>
@@ -127,7 +123,7 @@
 						</tr>
 						<tr>
 							<td class="feature-name">Uses existing upstream repos</td>
-							<td class="highlight"><span class="check yes" aria-label="Yes"></span></td>
+							<td class="highlight"><span class="check partial" aria-label="Partial"></span></td>
 							<td><span class="check yes" aria-label="Yes"></span></td>
 							<td><span class="check yes" aria-label="Yes"></span></td>
 							<td><span class="check yes" aria-label="Yes"></span></td>
@@ -135,7 +131,7 @@
 						</tr>
 						<tr>
 							<td class="feature-name">Immutable generations</td>
-							<td class="highlight"><span class="check yes" aria-label="Yes"></span></td>
+							<td class="highlight"><span class="check partial" aria-label="Partial"></span></td>
 							<td><span class="check no" aria-label="No"></span></td>
 							<td><span class="check no" aria-label="No"></span></td>
 							<td><span class="check no" aria-label="No"></span></td>
@@ -175,13 +171,13 @@
 					apt is the workhorse of the DEB ecosystem -- battle-tested and reliable. Conary
 					doesn't replace apt on Ubuntu LTS systems; it sits alongside it. The key differences:
 					Conary adds reversible adoption/unadoption, content-addressable storage for
-					deduplication, Remi conversion, and optional immutable EROFS generations when
-					you explicitly choose that authority boundary.
+					Conary-owned files, policy-gated Remi conversion, and an experimental EROFS
+					generation path when you explicitly choose that authority boundary.
 				</p>
 				<p>
 					If you only run Ubuntu and don't need cross-distro support, apt works great. Conary
-					becomes valuable when you want immutable system generations, unified management,
-					disk savings from CAS, or a safer path toward Conary-owned package state.
+					is worth testing when you want one preview workflow across supported hosts,
+					content reuse through CAS, or a gradual path toward Conary-owned package state.
 				</p>
 			</div>
 
@@ -189,8 +185,8 @@
 				<h2>vs. dnf <span class="detail-distro">(Fedora / RHEL)</span></h2>
 				<p>
 					dnf is a capable package manager with delta RPM support and a SAT solver. Conary
-					shares the SAT-based approach (via resolvo) and adds CAS deduplication, immutable
-					EROFS generations with composefs mounts, and cross-distro package management.
+					shares the SAT-based approach (via resolvo) and adds CAS storage plus an
+					experimental EROFS generation path with optional composefs integration.
 					dnf's delta RPM support is mature but depends on upstream providing delta files.
 					Conary's generation-delta work remains part of the broader artifact roadmap.
 					dnf transactions mutate the filesystem in place; Conary adds changeset-backed
@@ -202,10 +198,10 @@
 				<h2>vs. pacman <span class="detail-distro">(Arch Linux)</span></h2>
 				<p>
 					pacman is fast, minimal, and trusts the user. Conary respects that philosophy while
-					adding features pacman lacks: reversible adoption, immutable EROFS
-					generation artifacts, generation integrity work through composefs/fs-verity,
-					content-addressable storage, dependency resolution through SAT solving,
-					and the ability to install packages from Fedora or Ubuntu repos alongside Arch packages.
+					adding reversible adoption, experimental EROFS generation artifacts,
+					content-addressable storage, and SAT-based dependency resolution. Remi can
+					convert policy-approved Fedora or Ubuntu packages for an Arch preview host;
+					it does not make every upstream package portable.
 				</p>
 			</div>
 
@@ -229,13 +225,10 @@
 			<div class="detail-card animate-in" style="--stagger: 9">
 				<h2>vs. NixOS Generations</h2>
 				<p>
-					Both Conary and NixOS support immutable system generations, but the
-					approach differs. NixOS builds generations from Nix expressions in a
-					custom functional language. Conary builds generations from the actual
-					installed package set -- EROFS images mounted with composefs and backed
-					by content-addressable storage. Conary generations work with existing
-					RPM/DEB/Arch packages; NixOS requires packages to be rewritten as Nix
-					derivations.
+					NixOS has a mature immutable-generation workflow built from Nix expressions.
+					Conary is experimenting with a different path: build EROFS artifacts from
+					Conary-tracked package state, with composefs/fs-verity integration on compatible
+					hosts. That path is not part of Conary's reliable first-tester workflow.
 				</p>
 			</div>
 
@@ -252,15 +245,15 @@
 			<div class="detail-card animate-in" style="--stagger: 11">
 				<h2>Where Conary Is Still Early</h2>
 				<p>
-					Conary is a 0.9.2 limited preview release. apt, dnf, and pacman have decades
+					Conary is a v0.11.2 limited preview release. apt, dnf, and pacman have decades
 					of battle-testing, ecosystem integration, and institutional trust. Nix has
 					a large and active community building custom packages.
 				</p>
 				<p>
-					Conary bridges the package gap through Remi (on-demand conversion of upstream
-					packages), but native CCS packages are still few. The community is small.
-					We believe the architecture is sound -- but we are asking for early adopters
-					and contributors, not production deployments.
+					Remi attempts on-demand conversion of supported upstream packages, but native
+					CCS packages are still few and policy-blocked conversions are expected. The
+					community is small; this is a request for testers and contributors, not
+					production deployments.
 				</p>
 			</div>
 		</div>
@@ -300,6 +293,15 @@
 	.compare-block {
 		max-width: 820px;
 		margin: 0 auto 3rem;
+	}
+
+	.matrix-note {
+		max-width: 680px;
+		margin: 0 auto 1rem;
+		font-size: 0.8125rem;
+		line-height: 1.6;
+		color: var(--color-text-muted);
+		text-align: center;
 	}
 
 	.compare-table-wrap { overflow-x: auto; }

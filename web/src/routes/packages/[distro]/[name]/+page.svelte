@@ -230,10 +230,10 @@
 				{/if}
 
 				<div class="sidebar-section">
-					<h3>Install</h3>
+					<h3>Preview install</h3>
 					<div class="terminal-block">
 						<span class="terminal-prompt">$</span>
-						<code>conary install {pkg.name}</code>
+						<code>sudo conary install {pkg.name} --dry-run</code>
 					</div>
 				</div>
 			</aside>

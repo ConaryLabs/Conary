@@ -1037,7 +1037,7 @@ mod tests {
     #[test]
     fn classify_system_init_and_repo_sync_as_local_state_mutations() {
         for args in [
-            ["conary", "system", "init"].as_slice(),
+            ["conary", "system", "init", "--profile", "fedora-44"].as_slice(),
             ["conary", "repo", "sync", "remi"].as_slice(),
             ["conary", "publish", "./repo"].as_slice(),
             ["conary", "new", "--from", ".", "--explain"].as_slice(),

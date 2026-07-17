@@ -33,8 +33,11 @@ for fixture in "${fixtures[@]}"; do
 done
 
 echo "Writing SHA256SUMS..."
-find "$DEPS_DIR" -path '*/output/*.ccs' -type f -print0 \
-    | sort -z \
-    | xargs -0 sha256sum > "$DEPS_DIR/SHA256SUMS"
+(
+    cd "$DEPS_DIR"
+    find . -path '*/output/*.ccs' -type f -print0 \
+        | sort -z \
+        | xargs -0 sha256sum > SHA256SUMS
+)
 
 echo "[OK] Dependency fixtures built"

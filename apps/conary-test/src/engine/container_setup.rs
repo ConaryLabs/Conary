@@ -11,25 +11,36 @@ use crate::container::{ContainerBackend, ContainerId};
 
 /// Initialize conary database and repos inside a test container.
 ///
-/// `add_distro_repo` gates whether to add the distro-specific Remi repo.
-/// The runner sets this to `phase > 1`; the service always passes `true`.
+/// `configure_remi_override` gates test-only replacement of the packaged Remi
+/// seed when a non-production endpoint is configured. Normal preview tests use
+/// the one `remi` source created by `system init`.
 pub async fn initialize_container_state(
     config: &GlobalConfig,
     distro: &str,
-    add_distro_repo: bool,
+    configure_remi_override: bool,
     backend: &dyn ContainerBackend,
     container_id: &ContainerId,
 ) -> anyhow::Result<()> {
     use std::time::Duration;
 
+    let distro_config = config
+        .distros
+        .get(distro)
+        .with_context(|| format!("unknown distro: {distro}"))?;
+    if distro_config.repo_name != "remi" {
+        bail!(
+            "distro {distro} must use the packaged 'remi' repository seed, not '{}'",
+            distro_config.repo_name
+        );
+    }
     let db_parent = std::path::Path::new(&config.paths.db)
         .parent()
         .context("db path has no parent directory")?
         .display()
         .to_string();
     let init_cmd = format!(
-        "mkdir -p {db_parent} && {} system init --db-path {}",
-        config.paths.conary_bin, config.paths.db
+        "mkdir -p {db_parent} && {} system init --profile {} --db-path {}",
+        config.paths.conary_bin, distro_config.remi_distro, config.paths.db
     );
     let init_result = backend
         .exec(
@@ -60,27 +71,52 @@ pub async fn initialize_container_state(
             .await?;
     }
 
-    if add_distro_repo {
-        let distro_config = config
-            .distros
-            .get(distro)
-            .with_context(|| format!("unknown distro: {distro}"))?;
-        let add_repo_cmd = format!(
-            "{} repo add {} {} --default-strategy remi --remi-endpoint {} --remi-distro {} --no-gpg-check --db-path {} >/dev/null 2>&1 || true",
+    if configure_remi_override
+        && config.remi.endpoint.trim_end_matches('/') != "https://remi.conary.io"
+    {
+        let replace_repo_cmd = format!(
+            "{} repo remove remi --db-path {} && {} repo add remi {} --default-strategy remi --remi-endpoint {} --remi-distro {} --no-gpg-check --db-path {}",
             config.paths.conary_bin,
-            distro_config.repo_name,
+            config.paths.db,
+            config.paths.conary_bin,
             config.remi.endpoint,
             config.remi.endpoint,
             distro_config.remi_distro,
             config.paths.db
         );
-        backend
+        let replace_result = backend
             .exec(
                 container_id,
-                &["sh", "-c", &add_repo_cmd],
+                &["sh", "-c", &replace_repo_cmd],
                 Duration::from_secs(60),
             )
             .await?;
+        if replace_result.exit_code != 0 {
+            bail!(
+                "failed to replace packaged Remi seed for test endpoint: {}{}",
+                replace_result.stdout,
+                replace_result.stderr
+            );
+        }
+    }
+
+    let verify_seed_cmd = format!(
+        "repo_output=\"$({} repo list --all --db-path {})\" && count=\"$(printf '%s\\n' \"$repo_output\" | grep -Ec '^[[:space:]]+\\[[x ]\\][[:space:]]+remi[[:space:]]')\" && [ \"$count\" -eq 1 ]",
+        config.paths.conary_bin, config.paths.db
+    );
+    let verify_result = backend
+        .exec(
+            container_id,
+            &["sh", "-c", &verify_seed_cmd],
+            Duration::from_secs(30),
+        )
+        .await?;
+    if verify_result.exit_code != 0 {
+        bail!(
+            "packaged onboarding must leave exactly one Remi repository: {}{}",
+            verify_result.stdout,
+            verify_result.stderr
+        );
     }
 
     Ok(())

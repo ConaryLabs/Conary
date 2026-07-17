@@ -3,7 +3,7 @@
 # Arch Linux build container for Conary packages.
 # Uses rustup for toolchain management.
 
-FROM docker.io/library/archlinux:latest
+FROM docker.io/library/archlinux@sha256:fe6972d4dc1f660c0c10f4c41b2de8986bab89e7e2955378f8beadb8ebcd7433
 
 RUN pacman -Syu --noconfirm && \
     pacman -S --noconfirm \
@@ -24,5 +24,5 @@ RUN useradd -m builder && \
 RUN mkdir -p /build /output && chown builder:builder /build /output
 
 USER builder
-RUN rustup default stable
+RUN rustup default 1.96.0
 WORKDIR /build

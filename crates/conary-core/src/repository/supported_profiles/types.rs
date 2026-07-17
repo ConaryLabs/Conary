@@ -192,6 +192,21 @@ impl SupportedProfile {
         &self.document.repository.name_patterns
     }
 
+    /// Return whether a repository name belongs to this public profile.
+    ///
+    /// Profile repository hints use the same narrow SQL-LIKE shape consumed by
+    /// Remi lookup: either an exact name or one trailing `%` wildcard. Keeping
+    /// this matching here prevents callers from re-encoding distro families.
+    #[must_use]
+    pub fn matches_repository_name(&self, name: &str) -> bool {
+        self.repository_name_patterns()
+            .iter()
+            .any(|pattern| match pattern.strip_suffix('%') {
+                Some(prefix) => name.starts_with(prefix),
+                None => name == pattern,
+            })
+    }
+
     #[must_use]
     pub fn replay_target_for_arch(&self, arch: &str) -> ReplayTargetOwned {
         ReplayTargetOwned {

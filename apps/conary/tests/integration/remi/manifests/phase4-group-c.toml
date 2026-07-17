@@ -28,7 +28,7 @@ fatal = true
 
 # Setup: init DB
 [[test.step]]
-conary = "system init"
+conary = "system init --profile ${REMI_DISTRO}"
 
 [test.step.assert]
 exit_code = 0

@@ -106,6 +106,22 @@ fn repository_hints_are_profile_owned() {
 }
 
 #[test]
+fn repository_name_matching_stays_profile_owned() {
+    let fedora = profile_by_public_id("fedora-44").unwrap();
+    assert!(fedora.matches_repository_name("fedora-44"));
+    assert!(!fedora.matches_repository_name("ubuntu-26.04"));
+
+    let ubuntu = profile_by_public_id("ubuntu-26.04").unwrap();
+    assert!(ubuntu.matches_repository_name("ubuntu-26.04"));
+    assert!(!ubuntu.matches_repository_name("arch-core"));
+
+    let arch = profile_by_public_id("arch").unwrap();
+    assert!(arch.matches_repository_name("arch-core"));
+    assert!(arch.matches_repository_name("arch-multilib"));
+    assert!(!arch.matches_repository_name("fedora-44"));
+}
+
+#[test]
 fn profile_backed_lifecycle_query_accepts_only_explicit_entries() {
     use crate::ccs::v2::validation::{ProfileConstraintStatus, TargetProfileQuery};
 

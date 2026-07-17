@@ -38,7 +38,7 @@ run = """
 set -eu
 rm -f ${DB_PATH}
 rm -rf /conary/current /conary/current.native-handoff-backup /conary/native-authority-handoff.json /conary/generations/71
-${CONARY_BIN} system init --db-path ${DB_PATH}
+${CONARY_BIN} system init --profile ${REMI_DISTRO} --db-path ${DB_PATH}
 ${native_query}
 test -x ${native_file}
 ${CONARY_BIN} system adopt ${native_package} --db-path ${DB_PATH}
@@ -129,7 +129,7 @@ run = """
 set -eu
 rm -f ${DB_PATH}
 rm -rf /conary/current /conary/current.native-handoff-backup /conary/native-authority-handoff.json /conary/generations/72
-${CONARY_BIN} system init --db-path ${DB_PATH}
+${CONARY_BIN} system init --profile ${REMI_DISTRO} --db-path ${DB_PATH}
 ${native_query}
 test -x ${native_file}
 ${CONARY_BIN} system adopt ${native_package} --db-path ${DB_PATH}

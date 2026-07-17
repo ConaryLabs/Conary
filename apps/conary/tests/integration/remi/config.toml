@@ -20,8 +20,8 @@ fixture_dir = "/opt/remi-tests/fixtures"
 
 # Distro-specific settings. Key = DISTRO env var value.
 [distros.fedora44]
-remi_distro = "fedora"
-repo_name = "fedora-remi"
+remi_distro = "fedora-44"
+repo_name = "remi"
 test_package = "which"
 test_binary = "/usr/bin/which"
 test_package_2 = "tree"
@@ -30,8 +30,8 @@ test_package_3 = "jq"
 test_binary_3 = "/usr/bin/jq"
 
 [distros."ubuntu-26.04"]
-remi_distro = "ubuntu"
-repo_name = "ubuntu-remi"
+remi_distro = "ubuntu-26.04"
+repo_name = "remi"
 test_package = "patch"
 test_binary = "/usr/bin/patch"
 test_package_2 = "nano"
@@ -41,7 +41,7 @@ test_binary_3 = "/usr/bin/jq"
 
 [distros.arch]
 remi_distro = "arch"
-repo_name = "arch-remi"
+repo_name = "remi"
 test_package = "which"
 test_binary = "/usr/bin/which"
 test_package_2 = "tree"

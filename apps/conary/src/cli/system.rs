@@ -26,6 +26,10 @@ pub enum TakeoverLevel {
 pub enum SystemCommands {
     /// Initialize a new Conary database
     Init {
+        /// Exact supported host profile for seeded repositories
+        #[arg(long, value_name = "PROFILE", value_parser = super::repo::parse_public_profile_id)]
+        profile: String,
+
         #[command(flatten)]
         db: DbArgs,
     },

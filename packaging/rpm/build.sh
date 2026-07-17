@@ -12,6 +12,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 SPEC="$SCRIPT_DIR/conary.spec"
+OUTPUT="$SCRIPT_DIR/output"
 
 VERSION=$(grep '^version' "$REPO_ROOT/apps/conary/Cargo.toml" | head -1 | sed 's/.*"\(.*\)".*/\1/')
 NAME="conary"
@@ -26,6 +27,9 @@ for arg in "$@"; do
 done
 
 echo "Building $NAME $VERSION RPM"
+
+mkdir -p "$OUTPUT"
+find "$OUTPUT" -maxdepth 1 -name '*.rpm' -delete
 
 # --- Vendor dependencies ---
 echo "[1/4] Vendoring dependencies..."
@@ -73,7 +77,7 @@ if $USE_PODMAN; then
         -v "$TMPDIR/$TARNAME.tar.gz:/rpmbuild/SOURCES/$TARNAME.tar.gz:ro,Z" \
         -v "$TMPDIR/vendor.tar.gz:/rpmbuild/SOURCES/vendor.tar.gz:ro,Z" \
         -v "$SPEC:/rpmbuild/SPECS/conary.spec:ro,Z" \
-        -v "$REPO_ROOT/packaging/rpm/output:/output:Z" \
+        -v "$OUTPUT:/output:Z" \
         "$IMAGE" \
         bash -c '
             rpmbuild -bb \
@@ -83,13 +87,12 @@ if $USE_PODMAN; then
         '
 
     echo "[4/4] Done."
-    echo "RPMs written to: $REPO_ROOT/packaging/rpm/output/"
-    ls -lh "$REPO_ROOT/packaging/rpm/output/"*.rpm 2>/dev/null || echo "(no RPMs found -- check build output)"
 else
     # --- Local rpmbuild ---
     echo "[3/4] Running rpmbuild..."
     RPMBUILD_DIR="$REPO_ROOT/packaging/rpm/rpmbuild"
     mkdir -p "$RPMBUILD_DIR"/{BUILD,RPMS,SRPMS,SOURCES,SPECS}
+    find "$RPMBUILD_DIR/RPMS" -type f -name '*.rpm' -delete
 
     cp "$TMPDIR/$TARNAME.tar.gz" "$RPMBUILD_DIR/SOURCES/"
     cp "$TMPDIR/vendor.tar.gz" "$RPMBUILD_DIR/SOURCES/"
@@ -100,10 +103,17 @@ else
         "$RPMBUILD_DIR/SPECS/conary.spec"
 
     # Copy RPMs to output/ for consistency with CI artifact paths
-    mkdir -p "$SCRIPT_DIR/output"
-    find "$RPMBUILD_DIR/RPMS" -name '*.rpm' -exec cp {} "$SCRIPT_DIR/output/" \;
+    find "$RPMBUILD_DIR/RPMS" -name '*.rpm' -exec cp {} "$OUTPUT/" \;
 
     echo "[4/4] Done."
-    echo "RPMs written to: $SCRIPT_DIR/output/"
-    ls -lh "$SCRIPT_DIR/output/"*.rpm 2>/dev/null || echo "(no RPMs found -- check build output)"
 fi
+
+shopt -s nullglob
+rpm_outputs=("$OUTPUT/$NAME-$VERSION-"*.x86_64.rpm)
+if [[ ${#rpm_outputs[@]} -ne 1 || ! -s "${rpm_outputs[0]:-}" || -L "${rpm_outputs[0]:-}" ]]; then
+    echo "Expected exactly one $NAME $VERSION x86_64 RPM, found ${#rpm_outputs[@]}" >&2
+    exit 1
+fi
+
+echo "RPM written to: ${rpm_outputs[0]}"
+ls -lh "${rpm_outputs[0]}"

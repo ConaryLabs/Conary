@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Result, anyhow};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -507,10 +507,7 @@ async fn execute_run(
     Ok(())
 }
 
-/// Initialize conary database and repos inside a test container.
-///
-/// Similar to `TestRunner::initialize_container_state` but always adds the
-/// distro repo (the runner version gates on `phase > 1`).
+/// Initialize the Conary database and packaged Remi seed inside a test container.
 async fn initialize_container(
     state: &AppState,
     distro: &str,
@@ -518,71 +515,14 @@ async fn initialize_container(
     backend: &dyn ContainerBackend,
     container_id: &crate::container::ContainerId,
 ) -> Result<()> {
-    use std::time::Duration;
-
-    let config = &state.config;
-    let db_parent = std::path::Path::new(&config.paths.db)
-        .parent()
-        .context("db path has no parent directory")?
-        .display()
-        .to_string();
-    let init_cmd = format!(
-        "mkdir -p {db_parent} && {} system init --db-path {}",
-        config.paths.conary_bin, config.paths.db
-    );
-    let init_result = backend
-        .exec(
-            container_id,
-            &["sh", "-c", &init_cmd],
-            Duration::from_secs(120),
-        )
-        .await?;
-    if init_result.exit_code != 0 {
-        bail!(
-            "failed to initialize conary database: {}{}",
-            init_result.stdout,
-            init_result.stderr
-        );
-    }
-
-    for repo in &config.setup.remove_default_repos {
-        let remove_cmd = format!(
-            "{} repo remove {} --db-path {} >/dev/null 2>&1 || true",
-            config.paths.conary_bin, repo, config.paths.db
-        );
-        backend
-            .exec(
-                container_id,
-                &["sh", "-c", &remove_cmd],
-                Duration::from_secs(30),
-            )
-            .await?;
-    }
-
-    {
-        let distro_config = config
-            .distros
-            .get(distro)
-            .with_context(|| format!("unknown distro: {distro}"))?;
-        let add_repo_cmd = format!(
-            "{} repo add {} {} --default-strategy remi --remi-endpoint {} --remi-distro {} --no-gpg-check --db-path {} >/dev/null 2>&1 || true",
-            config.paths.conary_bin,
-            distro_config.repo_name,
-            config.remi.endpoint,
-            config.remi.endpoint,
-            distro_config.remi_distro,
-            config.paths.db
-        );
-        backend
-            .exec(
-                container_id,
-                &["sh", "-c", &add_repo_cmd],
-                Duration::from_secs(60),
-            )
-            .await?;
-    }
-
-    Ok(())
+    crate::engine::container_setup::initialize_container_state(
+        &state.config,
+        distro,
+        true,
+        backend,
+        container_id,
+    )
+    .await
 }
 
 /// Retrieve a run's full report as a JSON value.

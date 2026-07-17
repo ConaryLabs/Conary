@@ -43,8 +43,8 @@ pub mod test_fixtures {
         config.distros.insert(
             "fedora44".to_string(),
             DistroConfig {
-                remi_distro: "fedora".to_string(),
-                repo_name: "conary-fedora44".to_string(),
+                remi_distro: "fedora-44".to_string(),
+                repo_name: "remi".to_string(),
                 containerfile: None,
                 test_packages: Vec::new(),
             },

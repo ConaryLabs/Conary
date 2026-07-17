@@ -217,8 +217,8 @@ mod tests {
         distros.insert(
             "fedora44".to_string(),
             DistroConfig {
-                remi_distro: "fedora".to_string(),
-                repo_name: "fedora-remi".to_string(),
+                remi_distro: "fedora-44".to_string(),
+                repo_name: "remi".to_string(),
                 containerfile: None,
                 test_packages: vec![TestPackage {
                     package: "conary-test-fixture".to_string(),
@@ -306,8 +306,8 @@ mod tests {
         assert_eq!(vars["REMI_ENDPOINT"], "https://remi.conary.io");
         assert_eq!(vars["DB_PATH"], "/tmp/conary-test.db");
         assert_eq!(vars["CONARY_BIN"], "/usr/local/bin/conary");
-        assert_eq!(vars["REMI_DISTRO"], "fedora");
-        assert_eq!(vars["REPO_NAME"], "fedora-remi");
+        assert_eq!(vars["REMI_DISTRO"], "fedora-44");
+        assert_eq!(vars["REPO_NAME"], "remi");
         assert_eq!(vars["TEST_PACKAGE_1"], "conary-test-fixture");
         assert_eq!(vars["TEST_BINARY_1"], "/usr/bin/true");
         assert_eq!(vars["FIXTURE_PKG_NAME"], "conary-test-fixture");

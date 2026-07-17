@@ -8,53 +8,53 @@
 		<h1 class="animate-in" style="--stagger: 0">About Conary</h1>
 
 		<p class="lead animate-in" style="--stagger: 1">
-			Conary is a cross-distribution Linux package manager that unifies package management
-			across Fedora, Arch Linux, and Ubuntu.
+			Conary is an early cross-distribution Linux package-manager preview for supported
+			Fedora, Arch Linux, and Ubuntu test hosts.
 		</p>
 
 		<p class="animate-in" style="--stagger: 2">
-			Every operation produces an immutable EROFS image mounted via Linux composefs,
-			with kernel-enforced integrity (fs-verity) on every file read. Conary uses the
-			CCS (Conary Container Store) native format with content-addressable storage and
-			EROFS binary deltas for efficient updates.
+			The supported first-tester path starts with Conary-owned package operations and
+			reversible tracking of native packages while dnf, apt, or pacman remains authoritative.
+			Conary's CCS format uses content-addressable storage. EROFS generations plus optional
+			composefs/fs-verity integration are a separate VM/debug workflow, not a boundary around
+			every package operation.
 		</p>
 
 		<h2>What is Remi?</h2>
 
 		<p>
 			Remi is Conary's on-demand conversion proxy. It sits between your system and upstream
-			distribution repositories, transparently converting legacy packages (RPM, DEB, Arch)
-			into the CCS format. This gives you the benefits of CCS -- content-addressable storage,
-			binary deltas, hermetic builds -- without requiring upstream distributions to change
-			anything.
+			distribution repositories and attempts to convert supported RPM, DEB, and Arch packages
+			into CCS. Public serving is policy-gated: unsupported or unsafe package behavior is
+			refused or held for review, and a first conversion may be slower than a cache hit.
 		</p>
 
 		<h2>Key Features</h2>
 
 		<div class="features-grid">
 			<div class="feature">
-				<h3>Composefs-native</h3>
-				<p>Every operation builds an immutable EROFS image mounted via composefs</p>
+				<h3>Adoption-led preview</h3>
+				<p>Track native packages without silently taking authority from the distro package manager</p>
 			</div>
 			<div class="feature">
-				<h3>Kernel-enforced integrity</h3>
-				<p>fs-verity on every file -- the kernel verifies content on each read</p>
+				<h3>Explicit apply intent</h3>
+				<p>Preview active-host changes with --dry-run and confirm supported mutations with --yes</p>
 			</div>
 			<div class="feature">
 				<h3>Cross-distribution</h3>
-				<p>Manage packages from Fedora, Arch, and Ubuntu with a single tool</p>
+				<p>Use one CLI and index for the supported Fedora, Arch, and Ubuntu preview profiles</p>
 			</div>
 			<div class="feature">
 				<h3>Content-addressable storage</h3>
-				<p>Deduplicate files across packages using CAS</p>
+				<p>Store Conary-owned content by hash and reuse identical files across packages</p>
 			</div>
 			<div class="feature">
-				<h3>Instant rollback</h3>
-				<p>Remount a previous generation -- no file copying, no rebuilding</p>
+				<h3>Policy-gated conversion</h3>
+				<p>Serve converted artifacts only when current parser, dependency, and scriptlet policy allows</p>
 			</div>
 			<div class="feature">
-				<h3>CAS federation</h3>
-				<p>Peer-to-peer chunk sharing for bandwidth savings</p>
+				<h3>Advanced paths stay separate</h3>
+				<p>Generation, model-apply, conaryd, and federation work is outside the reliable preview loop</p>
 			</div>
 		</div>
 
@@ -63,7 +63,7 @@
 		<p>Install a package with Conary:</p>
 		<div class="terminal-block">
 			<span class="terminal-prompt">$</span>
-			<code>conary install nginx</code>
+			<code>sudo conary install nginx --dry-run</code>
 		</div>
 
 		<p>Search for packages:</p>
@@ -81,7 +81,7 @@
 		<h2>Package Index</h2>
 
 		<p>
-			This web interface provides a searchable index of all packages available through Remi.
+			This web interface provides a searchable index of packages served publicly through Remi.
 			You can browse packages by distribution, search by name or description, and view
 			detailed information including versions, dependencies, and download statistics.
 		</p>

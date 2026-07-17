@@ -14,7 +14,7 @@ phase = 1
 
 # Setup: initialize DB and remove default repos (mirrors run_phase1 preamble)
 [[suite.setup]]
-conary = "system init"
+conary = "system init --profile ${REMI_DISTRO}"
 
 [[suite.setup]]
 run = "${CONARY_BIN} repo remove arch-core --db-path ${DB_PATH}"

@@ -30,6 +30,7 @@ PRODUCT_DOC_PATHS=(
     "docs/operations"
     "docs/roadmaps"
     "site/src/routes"
+    "web/src/routes"
 )
 
 POLICYKIT_DOC_PATHS=(
@@ -171,6 +172,22 @@ check_retired_commands() {
     done < <(rg -n -- "$retired_pattern" "${paths[@]}" || true)
 }
 
+check_system_init_profiles() {
+    local paths=()
+    local path
+
+    while IFS= read -r path; do
+        paths+=("$path")
+    done < <(existing_paths "${PRODUCT_DOC_PATHS[@]}")
+
+    local file line_no text
+    while IFS=: read -r file line_no text; do
+        report_error "$file:$line_no shows system init without an exact --profile: $text"
+    done < <(
+        rg -n -P -- 'conary system init(?![^\n]*--profile)' "${paths[@]}" || true
+    )
+}
+
 check_preview_status() {
     require_match "README.md" 'Conary is still early\. Expect failures\.' 'early preview warning'
     require_match "README.md" 'VM or disposable host' 'VM or disposable host warning'
@@ -209,6 +226,7 @@ check_release_doc_versions() {
         "docs/operations/release-artifact-matrix.md"
         "docs/roadmaps/external-tester-milestone.md"
         "docs/operations/external-tester-outreach.md"
+        "site/src/routes"
     )
 
     for path in "${release_docs[@]}"; do
@@ -228,6 +246,42 @@ check_release_doc_versions() {
             fi
         done < <(rg -nH -- 'conary[-_][0-9]+\.[0-9]+\.[0-9]+' "$path" || true)
     done
+}
+
+check_site_preview_truth() {
+    local features="site/src/routes/features/+page.svelte"
+    local package_index_about="web/src/routes/about/+page.svelte"
+    require_file "$features" || return
+    require_file "$package_index_about" || return
+
+    require_match "$features" 'conary system generation build[^<]*--yes' 'generation build apply-intent example'
+    require_match "$features" 'conary system generation switch[^<]*--yes' 'generation switch apply-intent example'
+    require_match "$features" 'conary system generation rollback[^<]*--yes' 'generation rollback apply-intent example'
+    require_match "$features" 'conary system generation gc[^<]*--yes' 'generation garbage-collection apply-intent example'
+    require_match "$features" 'conary model apply --dry-run' 'model apply dry-run example'
+    require_match "$features" 'conary model apply --yes' 'model apply confirmation example'
+    require_match "$features" '[Ff]ederation is outside the reliable limited-preview path' 'federation preview-boundary caveat'
+    require_match "$features" 'not a complete reproducibility or containment guarantee' 'hermetic-mode limitation caveat'
+
+    local file line_no text
+    while IFS=: read -r file line_no text; do
+        report_error "$file:$line_no makes a public frontend every-operation generation/integrity claim: $text"
+    done < <(
+        rg -n -i -- 'every operation[^.\n]*(EROF|composefs|fs-verity)|fs-verity on every file' \
+            "site/src/routes" "web/src/routes" || true
+    )
+
+    while IFS=: read -r file line_no text; do
+        if [[ "$text" != *"--dry-run"* && "$text" != *"--yes"* ]]; then
+            report_error "$file:$line_no shows an active install without --dry-run or --yes: $text"
+        fi
+    done < <(rg -n -- '<(?:code|span[^>]*)>(?:sudo )?conary install ' "site/src/routes" "web/src/routes" || true)
+
+    while IFS=: read -r file line_no text; do
+        if [[ "$text" == *"--yes"* && "$text" != *">sudo conary install "* && "$text" != *"--db-path"* ]]; then
+            report_error "$file:$line_no shows a system-database install without sudo: $text"
+        fi
+    done < <(rg -n -- '<(?:code|span[^>]*)>(?:sudo )?conary install ' "site/src/routes" "web/src/routes" || true)
 }
 
 check_preview_claim_drift() {
@@ -640,8 +694,10 @@ check_neutral_planning_layout
 check_required_scan_paths
 check_schema_versions
 check_retired_commands
+check_system_init_profiles
 check_preview_status
 check_release_doc_versions
+check_site_preview_truth
 check_preview_claim_drift
 check_policykit_truth
 check_conaryd_routes

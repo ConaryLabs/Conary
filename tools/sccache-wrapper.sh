@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-export SCCACHE_DIR="${SCCACHE_DIR:-/home/peter/Conary/.sccache}"
-SCCACHE_BIN="${SCCACHE_BIN:-/home/peter/.cargo/bin/sccache}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-if [ -x "$SCCACHE_BIN" ]; then
-  if "$SCCACHE_BIN" "$@"; then
-    exit 0
-  fi
+export SCCACHE_DIR="${SCCACHE_DIR:-$REPO_ROOT/.sccache}"
+SCCACHE_BIN="${SCCACHE_BIN:-$(command -v sccache || true)}"
+
+if [[ -n "$SCCACHE_BIN" && -x "$SCCACHE_BIN" ]]; then
+    if "$SCCACHE_BIN" "$@"; then
+        exit 0
+    fi
 fi
 
 exec rustc "$@"

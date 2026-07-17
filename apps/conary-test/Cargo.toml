@@ -5,7 +5,7 @@ version = "0.8.0"
 edition = "2024"
 rust-version = "1.96"
 authors = ["Conary Contributors"]
-license = "MIT OR Apache-2.0"
+license = "MIT"
 description = "Test infrastructure for Conary — declarative TOML test engine with container management, HTTP API, and MCP interface"
 
 [dependencies]

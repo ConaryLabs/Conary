@@ -32,9 +32,20 @@ pub fn report_error(err: &anyhow::Error) {
 fn render_error_lines(err: &anyhow::Error) -> Vec<String> {
     if let Some(core_err) = err.downcast_ref::<conary_core::Error>() {
         match core_err {
-            conary_core::Error::DatabaseNotFound(_) => vec![
-                "Error: Database not initialized.".to_string(),
-                "Run 'conary system init' to set up the package database.".to_string(),
+            conary_core::Error::DatabaseNotFound(path)
+                if std::path::Path::new(path)
+                    == conary_core::runtime_root::ConaryRuntimeRoot::default().db_path() =>
+            {
+                vec![
+                    "Error: Database not initialized.".to_string(),
+                    "Run 'sudo conary system init --profile <fedora-44|ubuntu-26.04|arch>' to set up the system database."
+                        .to_string(),
+                ]
+            }
+            conary_core::Error::DatabaseNotFound(path) => vec![
+                format!("Error: Custom database not initialized at {path:?}."),
+                "Run 'conary system init --profile <fedora-44|ubuntu-26.04|arch> --db-path <PATH>' with the same custom path."
+                    .to_string(),
             ],
             conary_core::Error::NotFound(detail) => vec![format!("Error: {detail}")],
             conary_core::Error::ConflictError(detail) => vec![
@@ -60,7 +71,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_render_error_lines_for_database_not_found() {
+    fn test_render_error_lines_for_custom_database_not_found() {
         let err = anyhow::Error::new(conary_core::Error::DatabaseNotFound(
             "/tmp/conary.db".to_string(),
         ));
@@ -68,8 +79,25 @@ mod tests {
         assert_eq!(
             render_error_lines(&err),
             vec![
+                "Error: Custom database not initialized at \"/tmp/conary.db\".".to_string(),
+                "Run 'conary system init --profile <fedora-44|ubuntu-26.04|arch> --db-path <PATH>' with the same custom path."
+                    .to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_render_error_lines_for_system_database_not_found() {
+        let err = anyhow::Error::new(conary_core::Error::DatabaseNotFound(
+            "/var/lib/conary/conary.db".to_string(),
+        ));
+
+        assert_eq!(
+            render_error_lines(&err),
+            vec![
                 "Error: Database not initialized.".to_string(),
-                "Run 'conary system init' to set up the package database.".to_string(),
+                "Run 'sudo conary system init --profile <fedora-44|ubuntu-26.04|arch>' to set up the system database."
+                    .to_string(),
             ]
         );
     }

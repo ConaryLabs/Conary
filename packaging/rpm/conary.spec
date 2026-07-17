@@ -3,9 +3,9 @@
 Name:           conary
 Version:        0.11.1
 Release:        1%{?dist}
-Summary:        Modern package manager with atomic operations, rollback, and delta updates
+Summary:        Early-preview Linux package manager with native-package adoption
 
-License:        MIT OR Apache-2.0
+License:        MIT
 URL:            https://github.com/ConaryLabs/Conary
 Source0:        %{crate}-%{version}.tar.gz
 Source1:        vendor.tar.gz
@@ -19,13 +19,12 @@ BuildRequires:  perl
 Requires:       openssl-libs
 Requires:       xz-libs
 
-ExclusiveArch:  x86_64 aarch64
+ExclusiveArch:  x86_64
 
 %description
-Conary is a modern package manager that brings atomic transactions,
-automatic rollback, and delta updates to Linux systems. It works
-alongside existing package managers (DNF, APT, pacman), tracking their
-packages and providing a unified interface with enhanced capabilities.
+Conary is an early-preview Linux package manager for tracking and
+reversibly adopting packages from DNF, APT, and pacman. The preview also
+offers guarded dry-run and apply workflows for package changes.
 
 %prep
 %setup -q -n %{crate}-%{version}
@@ -61,17 +60,16 @@ target/release/%{crate} system completions fish > %{buildroot}%{_datadir}/fish/v
 install -d %{buildroot}%{_sysconfdir}/%{crate}
 install -d %{buildroot}%{_sharedstatedir}/%{crate}
 
-# License files
-install -Dpm 0644 LICENSE-MIT %{buildroot}%{_datadir}/licenses/%{crate}/LICENSE-MIT
-install -Dpm 0644 LICENSE-APACHE %{buildroot}%{_datadir}/licenses/%{crate}/LICENSE-APACHE
+# License
+install -Dpm 0644 LICENSE %{buildroot}%{_datadir}/licenses/%{crate}/LICENSE
 
 %post
 # Initialize the Conary database and seed default repos (including Remi CCS proxy).
-# Safe to re-run: add_repository checks uniqueness.
-%{_bindir}/%{crate} system init 2>/dev/null || :
+# Safe to re-run: init reconciles managed defaults without replacing user-managed endpoints.
+%{_bindir}/%{crate} system init --profile fedora-44
 
 %files
-%license LICENSE-MIT LICENSE-APACHE
+%license LICENSE
 %doc README.md
 %{_bindir}/%{crate}
 %{_mandir}/man1/%{crate}.1*

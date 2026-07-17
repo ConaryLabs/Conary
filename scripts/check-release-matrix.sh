@@ -8,6 +8,19 @@ release_build=".github/workflows/release-build.yml"
 deploy_workflow=".github/workflows/deploy-and-verify.yml"
 merge_workflow=".github/workflows/merge-validation.yml"
 artifact_matrix="docs/operations/release-artifact-matrix.md"
+rpm_containerfile="packaging/rpm/Containerfile.build"
+deb_containerfile="packaging/deb/Containerfile.build"
+arch_containerfile="packaging/arch/Containerfile.build"
+rpm_build_script="packaging/rpm/build.sh"
+deb_build_script="packaging/deb/build.sh"
+arch_build_script="packaging/arch/build.sh"
+ccs_build_script="packaging/ccs/build.sh"
+
+fedora_release_image='registry.fedoraproject.org/fedora@sha256:765b2260aa4b4eff379b9a6f983f15fcf41a6f9dda9b272b790e23e92fcbaafb'
+ubuntu_release_image='docker.io/library/ubuntu@sha256:3131b4cc82a783df6c9df078f86e01819a13594b865c2cad47bd1bca2b7063bb'
+arch_release_image='docker.io/library/archlinux@sha256:fe6972d4dc1f660c0c10f4c41b2de8986bab89e7e2955378f8beadb8ebcd7433'
+rustup_init_url='https://static.rust-lang.org/rustup/archive/1.28.2/x86_64-unknown-linux-gnu/rustup-init'
+rustup_init_sha256='20a06e644b0d9bd2fbdbfd52d42540bdde820ea7df86e92e533c073da0cdd43c'
 
 fail() {
     echo "ERROR: $*" >&2
@@ -30,6 +43,49 @@ forbid_match() {
     if rg -q --multiline "$pattern" "$file"; then
         fail "$description unexpectedly present in $file"
     fi
+}
+
+extract_job_block() {
+    local file="$1"
+    local job="$2"
+
+    awk -v header="  ${job}:" '
+        $0 == header {
+            in_job = 1
+        }
+        in_job && $0 != header && /^  [A-Za-z0-9_-]+:/ {
+            exit
+        }
+        in_job {
+            print
+        }
+    ' "$file"
+}
+
+require_job_match() {
+    local file="$1"
+    local job="$2"
+    local pattern="$3"
+    local description="$4"
+    local block
+
+    block="$(extract_job_block "$file" "$job")"
+    [[ -n "$block" ]] || fail "$job job missing in $file"
+    printf '%s\n' "$block" | rg -q --multiline "$pattern" ||
+        fail "$description missing in $file job $job"
+}
+
+require_literal_count() {
+    local file="$1"
+    local literal="$2"
+    local expected="$3"
+    local description="$4"
+    local actual
+
+    actual="$(rg -F -c -- "$literal" "$file" || true)"
+    actual="${actual:-0}"
+    [[ "$actual" == "$expected" ]] ||
+        fail "$description expected $expected occurrences in $file, found $actual"
 }
 
 require_artifact_matrix_row() {
@@ -91,7 +147,17 @@ validate_deploy_routing_pairs() {
     done
 }
 
-[[ -f "$artifact_matrix" ]] || fail "missing $artifact_matrix"
+for required_file in \
+    "$artifact_matrix" \
+    "$rpm_containerfile" \
+    "$deb_containerfile" \
+    "$arch_containerfile" \
+    "$rpm_build_script" \
+    "$deb_build_script" \
+    "$arch_build_script" \
+    "$ccs_build_script"; do
+    [[ -f "$required_file" ]] || fail "missing $required_file"
+done
 
 require_match "$release_build" 'conary-test-v\*' 'conary-test release trigger'
 require_match "$release_build" 'scripts/release-matrix\.sh resolve-tag' 'helper-based tag resolution'
@@ -102,7 +168,33 @@ require_match "$release_build" '\./scripts/release\.sh "\$product"' 'dry-run rel
 require_match "$release_build" 'CONARY_RELEASE_LOCKFILE_MODE: online' 'dry-run release tree should allow online lockfile refreshes in CI'
 require_match "$release_build" 'git config --global --add safe\.directory "\$\(pwd\)"' 'dry-run release tree should mark the checked-out repo as a safe git directory'
 require_match "$release_build" 'git tag --points-at HEAD \| grep -Fx "\$tag_name"' 'dry-run preparation should verify the expected local tag'
-require_match "$release_build" 'image: registry\.fedoraproject\.org/fedora:44' 'release-build RPM builder must use Fedora 44'
+require_job_match "$release_build" prepare 'if \[\[ "\$dry_run" != "true" \]\]; then[\s\S]*scripts/release-matrix\.sh assert-owned-version "\$product" "\$version"' 'live tag preparation must match every owned manifest to the resolved version'
+require_literal_count "$release_build" 'bash scripts/release-matrix.sh assert-owned-version "$product" "$version"' 8 'live and dry-run owned-manifest version assertions'
+require_job_match "$release_build" build-rpm "image: ${fedora_release_image}" 'release-build RPM builder must use the pinned Fedora 44 image'
+require_job_match "$release_build" build-deb "image: ${ubuntu_release_image}" 'release-build DEB builder must use the pinned Ubuntu 26.04 image'
+require_job_match "$release_build" build-arch "image: ${arch_release_image}" 'release-build Arch builder must use the pinned Arch image'
+require_match "$rpm_containerfile" "^FROM ${fedora_release_image}$" 'RPM Containerfile must use the release-build Fedora image digest'
+require_match "$deb_containerfile" "^FROM ${ubuntu_release_image}$" 'DEB Containerfile must use the release-build Ubuntu image digest'
+require_match "$arch_containerfile" "^FROM ${arch_release_image}$" 'Arch Containerfile must use the release-build Arch image digest'
+
+rustup_flow_pattern="${rustup_init_url}[\\s\\S]*${rustup_init_sha256}  /tmp/rustup-init[\\s\\S]*sha256sum -c -[\\s\\S]*/tmp/rustup-init -y --default-toolchain 1\\.96\\.0 --profile minimal[\\s\\S]*rm -f /tmp/rustup-init"
+require_job_match "$release_build" build-rpm "$rustup_flow_pattern" 'release-build RPM builder checksum-pinned rustup-init flow'
+require_job_match "$release_build" build-deb "$rustup_flow_pattern" 'release-build DEB builder checksum-pinned rustup-init flow'
+require_match "$rpm_containerfile" "$rustup_flow_pattern" 'RPM Containerfile checksum-pinned rustup-init flow'
+require_match "$deb_containerfile" "$rustup_flow_pattern" 'DEB Containerfile checksum-pinned rustup-init flow'
+require_job_match "$release_build" build-ccs 'toolchain: 1\.96\.0' 'release-build CCS builder pinned Rust toolchain'
+require_job_match "$release_build" build-arch 'rustup default 1\.96\.0[\s\S]*runuser -u builder -- rustup default 1\.96\.0' 'release-build Arch builder pinned Rust toolchain'
+require_match "$arch_containerfile" '^RUN rustup default 1\.96\.0$' 'Arch Containerfile pinned Rust toolchain'
+require_literal_count "$release_build" 'uses: actions/upload-artifact@' 10 'release artifact upload actions'
+require_literal_count "$release_build" 'if-no-files-found: error' 10 'fail-closed release artifact uploads'
+require_job_match "$release_build" bundle-conary 'require_exact_asset CCS[\s\S]*release-packages/conary-\$\{VERSION\}\.ccs"[\s\S]*release-packages/\*\.ccs' 'exact version-matching CCS release asset assertion'
+require_job_match "$release_build" bundle-conary 'require_exact_asset RPM[\s\S]*release-packages/conary-\$\{VERSION\}-1\.fc44\.x86_64\.rpm"[\s\S]*release-packages/\*\.rpm' 'exact version-matching RPM release asset assertion'
+require_job_match "$release_build" bundle-conary 'require_exact_asset DEB[\s\S]*release-packages/conary_\$\{VERSION\}-1_amd64\.deb"[\s\S]*release-packages/\*\.deb' 'exact version-matching DEB release asset assertion'
+require_job_match "$release_build" bundle-conary 'require_exact_asset Arch[\s\S]*release-packages/conary-\$\{VERSION\}-1-x86_64\.pkg\.tar\.zst"[\s\S]*release-packages/\*\.pkg\.tar\.zst' 'exact version-matching Arch release asset assertion'
+require_job_match "$release_build" bundle-conary 'CCS_FILE="release-packages/conary-\$\{VERSION\}\.ccs"' 'direct version-matching CCS signing path'
+forbid_match "$release_build" 'CCS_FILE=\$\(ls ' 'ambiguous first-match CCS signing path'
+require_job_match "$release_build" bundle-conary 'sign_hash --show-public-key[\s\S]*TRUSTED_UPDATE_KEYS[\s\S]*release signing key does not match an embedded trusted update key' 'live signing key must match an embedded trusted update key'
+require_job_match "$release_build" bundle-conary 'blob/\$\{TAG_NAME\}/docs/guides/agent-assisted-tester-loop\.md' 'tag-pinned tester guide release-note link'
 require_match "$release_build" 'deterministic dry-run signing key' 'dry-run signing fallback'
 require_match "$release_build" 'REHEARSAL_SIGNING_PUBLIC_KEY\.txt' 'dry-run signing public key artifact'
 require_match "$release_build" 'bundle_name: \$\{\{ steps\.meta\.outputs\.bundle_name \}\}' 'prepare bundle_name output'
@@ -123,7 +215,24 @@ require_match "$release_build" 'build-ccs:[\s\S]*needs: \[prepare, workspace-val
 require_match "$release_build" 'build-remi:[\s\S]*needs: \[prepare, workspace-validation\]' 'remi build should need workspace validation'
 require_match "$release_build" 'publish-remi:[\s\S]*needs: \[prepare, workspace-validation, build-remi\]' 'remi publish should need workspace validation'
 require_match "$release_build" 'name: \$\{\{ needs\.prepare\.outputs\.bundle_name \}\}' 'dynamic bundle artifact naming'
-require_match "$release_build" 'gh release create' 'CLI-based GitHub release publication'
+immutable_publish_pattern='if gh release view "\$TAG_NAME" >/dev/null 2>&1; then[\s\S]*--json isDraft --jq[\s\S]*release \$TAG_NAME is already published; refusing to replace immutable assets[\s\S]*else[\s\S]*gh release create "\$TAG_NAME" --draft --generate-notes --verify-tag[\s\S]*fi[\s\S]*gh release upload "\$TAG_NAME" release-packages/\* --clobber[\s\S]*gh release edit "\$TAG_NAME" --draft=false'
+for publish_job in bundle-conary publish-remi publish-conaryd publish-conary-test; do
+    require_job_match "$release_build" "$publish_job" "$immutable_publish_pattern" "immutable-compatible draft-upload-publish sequence for $publish_job"
+done
+require_job_match "$release_build" bundle-conary 'gh release edit "\$TAG_NAME" --notes-file "\$release_notes"[\s\S]*gh release upload "\$TAG_NAME"' 'Conary release notes must be finalized before immutable asset publication'
+require_literal_count "$release_build" 'gh release create "$TAG_NAME" --draft --generate-notes --verify-tag' 4 'draft release creation command'
+require_literal_count "$release_build" 'gh release upload "$TAG_NAME" release-packages/* --clobber' 4 'draft asset upload command'
+require_literal_count "$release_build" 'gh release edit "$TAG_NAME" --draft=false' 4 'release publication command'
+forbid_match "$release_build" 'gh release create "\$TAG_NAME" release-packages/\*' 'direct published release creation with attached assets'
+
+require_match "$rpm_build_script" 'find "\$OUTPUT".*\*\.rpm.*-delete' 'RPM build must clean stale package output'
+require_match "$rpm_build_script" 'Expected exactly one \$NAME \$VERSION x86_64 RPM' 'RPM build must fail without its expected package'
+require_match "$deb_build_script" 'find "\$OUTPUT".*\*\.deb.*-delete' 'DEB build must clean stale package output'
+require_match "$deb_build_script" 'EXPECTED_DEB="\$OUTPUT/\$\{NAME\}_\$\{VERSION\}-1_amd64\.deb"[\s\S]*\[\[ ! -s "\$EXPECTED_DEB"' 'DEB build must require its expected package'
+require_match "$arch_build_script" 'find "\$OUTPUT".*\*\.pkg\.tar\.zst.*-delete' 'Arch build must clean stale package output'
+require_match "$arch_build_script" 'EXPECTED_PACKAGE="\$OUTPUT/\$\{NAME\}-\$\{VERSION\}-1-x86_64\.pkg\.tar\.zst"[\s\S]*\[\[ ! -s "\$EXPECTED_PACKAGE"' 'Arch build must require its expected package'
+require_match "$ccs_build_script" 'find "\$OUTPUT".*\*\.ccs.*-delete' 'CCS build must clean stale package output'
+require_match "$ccs_build_script" 'EXPECTED_CCS="\$OUTPUT/\$\{NAME\}-\$\{VERSION\}\.ccs"[\s\S]*\[\[ ! -s "\$EXPECTED_CCS"' 'CCS build must require its expected package'
 
 require_match "$merge_workflow" 'workflow-runtime-policy:' 'merge validation workflow runtime policy job'
 require_match "$merge_workflow" 'bash scripts/test-github-action-runtimes\.sh' 'merge validation action checker test'

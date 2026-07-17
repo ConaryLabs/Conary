@@ -4,7 +4,7 @@
 use super::DbArgs;
 use clap::{Subcommand, ValueEnum};
 
-fn parse_public_remi_distro(value: &str) -> Result<String, String> {
+pub(super) fn parse_public_profile_id(value: &str) -> Result<String, String> {
     conary_core::repository::supported_profiles::profile_by_public_id(value)
         .map(|profile| profile.id().to_string())
         .ok_or_else(|| {
@@ -13,7 +13,7 @@ fn parse_public_remi_distro(value: &str) -> Result<String, String> {
                 .map(|profile| profile.id())
                 .collect::<Vec<_>>()
                 .join(", ");
-            format!("unsupported Remi distro '{value}'; expected one of: {supported}")
+            format!("unsupported public profile '{value}'; expected one of: {supported}")
         })
 }
 
@@ -94,7 +94,7 @@ pub enum RepoCommands {
         /// Distribution name for Remi conversion (required when --default-strategy=remi)
         ///
         /// Examples: fedora-44, ubuntu-26.04, arch
-        #[arg(long, value_name = "DISTRO", value_parser = parse_public_remi_distro)]
+        #[arg(long, value_name = "DISTRO", value_parser = parse_public_profile_id)]
         remi_distro: Option<String>,
 
         /// Whether this repository publishes security-advisory metadata

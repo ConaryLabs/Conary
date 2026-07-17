@@ -16,10 +16,10 @@ version = "0.0.0"
 release = "1"
 summary = "Conary package manager"
 description = """
-Conary is a next-generation Linux package manager with content-
-addressable storage, atomic transactions, generation-based rollback,
-and cross-distribution package resolution. This recipe builds Conary
-from source to achieve self-hosting on conaryOS.
+Conary is an early-preview Linux package manager with content-addressable
+storage, explicit transaction and recovery boundaries, native-package
+adoption, and cross-distribution package resolution. This recipe builds
+Conary from source to achieve self-hosting on conaryOS.
 """
 license = "MIT"
 homepage = "https://conary.io/"

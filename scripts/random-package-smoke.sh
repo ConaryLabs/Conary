@@ -20,7 +20,7 @@ Environment:
   CONARY_BIN         Conary binary to run.
   PACKAGE_CANDIDATES Newline or space separated candidate package names.
   REMI_ENDPOINT      Remi endpoint (default: https://remi.conary.io).
-  REMI_DISTRO        Remi distro (default: fedora).
+  REMI_DISTRO        Exact public profile (default: fedora-44).
   REPO_NAME          Repository name to use (default: remi from system init).
   DB_PATH            Reuse a DB path instead of a temp DB.
   ROOT               Install root for --apply runs; temp root by default.
@@ -137,7 +137,7 @@ default_conary_bin() {
 
 conary_bin="${CONARY_BIN:-$(default_conary_bin)}"
 remi_endpoint="${REMI_ENDPOINT:-https://remi.conary.io}"
-remi_distro="${REMI_DISTRO:-fedora}"
+remi_distro="${REMI_DISTRO:-fedora-44}"
 repo_name="${REPO_NAME:-remi}"
 
 print_command() {
@@ -210,7 +210,7 @@ mkdir -p "$root" "$out_dir"
 
 setup_log="$out_dir/setup.log"
 run_setup() {
-    "$conary_bin" system init --db-path "$db_path" || return
+    "$conary_bin" system init --profile "$remi_distro" --db-path "$db_path" || return
     if [[ "$repo_name" != "remi" ]]; then
         "$conary_bin" repo add "$repo_name" "$remi_endpoint" \
             --default-strategy remi \

@@ -383,6 +383,26 @@ stage_release_files() {
     git add -- "${files[@]}"
 }
 
+regenerate_conary_man_page() {
+    local new_version="$1"
+    local build_script="apps/conary/build.rs"
+    local man_page="apps/conary/man/conary.1"
+
+    [[ -f "$build_script" ]] || die "missing Conary build script: ${build_script}"
+
+    # The package-version edit already invalidates Cargo's package fingerprint.
+    # Touching the build script additionally guarantees that Cargo reruns it even
+    # when a release is prepared in a reused target directory.
+    touch "$build_script"
+    cargo build -p conary --bin conary --quiet
+
+    [[ -s "$man_page" ]] || die "Conary man-page generation did not produce ${man_page}"
+    grep -Fq -- "conary ${new_version}" "$man_page" ||
+        die "generated ${man_page} does not contain Conary version ${new_version}"
+
+    printf '  Regenerated %s for %s\n' "$man_page" "$new_version"
+}
+
 main() {
     local DRY_RUN=false
     local -a RELEASE_GROUPS=()
@@ -516,6 +536,10 @@ main() {
         esac
         printf '  Updated Cargo.lock\n'
 
+        if [[ "$product" == "conary" ]]; then
+            regenerate_conary_man_page "$new_version"
+        fi
+
         changelog_entry="$(generate_changelog "$product" "$local_history_tag" "$new_version")"
         if [[ -f CHANGELOG.md ]]; then
             tmp="$(mktemp)"
@@ -526,6 +550,12 @@ main() {
         fi
 
         stage_release_files "${owned_paths[@]}"
+        if [[ "$product" == "conary" ]]; then
+            # Generated man pages are intentionally ignored between releases.
+            # Force-add this one exact artifact so the release tag carries the
+            # CLI surface generated for the version being published.
+            git add -f -- apps/conary/man/conary.1
+        fi
         git commit -m "chore: release ${new_tag}"
         git tag -a "$new_tag" -m "Release ${new_tag}"
 

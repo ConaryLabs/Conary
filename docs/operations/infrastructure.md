@@ -125,8 +125,10 @@ not cover the task or when you are debugging the underlying service path itself.
   is available.
 - The dormant Forge-local verifier is `scripts/conaryd-health.sh`, which probes
   `/run/conary/conaryd.sock` rather than a public network endpoint.
-- The tracked Forge bootstrap trust for that path lives in
-  `deploy/ssh/forge-known-hosts` and `deploy/sudoers/conaryd-forge`
+- The retired Forge SSH host key is not retained. A replacement key must be
+  verified out of band and installed in host-local `known_hosts` before this
+  lane is re-enabled; `deploy/sudoers/conaryd-forge` is the dormant narrowed
+  privilege policy to review at that time.
 
 ### Remi
 

@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-07-17
+last_updated: 2026-07-18
 status: scheduled
 current_result: 0/10
 summary: Outcome tracker for Conary's first external tester milestone
@@ -29,23 +29,23 @@ useful evidence but does not count as a completion.
 
 ## Launch Record
 
-- Pinned Conary release: `v0.11.1`, exact commit
-  `4d4b422b45b055fa07a3885a68a4ab8e8d16b526`. Release-build run
-  `29540722051` published the Fedora 44, Ubuntu 26.04 LTS, Arch, and signed CCS
-  artifacts; deploy-and-verify run `29542934278` installed the release bundle
-  and verified Remi's self-update endpoint.
-- Installed-binary proof: the official preceding-preview Fedora RPM binary
-  verified the update signature, replaced itself with `v0.11.1`, and then
-  reported itself up to date. Independent downloads matched `SHA256SUMS`, and
-  the detached CCS signature verified offline.
+- Pinned Conary release candidate: `v0.11.2`. The exact tag commit,
+  release-build run, deploy-and-verify run, and final artifact hashes will be
+  recorded here immediately after publication; outreach remains gated until
+  that evidence is complete.
+- Installed-binary baseline: W2 proved the preceding official Fedora RPM could
+  verify the update signature, replace itself with the then-current preview,
+  and report itself up to date. The `v0.11.2` installed-package and self-update
+  evidence is pending publication.
 - Compatible Remi commit: `c001f8d69b9e8ef34fba39139576a9809800a9a6`,
   deployed with binary SHA-256
   `c955a24ff6b90f98ba5f20b37e6a67b79bdde199ec0dcbfac0ce78b001d0f485`.
 - Prewarmed package set: `curl`, `htop`, `nano`, and `zstd` for Fedora, Ubuntu,
   and Arch. Eleven conversion-version-6 rows are public; Ubuntu `nano` remains
   correctly fail-closed as `private-review`.
-- Clean-host proof: Fedora 44 installed, executed, and removed the public
+- Clean-host baseline: Fedora 44 installed, executed, and removed the public
   `htop 3.4.1` conversion after the exact public-target compatibility fix.
+  The `v0.11.2` native-package onboarding proof is pending publication.
 - Supported hosts: Fedora 44, Ubuntu 26.04 LTS, and Arch Linux on the release's
   supported architecture and compatibility baseline.
 - Planned launch sequence, using the venue-specific copy in

@@ -42,9 +42,8 @@ install -d "$STAGE/usr/share/fish/vendor_completions.d"
 "$RELEASE_BIN" system completions zsh  > "$STAGE/usr/share/zsh/site-functions/_$NAME"
 "$RELEASE_BIN" system completions fish > "$STAGE/usr/share/fish/vendor_completions.d/$NAME.fish"
 
-# Licenses
-install -Dpm 0644 "$REPO_ROOT/LICENSE-MIT" "$STAGE/usr/share/licenses/$NAME/LICENSE-MIT"
-install -Dpm 0644 "$REPO_ROOT/LICENSE-APACHE" "$STAGE/usr/share/licenses/$NAME/LICENSE-APACHE"
+# License
+install -Dpm 0644 "$REPO_ROOT/LICENSE" "$STAGE/usr/share/licenses/$NAME/LICENSE"
 
 # Config and data directories
 install -d "$STAGE/etc/$NAME"
@@ -57,6 +56,7 @@ cp "$SCRIPT_DIR/ccs.toml" "$STAGE/ccs.toml"
 echo "[3/4] Building CCS package..."
 OUTPUT="$SCRIPT_DIR/output"
 mkdir -p "$OUTPUT"
+find "$OUTPUT" -maxdepth 1 -name '*.ccs' -delete
 
 "$RELEASE_BIN" ccs build "$STAGE" \
     --output "$OUTPUT" \
@@ -64,4 +64,11 @@ mkdir -p "$OUTPUT"
     --source "$STAGE"
 
 echo "[4/4] Done."
-find "$OUTPUT" -name '*.ccs' -exec ls -lh {} \;
+EXPECTED_CCS="$OUTPUT/${NAME}-${VERSION}.ccs"
+if [[ ! -s "$EXPECTED_CCS" || -L "$EXPECTED_CCS" ]]; then
+    echo "Expected CCS package not found: $EXPECTED_CCS" >&2
+    exit 1
+fi
+
+echo "CCS package written to: $EXPECTED_CCS"
+ls -lh "$EXPECTED_CCS"

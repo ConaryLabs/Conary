@@ -11,7 +11,7 @@ Options:
   --repo-name NAME       Repository name to configure for validation
   --repo-url URL         Repository metadata URL
   --remi-endpoint URL    Remi conversion endpoint URL
-  --remi-distro DISTRO   Remi distro name
+  --remi-distro DISTRO   Exact public profile ID
   --help                 Show this help text
 EOF
 }
@@ -20,6 +20,7 @@ REPO_NAME=""
 REPO_URL=""
 REMI_ENDPOINT=""
 REMI_DISTRO=""
+PUBLIC_REMI_ENDPOINT="https://remi.conary.io"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -54,6 +55,10 @@ done
 if [[ -z "$REPO_NAME" || -z "$REPO_URL" || -z "$REMI_ENDPOINT" || -z "$REMI_DISTRO" ]]; then
     echo "--repo-name, --repo-url, --remi-endpoint, and --remi-distro are required." >&2
     usage >&2
+    exit 1
+fi
+if [[ "$REPO_NAME" != "remi" ]]; then
+    echo "--repo-name must be 'remi' so clean-host validation exercises the packaged seed." >&2
     exit 1
 fi
 
@@ -124,23 +129,32 @@ main() {
     unpack_workspace
     check_for_baked_private_key
 
-    conary system init
-    conary repo remove "$REPO_NAME" >/dev/null 2>&1 || true
-    conary repo add \
-        "$REPO_NAME" \
-        "$REPO_URL" \
-        --default-strategy remi \
-        --remi-endpoint "$REMI_ENDPOINT" \
-        --remi-distro "$REMI_DISTRO"
-
-    if [[ -f "$ROOT_JSON" ]]; then
-        conary trust init "$REPO_NAME" --root "$ROOT_JSON"
+    conary system init --profile "$REMI_DISTRO"
+    if [[ "$REPO_URL" != "$PUBLIC_REMI_ENDPOINT" || "$REMI_ENDPOINT" != "$PUBLIC_REMI_ENDPOINT" ]]; then
+        conary repo remove remi
+        conary repo add \
+            remi \
+            "$REPO_URL" \
+            --default-strategy remi \
+            --remi-endpoint "$REMI_ENDPOINT" \
+            --remi-distro "$REMI_DISTRO"
     fi
 
-    conary repo sync "$REPO_NAME" --force
+    repo_output="$(conary repo list --all)"
+    remi_count="$(printf '%s\n' "$repo_output" | grep -Ec '^[[:space:]]+\[[x ]\][[:space:]]+remi[[:space:]]')"
+    if [[ "$remi_count" -ne 1 ]]; then
+        echo "Expected exactly one packaged Remi repository, found $remi_count" >&2
+        exit 1
+    fi
+
+    if [[ -f "$ROOT_JSON" ]]; then
+        conary trust init remi --root "$ROOT_JSON"
+    fi
+
+    conary repo sync remi --force
     conary query label list
 
-    conary install tree --repo "$REPO_NAME" --yes --sandbox never
+    conary install tree --repo remi --yes --sandbox never
     conary remove tree --sandbox never --yes
 
     rm -rf "$SMOKE_OUTPUT" "$SMOKE_CACHE"

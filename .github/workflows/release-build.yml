@@ -68,6 +68,10 @@ jobs:
             exit 1
           fi
 
+          if [[ "$dry_run" != "true" ]]; then
+            bash scripts/release-matrix.sh assert-owned-version "$product" "$version"
+          fi
+
           bash scripts/release-matrix.sh metadata-json "$product" "$version" "$tag_name" "$dry_run" > release-metadata/metadata.json
           artifact_patterns="$(jq -c '.artifact_patterns' release-metadata/metadata.json)"
 
@@ -84,6 +88,7 @@ jobs:
         with:
           name: release-metadata
           path: release-metadata/metadata.json
+          if-no-files-found: error
           retention-days: 5
 
   workspace-validation:
@@ -121,6 +126,7 @@ jobs:
         env:
           product: ${{ needs.prepare.outputs.product }}
           tag_name: ${{ needs.prepare.outputs.tag_name }}
+          version: ${{ needs.prepare.outputs.version }}
           dry_run: ${{ needs.prepare.outputs.dry_run }}
           CONARY_RELEASE_LOCKFILE_MODE: online
         run: |
@@ -134,8 +140,11 @@ jobs:
           git config --global --add safe.directory "$(pwd)"
           ./scripts/release.sh "$product"
           git tag --points-at HEAD | grep -Fx "$tag_name"
+          bash scripts/release-matrix.sh assert-owned-version "$product" "$version"
       - name: Install Rust
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: 1.96.0
       - name: Cache cargo
         uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
@@ -157,6 +166,7 @@ jobs:
         with:
           name: ccs-package
           path: packaging/ccs/output/*.ccs
+          if-no-files-found: error
           retention-days: 5
       - name: Build signing helper
         run: cargo build --example sign_hash --manifest-path crates/conary-core/Cargo.toml --release
@@ -165,6 +175,7 @@ jobs:
         with:
           name: sign-hash
           path: target/release/examples/sign_hash
+          if-no-files-found: error
           retention-days: 5
 
   build-rpm:
@@ -173,7 +184,7 @@ jobs:
     needs: [prepare, workspace-validation]
     runs-on: ubuntu-latest
     container:
-      image: registry.fedoraproject.org/fedora:44
+      image: registry.fedoraproject.org/fedora@sha256:765b2260aa4b4eff379b9a6f983f15fcf41a6f9dda9b272b790e23e92fcbaafb
     steps:
       - name: Install build dependencies
         run: |
@@ -181,8 +192,13 @@ jobs:
           && dnf clean all
       - name: Install Rust
         run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
-            sh -s -- -y --default-toolchain stable --profile minimal
+          curl --proto '=https' --tlsv1.2 -sSf \
+            https://static.rust-lang.org/rustup/archive/1.28.2/x86_64-unknown-linux-gnu/rustup-init \
+            -o /tmp/rustup-init
+          echo '20a06e644b0d9bd2fbdbfd52d42540bdde820ea7df86e92e533c073da0cdd43c  /tmp/rustup-init' | sha256sum -c -
+          chmod +x /tmp/rustup-init
+          /tmp/rustup-init -y --default-toolchain 1.96.0 --profile minimal
+          rm -f /tmp/rustup-init
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -193,6 +209,7 @@ jobs:
         env:
           product: ${{ needs.prepare.outputs.product }}
           tag_name: ${{ needs.prepare.outputs.tag_name }}
+          version: ${{ needs.prepare.outputs.version }}
           dry_run: ${{ needs.prepare.outputs.dry_run }}
           CONARY_RELEASE_LOCKFILE_MODE: online
         run: |
@@ -206,6 +223,7 @@ jobs:
           git config --global --add safe.directory "$(pwd)"
           ./scripts/release.sh "$product"
           git tag --points-at HEAD | grep -Fx "$tag_name"
+          bash scripts/release-matrix.sh assert-owned-version "$product" "$version"
       - name: Build RPM
         run: bash packaging/rpm/build.sh
       - name: Upload RPM artifact
@@ -215,6 +233,7 @@ jobs:
           path: |
             packaging/rpm/output/*.rpm
             !packaging/rpm/output/*debug*
+          if-no-files-found: error
           retention-days: 5
 
   build-deb:
@@ -223,7 +242,7 @@ jobs:
     needs: [prepare, workspace-validation]
     runs-on: ubuntu-latest
     container:
-      image: docker.io/library/ubuntu:26.04
+      image: docker.io/library/ubuntu@sha256:3131b4cc82a783df6c9df078f86e01819a13594b865c2cad47bd1bca2b7063bb
     steps:
       - name: Install build dependencies
         env:
@@ -235,8 +254,13 @@ jobs:
           && rm -rf /var/lib/apt/lists/*
       - name: Install Rust
         run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
-            sh -s -- -y --default-toolchain stable --profile minimal
+          curl --proto '=https' --tlsv1.2 -sSf \
+            https://static.rust-lang.org/rustup/archive/1.28.2/x86_64-unknown-linux-gnu/rustup-init \
+            -o /tmp/rustup-init
+          echo '20a06e644b0d9bd2fbdbfd52d42540bdde820ea7df86e92e533c073da0cdd43c  /tmp/rustup-init' | sha256sum -c -
+          chmod +x /tmp/rustup-init
+          /tmp/rustup-init -y --default-toolchain 1.96.0 --profile minimal
+          rm -f /tmp/rustup-init
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -247,6 +271,7 @@ jobs:
         env:
           product: ${{ needs.prepare.outputs.product }}
           tag_name: ${{ needs.prepare.outputs.tag_name }}
+          version: ${{ needs.prepare.outputs.version }}
           dry_run: ${{ needs.prepare.outputs.dry_run }}
           CONARY_RELEASE_LOCKFILE_MODE: online
         run: |
@@ -260,6 +285,7 @@ jobs:
           git config --global --add safe.directory "$(pwd)"
           ./scripts/release.sh "$product"
           git tag --points-at HEAD | grep -Fx "$tag_name"
+          bash scripts/release-matrix.sh assert-owned-version "$product" "$version"
       - name: Build DEB
         run: bash packaging/deb/build.sh
       - name: Upload DEB artifact
@@ -267,6 +293,7 @@ jobs:
         with:
           name: deb-package
           path: packaging/deb/output/*.deb
+          if-no-files-found: error
           retention-days: 5
 
   build-arch:
@@ -275,7 +302,7 @@ jobs:
     needs: [prepare, workspace-validation]
     runs-on: ubuntu-latest
     container:
-      image: docker.io/library/archlinux:latest
+      image: docker.io/library/archlinux@sha256:fe6972d4dc1f660c0c10f4c41b2de8986bab89e7e2955378f8beadb8ebcd7433
     steps:
       - name: Install build dependencies
         run: |
@@ -288,8 +315,8 @@ jobs:
           echo 'builder ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers
       - name: Install Rust toolchain
         run: |
-          rustup default stable
-          runuser -u builder -- rustup default stable
+          rustup default 1.96.0
+          runuser -u builder -- rustup default 1.96.0
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
@@ -299,6 +326,7 @@ jobs:
         env:
           product: ${{ needs.prepare.outputs.product }}
           tag_name: ${{ needs.prepare.outputs.tag_name }}
+          version: ${{ needs.prepare.outputs.version }}
           dry_run: ${{ needs.prepare.outputs.dry_run }}
           CONARY_RELEASE_LOCKFILE_MODE: online
         run: |
@@ -312,6 +340,7 @@ jobs:
           git config --global --add safe.directory "$(pwd)"
           ./scripts/release.sh "$product"
           git tag --points-at HEAD | grep -Fx "$tag_name"
+          bash scripts/release-matrix.sh assert-owned-version "$product" "$version"
       - name: Fix ownership for makepkg
         run: chown -R builder:builder .
       - name: Build Arch package
@@ -323,6 +352,7 @@ jobs:
           path: |
             packaging/arch/output/*.pkg.tar.zst
             !packaging/arch/output/*debug*
+          if-no-files-found: error
           retention-days: 5
 
   bundle-conary:
@@ -339,26 +369,58 @@ jobs:
         with:
           path: release-artifacts
       - name: Collect artifacts and checksums
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
         run: |
+          set -euo pipefail
+
           mkdir -p release-packages
           find release-artifacts -type f \
             \( -name '*.ccs' -o -name '*.rpm' -o -name '*.deb' -o -name '*.pkg.tar.zst' \) \
             ! -name '*debuginfo*' ! -name '*debugsource*' \
             -exec cp {} release-packages/ \;
           cp release-artifacts/release-metadata/metadata.json release-packages/metadata.json
+
+          require_exact_asset() {
+            local label="$1"
+            local expected="$2"
+            shift 2
+            local -a matches=("$@")
+
+            if [[ ${#matches[@]} -ne 1 || "${matches[0]:-}" != "$expected" || ! -s "$expected" || -L "$expected" ]]; then
+              echo "expected exactly one ${label} asset at ${expected}; found ${#matches[@]} matching files" >&2
+              exit 1
+            fi
+          }
+
+          shopt -s nullglob
+          require_exact_asset CCS \
+            "release-packages/conary-${VERSION}.ccs" \
+            release-packages/*.ccs
+          require_exact_asset RPM \
+            "release-packages/conary-${VERSION}-1.fc44.x86_64.rpm" \
+            release-packages/*.rpm
+          require_exact_asset DEB \
+            "release-packages/conary_${VERSION}-1_amd64.deb" \
+            release-packages/*.deb
+          require_exact_asset Arch \
+            "release-packages/conary-${VERSION}-1-x86_64.pkg.tar.zst" \
+            release-packages/*.pkg.tar.zst
+
           cd release-packages
           sha256sum -- * > SHA256SUMS
       - name: Sign CCS package
         env:
           RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+          VERSION: ${{ needs.prepare.outputs.version }}
           DRY_RUN: ${{ needs.prepare.outputs.dry_run }}
           DRY_RUN_SIGNING_KEY: 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f
         run: |
           set -euo pipefail
           chmod +x release-artifacts/sign-hash/sign_hash
-          CCS_FILE=$(ls release-packages/conary-*.ccs 2>/dev/null | head -1)
-          if [ -z "$CCS_FILE" ]; then
-            echo "No CCS package found to sign" >&2
+          CCS_FILE="release-packages/conary-${VERSION}.ccs"
+          if [[ ! -s "$CCS_FILE" || -L "$CCS_FILE" ]]; then
+            echo "Expected CCS package not found at $CCS_FILE" >&2
             exit 1
           fi
           if [ -z "${RELEASE_SIGNING_KEY:-}" ]; then
@@ -367,6 +429,20 @@ jobs:
               echo "[DRY RUN] RELEASE_SIGNING_KEY not set; using deterministic dry-run signing key"
             else
               echo "RELEASE_SIGNING_KEY must be configured for conary releases" >&2
+              exit 1
+            fi
+          fi
+          if [ "$DRY_RUN" != "true" ]; then
+            signing_public_key="$(release-artifacts/sign-hash/sign_hash --show-public-key)"
+            trusted_update_keys="$(
+              {
+                sed -n '/pub const TRUSTED_UPDATE_KEYS/,/];/p' crates/conary-core/src/self_update.rs |
+                  grep -Eo '"[0-9a-f]{64}"' |
+                  tr -d '"'
+              } || true
+            )"
+            if [[ -z "$trusted_update_keys" ]] || ! grep -Fxq "$signing_public_key" <<< "$trusted_update_keys"; then
+              echo "release signing key does not match an embedded trusted update key" >&2
               exit 1
             fi
           fi
@@ -379,6 +455,7 @@ jobs:
         with:
           name: ${{ needs.prepare.outputs.bundle_name }}
           path: release-packages/*
+          if-no-files-found: error
           retention-days: 5
       - name: Create GitHub Release
         if: ${{ needs.prepare.outputs.dry_run != 'true' }}
@@ -390,10 +467,63 @@ jobs:
           set -euo pipefail
 
           if gh release view "$TAG_NAME" >/dev/null 2>&1; then
-            gh release upload "$TAG_NAME" release-packages/* --clobber
+            if [[ "$(gh release view "$TAG_NAME" --json isDraft --jq '.isDraft')" != "true" ]]; then
+              echo "release $TAG_NAME is already published; refusing to replace immutable assets" >&2
+              exit 1
+            fi
           else
-            gh release create "$TAG_NAME" release-packages/* --generate-notes --verify-tag
+            gh release create "$TAG_NAME" --draft --generate-notes --verify-tag
           fi
+
+          version="${TAG_NAME#v}"
+          generated_notes="$(mktemp)"
+          release_notes="$(mktemp)"
+          gh api --method POST \
+            "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
+            -f tag_name="$TAG_NAME" \
+            --jq '.body' > "$generated_notes"
+          {
+            cat <<EOF
+          ## Conary ${TAG_NAME} limited public preview
+
+          This is an early preview for disposable, snapshotted, or explicitly
+          non-critical systems. It is not a production recommendation.
+
+          ### Supported tester lane
+
+          - Fedora 44, Ubuntu 26.04 LTS, or Arch Linux
+          - x86_64
+          - the adoption-led package-manager loop in the [tester guide](https://github.com/ConaryLabs/Conary/blob/${TAG_NAME}/docs/guides/agent-assisted-tester-loop.md)
+
+          Download \`SHA256SUMS\` and exactly one matching package:
+
+          - Fedora 44: \`conary-${version}-1.fc44.x86_64.rpm\`
+          - Ubuntu 26.04 LTS: \`conary_${version}-1_amd64.deb\`
+          - Arch Linux: \`conary-${version}-1-x86_64.pkg.tar.zst\`
+
+          Verify the downloaded package before installation:
+
+          \`\`\`bash
+          sha256sum -c SHA256SUMS --ignore-missing
+          \`\`\`
+
+          The native packages initialize Conary with the exact supported host
+          profile. The preview still refuses packages when dependency,
+          capability, or scriptlet policy cannot establish a safe path. SBOM
+          and provenance sidecars are not published yet.
+
+          Report results with the [beta feedback template](https://github.com/ConaryLabs/Conary/issues/new?template=beta_feedback.md).
+
+          ## Changes
+
+          EOF
+            cat "$generated_notes"
+          } > "$release_notes"
+          gh release edit "$TAG_NAME" --notes-file "$release_notes"
+          rm -f "$generated_notes" "$release_notes"
+
+          gh release upload "$TAG_NAME" release-packages/* --clobber
+          gh release edit "$TAG_NAME" --draft=false
 
   build-remi:
     name: build-remi
@@ -410,6 +540,7 @@ jobs:
         env:
           product: ${{ needs.prepare.outputs.product }}
           tag_name: ${{ needs.prepare.outputs.tag_name }}
+          version: ${{ needs.prepare.outputs.version }}
           dry_run: ${{ needs.prepare.outputs.dry_run }}
           CONARY_RELEASE_LOCKFILE_MODE: online
         run: |
@@ -423,6 +554,7 @@ jobs:
           git config --global --add safe.directory "$(pwd)"
           ./scripts/release.sh "$product"
           git tag --points-at HEAD | grep -Fx "$tag_name"
+          bash scripts/release-matrix.sh assert-owned-version "$product" "$version"
       - uses: ./.github/actions/setup-rust-workspace
       - name: Build remi release binary
         run: cargo build -p remi --release --verbose
@@ -442,6 +574,7 @@ jobs:
         with:
           name: ${{ needs.prepare.outputs.bundle_name }}
           path: release-packages/*
+          if-no-files-found: error
           retention-days: 5
       - name: Write build summary
         run: |
@@ -479,10 +612,16 @@ jobs:
           set -euo pipefail
 
           if gh release view "$TAG_NAME" >/dev/null 2>&1; then
-            gh release upload "$TAG_NAME" release-packages/* --clobber
+            if [[ "$(gh release view "$TAG_NAME" --json isDraft --jq '.isDraft')" != "true" ]]; then
+              echo "release $TAG_NAME is already published; refusing to replace immutable assets" >&2
+              exit 1
+            fi
           else
-            gh release create "$TAG_NAME" release-packages/* --generate-notes --verify-tag
+            gh release create "$TAG_NAME" --draft --generate-notes --verify-tag
           fi
+
+          gh release upload "$TAG_NAME" release-packages/* --clobber
+          gh release edit "$TAG_NAME" --draft=false
 
   build-conaryd:
     name: build-conaryd
@@ -499,6 +638,7 @@ jobs:
         env:
           product: ${{ needs.prepare.outputs.product }}
           tag_name: ${{ needs.prepare.outputs.tag_name }}
+          version: ${{ needs.prepare.outputs.version }}
           dry_run: ${{ needs.prepare.outputs.dry_run }}
           CONARY_RELEASE_LOCKFILE_MODE: online
         run: |
@@ -512,6 +652,7 @@ jobs:
           git config --global --add safe.directory "$(pwd)"
           ./scripts/release.sh "$product"
           git tag --points-at HEAD | grep -Fx "$tag_name"
+          bash scripts/release-matrix.sh assert-owned-version "$product" "$version"
       - uses: ./.github/actions/setup-rust-workspace
       - name: Build conaryd release binary
         run: cargo build -p conaryd --release --verbose
@@ -531,6 +672,7 @@ jobs:
         with:
           name: ${{ needs.prepare.outputs.bundle_name }}
           path: release-packages/*
+          if-no-files-found: error
           retention-days: 5
       - name: Write build summary
         run: |
@@ -568,10 +710,16 @@ jobs:
           set -euo pipefail
 
           if gh release view "$TAG_NAME" >/dev/null 2>&1; then
-            gh release upload "$TAG_NAME" release-packages/* --clobber
+            if [[ "$(gh release view "$TAG_NAME" --json isDraft --jq '.isDraft')" != "true" ]]; then
+              echo "release $TAG_NAME is already published; refusing to replace immutable assets" >&2
+              exit 1
+            fi
           else
-            gh release create "$TAG_NAME" release-packages/* --generate-notes --verify-tag
+            gh release create "$TAG_NAME" --draft --generate-notes --verify-tag
           fi
+
+          gh release upload "$TAG_NAME" release-packages/* --clobber
+          gh release edit "$TAG_NAME" --draft=false
 
   build-conary-test:
     name: build-conary-test
@@ -588,6 +736,7 @@ jobs:
         env:
           product: ${{ needs.prepare.outputs.product }}
           tag_name: ${{ needs.prepare.outputs.tag_name }}
+          version: ${{ needs.prepare.outputs.version }}
           dry_run: ${{ needs.prepare.outputs.dry_run }}
           CONARY_RELEASE_LOCKFILE_MODE: online
         run: |
@@ -601,6 +750,7 @@ jobs:
           git config --global --add safe.directory "$(pwd)"
           ./scripts/release.sh "$product"
           git tag --points-at HEAD | grep -Fx "$tag_name"
+          bash scripts/release-matrix.sh assert-owned-version "$product" "$version"
       - uses: ./.github/actions/setup-rust-workspace
       - name: Build conary-test release binary
         run: cargo build -p conary-test --release --verbose
@@ -620,6 +770,7 @@ jobs:
         with:
           name: ${{ needs.prepare.outputs.bundle_name }}
           path: release-packages/*
+          if-no-files-found: error
           retention-days: 5
       - name: Write build summary
         run: |
@@ -657,7 +808,13 @@ jobs:
           set -euo pipefail
 
           if gh release view "$TAG_NAME" >/dev/null 2>&1; then
-            gh release upload "$TAG_NAME" release-packages/* --clobber
+            if [[ "$(gh release view "$TAG_NAME" --json isDraft --jq '.isDraft')" != "true" ]]; then
+              echo "release $TAG_NAME is already published; refusing to replace immutable assets" >&2
+              exit 1
+            fi
           else
-            gh release create "$TAG_NAME" release-packages/* --generate-notes --verify-tag
+            gh release create "$TAG_NAME" --draft --generate-notes --verify-tag
           fi
+
+          gh release upload "$TAG_NAME" release-packages/* --clobber
+          gh release edit "$TAG_NAME" --draft=false

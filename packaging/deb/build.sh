@@ -11,6 +11,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+OUTPUT="$SCRIPT_DIR/output"
 
 VERSION=$(grep '^version' "$REPO_ROOT/apps/conary/Cargo.toml" | head -1 | sed 's/.*"\(.*\)".*/\1/')
 NAME="conary"
@@ -24,6 +25,9 @@ for arg in "$@"; do
 done
 
 echo "Building $NAME $VERSION DEB"
+
+mkdir -p "$OUTPUT"
+find "$OUTPUT" -maxdepth 1 -name '*.deb' -delete
 
 # --- Vendor dependencies ---
 echo "[1/4] Vendoring dependencies..."
@@ -61,8 +65,6 @@ cp -a "$REPO_ROOT/vendor" "$BUILDDIR/vendor"
 # Copy debian directory into build tree
 cp -a "$SCRIPT_DIR/debian" "$BUILDDIR/debian"
 
-mkdir -p "$SCRIPT_DIR/output"
-
 if $USE_PODMAN; then
     # --- Podman build ---
     echo "[3/4] Building in Podman container..."
@@ -72,7 +74,7 @@ if $USE_PODMAN; then
 
     podman run --rm \
         -v "$BUILDDIR:/build/src:Z" \
-        -v "$SCRIPT_DIR/output:/output:Z" \
+        -v "$OUTPUT:/output:Z" \
         "$IMAGE" \
         bash -c '
             cd /build/src && \
@@ -81,8 +83,6 @@ if $USE_PODMAN; then
         '
 
     echo "[4/4] Done."
-    echo "DEBs written to: $SCRIPT_DIR/output/"
-    ls -lh "$SCRIPT_DIR/output/"*.deb 2>/dev/null || echo "(no DEBs found -- check build output)"
 else
     # --- Local build ---
     echo "[3/4] Running dpkg-buildpackage..."
@@ -90,7 +90,14 @@ else
     dpkg-buildpackage -us -uc -b
 
     echo "[4/4] Done."
-    cp "$TMPDIR"/*.deb "$SCRIPT_DIR/output/" 2>/dev/null || true
-    echo "DEBs written to: $SCRIPT_DIR/output/"
-    ls -lh "$SCRIPT_DIR/output/"*.deb 2>/dev/null || echo "(no DEBs found -- check build output)"
+    cp "$TMPDIR"/*.deb "$OUTPUT/"
 fi
+
+EXPECTED_DEB="$OUTPUT/${NAME}_${VERSION}-1_amd64.deb"
+if [[ ! -s "$EXPECTED_DEB" || -L "$EXPECTED_DEB" ]]; then
+    echo "Expected DEB not found: $EXPECTED_DEB" >&2
+    exit 1
+fi
+
+echo "DEB written to: $EXPECTED_DEB"
+ls -lh "$EXPECTED_DEB"

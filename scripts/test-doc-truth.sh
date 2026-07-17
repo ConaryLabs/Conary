@@ -44,7 +44,9 @@ make_good_repo() {
         "$root/docs/operations" \
         "$root/docs/roadmaps" \
         "$root/site/src/routes/about" \
-        "$root/site/src/routes/install"
+        "$root/site/src/routes/features" \
+        "$root/site/src/routes/install" \
+        "$root/web/src/routes/about"
 
     cat > "$root/crates/conary-core/src/db/schema.rs" <<'EOF'
 /// Current schema version
@@ -152,6 +154,27 @@ EOF
 <section>
 	<p>Start with the adoption-led limited preview on a VM or non-critical host.</p>
 	<p>Remi cold-start conversion can make first package use slower.</p>
+	<p>The pinned preview release is v0.10.1.</p>
+</section>
+EOF
+
+    cat > "$root/site/src/routes/features/+page.svelte" <<'EOF'
+<section>
+	<code>conary system generation build --summary test --yes</code>
+	<code>conary system generation switch 2 --yes</code>
+	<code>conary system generation rollback --yes</code>
+	<code>conary system generation gc --keep 3 --yes</code>
+	<code>conary model apply --dry-run</code>
+	<code>conary model apply --yes</code>
+	<p>Federation is outside the reliable limited-preview path.</p>
+	<p>Hermetic mode is not a complete reproducibility or containment guarantee.</p>
+</section>
+EOF
+
+    cat > "$root/web/src/routes/about/+page.svelte" <<'EOF'
+<section>
+	<p>Package operations and experimental generation artifacts have separate boundaries.</p>
+	<code>conary install nginx --dry-run</code>
 </section>
 EOF
 
@@ -428,6 +451,34 @@ break_release_artifact_version() {
     sed -i 's/conary-0.10.1/conary-0.9.2/g' "$1/docs/guides/agent-assisted-tester-loop.md"
 }
 
+break_system_init_profile() {
+    printf '\n```bash\nconary system init\n```\n' >> "$1/README.md"
+}
+
+break_site_release_version() {
+    sed -i 's/v0.10.1/v0.9.2/g' "$1/site/src/routes/install/+page.svelte"
+}
+
+break_site_generation_apply_intent() {
+    sed -i 's/generation build --summary test --yes/generation build --summary test/' "$1/site/src/routes/features/+page.svelte"
+}
+
+break_site_federation_boundary() {
+    sed -i 's/Federation is outside the reliable limited-preview path./Federation is ready for onboarding./' "$1/site/src/routes/features/+page.svelte"
+}
+
+break_package_index_every_operation_claim() {
+    printf '\n<p>Every operation builds an EROFS image mounted with composefs.</p>\n' >> "$1/web/src/routes/about/+page.svelte"
+}
+
+break_package_index_install_intent() {
+    sed -i 's/conary install nginx --dry-run/conary install nginx/' "$1/web/src/routes/about/+page.svelte"
+}
+
+break_package_index_live_install_privilege() {
+    sed -i 's/conary install nginx --dry-run/conary install nginx --yes/' "$1/web/src/routes/about/+page.svelte"
+}
+
 break_conaryd_501_claim() {
     printf '\nconaryd package install/remove/update routes return `501 Not Implemented`.\n' >> "$1/CHANGELOG.md"
 }
@@ -503,6 +554,13 @@ expect_failure "missing detailed Group O evidence" break_detailed_group_o_eviden
 expect_failure "missing detailed Group P evidence" break_detailed_group_p_evidence 'dated Group P evidence'
 expect_failure "release doc version drift" break_release_doc_version 'stale conary release reference'
 expect_failure "release artifact version drift" break_release_artifact_version 'stale conary release reference'
+expect_failure "system init exact profile" break_system_init_profile 'system init without an exact --profile'
+expect_failure "site release version drift" break_site_release_version 'stale conary release reference'
+expect_failure "site generation apply intent" break_site_generation_apply_intent 'generation build apply-intent example'
+expect_failure "site federation boundary" break_site_federation_boundary 'federation preview-boundary caveat'
+expect_failure "package index every-operation claim" break_package_index_every_operation_claim 'public frontend every-operation generation/integrity claim'
+expect_failure "package index install intent" break_package_index_install_intent 'active install without --dry-run or --yes'
+expect_failure "package index live install privilege" break_package_index_live_install_privilege 'system-database install without sudo'
 expect_failure "conaryd 501 claim" break_conaryd_501_claim 'claims conaryd package execution is still blanket 501'
 expect_failure "site schema drift" break_site_schema_version 'schema.*65.*SCHEMA_VERSION.*69'
 expect_failure "every install EROFS claim" break_every_install_erofs_claim 'every install builds an EROFS generation'

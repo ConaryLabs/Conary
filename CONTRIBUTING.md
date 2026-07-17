@@ -12,6 +12,7 @@ Thank you for your interest in contributing to Conary. Whether you are fixing a 
 - [Pull Request Process](#pull-request-process)
 - [Issue Reporting](#issue-reporting)
 - [Architecture Decisions](#architecture-decisions)
+- [Code of Conduct](#code-of-conduct)
 - [License](#license)
 
 ## Getting Started
@@ -19,15 +20,16 @@ Thank you for your interest in contributing to Conary. Whether you are fixing a 
 ### Prerequisites
 
 - **Rust 1.96+** (edition 2024) -- install via [rustup](https://rustup.rs/)
-- **SQLite** development headers (`libsqlite3-dev` on Debian/Ubuntu, `sqlite-devel` on Fedora/RHEL, `sqlite` on Arch)
 - **Git**
 - **Linux** -- Conary uses Linux-specific APIs (namespaces, landlock, seccomp) and does not currently build on macOS or Windows
 
 ### Your First Contribution
 
-Not sure where to start? Look for issues labeled [`good first issue`](https://github.com/ConaryLabs/Conary/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22). These are scoped to be completable in a single session and don't require deep knowledge of the codebase.
+Not sure where to start? Open a thread in
+[GitHub Discussions](https://github.com/ConaryLabs/Conary/discussions) and a
+maintainer can help identify a real, bounded task.
 
-Good first contributions include:
+Small first contributions often include:
 - Adding or improving unit tests (look for modules with low coverage)
 - Fixing clippy warnings or improving error messages
 - Documentation improvements in doc comments
@@ -148,7 +150,9 @@ cargo test -p conaryd
   // apps/conary/src/commands/example.rs
   ```
 - **Database-first**: All runtime state lives in SQLite. No config files (INI, TOML, YAML, JSON) for runtime state.
-- **No emojis**: Use text markers like `[COMPLETE]`, `[IN PROGRESS]`, `[FAILED]` in output and documentation.
+- **CLI output**: Route user-facing status through `apps/conary/src/ui/` and
+  use the guarded lowercase vocabulary such as `[ok]`, `[fail]`, and `[warn]`.
+  Do not hand-roll status prefixes.
 - **Clippy-clean**: All code must pass `cargo clippy --workspace --all-targets -- -D warnings`. Pedantic lints are encouraged.
 - **Tests in same file**: Unit tests go in a `#[cfg(test)] mod tests` block at the bottom of each source file, not in separate test files.
 
@@ -358,7 +362,7 @@ Conary has a few core design principles that inform how contributions should be 
 
 - **Database-first**: SQLite is the single source of truth for all package state. Do not introduce config files, caches outside the database, or in-memory-only state for data that should persist.
 - **Content-addressable storage**: Files are stored by hash, enabling deduplication and efficient delta updates.
-- **Atomic transactions**: Package operations commit durable state to SQLite, then rebuild or reselect complete EROFS generation artifacts from DB/CAS state after crashes. Partial installs should never leave the system in a broken state.
+- **Explicit transaction and recovery boundaries**: Package operations record durable state in SQLite and use command-specific live-root journals or generation recovery paths. Keep failure handling fail-closed, and do not assume every host mutation has automatic rollback without focused proof.
 - **Package-owned service surfaces**: Remi and conaryd live in their own app crates and should be built and tested directly with `cargo build -p remi`, `cargo build -p conaryd`, `cargo test -p remi`, and `cargo test -p conaryd`.
 
 Before proposing significant architectural changes, please open an issue to discuss the approach. This helps avoid wasted effort and ensures alignment with the project direction.
@@ -380,6 +384,12 @@ Before proposing significant architectural changes, please open an issue to disc
 
 If you have questions about contributing, feel free to start a thread in [GitHub Discussions](https://github.com/ConaryLabs/Conary/discussions) or open an issue on the [GitHub repository](https://github.com/ConaryLabs/Conary). We are happy to help newcomers find their way around the codebase.
 
+## Code of Conduct
+
+Participation in Conary project spaces is governed by the
+[Conary Code of Conduct](CODE_OF_CONDUCT.md). Report sensitive conduct concerns
+privately using the contact listed there.
+
 ## License
 
-Conary is licensed under the [MIT License](LICENSE-MIT). By submitting a pull request, you agree that your contributions will be licensed under the same terms.
+Conary is licensed under the [MIT License](LICENSE). By submitting a pull request, you agree that your contributions will be licensed under the same terms.

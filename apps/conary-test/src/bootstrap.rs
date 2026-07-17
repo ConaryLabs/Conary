@@ -711,8 +711,8 @@ conary_bin = "/usr/bin/conary"
 results_dir = "/tmp/results"
 
 [distros.fedora44]
-remi_distro = "fedora"
-repo_name = "fedora-remi"
+remi_distro = "fedora-44"
+repo_name = "remi"
 "#,
         )
         .unwrap();

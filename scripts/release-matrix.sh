@@ -22,6 +22,7 @@ Usage:
   scripts/release-matrix.sh latest-version-from-list <product> <tag...>
   scripts/release-matrix.sh latest-version-from-git <product>
   scripts/release-matrix.sh max-owned-version <product>
+  scripts/release-matrix.sh assert-owned-version <product> <version>
   scripts/release-matrix.sh owned-paths <product>
   scripts/release-matrix.sh metadata-json <product> <version> <tag> <dry_run>
 EOF
@@ -370,6 +371,20 @@ max_owned_version() {
     printf '%s\n' "${versions[@]}" | sort -V | tail -n1
 }
 
+assert_owned_version() {
+    local product="$1"
+    local expected_version="$2"
+    local file actual_version
+
+    while IFS= read -r file; do
+        [[ -n "$file" ]] || continue
+        [[ -f "$file" ]] || die "owned manifest missing: $file"
+        actual_version="$(extract_version_from_file "$file")"
+        [[ "$actual_version" == "$expected_version" ]] ||
+            die "owned manifest version mismatch for ${product}: ${file} is ${actual_version}, expected ${expected_version}"
+    done < <(version_owned_manifests_for "$product")
+}
+
 owned_paths() {
     version_owned_manifests_for "$1"
 }
@@ -496,6 +511,11 @@ main() {
             [[ $# -eq 1 ]] || usage
             is_product "$1" || die "unknown product: $1"
             max_owned_version "$1"
+            ;;
+        assert-owned-version)
+            [[ $# -eq 2 ]] || usage
+            is_product "$1" || die "unknown product: $1"
+            assert_owned_version "$1" "$2"
             ;;
         owned-paths)
             [[ $# -eq 1 ]] || usage

@@ -1,6 +1,6 @@
 <svelte:head>
 	<title>Conary - The Cross-Distribution System Manager</title>
-	<meta name="description" content="Try Nix-like package safety on Fedora, Arch, and Ubuntu through reversible native-package adoption, immutable generations, and Remi conversion." />
+	<meta name="description" content="Try Conary's limited Linux preview through reversible native-package adoption on Fedora, Arch, and Ubuntu." />
 </svelte:head>
 
 <!-- Hero -->
@@ -10,7 +10,7 @@
 	<div class="container hero-inner">
 		<h1 class="hero-title animate-in" style="--stagger: 0">Conary</h1>
 		<p class="hero-tagline animate-in" style="--stagger: 2">
-			Nix-like safety on the distro you already use
+			Reversible package experiments on the distro you already use
 		</p>
 		<p class="hero-desc animate-in" style="--stagger: 3">
 			Conary's limited preview starts with reversible native-package adoption:
@@ -56,18 +56,19 @@
 		<h2 class="section-title animate-in" style="--stagger: 9">Why Conary?</h2>
 		<div class="features-grid">
 			<div class="feature-card animate-in" style="--stagger: 10">
-				<h3>Immutable Generations</h3>
+				<h3>Optional Generations</h3>
 				<p>
-					EROFS images + composefs overlays. Build, select for next boot,
-					roll back, or export complete system states when you explicitly
-					move into the generation-model path.
+					The advanced generation path builds EROFS artifacts that can be selected
+					for next boot or exported for validation. It is separate from the basic
+					package loop and should be exercised in a VM today.
 				</p>
 			</div>
 			<div class="feature-card animate-in" style="--stagger: 11">
 				<h3>Cross-Distribution</h3>
 				<p>
-					One tool for Fedora, Arch, and Ubuntu. Install RPM, DEB, or Arch packages
-					with the same commands, the same resolver, the same transaction engine.
+					One CLI for the supported Fedora, Arch, and Ubuntu preview hosts. RPM,
+					DEB, and Arch inputs share a resolver and transaction engine when their
+					metadata and package behavior pass current policy.
 				</p>
 			</div>
 			<div class="feature-card animate-in" style="--stagger: 12">
@@ -89,14 +90,14 @@
 			<div class="feature-card animate-in" style="--stagger: 14">
 				<h3>Content-Addressable Storage</h3>
 				<p>
-					Files are stored by content hash, not by package. Identical files across
-					packages are deduplicated automatically, saving disk space and bandwidth.
+					Conary-owned files are stored by content hash, not only by package.
+					Identical content can be reused instead of stored repeatedly.
 				</p>
 			</div>
 			<div class="feature-card animate-in" style="--stagger: 15">
 				<h3>Preview Release</h3>
 				<p>
-					v0.9.2 publishes Fedora 44 RPM, Ubuntu 26.04 LTS DEB, Arch package,
+					v0.11.2 publishes Fedora 44 RPM, Ubuntu 26.04 LTS DEB, Arch package,
 					CCS package, checksums, and a detached CCS signature for the first
 					external tester loop.
 				</p>
@@ -104,24 +105,25 @@
 			<div class="feature-card animate-in" style="--stagger: 16">
 				<h3>Generation Integrity</h3>
 				<p>
-					Generation integrity work uses EROFS, composefs, and fs-verity
-					where that path is selected. The basic package loop stays on stock
-					host package flows.
+					Generation artifacts use EROFS, with composefs and fs-verity integration
+					available only on compatible generation hosts. These mechanisms do not
+					wrap every package operation in the basic preview loop.
 				</p>
 			</div>
 			<div class="feature-card animate-in" style="--stagger: 17">
 				<h3>Declarative System Model</h3>
 				<p>
-					Declare the packages your system should have. Conary computes the difference,
-					then applies package changes or builds a generation when you choose that
-					authority boundary.
+					Declare the packages your system should have and inspect the difference.
+					Applying that model mutates the host and remains a VM-only follow-up until
+					it has the same recovery evidence as the package loop.
 				</p>
 			</div>
 			<div class="feature-card animate-in" style="--stagger: 18">
 				<h3>On-Demand Conversion</h3>
 				<p>
-					Remi, the conversion proxy, transparently converts upstream RPM/DEB/Arch
-					packages into CCS format. No upstream changes required.
+					Remi attempts to convert supported upstream RPM, DEB, and Arch packages
+					into CCS format. Policy-approved artifacts are served publicly; packages
+					that need unsafe or unsupported behavior are refused or held for review.
 				</p>
 			</div>
 			<div class="feature-card animate-in" style="--stagger: 19">
@@ -150,7 +152,7 @@
 			<div class="terminal-body">
 				<div class="terminal-line">
 					<span class="t-prompt">$</span>
-					<span class="t-cmd">conary system adopt --system --dry-run</span>
+					<span class="t-cmd">sudo conary system adopt --system --dry-run</span>
 				</div>
 				<div class="terminal-line t-output">Scanning native package database...</div>
 				<div class="terminal-line t-output">Would adopt 142 package(s)</div>
@@ -158,14 +160,14 @@
 				<div class="terminal-line t-blank"></div>
 				<div class="terminal-line">
 					<span class="t-prompt">$</span>
-					<span class="t-cmd">conary system adopt --status</span>
+					<span class="t-cmd">sudo conary system adopt --status</span>
 				</div>
 				<div class="terminal-line t-output">Adopted (track): 0</div>
 				<div class="terminal-line t-output">Native packages visible: 142</div>
 				<div class="terminal-line t-blank"></div>
 				<div class="terminal-line">
 					<span class="t-prompt">$</span>
-					<span class="t-cmd">conary system unadopt --all --dry-run</span>
+					<span class="t-cmd">sudo conary system unadopt --all --dry-run</span>
 				</div>
 				<div class="terminal-line t-output t-success">Would remove Conary tracking only.</div>
 			</div>
@@ -192,7 +194,7 @@
 				<tbody>
 					<tr>
 						<td class="feature-name">Immutable generations</td>
-						<td class="highlight"><span class="check yes" aria-label="Yes"></span></td>
+						<td class="highlight"><span class="check partial" aria-label="Partial"></span></td>
 						<td><span class="check no" aria-label="No"></span></td>
 						<td><span class="check no" aria-label="No"></span></td>
 						<td><span class="check no" aria-label="No"></span></td>
@@ -200,7 +202,7 @@
 					</tr>
 					<tr>
 						<td class="feature-name">Cross-distribution</td>
-						<td class="highlight"><span class="check yes" aria-label="Yes"></span></td>
+						<td class="highlight"><span class="check partial" aria-label="Partial"></span></td>
 						<td><span class="check no" aria-label="No"></span></td>
 						<td><span class="check no" aria-label="No"></span></td>
 						<td><span class="check no" aria-label="No"></span></td>
@@ -224,7 +226,7 @@
 					</tr>
 					<tr>
 						<td class="feature-name">Bootable generation rollback</td>
-						<td class="highlight"><span class="check yes" aria-label="Yes"></span></td>
+						<td class="highlight"><span class="check partial" aria-label="Partial"></span></td>
 						<td><span class="check no" aria-label="No"></span></td>
 						<td><span class="check no" aria-label="No"></span></td>
 						<td><span class="check no" aria-label="No"></span></td>
@@ -240,7 +242,7 @@
 					</tr>
 					<tr>
 						<td class="feature-name">Declarative system model</td>
-						<td class="highlight"><span class="check yes" aria-label="Yes"></span></td>
+						<td class="highlight"><span class="check partial" aria-label="Partial"></span></td>
 						<td><span class="check no" aria-label="No"></span></td>
 						<td><span class="check no" aria-label="No"></span></td>
 						<td><span class="check no" aria-label="No"></span></td>
@@ -248,7 +250,7 @@
 					</tr>
 					<tr>
 						<td class="feature-name">On-demand conversion</td>
-						<td class="highlight"><span class="check yes" aria-label="Yes"></span></td>
+						<td class="highlight"><span class="check partial" aria-label="Partial"></span></td>
 						<td><span class="check no" aria-label="No"></span></td>
 						<td><span class="check no" aria-label="No"></span></td>
 						<td><span class="check no" aria-label="No"></span></td>

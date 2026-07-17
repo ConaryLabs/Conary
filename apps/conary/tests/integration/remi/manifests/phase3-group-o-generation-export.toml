@@ -30,7 +30,7 @@ timeout_seconds = 900
 ssh_port = 2240
 stage_conary = true
 commands = [
-    "conary system init",
+    "conary system init --profile fedora-44",
     "mkdir -p /var/tmp/conary-generation-export",
     "conary system generation build --yes > /var/tmp/conary-generation-export/build.log 2>&1; code=$?; cat /var/tmp/conary-generation-export/build.log; test \"$code\" -ne 0",
     "grep -q 'not self-contained' /var/tmp/conary-generation-export/build.log",
@@ -60,7 +60,7 @@ timeout_seconds = 1500
 ssh_port = 2244
 stage_conary = true
 commands = [
-    "conary system init",
+    "conary system init --profile fedora-44",
     "for cmd in sqlite3 cpio dracut depmod; do command -v \"$cmd\" >/dev/null || { echo \"generation-builder-ready QEMU fixture missing $cmd\"; exit 1; }; done",
     "test -d /usr/lib/dracut || { echo 'generation-builder-ready QEMU fixture missing /usr/lib/dracut'; exit 1; }",
     "conary system adopt --system --full",
@@ -93,7 +93,7 @@ ssh_port = 2245
 stage_conary = true
 scratch_disk_mb = 65536
 commands = [
-    "conary system init",
+    "conary system init --profile fedora-44",
     "for cmd in sqlite3 cpio dracut depmod systemd-repart qemu-img mkfs.ext4 mkfs.vfat composefs-info; do command -v \"$cmd\" >/dev/null || { echo \"generation-builder-ready QEMU fixture missing $cmd\"; exit 1; }; done",
     "test -d /usr/lib/dracut || { echo 'generation-builder-ready QEMU fixture missing /usr/lib/dracut'; exit 1; }",
     "mkdir -p /etc/ssh/authorized_keys /etc/ssh/sshd_config.d; test -s /root/.ssh/authorized_keys; cp /root/.ssh/authorized_keys /etc/ssh/authorized_keys/root; chmod 0644 /etc/ssh/authorized_keys/root; printf '%s\\n' 'AuthorizedKeysFile .ssh/authorized_keys /etc/ssh/authorized_keys/%u' > /etc/ssh/sshd_config.d/90-conary-test-authorized-keys.conf; sshd_config=/etc/ssh/sshd_config; sshd_config_tmp=/etc/ssh/sshd_config.conary-test; if ! grep -q '/etc/ssh/authorized_keys/%u' \"$sshd_config\"; then { printf '%s\\n' 'AuthorizedKeysFile .ssh/authorized_keys /etc/ssh/authorized_keys/%u'; cat \"$sshd_config\"; } > \"$sshd_config_tmp\"; mv \"$sshd_config_tmp\" \"$sshd_config\"; fi",
@@ -159,7 +159,7 @@ ssh_port = 2247
 stage_conary = true
 scratch_disk_mb = 65536
 commands = [
-    "conary system init",
+    "conary system init --profile fedora-44",
     "for cmd in sqlite3 cpio dracut depmod systemd-repart qemu-img mkfs.ext4 mkfs.vfat composefs-info; do command -v \"$cmd\" >/dev/null || { echo \"generation-builder-ready QEMU fixture missing $cmd\"; exit 1; }; done",
     "test -d /usr/lib/dracut || { echo 'generation-builder-ready QEMU fixture missing /usr/lib/dracut'; exit 1; }",
     "mkdir -p /etc/ssh/authorized_keys /etc/ssh/sshd_config.d; test -s /root/.ssh/authorized_keys; cp /root/.ssh/authorized_keys /etc/ssh/authorized_keys/root; chmod 0644 /etc/ssh/authorized_keys/root; printf '%s\\n' 'AuthorizedKeysFile .ssh/authorized_keys /etc/ssh/authorized_keys/%u' > /etc/ssh/sshd_config.d/90-conary-test-authorized-keys.conf; sshd_config=/etc/ssh/sshd_config; sshd_config_tmp=/etc/ssh/sshd_config.conary-test; if ! grep -q '/etc/ssh/authorized_keys/%u' \"$sshd_config\"; then { printf '%s\\n' 'AuthorizedKeysFile .ssh/authorized_keys /etc/ssh/authorized_keys/%u'; cat \"$sshd_config\"; } > \"$sshd_config_tmp\"; mv \"$sshd_config_tmp\" \"$sshd_config\"; fi",
@@ -259,7 +259,7 @@ copy_to_guest = [
     { source = "apps/conary/tests/fixtures/bootstrap-generation-export", dest = "/var/lib/conary/bootstrap-inputs" },
 ]
 commands = [
-    "conary system init",
+    "conary system init --profile fedora-44",
     "for cmd in sqlite3 cpio dracut depmod systemd-repart qemu-img mkfs.ext4 mkfs.vfat composefs-info; do command -v \"$cmd\" >/dev/null || { echo \"generation-builder-ready QEMU fixture missing $cmd\"; exit 1; }; done",
     "test -d /usr/lib/dracut || { echo 'generation-builder-ready QEMU fixture missing /usr/lib/dracut'; exit 1; }",
     "test -d /var/lib/conary/bootstrap-inputs",

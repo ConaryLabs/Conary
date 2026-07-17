@@ -1,8 +1,8 @@
 # Conary
 
-[![PR Gate](https://github.com/ConaryLabs/Conary/actions/workflows/pr-gate.yml/badge.svg)](https://github.com/ConaryLabs/Conary/actions/workflows/pr-gate.yml)
+[![Merge validation](https://github.com/ConaryLabs/Conary/actions/workflows/merge-validation.yml/badge.svg?branch=main)](https://github.com/ConaryLabs/Conary/actions/workflows/merge-validation.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![v0.11.1](https://img.shields.io/badge/version-0.11.1-orange.svg)](CHANGELOG.md)
+[![v0.11.2](https://img.shields.io/badge/version-0.11.2-orange.svg)](CHANGELOG.md)
 
 **Website:** [conary.io](https://conary.io) | **Packages:** [remi.conary.io](https://remi.conary.io) | **Discussions:** [GitHub Discussions](https://github.com/ConaryLabs/Conary/discussions)
 
@@ -46,7 +46,7 @@ attach only a reviewed support bundle.
 ## Try It
 
 Download the pinned preview release from
-[v0.11.1](https://github.com/ConaryLabs/Conary/releases/tag/v0.11.1), verify
+[v0.11.2](https://github.com/ConaryLabs/Conary/releases/tag/v0.11.2), verify
 `SHA256SUMS`, and install the package for your test VM. Release artifact
 expectations are tracked in
 [docs/operations/release-artifact-matrix.md](docs/operations/release-artifact-matrix.md).
@@ -54,22 +54,24 @@ expectations are tracked in
 Then try the smallest package loop:
 
 ```bash
-conary system init
-conary repo add remi https://remi.conary.io
-conary repo sync
-conary install htop --dry-run
-conary install htop --yes
-conary list htop --info
+sudo conary repo list
+sudo conary repo sync remi
+sudo conary install htop --dry-run
+sudo conary install htop --yes
+sudo conary list htop --info
 ```
+
+The RPM, DEB, and Arch packages initialize the root-owned system database with
+the exact host profile during installation. Do not add a second Remi source.
 
 To test reversible adoption without handing package ownership to Conary:
 
 ```bash
-conary system adopt --system --dry-run
-conary system adopt --system
-conary system adopt --status
-conary system unadopt --all --dry-run
-conary system unadopt --all --yes
+sudo conary system adopt --system --dry-run
+sudo conary system adopt --system
+sudo conary system adopt --status
+sudo conary system unadopt --all --dry-run
+sudo conary system unadopt --all --yes
 ```
 
 Commands that change packages, files, generation state, or selected native
@@ -105,31 +107,31 @@ first when the command supports it.
 
 ```bash
 # Install and inspect packages
-conary install nginx --dry-run
-conary install nginx --yes
-conary list
-conary list nginx --info
-conary list nginx --files
-conary query depends nginx
-conary query whatprovides 'soname(libssl.so.3)'
+sudo conary install nginx --dry-run
+sudo conary install nginx --yes
+sudo conary list
+sudo conary list nginx --info
+sudo conary list nginx --files
+sudo conary query depends nginx
+sudo conary query whatprovides 'soname(libssl.so.3)'
 
 # Update Conary-owned packages
-conary update --dry-run
-conary update nginx --yes
+sudo conary update --dry-run
+sudo conary update nginx --yes
 
 # Build and select immutable generations
-conary system generation build --summary "After nginx setup" --yes
-conary system generation list
-conary system generation switch 1 --yes
-conary system generation rollback --yes
+sudo conary system generation build --summary "After nginx setup" --yes
+sudo conary system generation list
+sudo conary system generation switch 1 --yes
+sudo conary system generation rollback --yes
 
 # Export a generation artifact
-conary system generation export --path /conary/generations/1 --format qcow2 --output gen1.qcow2
-conary system generation export --path /conary/generations/1 --format iso --output gen1.iso
+sudo conary system generation export --path /conary/generations/1 --format qcow2 --output gen1.qcow2
+sudo conary system generation export --path /conary/generations/1 --format iso --output gen1.iso
 
 # Self-update the CLI
-conary self-update --check
-conary self-update
+sudo conary self-update --check
+sudo conary self-update
 ```
 
 The default `conary --help` shows the daily-driver commands. The full
@@ -161,8 +163,12 @@ Conary requires Rust 1.96+ on Linux.
 git clone https://github.com/ConaryLabs/Conary.git
 cd Conary
 cargo build -p conary
-./target/debug/conary system init
+sudo ./target/debug/conary system init --profile fedora-44
 ```
+
+Use `--profile ubuntu-26.04` or `--profile arch` on those supported hosts. For
+an isolated non-root development database, pass both the exact profile and a
+writable `--db-path`; subsequent commands must use the same path.
 
 Useful verification commands:
 
@@ -208,9 +214,8 @@ details.
 ## Community
 
 - [GitHub Discussions](https://github.com/ConaryLabs/Conary/discussions)
-- [Good First Issues](https://github.com/ConaryLabs/Conary/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
 - [CONTRIBUTING.md](CONTRIBUTING.md)
 
 ## License
 
-MIT
+[MIT](LICENSE)

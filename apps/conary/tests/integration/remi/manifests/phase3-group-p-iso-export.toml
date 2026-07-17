@@ -30,8 +30,8 @@ copy_to_guest = [
     { source = "apps/conary/tests/fixtures/bootstrap-generation-export", dest = "/var/lib/conary/bootstrap-inputs" },
 ]
 commands = [
-    "conary system init",
-    "if ! command -v xorriso >/dev/null || ! command -v mmd >/dev/null || ! command -v mcopy >/dev/null; then conary repo remove remi || true; conary repo add remi https://packages.conary.io --default-strategy remi --remi-endpoint https://packages.conary.io --remi-distro fedora --no-gpg-check; conary repo sync remi --force; for pkg in libburn libisofs libisoburn xorriso mtools; do conary install \"$pkg\" --repo remi --yes --sandbox never --no-deps; done; ldconfig; fi",
+    "conary system init --profile fedora-44",
+    "if ! command -v xorriso >/dev/null || ! command -v mmd >/dev/null || ! command -v mcopy >/dev/null; then conary repo remove remi || true; conary repo add remi https://packages.conary.io --default-strategy remi --remi-endpoint https://packages.conary.io --remi-distro fedora-44 --no-gpg-check; conary repo sync remi --force; for pkg in libburn libisofs libisoburn xorriso mtools; do conary install \"$pkg\" --repo remi --yes --sandbox never --no-deps; done; ldconfig; fi",
     "xorriso -version >/dev/null",
     "mmd -V >/dev/null",
     "mcopy -V >/dev/null",

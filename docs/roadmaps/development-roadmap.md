@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-07-17
+last_updated: 2026-07-18
 proof_baseline: 4d4b422b45b055fa07a3885a68a4ab8e8d16b526
 current_milestone: first external tester loop
 active_workstream: W3 First External Tester Loop
@@ -101,7 +101,7 @@ the stated scope, not whether a workstream happens to be active.
 - **Dependencies:** none remain inside W0.
 - **Next gate:** W1 completed the integrated candidate, authority reconciliation,
   TGE05 proof, public v4 fixture publication, fresh-cache boot, and final
-  integrated gates. W2 is active.
+  integrated gates. W2 subsequently completed and W3 is active.
 - **Proof:** on 2026-07-15, doc truth, its fixtures, agent-context fixtures and
   validation, and optional review-helper fixtures passed. The maintainability
   fixture reproduced its known federation `pipefail` false negative. Release
@@ -154,8 +154,9 @@ the stated scope, not whether a workstream happens to be active.
 - **Execution status:** complete; the integrated merge commit is the
   release-green candidate consumed by W2.
 - **Dependencies:** none remain inside W1.
-- **Next gate:** W2 is active and owns the post-integration preview release,
-  compatible Remi deployment, and representative clean-host smoke.
+- **Next gate:** W2 completed the post-integration preview release, compatible
+  Remi deployment, and representative clean-host smoke; W3 owns external
+  tester evidence.
 - **Proof:** formatting, workspace Clippy with warnings denied, owning
   Conary/core/Remi/conaryd tests, the 28-suite/334-case `conary-test` inventory,
   release audit, release-matrix validation, neutral documentation/routing
@@ -248,23 +249,31 @@ and creates no roadmap item.
 
 - **Outcome:** Conary has external evidence about whether its adoption-led
   preview works for strangers on supported systems.
-- **Current truth:** W2's pinned release, compatible prewarmed Remi path,
-  clean-host smoke, rollback, artifact, signature, deployment, and
-  installed-binary self-update evidence are complete. The verified launch
-  sequence is scheduled for Show HN on Monday, 2026-07-20 at 15:00 CEST
-  (`13:00 UTC`), r/codex at the same time on Tuesday, and r/ClaudeAI at the
-  same time on Wednesday. Nothing has been posted and the tracker remains
-  0/10.
-- **Execution status:** active; scheduled for manual launch.
-- **Dependencies:** only the maintainer's manual submissions and each venue's
-  current account/rule eligibility remain before the scheduled launch sequence.
-- **Next gate:** submit the verified Show HN packet, record every actual post
-  URL and timestamp, and obtain the first privacy-safe qualifying report.
-- **Proof:** each completion belongs to a unique outsider and covers exactly
-  `install -> adopt -> list/search -> update --dry-run -> unadopt` on a
-  supported host with the pinned release. Record failed attempts and triage
-  every report as `fix-now`, `next-slice`, or `declined-with-reason` with an
-  owner.
+- **Current truth:** W2's compatible prewarmed Remi path, clean-host smoke,
+  rollback, artifact, signature, deployment, and installed-binary self-update
+  baselines are complete. A W3a public-readiness slice is preparing `v0.11.2`
+  with exact-profile package onboarding, corrected public-site claims,
+  MIT-only project licensing, stronger GitHub safety settings, pinned release
+  inputs, and draft-first immutable release publication. The launch sequence
+  remains scheduled for Show HN on Monday, 2026-07-20 at 15:00 CEST (`13:00
+  UTC`), r/codex at the same time on Tuesday, and r/ClaudeAI at the same time
+  on Wednesday. Nothing has been posted and the tracker remains 0/10.
+- **Execution status:** active; public-readiness integration and release proof
+  precede manual launch.
+- **Dependencies:** publish and independently verify `v0.11.2`, close the
+  maintainer-only repository-history safety checkpoint, and re-check each venue's
+  current account/rule eligibility before the scheduled submissions.
+- **Next gate:** complete the `v0.11.2` artifact, installed-package, and
+  self-update evidence; then submit the verified Show HN packet, record its
+  actual URL and timestamp, and obtain the first privacy-safe qualifying
+  report.
+- **Proof:** the release gate requires exact tag/run identity, independent
+  checksums and CCS-signature verification, profile-correct native-package
+  initialization, and installed-binary self-update. Each later milestone
+  completion belongs to a unique outsider and covers exactly `install -> adopt
+  -> list/search -> update --dry-run -> unadopt` on a supported host with the
+  pinned release. Record failed attempts and triage every report as `fix-now`,
+  `next-slice`, or `declined-with-reason` with an owner.
 - **Limitations:** no qualifying completion for three weeks after launch
   triggers a maintainer review of venue reach, onboarding friction, and
   observed failures. A pivot still requires a reproducible systemic blocker;
@@ -458,6 +467,7 @@ publication, public fresh-cache KVM proof, and final integrated release gates.
 W2 closed after exact release identity, multi-distro artifact publication,
 checksum and CCS-signature verification, production deployment, official
 installed-binary self-update, compatible prewarmed Remi, rollback, and
-clean-host proof. W3 is now active and scheduled for a manual Show HN launch
-on 2026-07-20 at 15:00 CEST (`13:00 UTC`), followed by r/codex and r/ClaudeAI
-on the next two days.
+clean-host proof. W3 is now active; its W3a public-readiness and `v0.11.2`
+proof gate must close before the manual Show HN launch scheduled for 2026-07-20
+at 15:00 CEST (`13:00 UTC`), followed by r/codex and r/ClaudeAI on the next two
+days.

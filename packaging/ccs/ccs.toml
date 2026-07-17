@@ -6,8 +6,8 @@
 [package]
 name = "conary"
 version = "0.11.1"
-description = "Modern package manager with atomic operations, rollback, and delta updates"
-license = "MIT OR Apache-2.0"
+description = "Early-preview Linux package manager with native-package adoption"
+license = "MIT"
 homepage = "https://conary.io"
 repository = "https://github.com/ConaryLabs/Conary"
 

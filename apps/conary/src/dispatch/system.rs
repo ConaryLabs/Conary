@@ -22,7 +22,9 @@ pub(super) async fn dispatch_system_command(
     allow_live_system_mutation: bool,
 ) -> Result<()> {
     match sys_cmd {
-        cli::SystemCommands::Init { db } => commands::cmd_init(&db.db_path).await,
+        cli::SystemCommands::Init { profile, db } => {
+            commands::cmd_init(&db.db_path, &profile).await
+        }
 
         cli::SystemCommands::Completions { shell } => {
             let mut cmd = Cli::command();

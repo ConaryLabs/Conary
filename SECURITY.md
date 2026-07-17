@@ -4,12 +4,12 @@
 
 If you discover a security vulnerability in Conary, **please do not open a public issue.** Security vulnerabilities disclosed publicly before a fix is available put all users at risk.
 
-Instead, report vulnerabilities through **GitHub Security Advisories**:
+Instead, use GitHub's private vulnerability-reporting form:
 
-1. Go to [https://github.com/ConaryLabs/Conary/security/advisories](https://github.com/ConaryLabs/Conary/security/advisories)
-2. Click "New draft security advisory"
+1. Go to [https://github.com/ConaryLabs/Conary/security/advisories/new](https://github.com/ConaryLabs/Conary/security/advisories/new)
+2. Click **Report a vulnerability**
 3. Fill in the details of the vulnerability
-4. Submit the advisory
+4. Submit the private report
 
 This ensures the report is private and visible only to the maintainers until a fix is ready.
 
@@ -36,10 +36,14 @@ We will coordinate disclosure with you. You will be credited in the advisory unl
 
 | Version | Supported |
 |---------|-----------|
-| 0.8.x limited preview | Yes |
-| < 0.8   | No        |
+| Latest `0.11.x` limited preview release | Yes |
+| Older preview releases | No |
 
-Only the latest release receives security updates. The preview support matrix is Fedora 44, Ubuntu 26.04 LTS, and Arch Linux on Linux kernels with the required composefs, fs-verity, namespace, landlock, and seccomp support. We recommend always running the most recent version.
+Only the latest release receives security updates. The basic package-manager
+preview supports Fedora 44, Ubuntu 26.04 LTS, and Arch Linux on x86_64.
+Generation features have additional kernel and tooling requirements; see the
+[compatibility checklist](docs/guides/compatibility-checklist.md) for those
+narrower paths. We recommend always running the most recent release.
 
 ## Security Architecture
 
@@ -52,8 +56,8 @@ Conary is a system-level package manager that executes with elevated privileges.
 - **Landlock filesystem restrictions** -- kernel-enforced limits on which paths scriptlets can access
 - **Seccomp-BPF syscall filtering** -- restrict which system calls scriptlets can make
 - **TUF trust metadata** -- repository metadata follows The Update Framework for supply chain integrity
-- **Content-addressable storage** -- files stored by cryptographic hash, preventing tampering
-- **Atomic transactions** -- database-first transactions rebuild or reselect complete EROFS generation artifacts after crashes instead of leaving partial installs behind
+- **Content-addressable storage** -- cryptographic hashes let verification detect and reject content mismatches
+- **Transaction and recovery boundaries** -- state changes use durable changesets, live-root journals, and generation validation; the preview still scopes host mutation and does not promise universal automatic rollback
 - **Peer credential authentication** -- daemon API uses SO_PEERCRED to verify caller identity
 - **Pinned federation peer identity** -- HTTPS federation peers are bound to pinned TLS certificate fingerprints
 - **Rate limiting and CORS** -- server endpoints are protected against abuse

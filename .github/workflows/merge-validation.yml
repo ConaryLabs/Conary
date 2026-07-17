@@ -78,6 +78,21 @@ jobs:
       - name: Validate feature ownership cards
         run: bash scripts/agent-context.sh --validate
 
+  frontends:
+    name: frontends
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: |
+            site/package-lock.json
+            web/package-lock.json
+      - name: Check and build both SvelteKit frontends
+        run: bash scripts/check-frontends.sh
+
   fmt:
     name: fmt
     runs-on: ubuntu-latest

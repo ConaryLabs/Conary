@@ -132,9 +132,9 @@ pub struct CommonArgs {
 #[command(name = "conary")]
 #[command(author = "Conary Project")]
 #[command(version)]
-#[command(about = "A next-generation package manager with atomic transactions", long_about = None)]
+#[command(about = "Early-preview Linux package manager with native-package adoption", long_about = None)]
 #[command(
-    after_help = "Daily workflow examples:\n  conary install nginx --dry-run\n  conary install nginx --yes\n  conary update --dry-run\n  conary system adopt --refresh\n  conary system completions bash > /tmp/conary-completion.bash\n  conary system generation export --path /conary/generations/1 --format qcow2 --output gen1.qcow2\n  conaryd handles durable package jobs with the same apply-intent boundary\n\nAdvanced packaging and platform commands: run 'conary --help-advanced'"
+    after_help = "Daily workflow examples:\n  sudo conary install nginx --dry-run\n  sudo conary install nginx --yes\n  sudo conary update --dry-run\n  sudo conary system adopt --refresh\n  conary system completions bash > /tmp/conary-completion.bash\n  sudo conary system generation export --path /conary/generations/1 --format qcow2 --output gen1.qcow2\n  conaryd handles durable package jobs with the same apply-intent boundary\n\nAdvanced packaging and platform commands: run 'conary --help-advanced'"
 )]
 pub struct Cli {
     /// Use seccomp warn mode for scriptlets instead of enforcing blocked syscalls
@@ -1333,6 +1333,27 @@ mod tests {
             ])
             .is_err()
         );
+    }
+
+    #[test]
+    fn system_init_accepts_only_exact_public_profiles() {
+        for expected in ["fedora-44", "ubuntu-26.04", "arch"] {
+            let cli = parse_cli(["conary", "system", "init", "--profile", expected]).unwrap();
+            match cli.command {
+                Some(Commands::System(SystemCommands::Init { profile, .. })) => {
+                    assert_eq!(profile, expected);
+                }
+                _ => panic!("expected system init command"),
+            }
+        }
+
+        for unsupported in ["fedora", "ubuntu", "debian-13"] {
+            assert!(
+                parse_cli(["conary", "system", "init", "--profile", unsupported]).is_err(),
+                "{unsupported} must not parse as a public profile"
+            );
+        }
+        assert!(parse_cli(["conary", "system", "init"]).is_err());
     }
 
     #[test]

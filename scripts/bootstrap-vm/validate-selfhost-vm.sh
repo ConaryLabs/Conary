@@ -13,7 +13,7 @@ Options:
   --repo-name NAME       Repository name to configure inside the guest
   --repo-url URL         Repository metadata URL
   --remi-endpoint URL    Remi conversion endpoint URL
-  --remi-distro DISTRO   Remi distro name (for example: fedora)
+  --remi-distro DISTRO   Exact public profile ID (for example: fedora-44)
   --root-json PATH       Optional TUF root metadata to copy into the guest
   --ssh-port PORT        Host port forwarded to guest SSH (default: 2222)
   --memory MB            QEMU guest memory in MiB (default: 4096)

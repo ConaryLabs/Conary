@@ -39,10 +39,10 @@ Validate the guest against explicit remote inputs:
 ```bash
 scripts/bootstrap-vm/validate-selfhost-vm.sh \
   --work-dir /tmp/conary-selfhost-vm \
-  --repo-name fedora-remi \
+  --repo-name remi \
   --repo-url "$REPO_URL" \
   --remi-endpoint "$REMI_ENDPOINT" \
-  --remi-distro fedora \
+  --remi-distro fedora-44 \
   --root-json /absolute/path/to/root.json
 ```
 

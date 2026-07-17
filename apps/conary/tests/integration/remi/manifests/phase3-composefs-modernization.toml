@@ -29,7 +29,7 @@ copy_to_guest = [
     { source = "apps/conary/tests/fixtures/synthetic-generation-artifact", dest = "/var/tmp/synthetic-generation-artifact" },
 ]
 commands = [
-    "conary system init",
+    "conary system init --profile fedora-44",
     "rm -rf /conary/generations/42 /conary/objects/47 /conary/current /var/tmp/conary-oci-good /var/tmp/conary-oci-broken",
     "mkdir -p /conary/objects",
     "cp -a /var/tmp/synthetic-generation-artifact/generations /conary/",
@@ -72,7 +72,7 @@ timeout_seconds = 420
 ssh_port = 2251
 stage_conary = true
 commands = [
-    "conary system init",
+    "conary system init --profile fedora-44",
     "rm -f /conary/current",
     "conary system state rollback 424242 --yes > /var/tmp/composefs-modernization-rollback.log 2>&1; code=$?; cat /var/tmp/composefs-modernization-rollback.log; test \"$code\" -ne 0",
     "grep -q 'without an active composefs generation' /var/tmp/composefs-modernization-rollback.log",

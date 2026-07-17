@@ -7,7 +7,7 @@
 	<div class="container">
 		<h1 class="page-title animate-in" style="--stagger: 0">About Conary</h1>
 		<p class="page-desc animate-in" style="--stagger: 1">
-			Reviving a visionary 2005 design -- now with immutable system generations.
+			Reviving a visionary 2005 design while exploring a modern generation model.
 		</p>
 	</div>
 </section>
@@ -32,9 +32,9 @@
 			<p>
 				This project is a ground-up reimplementation in Rust -- not a fork or a port. The original
 				source is long gone from active development, but the design principles endure: treat the
-				filesystem as a content store, make every operation atomic and reversible, and resolve
-				dependencies correctly the first time. We carry the name forward as a tribute to the
-				engineering that got there first.
+				filesystem as a content store, give mutations explicit transaction and recovery boundaries,
+				and resolve dependencies before applying changes. We carry the name forward as a tribute
+				to the engineering that got there first.
 			</p>
 			<p>
 				This is an independent project, not a resurrection or continuation of the original
@@ -49,9 +49,9 @@
 				Linux package management is fragmented. Every distribution maintains its own
 				package format, its own repositories, its own tools. Switching distros means learning
 				new commands, losing muscle memory, and accepting that software availability varies
-				wildly. Even within a single distro, package managers haven't fundamentally changed
-				in decades -- most still lack atomic transactions, content-addressable storage, or
-				efficient binary updates.
+				wildly. Even within a single distro, the tools expose different transaction,
+				content-storage, and update models, making one auditable workflow difficult to
+				carry between systems.
 			</p>
 		</div>
 
@@ -83,8 +83,8 @@
 					<p>Content-addressable storage. Files stored by hash, not by package. Identical files are automatically deduplicated.</p>
 				</div>
 				<div class="arch-item">
-					<h3>Composefs Transactions</h3>
-					<p>Generation builds create EROFS images backed by composefs. Previous generations remain available for selected-generation rollback.</p>
+					<h3>Generation Artifacts</h3>
+					<p>The advanced path builds EROFS images and can integrate composefs on compatible hosts. It is separate from the basic package transaction loop.</p>
 				</div>
 				<div class="arch-item">
 					<h3>Resolver</h3>
@@ -100,11 +100,11 @@
 				</div>
 				<div class="arch-item">
 					<h3>System Model</h3>
-					<p>Declarative system configuration. Define desired state, Conary computes and applies the diff.</p>
+					<p>Define desired package state and inspect drift. Live application remains a VM-only follow-up while recovery evidence matures.</p>
 				</div>
 				<div class="arch-item">
 					<h3>Generations</h3>
-					<p>Immutable EROFS filesystem images with composefs overlay. Select, roll back, or export complete system states when generation mode is enabled.</p>
+					<p>Experimental EROFS system artifacts that can be selected, rolled back, or exported in the explicit generation workflow.</p>
 				</div>
 				<div class="arch-item">
 					<h3>Bootstrap</h3>
@@ -122,7 +122,7 @@
 				</div>
 				<div class="tech-item">
 					<span class="tech-label">Filesystem</span>
-					<span class="tech-value">EROFS + composefs (composefs-rs), fs-verity</span>
+					<span class="tech-value">EROFS; optional composefs and fs-verity integration for generations</span>
 				</div>
 				<div class="tech-item">
 					<span class="tech-label">Database</span>
@@ -150,15 +150,14 @@
 		<div class="about-block animate-in" style="--stagger: 8">
 			<h2>Contributing</h2>
 			<p>
-				Conary is open source and welcomes contributions. The codebase is well-structured
-				with thousands of tests across unit, integration, and harness coverage, comprehensive CI (clippy, test,
-				and release workflows), and good-first-issue labels for newcomers.
+				Conary is open source and welcomes contributions. The repository includes unit,
+				integration, and harness coverage plus formatting, lint, test, documentation-truth,
+				and release workflows. Open issues and the contributing guide are the current entry points.
 			</p>
 			<div class="about-links">
 				<a href="https://github.com/ConaryLabs/Conary" target="_blank" rel="noopener noreferrer" class="btn btn-outline">GitHub</a>
 				<a href="https://github.com/ConaryLabs/Conary/blob/main/CONTRIBUTING.md" target="_blank" rel="noopener noreferrer" class="btn btn-outline">Contributing Guide</a>
-				<a href="https://github.com/ConaryLabs/Conary/discussions" target="_blank" rel="noopener noreferrer" class="btn btn-outline">Discussions</a>
-				<a href="https://github.com/ConaryLabs/Conary/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22" target="_blank" rel="noopener noreferrer" class="btn btn-outline">Good First Issues</a>
+				<a href="https://github.com/ConaryLabs/Conary/issues" target="_blank" rel="noopener noreferrer" class="btn btn-outline">Issues</a>
 			</div>
 		</div>
 	</div>

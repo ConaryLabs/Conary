@@ -795,8 +795,8 @@ mod tests {
         distros.insert(
             "fedora44".to_string(),
             DistroConfig {
-                remi_distro: "fedora".to_string(),
-                repo_name: "fedora-remi".to_string(),
+                remi_distro: "fedora-44".to_string(),
+                repo_name: "remi".to_string(),
                 containerfile: None,
                 test_packages: vec![TestPackage {
                     package: "conary-test-fixture".to_string(),

@@ -5,7 +5,7 @@ edition = "2024"
 rust-version = "1.96"
 authors = ["Conary Contributors"]
 description = "Remi package server for Conary"
-license = "MIT OR Apache-2.0"
+license = "MIT"
 
 [dependencies]
 conary-bootstrap = { path = "../../crates/conary-bootstrap" }

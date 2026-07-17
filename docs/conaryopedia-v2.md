@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-07-15
-revision: 18
-summary: Remove the dead local link while retaining historical lineage context
+last_updated: 2026-07-18
+revision: 19
+summary: Document profile-aware initialization and packaged-host privileges
 ---
 
 # Conaryopedia v2
@@ -96,7 +96,10 @@ A dependency can be **promoted** to explicit if the user later installs it by na
 
 ### 1.2 Changesets
 
-A **changeset** is an atomic transaction. Every operation that modifies system state -- install, remove, update, rollback -- creates a changeset. This is the mechanism that prevents half-configured systems.
+A **changeset** is a durable transaction record. Operations that modify system
+state create changesets so pending, applied, failed, and rolled-back outcomes
+remain explicit. A changeset by itself is not a guarantee that every live-root
+side effect can be rolled back automatically.
 
 A changeset records:
 
@@ -112,17 +115,16 @@ A changeset records:
 2. Conary creates a changeset (status: pending)
 3. Package content is verified and stored in CAS
 4. The database transaction records the package/file ownership state
-5. A complete composefs generation artifact is built from CAS and DB state
-6. `/conary/current` and boot state are updated atomically for the next boot
+5. The selected execution path either applies guarded live-root changes or builds a complete generation artifact
+6. Generation-backed paths validate artifacts before updating `/conary/current` and boot state
 7. The changeset is marked "applied" with the matching system state snapshot
 ```
 
-If *anything* fails at steps 3-6, the operation fails closed -- partial
-generation artifacts are removed, database changes are reverted, and the
-changeset is marked accordingly. Public runtime mutation does not fall back to
-direct live-root file deployment. The `tx_uuid` ensures that even if the
-process crashes mid-transaction, recovery can identify and clean up incomplete
-work.
+Failure handling is specific to the execution path. Database work rolls back
+before commit, live-root paths use their mutation journal where supported, and
+generation paths validate artifacts before pointer updates. The changeset and
+`tx_uuid` preserve enough correlation for recovery and diagnosis; they do not
+turn every external scriptlet or host-side effect into a reversible action.
 
 #### Rollback
 
@@ -330,13 +332,17 @@ Chunking provides implicit delta compression: when a file changes between versio
 
 ### 1.8 System State
 
-A **system state** is a snapshot of every package installed on the system at a point in time. States are created automatically after each changeset is applied.
+A **system state** records package membership at a point in time. Some command
+paths create states as part of their lifecycle, and operators can create manual
+states. Snapshot work can be deferred when a command cannot complete that
+follow-up safely, so a changeset does not by itself prove that a new state
+exists.
 
 ```bash
 conary system state list          # Show all snapshots
 conary system state show 12       # Details of state 12
 conary system state diff 5 8      # What changed between states 5 and 8
-conary system state rollback 5 --yes # Return to state 5
+conary system state rollback 5 --yes # Reconcile toward recorded state 5
 ```
 
 Each state records:
@@ -348,7 +354,11 @@ Each state records:
 - The **package count**
 - A complete member list: every trove name, version, architecture, and install reason
 
-States enable time travel. You can compare any two states to see exactly what changed, or roll back to any previous state. State pruning (`conary system state prune`) removes old snapshots to reclaim space while preserving the ability to roll back to recent states.
+States let you compare recorded package membership and plan reconciliation to a
+previous record. They are not universal filesystem snapshots, and rollback
+availability depends on the command's recorded evidence and recovery boundary.
+State pruning (`conary system state prune`) removes older records while keeping
+the configured recent set.
 
 ### 1.9 Dependencies
 
@@ -420,21 +430,35 @@ Collections are the building block for defining system roles. A server might use
 
 This chapter covers the day-to-day operations of managing packages on a Conary system: installing, removing, updating, searching, querying, and maintaining system state.
 
+Except where a command explicitly uses a custom `--db-path`, examples in this
+chapter operate on the default system database and assume a root shell. On a
+packaged host, prefix them with `sudo`, as shown in the public tester guide.
+
 ### 2.1 Initialization
 
 Before Conary can manage packages, its database must be initialized:
 
 ```bash
-conary system init
+sudo conary system init --profile fedora-44
 ```
 
-This creates the SQLite database at `/var/lib/conary/conary.db` and sets up all tables (currently schema v77). The database is the single source of truth for all package state -- there are no configuration files for runtime state. Recovery metadata is SQLite-native: first-wave adoption and unadoption paths write checkpoint backups under the runtime root, and generation publication writes a DB backup under `/conary/generations/<n>/state/`.
+Use `--profile ubuntu-26.04` or `--profile arch` on those supported hosts. This
+creates the SQLite database at `/var/lib/conary/conary.db`, configures Remi and
+only the selected profile's native repositories, and sets up all tables
+(currently schema v77). The database is the single source of truth for all
+package state -- there are no configuration files for runtime state. Recovery
+metadata is SQLite-native: first-wave adoption and unadoption paths write
+checkpoint backups under the runtime root, and generation publication writes a
+DB backup under `/conary/generations/<n>/state/`.
 
 You can specify an alternate database path with `-d`:
 
 ```bash
-conary system init -d /path/to/custom.db
+conary system init --profile fedora-44 --db-path /path/to/custom.db
 ```
+
+An explicit custom database remains available for isolated source and test
+workflows; use the exact profile that matches the data being exercised.
 
 ### 2.2 Installing Packages
 
@@ -486,7 +510,7 @@ When installing a legacy package (RPM/DEB/Arch), you can convert it to CCS forma
 conary install nginx --convert-to-ccs --yes
 ```
 
-This enables CAS deduplication, component selection, and atomic transactions for the installed package. Scriptlets can be captured and converted to declarative hooks during conversion flows; imperative scriptlets that still run at install time use the scriptlet sandbox controls below.
+This enables CAS deduplication, component selection, and changeset-backed state tracking for the installed package. Scriptlets can be captured and converted to declarative hooks during conversion flows; imperative scriptlets that still run at install time use the scriptlet sandbox controls below.
 
 #### What Happens During Install
 
@@ -496,8 +520,8 @@ This enables CAS deduplication, component selection, and atomic transactions for
 4. **CAS storage**: File content is stored under the runtime CAS
 5. **Pre-scriptlet preflight**: Protected live-root scriptlets are checked before mutation
 6. **Pre-scriptlets**: Package pre-install hooks run before file/DB mutation
-7. **Changeset commit**: Package DB/file state is committed as an atomic changeset
-8. **Generation publication**: A complete composefs artifact is built from CAS and DB state
+7. **Changeset commit**: Package DB/file state is recorded in the operation's changeset
+8. **Generation publication**: When requested by the execution path, a complete composefs artifact is built from CAS and DB state
 9. **Post-scriptlets**: Package post hooks run with structured warning metadata for true nonzero exits
 10. **Triggers**: File-pattern triggers fire (e.g., `ldconfig` for new `.so` files)
 
@@ -710,7 +734,7 @@ SQLite-native backups recover Conary manager visibility for packages and generat
 
 #### Converting Adopted Packages to CCS
 
-Bulk convert adopted packages to CCS format for deduplication and atomic transactions:
+Bulk convert adopted packages to CCS format for deduplication and changeset-backed management:
 
 ```bash
 conary system adopt --convert                # Convert all adopted packages
@@ -745,7 +769,10 @@ conary system adopt --sync-hook --remove-hook  # Remove them
 
 ### 2.10 System State and Rollback
 
-Every operation that modifies the system creates a state snapshot (see Chapter 1.8). These snapshots enable time-travel:
+State-producing operations and explicit manual snapshots create package-state
+records (see Chapter 1.8). These records support inspection, comparison, and
+bounded reconciliation; they do not imply that every live-host mutation has a
+complete automatic snapshot.
 
 #### Listing States
 
@@ -775,11 +802,14 @@ Shows packages added, removed, and version-changed between two states.
 #### Rolling Back
 
 ```bash
-conary system state revert 5 --yes # Return to state 5
+conary system state revert 5 --yes                         # Reconcile toward recorded state 5
 conary system state revert 5 --dry-run                     # Preview the rollback
 ```
 
-Reverting creates a new changeset that undoes all changes since state 5. This means the revert itself can be reverted -- no operation is destructive.
+Reverting creates a new changeset that plans reconciliation toward the recorded
+package membership. Its dry run should be reviewed first, and its guarantees are
+limited to the evidence and mutation boundary owned by that command; it is not a
+promise to undo every intervening filesystem or service-side effect.
 
 You can also roll back a specific changeset:
 
@@ -1248,7 +1278,11 @@ conary model apply --no-autoremove --yes # Don't clean up orphans after
 conary model apply --offline --yes # Use cached remote data only
 ```
 
-Apply performs the diff and then executes all actions as a single atomic changeset. If anything fails, the entire operation rolls back.
+Apply performs the diff and executes actions through the shared transactional
+paths. Preflight failures occur before mutation; a later action can still
+produce an explicitly reported partial outcome when an external or live-root
+effect cannot be reversed. Preview the plan first and inspect the recorded
+history after apply.
 
 The `--strict` flag is important: without it, packages not mentioned in the model are left alone. With `--strict`, any package not in the install list (and not a dependency of something in the list) is removed. This is the "cattle, not pets" mode for managed servers.
 
@@ -2150,7 +2184,11 @@ Conary's build pipeline follows a two-phase model inspired by BuildStream, separ
                                              +--------------------------------+
 ```
 
-This separation guarantees reproducibility: once all sources are cached, the build phase has no network access and cannot introduce external dependencies. The `--fetch-only` flag enables pre-fetching for air-gapped builds.
+This separation removes network access from the build phase once sources are
+cached, reducing one important source of nondeterminism and undeclared
+dependencies. Reproducibility still depends on pinned inputs, toolchains, and
+the declared build environment. The `--fetch-only` flag enables pre-fetching
+for air-gapped builds.
 
 ### 5.5 Kitchen Configuration
 
@@ -2605,7 +2643,7 @@ releases = ["latest"]
 arches = ["x86_64"]
 
 [upstream.ubuntu]
-base_url = "http://archive.ubuntu.com/ubuntu"
+base_url = "https://archive.ubuntu.com/ubuntu"
 releases = ["resolute"]
 arches = ["amd64"]
 
@@ -4227,7 +4265,10 @@ through `--sandbox=never` plus the live-host mutation acknowledgement and record
 
 ## 7.7 Package DNA (Provenance)
 
-Conary tracks the complete provenance of every package through a 4-layer "Package DNA" system (`src/provenance/`). Each layer captures a different aspect of the package's lineage.
+Conary can track package provenance through a 4-layer "Package DNA" system
+(`src/provenance/`). Each layer captures a different aspect of the package's
+lineage, but imported, legacy, or incompletely attested packages can have
+missing fields and must be reported as such.
 
 ### Layer 1: Source Provenance
 
@@ -4615,9 +4656,9 @@ Layer 1: TUF Trust
   Rollback, freeze, and mix-and-match attacks are detected.
 
 Layer 2: Package DNA
-  Every package carries its complete provenance chain.
-  Build dependencies include recursive DNA hashes.
-  Tampering changes the DNA hash, which is detectable.
+  Packages carry the provenance evidence available for their build or import.
+  Attested builds can include recursive dependency DNA hashes.
+  Missing provenance stays visible instead of being inferred as complete.
 
 Layer 3: Capability Declarations
   Packages declare what they need (network, filesystem, syscalls).
@@ -5594,7 +5635,11 @@ model/config file path and prints the file it changed.
 
 ### 8.7 Transaction Engine: Composefs-Native Operations
 
-Every package operation in Conary runs inside a transaction (`conary-core/src/transaction/mod.rs`). The composefs-native transaction engine guarantees that the system is never left in a half-installed state, even if power is lost mid-operation.
+Package operations use the transaction machinery in
+`conary-core/src/transaction/mod.rs` to record state and coordinate recovery.
+Database transactions, guarded live-root journals, and composefs generation
+publication cover different failure boundaries; power-loss recovery must be
+proved for the specific path rather than assumed for every host-side effect.
 
 #### State Machine
 
@@ -5650,7 +5695,7 @@ These systems compose into workflows that span the entire lifecycle:
 **Bootstrap a new distro**:
 1. Bootstrap builds a minimal system from source (8.1)
 2. Recipes define how each package is built (8.5)
-3. The transaction engine ensures each package installation is atomic (8.7)
+3. The transaction engine records each package installation and its recovery state (8.7)
 4. The system model describes the final desired state (8.4)
 
 **Deploy to a fleet**:
@@ -5681,13 +5726,19 @@ Conary is a ground-up rethinking of Linux package management. It doesn't patch o
 
 **Content-addressable storage** means every file is stored by its hash. Deduplication is automatic, verification is intrinsic, and any node that has a chunk can serve it.
 
-**Atomic transactions** mean the system is never half-installed. Power loss during an upgrade is a recoverable event, not a crisis.
+**Explicit transaction boundaries** make pending, applied, failed, and
+rolled-back state inspectable. Database, live-root, and generation paths have
+different recovery guarantees, so the preview does not claim that every host
+mutation can be rolled back automatically.
 
 **Multi-format ingestion** means Conary doesn't fight the existing ecosystem. RPM, DEB, and Arch packages are converted to a unified format, preserving their metadata while gaining CAS benefits.
 
 **Declarative state** means you describe what you want, not how to get there. The system model converges reality to match your specification.
 
-**Defense-in-depth security** means capabilities, kernel enforcement, provenance tracking, and TUF verification all work together so that no single point of compromise is fatal.
+**Defense-in-depth security** means capabilities, kernel enforcement,
+provenance tracking, and TUF verification provide overlapping checks. No
+single control is treated as sufficient, and a compromised trusted component
+can still be security-critical.
 
 **Federation** means bandwidth scales with the network, not the origin server. Every cache is a potential source for its neighbors.
 

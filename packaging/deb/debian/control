@@ -7,8 +7,8 @@ Standards-Version: 4.6.2
 Homepage: https://github.com/ConaryLabs/Conary
 
 Package: conary
-Architecture: amd64 arm64
+Architecture: amd64
 Depends: ${shlibs:Depends}, ${misc:Depends}
-Description: Modern package manager with atomic operations and delta updates
- Conary brings atomic transactions, automatic rollback, and delta updates
- to Linux systems. Works alongside existing package managers (DNF, APT, pacman).
+Description: Early-preview Linux package manager with native-package adoption
+ Conary tracks and reversibly adopts packages from DNF, APT, and pacman, with
+ guarded dry-run and apply workflows for package changes.

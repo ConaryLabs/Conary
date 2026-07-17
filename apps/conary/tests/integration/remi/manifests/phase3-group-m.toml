@@ -17,19 +17,19 @@ phase = 3
 small_package = "tree"
 small_binary = "/usr/bin/tree"
 dep_heavy_package = "jq"
-distro_repo = "fedora-remi"
+distro_repo = "remi"
 
 [distro_overrides."ubuntu-26.04"]
 small_package = "patch"
 small_binary = "/usr/bin/patch"
 dep_heavy_package = "jq"
-distro_repo = "ubuntu-remi"
+distro_repo = "remi"
 
 [distro_overrides.arch]
 small_package = "tree"
 small_binary = "/usr/bin/tree"
 dep_heavy_package = "jq"
-distro_repo = "arch-remi"
+distro_repo = "remi"
 
 # --------------------------------------------------------------------------
 # T138: Install real CCS package

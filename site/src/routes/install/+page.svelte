@@ -24,9 +24,10 @@
 			</p>
 			<p class="install-note">
 				Use the pinned
-				<a href="https://github.com/ConaryLabs/Conary/releases/tag/v0.9.2" target="_blank" rel="noopener noreferrer">v0.9.2 release</a>
+				<a href="https://github.com/ConaryLabs/Conary/releases/tag/v0.11.2" target="_blank" rel="noopener noreferrer">v0.11.2 release</a>
 				on a VM or non-critical host. Verify SHA256SUMS before installing the
-				Fedora 44 RPM, Ubuntu 26.04 LTS DEB, or Arch package.
+				Fedora 44 RPM, Ubuntu 26.04 LTS DEB, or Arch package. The package
+				initializes the system database for that exact host profile.
 			</p>
 			<div class="terminal">
 				<div class="terminal-header">
@@ -38,43 +39,45 @@
 				<div class="terminal-body">
 					<div class="terminal-line">
 						<span class="t-prompt">$</span>
-						<span class="t-cmd">conary system init</span>
+						<span class="t-cmd">sudo conary repo sync remi</span>
 					</div>
 					<div class="terminal-line">
 						<span class="t-prompt">$</span>
-						<span class="t-cmd">conary repo add remi https://remi.conary.io</span>
+						<span class="t-cmd">sudo conary install htop --dry-run</span>
 					</div>
 					<div class="terminal-line">
 						<span class="t-prompt">$</span>
-						<span class="t-cmd">conary repo sync</span>
+						<span class="t-cmd">sudo conary install htop --yes</span>
 					</div>
 					<div class="terminal-line">
 						<span class="t-prompt">$</span>
-						<span class="t-cmd">conary system adopt --system --dry-run</span>
-					</div>
-					<div class="terminal-line">
-						<span class="t-prompt">$</span>
-						<span class="t-cmd">conary system adopt --status</span>
+						<span class="t-cmd">sudo conary system adopt --system --dry-run</span>
 					</div>
 					<div class="terminal-line t-blank"></div>
 					<div class="terminal-line">
 						<span class="t-prompt">$</span>
-						<span class="t-cmd">conary system adopt --system</span>
+						<span class="t-cmd">sudo conary system adopt --system</span>
+					</div>
+					<div class="terminal-line">
+						<span class="t-prompt">$</span>
+						<span class="t-cmd">sudo conary system adopt --status</span>
 					</div>
 					<div class="terminal-line t-output">Use --dry-run first; unadopt requires --yes when applying the reversal.</div>
 					<div class="terminal-line">
 						<span class="t-prompt">$</span>
-						<span class="t-cmd">conary system unadopt --all --dry-run</span>
+						<span class="t-cmd">sudo conary system unadopt --all --dry-run</span>
 					</div>
 					<div class="terminal-line">
 						<span class="t-prompt">$</span>
-						<span class="t-cmd">conary system unadopt --all --yes</span>
+						<span class="t-cmd">sudo conary system unadopt --all --yes</span>
 					</div>
 				</div>
 			</div>
 			<p class="install-note">
 				Before selecting a Conary generation, unadopt removes Conary tracking without
-				deleting native package files.
+				deleting native package files. The
+				<a href="https://github.com/ConaryLabs/Conary/blob/main/docs/guides/agent-assisted-tester-loop.md" target="_blank" rel="noopener noreferrer">tester guide</a>
+				lists the full supported command sequence and what feedback to capture.
 			</p>
 		</div>
 
@@ -83,9 +86,9 @@
 			<h2>Developer Build</h2>
 			<p class="install-note">
 				Source builds remain available for contributors. Requires Rust 1.96+,
-				SQLite development headers, and Linux. The basic package loop does not
-				require composefs; generation-model features need Linux 6.2+ with
-				composefs and EROFS support. Conary uses Linux-specific kernel APIs and
+				Git, and Linux. The basic package loop does not require composefs;
+				generation-model experiments need Linux 6.2+ plus compatible EROFS,
+				composefs, and fs-verity support. Conary uses Linux-specific kernel APIs and
 				does not currently build on macOS or Windows.
 			</p>
 			<div class="terminal">
@@ -106,14 +109,22 @@
 					</div>
 					<div class="terminal-line">
 						<span class="t-prompt">$</span>
-						<span class="t-cmd">cargo build --release</span>
+						<span class="t-cmd">cargo build -p conary --release</span>
 					</div>
 					<div class="terminal-line">
 						<span class="t-prompt">$</span>
 						<span class="t-cmd">sudo install -m 755 target/release/conary /usr/local/bin/</span>
 					</div>
+					<div class="terminal-line">
+						<span class="t-prompt">$</span>
+						<span class="t-cmd">sudo conary system init --profile fedora-44</span>
+					</div>
 				</div>
 			</div>
+			<p class="install-note">
+				The initialization command above is the Fedora 44 example. Use
+				<code>--profile ubuntu-26.04</code> or <code>--profile arch</code> on those hosts.
+			</p>
 		</div>
 
 		<!-- First steps -->
@@ -132,24 +143,15 @@
 						<span class="t-prompt">$</span>
 						<span class="t-cmd">conary --version</span>
 					</div>
-					<div class="terminal-line t-output">conary 0.9.2</div>
+					<div class="terminal-line t-output">conary 0.11.2</div>
 					<div class="terminal-line t-blank"></div>
 					<div class="terminal-line">
 						<span class="t-prompt">$</span>
-						<span class="t-cmd">conary repo add remi https://remi.conary.io</span>
+						<span class="t-cmd">sudo conary repo sync remi</span>
 					</div>
-					<div class="terminal-line t-output t-success">Repository added.</div>
-					<div class="terminal-line t-blank"></div>
 					<div class="terminal-line">
 						<span class="t-prompt">$</span>
-						<span class="t-cmd">conary repo sync</span>
-					</div>
-					<div class="terminal-line t-output">Syncing metadata from 1 repository...</div>
-					<div class="terminal-line t-output t-success">Sync complete. Supported upstream metadata is ready.</div>
-					<div class="terminal-line t-blank"></div>
-					<div class="terminal-line">
-						<span class="t-prompt">$</span>
-						<span class="t-cmd">conary install htop --dry-run</span>
+						<span class="t-cmd">sudo conary install htop --dry-run</span>
 					</div>
 					<div class="terminal-line t-output">Resolving dependencies...</div>
 					<div class="terminal-line t-output t-success">No host files changed.</div>
@@ -161,10 +163,10 @@
 			<h2>Distribution Packages</h2>
 			<p class="install-note">
 				Native packages are published on the
-				<a href="https://github.com/ConaryLabs/Conary/releases/tag/v0.9.2" target="_blank" rel="noopener noreferrer">v0.9.2 release</a>.
-				Use <code>conary-0.9.2-1.fc44.x86_64.rpm</code>,
-				<code>conary_0.9.2-1_amd64.deb</code>, or
-				<code>conary-0.9.2-1-x86_64.pkg.tar.zst</code> for the matching test VM.
+				<a href="https://github.com/ConaryLabs/Conary/releases/tag/v0.11.2" target="_blank" rel="noopener noreferrer">v0.11.2 release</a>.
+				Use <code>conary-0.11.2-1.fc44.x86_64.rpm</code>,
+				<code>conary_0.11.2-1_amd64.deb</code>, or
+				<code>conary-0.11.2-1-x86_64.pkg.tar.zst</code> for the matching test VM.
 			</p>
 			<div class="distro-cards">
 				<div class="distro-card distro-fedora">

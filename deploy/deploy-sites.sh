@@ -57,16 +57,16 @@ stage_and_publish() {
 }
 
 deploy_site() {
-    echo "[site] Building conary.io from site/..."
-    (cd "$REPO_ROOT/site" && npm run build)
+    echo "[site] Checking and building conary.io from site/..."
+    (cd "$REPO_ROOT/site" && npm run check && npm run build)
     echo "[site] Deploying to $REMI_HOST:/conary/site/"
     stage_and_publish "site" "$REPO_ROOT/site/build" "site"
     echo "[site] conary.io deployed."
 }
 
 deploy_packages() {
-    echo "[packages] Building remi.conary.io from web/..."
-    (cd "$REPO_ROOT/web" && npm run build)
+    echo "[packages] Checking and building remi.conary.io from web/..."
+    (cd "$REPO_ROOT/web" && npm run check && npm run build)
     echo "[packages] Deploying to $REMI_HOST:/conary/web/"
     stage_and_publish "packages" "$REPO_ROOT/web/build" "web"
     echo "[packages] remi.conary.io deployed."

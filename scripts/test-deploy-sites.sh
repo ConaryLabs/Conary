@@ -28,6 +28,10 @@ log="${tmpdir}/commands.log"
 cat >"$tmpdir/bin/npm" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
+printf 'npm %s %s\n' "$(basename "$PWD")" "$*" >>"$DEPLOY_SITES_TEST_LOG"
+if [[ "$1" == "run" && "$2" == "check" ]]; then
+    exit 0
+fi
 if [[ "$1" == "run" && "$2" == "build" ]]; then
     mkdir -p build/assets
     printf '<!doctype html>\n' >build/index.html
@@ -95,6 +99,10 @@ grep -q 'deploy-site site /tmp/conary-site.deploy.TEST' "$log" ||
     fail "site deploy did not call the deploy helper"
 grep -q 'site/build/ peter@ssh.conary.io:/tmp/conary-site.deploy.TEST/' "$log" ||
     fail "site deploy did not stage build output with rsync"
+grep -q '^npm site run check$' "$log" ||
+    fail "site deploy did not run the frontend check"
+grep -q '^npm site run build$' "$log" ||
+    fail "site deploy did not run the frontend build"
 
 : >"$log"
 
@@ -108,5 +116,9 @@ grep -q 'deploy-site web /tmp/conary-web.deploy.TEST' "$log" ||
     fail "packages deploy did not call the deploy helper"
 grep -q 'web/build/ peter@ssh.conary.io:/tmp/conary-web.deploy.TEST/' "$log" ||
     fail "packages deploy did not stage build output with rsync"
+grep -q '^npm web run check$' "$log" ||
+    fail "packages deploy did not run the frontend check"
+grep -q '^npm web run build$' "$log" ||
+    fail "packages deploy did not run the frontend build"
 
 echo "deploy sites wrapper smoke passed"

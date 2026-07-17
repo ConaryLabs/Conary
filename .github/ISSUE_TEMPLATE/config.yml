@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Setup questions and discussion
+    url: https://github.com/ConaryLabs/Conary/discussions
+    about: Ask for help or discuss an idea before filing a bug.
+  - name: Report a security vulnerability privately
+    url: https://github.com/ConaryLabs/Conary/security/advisories/new
+    about: Do not disclose security vulnerabilities in a public issue.

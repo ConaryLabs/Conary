@@ -33,9 +33,8 @@ override_dh_auto_install:
 	target/release/conary system completions zsh  > debian/conary/usr/share/zsh/vendor-functions/_conary
 	target/release/conary system completions fish > debian/conary/usr/share/fish/vendor_completions.d/conary.fish
 
-	# License files
-	install -Dpm 0644 LICENSE-MIT debian/conary/usr/share/doc/conary/LICENSE-MIT
-	install -Dpm 0644 LICENSE-APACHE debian/conary/usr/share/doc/conary/LICENSE-APACHE
+	# License
+	install -Dpm 0644 LICENSE debian/conary/usr/share/doc/conary/LICENSE
 
 override_dh_auto_clean:
 	cargo clean 2>/dev/null || true

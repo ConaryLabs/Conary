@@ -22,6 +22,10 @@ The enabling sequence is:
 3. W2 Preview Release and Remi Readiness
 4. W3 First External Tester Loop
 
+W3 is active, but outreach has not started. Its W3a public-readiness gate must
+publish and verify the current onboarding release before the manual tester
+posts begin.
+
 Detailed maturity, workstream status, proof, blockers, and longer horizons live
 in the [development roadmap](docs/roadmaps/development-roadmap.md).
 

@@ -5,7 +5,7 @@ edition = "2024"
 rust-version = "1.96"
 authors = ["Conary Contributors"]
 description = "Transport-neutral agent operation contract for Conary"
-license = "MIT OR Apache-2.0"
+license = "MIT"
 
 [dependencies]
 schemars.workspace = true

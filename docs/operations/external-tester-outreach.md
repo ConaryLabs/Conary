@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-07-17
+last_updated: 2026-07-18
 status: scheduled
 summary: Multi-venue launch packet for the first external tester loop
 ---
@@ -8,9 +8,10 @@ summary: Multi-venue launch packet for the first external tester loop
 
 > **SCHEDULED FOR MANUAL LAUNCH:** begin with Show HN on Monday, 2026-07-20 at
 > 15:00 CEST (`13:00 UTC`), then use the venue-specific Reddit follow-ups below.
-> W2's `v0.11.1` artifact, signature, deployment, installed-binary self-update,
-> compatible Remi, rollback, prewarm, and clean-host evidence are recorded. Do
-> not publish automatically.
+> The W2 compatible-Remi, rollback, prewarm, and clean-host baselines are
+> recorded. The `v0.11.2` onboarding release and its artifact, installed-package,
+> and self-update evidence remain a publication gate. Do not publish
+> automatically or before that gate closes.
 
 The maintainer posts this manually and remains available to answer comments.
 After submission, record the actual HN URL and timestamp in the milestone
@@ -49,15 +50,16 @@ non-critical host, not an irreplaceable daily driver.
 
 The bounded loop is:
 
-  conary install htop --dry-run
-  conary install htop --yes
-  conary system adopt --system --dry-run
-  conary system adopt --system
-  conary list
-  conary search htop
-  conary update --dry-run
-  conary system unadopt --all --dry-run
-  conary system unadopt --all --yes
+  sudo conary repo sync remi
+  sudo conary install htop --dry-run
+  sudo conary install htop --yes
+  sudo conary system adopt --system --dry-run
+  sudo conary system adopt --system
+  sudo conary list
+  sudo conary search htop
+  sudo conary update --dry-run
+  sudo conary system unadopt --all --dry-run
+  sudo conary system unadopt --all --yes
 
 The agent-assisted walkthrough, including downloads and checksum verification:
 https://github.com/ConaryLabs/Conary/blob/main/docs/guides/agent-assisted-tester-loop.md
@@ -65,8 +67,8 @@ https://github.com/ConaryLabs/Conary/blob/main/docs/guides/agent-assisted-tester
 Host compatibility checklist:
 https://github.com/ConaryLabs/Conary/blob/main/docs/guides/compatibility-checklist.md
 
-Pinned v0.11.1 release:
-https://github.com/ConaryLabs/Conary/releases/tag/v0.11.1
+Pinned v0.11.2 release:
+https://github.com/ConaryLabs/Conary/releases/tag/v0.11.2
 
 Privacy-safe feedback form:
 https://github.com/ConaryLabs/Conary/issues/new?template=beta_feedback.md
@@ -120,8 +122,8 @@ https://github.com/ConaryLabs/Conary/blob/main/docs/guides/agent-assisted-tester
 Repository:
 https://github.com/ConaryLabs/Conary
 
-Pinned v0.11.1 release:
-https://github.com/ConaryLabs/Conary/releases/tag/v0.11.1
+Pinned v0.11.2 release:
+https://github.com/ConaryLabs/Conary/releases/tag/v0.11.2
 
 The supported test hosts are x86_64 Fedora 44, Ubuntu 26.04 LTS, and Arch
 Linux. Please use a VM, snapshot, spare system, or other non-critical host. The
@@ -174,8 +176,8 @@ https://github.com/ConaryLabs/Conary/blob/main/docs/guides/agent-assisted-tester
 Repository and source:
 https://github.com/ConaryLabs/Conary
 
-Pinned v0.11.1 release:
-https://github.com/ConaryLabs/Conary/releases/tag/v0.11.1
+Pinned v0.11.2 release:
+https://github.com/ConaryLabs/Conary/releases/tag/v0.11.2
 
 The supported hosts are x86_64 Fedora 44, Ubuntu 26.04 LTS, and Arch Linux.
 Please use a VM, snapshot, spare system, or other non-critical host. This is an
@@ -209,13 +211,18 @@ and failed attempts are useful evidence.
 
 ## Launch Checklist
 
-- [x] Replace every release reference with the exact W2 release.
+- [x] Replace every launch-copy release reference with the `v0.11.2` onboarding
+  release candidate.
 - [x] Link the release artifact matrix and checksum/signature instructions.
 - [x] Pin the compatible Remi commit and prewarmed package set.
 - [x] Link the compatibility checklist, tester guide, and beta-feedback template.
-- [x] Record the clean-host smoke and rollback evidence.
+- [x] Retain the W2 clean-host and rollback baselines.
 - [x] Record Show HN, r/codex, r/ClaudeAI, and their planned launch timestamps
   in the milestone tracker.
+- [ ] Publish `v0.11.2` and record its exact tag, workflow runs, checksums,
+  detached CCS signature, profile-correct native-package initialization, and
+  installed-binary self-update evidence in the milestone tracker and artifact
+  matrix.
 - [ ] Re-check each venue's current rules and account eligibility immediately
   before posting.
 - [ ] After publication, record every actual post URL and launch timestamp.
