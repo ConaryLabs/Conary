@@ -104,7 +104,7 @@ case "${1:-}" in
         if [[ "${RELEASE_FIXTURE_STALE_MAN:-0}" == "1" ]]; then
             version="0.7.0"
         fi
-        printf '.TH conary 1 "" "conary %s"\n' "$version" > apps/conary/man/conary.1
+        printf '.TH conary 1 "" "conary %s" \n' "$version" > apps/conary/man/conary.1
         ;;
     *)
         printf 'unexpected cargo fixture command: %s\n' "$*" >&2
@@ -465,6 +465,9 @@ test_release_conary_regenerates_and_stages_man_page() {
         "$(<"$repo/apps/conary/man/conary.1")" \
         "conary 0.7.1" \
         "generated man page should contain the release version"
+    if grep -Eq '[[:blank:]]$' "$repo/apps/conary/man/conary.1"; then
+        fail "generated man page should not contain trailing whitespace"
+    fi
 
     committed_files="$(git -C "$repo" show --pretty=format: --name-only HEAD)"
     assert_contains "$committed_files" \

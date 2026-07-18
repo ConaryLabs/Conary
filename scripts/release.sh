@@ -397,6 +397,9 @@ regenerate_conary_man_page() {
     cargo build -p conary --bin conary --quiet
 
     [[ -s "$man_page" ]] || die "Conary man-page generation did not produce ${man_page}"
+    # Keep the tracked release artifact diff-clean when the roff generator pads
+    # a field with spaces or tabs.
+    sed -i 's/[[:blank:]]\+$//' "$man_page"
     grep -Fq -- "conary ${new_version}" "$man_page" ||
         die "generated ${man_page} does not contain Conary version ${new_version}"
 
