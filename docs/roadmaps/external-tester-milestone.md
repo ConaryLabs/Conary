@@ -44,7 +44,7 @@ useful evidence but does not count as a completion.
   | `conary-0.11.3-1.fc44.x86_64.rpm` | pending |
   | `conary-0.11.3.ccs` | pending |
   | `conary_0.11.3-1_amd64.deb` | pending |
-  | `conary-0.11.3.metadata.json` | pending |
+  | `metadata.json` | pending |
 
   Offline verification of `conary-0.11.3.ccs.sig` against the published CCS is
   pending. `SHA256SUMS` and the detached signature are the other two expected
