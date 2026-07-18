@@ -4,7 +4,7 @@
 # Builds from a vendored source tarball (no network access needed during build).
 
 pkgname=conary
-pkgver=0.11.2
+pkgver=0.11.3
 pkgrel=1
 pkgdesc='Early-preview Linux package manager with native-package adoption'
 arch=('x86_64')

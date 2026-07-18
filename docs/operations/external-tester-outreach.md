@@ -9,9 +9,14 @@ summary: Multi-venue launch packet for the first external tester loop
 > **SCHEDULED FOR MANUAL LAUNCH:** begin with Show HN on Monday, 2026-07-20 at
 > 15:00 CEST (`13:00 UTC`), then use the venue-specific Reddit follow-ups below.
 > The W2 compatible-Remi, rollback, prewarm, and clean-host baselines are
-> recorded. The immutable `v0.11.2` onboarding release and its artifact,
-> installed-package, self-update, deployment, and public-site evidence are
-> complete. Do not publish automatically or until GitHub Support has
+> recorded. The `v0.11.2` gate was reopened for `v0.11.3` after the supported
+> `htop` path exposed unreachable generic SONAME evidence; review also found an
+> inexact or ABI-unchecked critical-library fallback and discarded Arch
+> capability constraints.
+> Candidate links and filenames now target the replacement release, but its
+> exact tag, workflow runs, hashes, native-package onboarding, installed-binary
+> self-update, deployment, and public-site evidence are pending. Do not publish
+> automatically or until that evidence is complete and GitHub Support has
 > dereferenced the cached pull-request and commit views that still expose
 > pre-rewrite history and the venue-specific eligibility checks pass. Nothing
 > has been posted; the milestone tracker remains 0/10.
@@ -54,8 +59,8 @@ non-critical host, not an irreplaceable daily driver.
 The bounded loop is:
 
   sudo conary repo sync remi
-  sudo conary install htop --dry-run
-  sudo conary install htop --yes
+  sudo conary install htop --dry-run --allow-capabilities
+  sudo conary install htop --yes --allow-capabilities
   sudo conary system adopt --system --dry-run
   sudo conary system adopt --system
   sudo conary list
@@ -64,22 +69,27 @@ The bounded loop is:
   sudo conary system unadopt --all --dry-run
   sudo conary system unadopt --all --yes
 
+For htop, --allow-capabilities explicitly approves its package-declared
+capability. Review the dry-run first and run the live install only after the
+human tester approves that capability.
+
 The agent-assisted walkthrough, including downloads and checksum verification:
-https://github.com/ConaryLabs/Conary/blob/v0.11.2/docs/guides/agent-assisted-tester-loop.md
+https://github.com/ConaryLabs/Conary/blob/v0.11.3/docs/guides/agent-assisted-tester-loop.md
 
 Host compatibility checklist:
-https://github.com/ConaryLabs/Conary/blob/v0.11.2/docs/guides/compatibility-checklist.md
+https://github.com/ConaryLabs/Conary/blob/v0.11.3/docs/guides/compatibility-checklist.md
 
-Pinned v0.11.2 release:
-https://github.com/ConaryLabs/Conary/releases/tag/v0.11.2
+Pinned v0.11.3 release:
+https://github.com/ConaryLabs/Conary/releases/tag/v0.11.3
 
 Privacy-safe feedback form:
 https://github.com/ConaryLabs/Conary/issues/new?template=beta_feedback.md
 
-The release has RPM, DEB, Arch, and CCS artifacts, SHA256SUMS, and a detached
-CCS signature. I independently verified the checksums, signature, clean-host
-install path, rollback, and installed-binary self-update. It does not publish
-SBOM or provenance sidecars, which remains an explicit preview caveat.
+Before I post this copy, the v0.11.3 gate must publish RPM, DEB, Arch, and CCS
+artifacts, SHA256SUMS, and a detached CCS signature, and I must independently
+verify the checksums, signature, clean-host install path, rollback, and
+installed-binary self-update. SBOM and provenance sidecars are not planned,
+which remains an explicit preview caveat.
 
 The feedback I care about most is where adoption feels risky, where dry runs or
 warnings are unclear, which everyday package-manager operation is missing
@@ -120,18 +130,19 @@ explain each command, ask the human before every live mutation, keep a
 transcript, and draft privacy-safe feedback.
 
 Agent-assisted tester guide:
-https://github.com/ConaryLabs/Conary/blob/v0.11.2/docs/guides/agent-assisted-tester-loop.md
+https://github.com/ConaryLabs/Conary/blob/v0.11.3/docs/guides/agent-assisted-tester-loop.md
 
 Repository:
 https://github.com/ConaryLabs/Conary
 
-Pinned v0.11.2 release:
-https://github.com/ConaryLabs/Conary/releases/tag/v0.11.2
+Pinned v0.11.3 release:
+https://github.com/ConaryLabs/Conary/releases/tag/v0.11.3
 
 The supported test hosts are x86_64 Fedora 44, Ubuntu 26.04 LTS, and Arch
 Linux. Please use a VM, snapshot, spare system, or other non-critical host. The
-release has checksums and a detached CCS signature, but no SBOM or provenance
-sidecars; this is explicitly an early preview.
+v0.11.3 must have verified checksums and a detached CCS signature before this
+copy is posted. It will not have SBOM or provenance sidecars; this is explicitly
+an early preview.
 
 I'm interested in two kinds of feedback: where Conary's adoption/reversal flow
 feels unclear, and whether the repo-level instructions plus explicit human
@@ -174,18 +185,18 @@ step, ask before every live mutation, retain a transcript, and draft
 privacy-safe feedback.
 
 Agent-assisted tester guide:
-https://github.com/ConaryLabs/Conary/blob/v0.11.2/docs/guides/agent-assisted-tester-loop.md
+https://github.com/ConaryLabs/Conary/blob/v0.11.3/docs/guides/agent-assisted-tester-loop.md
 
 Repository and source:
 https://github.com/ConaryLabs/Conary
 
-Pinned v0.11.2 release:
-https://github.com/ConaryLabs/Conary/releases/tag/v0.11.2
+Pinned v0.11.3 release:
+https://github.com/ConaryLabs/Conary/releases/tag/v0.11.3
 
 The supported hosts are x86_64 Fedora 44, Ubuntu 26.04 LTS, and Arch Linux.
 Please use a VM, snapshot, spare system, or other non-critical host. This is an
-early preview: release checksums and a detached CCS signature are published,
-but SBOM and provenance sidecars are not.
+early preview: v0.11.3 checksums and a detached CCS signature must be verified
+before this copy is posted, and SBOM and provenance sidecars are not planned.
 
 The useful feedback is both product-level and workflow-level: where adoption
 or reversal feels risky, whether dry runs and warnings are clear, and whether
@@ -214,20 +225,20 @@ and failed attempts are useful evidence.
 
 ## Launch Checklist
 
-- [x] Replace every launch-copy release reference with the immutable `v0.11.2`
-  onboarding release and pin public guides to that tag.
+- [x] Replace every launch-copy release reference with the `v0.11.3` candidate
+  target and pin public guides to that prospective tag.
 - [x] Link the release artifact matrix and checksum/signature instructions.
 - [x] Pin the compatible Remi commit and prewarmed package set.
 - [x] Link the compatibility checklist, tester guide, and beta-feedback template.
-- [x] Retain the W2 clean-host and rollback baselines.
+- [x] Retain the W2 clean-host and rollback evidence as superseded baselines.
 - [x] Record Show HN, r/codex, r/ClaudeAI, and their planned launch timestamps
   in the milestone tracker.
-- [x] Publish `v0.11.2` and record its exact tag, workflow runs, checksums,
+- [ ] Publish `v0.11.3` and record its exact tag, workflow runs, checksums,
   detached CCS signature, profile-correct native-package initialization, and
   installed-binary self-update evidence in the milestone tracker and artifact
   matrix.
-- [x] Build and deploy the checked `conary.io` and `remi.conary.io` production
-  sites.
+- [ ] Build and deploy the checked `conary.io` and `remi.conary.io` production
+  sites for the exact candidate release.
 - [ ] Obtain GitHub Support confirmation that cached pre-rewrite pull-request
   and commit views have been dereferenced.
 - [ ] Re-check each venue's current rules and account eligibility immediately

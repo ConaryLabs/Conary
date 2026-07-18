@@ -2,7 +2,7 @@
 
 [![Merge validation](https://github.com/ConaryLabs/Conary/actions/workflows/merge-validation.yml/badge.svg?branch=main)](https://github.com/ConaryLabs/Conary/actions/workflows/merge-validation.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![v0.11.2](https://img.shields.io/badge/version-0.11.2-orange.svg)](CHANGELOG.md)
+[![v0.11.3](https://img.shields.io/badge/version-0.11.3-orange.svg)](CHANGELOG.md)
 
 **Website:** [conary.io](https://conary.io) | **Packages:** [remi.conary.io](https://remi.conary.io) | **Discussions:** [GitHub Discussions](https://github.com/ConaryLabs/Conary/discussions)
 
@@ -46,9 +46,9 @@ attach only a reviewed support bundle.
 ## Try It
 
 Download the pinned preview release from
-[v0.11.2](https://github.com/ConaryLabs/Conary/releases/tag/v0.11.2), verify
-`SHA256SUMS`, and install the package for your test VM. Release artifact
-expectations are tracked in
+[v0.11.3](https://github.com/ConaryLabs/Conary/releases/tag/v0.11.3) after its
+release page publishes `SHA256SUMS`, verify the package checksum, and install it
+only on a VM or non-critical host. Release artifact expectations are tracked in
 [docs/operations/release-artifact-matrix.md](docs/operations/release-artifact-matrix.md).
 
 Then try the smallest package loop:
@@ -56,10 +56,14 @@ Then try the smallest package loop:
 ```bash
 sudo conary repo list
 sudo conary repo sync remi
-sudo conary install htop --dry-run
-sudo conary install htop --yes
+sudo conary install htop --dry-run --allow-capabilities
+sudo conary install htop --yes --allow-capabilities
 sudo conary list htop --info
 ```
+
+For this package, `--allow-capabilities` explicitly approves the capability
+declared by the conversion. Review the dry-run first, and apply the live install
+only when that capability is expected.
 
 The RPM, DEB, and Arch packages initialize the root-owned system database with
 the exact host profile during installation. Do not add a second Remi source.

@@ -97,7 +97,7 @@
 			<div class="feature-card animate-in" style="--stagger: 15">
 				<h3>Preview Release</h3>
 				<p>
-					v0.11.2 publishes Fedora 44 RPM, Ubuntu 26.04 LTS DEB, Arch package,
+					v0.11.3 publishes a Fedora 44 RPM, Ubuntu 26.04 LTS DEB, Arch package,
 					CCS package, checksums, and a detached CCS signature for the first
 					external tester loop.
 				</p>

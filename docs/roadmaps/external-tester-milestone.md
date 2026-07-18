@@ -29,34 +29,36 @@ useful evidence but does not count as a completion.
 
 ## Launch Record
 
-- Pinned Conary release: immutable `v0.11.2`, published at
-  `2026-07-18T02:07:37Z`. Its annotated tag peels to exact commit
-  `df8bb13dce759180081f38c6c78506e0a182fcd8`. Release-build run
-  `29623998496` attempt 2 and deploy-and-verify run `29626490327` both passed
-  at that commit.
-- Release payload evidence: the release has seven assets. Independent downloads
-  matched all five payload entries in `SHA256SUMS`:
+- Pinned Conary release target: `v0.11.3`, not yet published or verified. The
+  `v0.11.2` gate was reopened for `v0.11.3` after the real supported `htop`
+  path exposed unreachable generic SONAME evidence; review also found an
+  inexact or ABI-unchecked critical-library fallback and discarded Arch
+  capability constraints. The exact annotated tag and commit, release-build
+  run, and deploy-and-verify run are pending.
+- Release payload evidence: seven assets are expected. Publication and
+  independent hashes for all five `SHA256SUMS` payloads are pending:
 
   | Manifest payload | SHA-256 |
   | --- | --- |
-  | `conary-0.11.2-1-x86_64.pkg.tar.zst` | `bae694e0fd02acde12ee3fdd8efe7fe31df94fb47c67b480709e26bf8bdff991` |
-  | `conary-0.11.2-1.fc44.x86_64.rpm` | `be570c4d6ace9c76f35ac85ce6d5ec07650e5d5be11ad0f3ab90af6ea22fe308` |
-  | `conary-0.11.2.ccs` | `d00702da873192b4a5ad8836658f9ea8fe1dba1fa667bccdbd105561dfe5adc0` |
-  | `conary_0.11.2-1_amd64.deb` | `b5ea9bd5d0b642b3b4a1fc6371f9563eda44fe5e18a40e4908b1f9fb09b1515f` |
-  | `conary-0.11.2.metadata.json` | `37b56b06769a05a90c767b60f6820c75b0fb8d09856cd2380f1448cb8ad882c0` |
+  | `conary-0.11.3-1-x86_64.pkg.tar.zst` | pending |
+  | `conary-0.11.3-1.fc44.x86_64.rpm` | pending |
+  | `conary-0.11.3.ccs` | pending |
+  | `conary_0.11.3-1_amd64.deb` | pending |
+  | `conary-0.11.3.metadata.json` | pending |
 
-  The detached `conary-0.11.2.ccs.sig` verified offline against the published
-  CCS with the preceding official binary. `SHA256SUMS` and the detached
-  signature are the other two assets. No SBOM or provenance sidecars are
-  published for this limited preview.
-- Installed-binary baseline: the official `v0.11.1 -> v0.11.2` Fedora RPM
-  upgrade path, using the preceding release's binary and
-  an isolated schema-77 database, detected the signed `v0.11.2` CCS with hash
-  `d00702da873192b4a5ad8836658f9ea8fe1dba1fa667bccdbd105561dfe5adc0`,
-  printed `Signature verified`, replaced itself, reported `conary 0.11.2`,
-  preserved schema 77, and then reported itself up to date. The resulting
-  binary SHA-256 was
-  `b075fc4464430bfed1342c6516b1efa193ce94fac014cb288142d2e95e01e227`.
+  Offline verification of `conary-0.11.3.ccs.sig` against the published CCS is
+  pending. `SHA256SUMS` and the detached signature are the other two expected
+  assets. No SBOM or provenance sidecars are planned for this limited preview;
+  their absence remains an explicit caveat.
+- Installed-binary evidence: pending. The preceding official binary must
+  detect and apply the signed `v0.11.3` CCS against an isolated schema-77
+  database, print `Signature verified`, report `conary 0.11.3`, preserve the
+  schema, and then report itself up to date. Record both CCS and resulting
+  binary SHA-256 values.
+- Candidate SONAME repair: the live-runtime path now requires an exact SONAME
+  cache entry and compatible ELF class, while Arch's versioned SONAME
+  capability uses its full constraint in the `pacman` proof. Release-asset and
+  supported-host `htop` evidence remain pending.
 - Compatible rewritten Remi commit:
   `27ec2eccb6befdf06d9a826b84cc5a6948eff5fb`. It and deployed pre-rewrite
   source commit `c001f8d69b9e8ef34fba39139576a9809800a9a6` have the same tree. The
@@ -65,19 +67,15 @@ useful evidence but does not count as a completion.
 - Prewarmed package set: `curl`, `htop`, `nano`, and `zstd` for Fedora, Ubuntu,
   and Arch. Eleven conversion-version-6 rows are public; Ubuntu `nano` remains
   correctly fail-closed as `private-review`.
-- Clean-host and onboarding baseline: Fedora 44 installed, executed, and
-  removed the public `htop 3.4.1` conversion after the exact public-target
-  compatibility fix. The released `v0.11.2` Arch package's actual
-  `post_install` initialized schema 77 with `system.host-profile=arch`, added
-  only the three Arch native repositories plus Remi, and left native repos
-  disabled pending signing trust. The released binary then synchronized Remi
-  and recorded 15,423 packages, all with distro `arch`.
-- Deployment baseline: deploy-and-verify reported the public self-update API at
-  `v0.11.2` with CCS SHA-256
-  `d00702da873192b4a5ad8836658f9ea8fe1dba1fa667bccdbd105561dfe5adc0`;
-  full Remi health passed 10/10. Checked production builds for both
-  `conary.io` and `remi.conary.io` completed without warnings or errors and
-  were deployed through the repository helper.
+- Superseded clean-host and onboarding baseline: the preceding release proved
+  Fedora installation/execution/removal, profile-correct Arch initialization,
+  and Arch Remi synchronization, but that evidence no longer closes the launch
+  gate after the supported `htop` SONAME flaw. Repeat the real package path and
+  released native-package initialization with the `v0.11.3` artifacts.
+- Deployment evidence: pending for `v0.11.3`. The prior self-update API, full
+  Remi-health 10/10, and checked production-site deployments remain a
+  superseded baseline; repeat deploy-and-verify, health, and checked site
+  deployment against the exact candidate release.
 - Supported hosts: Fedora 44, Ubuntu 26.04 LTS, and Arch Linux on the release's
   supported architecture and compatibility baseline.
 - Planned launch sequence, using the venue-specific copy in
@@ -90,10 +88,11 @@ useful evidence but does not count as a completion.
   | r/ClaudeAI | Wednesday, 2026-07-22 at 15:00 CEST (`13:00 UTC`) | scheduled; requires current showcase eligibility and posting-account karma over 50 |
 
 - Actual post URLs and launch timestamps: not launched. Outreach remains gated
-  until GitHub Support dereferences the cached pull-request and commit views
-  that still expose pre-rewrite history, followed by the per-venue eligibility
-  checks. Record each post immediately after submission. The three-week stall
-  clock starts from the first actual launch timestamp.
+  until the exact `v0.11.3` release evidence is complete, GitHub Support
+  dereferences the cached pull-request and commit views that still expose
+  pre-rewrite history, and the per-venue eligibility checks pass. Record each
+  post immediately after submission. The three-week stall clock starts from
+  the first actual launch timestamp.
 - Privacy-safe feedback path: the beta-feedback issue template and a reviewed
   support bundle; never request secrets, credential files, private keys, broad
   environment dumps, or a live database by default.

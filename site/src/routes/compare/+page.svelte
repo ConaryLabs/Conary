@@ -245,7 +245,7 @@
 			<div class="detail-card animate-in" style="--stagger: 11">
 				<h2>Where Conary Is Still Early</h2>
 				<p>
-					Conary is a v0.11.2 limited preview release. apt, dnf, and pacman have decades
+					Conary is a v0.11.3 limited preview release. apt, dnf, and pacman have decades
 					of battle-testing, ecosystem integration, and institutional trust. Nix has
 					a large and active community building custom packages.
 				</p>

@@ -24,7 +24,7 @@
 			</p>
 			<p class="install-note">
 				Use the pinned
-				<a href="https://github.com/ConaryLabs/Conary/releases/tag/v0.11.2" target="_blank" rel="noopener noreferrer">v0.11.2 release</a>
+				<a href="https://github.com/ConaryLabs/Conary/releases/tag/v0.11.3" target="_blank" rel="noopener noreferrer">v0.11.3 release</a>
 				on a VM or non-critical host. Verify SHA256SUMS before installing the
 				Fedora 44 RPM, Ubuntu 26.04 LTS DEB, or Arch package. The package
 				initializes the system database for that exact host profile.
@@ -43,11 +43,11 @@
 					</div>
 					<div class="terminal-line">
 						<span class="t-prompt">$</span>
-						<span class="t-cmd">sudo conary install htop --dry-run</span>
+						<span class="t-cmd">sudo conary install htop --dry-run --allow-capabilities</span>
 					</div>
 					<div class="terminal-line">
 						<span class="t-prompt">$</span>
-						<span class="t-cmd">sudo conary install htop --yes</span>
+						<span class="t-cmd">sudo conary install htop --yes --allow-capabilities</span>
 					</div>
 					<div class="terminal-line">
 						<span class="t-prompt">$</span>
@@ -74,9 +74,14 @@
 				</div>
 			</div>
 			<p class="install-note">
+				For <code>htop</code>, <code>--allow-capabilities</code> explicitly approves its
+				package-declared capability. Review the dry-run first and apply the live install
+				only after the human tester approves that capability.
+			</p>
+			<p class="install-note">
 				Before selecting a Conary generation, unadopt removes Conary tracking without
 				deleting native package files. The
-				<a href="https://github.com/ConaryLabs/Conary/blob/main/docs/guides/agent-assisted-tester-loop.md" target="_blank" rel="noopener noreferrer">tester guide</a>
+				<a href="https://github.com/ConaryLabs/Conary/blob/v0.11.3/docs/guides/agent-assisted-tester-loop.md" target="_blank" rel="noopener noreferrer">tester guide</a>
 				lists the full supported command sequence and what feedback to capture.
 			</p>
 		</div>
@@ -130,7 +135,7 @@
 		<!-- First steps -->
 		<div class="install-block animate-in" style="--stagger: 9">
 			<h2>Conary-Owned Package Check</h2>
-			<p class="install-note">After the adoption preview, try a Conary-owned dry-run before applying an install.</p>
+			<p class="install-note">After the package is installed, try a Conary-owned dry-run before applying an install.</p>
 			<div class="terminal">
 				<div class="terminal-header">
 					<span class="terminal-dot" aria-hidden="true"></span>
@@ -143,7 +148,7 @@
 						<span class="t-prompt">$</span>
 						<span class="t-cmd">conary --version</span>
 					</div>
-					<div class="terminal-line t-output">conary 0.11.2</div>
+					<div class="terminal-line t-output">conary 0.11.3</div>
 					<div class="terminal-line t-blank"></div>
 					<div class="terminal-line">
 						<span class="t-prompt">$</span>
@@ -151,7 +156,7 @@
 					</div>
 					<div class="terminal-line">
 						<span class="t-prompt">$</span>
-						<span class="t-cmd">sudo conary install htop --dry-run</span>
+						<span class="t-cmd">sudo conary install htop --dry-run --allow-capabilities</span>
 					</div>
 					<div class="terminal-line t-output">Resolving dependencies...</div>
 					<div class="terminal-line t-output t-success">No host files changed.</div>
@@ -163,10 +168,10 @@
 			<h2>Distribution Packages</h2>
 			<p class="install-note">
 				Native packages are published on the
-				<a href="https://github.com/ConaryLabs/Conary/releases/tag/v0.11.2" target="_blank" rel="noopener noreferrer">v0.11.2 release</a>.
-				Use <code>conary-0.11.2-1.fc44.x86_64.rpm</code>,
-				<code>conary_0.11.2-1_amd64.deb</code>, or
-				<code>conary-0.11.2-1-x86_64.pkg.tar.zst</code> for the matching test VM.
+				<a href="https://github.com/ConaryLabs/Conary/releases/tag/v0.11.3" target="_blank" rel="noopener noreferrer">v0.11.3 release</a>
+				as <code>conary-0.11.3-1.fc44.x86_64.rpm</code>,
+				<code>conary_0.11.3-1_amd64.deb</code>, and
+				<code>conary-0.11.3-1-x86_64.pkg.tar.zst</code> for the matching test VM.
 			</p>
 			<div class="distro-cards">
 				<div class="distro-card distro-fedora">
