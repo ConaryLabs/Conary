@@ -715,6 +715,28 @@ PY
     assert_check_release_matrix_fails "$repo" "unexpected deploy routing pair"
 }
 
+test_check_release_matrix_rejects_non_tag_static_site_checkout() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/deploy-and-verify.yml" \
+        'ref: ${{ needs.resolve.outputs.tag_name }}' \
+        'ref: main'
+
+    assert_check_release_matrix_fails "$repo" "static-site checkout must use the serialized release tag"
+}
+
+test_check_release_matrix_rejects_single_static_site_deploy() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/deploy-and-verify.yml" \
+        'bash deploy/deploy-sites.sh both' \
+        'bash deploy/deploy-sites.sh site'
+
+    assert_check_release_matrix_fails "$repo" "both-site deployment from the release tag"
+}
+
 main() {
     local -a tests=(
         test_resolve_tag_remi_canonical
@@ -753,6 +775,8 @@ main() {
         test_check_release_matrix_rejects_late_conary_release_notes
         test_check_release_matrix_rejects_missing_artifact_row
         test_check_release_matrix_rejects_unknown_deploy_route_pair
+        test_check_release_matrix_rejects_non_tag_static_site_checkout
+        test_check_release_matrix_rejects_single_static_site_deploy
     )
 
     local test_name

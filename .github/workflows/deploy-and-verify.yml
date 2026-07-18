@@ -363,6 +363,92 @@ jobs:
             echo "Response: $response" >&2
             exit 1
           fi
+      - name: Check out exact release tag for static sites
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.resolve.outputs.tag_name }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Verify exact release tag checkout
+        env:
+          TAG_NAME: ${{ needs.resolve.outputs.tag_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git tag --points-at HEAD | grep -Fx "$TAG_NAME" >/dev/null || {
+            echo "Checked-out commit is not the serialized release tag ${TAG_NAME}" >&2
+            exit 1
+          }
+      - name: Set up pinned Node.js for static sites
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: |
+            site/package-lock.json
+            web/package-lock.json
+      - name: Install locked static-site dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --prefix site
+          npm ci --prefix web
+      - name: Configure static-site deployment access
+        env:
+          REMI_SSH_KEY: ${{ secrets.REMI_SSH_KEY }}
+          REMI_SSH_TARGET: ${{ secrets.REMI_SSH_TARGET }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -n "${REMI_SSH_KEY:-}" ]] || { echo "REMI_SSH_KEY is required" >&2; exit 1; }
+
+          target="${REMI_SSH_TARGET:-peter@ssh.conary.io}"
+          [[ "$target" =~ ^[A-Za-z_][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9.-]*$ ]] || {
+            echo "REMI_SSH_TARGET must be a user@host SSH target" >&2
+            exit 1
+          }
+          host="${target#*@}"
+          key_path="${RUNNER_TEMP}/remi_site_key"
+
+          install -d -m 700 "$HOME/.ssh"
+          umask 077
+          echo "REMI_SITE_KEY_PATH=${key_path}" >> "$GITHUB_ENV"
+          printf '%s\n' "$REMI_SSH_KEY" > "$key_path"
+          ssh-keygen -y -f "$key_path" >/dev/null
+
+          known_host="$(ssh-keyscan -H "$host" 2>/dev/null)"
+          [[ -n "$known_host" ]] || { echo "Could not read SSH host key for ${host}" >&2; exit 1; }
+          printf '%s\n' "$known_host" >> "$HOME/.ssh/known_hosts"
+          {
+            printf 'Host %s\n' "$host"
+            printf '  IdentityFile %s\n' "$key_path"
+            printf '  IdentitiesOnly yes\n'
+            printf '  StrictHostKeyChecking yes\n'
+          } >> "$HOME/.ssh/config"
+          chmod 600 "$HOME/.ssh/config" "$HOME/.ssh/known_hosts"
+
+          echo "REMI_HOST=${target}" >> "$GITHUB_ENV"
+      - name: Deploy both static sites from the release tag
+        shell: bash
+        run: bash deploy/deploy-sites.sh both
+      - name: Remove static-site deployment key
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          key_path="${REMI_SITE_KEY_PATH:-}"
+          [[ -n "$key_path" ]] || exit 0
+          [[ "$key_path" == "${RUNNER_TEMP}/"* ]] || {
+            echo "Refusing to remove unexpected key path" >&2
+            exit 1
+          }
+          [[ ! -L "$key_path" ]] || { echo "Refusing to remove symlinked key path" >&2; exit 1; }
+          if [[ -f "$key_path" ]]; then
+            shred -u -- "$key_path" 2>/dev/null || {
+              : > "$key_path"
+              unlink "$key_path"
+            }
+          fi
 
   verify-remi:
     name: verify-remi
