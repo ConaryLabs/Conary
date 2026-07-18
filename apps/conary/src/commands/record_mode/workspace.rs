@@ -3,6 +3,7 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, Result};
 use tempfile::Builder;
@@ -10,6 +11,10 @@ use walkdir::WalkDir;
 
 const ACTIVE_MARKER: &str = ".conary-record-active";
 const KEEP_RAW_TRACE_MARKER: &str = ".conary-record-keep-raw-trace";
+// Directory creation and marker creation are separate syscalls. A generous
+// grace period keeps concurrent startup sweeps from treating that brief state
+// as an abandoned workspace.
+const STALE_WORKSPACE_MIN_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 
 #[derive(Debug)]
 pub(crate) struct RecordWorkspace {
@@ -28,9 +33,9 @@ impl RecordWorkspace {
             .canonicalize()
             .with_context(|| format!("failed to canonicalize source {}", source.display()))?;
         let private_temp = Builder::new().prefix("conary-record-").tempdir()?;
+        fs::set_permissions(private_temp.path(), fs::Permissions::from_mode(0o700))?;
+        fs::write(private_temp.path().join(ACTIVE_MARKER), b"active")?;
         let private_root = private_temp.keep();
-        fs::set_permissions(&private_root, fs::Permissions::from_mode(0o700))?;
-        fs::write(private_root.join(ACTIVE_MARKER), b"active")?;
 
         let workspace = Self {
             source_root: private_root.join("source"),
@@ -87,6 +92,7 @@ pub(crate) fn cleanup_stale_workspaces(parent: &Path) -> Result<usize> {
     if !parent.is_dir() {
         return Ok(0);
     }
+    let now = SystemTime::now();
     for entry in fs::read_dir(parent)? {
         let entry = entry?;
         let path = entry.path();
@@ -94,15 +100,23 @@ pub(crate) fn cleanup_stale_workspaces(parent: &Path) -> Result<usize> {
             continue;
         };
         if name.starts_with("conary-record-")
-            && path.is_dir()
-            && !path.join(ACTIVE_MARKER).exists()
-            && !path.join(KEEP_RAW_TRACE_MARKER).exists()
+            && entry.file_type()?.is_dir()
+            && workspace_is_old_enough_to_clean(&path, now)?
+            && !path.join(ACTIVE_MARKER).try_exists()?
+            && !path.join(KEEP_RAW_TRACE_MARKER).try_exists()?
         {
             fs::remove_dir_all(&path)?;
             removed += 1;
         }
     }
     Ok(removed)
+}
+
+fn workspace_is_old_enough_to_clean(path: &Path, now: SystemTime) -> Result<bool> {
+    let modified = fs::metadata(path)?.modified()?;
+    Ok(now
+        .duration_since(modified)
+        .is_ok_and(|age| age >= STALE_WORKSPACE_MIN_AGE))
 }
 
 fn copy_tree(source: &Path, destination: &Path) -> Result<()> {
@@ -141,6 +155,14 @@ mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
 
+    fn mark_workspace_stale(path: &Path) {
+        let modified = SystemTime::now()
+            .checked_sub(STALE_WORKSPACE_MIN_AGE + Duration::from_secs(1))
+            .unwrap();
+        let times = fs::FileTimes::new().set_modified(modified);
+        fs::File::open(path).unwrap().set_times(times).unwrap();
+    }
+
     #[test]
     fn workspace_uses_private_permissions_and_public_source_snapshot() {
         let temp = tempfile::tempdir().unwrap();
@@ -159,6 +181,7 @@ mod tests {
             & 0o777;
         assert_eq!(mode, 0o700);
         assert!(workspace.source_root.join("main.c").is_file());
+        assert!(workspace.private_root.join(ACTIVE_MARKER).is_file());
 
         workspace.publish_source_snapshot().unwrap();
         assert!(output.join("source/main.c").is_file());
@@ -212,6 +235,8 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(temp.path().join("conary-record-old")).unwrap();
         std::fs::create_dir_all(temp.path().join("unrelated")).unwrap();
+        mark_workspace_stale(&temp.path().join("conary-record-old"));
+        mark_workspace_stale(&temp.path().join("unrelated"));
 
         assert_eq!(cleanup_stale_workspaces(temp.path()).unwrap(), 1);
         assert!(!temp.path().join("conary-record-old").exists());
@@ -227,9 +252,25 @@ mod tests {
         std::fs::create_dir_all(&kept).unwrap();
         std::fs::write(active.join(ACTIVE_MARKER), "active").unwrap();
         std::fs::write(kept.join(KEEP_RAW_TRACE_MARKER), "keep").unwrap();
+        mark_workspace_stale(&active);
+        mark_workspace_stale(&kept);
 
         assert_eq!(cleanup_stale_workspaces(temp.path()).unwrap(), 0);
         assert!(active.exists());
         assert!(kept.exists());
+    }
+
+    #[test]
+    fn stale_cleanup_skips_fresh_workspace_before_activation_marker() {
+        let temp = tempfile::tempdir().unwrap();
+        let candidate = temp.path().join("conary-record-starting");
+        std::fs::create_dir_all(&candidate).unwrap();
+
+        assert_eq!(cleanup_stale_workspaces(temp.path()).unwrap(), 0);
+        assert!(candidate.exists());
+
+        mark_workspace_stale(&candidate);
+        assert_eq!(cleanup_stale_workspaces(temp.path()).unwrap(), 1);
+        assert!(!candidate.exists());
     }
 }
