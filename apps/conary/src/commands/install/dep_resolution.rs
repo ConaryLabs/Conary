@@ -97,7 +97,7 @@ fn resolve_missing_deps_with_probes<PackageProbe, RuntimeProbe>(
 ) -> DepResolutionPlan
 where
     PackageProbe: Fn(&str) -> bool,
-    RuntimeProbe: Fn(&str) -> bool,
+    RuntimeProbe: Fn(&str, &VersionConstraint) -> bool,
 {
     let mut plan = DepResolutionPlan::default();
 
@@ -110,7 +110,7 @@ where
                 .unwrap_or(false);
             let is_on_system = is_tracked
                 || is_system_package_installed(&dep.name)
-                || is_live_runtime_dependency_present(&dep.name);
+                || is_live_runtime_dependency_present(&dep.name, &dep.constraint);
 
             if is_on_system {
                 debug!("Dependency '{}' is blocked and present on system", dep.name);
@@ -166,7 +166,7 @@ where
             DepMode::Satisfy => {
                 if is_system_package_installed(&dep.name) {
                     plan.satisfied.push((dep.name.clone(), "system PM".into()));
-                } else if is_live_runtime_dependency_present(&dep.name) {
+                } else if is_live_runtime_dependency_present(&dep.name, &dep.constraint) {
                     plan.satisfied
                         .push((dep.name.clone(), "live runtime".into()));
                 } else {
@@ -185,7 +185,7 @@ where
                         dep.name
                     );
                     plan.to_adopt.push(dep.name.clone());
-                } else if is_live_runtime_dependency_present(&dep.name) {
+                } else if is_live_runtime_dependency_present(&dep.name, &dep.constraint) {
                     plan.satisfied
                         .push((dep.name.clone(), "live runtime".into()));
                 } else {
@@ -329,7 +329,7 @@ mod tests {
             &missing,
             DepMode::Satisfy,
             |_| false,
-            |name| {
+            |name, _| {
                 matches!(
                     name,
                     "bash"
@@ -382,7 +382,7 @@ mod tests {
             &missing,
             DepMode::Takeover,
             |_| false,
-            |_| false,
+            |_, _| false,
         );
 
         assert_eq!(plan.to_install.len(), 1);
@@ -419,7 +419,7 @@ mod tests {
             &missing,
             DepMode::Adopt,
             |_| false,
-            |name| name == "libcap.so.2()(64bit)",
+            |name, _| name == "libcap.so.2()(64bit)",
         );
 
         assert!(plan.to_install.is_empty());
@@ -428,6 +428,29 @@ mod tests {
         assert_eq!(
             plan.satisfied,
             vec![("libcap.so.2()(64bit)".to_string(), "live runtime".into())]
+        );
+    }
+
+    #[test]
+    fn adopt_mode_passes_arch_soname_constraint_to_runtime_probe() {
+        let conn = test_db();
+        let missing = vec![make_versioned_dep("libcap.so", "2-64", &["htop"])];
+        let expected_constraint = VersionConstraint::parse("= 2-64").unwrap();
+
+        let plan = resolve_missing_deps_with_probes(
+            &conn,
+            &missing,
+            DepMode::Adopt,
+            |_| false,
+            |name, constraint| name == "libcap.so" && constraint == &expected_constraint,
+        );
+
+        assert!(plan.to_install.is_empty());
+        assert!(plan.to_adopt.is_empty());
+        assert!(plan.unresolvable.is_empty());
+        assert_eq!(
+            plan.satisfied,
+            vec![("libcap.so".to_string(), "live runtime".into())]
         );
     }
 
@@ -504,7 +527,7 @@ mod tests {
             &missing,
             DepMode::Satisfy,
             |_| false,
-            |dep| dep.starts_with("libc.so.6"),
+            |dep, _| dep.starts_with("libc.so.6"),
         );
 
         assert_eq!(plan.blocked, vec!["libc.so.6(GLIBC_2.34)(64bit)"]);
@@ -524,7 +547,7 @@ mod tests {
             &missing,
             DepMode::Satisfy,
             |_| false,
-            |dep| dep.starts_with("libudev.so."),
+            |dep, _| dep.starts_with("libudev.so."),
         );
 
         assert_eq!(plan.blocked, vec!["libudev.so.1()(64bit)"]);
@@ -544,7 +567,7 @@ mod tests {
             &missing,
             DepMode::Satisfy,
             |_| false,
-            |dep| dep == "udev",
+            |dep, _| dep == "udev",
         );
 
         assert_eq!(plan.blocked, vec!["udev"]);
