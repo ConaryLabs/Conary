@@ -29,36 +29,52 @@ useful evidence but does not count as a completion.
 
 ## Launch Record
 
-- Pinned Conary release target: `v0.11.3`, not yet published or verified. The
-  `v0.11.2` gate was reopened for `v0.11.3` after the real supported `htop`
-  path exposed unreachable generic SONAME evidence; review also found an
-  inexact or ABI-unchecked critical-library fallback and discarded Arch
-  capability constraints. The exact annotated tag and commit, release-build
-  run, and deploy-and-verify run are pending.
-- Release payload evidence: seven assets are expected. Publication and
-  independent hashes for all five `SHA256SUMS` payloads are pending:
+- Pinned Conary release: `v0.11.3`, published immutable at
+  `2026-07-18T04:31:28Z`. Annotated tag object
+  `a2a12791e695379e9313a210d2fd5eea2a39b352` peels to commit
+  `0fc31c33b42a84bb00c9c8d9bdfc574ebe960ae0`. Final merge CI run
+  `29628990277` passed 11/11 jobs, release-build run `29629361456` passed, and
+  exact-tag deploy-and-verify run `29630694438` passed for both public sites.
+  This `v0.11.3` release replaces the reopened `v0.11.2` gate after its supported `htop` path
+  exposed unreachable generic SONAME evidence, an inexact or ABI-unchecked
+  critical-library fallback, and discarded Arch capability constraints.
+- Release payload evidence: seven assets are published. Independent downloads
+  matched all five `SHA256SUMS` payloads, and every REST asset digest matched:
 
   | Manifest payload | SHA-256 |
   | --- | --- |
-  | `conary-0.11.3-1-x86_64.pkg.tar.zst` | pending |
-  | `conary-0.11.3-1.fc44.x86_64.rpm` | pending |
-  | `conary-0.11.3.ccs` | pending |
-  | `conary_0.11.3-1_amd64.deb` | pending |
-  | `metadata.json` | pending |
+  | `conary-0.11.3-1-x86_64.pkg.tar.zst` | `92d94443f30a22eee2da06ca336f951394a1c3cdfed0d9321329c2a05a61777e` |
+  | `conary-0.11.3-1.fc44.x86_64.rpm` | `5f32eeede9fc43483aa423cc5fc4f69f7577f03719de0c11e3018f847c319b6e` |
+  | `conary-0.11.3.ccs` | `c152df62d93e29f6245b2e924a13a9b3650988f34ea35854cb35f556e723160d` |
+  | `conary_0.11.3-1_amd64.deb` | `04da72e485992163da976ef6381a68491f75f760ee2381198b25ee7aa893204e` |
+  | `metadata.json` | `c2cc2bf053c4325a530f7d4499c155abb094955163347b0e6e4e3bc6f75748b6` |
 
-  Offline verification of `conary-0.11.3.ccs.sig` against the published CCS is
-  pending. `SHA256SUMS` and the detached signature are the other two expected
-  assets. No SBOM or provenance sidecars are planned for this limited preview;
-  their absence remains an explicit caveat.
-- Installed-binary evidence: pending. The preceding official binary must
-  detect and apply the signed `v0.11.3` CCS against an isolated schema-77
-  database, print `Signature verified`, report `conary 0.11.3`, preserve the
-  schema, and then report itself up to date. Record both CCS and resulting
-  binary SHA-256 values.
-- Candidate SONAME repair: the live-runtime path now requires an exact SONAME
-  cache entry and compatible ELF class, while Arch's versioned SONAME
-  capability uses its full constraint in the `pacman` proof. Release-asset and
-  supported-host `htop` evidence remain pending.
+  The official `v0.11.2` binary verified the `v0.11.3` detached signature against the
+  published CCS. `SHA256SUMS` and the detached signature are the other two
+  assets. No SBOM or provenance sidecars are published or planned for this
+  limited preview; their absence remains an explicit caveat.
+- Installed-binary evidence for `v0.11.3` from the official `v0.11.2` binary:
+  it detected and applied the signed CCS against an isolated schema-77 database,
+  printed `Signature verified`, reported `conary 0.11.3`, preserved schema 77,
+  and then reported itself current. The resulting binary SHA-256 is
+  `2007bc379f98ce09c581a99a9fff182b450aa28995449a955cdca2315a281a4c`.
+- Released Arch package evidence: the exact manifest-matched package installed
+  natively, initialized profile `arch` at schema 77, configured Remi, and
+  synchronized 15,429 Arch rows with zero foreign rows. The released resolver
+  planned zero installs, five adoptions, and zero blocked or unresolved
+  dependencies; it satisfied the exact versioned `libcap.so` and
+  `libncursesw.so` capabilities, installed and executed `htop 3.5.1-1-arch`,
+  then removed its five files and trove. This was a `bwrap`-isolated live-host
+  proof, not a pristine Arch VM: the Conary database and mutation target were
+  isolated while the real Arch native-package database and runtime evidence
+  were exposed read-only, and the host remained untouched.
+- Released Fedora-form evidence: the exact manifest-matched RPM was extracted
+  into a `minimal-boot-v4` KVM guest initialized at schema 77 with profile
+  `fedora-44`; Remi synchronized 76,685 rows. Live exact `libcap.so.2` and
+  `libncursesw.so.6` evidence was ELF64, and Conary installed, executed, and
+  removed `htop 3.4.1` without installing a `libcap` trove. The guest is
+  conaryOS and lacks `rpm` and `dnf`, so this proves Fedora-form metadata and
+  live-runtime probing, not a literal stock Fedora native-PM onboarding path.
 - Compatible rewritten Remi commit:
   `27ec2eccb6befdf06d9a826b84cc5a6948eff5fb`. It and deployed pre-rewrite
   source commit `c001f8d69b9e8ef34fba39139576a9809800a9a6` have the same tree. The
@@ -67,15 +83,16 @@ useful evidence but does not count as a completion.
 - Prewarmed package set: `curl`, `htop`, `nano`, and `zstd` for Fedora, Ubuntu,
   and Arch. Eleven conversion-version-6 rows are public; Ubuntu `nano` remains
   correctly fail-closed as `private-review`.
-- Superseded clean-host and onboarding baseline: the preceding release proved
-  Fedora installation/execution/removal, profile-correct Arch initialization,
-  and Arch Remi synchronization, but that evidence no longer closes the launch
-  gate after the supported `htop` SONAME flaw. Repeat the real package path and
-  released native-package initialization with the `v0.11.3` artifacts.
-- Deployment evidence: pending for `v0.11.3`. The prior self-update API, full
-  Remi-health 10/10, and checked production-site deployments remain a
-  superseded baseline; repeat deploy-and-verify, health, and checked site
-  deployment against the exact candidate release.
+- Deployment evidence: exact-tag run `29630694438` deployed both checked sites
+  successfully. Full Remi health passed 10/10, all six checked public routes
+  returned HTTP 200, and the deployed pages loaded the exact `v0.11.3` site
+  chunks. The self-update API CCS matched the released CCS SHA-256, size
+  `16183776`, and detached signature.
+- Repository-community closeout: the
+  [Welcome Discussion](https://github.com/ConaryLabs/Conary/discussions/36) is
+  live, and [issue #35's released-path proof](https://github.com/ConaryLabs/Conary/issues/35#issuecomment-5009942880)
+  was recorded before the issue was closed. These repository actions do not
+  count as a qualifying external completion or launch the broad outreach loop.
 - Supported hosts: Fedora 44, Ubuntu 26.04 LTS, and Arch Linux on the release's
   supported architecture and compatibility baseline.
 - Planned launch sequence, using the venue-specific copy in
@@ -87,10 +104,10 @@ useful evidence but does not count as a completion.
   | r/codex | Tuesday, 2026-07-21 at 15:00 CEST (`13:00 UTC`) | scheduled; re-check rules and posting eligibility |
   | r/ClaudeAI | Wednesday, 2026-07-22 at 15:00 CEST (`13:00 UTC`) | scheduled; requires current showcase eligibility and posting-account karma over 50 |
 
-- Actual post URLs and launch timestamps: not launched. Outreach remains gated
-  until the exact `v0.11.3` release evidence is complete, GitHub Support
+- Actual post URLs and launch timestamps: not launched. Release and site
+  evidence is complete, but outreach remains gated until GitHub Support
   dereferences the cached pull-request and commit views that still expose
-  pre-rewrite history, and the per-venue eligibility checks pass. Record each
+  pre-rewrite history and the per-venue eligibility checks pass. Record each
   post immediately after submission. The three-week stall clock starts from
   the first actual launch timestamp.
 - Privacy-safe feedback path: the beta-feedback issue template and a reviewed

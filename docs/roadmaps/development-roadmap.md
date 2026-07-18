@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-07-18
-proof_baseline: "v0.11.3 candidate; exact release commit pending"
+proof_baseline: "v0.11.3 at 0fc31c33b42a84bb00c9c8d9bdfc574ebe960ae0; release proof complete"
 current_milestone: first external tester loop
 active_workstream: W3 First External Tester Loop
 next_workstream: post-milestone work selected from tester evidence
@@ -78,8 +78,8 @@ the stated scope, not whether a workstream happens to be active.
 | CLI and core package operations | solid | Scope is the limited preview; external use and fresh combined proof matter more than new surface area. |
 | Adoption, unadoption, and native handoff | solid | Proof covers the current three-distro scope; the released Arch package initializes only its exact native profile and synchronizes Remi. |
 | Database, CAS, native parsing, and resolution | solid | Some advanced repository-policy abstractions and integration edges remain incomplete. |
-| Packaging, static repositories, trust, and self-update | solid | The `v0.11.2` gate was reopened for `v0.11.3` after a supported-path SONAME flaw; exact tag, artifact hashes, signature, native onboarding, deployment, and real self-update proof are pending. No SBOM/provenance sidecars are planned. |
-| CCS conversion and scriptlet authority | limited | The reviewed authority work has green local plus public-redownload QEMU file-capability fixture proof and is present in the `v0.11.3` candidate; exact release proof and the deliberately narrow public scriptlet scope remain separate. |
+| Packaging, static repositories, trust, and self-update | solid | `v0.11.3` replaces the reopened `v0.11.2` gate with exact tag, artifact hashes, signature, native onboarding, deployment, and real installed-binary self-update proof. No SBOM/provenance sidecars are published or planned. |
+| CCS conversion and scriptlet authority | limited | The reviewed authority work has green local plus public-redownload QEMU file-capability fixture proof and is published in `v0.11.3`; the deliberately narrow public scriptlet scope remains separate. |
 | Generation build and export | limited | Proven paths are x86_64; non-x86 assets, signed boot authority, and persistent-effect rollback remain later work. |
 | Model, source selection, and replatforming | limited | Some resolution deltas and builder inputs are not wired end to end. |
 | Bootstrap and self-hosting | limited | Rootful, chroot, fixture, and QEMU dependencies need repeatable current proof. |
@@ -262,41 +262,57 @@ and creates no roadmap item.
 
 - **Outcome:** Conary has external evidence about whether its adoption-led
   preview works for strangers on supported systems.
-- **Current truth:** the W3a publication gate is reopened. The `v0.11.2` gate was reopened for `v0.11.3`
-  after the real supported `htop` path exposed
-  unreachable generic SONAME evidence; review also found an inexact or
-  ABI-unchecked critical-library fallback and discarded Arch capability
-  constraints. The candidate
-  repair requires exact cache entries, compatible ELF class, and
-  constraint-aware `pacman` proof. Its exact tag and commit, workflow runs,
-  artifact hashes, detached-signature check, released native-package
-  onboarding, Remi synchronization, deployment, and real installed-binary
-  self-update are pending. Conary remains MIT-only and the GitHub safety
-  settings remain in place. Nothing has been posted and the tracker remains
-  0/10.
+- **Current truth:** the W3a publication and public-readiness gate is complete.
+  Immutable `v0.11.3` replaces the reopened `v0.11.2` gate after the real
+  supported `htop` path exposed unreachable generic SONAME evidence, an
+  inexact or ABI-unchecked critical-library fallback, and discarded Arch
+  capability constraints. The release now requires exact cache entries,
+  compatible ELF class, and constraint-aware `pacman` proof. Its exact tag,
+  workflows, artifact hashes, signature, released package paths, Remi
+  synchronization, installed-binary self-update, service, and checked-site
+  evidence are complete. Conary remains MIT-only and the GitHub safety
+  settings remain in place. No broad external venue post has been published,
+  and the tracker remains 0/10.
 - **Execution status:** active; W3a release and public-readiness proof is
-  reopened, while manual outreach and the external tester loop remain
+  complete, while manual outreach and the external tester loop remain
   unlaunched.
-- **Dependencies:** publish and independently verify the exact `v0.11.3`
-  candidate; GitHub Support must dereference the cached pull-request and commit
-  views that still expose pre-rewrite history; and the maintainer must re-check
-  each venue's current account/rule eligibility immediately before submission.
-- **Next gate:** record the exact `v0.11.3` tag, workflow runs, hashes,
-  signature, native-package, supported-host, self-update, service, and site
-  evidence. After GitHub Support also confirms the cached history is no longer
-  reachable, submit the verified Show HN packet, record its actual URL and
-  timestamp, and obtain the first privacy-safe qualifying report.
-- **Proof:** the preceding release's seven-asset publication, five independent
-  payload checksums, detached-signature verification, profile-correct Arch
-  onboarding, 15,423-package Remi synchronization, installed-binary
-  self-update, full Remi-health 10/10, and checked site deployments remain a
-  superseded baseline only. The `v0.11.3` exact tag/run identity, payload
-  hashes, signature, real native-package and `htop` path, self-update, service,
-  and site proof are pending. No SBOM or provenance sidecars are planned for
-  this limited preview. Each later milestone completion belongs to a unique
-  outsider and covers exactly `install -> adopt -> list/search -> update
-  --dry-run -> unadopt` on a supported host with the pinned release. Record
-  failed attempts and triage every report as `fix-now`, `next-slice`, or
+- **Dependencies:** GitHub Support must dereference the cached pull-request and
+  commit views that still expose pre-rewrite history, and the maintainer must
+  re-check each venue's current account/rule eligibility immediately before
+  submission.
+- **Next gate:** after GitHub Support confirms the cached history is no longer
+  reachable and the venue checks pass, submit the verified Show HN packet,
+  record its actual URL and timestamp, and obtain the first privacy-safe
+  qualifying report.
+- **Proof:** annotated `v0.11.3` tag object
+  `a2a12791e695379e9313a210d2fd5eea2a39b352` peels to commit
+  `0fc31c33b42a84bb00c9c8d9bdfc574ebe960ae0`; the immutable release was
+  published at `2026-07-18T04:31:28Z`. Final merge CI run `29628990277` passed
+  11/11 jobs, release-build run `29629361456` passed, and exact-tag
+  deploy-and-verify run `29630694438` passed for both sites. Seven assets are
+  published; independent downloads matched all five `SHA256SUMS` payloads and
+  every REST asset digest, and the official `v0.11.2` binary verified the
+  detached CCS signature. That binary also updated through the signed CCS in
+  an isolated schema-77 database, reported `conary 0.11.3`, and then reported
+  itself current. The released Arch package initialized profile `arch`,
+  synchronized 15,429 Remi rows with zero foreign rows, planned zero installs
+  and five adoptions with nothing blocked or unresolved, and installed,
+  executed, and removed `htop 3.5.1-1-arch`; this was an isolated `bwrap`
+  target backed by read-only live-host package evidence, not a pristine Arch
+  VM. Fedora-form KVM proof synchronized 76,685 rows and installed, executed,
+  and removed `htop 3.4.1` using exact ELF64 `libcap.so.2` and
+  `libncursesw.so.6` evidence, but `minimal-boot-v4` lacks `rpm` and `dnf`, so
+  it is not literal stock Fedora native-PM proof. Full Remi health passed
+  10/10, six public routes returned HTTP 200 with exact-release site chunks,
+  and the deployed API CCS matched the release hash, size, and signature. No
+  SBOM or provenance sidecars are published or planned for this limited
+  preview. The repository Welcome Discussion is live at discussion 36, and
+  issue 35 was closed after its released-path proof was recorded; neither
+  repository action launches broad outreach or counts as a qualifying external
+  completion. Each later milestone completion belongs to a unique outsider
+  and covers exactly `install -> adopt -> list/search -> update --dry-run ->
+  unadopt` on a supported host with the pinned release. Record failed attempts
+  and triage every report as `fix-now`, `next-slice`, or
   `declined-with-reason` with an owner.
 - **Limitations:** no qualifying completion for three weeks after launch
   triggers a maintainer review of venue reach, onboarding friction, and
@@ -493,11 +509,10 @@ publication, public fresh-cache KVM proof, and final integrated release gates.
 W2 closed after exact release identity, multi-distro artifact publication,
 checksum and CCS-signature verification, production deployment, official
 installed-binary self-update, compatible prewarmed Remi, rollback, and
-clean-host proof. W3 is now active; its W3a `v0.11.2` proof gate closed and was then reopened for the `v0.11.3`
-replacement after the
-supported `htop` SONAME-probe flaw was found. Manual outreach now also waits for
-the exact replacement-release proof, alongside GitHub Support dereferencing
-cached pre-rewrite pull-request and commit views and the venue-specific
-eligibility checks. After those gates, Show HN remains scheduled for 2026-07-20
-at 15:00 CEST (`13:00 UTC`), followed by r/codex and r/ClaudeAI on the next two
-days.
+clean-host proof. W3 is now active; its W3a `v0.11.2` proof gate closed, was
+reopened after the supported `htop` SONAME-probe flaw was found, and is now
+closed again with the verified `v0.11.3` replacement. Manual outreach still
+waits for GitHub Support to dereference cached pre-rewrite pull-request and
+commit views and for the venue-specific eligibility checks. After those gates,
+Show HN remains scheduled for 2026-07-20 at 15:00 CEST (`13:00 UTC`), followed
+by r/codex and r/ClaudeAI on the next two days.
