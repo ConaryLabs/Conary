@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 - satisfy live SONAME capabilities
+- keep generated man pages diff-clean after builds
 
 ### Other
 - ci: deploy release sites from exact tag
