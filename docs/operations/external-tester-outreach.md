@@ -9,9 +9,12 @@ summary: Multi-venue launch packet for the first external tester loop
 > **SCHEDULED FOR MANUAL LAUNCH:** begin with Show HN on Monday, 2026-07-20 at
 > 15:00 CEST (`13:00 UTC`), then use the venue-specific Reddit follow-ups below.
 > The W2 compatible-Remi, rollback, prewarm, and clean-host baselines are
-> recorded. The `v0.11.2` onboarding release and its artifact, installed-package,
-> and self-update evidence remain a publication gate. Do not publish
-> automatically or before that gate closes.
+> recorded. The immutable `v0.11.2` onboarding release and its artifact,
+> installed-package, self-update, deployment, and public-site evidence are
+> complete. Do not publish automatically or until GitHub Support has
+> dereferenced the cached pull-request and commit views that still expose
+> pre-rewrite history and the venue-specific eligibility checks pass. Nothing
+> has been posted; the milestone tracker remains 0/10.
 
 The maintainer posts this manually and remains available to answer comments.
 After submission, record the actual HN URL and timestamp in the milestone
@@ -62,10 +65,10 @@ The bounded loop is:
   sudo conary system unadopt --all --yes
 
 The agent-assisted walkthrough, including downloads and checksum verification:
-https://github.com/ConaryLabs/Conary/blob/main/docs/guides/agent-assisted-tester-loop.md
+https://github.com/ConaryLabs/Conary/blob/v0.11.2/docs/guides/agent-assisted-tester-loop.md
 
 Host compatibility checklist:
-https://github.com/ConaryLabs/Conary/blob/main/docs/guides/compatibility-checklist.md
+https://github.com/ConaryLabs/Conary/blob/v0.11.2/docs/guides/compatibility-checklist.md
 
 Pinned v0.11.2 release:
 https://github.com/ConaryLabs/Conary/releases/tag/v0.11.2
@@ -117,7 +120,7 @@ explain each command, ask the human before every live mutation, keep a
 transcript, and draft privacy-safe feedback.
 
 Agent-assisted tester guide:
-https://github.com/ConaryLabs/Conary/blob/main/docs/guides/agent-assisted-tester-loop.md
+https://github.com/ConaryLabs/Conary/blob/v0.11.2/docs/guides/agent-assisted-tester-loop.md
 
 Repository:
 https://github.com/ConaryLabs/Conary
@@ -171,7 +174,7 @@ step, ask before every live mutation, retain a transcript, and draft
 privacy-safe feedback.
 
 Agent-assisted tester guide:
-https://github.com/ConaryLabs/Conary/blob/main/docs/guides/agent-assisted-tester-loop.md
+https://github.com/ConaryLabs/Conary/blob/v0.11.2/docs/guides/agent-assisted-tester-loop.md
 
 Repository and source:
 https://github.com/ConaryLabs/Conary
@@ -211,18 +214,22 @@ and failed attempts are useful evidence.
 
 ## Launch Checklist
 
-- [x] Replace every launch-copy release reference with the `v0.11.2` onboarding
-  release candidate.
+- [x] Replace every launch-copy release reference with the immutable `v0.11.2`
+  onboarding release and pin public guides to that tag.
 - [x] Link the release artifact matrix and checksum/signature instructions.
 - [x] Pin the compatible Remi commit and prewarmed package set.
 - [x] Link the compatibility checklist, tester guide, and beta-feedback template.
 - [x] Retain the W2 clean-host and rollback baselines.
 - [x] Record Show HN, r/codex, r/ClaudeAI, and their planned launch timestamps
   in the milestone tracker.
-- [ ] Publish `v0.11.2` and record its exact tag, workflow runs, checksums,
+- [x] Publish `v0.11.2` and record its exact tag, workflow runs, checksums,
   detached CCS signature, profile-correct native-package initialization, and
   installed-binary self-update evidence in the milestone tracker and artifact
   matrix.
+- [x] Build and deploy the checked `conary.io` and `remi.conary.io` production
+  sites.
+- [ ] Obtain GitHub Support confirmation that cached pre-rewrite pull-request
+  and commit views have been dereferenced.
 - [ ] Re-check each venue's current rules and account eligibility immediately
   before posting.
 - [ ] After publication, record every actual post URL and launch timestamp.

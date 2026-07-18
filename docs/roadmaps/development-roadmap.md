@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-07-18
-proof_baseline: cb16f4876fdaa1ca422c3e9cce331788cacadfb1
+proof_baseline: df8bb13dce759180081f38c6c78506e0a182fcd8
 current_milestone: first external tester loop
 active_workstream: W3 First External Tester Loop
 next_workstream: post-milestone work selected from tester evidence
@@ -70,16 +70,16 @@ ordinary outreach difficulty does not satisfy the milestone. The active
 
 ## Subsystem Maturity
 
-This is the dated 2026-07-16 baseline. The label describes reliability within
+This is the dated 2026-07-18 baseline. The label describes reliability within
 the stated scope, not whether a workstream happens to be active.
 
 | Subsystem | Maturity | Current limitation or next proof |
 | --- | --- | --- |
 | CLI and core package operations | solid | Scope is the limited preview; external use and fresh combined proof matter more than new surface area. |
-| Adoption, unadoption, and native handoff | solid | Proof covers the current three-distro scope and is dated; revalidate on the integrated release candidate. |
+| Adoption, unadoption, and native handoff | solid | Proof covers the current three-distro scope; the released Arch package initializes only its exact native profile and synchronizes Remi. |
 | Database, CAS, native parsing, and resolution | solid | Some advanced repository-policy abstractions and integration edges remain incomplete. |
-| Packaging, static repositories, trust, and self-update | solid | Preview scope only; refresh release evidence and keep supply-chain caveats explicit. |
-| CCS conversion and scriptlet authority | limited | The W1 candidate integrates the reviewed authority work and has green local plus public-redownload QEMU file-capability fixture proof; W2 owns release and clean-host acceptance. |
+| Packaging, static repositories, trust, and self-update | solid | `v0.11.2` artifacts, checksums, detached signature, native onboarding, deployment, and real `v0.11.1 -> v0.11.2` self-update are verified; no SBOM/provenance sidecars are published. |
+| CCS conversion and scriptlet authority | limited | The reviewed authority work has green local plus public-redownload QEMU file-capability fixture proof and ships in the verified `v0.11.2` preview; the public scriptlet scope remains deliberately narrow. |
 | Generation build and export | limited | Proven paths are x86_64; non-x86 assets, signed boot authority, and persistent-effect rollback remain later work. |
 | Model, source selection, and replatforming | limited | Some resolution deltas and builder inputs are not wired end to end. |
 | Bootstrap and self-hosting | limited | Rootful, chroot, fixture, and QEMU dependencies need repeatable current proof. |
@@ -262,31 +262,43 @@ and creates no roadmap item.
 
 - **Outcome:** Conary has external evidence about whether its adoption-led
   preview works for strangers on supported systems.
-- **Current truth:** W2's compatible prewarmed Remi path, clean-host smoke,
-  rollback, artifact, signature, deployment, and installed-binary self-update
-  baselines are complete. A W3a public-readiness slice is preparing `v0.11.2`
-  with exact-profile package onboarding, corrected public-site claims,
-  MIT-only project licensing, stronger GitHub safety settings, pinned release
-  inputs, and draft-first immutable release publication. The launch sequence
-  remains scheduled for Show HN on Monday, 2026-07-20 at 15:00 CEST (`13:00
-  UTC`), r/codex at the same time on Tuesday, and r/ClaudeAI at the same time
-  on Wednesday. Nothing has been posted and the tracker remains 0/10.
-- **Execution status:** active; public-readiness integration and release proof
-  precede manual launch.
-- **Dependencies:** publish and independently verify `v0.11.2`, close the
-  maintainer-only repository-history safety checkpoint, and re-check each venue's
-  current account/rule eligibility before the scheduled submissions.
-- **Next gate:** complete the `v0.11.2` artifact, installed-package, and
-  self-update evidence; then submit the verified Show HN packet, record its
-  actual URL and timestamp, and obtain the first privacy-safe qualifying
-  report.
-- **Proof:** the release gate requires exact tag/run identity, independent
-  checksums and CCS-signature verification, profile-correct native-package
-  initialization, and installed-binary self-update. Each later milestone
-  completion belongs to a unique outsider and covers exactly `install -> adopt
-  -> list/search -> update --dry-run -> unadopt` on a supported host with the
-  pinned release. Record failed attempts and triage every report as `fix-now`,
-  `next-slice`, or `declined-with-reason` with an owner.
+- **Current truth:** W3a public readiness is complete. The immutable
+  `v0.11.2` release is published from exact tag commit
+  `df8bb13dce759180081f38c6c78506e0a182fcd8`; its artifacts, checksums,
+  detached CCS signature, exact-profile Arch onboarding, Remi synchronization,
+  production deployment, and real `v0.11.1 -> v0.11.2` self-update are
+  independently verified. Conary is MIT-only, the GitHub safety settings and
+  public-site claims are reconciled, and both `conary.io` and
+  `remi.conary.io` were deployed from their checked production builds. The
+  launch sequence remains scheduled for Show HN on Monday, 2026-07-20 at
+  15:00 CEST (`13:00 UTC`), r/codex at the same time on Tuesday, and
+  r/ClaudeAI at the same time on Wednesday. Nothing has been posted and the
+  tracker remains 0/10.
+- **Execution status:** active; W3a release and public-readiness proof is
+  complete, while manual outreach and the external tester loop remain
+  unlaunched.
+- **Dependencies:** GitHub Support must dereference the cached pull-request and
+  commit views that still expose pre-rewrite history, and the maintainer must
+  re-check each venue's current account/rule eligibility immediately before
+  submission.
+- **Next gate:** after GitHub Support confirms the cached history is no longer
+  reachable, submit the verified Show HN packet, record its actual URL and
+  timestamp, and obtain the first privacy-safe qualifying report.
+- **Proof:** release-build run `29623998496` attempt 2 and deploy-and-verify run
+  `29626490327` passed at
+  `df8bb13dce759180081f38c6c78506e0a182fcd8`. The immutable release published
+  seven assets; all five payload entries in `SHA256SUMS` matched independent
+  downloads and the detached CCS signature verified. The released Arch package
+  initialized only the Arch native repositories plus Remi, then synchronized
+  15,423 Arch packages. An official `v0.11.1` binary verified and applied the
+  signed `v0.11.2` CCS, reported `conary 0.11.2`, preserved schema 77, and
+  reported itself up to date. Full Remi health passed 10/10, and both public
+  sites completed checked production builds and deployment. No SBOM or
+  provenance sidecars are published. Each later milestone completion belongs
+  to a unique outsider and covers exactly `install -> adopt -> list/search ->
+  update --dry-run -> unadopt` on a supported host with the pinned release.
+  Record failed attempts and triage every report as `fix-now`, `next-slice`,
+  or `declined-with-reason` with an owner.
 - **Limitations:** no qualifying completion for three weeks after launch
   triggers a maintainer review of venue reach, onboarding friction, and
   observed failures. A pivot still requires a reproducible systemic blocker;
@@ -483,6 +495,8 @@ W2 closed after exact release identity, multi-distro artifact publication,
 checksum and CCS-signature verification, production deployment, official
 installed-binary self-update, compatible prewarmed Remi, rollback, and
 clean-host proof. W3 is now active; its W3a public-readiness and `v0.11.2`
-proof gate must close before the manual Show HN launch scheduled for 2026-07-20
-at 15:00 CEST (`13:00 UTC`), followed by r/codex and r/ClaudeAI on the next two
-days.
+proof gate closed on 2026-07-18. Manual outreach remains gated by GitHub
+Support dereferencing cached pre-rewrite pull-request and commit views plus the
+venue-specific eligibility checks. After that gate, Show HN remains scheduled
+for 2026-07-20 at 15:00 CEST (`13:00 UTC`), followed by r/codex and r/ClaudeAI
+on the next two days.
