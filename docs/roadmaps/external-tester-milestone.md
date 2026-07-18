@@ -37,8 +37,10 @@ useful evidence but does not count as a completion.
   verify the update signature, replace itself with the then-current preview,
   and report itself up to date. The `v0.11.2` installed-package and self-update
   evidence is pending publication.
-- Compatible Remi commit: `c001f8d69b9e8ef34fba39139576a9809800a9a6`,
-  deployed with binary SHA-256
+- Compatible rewritten Remi commit:
+  `27ec2eccb6befdf06d9a826b84cc5a6948eff5fb`. It and deployed pre-rewrite
+  source commit `c001f8d69b9e8ef34fba39139576a9809800a9a6` have the same tree. The
+  deployed binary SHA-256 is
   `c955a24ff6b90f98ba5f20b37e6a67b79bdde199ec0dcbfac0ce78b001d0f485`.
 - Prewarmed package set: `curl`, `htop`, `nano`, and `zstd` for Fedora, Ubuntu,
   and Arch. Eleven conversion-version-6 rows are public; Ubuntu `nano` remains

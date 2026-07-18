@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-07-18
-proof_baseline: 4d4b422b45b055fa07a3885a68a4ab8e8d16b526
+proof_baseline: cb16f4876fdaa1ca422c3e9cce331788cacadfb1
 current_milestone: first external tester loop
 active_workstream: W3 First External Tester Loop
 next_workstream: post-milestone work selected from tester evidence
@@ -13,6 +13,13 @@ next_workstream: post-milestone work selected from tester evidence
 This document is the detailed source of truth for Conary's current maturity,
 ordered delivery work, evidence, blockers, and longer horizons. It separates
 subsystem maturity from workstream execution state and evidence freshness.
+
+A coordinated credential-history cleanup on 2026-07-18 changed commit object
+IDs at and after the removed history without changing the corresponding
+shipping trees. Current-history commit references below use the rewritten
+identities. Explicit obsolete pre-rebase and disposable-rehearsal identifiers
+remain labeled as historical, and workflow runs created before the rewrite
+still display their original head IDs.
 
 The supported public package-manager preview is adoption-led and bounded to
 Fedora 44, Ubuntu 26.04 LTS, and Arch Linux. It centers on the local CLI,
@@ -89,8 +96,9 @@ the stated scope, not whether a workstream happens to be active.
 - **Outcome:** active repository planning is concise, tool-neutral, and
   discoverable without retaining completed process history or losing current
   product, release, or branch-resume truth.
-- **Current truth:** execution began from clean `main` at `a610dcf8`, three
-  commits ahead of `origin/main` at `ce6841ec`. The old planning tree contained
+- **Current truth:** execution began from clean `main` at rewritten commit
+  `b5d7f479`, three commits ahead of `origin/main` at rewritten commit
+  `7202649b`. The old planning tree contained
   176 tracked files and the retired assistant archive contained one file. The
   authority worktree was clean at the pinned head. The public and detailed
   roadmap, milestone tracker, and gated outreach draft are now active.
@@ -114,8 +122,8 @@ the stated scope, not whether a workstream happens to be active.
   W1 handoff below. Every referenced implementation commit exists; four missing
   full base IDs are obsolete pre-rebase markers, and one stale report's
   `f519bc42` sysctl-versioning reference maps by subject and task range to
-  canonical commit `e56d71ac`. No unique blocker, decision, or follow-up exists
-  only in local scratch. Head `14b50fbd198b5e52955f57dffad318e7e1344719`
+  canonical rewritten commit `72f58820`. No unique blocker, decision, or follow-up exists
+  only in local scratch. Head `11583a1c5e3e94155b5459b4f998887ee87c5669`
   immediately precedes self-deletion: it removed the remaining 179 tracked
   history/registry files after rehearsal, and the ignored main/authority SDD
   state and local reviews were removed after handoff preservation. No
@@ -141,9 +149,9 @@ the stated scope, not whether a workstream happens to be active.
 
 - **Outcome:** one clean integrated commit is safe to treat as the release
   candidate, with authority work reconciled and current release gates green.
-- **Current truth:** W1 started from clean `main` at `ffb69d93` and reconciles
+- **Current truth:** W1 started from clean `main` at rewritten commit `b8be9f0d` and reconciles
   the independently reviewed authority head
-  `e6eeb4da9c560c34317b57b2a422717d4d556b37` without restoring retired process
+  `b3bb30766b5c03a1e997c70e36b19afdd5f9e870` without restoring retired process
   files. `Cargo.lock` now resolves `crossbeam-epoch 0.9.20`; the fresh release
   audit no longer reports `RUSTSEC-2026-0204`. Both nonblocking authority-review
   notes are closed: one regression crosses the raw private artifact writer and
@@ -207,7 +215,7 @@ recorded exactly in the reconciliation map below.
   release and a prepared compatible service path matching the integrated code
   and documentation.
 - **Current truth:** `v0.11.1` is the pinned post-integration preview. Its exact
-  source/tag commit is `4d4b422b45b055fa07a3885a68a4ab8e8d16b526`;
+  rewritten source/tag commit is `cb16f4876fdaa1ca422c3e9cce331788cacadfb1`;
   the GitHub Release publishes Fedora 44, Ubuntu 26.04 LTS, Arch, and CCS
   artifacts with `SHA256SUMS` and a detached CCS signature. Remi remains the
   deliberately chosen maintainer-operated service and source-build preview,
@@ -218,15 +226,20 @@ recorded exactly in the reconciliation map below.
   15:00 CEST (`13:00 UTC`), followed by venue-specific r/codex and r/ClaudeAI
   posts on the next two days.
 - **Proof:** release-build run `29540722051` and deploy-and-verify run
-  `29542934278` succeeded for the exact release commit. Independent downloads
+  `29542934278` ran at pre-rewrite head
+  `4d4b422b45b055fa07a3885a68a4ab8e8d16b526`. The current rewritten tag
+  commit is `cb16f4876fdaa1ca422c3e9cce331788cacadfb1`; both commits have tree
+  `17c857bb27daa69b54a5c0688dc6892848da52b6`. Independent downloads
   matched every entry in `SHA256SUMS`; the detached CCS signature verified
   against the published CCS digest. The official preceding-preview Fedora RPM
   binary, using an isolated schema-75 database, detected `v0.11.1`, printed
   `Signature verified`, replaced itself, reported `conary 0.11.1`, and then
   reported itself up to date. The release records the explicit decision not to
-  publish SBOM/provenance sidecars for this limited preview. Compatible Remi
-  commit `c001f8d69b9e8ef34fba39139576a9809800a9a6` is deployed as binary
-  SHA-256 `c955a24ff6b90f98ba5f20b37e6a67b79bdde199ec0dcbfac0ce78b001d0f485`;
+  publish SBOM/provenance sidecars for this limited preview. Current compatible
+  Remi commit `27ec2eccb6befdf06d9a826b84cc5a6948eff5fb` and the deployed pre-rewrite
+  source commit `c001f8d69b9e8ef34fba39139576a9809800a9a6` both have tree
+  `4307eea1f795056ce66d588d599082eb09690b78`. The deployed binary SHA-256 is
+  `c955a24ff6b90f98ba5f20b37e6a67b79bdde199ec0dcbfac0ce78b001d0f485`;
   its rollback/redeploy rehearsal and 10/10 public health passed, its
   conversion-version-6 prewarm state contains 11 public rows and one
   fail-closed private-review row, and a clean Fedora 44 host installed, ran,
@@ -284,8 +297,8 @@ and creates no roadmap item.
 ## Authority-Branch Reconciliation Map
 
 The authority worktree is read-only during W0. Its pinned head is
-`e6eeb4da9c560c34317b57b2a422717d4d556b37`, its merge base with the W0
-baseline is `ce6841ec1dcfdddf12c68feefac648507fd1538d`, and it was tracked-clean
+`b3bb30766b5c03a1e997c70e36b19afdd5f9e870`, its merge base with the W0
+baseline is `7202649b6ea6df2d20a681601f9e763bc16147c7`, and it was tracked-clean
 on 2026-07-15. The branch contains 78 commits on its side of that merge base.
 Its final independent review found no Critical or Important issue and returned
 `Ready to merge? Yes`.
@@ -331,11 +344,12 @@ W1 closed the two nonblocking review notes as follows:
 
 ### Disposable Rehearsal Proof
 
-On 2026-07-15, migration head
-`b9530d681feea0af3f9139d3b294b250a8ea57b1` was cloned into a disposable
+On 2026-07-15, the migration head now represented in rewritten history by
+`0cd45b180b0ce3cb9f934ba849a6926105a842f4` was cloned into a disposable
 repository. The rehearsal first committed deletion of the former planning
 tree, retired assistant archive, and five structural-registry scripts, then
-merged authority head `e6eeb4da9c560c34317b57b2a422717d4d556b37`
+merged the authority head now represented by
+`b3bb30766b5c03a1e997c70e36b19afdd5f9e870`
 with `--no-commit --no-ff`. The merge stopped on five expected conflicts:
 `docs/SCRIPTLET_SECURITY.md`, `docs/modules/test-fixtures.md`, and the three
 retired branch registries for generated-document inventory, per-file audit
@@ -368,9 +382,10 @@ The following rehearsal gates passed:
 - `cargo run -p conary-test -- list` (28 suites, 334 cases).
 
 No selector correction was required because every named focused filter matched
-tests. Rehearsal commit `5fb111b5f4b95758310dd8e44e6714d863afc924`
-has the authority head as its second parent, and the authority-head ancestry
-check passed. Before this proof record was edited, both live worktrees were
+tests. Unreachable historical disposable-only rehearsal commit
+`5fb111b5f4b95758310dd8e44e6714d863afc924` had the then-current authority head
+as its second parent, and the authority-head ancestry check passed. Before this
+proof record was edited, both live worktrees were
 confirmed clean and the authority worktree remained at the pinned head.
 
 ## Post-Milestone Horizons
