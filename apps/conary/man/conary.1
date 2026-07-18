@@ -1,0 +1,89 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH conary 1  "conary 0.11.2" 
+.SH NAME
+conary \- Early\-preview Linux package manager with native\-package adoption
+.SH SYNOPSIS
+\fBconary\fR [\fB\-\-seccomp\-warn\fR] [\fB\-\-help\-advanced\fR] [\fB\-\-verbose\fR]... [\fB\-q\fR|\fB\-\-quiet\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] [\fIsubcommands\fR]
+.SH DESCRIPTION
+Early\-preview Linux package manager with native\-package adoption
+.SH OPTIONS
+.TP
+\fB\-\-seccomp\-warn\fR
+Use seccomp warn mode for scriptlets instead of enforcing blocked syscalls
+.TP
+\fB\-\-help\-advanced\fR
+List advanced packaging and platform commands
+.TP
+\fB\-\-verbose\fR
+Increase log verbosity (repeat for more: info, debug, trace)
+.TP
+\fB\-q\fR, \fB\-\-quiet\fR
+Silence all logs except errors
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+\fB\-V\fR, \fB\-\-version\fR
+Print version
+.SH SUBCOMMANDS
+.TP
+conary\-install(1)
+Install package(s) or collection (@name)
+.TP
+conary\-remove(1)
+Remove an installed package
+.TP
+conary\-update(1)
+Check for and apply package updates
+.TP
+conary\-search(1)
+Search for packages in repositories
+.TP
+conary\-list(1)
+List installed packages
+.TP
+conary\-autoremove(1)
+Remove orphaned packages (installed as dependencies but no longer needed)
+.TP
+conary\-pin(1)
+Pin a package to prevent updates and removal
+.TP
+conary\-unpin(1)
+Unpin a package to allow updates and removal
+.TP
+conary\-try(1)
+Try a package artifact with explicit keep or rollback
+.TP
+conary\-system(1)
+System administration (state, triggers, redirects, gc, etc.)
+.TP
+conary\-repo(1)
+Repository management
+.TP
+conary\-config(1)
+Configuration file management
+.TP
+conary\-distro(1)
+Distro pinning management
+.TP
+conary\-self\-update(1)
+Update conary itself to the latest version
+.TP
+conary\-help(1)
+Print this message or the help of the given subcommand(s)
+.SH EXTRA
+Daily workflow examples:
+  sudo conary install nginx \-\-dry\-run
+  sudo conary install nginx \-\-yes
+  sudo conary update \-\-dry\-run
+  sudo conary system adopt \-\-refresh
+  conary system completions bash > /tmp/conary\-completion.bash
+  sudo conary system generation export \-\-path /conary/generations/1 \-\-format qcow2 \-\-output gen1.qcow2
+  conaryd handles durable package jobs with the same apply\-intent boundary
+
+Advanced packaging and platform commands: run \*(Aqconary \-\-help\-advanced\*(Aq
+.SH VERSION
+v0.11.2
+.SH AUTHORS
+Conary Project

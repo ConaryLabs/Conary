@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v0.11.2] - 2026-07-18
+
+### Fixed
+- prepare limited public preview
+
+### Other
+- fix(record): protect concurrent workspace startup
 ## [v0.11.1] - 2026-07-17
 
 ### Other
