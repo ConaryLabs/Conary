@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-07-18
+last_updated: 2026-07-19
 status: scheduled
 summary: Multi-venue launch packet for the first external tester loop
 ---
@@ -18,7 +18,9 @@ summary: Multi-venue launch packet for the first external tester loop
 > verified. Do not publish automatically or until GitHub Support has
 > dereferenced the cached pull-request and commit views that still expose
 > pre-rewrite history and the venue-specific eligibility checks pass. No listed
-> external venue post has been published; the milestone tracker remains 0/10.
+> external venue post has been published. Organic prelaunch testing has one
+> unique qualifying tester across Ubuntu 26.04 LTS and Fedora 44, so the
+> milestone tracker is 1/10; this does not start the broad-outreach stall clock.
 
 The maintainer posts this manually and remains available to answer comments.
 After submission, record the actual HN URL and timestamp in the milestone

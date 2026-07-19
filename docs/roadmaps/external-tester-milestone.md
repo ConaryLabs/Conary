@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-07-18
-status: scheduled
-current_result: 0/10
+last_updated: 2026-07-19
+status: active
+current_result: 1/10
 summary: Outcome tracker for Conary's first external tester milestone
 ---
 
@@ -13,7 +13,8 @@ maintainer records an evidence-backed pivot for a reproducible systemic
 blocker. Interest, downloads, partial attempts, and repeated runs by the same
 person do not count as separate completions.
 
-**Current result: 0/10 qualifying completions.**
+**Current result: 1/10 qualifying completions.** Two supported-host reports from
+the same person count as one unique external tester.
 
 ## Qualifying Flow
 
@@ -93,6 +94,15 @@ useful evidence but does not count as a completion.
   live, and [issue #35's released-path proof](https://github.com/ConaryLabs/Conary/issues/35#issuecomment-5009942880)
   was recorded before the issue was closed. These repository actions do not
   count as a qualifying external completion or launch the broad outreach loop.
+- Organic prelaunch tester evidence: [issue #37](https://github.com/ConaryLabs/Conary/issues/37)
+  completed the full `v0.11.3` loop on x86_64 Ubuntu 26.04 LTS and
+  [confirmed the DEB checksum](https://github.com/ConaryLabs/Conary/issues/37#issuecomment-5010174050).
+  [Issue #38](https://github.com/ConaryLabs/Conary/issues/38) completed the same
+  loop on x86_64 Fedora 44 from a never-synced Remi state and
+  [confirmed the RPM checksum](https://github.com/ConaryLabs/Conary/issues/38#issuecomment-5010310461).
+  Both reports came from the same external tester, so they establish two
+  supported-host successes but count once toward the ten-person milestone.
+  They do not start the broad-outreach stall clock.
 - Supported hosts: Fedora 44, Ubuntu 26.04 LTS, and Arch Linux on the release's
   supported architecture and compatibility baseline.
 - Planned launch sequence, using the venue-specific copy in
@@ -122,10 +132,13 @@ dumps out of linked evidence.
 
 | Attempt | Date | Privacy-safe report | Distro and host scope | Pinned release | Full flow completed | Friction or failure | Triage status | Triage owner |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| - | - | - | - | - | - | - | - | - |
+| 1a | 2026-07-18 | [issue #37](https://github.com/ConaryLabs/Conary/issues/37) | Ubuntu 26.04 LTS, x86_64, VM/snapshot/non-critical host confirmed | `v0.11.3` DEB; checksum confirmed | yes, 11/11 steps | No functional failure; public-report verbosity and terminal-control-sequence guidance routed through [issue #39](https://github.com/ConaryLabs/Conary/issues/39) | `validated-no-action` | maintainer |
+| 1b | 2026-07-18 | [issue #38](https://github.com/ConaryLabs/Conary/issues/38) | Fedora 44, x86_64, VM/snapshot/non-critical host confirmed | `v0.11.3` RPM; checksum confirmed | yes, 11/11 steps | No functional failure; clean never-synced Remi start; same reporting-guidance follow-up as 1a | `validated-no-action` | maintainer |
 
-Triage statuses are `fix-now`, `next-slice`, and `declined-with-reason`.
-Qualifying and failed attempts both require an owner and a triage disposition.
+Attempts 1a and 1b came from the same person and therefore contribute one, not
+two, to the unique-tester result. Triage statuses are `fix-now`, `next-slice`,
+`validated-no-action`, and `declined-with-reason`. Qualifying and failed
+attempts both require an owner and a triage disposition.
 
 ## Stall and Pivot Rules
 

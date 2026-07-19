@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-18
-revision: 7
+last_updated: 2026-07-19
+revision: 8
 summary: Agent-supervised instructions for the first external Conary tester loop
 ---
 
@@ -43,7 +43,8 @@ Safety rules:
 - Run dry-run commands before live commands when the loop provides both.
 - Ask me before every non-dry-run command that mutates system state.
 - If a command output is ambiguous, surprising, or scary, stop and ask.
-- Keep a transcript of commands, exit statuses, and notable output.
+- Keep a local transcript of commands, exit statuses, and notable output. The
+  public feedback issue should summarize this transcript, not reproduce it.
 - Do not upload logs, bundles, private keys, tokens, shell history, raw
   environment dumps, or Conary databases.
 - At the end, draft a GitHub beta feedback issue using
@@ -233,6 +234,11 @@ Fill in:
 - **VM/snapshot/non-critical host:** `yes` or `no`;
 - **Commands Run:** exact commands from the transcript;
 - **What Happened:** short notes about results and friction.
+
+Keep the public issue concise. Include exit statuses and only the output needed
+to explain a failure, surprise, or useful result. Do not paste the complete
+local transcript, a full installed-package inventory, or broad environment
+output. Strip terminal color and control sequences before including excerpts.
 
 Only attach a support bundle if it would help explain a failure and you are
 running from a checkout. Review it first:

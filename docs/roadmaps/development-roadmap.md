@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-07-18
+last_updated: 2026-07-19
 proof_baseline: "v0.11.3 at 0fc31c33b42a84bb00c9c8d9bdfc574ebe960ae0; release proof complete"
 current_milestone: first external tester loop
 active_workstream: W3 First External Tester Loop
@@ -49,7 +49,8 @@ the affected attempts and a chosen remediation or explicit scope change.
 
 Launching outreach, publishing a release, receiving partial reports, or seeing
 ordinary outreach difficulty does not satisfy the milestone. The active
-[milestone tracker](external-tester-milestone.md) currently records 0/10.
+[milestone tracker](external-tester-milestone.md) currently records 1/10 from
+one external tester who completed the full flow on two supported hosts.
 
 ## Principles and Safety Boundaries
 
@@ -70,7 +71,7 @@ ordinary outreach difficulty does not satisfy the milestone. The active
 
 ## Subsystem Maturity
 
-This is the dated 2026-07-18 baseline. The label describes reliability within
+This is the dated 2026-07-19 baseline. The label describes reliability within
 the stated scope, not whether a workstream happens to be active.
 
 | Subsystem | Maturity | Current limitation or next proof |
@@ -87,7 +88,7 @@ the stated scope, not whether a workstream happens to be active.
 | conaryd package and query service | limited | System routes, authorization policy, restart semantics, dry-run behavior, deployment, and PolicyKit remain incomplete. |
 | Federation | experimental | Coordinator and fetch paths are not wired into serving; TLS identity documentation and enforcement do not yet agree. |
 | Advanced derivation, lock, and reproducibility flows | unfinished | Several interfaces exist without complete persisted inputs or update-path integration. |
-| External product readiness | unfinished | The prepared tester loop has not launched or completed. |
+| External product readiness | unfinished | One organic external tester completed the full flow on Ubuntu 26.04 and Fedora 44 with verified release-package checksums; the unique-person milestone is 1/10 and broad manual outreach remains unlaunched. |
 
 ## Workstreams
 
@@ -271,19 +272,21 @@ and creates no roadmap item.
   workflows, artifact hashes, signature, released package paths, Remi
   synchronization, installed-binary self-update, service, and checked-site
   evidence are complete. Conary remains MIT-only and the GitHub safety
-  settings remain in place. No broad external venue post has been published,
-  and the tracker remains 0/10.
+  settings remain in place. No broad external venue post has been published.
+  One organic external tester completed the full flow on Ubuntu 26.04 LTS and
+  Fedora 44 with verified `v0.11.3` package checksums. The two host reports
+  count once toward the unique-person milestone, so the tracker is 1/10.
 - **Execution status:** active; W3a release and public-readiness proof is
-  complete, while manual outreach and the external tester loop remain
-  unlaunched.
+  complete. The external tester loop has its first organic completion, while
+  the planned manual outreach sequence remains unlaunched.
 - **Dependencies:** GitHub Support must dereference the cached pull-request and
   commit views that still expose pre-rewrite history, and the maintainer must
   re-check each venue's current account/rule eligibility immediately before
   submission.
 - **Next gate:** after GitHub Support confirms the cached history is no longer
   reachable and the venue checks pass, submit the verified Show HN packet,
-  record its actual URL and timestamp, and obtain the first privacy-safe
-  qualifying report.
+  record its actual URL and timestamp, and continue collecting privacy-safe
+  reports toward the second unique qualifying tester.
 - **Proof:** annotated `v0.11.3` tag object
   `a2a12791e695379e9313a210d2fd5eea2a39b352` peels to commit
   `0fc31c33b42a84bb00c9c8d9bdfc574ebe960ae0`; the immutable release was
@@ -309,11 +312,14 @@ and creates no roadmap item.
   preview. The repository Welcome Discussion is live at discussion 36, and
   issue 35 was closed after its released-path proof was recorded; neither
   repository action launches broad outreach or counts as a qualifying external
-  completion. Each later milestone completion belongs to a unique outsider
-  and covers exactly `install -> adopt -> list/search -> update --dry-run ->
-  unadopt` on a supported host with the pinned release. Record failed attempts
-  and triage every report as `fix-now`, `next-slice`, or
-  `declined-with-reason` with an owner.
+  completion. Issues 37 and 38 subsequently recorded full `v0.11.3` loops on
+  x86_64 Ubuntu 26.04 LTS and Fedora 44, with both package checksums confirmed.
+  Because both reports came from the same external tester, they count as one
+  unique completion. Each later milestone completion belongs to a unique
+  outsider and covers exactly `install -> adopt -> list/search -> update
+  --dry-run -> unadopt` on a supported host with the pinned release. Record
+  failed attempts and triage every report as `fix-now`, `next-slice`,
+  `validated-no-action`, or `declined-with-reason` with an owner.
 - **Limitations:** no qualifying completion for three weeks after launch
   triggers a maintainer review of venue reach, onboarding friction, and
   observed failures. A pivot still requires a reproducible systemic blocker;
