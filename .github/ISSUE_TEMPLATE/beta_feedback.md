@@ -27,18 +27,25 @@ Fill this in if you ran the tester loop from the preview post.
 
 - **Distribution**: (Fedora 44, Ubuntu 26.04 LTS, Arch Linux, or other)
 - **Kernel version**: (output of `uname -r`)
-- **Conary version or commit**: (output of `conary --version`, release tag, or commit SHA)
+- **Architecture**: (output of `uname -m`)
+- **Conary version or commit**: (output of `conary --version` or commit SHA)
+- **Release tag and package**: (for example, `v0.11.3` and the exact RPM/DEB/Arch package name)
+- **Package checksum verified**: yes/no
 - **VM/snapshot/non-critical host**: yes/no
 
 ## Commands Run
 
 ```bash
-# Paste the exact commands you ran.
+# List the exact commands and their exit statuses.
+# Include only short output excerpts needed to explain a failure or surprise.
 ```
 
 ## What Happened
 
 Describe the result, including anything confusing, slow, surprising, or good.
+Keep the public report concise: do not paste a full installed-package inventory,
+the complete local transcript, or broad environment output. Strip terminal
+color/control sequences and include only output needed to understand the result.
 
 ## Support Bundle
 
