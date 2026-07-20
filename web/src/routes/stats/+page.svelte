@@ -1,4 +1,5 @@
 <script lang="ts">
+	import PageMeta from '$lib/components/PageMeta.svelte';
 	import DistroSelector from '$lib/components/DistroSelector.svelte';
 	import { getStatsOverview, getPopularPackages, getRecentPackages } from '$lib/api';
 	import type { StatsOverview, PopularPackage, RecentPackage } from '$lib/types';
@@ -51,13 +52,17 @@
 	}
 </script>
 
-<svelte:head>
-	<title>Statistics - Conary</title>
-</svelte:head>
+<PageMeta
+	title="Package index statistics — Conary"
+	description="Inspect current package, download, distribution, and conversion counters from the public Remi index."
+	path="/stats"
+/>
 
 <div class="container page">
 	<div class="page-header">
-		<h1>Statistics</h1>
+		<p class="eyebrow">Live API counters</p>
+		<h1>Index statistics</h1>
+		<p class="page-subtitle">Observed package-index activity, not a claim of universal package compatibility.</p>
 	</div>
 
 	{#if stats}
@@ -162,20 +167,22 @@
 
 <style>
 	.page {
-		padding: 2.5rem 1.5rem;
+		padding-block: clamp(3rem, 7vw, 5.5rem);
 	}
 
 	.page-header h1 {
-		font-family: var(--font-display);
-		font-size: 1.75rem;
+		font-size: clamp(2.6rem, 6vw, 4.8rem);
 		font-weight: 700;
-		margin-bottom: 1.5rem;
+		letter-spacing: -0.055em;
+		margin-bottom: 0.65rem;
 	}
 
 	.overview-grid {
 		display: grid;
 		grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-		gap: 0.75rem;
+		gap: 1px;
+		padding: 1px;
+		background: var(--color-border);
 		margin-bottom: 2rem;
 	}
 
@@ -185,8 +192,7 @@
 		align-items: center;
 		padding: 1.25rem;
 		background: var(--color-surface);
-		border: 1px solid var(--color-border);
-		border-radius: var(--radius-md);
+		border: 0;
 	}
 
 	.overview-value {
@@ -194,7 +200,6 @@
 		font-size: 1.75rem;
 		font-weight: 700;
 		color: var(--color-accent);
-		text-shadow: 0 0 30px var(--color-accent-glow);
 	}
 
 	.overview-label {
@@ -217,14 +222,15 @@
 	}
 
 	.table-section h2 {
-		font-family: var(--font-display);
-		font-size: 1.125rem;
+		font-size: 1.2rem;
 		font-weight: 700;
 		margin-bottom: 1rem;
 	}
 
 	.table-wrap {
 		overflow-x: auto;
+		border: 1px solid var(--color-border);
+		background: var(--color-layer);
 	}
 
 	table {
@@ -236,7 +242,7 @@
 	th {
 		text-align: left;
 		font-weight: 600;
-		padding: 0.625rem 0.5rem;
+		padding: 0.75rem;
 		border-bottom: 1px solid var(--color-border);
 		font-size: 0.6875rem;
 		color: var(--color-text-muted);
@@ -245,7 +251,7 @@
 	}
 
 	td {
-		padding: 0.5rem;
+		padding: 0.65rem 0.75rem;
 		border-bottom: 1px solid var(--color-border);
 	}
 

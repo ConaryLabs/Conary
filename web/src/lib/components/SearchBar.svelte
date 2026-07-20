@@ -4,12 +4,10 @@
 
 	let {
 		value = '',
-		placeholder = 'Search packages...',
-		autofocus = false
+		placeholder = 'Search packages…'
 	}: {
 		value?: string;
 		placeholder?: string;
-		autofocus?: boolean;
 	} = $props();
 
 	let query = $state('');
@@ -17,7 +15,6 @@
 	let showSuggestions = $state(false);
 	let selectedIndex = $state(-1);
 	let debounceTimer: ReturnType<typeof setTimeout> | undefined;
-	let inputEl: HTMLInputElement | undefined = $state();
 
 	$effect(() => {
 		query = value;
@@ -54,29 +51,29 @@
 		goto(`/search?q=${encodeURIComponent(q)}`);
 	}
 
-	function selectSuggestion(s: string) {
-		query = s;
+	function selectSuggestion(suggestion: string) {
+		query = suggestion;
 		showSuggestions = false;
 		submit();
 	}
 
-	function handleKeydown(e: KeyboardEvent) {
+	function handleKeydown(event: KeyboardEvent) {
 		if (!showSuggestions) {
-			if (e.key === 'Enter') submit();
+			if (event.key === 'Enter') submit();
 			return;
 		}
 
-		switch (e.key) {
+		switch (event.key) {
 			case 'ArrowDown':
-				e.preventDefault();
+				event.preventDefault();
 				selectedIndex = Math.min(selectedIndex + 1, suggestions.length - 1);
 				break;
 			case 'ArrowUp':
-				e.preventDefault();
+				event.preventDefault();
 				selectedIndex = Math.max(selectedIndex - 1, -1);
 				break;
 			case 'Enter':
-				e.preventDefault();
+				event.preventDefault();
 				if (selectedIndex >= 0 && selectedIndex < suggestions.length) {
 					selectSuggestion(suggestions[selectedIndex]);
 				} else {
@@ -99,41 +96,34 @@
 
 <div class="search-bar">
 	<div class="search-input-wrapper">
-		<span class="search-prompt" aria-hidden="true">&gt;_</span>
+		<span class="search-prompt" aria-hidden="true">find /</span>
 		<input
-			bind:this={inputEl}
 			bind:value={query}
 			oninput={handleInput}
 			onkeydown={handleKeydown}
 			onfocus={() => { if (suggestions.length > 0) showSuggestions = true; }}
 			onblur={handleBlur}
-			type="text"
+			type="search"
 			{placeholder}
 			autocomplete="off"
 			spellcheck="false"
 			role="combobox"
+			aria-label="Search packages"
 			aria-expanded={showSuggestions}
 			aria-autocomplete="list"
 			aria-controls="search-suggestions"
+			aria-activedescendant={selectedIndex >= 0 ? `search-suggestion-${selectedIndex}` : undefined}
 		/>
-		<button class="search-submit" onclick={submit} aria-label="Search">
-			<svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-				<path fill-rule="evenodd" d="M10.293 3.293a1 1 0 011.414 0l6 6a1 1 0 010 1.414l-6 6a1 1 0 01-1.414-1.414L14.586 11H3a1 1 0 110-2h11.586l-4.293-4.293a1 1 0 010-1.414z" clip-rule="evenodd" />
-			</svg>
+		<button class="search-submit" onclick={submit} aria-label="Submit package search">
+			Search <span aria-hidden="true">→</span>
 		</button>
 	</div>
 
 	{#if showSuggestions}
 		<ul id="search-suggestions" class="suggestions" role="listbox">
 			{#each suggestions as suggestion, i}
-				<li
-					role="option"
-					aria-selected={i === selectedIndex}
-					class:selected={i === selectedIndex}
-				>
-					<button onclick={() => selectSuggestion(suggestion)}>
-						{suggestion}
-					</button>
+				<li id="search-suggestion-{i}" role="option" aria-selected={i === selectedIndex} class:selected={i === selectedIndex}>
+					<button tabindex="-1" onclick={() => selectSuggestion(suggestion)}>{suggestion}</button>
 				</li>
 			{/each}
 		</ul>
@@ -144,102 +134,115 @@
 	.search-bar {
 		position: relative;
 		width: 100%;
-		max-width: 640px;
+		max-width: 680px;
 	}
 
 	.search-input-wrapper {
 		display: flex;
-		align-items: center;
-		background: var(--color-surface);
-		border: 1px solid var(--color-border);
-		border-radius: var(--radius-lg);
-		transition: border-color 0.2s, box-shadow 0.2s;
+		align-items: stretch;
+		min-height: 54px;
+		border: 1px solid var(--color-control-border);
+		border-radius: var(--radius-sm);
+		background: var(--color-code-bg);
+		transition: border-color 150ms ease;
 	}
 
 	.search-input-wrapper:focus-within {
-		border-color: var(--color-accent);
-		box-shadow: 0 0 0 3px var(--color-accent-subtle), var(--shadow-glow);
+		border-color: var(--color-cyan);
+	}
+
+	.search-input-wrapper:has(input:focus-visible) {
+		outline: 3px solid var(--color-orange);
+		outline-offset: 4px;
 	}
 
 	.search-prompt {
+		display: flex;
+		align-items: center;
+		margin-left: 1rem;
+		color: var(--color-orange);
 		font-family: var(--font-mono);
-		font-size: 0.9375rem;
+		font-size: 0.75rem;
 		font-weight: 500;
-		color: var(--color-accent);
-		margin-left: 1.125rem;
-		flex-shrink: 0;
 		user-select: none;
 	}
 
 	input {
-		flex: 1;
-		border: none;
-		background: none;
-		padding: 0.875rem 0.75rem;
-		font-size: 1rem;
-		color: var(--color-text);
-		outline: none;
 		min-width: 0;
+		flex: 1;
+		padding: 0.85rem 0.8rem;
+		border: 0;
+		outline: 0;
+		color: var(--color-ivory);
+		background: transparent;
+		font-size: 0.98rem;
 	}
 
 	input::placeholder {
-		color: var(--color-text-muted);
+		color: var(--color-muted);
 	}
 
 	.search-submit {
-		display: flex;
+		display: inline-flex;
 		align-items: center;
-		justify-content: center;
-		background: var(--color-accent);
-		color: var(--color-bg);
-		border: none;
-		border-radius: 0 calc(var(--radius-lg) - 1px) calc(var(--radius-lg) - 1px) 0;
-		padding: 0.875rem 1.125rem;
-		transition: background-color 0.15s;
+		gap: 0.5rem;
+		padding: 0.8rem 1.1rem;
+		border: 0;
+		border-left: 1px solid var(--color-control-border);
+		border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+		color: var(--color-field);
+		background: var(--color-cyan);
+		font-family: var(--font-mono);
+		font-size: 0.76rem;
+		font-weight: 500;
 	}
 
 	.search-submit:hover {
-		background: var(--color-accent-hover);
-	}
-
-	.search-submit svg {
-		width: 1.125rem;
-		height: 1.125rem;
+		background: var(--color-cyan-bright);
 	}
 
 	.suggestions {
 		position: absolute;
-		top: calc(100% + 4px);
+		top: calc(100% + 0.35rem);
 		left: 0;
 		right: 0;
-		margin: 0;
-		padding: 0.25rem 0;
-		list-style: none;
-		background: var(--color-surface);
-		border: 1px solid var(--color-border);
-		border-radius: var(--radius-md);
-		box-shadow: var(--shadow-lg);
 		z-index: 100;
 		max-height: 300px;
+		margin: 0;
+		padding: 0.35rem 0;
 		overflow-y: auto;
+		border: 1px solid var(--color-border-strong);
+		border-radius: var(--radius-sm);
+		background: var(--color-layer);
+		box-shadow: var(--shadow-lg);
+		list-style: none;
 	}
 
 	.suggestions li button {
 		display: block;
 		width: 100%;
-		text-align: left;
-		padding: 0.5rem 1rem 0.5rem 2.75rem;
-		border: none;
-		background: none;
-		color: var(--color-text);
-		font-size: 0.9375rem;
+		padding: 0.55rem 1rem;
+		border: 0;
+		color: var(--color-ivory);
+		background: transparent;
 		font-family: var(--font-mono);
-		transition: background 0.1s, color 0.1s;
+		font-size: 0.85rem;
+		text-align: left;
 	}
 
 	.suggestions li button:hover,
 	.suggestions li.selected button {
+		color: var(--color-cyan);
 		background: var(--color-accent-subtle);
-		color: var(--color-accent);
+	}
+
+	@media (max-width: 520px) {
+		.search-prompt {
+			display: none;
+		}
+
+		.search-submit {
+			padding-inline: 0.85rem;
+		}
 	}
 </style>

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { page } from '$app/state';
+	import PageMeta from '$lib/components/PageMeta.svelte';
 	import PackageCard from '$lib/components/PackageCard.svelte';
 	import Pagination from '$lib/components/Pagination.svelte';
 	import SearchBar from '$lib/components/SearchBar.svelte';
@@ -51,12 +52,15 @@
 	}
 </script>
 
-<svelte:head>
-	<title>{distroLabel(distro)} Packages - Conary</title>
-</svelte:head>
+<PageMeta
+	title={`${distroLabel(distro)} packages — Conary`}
+	description={`Browse public ${distroLabel(distro)} package metadata served by the Conary package index.`}
+	path={`/packages/${distro}`}
+/>
 
 <div class="container page">
 	<div class="page-header">
+		<p class="eyebrow">Distribution index / {distro}</p>
 		<div class="title-row">
 			<span class="distro-indicator distro-{distro}" aria-hidden="true"></span>
 			<h1>{distroLabel(distro)} Packages</h1>
@@ -96,7 +100,7 @@
 
 <style>
 	.page {
-		padding: 2.5rem 1.5rem;
+		padding-block: clamp(3rem, 7vw, 5.5rem);
 	}
 
 	.page-header {
@@ -120,9 +124,9 @@
 	.distro-indicator.distro-ubuntu { background: var(--color-ubuntu); }
 
 	.title-row h1 {
-		font-family: var(--font-display);
-		font-size: 1.75rem;
+		font-size: clamp(2.5rem, 6vw, 4.7rem);
 		font-weight: 700;
+		letter-spacing: -0.055em;
 		margin-bottom: 0;
 	}
 
@@ -140,7 +144,9 @@
 	.package-list {
 		display: grid;
 		grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-		gap: 0.75rem;
+		gap: 1px;
+		padding: 1px;
+		background: var(--color-border);
 	}
 
 	.status-msg {

@@ -9,28 +9,12 @@
 		onnavigate: (page: number) => void;
 	} = $props();
 
-	function getVisiblePages(current: number, total: number): (number | '...')[] {
-		if (total <= 7) {
-			return Array.from({ length: total }, (_, i) => i + 1);
-		}
-
-		const pages: (number | '...')[] = [1];
-
-		if (current > 3) {
-			pages.push('...');
-		}
-
-		const start = Math.max(2, current - 1);
-		const end = Math.min(total - 1, current + 1);
-
-		for (let i = start; i <= end; i++) {
-			pages.push(i);
-		}
-
-		if (current < total - 2) {
-			pages.push('...');
-		}
-
+	function getVisiblePages(current: number, total: number): (number | '…')[] {
+		if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+		const pages: (number | '…')[] = [1];
+		if (current > 3) pages.push('…');
+		for (let i = Math.max(2, current - 1); i <= Math.min(total - 1, current + 1); i++) pages.push(i);
+		if (current < total - 2) pages.push('…');
 		pages.push(total);
 		return pages;
 	}
@@ -39,42 +23,26 @@
 </script>
 
 {#if totalPages > 1}
-	<nav class="pagination" aria-label="Pagination">
-		<button
-			class="page-btn"
-			disabled={page <= 1}
-			onclick={() => onnavigate(page - 1)}
-			aria-label="Previous page"
-		>
-			Previous
-		</button>
-
+	<nav class="pagination" aria-label="Package pages">
+		<button class="page-btn" disabled={page <= 1} onclick={() => onnavigate(page - 1)}>← Previous</button>
 		<div class="page-numbers">
-			{#each visiblePages as p}
-				{#if p === '...'}
-					<span class="page-ellipsis">...</span>
+			{#each visiblePages as visiblePage}
+				{#if visiblePage === '…'}
+					<span class="page-ellipsis">…</span>
 				{:else}
 					<button
 						class="page-num"
-						class:active={p === page}
-						onclick={() => onnavigate(p)}
-						aria-label="Page {p}"
-						aria-current={p === page ? 'page' : undefined}
+						class:active={visiblePage === page}
+						onclick={() => onnavigate(visiblePage)}
+						aria-label="Page {visiblePage}"
+						aria-current={visiblePage === page ? 'page' : undefined}
 					>
-						{p}
+						{visiblePage}
 					</button>
 				{/if}
 			{/each}
 		</div>
-
-		<button
-			class="page-btn"
-			disabled={page >= totalPages}
-			onclick={() => onnavigate(page + 1)}
-			aria-label="Next page"
-		>
-			Next
-		</button>
+		<button class="page-btn" disabled={page >= totalPages} onclick={() => onnavigate(page + 1)}>Next →</button>
 	</nav>
 {/if}
 
@@ -84,64 +52,61 @@
 		align-items: center;
 		justify-content: center;
 		gap: 0.5rem;
-		margin: 2rem 0;
+		margin: 2.5rem 0 0;
 	}
 
 	.page-numbers {
 		display: flex;
 		align-items: center;
-		gap: 0.25rem;
+		gap: 0.2rem;
+	}
+
+	.page-btn,
+	.page-num {
+		min-height: 42px;
+		border: 1px solid var(--color-border-strong);
+		border-radius: var(--radius-sm);
+		color: var(--color-mist);
+		background: var(--color-layer);
+		font-family: var(--font-mono);
+		font-size: 0.7rem;
 	}
 
 	.page-btn {
-		padding: 0.5rem 1rem;
-		border: 1px solid var(--color-border);
-		border-radius: var(--radius-sm);
-		background: var(--color-surface);
-		color: var(--color-text);
-		font-size: 0.8125rem;
-		transition: all 0.15s;
-	}
-
-	.page-btn:hover:not(:disabled) {
-		border-color: var(--color-accent);
-		color: var(--color-accent);
-	}
-
-	.page-btn:disabled {
-		opacity: 0.3;
-		cursor: not-allowed;
+		padding: 0.55rem 0.9rem;
 	}
 
 	.page-num {
-		min-width: 2.25rem;
-		height: 2.25rem;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		border: 1px solid transparent;
-		border-radius: var(--radius-sm);
-		background: none;
-		color: var(--color-text-secondary);
-		font-size: 0.8125rem;
-		font-family: var(--font-mono);
-		transition: all 0.15s;
+		min-width: 42px;
+		padding: 0.45rem;
 	}
 
+	.page-btn:hover:not(:disabled),
 	.page-num:hover {
-		color: var(--color-text);
-		background: var(--color-surface);
+		color: var(--color-cyan);
+		border-color: var(--color-cyan);
 	}
 
 	.page-num.active {
-		background: var(--color-accent);
-		color: var(--color-bg);
-		border-color: var(--color-accent);
+		color: var(--color-field);
+		border-color: var(--color-cyan);
+		background: var(--color-cyan);
+	}
+
+	.page-btn:disabled {
+		cursor: not-allowed;
+		opacity: 0.35;
 	}
 
 	.page-ellipsis {
-		min-width: 2.25rem;
+		min-width: 2rem;
+		color: var(--color-muted);
 		text-align: center;
-		color: var(--color-text-muted);
+	}
+
+	@media (max-width: 560px) {
+		.page-numbers {
+			display: none;
+		}
 	}
 </style>

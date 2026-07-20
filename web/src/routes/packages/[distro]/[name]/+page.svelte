@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { page } from '$app/state';
+	import PageMeta from '$lib/components/PageMeta.svelte';
 	import { getPackageDetail, getReverseDependencies, getCanonicalInfo } from '$lib/api';
 	import type { CanonicalLookupResponse, PackageDetail } from '$lib/types';
 
@@ -59,12 +60,11 @@
 	}
 </script>
 
-<svelte:head>
-	<title>{name} - {distroLabel(distro)} - Conary</title>
-	{#if pkg}
-		<meta name="description" content="{pkg.description ?? `${pkg.name} package for ${distroLabel(pkg.distro)}`}" />
-	{/if}
-</svelte:head>
+<PageMeta
+	title={`${name} · ${distroLabel(distro)} package — Conary`}
+	description={pkg?.description ?? `${name} package metadata for ${distroLabel(distro)} in the public Conary index.`}
+	path={`/packages/${distro}/${name}`}
+/>
 
 <div class="container page">
 	{#if loading}
@@ -73,6 +73,7 @@
 		<p class="status-msg error">{error}</p>
 	{:else if pkg}
 		<div class="pkg-header animate-in" style="--stagger: 0">
+			<p class="eyebrow">Package record / {pkg.distro}</p>
 			<div class="pkg-title-row">
 				<h1>{pkg.name}</h1>
 				{#if pkg.converted}
@@ -243,7 +244,7 @@
 
 <style>
 	.page {
-		padding: 2.5rem 1.5rem;
+		padding-block: clamp(3rem, 7vw, 5.5rem);
 	}
 
 	.pkg-header {
@@ -259,9 +260,10 @@
 	}
 
 	.pkg-title-row h1 {
-		font-family: var(--font-display);
-		font-size: 2rem;
-		font-weight: 800;
+		font-size: clamp(2.6rem, 7vw, 5.4rem);
+		font-weight: 700;
+		letter-spacing: -0.055em;
+		overflow-wrap: anywhere;
 		margin-bottom: 0;
 	}
 
@@ -307,7 +309,7 @@
 		padding: 1.25rem;
 		background: var(--color-surface);
 		border: 1px solid var(--color-border);
-		border-radius: var(--radius-md);
+		border-left: 3px solid var(--color-cyan);
 	}
 
 	.cross-distro h2 {
@@ -341,7 +343,7 @@
 
 	.pkg-grid {
 		display: grid;
-		grid-template-columns: 1fr 300px;
+		grid-template-columns: minmax(0, 1fr) 320px;
 		gap: 2rem;
 		align-items: start;
 	}
@@ -351,8 +353,7 @@
 	}
 
 	.pkg-section h2 {
-		font-family: var(--font-display);
-		font-size: 1.125rem;
+		font-size: 1.25rem;
 		font-weight: 700;
 		margin-bottom: 1rem;
 		padding-bottom: 0.5rem;
@@ -361,6 +362,8 @@
 
 	.table-wrap {
 		overflow-x: auto;
+		border: 1px solid var(--color-border);
+		background: var(--color-layer);
 	}
 
 	.version-table {
@@ -408,7 +411,7 @@
 		padding: 0.25rem 0.625rem;
 		background: var(--color-surface);
 		border: 1px solid var(--color-border);
-		border-radius: var(--radius-sm);
+		border-radius: 2px;
 		font-size: 0.8125rem;
 	}
 
@@ -471,7 +474,7 @@
 		padding: 1.25rem;
 		background: var(--color-surface);
 		border: 1px solid var(--color-border);
-		border-radius: var(--radius-md);
+		border-radius: 0;
 		margin-bottom: 0.75rem;
 	}
 
@@ -526,6 +529,7 @@
 		border: 1px solid var(--color-border);
 		border-radius: var(--radius-sm);
 		padding: 0.625rem 0.875rem;
+		overflow-x: auto;
 	}
 
 	.terminal-prompt {

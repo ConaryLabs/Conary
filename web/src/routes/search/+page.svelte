@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { page } from '$app/state';
+	import PageMeta from '$lib/components/PageMeta.svelte';
 	import SearchBar from '$lib/components/SearchBar.svelte';
 	import PackageCard from '$lib/components/PackageCard.svelte';
 	import DistroSelector from '$lib/components/DistroSelector.svelte';
@@ -41,17 +42,21 @@
 	}
 </script>
 
-<svelte:head>
-	<title>{query ? `"${query}" - Search` : 'Search'} - Conary</title>
-</svelte:head>
+<PageMeta
+	title={query ? `“${query}” package search — Conary` : 'Search packages — Conary'}
+	description="Search public package metadata across the distribution indexes served by Remi."
+	noindex
+/>
 
 <div class="container page">
 	<div class="page-header">
+		<p class="eyebrow">Package lookup</p>
 		<h1>Search Packages</h1>
+		<p class="page-subtitle">Search names and descriptions, then narrow the evidence by source distribution.</p>
 	</div>
 
 	<div class="search-controls">
-		<SearchBar value={query} placeholder="Search packages..." autofocus />
+		<SearchBar value={query} placeholder="Search packages..." />
 		<DistroSelector selected={distroFilter} onselect={handleDistroSelect} />
 	</div>
 
@@ -82,14 +87,14 @@
 
 <style>
 	.page {
-		padding: 2.5rem 1.5rem;
+		padding-block: clamp(3rem, 7vw, 5.5rem);
 	}
 
 	.page-header h1 {
-		font-family: var(--font-display);
-		font-size: 1.75rem;
+		font-size: clamp(2.6rem, 6vw, 4.8rem);
 		font-weight: 700;
-		margin-bottom: 1.5rem;
+		letter-spacing: -0.055em;
+		margin-bottom: 0.65rem;
 	}
 
 	.search-controls {
@@ -108,7 +113,9 @@
 
 	.results-list {
 		display: grid;
-		gap: 0.75rem;
+		gap: 1px;
+		padding: 1px;
+		background: var(--color-border);
 	}
 
 	.status-msg {

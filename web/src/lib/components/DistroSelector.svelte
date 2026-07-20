@@ -15,15 +15,15 @@
 	];
 </script>
 
-<div class="distro-selector" role="tablist" aria-label="Distribution filter">
-	{#each distros as d}
+<div class="distro-selector" aria-label="Distribution filter">
+	{#each distros as distro}
 		<button
-			role="tab"
-			aria-selected={selected === d.id}
-			class:active={selected === d.id}
-			onclick={() => onselect(d.id)}
+			type="button"
+			aria-pressed={selected === distro.id}
+			class:active={selected === distro.id}
+			onclick={() => onselect(distro.id)}
 		>
-			{d.label}
+			{distro.label}
 		</button>
 	{/each}
 </div>
@@ -31,30 +31,33 @@
 <style>
 	.distro-selector {
 		display: inline-flex;
-		gap: 2px;
-		background: var(--color-surface);
-		border: 1px solid var(--color-border);
-		border-radius: var(--radius-md);
+		max-width: 100%;
 		padding: 3px;
+		overflow-x: auto;
+		border: 1px solid var(--color-border-strong);
+		border-radius: var(--radius-sm);
+		background: var(--color-code-bg);
 	}
 
 	button {
-		padding: 0.4375rem 1.125rem;
-		border: none;
-		border-radius: calc(var(--radius-md) - 3px);
-		background: none;
-		color: var(--color-text-secondary);
-		font-size: 0.8125rem;
+		min-height: 40px;
+		padding: 0.45rem 1rem;
+		border: 0;
+		border-radius: 2px;
+		color: var(--color-mist);
+		background: transparent;
+		font-family: var(--font-mono);
+		font-size: 0.72rem;
 		font-weight: 500;
-		transition: all 0.15s;
+		transition: color 150ms ease, background 150ms ease;
 	}
 
 	button:hover {
-		color: var(--color-text);
+		color: var(--color-ivory);
 	}
 
 	button.active {
-		background: var(--color-accent-subtle);
-		color: var(--color-accent);
+		color: var(--color-field);
+		background: var(--color-cyan);
 	}
 </style>

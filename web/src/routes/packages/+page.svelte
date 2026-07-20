@@ -1,4 +1,5 @@
 <script lang="ts">
+	import PageMeta from '$lib/components/PageMeta.svelte';
 	import DistroSelector from '$lib/components/DistroSelector.svelte';
 	import PackageCard from '$lib/components/PackageCard.svelte';
 	import { getPopularPackages } from '$lib/api';
@@ -29,14 +30,17 @@
 	}
 </script>
 
-<svelte:head>
-	<title>Browse Packages - Conary</title>
-</svelte:head>
+<PageMeta
+	title="Browse packages — Conary"
+	description="Browse public package metadata across the Fedora, Arch Linux, and Ubuntu indexes served by Remi."
+	path="/packages"
+/>
 
 <div class="container page">
 	<div class="page-header">
+		<p class="eyebrow">Public package map</p>
 		<h1>Browse Packages</h1>
-		<p class="page-subtitle">Select a distribution to browse its packages</p>
+		<p class="page-subtitle">Choose a source distribution or inspect the packages with the most observed demand.</p>
 	</div>
 
 	<DistroSelector selected="all" onselect={handleDistroSelect} />
@@ -63,7 +67,7 @@
 
 <style>
 	.page {
-		padding: 2.5rem 1.5rem;
+		padding-block: clamp(3rem, 7vw, 5.5rem);
 	}
 
 	.page-header {
@@ -71,10 +75,10 @@
 	}
 
 	.page-header h1 {
-		font-family: var(--font-display);
-		font-size: 1.75rem;
+		font-size: clamp(2.6rem, 6vw, 4.8rem);
 		font-weight: 700;
-		margin-bottom: 0.25rem;
+		letter-spacing: -0.055em;
+		margin-bottom: 0.65rem;
 	}
 
 	.page-subtitle {
@@ -87,8 +91,7 @@
 	}
 
 	.section h2 {
-		font-family: var(--font-display);
-		font-size: 1.25rem;
+		font-size: 1.35rem;
 		font-weight: 700;
 		margin-bottom: 1rem;
 	}
@@ -96,7 +99,9 @@
 	.package-grid {
 		display: grid;
 		grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-		gap: 0.75rem;
+		gap: 1px;
+		padding: 1px;
+		background: var(--color-border);
 	}
 
 	.status-msg {

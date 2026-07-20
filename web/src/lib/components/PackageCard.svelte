@@ -35,129 +35,111 @@
 <a href="/packages/{distro}/{name}" class="package-card">
 	<div class="card-header">
 		<span class="card-name">{name}</span>
-		{#if version}
-			<span class="card-version">{version}</span>
-		{/if}
+		<span class="card-arrow" aria-hidden="true">↗</span>
 	</div>
+	{#if version}
+		<span class="card-version">{version}</span>
+	{/if}
 	{#if description}
 		<p class="card-description">{description}</p>
 	{/if}
 	<div class="card-meta">
 		<span class="card-distro distro-{distro}">{distro}</span>
-		{#if converted}
-			<span class="card-badge">CCS</span>
-		{/if}
-		{#if size > 0}
-			<span class="card-stat">{formatSize(size)}</span>
-		{/if}
-		{#if downloads > 0}
-			<span class="card-stat">{formatDownloads(downloads)} dl</span>
-		{/if}
+		{#if converted}<span class="card-badge">CCS</span>{/if}
+		{#if size > 0}<span class="card-stat">{formatSize(size)}</span>{/if}
+		{#if downloads > 0}<span class="card-stat">{formatDownloads(downloads)} downloads</span>{/if}
 	</div>
 </a>
 
 <style>
 	.package-card {
-		display: block;
-		padding: 1rem 1.25rem;
-		background: var(--color-surface);
-		border: 1px solid var(--color-border);
-		border-radius: var(--radius-md);
+		display: flex;
+		min-height: 154px;
+		flex-direction: column;
+		padding: 1.15rem 1.25rem;
+		color: var(--color-ivory);
+		background: var(--color-layer);
 		text-decoration: none;
-		color: var(--color-text);
-		transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s;
+		transition: color 150ms ease, background 150ms ease;
 	}
 
 	.package-card:hover {
-		border-color: var(--color-border-hover);
-		box-shadow: var(--shadow-md);
-		transform: translateY(-1px);
+		color: var(--color-ivory);
+		background: var(--color-surface-hover);
 		text-decoration: none;
-		color: var(--color-text);
 	}
 
 	.card-header {
 		display: flex;
 		align-items: baseline;
-		gap: 0.5rem;
-		margin-bottom: 0.375rem;
+		justify-content: space-between;
+		gap: 0.75rem;
 	}
 
 	.card-name {
+		min-width: 0;
+		overflow-wrap: anywhere;
+		color: var(--color-cyan);
 		font-family: var(--font-mono);
+		font-size: 0.9rem;
 		font-weight: 500;
-		font-size: 0.9375rem;
-		color: var(--color-accent);
-		transition: color 0.15s;
 	}
 
-	.package-card:hover .card-name {
-		color: var(--color-accent-hover);
+	.card-arrow {
+		color: var(--color-orange);
+		font-size: 0.82rem;
 	}
 
 	.card-version {
+		margin-top: 0.15rem;
+		color: var(--color-muted);
 		font-family: var(--font-mono);
-		font-size: 0.75rem;
-		color: var(--color-text-muted);
+		font-size: 0.7rem;
 	}
 
 	.card-description {
-		margin: 0 0 0.625rem;
-		font-size: 0.8125rem;
-		color: var(--color-text-secondary);
-		line-height: 1.5;
 		display: -webkit-box;
+		margin: 0.7rem 0 1rem;
+		overflow: hidden;
+		color: var(--color-mist);
+		font-size: 0.8rem;
+		line-height: 1.45;
+		-webkit-box-orient: vertical;
 		-webkit-line-clamp: 2;
 		line-clamp: 2;
-		-webkit-box-orient: vertical;
-		overflow: hidden;
 	}
 
 	.card-meta {
 		display: flex;
 		align-items: center;
-		gap: 0.625rem;
-		font-size: 0.75rem;
-		color: var(--color-text-muted);
+		flex-wrap: wrap;
+		gap: 0.45rem 0.65rem;
+		margin-top: auto;
+		color: var(--color-muted);
+		font-size: 0.68rem;
 	}
 
-	.card-distro {
-		font-weight: 500;
-		text-transform: capitalize;
-		padding: 0.1em 0.5em;
+	.card-distro,
+	.card-badge {
+		padding: 0.12rem 0.42rem;
+		border: 1px solid currentColor;
 		border-radius: var(--radius-sm);
-		font-size: 0.6875rem;
-		letter-spacing: 0.02em;
+		font-family: var(--font-mono);
+		font-size: 0.62rem;
+		letter-spacing: 0.05em;
+		text-transform: uppercase;
 	}
 
-	.distro-fedora {
-		background: rgba(60, 110, 180, 0.15);
-		color: #6B9FE0;
-	}
-
-	.distro-arch {
-		background: rgba(23, 147, 209, 0.15);
-		color: #4DB8E8;
-	}
-
-	.distro-ubuntu {
-		background: rgba(233, 84, 32, 0.15);
-		color: #F08060;
-	}
+	.distro-fedora { color: #79abe3; }
+	.distro-arch { color: var(--color-cyan); }
+	.distro-ubuntu { color: #ff9154; }
 
 	.card-badge {
-		padding: 0.1em 0.4em;
-		border-radius: var(--radius-sm);
-		font-size: 0.625rem;
-		font-weight: 600;
-		text-transform: uppercase;
-		letter-spacing: 0.04em;
-		background: rgba(52, 211, 153, 0.15);
 		color: var(--color-success);
 	}
 
 	.card-stat {
 		font-family: var(--font-mono);
-		font-size: 0.6875rem;
+		font-size: 0.66rem;
 	}
 </style>

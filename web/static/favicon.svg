@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Conary">
+  <rect width="64" height="64" rx="12" fill="#0A1224"/>
+  <path d="M 45 18 A 20 20 0 1 0 45 46" fill="none" stroke="#FBF7F0" stroke-width="7" stroke-linecap="round"/>
+  <path d="M 39 25 A 11 11 0 1 0 39 39" fill="none" stroke="#46C7D3" stroke-width="6" stroke-linecap="round"/>
+  <rect x="45" y="28" width="8" height="8" rx="1.5" fill="#FC6B16" transform="rotate(45 49 32)"/>
+</svg>

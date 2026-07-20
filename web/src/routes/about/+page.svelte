@@ -1,10 +1,16 @@
-<svelte:head>
-	<title>About - Conary Package Index</title>
-	<meta name="description" content="Learn about Conary, the cross-distribution package manager, and Remi, the on-demand conversion proxy." />
-</svelte:head>
+<script lang="ts">
+	import PageMeta from '$lib/components/PageMeta.svelte';
+</script>
+
+<PageMeta
+	title="About Remi and the package index — Conary"
+	description="Learn how the public package index relates to Conary, Remi, upstream repositories, and policy-gated CCS conversion."
+	path="/about"
+/>
 
 <div class="container page">
 	<div class="content">
+		<p class="eyebrow">System boundary</p>
 		<h1 class="animate-in" style="--stagger: 0">About Conary</h1>
 
 		<p class="lead animate-in" style="--stagger: 1">
@@ -105,23 +111,22 @@
 
 <style>
 	.page {
-		padding: 2.5rem 1.5rem;
+		padding-block: clamp(3rem, 7vw, 5.5rem);
 	}
 
 	.content {
-		max-width: 720px;
+		max-width: 860px;
 	}
 
 	h1 {
-		font-family: var(--font-display);
-		font-size: 2.25rem;
-		font-weight: 800;
+		font-size: clamp(2.8rem, 7vw, 5.5rem);
+		font-weight: 700;
+		letter-spacing: -0.055em;
 		margin-bottom: 1.25rem;
 	}
 
 	h2 {
-		font-family: var(--font-display);
-		font-size: 1.375rem;
+		font-size: clamp(1.55rem, 3vw, 2.2rem);
 		font-weight: 700;
 		margin-top: 3rem;
 		margin-bottom: 1rem;
@@ -150,15 +155,13 @@
 		padding: 1.25rem;
 		background: var(--color-surface);
 		border: 1px solid var(--color-border);
-		border-radius: var(--radius-md);
 	}
 
 	.feature h3 {
-		font-family: var(--font-display);
 		font-size: 0.9375rem;
 		font-weight: 700;
 		margin-bottom: 0.375rem;
-		color: var(--color-accent);
+		color: var(--color-cyan);
 	}
 
 	.feature p {
@@ -173,7 +176,7 @@
 		gap: 0.625rem;
 		background: var(--color-code-bg);
 		border: 1px solid var(--color-border);
-		border-radius: var(--radius-md);
+		border-left: 3px solid var(--color-orange);
 		padding: 0.875rem 1.125rem;
 		margin-bottom: 1.5rem;
 	}
@@ -181,7 +184,7 @@
 	.terminal-prompt {
 		font-family: var(--font-mono);
 		font-size: 0.875rem;
-		color: var(--color-accent);
+		color: var(--color-orange);
 		font-weight: 500;
 		user-select: none;
 	}
@@ -206,18 +209,23 @@
 		padding: 0.75rem 1.25rem;
 		background: var(--color-surface);
 		border: 1px solid var(--color-border);
-		border-radius: var(--radius-md);
 		text-decoration: none;
-		color: var(--color-accent);
+		color: var(--color-cyan);
 		font-size: 0.875rem;
 		font-weight: 500;
 		transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s;
 	}
 
 	.link-card:hover {
-		border-color: var(--color-accent);
-		box-shadow: 0 0 0 3px var(--color-accent-subtle);
+		border-color: var(--color-cyan);
+		background: var(--color-accent-subtle);
 		transform: translateY(-1px);
 		text-decoration: none;
+	}
+
+	@media (max-width: 560px) {
+		.links-row {
+			flex-direction: column;
+		}
 	}
 </style>

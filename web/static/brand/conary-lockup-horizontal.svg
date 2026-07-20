@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 176" role="img" aria-labelledby="title desc">
+  <title id="title">Conary</title>
+  <desc id="desc">The Conary symbol and wordmark.</desc>
+  <g transform="translate(8 8) scale(.3125)">
+    <rect width="512" height="512" rx="72" fill="#0A1224"/>
+    <path d="M 365 146 A 160 160 0 1 0 365 366" fill="none" stroke="#FBF7F0" stroke-width="50" stroke-linecap="round"/>
+    <path d="M 318 198 A 89 89 0 1 0 318 314" fill="none" stroke="#46C7D3" stroke-width="40" stroke-linecap="round"/>
+    <rect x="350" y="229" width="54" height="54" rx="9" fill="#FC6B16" transform="rotate(45 377 256)"/>
+  </g>
+  <text x="198" y="116" fill="#FBF7F0" font-family="Syne, Arial, sans-serif" font-size="82" font-weight="700" letter-spacing="-4">Conary</text>
+</svg>

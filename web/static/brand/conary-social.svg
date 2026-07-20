@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" role="img" aria-labelledby="title desc">
+  <title id="title">Conary</title>
+  <desc id="desc">Conary — reversible package experiments on Linux.</desc>
+  <rect width="1200" height="630" fill="#0A1224"/>
+  <path d="M 346 132 A 190 190 0 1 0 346 498" fill="none" stroke="#FBF7F0" stroke-width="56" stroke-linecap="round"/>
+  <path d="M 300 210 A 104 104 0 1 0 300 420" fill="none" stroke="#46C7D3" stroke-width="44" stroke-linecap="round"/>
+  <rect x="349" y="288" width="62" height="62" rx="10" fill="#FC6B16" transform="rotate(45 380 319)"/>
+  <text x="520" y="184" fill="#FC6B16" font-family="JetBrains Mono, monospace" font-size="20" font-weight="500" letter-spacing="3">LIMITED LINUX PREVIEW</text>
+  <text x="514" y="316" fill="#FBF7F0" font-family="Syne, Arial, sans-serif" font-size="112" font-weight="800" letter-spacing="-7">Conary</text>
+  <text x="520" y="388" fill="#BFCBD4" font-family="Outfit, Arial, sans-serif" font-size="34" font-weight="500">Reversible package experiments</text>
+  <text x="520" y="431" fill="#BFCBD4" font-family="Outfit, Arial, sans-serif" font-size="34" font-weight="500">on the distro you already use.</text>
+  <path d="M 520 486 H 1098" stroke="#21344A"/>
+  <text x="520" y="530" fill="#46C7D3" font-family="JetBrains Mono, monospace" font-size="19">conary.io</text>
+</svg>
