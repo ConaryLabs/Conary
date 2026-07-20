@@ -5,15 +5,15 @@ const buildRoot = new URL('../build/', import.meta.url);
 const pages = [
 	{
 		file: 'index.html',
-		title: 'Conary — Reversible package experiments on Linux',
+		title: 'Conary — One reversible package model for Linux',
 		canonical: 'https://conary.io/',
-		marker: 'Try Conary alongside the package manager you already trust.'
+		marker: 'Make Linux package state portable, inspectable, and reversible.'
 	},
 	{
 		file: 'features/index.html',
-		title: 'Features and preview boundaries — Conary',
+		title: 'Product vision and features — Conary',
 		canonical: 'https://conary.io/features/',
-		marker: 'Features, ordered by the evidence behind them.'
+		marker: 'The package manager is only the beginning.'
 	},
 	{
 		file: 'install/index.html',

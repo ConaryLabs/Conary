@@ -4,29 +4,106 @@
 </script>
 
 <PageMeta
-	title="Features and preview boundaries — Conary"
-	description="Explore Conary's current package-management capabilities, experimental surfaces, and explicit preview boundaries."
+	title="Product vision and features — Conary"
+	description="Explore the Conary product direction, the features available today, and the evidence behind each package and system-management layer."
 	path="/features/"
 />
 
 <PageIntro
-	eyebrow="Capability map"
-	title="Features, ordered by the evidence behind them."
-	description="The bounded preview, Conary-owned package state, VM-only generations, experimental infrastructure, and future work are different commitments. This page keeps them visibly separate."
+	eyebrow="Product vision and capability map"
+	title="The package manager is only the beginning."
+	description="Conary is growing from reversible package adoption into a shared model for building, describing, moving, and recovering Linux systems. The direction is ambitious; the evidence labels show which parts you can rely on today."
 />
 
 <nav class="category-index" aria-label="Feature maturity groups">
 	<div class="container">
+		<a href="#direction">Direction</a>
 		<a href="#preview-supported">Preview</a>
-		<a href="#owned-packages">Owned packages</a>
-		<a href="#vm-generations">VM generations</a>
-		<a href="#experimental">Experimental</a>
-		<a href="#roadmap">Not promised</a>
+		<a href="#owned-packages">Package core</a>
+		<a href="#vm-generations">Systems</a>
+		<a href="#experimental">Infrastructure</a>
+		<a href="#roadmap">Horizon</a>
 	</div>
 </nav>
 
 <section class="features-page">
 	<div class="container features-content">
+		<div class="category category-direction" id="direction">
+			<div class="category-heading">
+				<span class="category-status preview">product direction</span>
+				<h2 class="category-title">What Conary is building toward</h2>
+				<p>A connected system, not a pile of package-manager features.</p>
+			</div>
+
+			<div class="feature-list direction-list">
+				<article class="feature-card feature-lead">
+					<span class="feature-status preview">foundation available</span>
+					<h3>Shared package intent, distribution-aware resolution</h3>
+					<p>
+						Express the package state you want through one set of concepts while target
+						profiles preserve each distribution's identities, versions, repositories,
+						formats, and policy. The goal is portability of intent—not pretending every
+						RPM, DEB, or Arch artifact is interchangeable.
+					</p>
+				</article>
+
+				<article class="feature-card">
+					<span class="feature-status preview">working today</span>
+					<h3>Gradual authority transfer</h3>
+					<p>
+						Start with the machine already running. Conary can observe native packages,
+						track them reversibly, and keep ownership visible so migration becomes a series
+						of deliberate boundaries instead of one destructive cutover.
+					</p>
+				</article>
+
+				<article class="feature-card">
+					<span class="feature-status limited">post-milestone direction</span>
+					<h3>Third-party package building and publishing</h3>
+					<p>
+						Turn the existing recipe, isolated-build, CCS, signing, and static-publication
+						machinery into a coherent workflow that other projects can use—not only an
+						internal bootstrap pipeline.
+					</p>
+				</article>
+
+				<article class="feature-card">
+					<span class="feature-status limited">available · limited</span>
+					<h3>Declarative systems and replatform planning</h3>
+					<p>
+						Describe desired package state, compare it with a host, lock inputs, and connect
+						models to builders and source selection. Over time, that same model can turn a
+						distribution move into an inspectable plan rather than a fresh-install ritual.
+					</p>
+				</article>
+
+				<article class="feature-card">
+					<span class="feature-status vm">VM evidence · limited</span>
+					<h3>Selectable system artifacts and explicit trust</h3>
+					<p>
+						Compose package state into content-reusing generations, carry the boot assets
+						needed to run them, and make selection, export, verification, and recovery
+						explicit. Current proof is x86_64 and VM-focused; signed boot authority and
+						broader trust are later work.
+					</p>
+				</article>
+
+				<article class="feature-card">
+					<span class="feature-status experimental">service today · research ahead</span>
+					<h3>Shared package services and automation</h3>
+					<p>
+						Remi already indexes package metadata and serves policy-approved conversions.
+						The longer path connects reliable operator services, agent-facing operations,
+						and trusted federation without making hidden network authority the default.
+					</p>
+				</article>
+				<p class="direction-note">
+					This is product direction, not an ordered release promise. Post-preview priorities
+					will be selected from external tester evidence.
+				</p>
+			</div>
+		</div>
+
 		<div class="category category-preview" id="preview-supported">
 			<div class="category-heading">
 				<span class="category-status preview">preview-supported</span>
@@ -259,9 +336,9 @@
 
 		<div class="category category-quiet" id="roadmap">
 			<div class="category-heading">
-				<span class="category-status roadmap">not preview commitments</span>
-				<h2 class="category-title">Roadmap and refusal boundaries</h2>
-				<p>Directions under discussion or explicit absences—not capabilities to plan production work around.</p>
+				<span class="category-status roadmap">longer horizon</span>
+				<h2 class="category-title">What still needs its proof</h2>
+				<p>Valuable directions that are not capabilities to plan production work around yet.</p>
 			</div>
 
 			<div class="feature-list">
@@ -298,9 +375,9 @@
 
 		<section class="features-cta">
 			<div>
-				<p class="eyebrow">Start with the strongest evidence</p>
-				<h2>Run the bounded preview before exploring advanced surfaces.</h2>
-				<p>The install runbook pins the package, checksum, command order, and feedback contract.</p>
+				<p class="eyebrow">The first step is ready</p>
+				<h2>Try the reversible foundation of the larger system.</h2>
+				<p>The install runbook pins the package, checksum, command order, and feedback contract so the vision begins with real evidence.</p>
 			</div>
 			<a href="/install/" class="btn btn-primary">Open the preview runbook</a>
 		</section>
@@ -318,7 +395,7 @@
 
 	.category-index .container {
 		display: grid;
-		grid-template-columns: repeat(5, minmax(0, 1fr));
+		grid-template-columns: repeat(6, minmax(0, 1fr));
 	}
 
 	.category-index a {
@@ -480,6 +557,15 @@
 		margin-bottom: 0;
 	}
 
+	.direction-note {
+		padding: 1rem 1.1rem;
+		border-left: 3px solid var(--color-cyan);
+		color: var(--color-muted) !important;
+		background: rgb(70 199 211 / 6%);
+		font-family: var(--font-mono);
+		font-size: 0.72rem !important;
+	}
+
 	.feature-code {
 		display: flex;
 		flex-direction: column;
@@ -567,10 +653,6 @@
 
 		.category-index a {
 			border-bottom: 1px solid var(--color-border);
-		}
-
-		.category-index a:last-child {
-			grid-column: 1 / -1;
 		}
 
 		.category {

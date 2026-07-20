@@ -5,29 +5,29 @@
 </script>
 
 <PageMeta
-	title="Conary — Reversible package experiments on Linux"
-	description="Try Conary's limited Linux preview alongside dnf, apt, or pacman through reversible native-package adoption."
+	title="Conary — One reversible package model for Linux"
+	description="Conary is building portable, inspectable, and reversible package state across Linux distributions, from native-package adoption to declarative systems."
 	path="/"
 />
 
 <section class="hero">
 	<div class="container grid-12 hero-grid">
 		<div class="hero-copy">
-			<p class="eyebrow">Limited preview · {previewRelease.tag}</p>
-			<h1>Try Conary alongside the package manager you already trust.</h1>
+			<p class="eyebrow">A package system for Linux · {previewRelease.tag}</p>
+			<h1>Make Linux package state portable, inspectable, and reversible.</h1>
 			<p class="hero-lede">
-				On Fedora 44, Ubuntu 26.04 LTS, or Arch, Conary can track native packages
-				while dnf, apt, or pacman remains authoritative. Inspect the dry-run,
-				then reverse the tracking without deleting package files.
+				Conary is building one model for packages and systems across distributions:
+				adopt the machine you have, move authority only when you choose, and grow
+				toward reproducible packages and selectable system state.
 			</p>
 			<div class="button-row hero-actions">
-				<a href="/install/" class="btn btn-primary">Run the limited preview</a>
-				<a href="/features/" class="btn btn-secondary">See current boundaries</a>
+				<a href="/features/" class="btn btn-primary">Explore the product direction</a>
+				<a href="/install/" class="btn btn-secondary">Try what works today</a>
 			</div>
-			<ul class="hero-meta" aria-label="Preview scope">
-				<li>x86_64</li>
-				<li>VM or non-critical host</li>
-				<li>Native authority stays in place</li>
+			<ul class="hero-meta" aria-label="Conary principles">
+				<li>Fedora · Ubuntu · Arch</li>
+				<li>Native authority by default</li>
+				<li>Preview available now</li>
 			</ul>
 		</div>
 
@@ -54,14 +54,67 @@
 	</div>
 </section>
 
+<section class="section vision">
+	<div class="container">
+		<div class="vision-heading">
+			<div>
+				<p class="eyebrow">The Conary idea</p>
+				<h2 class="section-heading">One model, from package intent to a complete system.</h2>
+			</div>
+			<p class="section-copy">
+				Linux distributions should not become interchangeable. Their package formats,
+				policies, and native tools matter. Conary aims to add a shared control plane
+				above those differences—without hiding who owns each change.
+			</p>
+		</div>
+
+		<div class="vision-grid">
+			<article>
+				<span class="vision-status available">foundation available</span>
+				<h3>Express package intent across distributions</h3>
+				<p>Use shared package concepts while Conary resolves host-matching RPM, DEB, Arch, and CCS inputs with distribution-aware identity.</p>
+			</article>
+			<article>
+				<span class="vision-status available">preview today</span>
+				<h3>Adopt a system without reinstalling it</h3>
+				<p>Bring existing native packages into view, keep dnf, apt, or pacman authoritative, and transfer ownership only through an explicit decision.</p>
+			</article>
+			<article>
+				<span class="vision-status building">available · growing</span>
+				<h3>Treat packages as verifiable content</h3>
+				<p>Store Conary-owned files by content hash, resolve dependencies as a graph, and build, sign, verify, and inspect the native CCS format.</p>
+			</article>
+			<article>
+				<span class="vision-status building">active machinery</span>
+				<h3>Describe the system you want</h3>
+				<p>Compare a declarative model with a running host and develop a path toward planned package changes and cross-distribution replatforming.</p>
+			</article>
+			<article>
+				<span class="vision-status advanced">VM evidence</span>
+				<h3>Select complete system generations</h3>
+				<p>Build content-reusing EROFS artifacts, select a generation for the next boot, and make recovery a system-level operation rather than a hopeful undo.</p>
+			</article>
+			<article>
+				<span class="vision-status horizon">service today · wider horizon</span>
+				<h3>Share package infrastructure</h3>
+				<p>Use Remi as the package metadata and conversion service today, while federation, third-party publishing, and broader automation mature.</p>
+			</article>
+			<a href="/features/" class="vision-link">
+				<span>See the full feature map and maturity of each layer</span>
+				<span aria-hidden="true">→</span>
+			</a>
+		</div>
+	</div>
+</section>
+
 <section class="section evaluate">
 	<div class="container grid-12">
 		<div class="evaluate-heading">
-			<p class="eyebrow">The first useful loop</p>
-			<h2 class="section-heading">What you can evaluate now</h2>
+			<p class="eyebrow">Available now · limited preview</p>
+			<h2 class="section-heading">Start without starting over.</h2>
 			<p class="section-copy">
-				The preview is intentionally narrow. It tests whether Conary can add useful
-				package state without forcing a distribution migration first.
+				The first public loop is deliberately focused: prove Conary can add useful
+				package state to a real host before asking users to trust the larger vision.
 			</p>
 		</div>
 
@@ -129,38 +182,6 @@
 	</div>
 </section>
 
-<section class="section beyond">
-	<div class="container grid-12">
-		<div class="beyond-intro">
-			<p class="eyebrow">Beyond the first loop</p>
-			<h2 class="section-heading">A path toward Conary-owned state, not a shortcut around consent.</h2>
-		</div>
-
-		<div class="beyond-grid">
-			<article>
-				<span class="article-mark cyan" aria-hidden="true"></span>
-				<h3>Content-addressable storage</h3>
-				<p>
-					Conary-owned files are stored by content hash so identical content can be
-					reused across packages instead of stored repeatedly.
-				</p>
-			</article>
-			<article>
-				<span class="article-mark orange" aria-hidden="true"></span>
-				<h3>Optional system generations</h3>
-				<p>
-					The advanced path builds EROFS generation artifacts for explicit selection.
-					It is separate from the basic package loop and should be exercised in a VM today.
-				</p>
-			</article>
-			<a href="/features/" class="feature-link">
-				<span>Capabilities and current boundaries</span>
-				<span aria-hidden="true">→</span>
-			</a>
-		</div>
-	</div>
-</section>
-
 <section class="section section-band fit-check">
 	<div class="container grid-12">
 		<div class="fit-title">
@@ -181,9 +202,9 @@
 <section class="section final-cta">
 	<div class="container cta-box">
 		<div>
-			<p class="eyebrow">Ready to test the boundary?</p>
-			<h2>Run the reversible preview on a VM.</h2>
-			<p>Use the pinned release, verify its checksums, and start with the documented dry-run.</p>
+			<p class="eyebrow">See the idea on a real host</p>
+			<h2>Start with the reversible layer.</h2>
+			<p>The larger system is the direction. The pinned, checksum-verified preview is where you can begin safely today.</p>
 		</div>
 		<div class="button-row">
 			<a href="/install/" class="btn btn-primary">Open the install guide</a>
@@ -258,6 +279,128 @@
 		height: 0.34rem;
 		background: var(--color-orange);
 		transform: rotate(45deg);
+	}
+
+	.vision {
+		border-bottom: 1px solid var(--color-border);
+		background: var(--color-layer);
+	}
+
+	.vision-heading {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) minmax(300px, 0.72fr);
+		gap: clamp(2rem, 7vw, 6rem);
+		align-items: end;
+		margin-bottom: clamp(2.5rem, 6vw, 4.5rem);
+	}
+
+	.vision-heading h2 {
+		max-width: 15ch;
+	}
+
+	.vision-heading .section-copy {
+		margin: 0;
+	}
+
+	.vision-grid {
+		display: grid;
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+		gap: 1px;
+		border: 1px solid var(--color-border);
+		background: var(--color-border);
+	}
+
+	.vision-grid article,
+	.vision-link {
+		background: var(--color-field);
+	}
+
+	.vision-grid article {
+		min-height: 248px;
+		padding: clamp(1.35rem, 3vw, 2rem);
+	}
+
+	.vision-status {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.5rem;
+		font-family: var(--font-mono);
+		font-size: 0.65rem;
+		letter-spacing: 0.05em;
+		text-transform: uppercase;
+	}
+
+	.vision-status::before {
+		content: '';
+		width: 0.52rem;
+		height: 0.52rem;
+		flex: 0 0 auto;
+	}
+
+	.vision-status.available,
+	.vision-status.building {
+		color: var(--color-cyan);
+	}
+
+	.vision-status.available::before {
+		background: var(--color-cyan);
+	}
+
+	.vision-status.building::before {
+		border: 1px solid var(--color-cyan);
+	}
+
+	.vision-status.advanced {
+		color: var(--color-orange);
+	}
+
+	.vision-status.advanced::before {
+		background: var(--color-orange);
+		transform: rotate(45deg) scale(0.82);
+	}
+
+	.vision-status.horizon {
+		color: var(--color-muted);
+	}
+
+	.vision-status.horizon::before {
+		width: 0.65rem;
+		height: 1px;
+		background: var(--color-muted);
+	}
+
+	.vision-grid h3 {
+		max-width: 20ch;
+		margin: 2.6rem 0 0.75rem;
+		font-family: var(--font-body);
+		font-size: 1.15rem;
+		font-weight: 600;
+		letter-spacing: -0.015em;
+	}
+
+	.vision-grid p {
+		margin: 0;
+		color: var(--color-muted);
+		font-size: 0.9rem;
+		line-height: 1.65;
+	}
+
+	.vision-link {
+		grid-column: 1 / -1;
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		min-height: 64px;
+		padding: 1rem 1.4rem;
+		color: var(--color-cyan);
+		font-family: var(--font-mono);
+		font-size: 0.78rem;
+		text-decoration: none;
+	}
+
+	.vision-link:hover {
+		color: var(--color-field);
+		background: var(--color-cyan);
 	}
 
 	.hero-art {
@@ -439,77 +582,6 @@
 		line-height: 1.6;
 	}
 
-	.beyond-intro {
-		grid-column: 1 / span 5;
-	}
-
-	.beyond-grid {
-		grid-column: 7 / -1;
-		display: grid;
-		grid-template-columns: repeat(2, minmax(0, 1fr));
-		gap: 1px;
-		background: var(--color-border);
-		border: 1px solid var(--color-border);
-	}
-
-	.beyond-grid article,
-	.feature-link {
-		background: var(--color-field);
-	}
-
-	.beyond-grid article {
-		padding: clamp(1.4rem, 3vw, 2rem);
-	}
-
-	.article-mark {
-		display: block;
-		width: 0.9rem;
-		height: 0.9rem;
-		margin-bottom: 2.5rem;
-	}
-
-	.article-mark.cyan {
-		border: 3px solid var(--color-cyan);
-		border-radius: 50%;
-	}
-
-	.article-mark.orange {
-		background: var(--color-orange);
-		transform: rotate(45deg) scale(0.82);
-	}
-
-	.beyond-grid h3 {
-		margin-bottom: 0.7rem;
-		font-family: var(--font-body);
-		font-size: 1.08rem;
-		font-weight: 600;
-		letter-spacing: 0;
-	}
-
-	.beyond-grid p {
-		margin: 0;
-		color: var(--color-muted);
-		font-size: 0.9rem;
-	}
-
-	.feature-link {
-		grid-column: 1 / -1;
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		min-height: 62px;
-		padding: 1rem 1.4rem;
-		color: var(--color-cyan);
-		font-family: var(--font-mono);
-		font-size: 0.78rem;
-		text-decoration: none;
-	}
-
-	.feature-link:hover {
-		color: var(--color-field);
-		background: var(--color-cyan);
-	}
-
 	.fit-title {
 		grid-column: 1 / span 6;
 	}
@@ -563,6 +635,10 @@
 	}
 
 	@media (max-width: 980px) {
+		.vision-grid {
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+		}
+
 		.hero-copy {
 			grid-column: 1 / span 6;
 		}
@@ -575,14 +651,12 @@
 		}
 
 		.evaluate-heading,
-		.evidence-copy,
-		.beyond-intro {
+		.evidence-copy {
 			grid-column: 1 / span 5;
 		}
 
 		.capability-list,
-		.evidence-terminal,
-		.beyond-grid {
+		.evidence-terminal {
 			grid-column: 6 / -1;
 		}
 
@@ -592,6 +666,18 @@
 	}
 
 	@media (max-width: 760px) {
+		.vision-heading {
+			grid-template-columns: 1fr;
+		}
+
+		.vision-grid {
+			grid-template-columns: 1fr;
+		}
+
+		.vision-link {
+			grid-column: 1;
+		}
+
 		.hero-grid {
 			min-height: auto;
 			padding-top: 4.5rem;
@@ -604,8 +690,6 @@
 		.capability-list,
 		.evidence-copy,
 		.evidence-terminal,
-		.beyond-intro,
-		.beyond-grid,
 		.fit-title,
 		.fit-copy {
 			grid-column: 1;
@@ -624,7 +708,6 @@
 
 		.evaluate-heading,
 		.evidence-copy,
-		.beyond-intro,
 		.fit-title {
 			margin-bottom: 2rem;
 		}
@@ -639,14 +722,6 @@
 
 		.evidence-terminal {
 			margin-top: 0.5rem;
-		}
-
-		.beyond-grid {
-			grid-template-columns: 1fr;
-		}
-
-		.feature-link {
-			grid-column: 1;
 		}
 
 		.cta-box {
