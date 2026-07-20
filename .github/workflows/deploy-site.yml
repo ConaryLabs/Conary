@@ -2,6 +2,16 @@ name: deploy-site
 
 on:
   workflow_dispatch:
+    inputs:
+      target:
+        description: Public frontend to deploy
+        required: true
+        default: both
+        type: choice
+        options:
+          - both
+          - site
+          - packages
 
 permissions:
   contents: read
@@ -12,7 +22,7 @@ concurrency:
 
 jobs:
   deploy:
-    name: deploy-conary-io
+    name: deploy-public-frontends
     if: ${{ github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     environment: production
@@ -24,9 +34,15 @@ jobs:
         with:
           node-version: '24'
           cache: npm
-          cache-dependency-path: site/package-lock.json
-      - name: Install locked site dependencies
-        run: npm ci --prefix site
+          cache-dependency-path: |
+            site/package-lock.json
+            web/package-lock.json
+      - name: Install locked frontend dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --prefix site
+          npm ci --prefix web
       - name: Configure production access
         env:
           REMI_SSH_KEY: ${{ secrets.REMI_SSH_KEY }}
@@ -58,9 +74,10 @@ jobs:
             echo "REMI_HOST=$target"
             echo "REMI_SITE_KEY_PATH=$key_path"
           } >> "$GITHUB_ENV"
-      - name: Deploy committed conary.io site
-        run: bash deploy/deploy-sites.sh site
+      - name: Deploy committed public frontend
+        run: bash deploy/deploy-sites.sh "${{ inputs.target }}"
       - name: Configure status-aware static routing
+        if: ${{ inputs.target != 'packages' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -71,20 +88,44 @@ jobs:
           trap cleanup EXIT
           scp deploy/configure-site-routing.sh "$REMI_HOST:$remote_script"
           ssh "$REMI_HOST" "chmod 0700 '$remote_script' && sudo -n '$remote_script'"
-      - name: Verify public site and branded 404
+      - name: Verify selected public frontend
         shell: bash
         run: |
           set -euo pipefail
-          home_status="$(curl --retry 5 --retry-delay 2 -sS -o /tmp/conary-home.html -w '%{http_code}' https://conary.io/)"
-          [[ "$home_status" == "200" ]] || { echo "home returned $home_status" >&2; exit 1; }
+          target="${{ inputs.target }}"
 
-          missing_url="https://conary.io/__deploy-404-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          missing_status="$(curl --retry 5 --retry-delay 2 -sS -o /tmp/conary-404.html -w '%{http_code}' "$missing_url")"
-          [[ "$missing_status" == "404" ]] || { echo "unknown route returned $missing_status" >&2; exit 1; }
-          grep -Fq 'This path is outside the current map.' /tmp/conary-404.html || {
-            echo "unknown route did not return the branded 404 body" >&2
-            exit 1
-          }
+          if [[ "$target" == "site" || "$target" == "both" ]]; then
+            home_status="$(curl --retry 5 --retry-delay 2 -sS -o /tmp/conary-home.html -w '%{http_code}' https://conary.io/)"
+            [[ "$home_status" == "200" ]] || { echo "conary.io home returned $home_status" >&2; exit 1; }
+            grep -Fq 'Make Linux package state portable, inspectable, and reversible.' /tmp/conary-home.html || {
+              echo "conary.io did not return the committed homepage" >&2
+              exit 1
+            }
+
+            missing_url="https://conary.io/__deploy-404-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            missing_status="$(curl --retry 5 --retry-delay 2 -sS -o /tmp/conary-404.html -w '%{http_code}' "$missing_url")"
+            [[ "$missing_status" == "404" ]] || { echo "unknown conary.io route returned $missing_status" >&2; exit 1; }
+            grep -Fq 'This path is outside the current map.' /tmp/conary-404.html || {
+              echo "unknown conary.io route did not return the branded 404 body" >&2
+              exit 1
+            }
+          fi
+
+          if [[ "$target" == "packages" || "$target" == "both" ]]; then
+            remi_status="$(curl --retry 5 --retry-delay 2 -sS -o /tmp/remi-home.html -w '%{http_code}' https://remi.conary.io/)"
+            [[ "$remi_status" == "200" ]] || { echo "remi.conary.io home returned $remi_status" >&2; exit 1; }
+            grep -Fq '<meta name="theme-color" content="#0a1224"' /tmp/remi-home.html || {
+              echo "remi.conary.io did not return the committed themed application shell" >&2
+              exit 1
+            }
+
+            api_status="$(curl --retry 5 --retry-delay 2 -sS -o /tmp/remi-stats.json -w '%{http_code}' https://remi.conary.io/v1/stats/overview)"
+            [[ "$api_status" == "200" ]] || { echo "Remi stats API returned $api_status" >&2; exit 1; }
+            grep -Fq '"total_packages"' /tmp/remi-stats.json || {
+              echo "Remi stats API response was missing total_packages" >&2
+              exit 1
+            }
+          fi
       - name: Remove deployment key
         if: ${{ always() }}
         shell: bash

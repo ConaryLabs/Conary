@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-16
-revision: 12
+last_updated: 2026-07-20
+revision: 13
 summary: Non-secret infrastructure, agent-operations transport, release, Remi deploy, TLS renewal, remote development, and Forge staging guidance for Conary contributors and coding assistants
 ---
 
@@ -171,11 +171,13 @@ not cover the task or when you are debugging the underlying service path itself.
   under `/tmp` on `peter@ssh.conary.io`, then asks
   `/usr/local/sbin/conary-remi-deploy deploy-site` to publish it into
   `/conary/site/` for `conary.io` or `/conary/web/` for `remi.conary.io`.
-- Post-release `conary.io` updates deploy from the exact `main` commit selected
-  by the manually dispatched `deploy-site` workflow. The workflow uses the
-  repository-held production key, runs the frontend checks and generated-HTML
-  assertions, publishes only `/conary/site/`, and verifies the public home and
-  unknown-route responses before it succeeds.
+- Post-release public-frontend updates deploy from the exact `main` commit
+  selected by the manually dispatched `deploy-site` workflow. Its required
+  `target` choice publishes `site`, `packages`, or `both` through the
+  repository-held production key. The workflow runs the relevant frontend
+  checks, verifies the selected public home content and Remi API when
+  applicable, and always verifies the branded status-aware 404 after a main
+  site deployment.
 - `deploy/configure-site-routing.sh` owns the host-side transition from the old
   SPA fallback to static routing. It requires one unambiguous nginx server for
   `conary.io` rooted at `/conary/site`, backs up the config, changes missing
