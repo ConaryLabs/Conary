@@ -171,6 +171,16 @@ not cover the task or when you are debugging the underlying service path itself.
   under `/tmp` on `peter@ssh.conary.io`, then asks
   `/usr/local/sbin/conary-remi-deploy deploy-site` to publish it into
   `/conary/site/` for `conary.io` or `/conary/web/` for `remi.conary.io`.
+- Post-release `conary.io` updates deploy from the exact `main` commit selected
+  by the manually dispatched `deploy-site` workflow. The workflow uses the
+  repository-held production key, runs the frontend checks and generated-HTML
+  assertions, publishes only `/conary/site/`, and verifies the public home and
+  unknown-route responses before it succeeds.
+- `deploy/configure-site-routing.sh` owns the host-side transition from the old
+  SPA fallback to static routing. It requires one unambiguous nginx server for
+  `conary.io` rooted at `/conary/site`, backs up the config, changes missing
+  paths to `=404` with `/404.html` as the error body, validates nginx, and
+  restores the backup if validation or reload fails.
 - The package frontend is the one wired into Remi's tracked config via
   `[web].root = "/conary/web"`; the main site remains a separate static root on
   the same host
