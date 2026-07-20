@@ -31,20 +31,13 @@ jobs:
         env:
           REMI_SSH_KEY: ${{ secrets.REMI_SSH_KEY }}
           REMI_SSH_TARGET: ${{ secrets.REMI_SSH_TARGET }}
-          REMI_ROOT_SSH_TARGET: ${{ secrets.REMI_ROOT_SSH_TARGET }}
         shell: bash
         run: |
           set -euo pipefail
           [[ -n "${REMI_SSH_KEY:-}" ]] || { echo "REMI_SSH_KEY is required" >&2; exit 1; }
 
           target="${REMI_SSH_TARGET:-peter@ssh.conary.io}"
-          root_target="${REMI_ROOT_SSH_TARGET:-root@ssh.conary.io}"
           [[ "$target" =~ ^[A-Za-z_][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9.-]*$ ]] || exit 1
-          [[ "$root_target" =~ ^[A-Za-z_][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9.-]*$ ]] || exit 1
-          [[ "${target#*@}" == "${root_target#*@}" ]] || {
-            echo "deploy and root SSH targets must use the same host" >&2
-            exit 1
-          }
 
           host="${target#*@}"
           key_path="${RUNNER_TEMP}/remi_site_key"
@@ -63,7 +56,6 @@ jobs:
           chmod 600 "$HOME/.ssh/config" "$HOME/.ssh/known_hosts"
           {
             echo "REMI_HOST=$target"
-            echo "REMI_ROOT_SSH_TARGET=$root_target"
             echo "REMI_SITE_KEY_PATH=$key_path"
           } >> "$GITHUB_ENV"
       - name: Deploy committed conary.io site
@@ -74,11 +66,11 @@ jobs:
           set -euo pipefail
           remote_script="/tmp/conary-site-routing-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.sh"
           cleanup() {
-            ssh "$REMI_ROOT_SSH_TARGET" "rm -f -- '$remote_script'" >/dev/null 2>&1 || true
+            ssh "$REMI_HOST" "rm -f -- '$remote_script'" >/dev/null 2>&1 || true
           }
           trap cleanup EXIT
-          scp deploy/configure-site-routing.sh "$REMI_ROOT_SSH_TARGET:$remote_script"
-          ssh "$REMI_ROOT_SSH_TARGET" "chmod 0700 '$remote_script' && '$remote_script'"
+          scp deploy/configure-site-routing.sh "$REMI_HOST:$remote_script"
+          ssh "$REMI_HOST" "chmod 0700 '$remote_script' && sudo -n '$remote_script'"
       - name: Verify public site and branded 404
         shell: bash
         run: |
