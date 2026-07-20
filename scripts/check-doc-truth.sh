@@ -17,7 +17,7 @@ fi
 DOCS_TRUTH_SCHEMA_CHECK_PATHS=(
     "docs/ARCHITECTURE.md"
     "docs/conaryopedia-v2.md"
-    "site/src/routes"
+    "site/src"
 )
 
 PRODUCT_DOC_PATHS=(
@@ -29,7 +29,7 @@ PRODUCT_DOC_PATHS=(
     "docs/modules"
     "docs/operations"
     "docs/roadmaps"
-    "site/src/routes"
+    "site/src"
     "web/src/routes"
 )
 
@@ -182,10 +182,10 @@ check_system_init_profiles() {
 
     local file line_no text
     while IFS=: read -r file line_no text; do
-        report_error "$file:$line_no shows system init without an exact --profile: $text"
-    done < <(
-        rg -n -P -- 'conary system init(?![^\n]*--profile)' "${paths[@]}" || true
-    )
+        if [[ "$text" != *"--profile "* && "$text" != *"--profile="* ]]; then
+            report_error "$file:$line_no shows system init without an exact --profile: $text"
+        fi
+    done < <(rg -nH -- 'conary system init' "${paths[@]}" || true)
 }
 
 check_preview_status() {
@@ -226,7 +226,7 @@ check_release_doc_versions() {
         "docs/operations/release-artifact-matrix.md"
         "docs/roadmaps/external-tester-milestone.md"
         "docs/operations/external-tester-outreach.md"
-        "site/src/routes"
+        "site/src"
     )
 
     for path in "${release_docs[@]}"; do

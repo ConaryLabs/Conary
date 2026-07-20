@@ -5,9 +5,10 @@
 	"type": "module",
 	"scripts": {
 		"dev": "vite dev",
-		"build": "vite build",
+		"build": "vite build && npm run verify:build",
 		"preview": "vite preview",
-		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json"
+		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+		"verify:build": "node scripts/verify-build.mjs"
 	},
 	"devDependencies": {
 		"@sveltejs/adapter-static": "^3.0.8",

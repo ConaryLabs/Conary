@@ -43,6 +43,7 @@ make_good_repo() {
         "$root/docs/modules" \
         "$root/docs/operations" \
         "$root/docs/roadmaps" \
+        "$root/site/src/lib" \
         "$root/site/src/routes/about" \
         "$root/site/src/routes/features" \
         "$root/site/src/routes/install" \
@@ -150,11 +151,17 @@ EOF
 </section>
 EOF
 
+    cat > "$root/site/src/lib/preview-release.ts" <<'EOF'
+export const previewRelease = {
+    tag: 'v0.10.1',
+};
+EOF
+
     cat > "$root/site/src/routes/install/+page.svelte" <<'EOF'
 <section>
 	<p>Start with the adoption-led limited preview on a VM or non-critical host.</p>
 	<p>Remi cold-start conversion can make first package use slower.</p>
-	<p>The pinned preview release is v0.10.1.</p>
+	<p>Use the pinned preview release.</p>
 </section>
 EOF
 
@@ -456,7 +463,7 @@ break_system_init_profile() {
 }
 
 break_site_release_version() {
-    sed -i 's/v0.10.1/v0.9.2/g' "$1/site/src/routes/install/+page.svelte"
+    sed -i 's/v0.10.1/v0.9.2/g' "$1/site/src/lib/preview-release.ts"
 }
 
 break_site_generation_apply_intent() {

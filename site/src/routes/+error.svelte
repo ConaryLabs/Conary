@@ -1,43 +1,24 @@
-<svelte:head>
-	<title>Page not found - Conary</title>
-	<meta name="description" content="The requested Conary page could not be found." />
-	<meta name="robots" content="noindex" />
-</svelte:head>
+<script lang="ts">
+	import { page } from '$app/state';
+	import ErrorPanel from '$lib/components/ErrorPanel.svelte';
+	import PageMeta from '$lib/components/PageMeta.svelte';
 
-<section class="error-page">
-	<div class="container error-content">
-		<p class="error-code">404</p>
-		<h1>Page not found</h1>
-		<p>The page you requested is not part of the Conary site.</p>
-		<a href="/" class="btn btn-primary">Return home</a>
-	</div>
-</section>
+	let isNotFound = $derived(page.status === 404);
+	let title = $derived(isNotFound ? 'Page not found — Conary' : `Request failed (${page.status}) — Conary`);
+	let description = $derived(
+		isNotFound
+			? 'The requested Conary page could not be found.'
+			: 'Conary could not complete this request. Return home and try the documented path again.'
+	);
+</script>
 
-<style>
-	.error-page {
-		padding: 7rem 0;
-	}
+<PageMeta {title} {description} noindex />
 
-	.error-content {
-		max-width: 620px;
-		text-align: center;
-	}
-
-	.error-code {
-		margin: 0 0 0.5rem;
-		font-family: var(--font-mono);
-		font-size: 0.875rem;
-		color: var(--color-accent);
-	}
-
-	h1 {
-		margin-bottom: 0.75rem;
-		font-family: var(--font-display);
-		font-size: 2.75rem;
-	}
-
-	.error-content > p:not(.error-code) {
-		margin: 0 0 1.5rem;
-		color: var(--color-text-secondary);
-	}
-</style>
+<ErrorPanel
+	status={page.status}
+	eyebrow={isNotFound ? 'route missing' : 'request failed'}
+	title={isNotFound ? 'This path is outside the current map.' : 'This request left the supported path.'}
+	description={isNotFound
+		? 'The page you requested is not part of the Conary site. Return to the evaluation path or open the install guide directly.'
+		: 'The site could not complete this request. Return home, then retry from a documented page.'}
+/>

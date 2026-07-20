@@ -1,423 +1,479 @@
-<svelte:head>
-	<title>Features - Conary</title>
-	<meta name="description" content="Conary limited-preview capabilities, advanced experimental surfaces, and safe command examples." />
-</svelte:head>
+<script lang="ts">
+	import PageIntro from '$lib/components/PageIntro.svelte';
+	import PageMeta from '$lib/components/PageMeta.svelte';
+</script>
 
-<section class="page-hero">
+<PageMeta
+	title="Features and preview boundaries — Conary"
+	description="Explore Conary's current package-management capabilities, experimental surfaces, and explicit preview boundaries."
+	path="/features/"
+/>
+
+<PageIntro
+	eyebrow="Capability map"
+	title="Features, ordered by the evidence behind them."
+	description="The bounded preview, Conary-owned package state, VM-only generations, experimental infrastructure, and future work are different commitments. This page keeps them visibly separate."
+/>
+
+<nav class="category-index" aria-label="Feature maturity groups">
 	<div class="container">
-		<h1 class="page-title animate-in" style="--stagger: 0">Features</h1>
-		<p class="page-desc animate-in" style="--stagger: 1">
-			Limited-preview capabilities and advanced surfaces, with their current boundaries.
-		</p>
+		<a href="#preview-supported">Preview</a>
+		<a href="#owned-packages">Owned packages</a>
+		<a href="#vm-generations">VM generations</a>
+		<a href="#experimental">Experimental</a>
+		<a href="#roadmap">Not promised</a>
 	</div>
-</section>
+</nav>
 
 <section class="features-page">
 	<div class="container features-content">
-
-		<!-- Category 1: System Management -->
-		<div class="category animate-in" style="--stagger: 2">
-			<h2 class="category-title">System Management</h2>
-
-			<div class="feature-card">
-				<h3>System Generations</h3>
-				<p>
-					The advanced generation path builds EROFS artifacts from current system state.
-					They can be selected for next boot or exported for image validation; composefs
-					and fs-verity integration depends on compatible host support. This path is
-					separate from the adoption-led package preview and should be tested in a VM.
-				</p>
-				<div class="feature-code">
-					<code>sudo conary system generation build --summary "Post-update" --yes</code>
-					<code>sudo conary system generation list</code>
-					<code>sudo conary system generation switch 2 --yes</code>
-					<code>sudo conary system generation rollback --yes</code>
-					<code>sudo conary system generation gc --keep 3 --yes</code>
-					<code>sudo conary system generation info 2</code>
-				</div>
-				<p class="feature-note">Generation experiments require Linux 6.2+ plus compatible EROFS, composefs, and fs-verity support. The basic package loop does not.</p>
+		<div class="category category-preview" id="preview-supported">
+			<div class="category-heading">
+				<span class="category-status preview">preview-supported</span>
+				<h2 class="category-title">The bounded tester loop</h2>
+				<p>Published, host-matched packages with a documented reversible workflow.</p>
 			</div>
 
-			<div class="feature-card">
-				<h3>Adoption and Explicit Takeover</h3>
-				<p>
-					Start by adopting installed RPM/DEB/pacman packages into Conary tracking while
-					the native package manager remains authoritative. Explicit takeover is a later
-					opt-in path that prepares a Conary generation instead of being the default preview
-					workflow.
-				</p>
-				<div class="feature-code">
-					<code>sudo conary system adopt --system --dry-run</code>
-					<code>sudo conary system unadopt --all --dry-run</code>
-					<code>sudo conary system takeover --dry-run</code>
-				</div>
-			</div>
+			<div class="feature-list">
+				<article class="feature-card feature-lead">
+					<span class="feature-status preview">supported path</span>
+					<h3>Host-matched package install</h3>
+					<p>
+						Fedora 44, Ubuntu 26.04 LTS, and Arch use the same Conary concepts but
+						different packages and repositories for the exact host target. The bounded
+						package and adoption mutations pair dry-runs with explicit approval; native
+						installation and repository sync remain separately approved live steps.
+					</p>
+					<!-- svelte-ignore a11y_no_noninteractive_tabindex (horizontal command list needs keyboard scrolling) -->
+					<div class="feature-code scroll-region" role="region" tabindex="0" aria-label="Host-matched package install commands">
+						<code>sudo conary install htop --dry-run --allow-capabilities</code>
+						<code>sudo conary install htop --yes --allow-capabilities</code>
+						<code>sudo conary update --dry-run</code>
+					</div>
+				</article>
 
-			<div class="feature-card">
-				<h3>Bootstrap</h3>
-				<p>
-					Build a complete Conary-managed system from scratch using the current
-					cross-tools, temp-tools, system, config, image, and optional tier2 stages.
-					systemd-repart handles rootless image creation when available, with a
-					fallback to sfdisk/mkfs. Outputs include EROFS images, CAS state, and
-					SQLite metadata. The source-build pipeline has experimental x86_64,
-					aarch64, and riscv64 targets; preview packages and the tester lane are
-					x86_64 only. Dry-run mode validates the pipeline without building.
-				</p>
-				<div class="feature-code">
-					<code>conary bootstrap init --target x86_64</code>
-					<code>conary bootstrap check</code>
-					<code>conary bootstrap cross-tools</code>
-					<code>conary bootstrap temp-tools</code>
-					<code>conary bootstrap system</code>
-					<code>conary bootstrap config</code>
-					<code>conary bootstrap tier2</code>
-					<code>conary bootstrap image --format qcow2</code>
-					<code>conary bootstrap dry-run</code>
-					<code>conary bootstrap status</code>
-				</div>
-				<p class="feature-note">RecipeGraph handles dependency ordering with automatic cycle breaking. SHA-256 checksum enforcement on all source downloads. Generation artifact export is x86_64-first today; aarch64/riscv64 boot assets are reserved for follow-up work.</p>
-			</div>
+				<article class="feature-card">
+					<span class="feature-status preview">reversible tracking</span>
+					<h3>Adoption and unadoption</h3>
+					<p>
+						Adoption records packages that remain owned by dnf, apt, or pacman. Unadoption
+						removes Conary tracking without deleting the native package files.
+					</p>
+					<!-- svelte-ignore a11y_no_noninteractive_tabindex (horizontal command list needs keyboard scrolling) -->
+					<div class="feature-code scroll-region" role="region" tabindex="0" aria-label="Adoption and unadoption commands">
+						<code>sudo conary system adopt --system --dry-run</code>
+						<code>sudo conary system adopt --system</code>
+						<code>sudo conary list</code>
+						<code>sudo conary search htop</code>
+						<code>sudo conary system unadopt --all --dry-run</code>
+						<code>sudo conary system unadopt --all --yes</code>
+					</div>
+				</article>
 
-			<div class="feature-card">
-				<h3>Generation Rollback</h3>
-				<p>
-					Rolling back selects a previous installed generation rather than copying
-					package files back into place. This is a VM/debug generation workflow;
-					it is not the rollback mechanism for every basic package operation.
-				</p>
-				<div class="feature-code">
-					<code>sudo conary system generation rollback --yes</code>
-					<code>sudo conary system generation switch 2 --yes</code>
-					<code>sudo conary system generation list</code>
-					<code>sudo conary system generation gc --keep 3 --yes</code>
-				</div>
-			</div>
-
-			<div class="feature-card">
-				<h3>/etc Three-Way Merge</h3>
-				<p>
-					The generation path has three-way merge machinery for configuration files
-					under /etc. Treat merge outcomes as advanced VM evidence and inspect them
-					before selecting a generation.
-				</p>
-			</div>
-
-			<div class="feature-card">
-				<h3>Boot Recovery</h3>
-				<p>
-					Generation recovery can validate the selected artifact, rebuild it from DB
-					state, and scan older generation artifacts. The initramfs/Dracut integration
-					is an advanced recovery surface, not part of the first tester loop.
-				</p>
+				<article class="feature-card">
+					<span class="feature-status preview">evidence boundary</span>
+					<h3>Pinned release and feedback contract</h3>
+					<p>
+						The tester lane pins a release, verifies its checksum, records exact commands
+						and exit statuses, and asks for concise public evidence without broad host dumps.
+					</p>
+					<a href="/install/" class="feature-action">Run the supported preview <span aria-hidden="true">→</span></a>
+				</article>
 			</div>
 		</div>
 
-		<!-- Category 2: Package Management -->
-		<div class="category animate-in" style="--stagger: 3">
-			<h2 class="category-title">Package Management</h2>
-
-			<div class="feature-card">
-				<h3>Multi-Format Install</h3>
-				<p>
-					Conary parses RPM, DEB, Arch, and CCS inputs and resolves supported dependency
-					metadata with a SAT-based solver. An install can still be refused when package
-					behavior or conversion policy is unsupported.
-				</p>
-				<div class="feature-code">
-					<code>sudo conary install ./package.rpm --dry-run</code>
-					<code>sudo conary install ./package.deb --dry-run</code>
-					<code>sudo conary install nginx postgresql redis --dry-run</code>
-				</div>
+		<div class="category" id="owned-packages">
+			<div class="category-heading">
+				<span class="category-status limited">available · limited</span>
+				<h2 class="category-title">Conary-owned package capabilities</h2>
+				<p>Useful package machinery whose policy and adapter boundaries still matter.</p>
 			</div>
 
-			<div class="feature-card">
-				<h3>SAT-Based Resolver</h3>
-				<p>
-					resolvo-based dependency resolution with typed dependencies -- soname, python,
-					perl, pkgconfig, cmake, binary, and more.
-				</p>
-				<div class="feature-code">
-					<code>conary query deptree nginx</code>
-					<code>conary query depends nginx</code>
-					<code>conary query rdepends openssl</code>
-				</div>
-			</div>
+			<div class="feature-list">
+				<article class="feature-card">
+					<span class="feature-status limited">same-target only</span>
+					<h3>RPM, DEB, Arch, and CCS inputs</h3>
+					<p>
+						Conary parses supported package formats and Remi can convert policy-approved
+						inputs into CCS for the matching target. Public cross-target portability is not
+						a current capability; unsupported package behavior fails closed.
+					</p>
+					<!-- svelte-ignore a11y_no_noninteractive_tabindex (horizontal command list needs keyboard scrolling) -->
+					<div class="feature-code scroll-region" role="region" tabindex="0" aria-label="Local package dry-run commands">
+						<code>sudo conary install ./package.rpm --dry-run</code>
+						<code>sudo conary install ./package.deb --dry-run</code>
+						<code>sudo conary install ./package.pkg.tar.zst --dry-run</code>
+					</div>
+				</article>
 
-			<div class="feature-card">
-				<h3>Component Model</h3>
-				<p>
-					CCS metadata can expose runtime, development, documentation, and other
-					components so a dry-run can select only the requested subset.
-				</p>
-				<div class="feature-code">
-					<code>sudo conary install nginx:runtime --dry-run</code>
-					<code>sudo conary install openssl:devel --dry-run</code>
-					<code>sudo conary install bash:doc --dry-run</code>
-				</div>
-			</div>
+				<article class="feature-card">
+					<span class="feature-status limited">core machinery</span>
+					<h3>CAS storage and SAT resolution</h3>
+					<p>
+						Conary-owned files are stored by content hash, while resolvo handles conflicts,
+						virtual provides, and typed dependencies. CAS garbage collection remains tied to
+						database reference counts.
+					</p>
+					<!-- svelte-ignore a11y_no_noninteractive_tabindex (horizontal command list needs keyboard scrolling) -->
+					<div class="feature-code scroll-region" role="region" tabindex="0" aria-label="Dependency and storage inspection commands">
+						<code>conary query deptree nginx</code>
+						<code>conary query depends nginx</code>
+						<code>conary query rdepends openssl</code>
+						<code>conary system verify</code>
+					</div>
+				</article>
 
-			<div class="feature-card">
-				<h3>Derived Packages</h3>
-				<p>
-					Create custom variants of existing packages with patches and file overrides.
-					Derived packages track their parent and can be rebuilt when the parent updates.
-				</p>
-				<div class="feature-code">
-					<code>conary derive create my-nginx --from nginx</code>
-					<code>conary derive patch my-nginx fix.patch</code>
-					<code>conary derive override my-nginx /etc/nginx/nginx.conf --source ./my-nginx.conf</code>
-					<code>conary derive build my-nginx</code>
-					<code>conary derive stale</code>
-				</div>
-			</div>
+				<article class="feature-card">
+					<span class="feature-status limited">native format</span>
+					<h3>Build, sign, verify, and inspect CCS</h3>
+					<p>
+						CCS uses CBOR manifests, Merkle verification, Ed25519 signatures, and
+						content-defined chunking. Signing requires an explicit private key path.
+					</p>
+					<!-- svelte-ignore a11y_no_noninteractive_tabindex (horizontal command list needs keyboard scrolling) -->
+					<div class="feature-code scroll-region" role="region" tabindex="0" aria-label="CCS package commands">
+						<code>conary ccs build .</code>
+						<code>conary ccs sign --key private.pem package.ccs</code>
+						<code>conary ccs verify package.ccs</code>
+						<code>conary ccs inspect package.ccs</code>
+					</div>
+				</article>
 
-			<div class="feature-card">
-				<h3>Configuration Management</h3>
-				<p>
-					Track, diff, backup, and restore system configuration files. Honors noreplace
-					flags from RPM/DEB to preserve user modifications during upgrades.
-				</p>
-				<div class="feature-code">
-					<code>conary config list</code>
-					<code>conary config diff /etc/nginx/nginx.conf</code>
-					<code>conary config backup /path</code>
-					<code>conary config restore /path</code>
-					<code>conary config check</code>
-				</div>
+				<article class="feature-card">
+					<span class="feature-status limited">changeset-backed</span>
+					<h3>Configuration handling</h3>
+					<p>
+						Package changesets track database and file state without implying a bootable
+						generation for every install. Configuration paths can be inspected, backed up,
+						and restored where current package metadata supports the operation.
+					</p>
+				</article>
 			</div>
 		</div>
 
-		<!-- Category 3: Build and Distribution -->
-		<div class="category animate-in" style="--stagger: 4">
-			<h2 class="category-title">Build and Distribution</h2>
-
-			<div class="feature-card">
-				<h3>CCS Native Format</h3>
-				<p>
-					Conary's native package format with CBOR manifests, Merkle tree verification,
-					Ed25519 signatures, and content-defined chunking for cross-package deduplication.
-				</p>
-				<div class="feature-code">
-					<code>conary ccs build .</code>
-					<code>conary ccs sign package.ccs</code>
-					<code>conary ccs verify package.ccs</code>
-					<code>conary ccs inspect package.ccs</code>
-				</div>
+		<div class="category" id="vm-generations">
+			<div class="category-heading">
+				<span class="category-status vm">VM-only</span>
+				<h2 class="category-title">System generation work</h2>
+				<p>Advanced state selection and recovery paths that are separate from the first package loop.</p>
 			</div>
 
-			<div class="feature-card">
-				<h3>Recipe System</h3>
-				<p>
-					Build packages from source using TOML recipe files. The optional
-					<code>--hermetic</code> mode adds Linux namespace isolation. It is not a complete reproducibility or containment guarantee.
-				</p>
-				<div class="feature-code">
-					<code>conary cook recipe.toml</code>
-					<code>conary cook --hermetic recipe.toml</code>
-					<code>conary cook --fetch-only recipe.toml</code>
-				</div>
-			</div>
+			<div class="feature-list">
+				<article class="feature-card">
+					<span class="feature-status vm">Linux 6.2+ host support</span>
+					<h3>Build and select EROFS generations</h3>
+					<p>
+						The generation path builds EROFS artifacts and can use compatible composefs and
+						fs-verity support. Rollback selects an earlier generation; it is not the undo
+						mechanism for every package transaction.
+					</p>
+					<!-- svelte-ignore a11y_no_noninteractive_tabindex (horizontal command list needs keyboard scrolling) -->
+					<div class="feature-code scroll-region" role="region" tabindex="0" aria-label="System generation commands">
+						<code>sudo conary system generation build --summary "Post-update" --yes</code>
+						<code>sudo conary system generation list</code>
+						<code>sudo conary system generation switch 2 --yes</code>
+						<code>sudo conary system generation rollback --yes</code>
+						<code>sudo conary system generation gc --keep 3 --yes</code>
+					</div>
+					<p class="feature-note">Use a VM. The basic package loop does not require composefs, fs-verity, or boot-stack changes.</p>
+				</article>
 
-			<div class="feature-card">
-				<h3>Dev Shells</h3>
-				<p>
-					Temporary environments without permanent installation, similar to nix shell.
-				</p>
-				<div class="feature-code">
-					<code>conary ccs shell python nodejs</code>
-					<code>conary ccs run gcc -- make</code>
-				</div>
-			</div>
+				<article class="feature-card">
+					<span class="feature-status vm">explicit apply</span>
+					<h3>Declarative system model</h3>
+					<p>
+						Desired package state can be described and compared with the host. Live apply
+						remains a VM-only path until it has the same recovery evidence as package mutation.
+					</p>
+					<!-- svelte-ignore a11y_no_noninteractive_tabindex (horizontal command list needs keyboard scrolling) -->
+					<div class="feature-code scroll-region" role="region" tabindex="0" aria-label="Declarative model commands">
+						<code>conary model diff</code>
+						<code>sudo conary model apply --dry-run</code>
+						<code>sudo conary model apply --yes</code>
+						<code>conary model check</code>
+					</div>
+				</article>
 
-			<div class="feature-card">
-				<h3>OCI Export</h3>
-				<p>
-					Export CCS packages as OCI artifacts compatible with OCI registries and
-					container tooling. Generation-to-OCI export is reserved for the shared
-					generation artifact follow-up.
-				</p>
-				<div class="feature-code">
-					<code>conary ccs export ./package.ccs --output ./package.oci</code>
-				</div>
-			</div>
-
-			<div class="feature-card">
-				<h3>Generation Delta Follow-up</h3>
-				<p>
-					Generation delta and chunk-reuse work remain part of the broader
-					artifact roadmap. Treat the current public release evidence as package-loop
-					and generation-export evidence, not a public delta-size claim.
-				</p>
-			</div>
-
-			<div class="feature-card">
-				<h3>Declarative System Model</h3>
-				<p>
-					Define desired package state in TOML and inspect drift with CI-friendly exit
-					codes. Live model application remains a VM-only follow-up until it has the
-					same recovery evidence as package mutation.
-				</p>
-				<div class="feature-code">
-					<code>conary model diff</code>
-					<code>sudo conary model apply --dry-run</code>
-					<code>sudo conary model apply --yes</code>
-					<code>conary model check</code>
-					<code>conary model snapshot</code>
-				</div>
+				<article class="feature-card">
+					<span class="feature-status vm">recovery surface</span>
+					<h3>Configuration merge and boot recovery</h3>
+					<p>
+						The source tree includes three-way merge machinery for <code>/etc</code>, artifact
+						validation, database-backed rebuild paths, and older-generation scanning. Treat
+						all of it as advanced VM evidence, not first-run onboarding.
+					</p>
+				</article>
 			</div>
 		</div>
 
-		<!-- Category 4: Infrastructure -->
-		<div class="category animate-in" style="--stagger: 5">
-			<h2 class="category-title">Infrastructure</h2>
-
-			<div class="feature-card">
-				<h3>Content-Addressable Storage</h3>
-				<p>
-					Files stored by SHA-256 hash with XXH128 for fast dedup checks. Automatic
-					deduplication across packages. FastCDC chunking for efficient distribution.
-					CAS garbage collection uses DB reference counts -- only unreferenced chunks
-					are reclaimed.
-				</p>
-				<div class="feature-code">
-					<code>conary system verify</code>
-					<code>conary system gc</code>
-				</div>
+		<div class="category category-quiet" id="experimental">
+			<div class="category-heading">
+				<span class="category-status experimental">experimental</span>
+				<h2 class="category-title">Infrastructure and build surfaces</h2>
+				<p>Real interfaces in the source tree without a reliable stranger-operated onboarding contract.</p>
 			</div>
 
-			<div class="feature-card">
-				<h3>Experimental CAS Federation</h3>
-				<p>
-					The source tree contains advanced peer discovery, chunk-sharing, and routing
-					surfaces. Federation is outside the reliable limited-preview path and is not
-					a supported onboarding workflow.
-				</p>
-				<div class="feature-code">
-					<code>conary federation status</code>
-					<code>conary federation peers</code>
-					<code>conary federation scan</code>
-					<code>conary federation stats --days 7</code>
-				</div>
-			</div>
+			<div class="feature-list">
+				<article class="feature-card">
+					<span class="feature-status experimental">source-build research</span>
+					<h3>Bootstrap and architecture targets</h3>
+					<p>
+						The staged bootstrap pipeline covers cross-tools through image creation, with
+						experimental x86_64, aarch64, and riscv64 source-build targets. Published tester
+						packages and current generation evidence remain x86_64.
+					</p>
+				</article>
 
-			<div class="feature-card">
-				<h3>Release Provenance</h3>
-				<p>
-					The preview release publishes checksums and a detached CCS signature.
-					Complete SBOM/provenance sidecars for every release artifact remain
-					follow-up work.
-				</p>
-			</div>
+				<article class="feature-card">
+					<span class="feature-status experimental">not onboarding</span>
+					<h3>CAS federation</h3>
+					<p>
+						Federation is outside the reliable limited-preview path. Peer discovery, routing,
+						and chunk-sharing surfaces exist, but coordinator and serving paths are not yet
+						wired into one supported operating model.
+					</p>
+					<!-- svelte-ignore a11y_no_noninteractive_tabindex (horizontal command list needs keyboard scrolling) -->
+					<div class="feature-code scroll-region" role="region" tabindex="0" aria-label="Experimental federation inspection commands">
+						<code>conary federation status</code>
+						<code>conary federation peers</code>
+					</div>
+				</article>
 
-			<div class="feature-card">
-				<h3>Trigger System</h3>
-				<p>
-					Built-in post-install trigger handlers include ldconfig,
-					systemd-reload, fc-cache, update-mime-database, gtk-update-icon-cache,
-					depmod, and others. Execution depends on the package path and current
-					adapter/scriptlet policy.
-				</p>
-			</div>
-
-			<div class="feature-card">
-				<h3>Capability Enforcement</h3>
-				<p>
-					Packages can declare runtime capabilities. The explicit capability runner uses
-					Landlock and seccomp-BPF where the host kernel exposes the required support;
-					this does not sandbox every package operation automatically.
-				</p>
-				<div class="feature-code">
-					<code>conary capability show nginx</code>
-					<code>conary capability run nginx -- /usr/sbin/nginx -t</code>
-				</div>
-			</div>
-
-			<div class="feature-card">
-				<h3>Sandboxed Scriptlets</h3>
-				<p>
-					Supported package scriptlets can run through namespace and resource-limit
-					machinery. Scriptlet-heavy or policy-blocked packages may still be refused in
-					the limited preview.
-				</p>
-				<div class="feature-code">
-					<code>sudo conary install pkg --sandbox=always --dry-run</code>
-				</div>
+				<article class="feature-card">
+					<span class="feature-status experimental">incomplete integration</span>
+					<h3>Recipes and derivations</h3>
+					<p>
+						The public <code>--isolated</code> cook path adds Linux namespace isolation. It is
+						not a complete reproducibility or containment guarantee. Advanced derivation,
+						lock, and update flows still have incomplete persisted inputs and integration edges.
+					</p>
+					<!-- svelte-ignore a11y_no_noninteractive_tabindex (horizontal command list needs keyboard scrolling) -->
+					<div class="feature-code scroll-region" role="region" tabindex="0" aria-label="Recipe build commands">
+						<code>conary cook recipe.toml</code>
+						<code>conary cook --isolated recipe.toml</code>
+						<code>conary cook --fetch-only recipe.toml</code>
+					</div>
+				</article>
 			</div>
 		</div>
 
+		<div class="category category-quiet" id="roadmap">
+			<div class="category-heading">
+				<span class="category-status roadmap">not preview commitments</span>
+				<h2 class="category-title">Roadmap and refusal boundaries</h2>
+				<p>Directions under discussion or explicit absences—not capabilities to plan production work around.</p>
+			</div>
+
+			<div class="feature-list">
+				<article class="feature-card">
+					<span class="feature-status roadmap">roadmap</span>
+					<h3>Generation delta work</h3>
+					<p>
+						Chunk reuse and generation-delta work remain broader artifact-roadmap items.
+						The current release makes no public delta-size or bandwidth-reduction claim.
+					</p>
+				</article>
+
+				<article class="feature-card">
+					<span class="feature-status roadmap">not supported</span>
+					<h3>Foreign-target package portability</h3>
+					<p>
+						Identity mapping can find equivalent packages, but the production target matrix
+						has no public cross-distribution allowances. Different source and host targets
+						fail closed without later explicit evidence.
+					</p>
+				</article>
+
+				<article class="feature-card">
+					<span class="feature-status roadmap">not promised</span>
+					<h3>Release sidecars and broader authority</h3>
+					<p>
+						No SBOM or provenance sidecars are published or planned for this limited preview.
+						Broader scriptlet authority, non-x86 boot artifacts, and wider recovery proof must
+						remain separate evidence-bearing work.
+					</p>
+				</article>
+			</div>
+		</div>
+
+		<section class="features-cta">
+			<div>
+				<p class="eyebrow">Start with the strongest evidence</p>
+				<h2>Run the bounded preview before exploring advanced surfaces.</h2>
+				<p>The install runbook pins the package, checksum, command order, and feedback contract.</p>
+			</div>
+			<a href="/install/" class="btn btn-primary">Open the preview runbook</a>
+		</section>
 	</div>
 </section>
 
 <style>
-	.page-hero {
-		padding: 4rem 0 2rem;
+	.category-index {
+		position: sticky;
+		top: var(--header-height);
+		z-index: 20;
+		border-bottom: 1px solid var(--color-border);
+		background: rgb(10 18 36 / 96%);
+	}
+
+	.category-index .container {
+		display: grid;
+		grid-template-columns: repeat(5, minmax(0, 1fr));
+	}
+
+	.category-index a {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		min-height: 48px;
+		padding: 0.65rem 0.4rem;
+		border-left: 1px solid var(--color-border);
+		color: var(--color-muted);
+		font-family: var(--font-mono);
+		font-size: 0.66rem;
 		text-align: center;
+		text-decoration: none;
 	}
 
-	.page-title {
-		font-family: var(--font-display);
-		font-size: 2.75rem;
-		font-weight: 800;
-		letter-spacing: -0.04em;
-		margin-bottom: 0.5rem;
+	.category-index a:last-child {
+		border-right: 1px solid var(--color-border);
 	}
 
-	.page-desc {
-		font-size: 1.0625rem;
-		color: var(--color-text-secondary);
-		font-weight: 300;
+	.category-index a:hover {
+		color: var(--color-field);
+		background: var(--color-cyan);
 	}
 
 	.features-page {
-		padding: 2rem 0 5rem;
+		padding: var(--section-space) 0 1rem;
 	}
 
 	.features-content {
-		max-width: 740px;
-		margin: 0 auto;
+		max-width: 1080px;
 	}
 
 	.category {
-		margin-bottom: 3.5rem;
-	}
-
-	.category-title {
-		font-family: var(--font-display);
-		font-size: 1.375rem;
-		font-weight: 700;
-		color: var(--color-accent);
-		margin-bottom: 1.25rem;
-		padding-bottom: 0.5rem;
+		display: grid;
+		grid-template-columns: minmax(190px, 0.75fr) minmax(0, 2fr);
+		gap: clamp(2rem, 6vw, 5rem);
+		scroll-margin-top: 8rem;
+		padding-bottom: var(--section-space);
+		margin-bottom: var(--section-space);
 		border-bottom: 1px solid var(--color-border);
 	}
 
+	.category-heading {
+		position: sticky;
+		top: calc(var(--header-height) + 5.5rem);
+		align-self: start;
+		padding-top: 0.35rem;
+	}
+
+	.category-title {
+		margin: 0.8rem 0 0.7rem;
+		font-size: clamp(1.45rem, 2.7vw, 2.15rem);
+		letter-spacing: -0.04em;
+	}
+
+	.category-heading > p {
+		margin: 0;
+		color: var(--color-muted);
+		font-size: 0.86rem;
+	}
+
+	.category-status,
+	.feature-status {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.4rem;
+		font-family: var(--font-mono);
+		font-size: 0.65rem;
+		letter-spacing: 0.05em;
+		text-transform: uppercase;
+	}
+
+	.category-status::before,
+	.feature-status::before {
+		content: '';
+		width: 0.5rem;
+		height: 0.5rem;
+		flex: 0 0 auto;
+	}
+
+	.preview {
+		color: var(--color-cyan);
+	}
+
+	.preview::before {
+		background: var(--color-cyan);
+	}
+
+	.limited {
+		color: var(--color-ivory);
+	}
+
+	.limited::before {
+		border: 1px solid var(--color-cyan);
+	}
+
+	.vm {
+		color: var(--color-orange);
+	}
+
+	.vm::before {
+		background: var(--color-orange);
+		transform: rotate(45deg) scale(0.8);
+	}
+
+	.experimental,
+	.roadmap {
+		color: var(--color-muted);
+	}
+
+	.experimental::before {
+		border: 1px solid var(--color-muted);
+	}
+
+	.roadmap::before {
+		width: 0.6rem;
+		height: 1px;
+		background: var(--color-muted);
+	}
+
+	.feature-list {
+		min-width: 0;
+	}
+
 	.feature-card {
-		background: var(--color-surface);
-		border: 1px solid var(--color-border);
-		border-radius: var(--radius-lg);
-		padding: 1.75rem;
-		margin-bottom: 1.25rem;
+		padding: 0 0 2rem;
+		margin-bottom: 2rem;
+		border-bottom: 1px solid var(--color-border);
 	}
 
 	.feature-card:last-child {
 		margin-bottom: 0;
 	}
 
+	.feature-lead {
+		padding: clamp(1.25rem, 3vw, 2rem);
+		border: 1px solid var(--color-control-border);
+		background: var(--color-layer);
+	}
+
 	.feature-card h3 {
-		font-family: var(--font-display);
-		font-size: 1.0625rem;
-		font-weight: 700;
-		color: var(--color-accent);
-		margin-bottom: 0.625rem;
+		margin: 0.55rem 0 0.65rem;
+		font-family: var(--font-body);
+		font-size: 1.15rem;
+		font-weight: 600;
+		letter-spacing: 0;
 	}
 
 	.feature-card p {
-		font-size: 0.9375rem;
-		color: var(--color-text-secondary);
-		line-height: 1.7;
-		margin: 0 0 0.75rem;
-		font-weight: 300;
+		max-width: 70ch;
+		margin: 0 0 1rem;
+		color: var(--color-mist);
+		font-size: 0.96rem;
+		line-height: 1.72;
 	}
 
 	.feature-card p:last-child {
@@ -427,45 +483,111 @@
 	.feature-code {
 		display: flex;
 		flex-direction: column;
-		gap: 0.25rem;
-		margin-bottom: 0.75rem;
-	}
-
-	.feature-code:last-child {
-		margin-bottom: 0;
+		gap: 1px;
+		margin: 1.1rem 0;
+		border: 1px solid var(--color-border);
+		background: var(--color-border);
 	}
 
 	.feature-code code {
 		display: block;
-		font-family: var(--font-mono);
-		font-size: 0.8125rem;
+		min-width: max-content;
+		padding: 0.55rem 0.8rem;
+		border: 0;
+		border-radius: 0;
+		color: var(--color-ivory);
 		background: var(--color-code-bg);
-		border-radius: var(--radius-sm);
-		padding: 0.5rem 0.75rem;
-		color: var(--color-text);
-		line-height: 1.5;
-		overflow-x: auto;
+		font-family: var(--font-mono);
+		font-size: 0.77rem;
+		line-height: 1.55;
+		white-space: nowrap;
+	}
+
+	.feature-code:focus-visible {
+		outline-offset: 3px;
 	}
 
 	.feature-note {
-		font-size: 0.8125rem;
-		color: var(--color-text-muted);
-		font-style: italic;
-		margin-bottom: 0;
+		padding: 0.85rem 1rem;
+		border-left: 3px solid var(--color-orange);
+		color: var(--color-muted) !important;
+		background: rgb(252 107 22 / 6%);
+		font-size: 0.82rem !important;
 	}
 
-	@media (max-width: 768px) {
-		.page-title {
-			font-size: 2rem;
+	.feature-action {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.55rem;
+		font-family: var(--font-mono);
+		font-size: 0.76rem;
+		text-decoration: none;
+	}
+
+	.category-quiet .feature-card {
+		opacity: 0.88;
+	}
+
+	.features-cta {
+		display: flex;
+		align-items: end;
+		justify-content: space-between;
+		gap: 3rem;
+		padding: clamp(2rem, 5vw, 4rem);
+		border: 1px solid var(--color-control-border);
+		background: var(--color-layer);
+	}
+
+	.features-cta h2 {
+		max-width: 17ch;
+		margin-bottom: 0.75rem;
+		font-size: clamp(1.9rem, 4vw, 3.2rem);
+		letter-spacing: -0.045em;
+	}
+
+	.features-cta p:last-child {
+		max-width: 58ch;
+		margin: 0;
+		color: var(--color-mist);
+	}
+
+	.features-cta .btn {
+		flex: 0 0 auto;
+	}
+
+	@media (max-width: 760px) {
+		.category-index {
+			position: static;
 		}
 
-		.feature-card {
-			padding: 1.25rem;
+		.category-index .container {
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+			width: 100%;
 		}
 
-		.feature-code code {
-			font-size: 0.75rem;
-			padding: 0.375rem 0.625rem;
+		.category-index a {
+			border-bottom: 1px solid var(--color-border);
+		}
+
+		.category-index a:last-child {
+			grid-column: 1 / -1;
+		}
+
+		.category {
+			grid-template-columns: 1fr;
+			gap: 1.5rem;
+			scroll-margin-top: 8rem;
+		}
+
+		.category-heading {
+			position: static;
+			padding-bottom: 1rem;
+			border-bottom: 2px solid var(--color-cyan);
+		}
+
+		.features-cta {
+			align-items: stretch;
+			flex-direction: column;
 		}
 	}
 </style>

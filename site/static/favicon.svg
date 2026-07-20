@@ -1,4 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Conary">
-  <rect width="64" height="64" rx="14" fill="#0c0f14"/>
-  <path d="M45 17.5c-3.4-2.7-7.7-4.2-12.4-4.2C21 13.3 13 21.1 13 32s8 18.7 19.6 18.7c4.7 0 9-1.5 12.4-4.2l-5.1-6.2a11.7 11.7 0 0 1-7.3 2.5c-6.4 0-10.9-4.5-10.9-10.8s4.5-10.8 10.9-10.8c2.8 0 5.3.9 7.3 2.5z" fill="#e8853d"/>
+  <rect width="64" height="64" rx="12" fill="#0A1224"/>
+  <path d="M 45 18 A 20 20 0 1 0 45 46" fill="none" stroke="#FBF7F0" stroke-width="7" stroke-linecap="round"/>
+  <path d="M 39 25 A 11 11 0 1 0 39 39" fill="none" stroke="#46C7D3" stroke-width="6" stroke-linecap="round"/>
+  <rect x="45" y="28" width="8" height="8" rx="1.5" fill="#FC6B16" transform="rotate(45 49 32)"/>
 </svg>

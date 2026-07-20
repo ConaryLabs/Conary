@@ -1,320 +1,394 @@
-<svelte:head>
-	<title>About - Conary</title>
-	<meta name="description" content="About the Conary project -- goals, architecture, and how to contribute." />
-</svelte:head>
+<script lang="ts">
+	import PageIntro from '$lib/components/PageIntro.svelte';
+	import PageMeta from '$lib/components/PageMeta.svelte';
+</script>
 
-<section class="page-hero">
-	<div class="container">
-		<h1 class="page-title animate-in" style="--stagger: 0">About Conary</h1>
-		<p class="page-desc animate-in" style="--stagger: 1">
-			Reviving a visionary 2005 design while exploring a modern generation model.
-		</p>
+<PageMeta
+	title="About Conary — Conary"
+	description="Learn how Conary reinterprets an influential package-manager idea as an independent, ground-up Rust project."
+	path="/about/"
+/>
+
+<PageIntro
+	eyebrow="Project context"
+	title="A ground-up take on an old package-manager idea."
+	description="Conary takes inspiration from a visionary mid-2000s design, then starts again in Rust with a deliberately narrower public preview and a modern generation model."
+/>
+
+<section class="independence-band">
+	<div class="container independence-grid">
+		<span class="independence-mark" aria-hidden="true"></span>
+		<div>
+			<p class="eyebrow">Independent project</p>
+			<p>
+				This is a ground-up reimplementation in Rust—not a fork, port, resurrection, or continuation of the original
+				rPath Conary codebase. It is not affiliated with, endorsed by, or maintained by rPath, SAS, or the original Conary developers.
+			</p>
+		</div>
 	</div>
 </section>
 
-<section class="about-section">
-	<div class="container about-content">
-		<div class="about-block animate-in" style="--stagger: 2">
-			<h2>Origins</h2>
-			<p>
-				Conary takes its name and core philosophy from the
-				<a href="https://en.wikipedia.org/wiki/Conary_(package_manager)" target="_blank" rel="noopener noreferrer">original Conary package manager</a>
-				developed by the team at <strong>rPath</strong> in the mid-2000s, many of them former Red Hat engineers.
-				That project pioneered ideas that were years ahead of
-				the mainstream: content-addressable storage for packages, repository-level binary diffs,
-				a SAT-based dependency resolver, and atomic rollback of system state.
-			</p>
-			<p>
-				rPath's Conary proved these concepts worked in production, but it was written in Python 2
-				and tied to rPath's own Linux distribution (rPath Linux / Foresight Linux). When rPath was
-				acquired by SAS in 2011, the project went dormant. The ideas, however, remained sound.
-			</p>
-			<p>
-				This project is a ground-up reimplementation in Rust -- not a fork or a port. The original
-				source is long gone from active development, but the design principles endure: treat the
-				filesystem as a content store, give mutations explicit transaction and recovery boundaries,
-				and resolve dependencies before applying changes. We carry the name forward as a tribute
-				to the engineering that got there first.
-			</p>
-			<p>
-				This is an independent project, not a resurrection or continuation of the original
-				rPath Conary codebase. It is not affiliated with, endorsed by, or maintained by
-				rPath, SAS, or the original Conary developers.
+<section class="section origins">
+	<div class="container grid-12">
+		<div class="origins-heading">
+			<p class="eyebrow">Origins</p>
+			<h2 class="section-heading">The ideas outlived the first implementation.</h2>
+			<p class="section-copy">
+				The name is carried forward as a tribute to the engineering that got there first.
 			</p>
 		</div>
 
-		<div class="about-block animate-in" style="--stagger: 3">
-			<h2>The Problem</h2>
+		<ol class="timeline">
+			<li>
+				<span class="timeline-date">mid-2000s</span>
+				<div>
+					<h3>rPath builds the original Conary</h3>
+					<p>
+						The <a href="https://en.wikipedia.org/wiki/Conary_(package_manager)">original Conary package manager</a>,
+						developed by the rPath team, pioneered content-addressable package storage, repository-level binary diffs,
+						a SAT-based resolver, and rollback of system state.
+					</p>
+				</div>
+			</li>
+			<li>
+				<span class="timeline-date">2011</span>
+				<div>
+					<h3>The implementation goes dormant</h3>
+					<p>
+						The Python 2 implementation was tied to rPath Linux and Foresight Linux. After SAS acquired rPath,
+						the project went dormant while its package-management ideas remained relevant.
+					</p>
+				</div>
+			</li>
+			<li>
+				<span class="timeline-date">now</span>
+				<div>
+					<h3>Conary starts again in Rust</h3>
+					<p>
+						The current project treats the filesystem as a content store, gives mutations explicit transaction and recovery boundaries,
+						and resolves dependencies before applying changes—without reusing the original codebase.
+					</p>
+				</div>
+			</li>
+		</ol>
+	</div>
+</section>
+
+<section class="section section-band approach">
+	<div class="container grid-12">
+		<div class="approach-title">
+			<p class="eyebrow">The problem</p>
+			<h2 class="section-heading">Linux package state is fragmented by distribution.</h2>
+		</div>
+		<div class="approach-copy">
 			<p>
-				Linux package management is fragmented. Every distribution maintains its own
-				package format, its own repositories, its own tools. Switching distros means learning
-				new commands, losing muscle memory, and accepting that software availability varies
-				wildly. Even within a single distro, the tools expose different transaction,
-				content-storage, and update models, making one auditable workflow difficult to
-				carry between systems.
+				Every distribution maintains its own package format, repositories, tools, and transaction model.
+				Switching hosts means changing commands and expectations, while package availability and recovery behavior vary.
+			</p>
+			<p>
+				Conary does not ask upstream maintainers to change their packages. Remi converts supported RPM, DEB, and Arch inputs
+				into Conary's CCS format for the matching target, while public serving remains limited to conversion-safe artifacts.
+			</p>
+			<p>
+				The first tester loop is narrower than the source tree: package-manager install, adoption, listing/search,
+				dry-run updates, and unadoption. Generation builds remain a separate explicit path.
 			</p>
 		</div>
+	</div>
+</section>
 
-		<div class="about-block animate-in" style="--stagger: 5">
-			<h2>The Approach</h2>
-			<p>
-				Conary doesn't ask upstream maintainers to change anything. It works with existing
-				RPM, DEB, and Arch packages through <strong>Remi</strong>, a conversion proxy that
-				converts supported upstream packages into Conary's native CCS format. This means
-				access to upstream package metadata across three major distributions, while public
-				serving stays limited to conversion-safe artifacts.
-			</p>
-			<p>
-				Under the hood, package operations commit DB and file state through changesets,
-				while generation builds produce EROFS images that can be selected for complete-system
-				rollback. Content-addressable storage (SHA-256 + XXH128) handles file-level
-				deduplication, a SAT-based dependency resolver (via resolvo) solves dependencies,
-				and generation integrity work uses composefs and fs-verity where that path is
-				selected. The first public tester loop is intentionally narrower: package-manager
-				install, adoption, listing/search, dry-run updates, and unadoption.
-			</p>
+<section class="section architecture">
+	<div class="container grid-12">
+		<div class="architecture-heading">
+			<p class="eyebrow">Architecture</p>
+			<h2 class="section-heading">Package state, content, and generation artifacts stay distinct.</h2>
 		</div>
 
-		<div class="about-block animate-in" style="--stagger: 6">
-			<h2>Architecture</h2>
-			<div class="arch-grid">
-				<div class="arch-item">
-					<h3>CAS Layer</h3>
-					<p>Content-addressable storage. Files stored by hash, not by package. Identical files are automatically deduplicated.</p>
-				</div>
-				<div class="arch-item">
-					<h3>Generation Artifacts</h3>
-					<p>The advanced path builds EROFS images and can integrate composefs on compatible hosts. It is separate from the basic package transaction loop.</p>
-				</div>
-				<div class="arch-item">
-					<h3>Resolver</h3>
-					<p>SAT-based dependency resolution via resolvo. Handles conflicts, virtual provides, and cross-distro deps.</p>
-				</div>
-				<div class="arch-item">
-					<h3>Format Parsers</h3>
-					<p>Native parsers for RPM, DEB, and Arch packages. Unified metadata model across all formats.</p>
-				</div>
-				<div class="arch-item">
-					<h3>Delta Engine</h3>
-					<p>CAS chunking and generation-delta work are part of the broader roadmap, not a size-reduction promise for the first tester loop.</p>
-				</div>
-				<div class="arch-item">
-					<h3>System Model</h3>
-					<p>Define desired package state and inspect drift. Live application remains a VM-only follow-up while recovery evidence matures.</p>
-				</div>
-				<div class="arch-item">
-					<h3>Generations</h3>
-					<p>Experimental EROFS system artifacts that can be selected, rolled back, or exported in the explicit generation workflow.</p>
-				</div>
-				<div class="arch-item">
-					<h3>Bootstrap</h3>
-					<p>Staged pipeline to build a complete system from scratch. Cross-compiler through bootable image.</p>
-				</div>
+		<dl class="architecture-list">
+			<div>
+				<dt>CAS layer</dt>
+				<dd>Files are stored by hash rather than only by package, allowing identical content to be deduplicated.</dd>
 			</div>
-		</div>
-
-		<div class="about-block animate-in" style="--stagger: 7">
-			<h2>Tech Stack</h2>
-			<div class="tech-list">
-				<div class="tech-item">
-					<span class="tech-label">Language</span>
-					<span class="tech-value">Rust (Edition 2024), 8-member Cargo workspace</span>
-				</div>
-				<div class="tech-item">
-					<span class="tech-label">Filesystem</span>
-					<span class="tech-value">EROFS; optional composefs and fs-verity integration for generations</span>
-				</div>
-				<div class="tech-item">
-					<span class="tech-label">Database</span>
-					<span class="tech-value">SQLite (schema version 77, DB-first runtime state)</span>
-				</div>
-				<div class="tech-item">
-					<span class="tech-label">Hashing</span>
-					<span class="tech-value">SHA-256, XXH128</span>
-				</div>
-				<div class="tech-item">
-					<span class="tech-label">Compression</span>
-					<span class="tech-value">Zstd, Gzip, XZ</span>
-				</div>
-				<div class="tech-item">
-					<span class="tech-label">Server</span>
-					<span class="tech-value">Axum + Tantivy (full-text search)</span>
-				</div>
-				<div class="tech-item">
-					<span class="tech-label">Resolver</span>
-					<span class="tech-value">resolvo (SAT solver)</span>
-				</div>
+			<div>
+				<dt>Resolver</dt>
+				<dd>resolvo provides SAT-based dependency resolution across conflicts, virtual provides, and typed dependencies.</dd>
 			</div>
+			<div>
+				<dt>Format parsers</dt>
+				<dd>Native RPM, DEB, and Arch parsers feed a shared metadata model while unsupported behavior can still be refused.</dd>
+			</div>
+			<div>
+				<dt>Package changesets</dt>
+				<dd>Package operations commit database and file state through explicit changesets rather than implying a bootable generation for every install.</dd>
+			</div>
+			<div>
+				<dt>Generation artifacts</dt>
+				<dd>The advanced path builds EROFS images and can integrate composefs and fs-verity on compatible hosts.</dd>
+			</div>
+			<div>
+				<dt>System model</dt>
+				<dd>Desired package state can be declared and inspected for drift; live application remains a VM-only follow-up.</dd>
+			</div>
+			<div>
+				<dt>Delta work</dt>
+				<dd>CAS chunking and generation-delta work remain broader roadmap items, not a size-reduction promise for the first tester loop.</dd>
+			</div>
+			<div>
+				<dt>Bootstrap</dt>
+				<dd>A staged pipeline builds from cross-tools through a complete system image, with experimental architecture targets beyond the packaged x86_64 tester lane.</dd>
+			</div>
+		</dl>
+	</div>
+</section>
+
+<section class="section stack-section">
+	<div class="container grid-12">
+		<div class="stack-heading">
+			<p class="eyebrow">Implementation</p>
+			<h2 class="section-heading">The current stack</h2>
 		</div>
 
-		<div class="about-block animate-in" style="--stagger: 8">
-			<h2>Contributing</h2>
+		<dl class="stack-list">
+			<div><dt>Language</dt><dd>Rust, Edition 2024 · 8-member Cargo workspace</dd></div>
+			<div><dt>Filesystem</dt><dd>EROFS · optional composefs and fs-verity integration for generations</dd></div>
+			<div><dt>Database</dt><dd>SQLite · schema version 77 · DB-first runtime state</dd></div>
+			<div><dt>Hashing</dt><dd>SHA-256 · XXH128</dd></div>
+			<div><dt>Compression</dt><dd>Zstd · Gzip · XZ</dd></div>
+			<div><dt>Server</dt><dd>Axum · Tantivy full-text search</dd></div>
+			<div><dt>Resolver</dt><dd>resolvo SAT solver</dd></div>
+		</dl>
+	</div>
+</section>
+
+<section class="section contribute">
+	<div class="container contribute-box">
+		<div>
+			<p class="eyebrow">Contribute</p>
+			<h2>Help turn preview evidence into a trustworthy package manager.</h2>
 			<p>
-				Conary is open source and welcomes contributions. The repository includes unit,
-				integration, and harness coverage plus formatting, lint, test, documentation-truth,
-				and release workflows. Open issues and the contributing guide are the current entry points.
+				The repository includes unit, integration, harness, formatting, lint, documentation-truth, and release workflows.
+				Open issues and the contributing guide are the current entry points.
 			</p>
-			<div class="about-links">
-				<a href="https://github.com/ConaryLabs/Conary" target="_blank" rel="noopener noreferrer" class="btn btn-outline">GitHub</a>
-				<a href="https://github.com/ConaryLabs/Conary/blob/main/CONTRIBUTING.md" target="_blank" rel="noopener noreferrer" class="btn btn-outline">Contributing Guide</a>
-				<a href="https://github.com/ConaryLabs/Conary/issues" target="_blank" rel="noopener noreferrer" class="btn btn-outline">Issues</a>
-			</div>
+		</div>
+		<div class="button-row">
+			<a href="https://github.com/ConaryLabs/Conary" class="btn btn-primary">GitHub <span aria-hidden="true">↗</span></a>
+			<a href="https://github.com/ConaryLabs/Conary/blob/main/CONTRIBUTING.md" class="btn btn-secondary">Contributing guide <span aria-hidden="true">↗</span></a>
+			<a href="https://github.com/ConaryLabs/Conary/issues" class="btn btn-secondary">Issues <span aria-hidden="true">↗</span></a>
 		</div>
 	</div>
 </section>
 
 <style>
-	.page-hero {
-		padding: 4rem 0 2rem;
-		text-align: center;
+	.independence-band {
+		padding: 1.6rem 0;
+		border-bottom: 1px solid var(--color-border);
+		background: rgb(252 107 22 / 6%);
 	}
 
-	.page-title {
-		font-family: var(--font-display);
-		font-size: 2.75rem;
-		font-weight: 800;
-		letter-spacing: -0.04em;
-		margin-bottom: 0.5rem;
-	}
-
-	.page-desc {
-		font-size: 1.0625rem;
-		color: var(--color-text-secondary);
-		font-weight: 300;
-	}
-
-	.about-section {
-		padding: 2rem 0 5rem;
-	}
-
-	.about-content {
-		max-width: 740px;
-		margin: 0 auto;
-	}
-
-	.about-block {
-		margin-bottom: 3rem;
-	}
-
-	.about-block h2 {
-		font-family: var(--font-display);
-		font-size: 1.25rem;
-		font-weight: 700;
-		color: var(--color-accent);
-		margin-bottom: 0.75rem;
-	}
-
-	.about-block p {
-		font-size: 0.9375rem;
-		color: var(--color-text-secondary);
-		line-height: 1.7;
-		margin: 0 0 0.75rem;
-		font-weight: 300;
-	}
-
-	.about-block p strong {
-		color: var(--color-text);
-		font-weight: 500;
-	}
-
-	.about-block p a {
-		color: var(--color-accent);
-		text-decoration: none;
-		border-bottom: 1px solid transparent;
-		transition: border-color 0.15s;
-	}
-
-	.about-block p a:hover {
-		border-bottom-color: var(--color-accent);
-	}
-
-	.arch-grid {
+	.independence-grid {
 		display: grid;
-		grid-template-columns: repeat(2, 1fr);
-		gap: 0.875rem;
+		grid-template-columns: auto minmax(0, 1fr);
+		gap: 1.2rem;
+		align-items: start;
+		max-width: 960px;
 	}
 
-	.arch-item {
-		background: var(--color-surface);
-		border: 1px solid var(--color-border);
-		border-radius: var(--radius-md);
-		padding: 1.25rem;
+	.independence-mark {
+		width: 1rem;
+		height: 1rem;
+		margin-top: 0.25rem;
+		background: var(--color-orange);
+		transform: rotate(45deg) scale(0.8);
 	}
 
-	.arch-item h3 {
+	.independence-band .eyebrow {
+		margin-bottom: 0.35rem;
+	}
+
+	.independence-band p:last-child {
+		margin: 0;
+		color: var(--color-mist);
+	}
+
+	.origins-heading,
+	.approach-title,
+	.architecture-heading,
+	.stack-heading {
+		grid-column: 1 / span 5;
+	}
+
+	.timeline,
+	.approach-copy,
+	.architecture-list,
+	.stack-list {
+		grid-column: 7 / -1;
+	}
+
+	.timeline {
+		margin: 0;
+		padding: 0;
+		list-style: none;
+		border-top: 1px solid var(--color-border);
+	}
+
+	.timeline li {
+		display: grid;
+		grid-template-columns: 110px minmax(0, 1fr);
+		gap: 1rem;
+		padding: 1.5rem 0;
+		border-bottom: 1px solid var(--color-border);
+	}
+
+	.timeline-date {
+		color: var(--color-orange);
 		font-family: var(--font-mono);
-		font-size: 0.8125rem;
-		font-weight: 500;
-		color: var(--color-accent);
-		margin-bottom: 0.375rem;
+		font-size: 0.72rem;
+		text-transform: uppercase;
 	}
 
-	.arch-item p {
-		font-size: 0.8125rem;
-		line-height: 1.5;
+	.timeline h3 {
+		margin-bottom: 0.55rem;
+		font-family: var(--font-body);
+		font-size: 1.05rem;
+		font-weight: 600;
+		letter-spacing: 0;
+	}
+
+	.timeline p,
+	.approach-copy p {
+		margin: 0 0 0.85rem;
+		color: var(--color-mist);
+		font-size: 0.95rem;
+		line-height: 1.72;
+	}
+
+	.approach-copy p:last-child {
+		margin-bottom: 0;
+	}
+
+	.architecture-list,
+	.stack-list {
 		margin: 0;
 	}
 
-	.tech-list {
-		display: flex;
-		flex-direction: column;
-		gap: 0.5rem;
+	.architecture-list > div {
+		display: grid;
+		grid-template-columns: minmax(150px, 0.7fr) minmax(0, 1.5fr);
+		gap: 1.25rem;
+		padding: 1.15rem 0;
+		border-top: 1px solid var(--color-border);
 	}
 
-	.tech-item {
-		display: flex;
-		align-items: center;
-		padding: 0.625rem 1rem;
-		background: var(--color-surface);
-		border: 1px solid var(--color-border);
-		border-radius: var(--radius-sm);
+	.architecture-list > div:last-child {
+		border-bottom: 1px solid var(--color-border);
 	}
 
-	.tech-label {
+	.architecture-list dt,
+	.stack-list dt {
+		color: var(--color-cyan);
 		font-family: var(--font-mono);
 		font-size: 0.75rem;
-		color: var(--color-text-muted);
-		min-width: 120px;
 		font-weight: 500;
 	}
 
-	.tech-value {
-		font-size: 0.875rem;
-		color: var(--color-text);
+	.architecture-list dd,
+	.stack-list dd {
+		margin: 0;
+		color: var(--color-mist);
+		font-size: 0.92rem;
 	}
 
-	.about-links {
+	.stack-section {
+		padding-top: 0;
+		border-top: 0 !important;
+	}
+
+	.stack-list {
+		border: 1px solid var(--color-border-strong);
+		background: var(--color-code-bg);
+	}
+
+	.stack-list > div {
+		display: grid;
+		grid-template-columns: 130px minmax(0, 1fr);
+		gap: 1rem;
+		padding: 0.9rem 1rem;
+		border-bottom: 1px solid var(--color-border);
+	}
+
+	.stack-list > div:last-child {
+		border-bottom: 0;
+	}
+
+	.contribute {
+		padding-bottom: 0;
+	}
+
+	.contribute-box {
 		display: flex;
-		gap: 0.75rem;
-		margin-top: 1.25rem;
+		align-items: end;
+		justify-content: space-between;
+		gap: 3rem;
+		padding: clamp(2rem, 5vw, 4rem);
+		border: 1px solid var(--color-border-strong);
+		background: var(--color-layer);
 	}
 
-	.btn {
-		display: inline-flex;
-		align-items: center;
-		padding: 0.625rem 1.25rem;
-		border-radius: var(--radius-md);
-		font-size: 0.875rem;
-		font-weight: 600;
-		text-decoration: none;
-		transition: all 0.15s;
+	.contribute-box h2 {
+		max-width: 16ch;
+		margin-bottom: 0.8rem;
+		font-size: clamp(2rem, 4vw, 3.4rem);
+		letter-spacing: -0.05em;
 	}
 
-	.btn-outline {
-		background: transparent;
-		color: var(--color-text);
-		border: 1px solid var(--color-border-hover);
+	.contribute-box p:last-child {
+		max-width: 60ch;
+		margin: 0;
+		color: var(--color-mist);
 	}
 
-	.btn-outline:hover {
-		border-color: var(--color-accent);
-		color: var(--color-accent);
-		transform: translateY(-1px);
+	.contribute-box .button-row {
+		justify-content: flex-end;
+		flex: 0 0 auto;
+		max-width: 310px;
 	}
 
-	@media (max-width: 768px) {
-		.page-title { font-size: 2rem; }
-		.arch-grid { grid-template-columns: 1fr; }
-		.tech-label { min-width: 90px; }
+	@media (max-width: 820px) {
+		.origins-heading,
+		.timeline,
+		.approach-title,
+		.approach-copy,
+		.architecture-heading,
+		.architecture-list,
+		.stack-heading,
+		.stack-list {
+			grid-column: 1 / -1;
+		}
+
+		.origins-heading,
+		.approach-title,
+		.architecture-heading,
+		.stack-heading {
+			margin-bottom: 2rem;
+		}
+
+		.contribute-box {
+			align-items: stretch;
+			flex-direction: column;
+		}
+
+		.contribute-box .button-row {
+			justify-content: flex-start;
+			max-width: none;
+		}
+	}
+
+	@media (max-width: 520px) {
+		.timeline li,
+		.architecture-list > div,
+		.stack-list > div {
+			grid-template-columns: 1fr;
+			gap: 0.45rem;
+		}
 	}
 </style>
