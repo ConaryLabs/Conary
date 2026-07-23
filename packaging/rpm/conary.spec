@@ -1,7 +1,7 @@
 %global crate conary
 
 Name:           conary
-Version:        0.11.3
+Version:        0.12.0
 Release:        1%{?dist}
 Summary:        Early-preview Linux package manager with native-package adoption
 

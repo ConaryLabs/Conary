@@ -5,7 +5,7 @@
 
 [package]
 name = "conary"
-version = "0.11.3"
+version = "0.12.0"
 description = "Early-preview Linux package manager with native-package adoption"
 license = "MIT"
 homepage = "https://conary.io"

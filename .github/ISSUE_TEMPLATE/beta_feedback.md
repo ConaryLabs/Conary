@@ -29,7 +29,7 @@ Fill this in if you ran the tester loop from the preview post.
 - **Kernel version**: (output of `uname -r`)
 - **Architecture**: (output of `uname -m`)
 - **Conary version or commit**: (output of `conary --version` or commit SHA)
-- **Release tag and package**: (for example, `v0.11.3` and the exact RPM/DEB/Arch package name)
+- **Release tag and package**: (for example, `v0.12.0` and the exact RPM/DEB/Arch package name)
 - **Package checksum verified**: yes/no
 - **VM/snapshot/non-critical host**: yes/no
 

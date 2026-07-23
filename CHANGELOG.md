@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v0.12.0] - 2026-07-23
+
+### Fixed
+- accept safe in-root symlink ancestors
+
+### Other
+- ops(site): deploy static routes with real 404s
+- feat(site): redesign public website
 ## [v0.11.3] - 2026-07-18
 
 ### Fixed
