@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-07-08
-revision: 24
-summary: Document scriptlet publication summary shape and sanitized intent reports
+last_updated: 2026-07-23
+revision: 25
+summary: Document root-contained payload symlink normalization
 ---
 
 # CCS Module (conary-core/src/ccs/)
@@ -335,6 +335,15 @@ conary ccs install package.ccs --dry-run     # Preview without applying
 The `--reinstall` flag forces reinstallation even when the same version is
 already present. This is useful for repairing corrupted files or re-running
 hooks without bumping the version.
+
+Payload paths are normalized before capability checks, CAS storage, or
+generation publication. Standard usr-merge roots and pre-existing symlink
+ancestors such as Arch `/usr/lib64 -> lib` are resolved to the root-relative
+deployment target only when every hop stays inside the selected install root.
+An absolute symlink target is accepted only when it explicitly names a path
+beneath that root. Escapes, loops, and children beneath symlinks created by the
+package remain fail-closed; an existing leaf symlink also keeps the separate
+replacement/collision semantics owned by the payload type.
 
 For `[[file_capabilities]]`, the install boundary depends on the execution
 path. Mutable live-root installs still apply the manifest authority with a

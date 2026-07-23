@@ -6,8 +6,11 @@ use anyhow::{Context, Result};
 use conary_core::ccs::CcsPackage;
 use conary_core::ccs::manifest::FileCapability;
 use conary_core::packages::traits::{ExtractedFile, PackageFormat};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::ffi::OsString;
 use std::path::{Component as PathComponent, Path, PathBuf};
+
+const MAX_EXISTING_SYMLINK_DEPTH: usize = 40;
 
 pub(super) fn sanitize_package_relative_path(path: &str) -> Result<PathBuf> {
     let candidate = path.strip_prefix('/').unwrap_or(path);
@@ -129,9 +132,141 @@ pub(crate) fn normalize_ccs_file_capabilities(
         .collect()
 }
 
-fn package_deployment_relative_path(_root_path: &Path, package_path: &str) -> Result<PathBuf> {
+fn package_deployment_relative_path(root_path: &Path, package_path: &str) -> Result<PathBuf> {
     let relative_path = sanitize_package_relative_path(package_path)?;
-    rewrite_standard_usrmerge_root_symlink(&relative_path)
+    let relative_path = rewrite_standard_usrmerge_root_symlink(&relative_path)?;
+    resolve_existing_symlink_ancestors(root_path, &relative_path)
+}
+
+fn resolve_existing_symlink_ancestors(root_path: &Path, relative_path: &Path) -> Result<PathBuf> {
+    let Some(file_name) = relative_path.file_name() else {
+        return Ok(relative_path.to_path_buf());
+    };
+    let parent = relative_path.parent().unwrap_or_else(|| Path::new(""));
+    let resolved_parent = resolve_existing_root_relative_path(root_path, parent, relative_path)?;
+    Ok(resolved_parent.join(file_name))
+}
+
+fn resolve_existing_root_relative_path(
+    root_path: &Path,
+    relative_path: &Path,
+    package_path: &Path,
+) -> Result<PathBuf> {
+    let mut pending: VecDeque<OsString> = relative_path
+        .components()
+        .filter_map(|component| match component {
+            PathComponent::Normal(part) => Some(part.to_os_string()),
+            _ => None,
+        })
+        .collect();
+    let mut resolved = PathBuf::new();
+    let mut symlink_depth = 0;
+
+    while let Some(component) = pending.pop_front() {
+        resolved.push(&component);
+        let candidate = root_path.join(&resolved);
+        match std::fs::symlink_metadata(&candidate) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                symlink_depth += 1;
+                if symlink_depth > MAX_EXISTING_SYMLINK_DEPTH {
+                    return Err(path_traversal_error(format!(
+                        "package path {} resolves through a symlink chain deeper than \
+                         {MAX_EXISTING_SYMLINK_DEPTH} at {}",
+                        package_path.display(),
+                        resolved.display()
+                    )));
+                }
+
+                let blocker = resolved.clone();
+                let target = std::fs::read_link(&candidate)
+                    .with_context(|| format!("failed to read symlink {}", candidate.display()))?;
+                resolved.pop();
+                let (mut redirected, target_relative) = if target.is_absolute() {
+                    let canonical_root = std::fs::canonicalize(root_path).with_context(|| {
+                        format!(
+                            "failed to resolve install root {} while validating package path {}",
+                            root_path.display(),
+                            package_path.display()
+                        )
+                    })?;
+                    let target_relative = target.strip_prefix(&canonical_root).map_err(|_| {
+                        path_traversal_error(format!(
+                            "package path {} escapes the install root through symlink {} -> {}",
+                            package_path.display(),
+                            blocker.display(),
+                            target.display()
+                        ))
+                    })?;
+                    (PathBuf::new(), target_relative)
+                } else {
+                    (resolved.clone(), target.as_path())
+                };
+                append_root_relative_symlink_target(
+                    &mut redirected,
+                    target_relative,
+                    &target,
+                    package_path,
+                    &blocker,
+                )?;
+                redirected.extend(pending);
+                pending = redirected
+                    .components()
+                    .filter_map(|component| match component {
+                        PathComponent::Normal(part) => Some(part.to_os_string()),
+                        _ => None,
+                    })
+                    .collect();
+                resolved.clear();
+            }
+            Ok(_) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => {
+                return Err(err)
+                    .with_context(|| format!("failed to inspect {}", candidate.display()));
+            }
+        }
+    }
+
+    Ok(resolved)
+}
+
+fn append_root_relative_symlink_target(
+    resolved: &mut PathBuf,
+    target_relative: &Path,
+    target_display: &Path,
+    package_path: &Path,
+    blocker: &Path,
+) -> Result<()> {
+    for component in target_relative.components() {
+        match component {
+            PathComponent::CurDir => {}
+            PathComponent::Normal(part) => resolved.push(part),
+            PathComponent::ParentDir => {
+                if !resolved.pop() {
+                    return Err(path_traversal_error(format!(
+                        "package path {} escapes the install root through symlink {} -> {}",
+                        package_path.display(),
+                        blocker.display(),
+                        target_display.display()
+                    )));
+                }
+            }
+            PathComponent::RootDir | PathComponent::Prefix(_) => {
+                return Err(path_traversal_error(format!(
+                    "package path {} resolves through invalid symlink {} -> {}",
+                    package_path.display(),
+                    blocker.display(),
+                    target_display.display()
+                )));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn path_traversal_error(message: String) -> anyhow::Error {
+    anyhow::Error::new(conary_core::Error::PathTraversal(message))
 }
 
 fn identical_regular_deployment(existing: &ExtractedFile, current: &ExtractedFile) -> bool {
@@ -310,8 +445,12 @@ pub(crate) fn normalize_ccs_extracted_files(
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_ccs_file_capabilities, sanitize_package_relative_path};
+    use super::{
+        normalize_ccs_extracted_files, normalize_ccs_file_capabilities, normalize_ccs_package_path,
+        sanitize_package_relative_path,
+    };
     use conary_core::ccs::manifest::FileCapability;
+    use conary_core::packages::traits::ExtractedFile;
     use std::path::PathBuf;
 
     fn file_capability(path: &str) -> FileCapability {
@@ -374,6 +513,101 @@ mod tests {
         assert_eq!(
             normalized[0].capabilities,
             vec!["cap_net_bind_service".to_string()]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn normalize_payload_follows_safe_existing_relative_symlink_ancestor() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("usr/lib")).unwrap();
+        std::os::unix::fs::symlink("lib", root.path().join("usr/lib64")).unwrap();
+
+        let normalized = normalize_ccs_extracted_files(
+            root.path(),
+            vec![ExtractedFile {
+                path: "/usr/lib64/libform.so.6".to_string(),
+                content: b"fixture".to_vec(),
+                sha256: Some("fixture-hash".to_string()),
+                size: 7,
+                mode: 0o100644,
+                symlink_target: None,
+            }],
+        )
+        .unwrap();
+
+        assert_eq!(normalized[0].path, "/usr/lib/libform.so.6");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn normalize_payload_follows_safe_existing_absolute_symlink_ancestor_inside_root() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("usr/lib")).unwrap();
+        std::os::unix::fs::symlink(root.path().join("usr/lib"), root.path().join("usr/lib64"))
+            .unwrap();
+
+        assert_eq!(
+            normalize_ccs_package_path(root.path(), "/usr/lib64/libform.so.6").unwrap(),
+            "/usr/lib/libform.so.6"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn normalize_payload_rejects_absolute_symlink_ancestor_outside_root() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("usr")).unwrap();
+        std::os::unix::fs::symlink(outside.path(), root.path().join("usr/lib64")).unwrap();
+
+        let err = normalize_ccs_package_path(root.path(), "/usr/lib64/libform.so.6").unwrap_err();
+
+        assert!(err.to_string().contains("escapes the install root"));
+        assert!(err.to_string().contains("usr/lib64"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn normalize_payload_rejects_existing_symlink_ancestor_that_escapes_root() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("usr")).unwrap();
+        std::os::unix::fs::symlink("../../outside", root.path().join("usr/lib64")).unwrap();
+
+        let err = normalize_ccs_package_path(root.path(), "/usr/lib64/libform.so.6").unwrap_err();
+
+        assert!(err.to_string().contains("escapes the install root"));
+        assert!(err.to_string().contains("usr/lib64"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn normalize_payload_rejects_multi_hop_existing_symlink_escape() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("usr")).unwrap();
+        std::fs::create_dir_all(root.path().join("opt")).unwrap();
+        std::os::unix::fs::symlink("../opt/lib64", root.path().join("usr/lib64")).unwrap();
+        std::os::unix::fs::symlink("../../outside", root.path().join("opt/lib64")).unwrap();
+
+        let err = normalize_ccs_package_path(root.path(), "/usr/lib64/libform.so.6").unwrap_err();
+
+        assert!(err.to_string().contains("escapes the install root"));
+        assert!(err.to_string().contains("opt/lib64"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn normalize_payload_rejects_existing_symlink_loop() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("usr")).unwrap();
+        std::os::unix::fs::symlink("lib", root.path().join("usr/lib64")).unwrap();
+        std::os::unix::fs::symlink("lib64", root.path().join("usr/lib")).unwrap();
+
+        let err = normalize_ccs_package_path(root.path(), "/usr/lib64/libform.so.6").unwrap_err();
+
+        assert!(
+            err.to_string().contains("symlink chain deeper than 40"),
+            "unexpected error: {err:#}"
         );
     }
 }

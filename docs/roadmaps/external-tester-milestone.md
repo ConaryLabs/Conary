@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-07-19
+last_updated: 2026-07-23
 status: active
 current_result: 1/10
 summary: Outcome tracker for Conary's first external tester milestone
@@ -103,23 +103,36 @@ useful evidence but does not count as a completion.
   Both reports came from the same external tester, so they establish two
   supported-host successes but count once toward the ten-person milestone.
   They do not start the broad-outreach stall clock.
+- Prelaunch remediation evidence:
+  [issue #41](https://github.com/ConaryLabs/Conary/issues/41) reports that
+  `v0.11.3` rejects the legitimate Arch-style `/usr/lib64 -> lib` ancestor while
+  validating a Fedora-form CCS payload on Artix. Artix and that cross-distro
+  route are outside the supported-host claim, but the in-root symlink
+  false-positive is a valid fail-closed-path defect. The attached bundle also
+  showed that unprivileged database-backed diagnostics could all fail against
+  the root-owned installed database. Both are `fix-now` launch blockers. The
+  repaired bundle records the host profile, source pin, and complete repository
+  set so the Fedora source route can be classified from evidence instead of
+  assumption.
 - Supported hosts: Fedora 44, Ubuntu 26.04 LTS, and Arch Linux on the release's
   supported architecture and compatibility baseline.
-- Planned launch sequence, using the venue-specific copy in
+- Rescheduling sequence, using the venue-specific copy in
   `docs/operations/external-tester-outreach.md`:
 
-  | Venue | Planned timestamp | State |
+  | Venue | New timestamp | State |
   | --- | --- | --- |
-  | Show HN | Monday, 2026-07-20 at 15:00 CEST (`13:00 UTC`) | scheduled |
-  | r/codex | Tuesday, 2026-07-21 at 15:00 CEST (`13:00 UTC`) | scheduled; re-check rules and posting eligibility |
-  | r/ClaudeAI | Wednesday, 2026-07-22 at 15:00 CEST (`13:00 UTC`) | scheduled; requires current showcase eligibility and posting-account karma over 50 |
+  | Show HN | TBD | postponed; the 2026-07-20 slot passed without a post |
+  | r/codex | TBD | postponed; the 2026-07-21 slot passed without a post; re-check rules and posting eligibility |
+  | r/ClaudeAI | TBD | postponed; the 2026-07-22 slot passed without a post; requires current showcase eligibility and posting-account karma over 50 |
 
 - Actual post URLs and launch timestamps: not launched. Release and site
-  evidence is complete, but outreach remains gated until GitHub Support
-  dereferences the cached pull-request and commit views that still expose
-  pre-rewrite history and the per-venue eligibility checks pass. Record each
-  post immediately after submission. The three-week stall clock starts from
-  the first actual launch timestamp.
+  evidence for `v0.11.3` is complete, but the former dates are retired and
+  outreach is postponed. Assign replacement dates only after the fix-now
+  remediation is published and verified on supported paths, its release claims
+  are refreshed, GitHub Support dereferences the cached pull-request and commit
+  views that still expose pre-rewrite history, and the per-venue eligibility
+  checks pass. Record each post immediately after submission. The three-week
+  stall clock starts from the first actual launch timestamp.
 - Privacy-safe feedback path: the beta-feedback issue template and a reviewed
   support bundle; never request secrets, credential files, private keys, broad
   environment dumps, or a live database by default.

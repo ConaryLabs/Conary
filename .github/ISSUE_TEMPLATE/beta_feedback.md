@@ -53,13 +53,16 @@ Run this from the checkout when it would help maintainers understand the host
 state:
 
 ```bash
+sudo -v
 bash scripts/conary-support-bundle.sh target/conary-support-bundle
 ```
 
 - **Support bundle reviewed before attach**: yes/no
 
-Review the bundle before attaching it. The script is allowlist-only and does
-not copy `conary.db`, raw logs, environment dumps, shell history, private keys,
-SSH keys, `/etc/conary/trust`, host-local access notes, or package payloads.
-Do not attach any of those unless a maintainer explicitly asks for a separately
-reviewed follow-up.
+On an installed host, the script uses the cached authorization only for
+allowlisted database-backed diagnostics and stops before writing if it is not
+available. Review the bundle before attaching it. The script is allowlist-only
+and does not copy `conary.db`, raw logs, environment dumps, shell history,
+private keys, SSH keys, `/etc/conary/trust`, host-local access notes, or package
+payloads. Do not attach any of those unless a maintainer explicitly asks for a
+separately reviewed follow-up.

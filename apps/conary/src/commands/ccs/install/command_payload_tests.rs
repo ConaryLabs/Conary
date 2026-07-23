@@ -321,6 +321,107 @@ async fn ccs_install_persists_usrmerge_payload_under_usr_path() {
 
 #[cfg(unix)]
 #[tokio::test]
+async fn ccs_install_resolves_safe_existing_lib64_ancestor_inside_root() {
+    use conary_core::ccs::builder::write_ccs_package;
+    use conary_core::ccs::{BuildResult, CcsManifest, ComponentData, FileEntry, FileType};
+    use conary_core::hash;
+
+    let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+    let temp_dir = tempfile::tempdir().unwrap();
+    let install_root = temp_dir.path().join("root");
+    let package_path = temp_dir.path().join("lib64-ancestor.ccs");
+    let db_path = temp_dir.path().join("conary.db");
+    let db_path_str = db_path.to_str().unwrap();
+
+    std::fs::create_dir_all(install_root.join("usr/lib")).unwrap();
+    std::os::unix::fs::symlink("lib", install_root.join("usr/lib64")).unwrap();
+    conary_core::db::init(db_path_str).unwrap();
+    stage_test_boot_assets(temp_dir.path());
+
+    let library_content = b"libform".to_vec();
+    let library_hash = hash::sha256(&library_content);
+    let init_content = b"#!/bin/sh\nexec true\n".to_vec();
+    let init_hash = hash::sha256(&init_content);
+    let total_size = (library_content.len() + init_content.len()) as u64;
+    let files = vec![
+        FileEntry {
+            path: "/usr/lib64/libform.so.6".to_string(),
+            hash: library_hash.clone(),
+            size: library_content.len() as u64,
+            mode: 0o100755,
+            component: "runtime".to_string(),
+            file_type: FileType::Regular,
+            target: None,
+            chunks: None,
+        },
+        FileEntry {
+            path: "/usr/sbin/init".to_string(),
+            hash: init_hash.clone(),
+            size: init_content.len() as u64,
+            mode: 0o100755,
+            component: "runtime".to_string(),
+            file_type: FileType::Regular,
+            target: None,
+            chunks: None,
+        },
+    ];
+    let result = BuildResult {
+        manifest: CcsManifest::new_minimal("lib64-ancestor", "1.0.0"),
+        components: HashMap::from([(
+            "runtime".to_string(),
+            ComponentData {
+                name: "runtime".to_string(),
+                files: files.clone(),
+                hash: "runtime".to_string(),
+                size: total_size,
+            },
+        )]),
+        files,
+        blobs: HashMap::from([(library_hash, library_content), (init_hash, init_content)]),
+        total_size,
+        chunked: false,
+        chunk_stats: None,
+    };
+    write_ccs_package(&result, &package_path).unwrap();
+
+    cmd_ccs_install(
+        package_path.to_str().unwrap(),
+        db_path_str,
+        install_root.to_str().unwrap(),
+        false,
+        true,
+        None,
+        None,
+        crate::commands::SandboxMode::None,
+        true,
+        false,
+        false,
+        None,
+    )
+    .await
+    .unwrap();
+
+    let conn = conary_core::db::open(db_path_str).unwrap();
+    let resolved_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM files WHERE path = '/usr/lib/libform.so.6'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let unresolved_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM files WHERE path = '/usr/lib64/libform.so.6'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(resolved_count, 1);
+    assert_eq!(unresolved_count, 0);
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn ccs_install_allows_identical_existing_symlink_destination() {
     use conary_core::ccs::builder::write_ccs_package;
     use conary_core::ccs::{BuildResult, CcsManifest, ComponentData, FileEntry, FileType};

@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-19
-revision: 8
+last_updated: 2026-07-23
+revision: 9
 summary: Agent-supervised instructions for the first external Conary tester loop
 ---
 
@@ -244,9 +244,13 @@ Only attach a support bundle if it would help explain a failure and you are
 running from a checkout. Review it first:
 
 ```bash
+sudo -v
 bash scripts/conary-support-bundle.sh target/conary-support-bundle
 ```
 
-Do not attach private keys, tokens, SSH keys, shell history, raw environment
-dumps, `/etc/conary/trust`, raw logs, package payloads, or live `conary.db`
-files unless a maintainer explicitly asks for a separately reviewed follow-up.
+On an installed host, the script uses the cached authorization only for
+allowlisted database-backed diagnostics and stops before writing if it is not
+available. Do not attach private keys, tokens, SSH keys, shell history, raw
+environment dumps, `/etc/conary/trust`, raw logs, package payloads, or live
+`conary.db` files unless a maintainer explicitly asks for a separately reviewed
+follow-up.

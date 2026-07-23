@@ -1,36 +1,35 @@
 ---
-last_updated: 2026-07-19
-status: scheduled
-summary: Multi-venue launch packet for the first external tester loop
+last_updated: 2026-07-23
+status: postponed
+summary: Postponed multi-venue launch packet for the first external tester loop
 ---
 
 # External Tester Launch Packet
 
-> **SCHEDULED FOR MANUAL LAUNCH:** begin with Show HN on Monday, 2026-07-20 at
-> 15:00 CEST (`13:00 UTC`), then use the venue-specific Reddit follow-ups below.
-> The W2 compatible-Remi, rollback, prewarm, and clean-host baselines are
-> recorded. The `v0.11.2` gate was reopened for `v0.11.3` after the supported
-> `htop` path exposed unreachable generic SONAME evidence; review also found an
-> inexact or ABI-unchecked critical-library fallback and discarded Arch
-> capability constraints. The immutable replacement release is published, and
-> its exact tag, workflow runs, hashes, native-package onboarding,
-> installed-binary self-update, deployment, and public-site evidence are now
-> verified. Do not publish automatically or until GitHub Support has
-> dereferenced the cached pull-request and commit views that still expose
-> pre-rewrite history and the venue-specific eligibility checks pass. No listed
-> external venue post has been published. Organic prelaunch testing has one
-> unique qualifying tester across Ubuntu 26.04 LTS and Fedora 44, so the
-> milestone tracker is 1/10; this does not start the broad-outreach stall clock.
+> **POSTPONED; NO NEW DATE IS ASSIGNED:** the planned 2026-07-20 through
+> 2026-07-22 launch window passed without a listed external venue post. Organic
+> prelaunch testing has one unique qualifying tester across Ubuntu 26.04 LTS and
+> Fedora 44, so the milestone tracker remains 1/10 and the broad-outreach stall
+> clock has not started. Before rescheduling, publish and verify the current
+> fix-now remediation: safe in-root system-symlink handling exposed by
+> [issue #41](https://github.com/ConaryLabs/Conary/issues/41), an installed-host
+> support bundle that can capture root-owned database diagnostics, and any
+> resulting release-evidence refresh. GitHub Support must also dereference the
+> cached pull-request and commit views that still expose pre-rewrite history,
+> and the venue-specific eligibility checks must pass. The venue copy below
+> remains a draft and its pinned-release references must be refreshed before use.
 
-The maintainer posts this manually and remains available to answer comments.
-After submission, record the actual HN URL and timestamp in the milestone
-tracker before treating W3 as launched.
+The maintainer will assign fresh dates only after all gates above are closed,
+then post manually and remain available to answer comments. After submission,
+record the actual HN URL and timestamp in the milestone tracker before treating
+W3 as launched.
 
 ## Show HN Submission
 
 - **Title:** `Show HN: Conary - reversible package management for Fedora, Ubuntu, and Arch`
 - **URL:** `https://github.com/ConaryLabs/Conary`
-- **Planned submission:** Monday, 2026-07-20 at 15:00 CEST (`13:00 UTC`)
+- **Reschedule state:** date and time TBD after remediation and launch-gate
+  clearance; the 2026-07-20 slot passed without a post
 
 The title is 76 characters and keeps the required `Show HN:` prefix. Submit the
 repository URL, then add the following as the opening comment.
@@ -101,7 +100,8 @@ reports.
 
 ## r/codex Follow-Up
 
-- **Planned submission:** Tuesday, 2026-07-21 at 15:00 CEST (`13:00 UTC`)
+- **Reschedule state:** date and time TBD after the new Show HN slot is assigned;
+  the 2026-07-21 slot passed without a post
 - **Title:** `I used Codex to help build a Rust package manager; now I want agent-assisted testers`
 - **Post type:** text post with the closest project or use-case flair available
 - **Pre-post check:** confirm the account can submit, re-read the current rules,
@@ -153,7 +153,8 @@ partial attempts are useful too.
 
 ## r/ClaudeAI Follow-Up
 
-- **Planned submission:** Wednesday, 2026-07-22 at 15:00 CEST (`13:00 UTC`)
+- **Reschedule state:** date and time TBD after the new r/codex slot is assigned;
+  the 2026-07-22 slot passed without a post
 - **Title:** `Built with Claude Code: a reversible Linux package-manager preview to test in a VM`
 - **Post type:** text post with the `Showcase` flair, if that remains the
   matching flair at submission time
@@ -233,18 +234,26 @@ and failed attempts are useful evidence.
 - [x] Pin the compatible Remi commit and prewarmed package set.
 - [x] Link the compatibility checklist, tester guide, and beta-feedback template.
 - [x] Retain the W2 clean-host and rollback evidence as superseded baselines.
-- [x] Record Show HN, r/codex, r/ClaudeAI, and their planned launch timestamps
-  in the milestone tracker.
+- [x] Record Show HN, r/codex, r/ClaudeAI, and their original planned launch
+  timestamps in the milestone tracker.
 - [x] Publish `v0.11.3` and record its exact tag, workflow runs, checksums,
   detached CCS signature, profile-correct native-package initialization, and
   installed-binary self-update evidence in the milestone tracker and artifact
   matrix.
 - [x] Build and deploy the checked `conary.io` and `remi.conary.io` production
   sites for the exact release.
+- [x] Record that the 2026-07-20 through 2026-07-22 launch window passed without
+  a post and remove those dates as future commitments.
+- [ ] Publish and verify the safe in-root symlink and installed-host
+  support-bundle remediation before exposing the package loop more broadly.
+- [ ] Refresh every pinned release, checksum, workflow, guide, and site claim
+  for the release that carries the remediation.
 - [ ] Obtain GitHub Support confirmation that cached pre-rewrite pull-request
   and commit views have been dereferenced.
 - [ ] Re-check each venue's current rules and account eligibility immediately
   before posting.
+- [ ] Assign a new staggered Show HN, r/codex, and r/ClaudeAI schedule only after
+  the preceding gates pass.
 - [ ] After launch, record every actual post URL and launch timestamp.
 
 ## Closeout

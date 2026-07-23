@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-07-19
+last_updated: 2026-07-23
 proof_baseline: "v0.11.3 at 0fc31c33b42a84bb00c9c8d9bdfc574ebe960ae0; release proof complete"
 current_milestone: first external tester loop
 active_workstream: W3 First External Tester Loop
@@ -88,7 +88,7 @@ the stated scope, not whether a workstream happens to be active.
 | conaryd package and query service | limited | System routes, authorization policy, restart semantics, dry-run behavior, deployment, and PolicyKit remain incomplete. |
 | Federation | experimental | Coordinator and fetch paths are not wired into serving; TLS identity documentation and enforcement do not yet agree. |
 | Advanced derivation, lock, and reproducibility flows | unfinished | Several interfaces exist without complete persisted inputs or update-path integration. |
-| External product readiness | unfinished | One organic external tester completed the full flow on Ubuntu 26.04 and Fedora 44 with verified release-package checksums; the unique-person milestone is 1/10 and broad manual outreach remains unlaunched. |
+| External product readiness | unfinished | One organic external tester completed the full flow on Ubuntu 26.04 and Fedora 44 with verified release-package checksums; the unique-person milestone is 1/10, the former 2026-07-20 through 2026-07-22 outreach slots passed without posts, and rescheduling waits on current fix-now remediation plus the existing launch gates. |
 
 ## Workstreams
 
@@ -223,9 +223,9 @@ recorded exactly in the reconciliation map below.
   not a public operator-artifact claim.
 - **Execution status:** complete.
 - **Dependencies:** none remain inside W2.
-- **Next gate:** W3 is scheduled for a manual Show HN launch on 2026-07-20 at
-  15:00 CEST (`13:00 UTC`), followed by venue-specific r/codex and r/ClaudeAI
-  posts on the next two days.
+- **Next gate:** W3 must close its current fix-now remediation and refresh the
+  release evidence before assigning a replacement Show HN, r/codex, and
+  r/ClaudeAI schedule.
 - **Proof:** release-build run `29540722051` and deploy-and-verify run
   `29542934278` ran at pre-rewrite head
   `4d4b422b45b055fa07a3885a68a4ab8e8d16b526`. The current rewritten tag
@@ -275,18 +275,26 @@ and creates no roadmap item.
   settings remain in place. No broad external venue post has been published.
   One organic external tester completed the full flow on Ubuntu 26.04 LTS and
   Fedora 44 with verified `v0.11.3` package checksums. The two host reports
-  count once toward the unique-person milestone, so the tracker is 1/10.
-- **Execution status:** active; W3a release and public-readiness proof is
-  complete. The external tester loop has its first organic completion, while
-  the planned manual outreach sequence remains unlaunched.
-- **Dependencies:** GitHub Support must dereference the cached pull-request and
-  commit views that still expose pre-rewrite history, and the maintainer must
-  re-check each venue's current account/rule eligibility immediately before
-  submission.
-- **Next gate:** after GitHub Support confirms the cached history is no longer
-  reachable and the venue checks pass, submit the verified Show HN packet,
-  record its actual URL and timestamp, and continue collecting privacy-safe
-  reports toward the second unique qualifying tester.
+  count once toward the unique-person milestone, so the tracker is 1/10. The
+  former 2026-07-20 through 2026-07-22 outreach window passed without a post.
+  Issue #41 then exposed a valid safe-system-symlink false-positive on an
+  Arch-style root, while its support bundle exposed unusable unprivileged
+  diagnostics against the installed root-owned database. The reported Artix
+  host and Fedora-form source route remain outside supported-scope proof and
+  require the repaired bundle's host-profile, source-pin, and repository
+  evidence before classification.
+- **Execution status:** active; broad outreach is postponed while W3 repairs
+  and publishes the path-safety and support-diagnostic defects.
+- **Dependencies:** the current fixes must pass supported Arch-path and
+  installed-host-style proof and ship in a refreshed preview release. GitHub
+  Support must dereference the cached pull-request and commit views that still
+  expose pre-rewrite history, and the maintainer must re-check each venue's
+  current account/rule eligibility immediately before submission.
+- **Next gate:** after the remediation release and its public claims are
+  verified, GitHub Support confirms the cached history is no longer reachable,
+  and venue checks pass, assign a new staggered schedule. Then submit the
+  refreshed Show HN packet, record its actual URL and timestamp, and continue
+  collecting privacy-safe reports toward the second unique qualifying tester.
 - **Proof:** annotated `v0.11.3` tag object
   `a2a12791e695379e9313a210d2fd5eea2a39b352` peels to commit
   `0fc31c33b42a84bb00c9c8d9bdfc574ebe960ae0`; the immutable release was
@@ -517,8 +525,9 @@ checksum and CCS-signature verification, production deployment, official
 installed-binary self-update, compatible prewarmed Remi, rollback, and
 clean-host proof. W3 is now active; its W3a `v0.11.2` proof gate closed, was
 reopened after the supported `htop` SONAME-probe flaw was found, and is now
-closed again with the verified `v0.11.3` replacement. Manual outreach still
-waits for GitHub Support to dereference cached pre-rewrite pull-request and
-commit views and for the venue-specific eligibility checks. After those gates,
-Show HN remains scheduled for 2026-07-20 at 15:00 CEST (`13:00 UTC`), followed
-by r/codex and r/ClaudeAI on the next two days.
+closed again with the verified `v0.11.3` replacement. The 2026-07-20 through
+2026-07-22 manual outreach window passed without a post and is now retired.
+Rescheduling waits for the current path-safety and support-bundle remediation
+to ship with refreshed release evidence, GitHub Support to dereference cached
+pre-rewrite pull-request and commit views, and the venue-specific eligibility
+checks. No replacement date is assigned yet.

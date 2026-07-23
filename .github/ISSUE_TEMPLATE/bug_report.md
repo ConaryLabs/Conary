@@ -36,12 +36,16 @@ What actually happened.
 <summary>Support bundle or reviewed logs</summary>
 
 ```bash
+sudo -v
 bash scripts/conary-support-bundle.sh target/conary-support-bundle
 ```
 
-Review the generated bundle before attaching it. It is allowlist-only and does
-not copy `conary.db`, raw logs, environment dumps, shell history, private keys,
-SSH keys, `/etc/conary/trust`, host-local access notes, or package payloads.
+On an installed host, the script uses the cached authorization only for
+allowlisted database-backed diagnostics and stops before writing if it is not
+available. Review the generated bundle before attaching it. It is allowlist-only
+and does not copy `conary.db`, raw logs, environment dumps, shell history,
+private keys, SSH keys, `/etc/conary/trust`, host-local access notes, or package
+payloads.
 If a maintainer asks for `RUST_LOG=debug` output, review and redact it before
 posting.
 

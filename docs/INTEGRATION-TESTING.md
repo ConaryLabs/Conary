@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-07-16
-revision: 31
-summary: Record the green W1 Group O v4 public fresh-cache KVM gate
+last_updated: 2026-07-23
+revision: 32
+summary: Document installed-host support-bundle privilege proof
 ---
 
 # Integration Testing
@@ -420,11 +420,14 @@ For shared tester feedback, prefer the beta issue template and the allowlist
 support bundle:
 
 ```bash
+sudo -v
 bash scripts/conary-support-bundle.sh target/conary-support-bundle
 ```
 
-Review the generated bundle before attaching it. It does not copy `conary.db`,
-raw logs, environment dumps, shell history, private keys, SSH keys,
+On an installed host, the script uses the cached authorization only for
+allowlisted database-backed diagnostics and stops before writing if it is not
+available. Review the generated bundle before attaching it. It does not copy
+`conary.db`, raw logs, environment dumps, shell history, private keys, SSH keys,
 `/etc/conary/trust`, host-local access notes, or package payloads.
 
 For managed Forge deployments from an operator workstation, prefer:
