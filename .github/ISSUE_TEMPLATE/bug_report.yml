@@ -72,7 +72,7 @@ body:
     attributes:
       label: Reviewed diagnostics
       description: |
-        When host state matters, run `bash scripts/conary-support-bundle.sh target/conary-support-bundle`, review the allowlist-only bundle, and attach it here. Do not post databases, raw logs, environment dumps, credentials, private keys, SSH keys, shell history, host-local access notes, or package payloads. Share reviewed and redacted `RUST_LOG=debug` output only when a maintainer requests it.
+        When host state matters on an installed host, run `sudo -v` first, then `bash scripts/conary-support-bundle.sh target/conary-support-bundle`. The script uses cached authorization only for allowlisted database-backed diagnostics and stops before writing if it is unavailable. Review the generated bundle before attaching it. Do not post `conary.db`, raw logs, environment dumps, credentials, private keys, SSH keys, shell history, host-local access notes, or package payloads. Share reviewed and redacted `RUST_LOG=debug` output only when a maintainer requests it.
     validations:
       required: false
   - type: textarea
