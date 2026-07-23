@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-07-15
-revision: 14
-summary: Vendor-neutral assistant map with neutral active planning, feature ownership, and documentation-truth routing
+last_updated: 2026-07-24
+revision: 15
+summary: Vendor-neutral assistant map with issue-backed pull requests, neutral active planning, feature ownership, and documentation-truth routing
 ---
 
 # Conary For Coding Assistants
@@ -17,15 +17,17 @@ second subsystem manual.
 
 1. Read [`AGENTS.md`](../../AGENTS.md) for the repo contract, safety rules, and
    verification expectations.
-2. Use this file to decide which canonical docs to open next.
-3. If you need a capability name, run
+2. Read [`CONTRIBUTING.md`](../../CONTRIBUTING.md#development-workflow) for the
+   issue, branch, pull-request, review, and closeout lifecycle.
+3. Use this file to decide which canonical docs to open next.
+4. If you need a capability name, run
    `bash scripts/agent-context.sh --list` to discover available feature slugs.
-4. Route the actual work with:
+5. Route the actual work with:
    - `bash scripts/agent-context.sh --feature <slug>` for a feature slug.
    - `bash scripts/agent-context.sh --path <file>` for a specific path.
-5. Read the start-here files, focused proof, and interaction gates printed by
+6. Read the start-here files, focused proof, and interaction gates printed by
    the `--feature` or `--path` command before editing.
-6. Use the focused proof for narrow edits and the interaction gate when the
+7. Use the focused proof for narrow edits and the interaction gate when the
    change crosses a neighbor system.
 
 ## Choose By Task
@@ -46,15 +48,18 @@ second subsystem manual.
 ## Guidance Order
 
 1. `AGENTS.md` is the canonical repo-wide contract.
-2. This file is the vendor-neutral routing layer into canonical docs.
-3. `scripts/agent-context.sh` and `docs/modules/feature-ownership.md` own exact
+2. `CONTRIBUTING.md` owns the issue-backed branch and pull-request lifecycle.
+3. This file is the vendor-neutral routing layer into canonical docs.
+4. `scripts/agent-context.sh` and `docs/modules/feature-ownership.md` own exact
    feature slugs, path routing, start-here files, focused proof, and interaction
    gates.
-4. Linked canonical docs own subsystem, testing, and operations detail.
+5. Linked canonical docs own subsystem, testing, and operations detail.
 
 ## Instruction Layers
 
 - `AGENTS.md` is the shared repo-wide contract for coding agents.
+- `CONTRIBUTING.md` is the shared issue, branch, pull-request, review, and
+  closeout workflow for humans and agents.
 - `docs/llms/README.md` is the vendor-neutral landing map into canonical docs.
 - `docs/modules/feature-ownership.md` is the detailed owner-card source, reached
   through `scripts/agent-context.sh` whenever possible.
@@ -95,8 +100,8 @@ second subsystem manual.
 
 ## Doc Families
 
-- **Contract:** `AGENTS.md` and thin tool shims. These are durable instructions
-  loaded by agents or coding tools.
+- **Contract:** `AGENTS.md`, `CONTRIBUTING.md`, and thin tool shims. These are
+  durable instructions loaded by contributors, agents, or coding tools.
 - **Routing:** this file, `docs/llms/subsystem-map.md`,
   `docs/modules/feature-ownership.md`, and `scripts/agent-context.sh`.
 - **Canonical docs:** architecture, module, integration-testing, operations,
@@ -114,6 +119,9 @@ second subsystem manual.
 ## Working Rules
 
 - Treat `AGENTS.md` as a contract and this file as a map.
+- Use one primary GitHub issue for each non-trivial work slice, an issue-linked
+  branch, and a pull request for integration; follow `CONTRIBUTING.md` for
+  linkage and closeout semantics.
 - Prefer `AGENTS.md` as the shared cross-tool filename where the tool supports
   it.
 - Use `scripts/agent-context.sh --feature <slug>` before feature-scoped edits,

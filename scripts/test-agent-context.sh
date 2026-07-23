@@ -199,6 +199,14 @@ fallback_out="$("$script" --path AGENTS.md --map "$fixture_map")"
 grep -q '^Assistant/contributor guidance |' <<<"$fallback_out" \
     || fail "AGENTS.md did not use the guidance fallback"
 
+fallback_out="$("$script" --path .github/ISSUE_TEMPLATE/work_item.yml --map "$fixture_map")"
+grep -q '^Assistant/contributor guidance |' <<<"$fallback_out" \
+    || fail "issue template did not use the guidance fallback"
+
+fallback_out="$("$script" --path scripts/test-agent-context.sh --map "$fixture_map")"
+grep -q '^Assistant/contributor guidance |' <<<"$fallback_out" \
+    || fail "agent-context fixture did not use the guidance fallback"
+
 fallback_out="$("$script" --path CLAUDE.md --map "$fixture_map")"
 grep -q '^Assistant/contributor guidance |' <<<"$fallback_out" \
     || fail "CLAUDE.md did not use the guidance fallback"

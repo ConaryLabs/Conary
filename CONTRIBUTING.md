@@ -9,7 +9,7 @@ Thank you for your interest in contributing to Conary. Whether you are fixing a 
 - [Running Tests](#running-tests)
 - [Code Style](#code-style)
 - [Module Overview](#module-overview)
-- [Pull Request Process](#pull-request-process)
+- [Development Workflow](#development-workflow)
 - [Issue Reporting](#issue-reporting)
 - [Architecture Decisions](#architecture-decisions)
 - [Code of Conduct](#code-of-conduct)
@@ -25,9 +25,12 @@ Thank you for your interest in contributing to Conary. Whether you are fixing a 
 
 ### Your First Contribution
 
-Not sure where to start? Open a thread in
+Not sure where to start? Browse
+[open issues](https://github.com/ConaryLabs/Conary/issues), especially
+`good first issue` and `help wanted`. If the problem or desired outcome is
+still unclear, open a thread in
 [GitHub Discussions](https://github.com/ConaryLabs/Conary/discussions) and a
-maintainer can help identify a real, bounded task.
+maintainer can help turn it into a real, bounded issue.
 
 Small first contributions often include:
 - Adding or improving unit tests (look for modules with low coverage)
@@ -66,11 +69,12 @@ git remote add upstream https://github.com/ConaryLabs/Conary.git
 If you work with an LLM coding tool, start with:
 
 1. `AGENTS.md`
-2. `docs/llms/README.md`
-3. `docs/modules/feature-ownership.md` when choosing a feature area or
+2. [This contribution workflow](#development-workflow)
+3. `docs/llms/README.md`
+4. `docs/modules/feature-ownership.md` when choosing a feature area or
    deciding which cross-system gates apply
-4. `docs/INTEGRATION-TESTING.md` when validation spans `conary-test`
-5. `docs/operations/infrastructure.md` for MCP, deploy, and host workflow notes
+5. `docs/INTEGRATION-TESTING.md` when validation spans `conary-test`
+6. `docs/operations/infrastructure.md` for MCP, deploy, and host workflow notes
 
 Tool-specific files such as `GEMINI.md` and `.github/copilot-instructions.md`
 are compatibility shims. Prefer the linked
@@ -304,31 +308,122 @@ and four shared crates.
 | `apps/conary-test/src/report/` | JSON output and SSE event streaming |
 | `apps/conary-test/src/server/` | Axum HTTP API and MCP server (rmcp) |
 
-## Pull Request Process
+## Development Workflow
 
-1. **Create a branch** from `main` with a descriptive name:
-   - `fix/rpm-parser-overflow`
-   - `feat/sparse-index`
-   - `docs/update-architecture`
+GitHub is the day-to-day coordination surface for Conary work:
 
-2. **Keep PRs focused**: One logical change per PR. A bug fix and a new feature should be separate PRs.
+| Surface | What it owns |
+|---------|--------------|
+| Issue | Problem, in/out scope, acceptance criteria, current status, and follow-up work |
+| Pull request | Proposed diff, review discussion, exact verification, and integration record |
+| Roadmap | Ordered project state, blockers, and proof expectations across issues |
+| Design or plan | Durable decisions or multi-step execution detail that would be too large or unstable in an issue |
+| Canonical docs and specs | Current product, operator, architecture, and persisted-contract truth |
 
-3. **Include tests**: New features need tests. Bug fixes need a regression test that fails without the fix.
+Issues and PRs link these surfaces together; they do not replace durable
+repository documentation.
 
-4. **Run CI checks locally** before pushing:
-   ```bash
-   cargo fmt --all -- --check
-   cargo clippy --workspace --all-targets -- -D warnings
-   cargo test --workspace --exclude conary-test --verbose
-   cargo test -p conary-test --verbose
-   ```
+### 1. Start With An Issue
 
-   Add the `cargo test -p remi` and `cargo test -p conaryd` pair when your
-   change touches service-owned code.
+Search open and closed issues before creating a new one. Use the matching
+GitHub issue type:
 
-5. **Write a clear PR description** explaining what changed and why. If it addresses an issue, reference it (e.g., "Fixes #42").
+- **Bug** for behavior that differs from the supported contract.
+- **Feature** for a new capability or user-visible improvement.
+- **Task** for implementation slices, refactors, documentation, operations,
+  releases, investigations with a deliverable, and project maintenance.
 
-6. **Respond to review feedback** constructively. Maintainers may request changes -- this is normal and part of keeping code quality high.
+The issue should name the problem, in-scope and out-of-scope work, acceptance
+criteria, owning subsystem or boundary, and expected proof. A broad initiative
+may remain open across several focused PRs or use sub-issues; each PR still
+names one primary issue.
+
+Use Discussions while an idea is still exploratory. Pure read-only triage does
+not need a new issue until it becomes proposed work. A truly trivial correction
+such as spelling or a dead link may go straight to a focused PR, but `main`
+still never receives a direct push. Report vulnerabilities through a private
+security advisory, not a public issue.
+
+### 2. Preserve The Project Gates
+
+Run `bash scripts/agent-context.sh --feature <slug>` or
+`bash scripts/agent-context.sh --path <file>` before feature-scoped work. Record
+the owning boundary and focused proof in the issue, then preserve any design,
+security, migration, compatibility, or maintainer-decision gate printed by the
+feature card.
+
+Create or update a tracked design or implementation plan only when the work
+needs durable decision detail or spans multiple coordinated steps. Link it from
+the issue. The issue owns work status; the document owns the durable decision
+or execution detail. Completed planning is removed after its truth and resume
+facts have moved to canonical owners, as described under Documentation Hygiene.
+
+### 3. Branch From Current `main`
+
+For a maintainer checkout:
+
+```bash
+git switch main
+git pull --ff-only
+git switch -c fix/42-rpm-parser-overflow
+```
+
+Contributors working from forks should refresh from `upstream/main` before
+creating the branch. Include the issue number in a short descriptive name:
+
+- `fix/42-rpm-parser-overflow`
+- `feat/57-sparse-index`
+- `docs/63-update-architecture`
+- `chore/71-refresh-dependencies`
+
+Do not commit or push repository changes directly to `main`.
+
+### 4. Implement And Open A Pull Request
+
+Keep each PR to one reviewable logical change. New features need focused tests;
+bug fixes need a regression test that fails without the fix. Open a draft PR
+early when the work is substantial or when review can help settle an active
+decision.
+
+Before pushing, run the focused proof and interaction gate selected by the
+feature card. Broad changes should also run the full local CI path:
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace --exclude conary-test --verbose
+cargo test -p conary-test --verbose
+```
+
+Add `cargo test -p remi` and `cargo test -p conaryd` when the change touches
+service-owned code.
+
+Every non-trivial PR names one primary issue:
+
+- Use `Closes #42` only when merging the PR will satisfy the issue's acceptance
+  criteria.
+- Use `Refs #42` when the PR is one slice of a larger issue. Record the
+  remaining work on the issue and leave it open.
+
+The PR description explains the problem, scope, ownership boundary, user or
+developer impact, exact verification commands and results, and any linked
+roadmap, design, or plan.
+
+### 5. Review, Merge, And Close
+
+The default-branch ruleset requires changes to arrive through a PR, required CI
+checks to pass, and review conversations to be resolved. Respond to review
+feedback in the PR and keep its verification section current after material
+changes.
+
+The maintainer bypass is PR-only so an urgent merge still leaves an issue, diff,
+discussion, and audit trail. Use it only when waiting for a required check would
+cause more harm than merging, and record the reason plus replacement proof in
+the issue and PR.
+
+Merge through GitHub, then let GitHub delete the head branch. Confirm that the
+issue closed when the PR used `Closes`; otherwise update the open issue with
+what landed, what remains, and the next acceptance boundary.
 
 ## Issue Reporting
 

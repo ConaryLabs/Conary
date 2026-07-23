@@ -1,0 +1,61 @@
+name: Feature request
+description: Propose a new capability or user-visible improvement.
+labels:
+  - enhancement
+type: Feature
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Search existing issues first. Use Discussions when the problem or desired outcome is still exploratory.
+  - type: checkboxes
+    id: existing_issue
+    attributes:
+      label: Existing issue check
+      options:
+        - label: I searched open and closed issues for this request.
+          required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you trying to do that is impossible, unsafe, or unnecessarily difficult today?
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: Describe the user-visible result, not only a preferred implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed approach
+      description: Share an implementation idea if you have one.
+    validations:
+      required: false
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+    validations:
+      required: false
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: List concrete outcomes that would make the request complete.
+      placeholder: |
+        - [ ] ...
+        - [ ] ...
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Link related issues, roadmap sections, designs, examples, or prior discussion.
+    validations:
+      required: false

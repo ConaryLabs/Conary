@@ -1,10 +1,23 @@
-## Summary
+## Primary Issue
 
-Brief description of what this PR does.
+<!-- Every non-trivial PR names one primary issue. Keep one linkage form. -->
+Closes #
+<!-- Use `Refs #` instead when this is one slice and the issue must remain open. -->
+
+Design / Plan / Roadmap:
+
+## Problem And Outcome
+
+What problem does this solve, and what should be true after merge?
 
 ## Changes
 
 -
+
+## Scope
+
+- In scope:
+- Out of scope:
 
 ## Ownership / Boundary
 
@@ -22,6 +35,7 @@ Brief description of what this PR does.
 - [ ] Ran affected-package verification directly when touching service or daemon code
 - [ ] Updated subsystem docs or maps when the "look here first" path changed
 - [ ] Ran the broader interaction gate when the feature ownership card required it
+- [ ] Updated the primary issue with any acceptance criteria left for later PRs
 
 ```text
 - cargo fmt --check
@@ -29,7 +43,8 @@ Brief description of what this PR does.
 - cargo test -p conary
 ```
 
-## Related Issues / Plans
+## Review And Merge Notes
 
-Closes #
-Plan / Roadmap:
+- Review focus:
+- User or developer impact:
+- Required-check bypass: not used

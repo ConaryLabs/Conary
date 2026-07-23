@@ -363,7 +363,7 @@ require_unambiguous_route() {
 fallback_hint_for_path() {
     local path="$1"
     case "$path" in
-        AGENTS.md|CONTRIBUTING.md|CLAUDE.md|GEMINI.md|REASONIX.md|.github/PULL_REQUEST_TEMPLATE.md|.github/copilot-instructions.md|docs/llms/*|docs/modules/feature-ownership.md|scripts/maintainability-drift-report.sh|scripts/agent-context.sh)
+        AGENTS.md|CONTRIBUTING.md|CLAUDE.md|GEMINI.md|REASONIX.md|.github/ISSUE_TEMPLATE/*|.github/PULL_REQUEST_TEMPLATE.md|.github/copilot-instructions.md|docs/llms/*|docs/modules/feature-ownership.md|scripts/maintainability-drift-report.sh|scripts/agent-context.sh|scripts/test-agent-context.sh)
             printf 'Assistant/contributor guidance | focused: bash scripts/check-doc-truth.sh; bash scripts/test-agent-context.sh; bash scripts/agent-context.sh --validate | gate: canonical root contracts, docs/llms routing, feature ownership, and routing/maintainability guidance stay aligned'
             ;;
         docs/modules/*|docs/operations/*|docs/INTEGRATION-TESTING.md|docs/ARCHITECTURE.md)

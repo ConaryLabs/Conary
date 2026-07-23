@@ -1,0 +1,69 @@
+name: Work item
+description: Track an implementation, refactor, documentation, operations, release, or maintenance slice.
+type: Task
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use one issue as the work record for a bounded outcome. Link durable roadmap, design, plan, or specification documents instead of copying their full contents here.
+  - type: checkboxes
+    id: existing_issue
+    attributes:
+      label: Existing issue check
+      options:
+        - label: I searched open and closed issues for this work.
+          required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or outcome
+      description: What needs to change, and why is this work worth doing now?
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: State both the in-scope result and important out-of-scope work.
+      placeholder: |
+        In scope:
+        - ...
+
+        Out of scope:
+        - ...
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: List observable conditions that must be true before this issue closes.
+      placeholder: |
+        - [ ] ...
+        - [ ] ...
+    validations:
+      required: true
+  - type: textarea
+    id: ownership
+    attributes:
+      label: Ownership and boundaries
+      description: Name the owning subsystem, safety or compatibility boundaries, and any persisted state or public surface involved.
+    validations:
+      required: true
+  - type: textarea
+    id: proof
+    attributes:
+      label: Expected proof
+      description: List focused tests, interaction gates, release evidence, or live verification expected before closeout.
+      placeholder: |
+        - `bash scripts/agent-context.sh --path ...`
+        - `cargo test -p ...`
+    validations:
+      required: true
+  - type: textarea
+    id: related
+    attributes:
+      label: Related roadmap, design, plan, or issues
+      description: Link durable repository docs and any parent, blocking, or follow-up issues.
+    validations:
+      required: false
