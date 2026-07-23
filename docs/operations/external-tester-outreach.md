@@ -10,15 +10,14 @@ summary: Postponed multi-venue launch packet for the first external tester loop
 > 2026-07-22 launch window passed without a listed external venue post. Organic
 > prelaunch testing has one unique qualifying tester across Ubuntu 26.04 LTS and
 > Fedora 44, so the milestone tracker remains 1/10 and the broad-outreach stall
-> clock has not started. Before rescheduling, publish and verify the current
-> fix-now remediation: safe in-root system-symlink handling exposed by
-> [issue #41](https://github.com/ConaryLabs/Conary/issues/41), an installed-host
-> support bundle that can capture root-owned database diagnostics, and any
-> resulting release-evidence refresh. GitHub Support must also dereference the
-> cached pull-request and commit views that still expose pre-rewrite history,
-> and the venue-specific eligibility checks must pass. The venue copy below
-> remains a draft. Its `v0.12.0` references are staged, but every release-proof
-> sentence must be checked against the finished release before use.
+> clock has not started. Immutable `v0.12.0` now carries the safe in-root
+> system-symlink and support-bundle remediation exposed by
+> [issue #41](https://github.com/ConaryLabs/Conary/issues/41), and its artifact,
+> supported-Arch, self-update, deployment, and live-service evidence is
+> complete. Rescheduling remains blocked until GitHub Support dereferences the
+> cached pull-request and commit views that still expose pre-rewrite history
+> and the venue-specific eligibility checks pass. The venue copy below remains
+> a draft until those external gates close.
 
 The maintainer will assign fresh dates only after all gates above are closed,
 then post manually and remain available to answer comments. After submission,
@@ -29,8 +28,8 @@ W3 as launched.
 
 - **Title:** `Show HN: Conary - reversible package management for Fedora, Ubuntu, and Arch`
 - **URL:** `https://github.com/ConaryLabs/Conary`
-- **Reschedule state:** date and time TBD after remediation and launch-gate
-  clearance; the 2026-07-20 slot passed without a post
+- **Reschedule state:** date and time TBD after external launch-gate clearance;
+  the 2026-07-20 slot passed without a post
 
 The title is 76 characters and keeps the required `Show HN:` prefix. Submit the
 repository URL, then add the following as the opening comment.
@@ -86,11 +85,11 @@ https://github.com/ConaryLabs/Conary/releases/tag/v0.12.0
 Privacy-safe feedback form:
 https://github.com/ConaryLabs/Conary/issues/new?template=beta_feedback.md
 
-Before using this copy, confirm the immutable v0.12.0 release publishes RPM,
-DEB, Arch, and CCS artifacts, SHA256SUMS, and a detached CCS signature, and
-that the recorded checksum, signature, supported package-path, deployment, and
-installed-binary self-update proof all passed. SBOM and provenance sidecars are
-not planned, which remains an explicit preview caveat.
+The immutable v0.12.0 release publishes RPM, DEB, Arch, and CCS artifacts,
+SHA256SUMS, and a detached CCS signature. Independent checksum, signature,
+supported Arch-path, deployment, and installed-binary self-update proof all
+passed. SBOM and provenance sidecars are not planned, which remains an
+explicit preview caveat.
 
 The feedback I care about most is where adoption feels risky, where dry runs or
 warnings are unclear, which everyday package-manager operation is missing
@@ -142,9 +141,9 @@ https://github.com/ConaryLabs/Conary/releases/tag/v0.12.0
 
 The supported test hosts are x86_64 Fedora 44, Ubuntu 26.04 LTS, and Arch
 Linux. Please use a VM, snapshot, spare system, or other non-critical host.
-Before posting, confirm the immutable v0.12.0 release has independently
-verified checksums and a verified detached CCS signature. It does not plan to
-publish SBOM or provenance sidecars; this is explicitly an early preview.
+The immutable v0.12.0 release has independently verified checksums and a
+verified detached CCS signature. It does not publish SBOM or provenance
+sidecars; this is explicitly an early preview.
 
 I'm interested in two kinds of feedback: where Conary's adoption/reversal flow
 feels unclear, and whether the repo-level instructions plus explicit human
@@ -197,10 +196,9 @@ Pinned v0.12.0 release:
 https://github.com/ConaryLabs/Conary/releases/tag/v0.12.0
 
 The supported hosts are x86_64 Fedora 44, Ubuntu 26.04 LTS, and Arch Linux.
-Please use a VM, snapshot, spare system, or other non-critical host. Before
-posting, confirm the early `v0.12.0` preview has independently verified
-checksums and a verified detached CCS signature. SBOM and provenance sidecars
-are not planned.
+Please use a VM, snapshot, spare system, or other non-critical host. The early
+`v0.12.0` preview has independently verified checksums and a verified detached
+CCS signature. SBOM and provenance sidecars are not planned.
 
 The useful feedback is both product-level and workflow-level: where adoption
 or reversal feels risky, whether dry runs and warnings are clear, and whether
@@ -229,26 +227,26 @@ and failed attempts are useful evidence.
 
 ## Launch Checklist
 
-- [x] Stage every launch-copy release reference for the `v0.12.0` candidate and
-  pin public guides to that exact tag.
+- [x] Pin every launch-copy release and public-guide reference to immutable
+  `v0.12.0`.
 - [x] Link the release artifact matrix and checksum/signature instructions.
 - [x] Pin the compatible Remi commit and prewarmed package set.
 - [x] Link the compatibility checklist, tester guide, and beta-feedback template.
 - [x] Retain the W2 clean-host and rollback evidence as superseded baselines.
 - [x] Record Show HN, r/codex, r/ClaudeAI, and their original planned launch
   timestamps in the milestone tracker.
-- [ ] Publish `v0.12.0` and record its exact tag, workflow runs, checksums,
-  detached CCS signature, profile-correct native-package initialization, and
+- [x] Publish `v0.12.0` and record its exact tag, workflow runs, checksums,
+  detached CCS signature, profile-correct shipped-package initialization, and
   installed-binary self-update evidence in the milestone tracker and artifact
   matrix.
-- [ ] Build and deploy the checked `conary.io` and `remi.conary.io` production
+- [x] Build and deploy the checked `conary.io` and `remi.conary.io` production
   sites for the exact `v0.12.0` release.
 - [x] Record that the 2026-07-20 through 2026-07-22 launch window passed without
   a post and remove those dates as future commitments.
-- [ ] Verify the safe in-root symlink and installed-host support-bundle
-  remediation from the shipped artifacts before exposing the package loop more
-  broadly.
-- [ ] Replace candidate wording with exact pinned checksum, workflow, guide,
+- [x] Verify the safe in-root symlink with the shipped binary and the
+  installed-host support-bundle remediation from the exact tagged source before
+  exposing the package loop more broadly.
+- [x] Replace candidate wording with exact pinned checksum, workflow, guide,
   site, and self-update evidence after the release passes.
 - [ ] Obtain GitHub Support confirmation that cached pre-rewrite pull-request
   and commit views have been dereferenced.

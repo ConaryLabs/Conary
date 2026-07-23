@@ -242,7 +242,7 @@
 				<li><a href="https://dnf5.readthedocs.io/en/latest/commands/history.8.html">DNF5 history commands <span aria-hidden="true">↗</span></a></li>
 				<li><a href="https://dnf5.readthedocs.io/en/stable/changes_from_dnf4.7.html">DNF5 changes from DNF4 <span aria-hidden="true">↗</span></a></li>
 				<li><a href="https://man.archlinux.org/man/pacman.8.en">pacman manual <span aria-hidden="true">↗</span></a></li>
-				<li><a href="https://nix.dev/manual/nix/2.32/package-management/profiles">Nix profiles <span aria-hidden="true">↗</span></a></li>
+				<li><a href="https://nix.dev/manual/nix/stable/package-management/profiles">Nix profiles <span aria-hidden="true">↗</span></a></li>
 				<li><a href="https://nixos.org/manual/nixos/stable/">NixOS manual <span aria-hidden="true">↗</span></a></li>
 			</ul>
 		</section>

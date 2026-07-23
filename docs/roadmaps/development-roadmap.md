@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-07-23
-proof_baseline: "v0.11.3 at 0fc31c33b42a84bb00c9c8d9bdfc574ebe960ae0; release proof complete"
+proof_baseline: "v0.12.0 at eb256b19b4f04ca1d03b6af39a2819d746d3a22a; release and issue-remediation proof complete"
 current_milestone: first external tester loop
 active_workstream: W3 First External Tester Loop
 next_workstream: post-milestone work selected from tester evidence
@@ -79,8 +79,8 @@ the stated scope, not whether a workstream happens to be active.
 | CLI and core package operations | solid | Scope is the limited preview; external use and fresh combined proof matter more than new surface area. |
 | Adoption, unadoption, and native handoff | solid | Proof covers the current three-distro scope; the released Arch package initializes only its exact native profile and synchronizes Remi. |
 | Database, CAS, native parsing, and resolution | solid | Some advanced repository-policy abstractions and integration edges remain incomplete. |
-| Packaging, static repositories, trust, and self-update | solid | `v0.11.3` replaces the reopened `v0.11.2` gate with exact tag, artifact hashes, signature, native onboarding, deployment, and real installed-binary self-update proof. No SBOM/provenance sidecars are published or planned. |
-| CCS conversion and scriptlet authority | limited | The reviewed authority work has green local plus public-redownload QEMU file-capability fixture proof and is published in `v0.11.3`; the deliberately narrow public scriptlet scope remains separate. |
+| Packaging, static repositories, trust, and self-update | solid | `v0.12.0` has exact tag, artifact hashes, signature, supported Arch-path, deployment, and real installed-binary self-update proof. No SBOM/provenance sidecars are published or planned. |
+| CCS conversion and scriptlet authority | limited | The reviewed authority work has green local plus public-redownload QEMU file-capability fixture proof and is published in `v0.12.0`; the deliberately narrow public scriptlet scope remains separate. |
 | Generation build and export | limited | Proven paths are x86_64; non-x86 assets, signed boot authority, and persistent-effect rollback remain later work. |
 | Model, source selection, and replatforming | limited | Some resolution deltas and builder inputs are not wired end to end. |
 | Bootstrap and self-hosting | limited | Rootful, chroot, fixture, and QEMU dependencies need repeatable current proof. |
@@ -88,7 +88,7 @@ the stated scope, not whether a workstream happens to be active.
 | conaryd package and query service | limited | System routes, authorization policy, restart semantics, dry-run behavior, deployment, and PolicyKit remain incomplete. |
 | Federation | experimental | Coordinator and fetch paths are not wired into serving; TLS identity documentation and enforcement do not yet agree. |
 | Advanced derivation, lock, and reproducibility flows | unfinished | Several interfaces exist without complete persisted inputs or update-path integration. |
-| External product readiness | unfinished | One organic external tester completed the full flow on Ubuntu 26.04 and Fedora 44 with verified release-package checksums; the unique-person milestone is 1/10, the former 2026-07-20 through 2026-07-22 outreach slots passed without posts, and rescheduling waits on current fix-now remediation plus the existing launch gates. |
+| External product readiness | unfinished | One organic external tester completed the full flow on Ubuntu 26.04 and Fedora 44 with verified release-package checksums; the unique-person milestone is 1/10, the former 2026-07-20 through 2026-07-22 outreach slots passed without posts, and rescheduling waits on cached-history dereferencing plus fresh venue checks. |
 
 ## Workstreams
 
@@ -263,67 +263,61 @@ and creates no roadmap item.
 
 - **Outcome:** Conary has external evidence about whether its adoption-led
   preview works for strangers on supported systems.
-- **Current truth:** the W3a publication and public-readiness gate is complete.
-  Immutable `v0.11.3` replaces the reopened `v0.11.2` gate after the real
-  supported `htop` path exposed unreachable generic SONAME evidence, an
-  inexact or ABI-unchecked critical-library fallback, and discarded Arch
-  capability constraints. The release now requires exact cache entries,
-  compatible ELF class, and constraint-aware `pacman` proof. Its exact tag,
-  workflows, artifact hashes, signature, released package paths, Remi
-  synchronization, installed-binary self-update, service, and checked-site
-  evidence are complete. Conary remains MIT-only and the GitHub safety
-  settings remain in place. No broad external venue post has been published.
-  One organic external tester completed the full flow on Ubuntu 26.04 LTS and
-  Fedora 44 with verified `v0.11.3` package checksums. The two host reports
-  count once toward the unique-person milestone, so the tracker is 1/10. The
-  former 2026-07-20 through 2026-07-22 outreach window passed without a post.
-  Issue #41 then exposed a valid safe-system-symlink false-positive on an
-  Arch-style root, while its support bundle exposed unusable unprivileged
-  diagnostics against the installed root-owned database. The reported Artix
-  host and Fedora-form source route remain outside supported-scope proof and
-  require the repaired bundle's host-profile, source-pin, and repository
-  evidence before classification.
-- **Execution status:** active; broad outreach is postponed while W3 repairs
-  and publishes the path-safety and support-diagnostic defects.
-- **Dependencies:** the current fixes must pass supported Arch-path and
-  installed-host-style proof and ship in a refreshed preview release. GitHub
-  Support must dereference the cached pull-request and commit views that still
-  expose pre-rewrite history, and the maintainer must re-check each venue's
-  current account/rule eligibility immediately before submission.
-- **Next gate:** after the remediation release and its public claims are
-  verified, GitHub Support confirms the cached history is no longer reachable,
-  and venue checks pass, assign a new staggered schedule. Then submit the
-  refreshed Show HN packet, record its actual URL and timestamp, and continue
-  collecting privacy-safe reports toward the second unique qualifying tester.
-- **Proof:** annotated `v0.11.3` tag object
-  `a2a12791e695379e9313a210d2fd5eea2a39b352` peels to commit
-  `0fc31c33b42a84bb00c9c8d9bdfc574ebe960ae0`; the immutable release was
-  published at `2026-07-18T04:31:28Z`. Final merge CI run `29628990277` passed
-  11/11 jobs, release-build run `29629361456` passed, and exact-tag
-  deploy-and-verify run `29630694438` passed for both sites. Seven assets are
-  published; independent downloads matched all five `SHA256SUMS` payloads and
-  every REST asset digest, and the official `v0.11.2` binary verified the
-  detached CCS signature. That binary also updated through the signed CCS in
-  an isolated schema-77 database, reported `conary 0.11.3`, and then reported
-  itself current. The released Arch package initialized profile `arch`,
-  synchronized 15,429 Remi rows with zero foreign rows, planned zero installs
-  and five adoptions with nothing blocked or unresolved, and installed,
-  executed, and removed `htop 3.5.1-1-arch`; this was an isolated `bwrap`
-  target backed by read-only live-host package evidence, not a pristine Arch
-  VM. Fedora-form KVM proof synchronized 76,685 rows and installed, executed,
-  and removed `htop 3.4.1` using exact ELF64 `libcap.so.2` and
-  `libncursesw.so.6` evidence, but `minimal-boot-v4` lacks `rpm` and `dnf`, so
-  it is not literal stock Fedora native-PM proof. Full Remi health passed
-  10/10, six public routes returned HTTP 200 with exact-release site chunks,
-  and the deployed API CCS matched the release hash, size, and signature. No
-  SBOM or provenance sidecars are published or planned for this limited
-  preview. The repository Welcome Discussion is live at discussion 36, and
-  issue 35 was closed after its released-path proof was recorded; neither
-  repository action launches broad outreach or counts as a qualifying external
-  completion. Issues 37 and 38 subsequently recorded full `v0.11.3` loops on
-  x86_64 Ubuntu 26.04 LTS and Fedora 44, with both package checksums confirmed.
-  Because both reports came from the same external tester, they count as one
-  unique completion. Each later milestone completion belongs to a unique
+- **Current truth:** the W3a publication and issue-remediation gate is complete
+  at immutable `v0.12.0`. It preserves the preceding exact SONAME, ELF-class,
+  and constraint-aware Arch fixes and adds safe in-root system-symlink
+  traversal plus usable installed-host support diagnostics. No broad external
+  venue post has been published. One organic external tester completed the
+  then-current full flow on Ubuntu 26.04 LTS and Fedora 44; the two host reports
+  count once toward the unique-person milestone, so the tracker remains 1/10.
+  The former 2026-07-20 through 2026-07-22 outreach window passed without a
+  post. Issue #41's reported Artix host and Fedora-form source route remain
+  outside supported-scope proof and require the repaired bundle's host-profile,
+  source-pin, and repository evidence before classification.
+- **Execution status:** active; release remediation is complete, but broad
+  outreach and its replacement dates remain postponed.
+- **Dependencies:** GitHub Support must dereference the cached pull-request and
+  commit views that still expose pre-rewrite history, and the maintainer must
+  re-check each venue's current account/rule eligibility immediately before
+  submission.
+- **Next gate:** after GitHub Support confirms the cached history is no longer
+  reachable and venue checks pass, assign a new staggered schedule. Then submit
+  the refreshed Show HN packet, record its actual URL and timestamp, and
+  continue collecting privacy-safe reports toward the second unique qualifying
+  tester.
+- **Proof:** immutable `v0.12.0` was published at
+  `2026-07-23T21:39:20Z`; annotated tag object
+  `8411169b40d8523ee716518cb3dc3e51acddb019` peels to commit
+  `eb256b19b4f04ca1d03b6af39a2819d746d3a22a`. Remediation merge CI
+  `30041401268` and release-commit CI `30042990554` passed 11/11 jobs,
+  release-build `30043930486` passed, and exact-tag deploy-and-verify
+  `30047027525` passed. Seven assets are published; independent downloads
+  matched all five `SHA256SUMS` payloads and all seven REST digests, and the
+  official preceding binary verified the detached CCS signature. An isolated
+  schema-77 database completed a signed update from the official preceding
+  preview to `v0.12.0` and then reported itself current. The exact Arch package
+  binary initialized profile `arch`, synchronized 15,462 Arch-only Remi rows,
+  installed and
+  executed `htop 3.5.2-1-arch`, and removed all five files and the trove. In
+  the same isolated writable root it installed and removed a one-file probe
+  through `/usr/lib64 -> lib`, while a paired out-of-root symlink was rejected
+  without an outside write or trove. Host pacman inventory, linker cache,
+  installed Conary binary, and `/usr/lib64` stayed unchanged. This was exact
+  released-binary proof with live-host pacman evidence read-only, not native
+  `pacman -U` or a pristine VM. Support-bundle self-tests passed, and an
+  isolated bundle captured integrity, table, repository, and profile summaries
+  without including its database; this host had no installed root-owned
+  Conary database for a live cached-sudo success. Full Remi health passed
+  10/10, six public routes returned HTTP 200, and the deployed CCS matched
+  release hash
+  `c973fb654b67da0619d6837b34e2f5f78bbea90dfd9fb8de19b6edf9cbe9582a`,
+  size `16183371`, and signature. The preceding Fedora-form KVM result remains
+  a conaryOS regression baseline rather than literal stock Fedora native-PM
+  proof. No SBOM or provenance sidecars are published or planned. The
+  repository Welcome Discussion remains live at discussion 36, and issue 35
+  remains closed with its released-path proof; neither repository action
+  launches broad outreach. Issues 37 and 38 remain two supported-host attempts
+  by one unique tester. Each later milestone completion belongs to a unique
   outsider and covers exactly `install -> adopt -> list/search -> update
   --dry-run -> unadopt` on a supported host with the pinned release. Record
   failed attempts and triage every report as `fix-now`, `next-slice`,
@@ -523,11 +517,10 @@ publication, public fresh-cache KVM proof, and final integrated release gates.
 W2 closed after exact release identity, multi-distro artifact publication,
 checksum and CCS-signature verification, production deployment, official
 installed-binary self-update, compatible prewarmed Remi, rollback, and
-clean-host proof. W3 is now active; its W3a `v0.11.2` proof gate closed, was
-reopened after the supported `htop` SONAME-probe flaw was found, and is now
-closed again with the verified `v0.11.3` replacement. The 2026-07-20 through
-2026-07-22 manual outreach window passed without a post and is now retired.
-Rescheduling waits for the current path-safety and support-bundle remediation
-to ship with refreshed release evidence, GitHub Support to dereference cached
-pre-rewrite pull-request and commit views, and the venue-specific eligibility
-checks. No replacement date is assigned yet.
+clean-host proof. W3 is now active; its earlier release proof gate was reopened
+for the supported `htop` SONAME repair and again for issue #41's path-safety
+and support-bundle defects. That remediation gate is closed with verified
+immutable `v0.12.0`. The 2026-07-20 through 2026-07-22 manual outreach window
+passed without a post and is now retired. Rescheduling waits for GitHub Support
+to dereference cached pre-rewrite pull-request and commit views and for the
+venue-specific eligibility checks. No replacement date is assigned yet.
