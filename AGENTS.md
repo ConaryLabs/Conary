@@ -21,6 +21,27 @@ focused proof, and interaction gate from `docs/modules/feature-ownership.md`.
 `--list` shows the slugs; `--run focused` / `--run gate` execute the card's own
 proof commands.
 
+## GitHub Workflow
+Use GitHub Issues as the normal work record and pull requests as the integration
+path. Before a non-trivial implementation, bug fix, refactor, documentation,
+operations, or maintenance slice, search for an existing issue and confirm or
+open one primary Bug, Feature, or Task with scope, acceptance criteria,
+ownership, and expected proof. Read-only scoping stays read-only until a write
+is authorized, and security reports use private advisories instead of public
+issues.
+
+Refresh `main`, then work on an issue-linked branch such as
+`fix/42-rpm-parser-overflow`; do not commit or push repository changes directly
+to `main`. Every PR links its primary issue. Use `Closes #...` only when the PR
+satisfies the issue's acceptance criteria; use `Refs #...` when it advances a
+larger issue that must remain open. Open substantial work as a draft PR early,
+keep decisions and verification current there, and merge only through GitHub
+after the required checks and review conversations are complete. Roadmaps,
+designs, plans, and specs remain the durable owners described below; link them
+from the issue rather than replacing durable repo truth with issue comments.
+See `CONTRIBUTING.md` for the full lifecycle and the narrow trivial-change and
+urgent-bypass rules.
+
 ## Coding Style, Safety, and Commits
 Use standard Rust formatting (`cargo fmt`) and keep Clippy clean. Indentation is 4 spaces. Follow Rust naming conventions: `snake_case` for functions/modules, `CamelCase` for types, `SCREAMING_SNAKE_CASE` for constants. Keep modules focused by subsystem. This repository expects each Rust source file to begin with a path comment such as `// conary-core/src/...`.
 

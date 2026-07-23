@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-07-23
+last_updated: 2026-07-24
 proof_baseline: "v0.12.0 at eb256b19b4f04ca1d03b6af39a2819d746d3a22a; release and issue-remediation proof complete"
 current_milestone: first external tester loop
 active_workstream: W3 First External Tester Loop
@@ -498,6 +498,13 @@ transports come later.
 Update this roadmap when implementation truth changes, a workstream changes
 state, proof is refreshed or becomes stale, a blocker is identified, or a
 milestone transitions. Do not use it as a daily activity log.
+
+Represent each active implementation slice with one primary GitHub issue and
+land repository changes through an issue-linked pull request. The issue owns
+bounded scope, acceptance criteria, current status, and follow-up work; this
+roadmap owns ordering, cross-issue blockers, and milestone truth. A broad
+workstream may span several issues and PRs, but the roadmap is not a substitute
+for the actionable issue queue.
 
 Active designs live under `docs/designs/`; active multi-step implementation
 plans live under `docs/plans/`; stable public or persisted contracts live under

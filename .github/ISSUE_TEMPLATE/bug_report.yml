@@ -1,0 +1,84 @@
+name: Bug report
+description: Report behavior that differs from Conary's supported contract.
+labels:
+  - bug
+type: Bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Search existing issues before filing. Report security vulnerabilities through the private advisory link instead of this public form.
+  - type: checkboxes
+    id: existing_issue
+    attributes:
+      label: Existing issue check
+      options:
+        - label: I searched open and closed issues for this behavior.
+          required: true
+  - type: input
+    id: conary_version
+    attributes:
+      label: Conary version
+      description: Paste the output of `conary --version`.
+      placeholder: conary 0.12.0
+    validations:
+      required: true
+  - type: input
+    id: distribution
+    attributes:
+      label: Distribution
+      description: Include the distribution name, version, and architecture.
+      placeholder: Fedora 44, x86_64
+    validations:
+      required: true
+  - type: input
+    id: kernel
+    attributes:
+      label: Kernel version
+      description: Paste the output of `uname -r` when host behavior is involved.
+    validations:
+      required: false
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: Describe the observed problem and its impact.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Reviewed diagnostics
+      description: |
+        When host state matters on an installed host, run `sudo -v` first, then `bash scripts/conary-support-bundle.sh target/conary-support-bundle`. The script uses cached authorization only for allowlisted database-backed diagnostics and stops before writing if it is unavailable. Review the generated bundle before attaching it. Do not post `conary.db`, raw logs, environment dumps, credentials, private keys, SSH keys, shell history, host-local access notes, or package payloads. Share reviewed and redacted `RUST_LOG=debug` output only when a maintainer requests it.
+    validations:
+      required: false
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Include relevant package names, repository configuration, screenshots, or related issues.
+    validations:
+      required: false
