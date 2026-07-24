@@ -60,12 +60,12 @@ pub fn list_installed_packages() -> Result<Vec<String>> {
 pub fn query_package(name: &str) -> Result<InstalledDpkgInfo> {
     debug!("Querying package info: {}", name);
 
-    // Use ASCII Record Separator (\x1e) to avoid conflicts with | in descriptions
+    // ASCII record/unit separators keep multiline descriptions unambiguous.
     let output = Command::new("dpkg-query")
         .args([
             "-W",
             "-f",
-            "${Package}\x1e${Version}\x1e${Architecture}\x1e${Description}\x1e${Maintainer}\x1e${Homepage}\x1e${Section}\x1e${Priority}\x1e${Installed-Size}\n",
+            "${Package}\x1e${Version}\x1e${Architecture}\x1e${Description}\x1e${Maintainer}\x1e${Homepage}\x1e${Section}\x1e${Priority}\x1e${Installed-Size}\x1f",
             name,
         ])
         .output()
@@ -78,8 +78,20 @@ pub fn query_package(name: &str) -> Result<InstalledDpkgInfo> {
         )));
     }
 
-    let line = String::from_utf8_lossy(&output.stdout);
-    let parts: Vec<&str> = line.trim().split('\x1e').collect();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let records = split_package_query_records(&stdout);
+    if records.len() > 1 {
+        let variants = records
+            .iter()
+            .filter(|parts| parts.len() >= 3)
+            .map(|parts| format!("{} [{}]", parts[0], parts[2]))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(Error::ConflictError(format!(
+            "Package '{name}' matches multiple installed dpkg variants: {variants}. Use an architecture-qualified native package name."
+        )));
+    }
+    let parts = records.first().cloned().unwrap_or_default();
 
     if parts.len() < 3 {
         return Err(Error::InitError(format!(
@@ -116,6 +128,15 @@ pub fn query_package(name: &str) -> Result<InstalledDpkgInfo> {
             .filter(|s| !s.is_empty()),
         installed_size,
     })
+}
+
+fn split_package_query_records(output: &str) -> Vec<Vec<&str>> {
+    output
+        .split('\x1f')
+        .map(|record| record.trim_matches(['\r', '\n']))
+        .filter(|record| !record.is_empty())
+        .map(|record| record.split('\x1e').collect())
+        .collect()
 }
 
 /// Query files installed by a package
@@ -657,5 +678,16 @@ mod tests {
 
         assert_eq!(info.full_version(), "1.0.0-1ubuntu1");
         assert_eq!(info.version_only(), "1.0.0-1ubuntu1");
+    }
+
+    #[test]
+    fn package_query_records_preserve_multiline_descriptions_and_variants() {
+        let output = "fixture\x1e1.2.3\x1eamd64\x1efirst line\nsecond line\x1f\
+                      fixture\x1e1.2.3\x1earm64\x1edescription\x1f";
+        let records = split_package_query_records(output);
+
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0][3], "first line\nsecond line");
+        assert_eq!(records[1][2], "arm64");
     }
 }

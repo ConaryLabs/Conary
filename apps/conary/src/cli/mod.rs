@@ -1993,9 +1993,9 @@ mod tests {
     }
 
     #[test]
-    fn parses_system_adopt_package_dry_run_refusal_surface() {
+    fn parses_system_adopt_package_dry_run_preview_surface() {
         let cli = parse_cli(["conary", "system", "adopt", "curl", "--dry-run"])
-            .expect("single-package dry-run should parse before runtime refuses it");
+            .expect("single-package dry-run preview should parse");
 
         match cli.command {
             Some(Commands::System(SystemCommands::Adopt {

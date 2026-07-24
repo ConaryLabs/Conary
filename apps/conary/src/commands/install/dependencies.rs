@@ -320,7 +320,8 @@ async fn handle_dep_adoptions(
             println!("    {}", name);
         }
         // Use the adopt subsystem
-        if let Err(e) = crate::commands::adopt::cmd_adopt(&dep_plan.to_adopt, db_path, false).await
+        if let Err(e) =
+            crate::commands::adopt::cmd_adopt(&dep_plan.to_adopt, db_path, false, false).await
         {
             warn!("Failed to auto-adopt dependencies: {}", e);
             // Non-fatal -- deps are still on the system

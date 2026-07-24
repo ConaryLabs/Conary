@@ -77,6 +77,59 @@ pub(crate) fn prepare_cas_backed_package_files(
         .collect()
 }
 
+pub(crate) fn validate_cas_backed_package_files(
+    package_name: &str,
+    files: &[FileInfoTuple],
+) -> Result<()> {
+    for file in files {
+        validate_cas_backed_file(&file.0, file.2, file.6.as_deref()).map_err(|error| {
+            anyhow!(
+                "package {package_name} has unresolved CAS-backed path {}: {error}",
+                file.0
+            )
+        })?;
+    }
+    Ok(())
+}
+
+fn validate_cas_backed_file(
+    file_path: &str,
+    file_mode: i32,
+    link_target: Option<&str>,
+) -> Result<()> {
+    if is_excluded(file_path) || link_target.is_some_and(|target| !target.is_empty()) {
+        return Ok(());
+    }
+
+    match file_mode & S_IFMT {
+        S_IFLNK => {
+            std::fs::read_link(file_path).map_err(|error| {
+                anyhow!("{file_path}: symlink target is required and could not be read: {error}")
+            })?;
+            Ok(())
+        }
+        S_IFDIR => Ok(()),
+        S_IFREG | 0 => {
+            let path = std::path::Path::new(file_path);
+            let metadata = std::fs::metadata(path).map_err(|error| {
+                anyhow!("{file_path}: regular file must be readable before CAS storage: {error}")
+            })?;
+            if !metadata.file_type().is_file() {
+                return Err(anyhow!(
+                    "{file_path}: regular file must be readable before CAS storage"
+                ));
+            }
+            std::fs::File::open(path).map_err(|error| {
+                anyhow!("{file_path}: regular file must be readable before CAS storage: {error}")
+            })?;
+            Ok(())
+        }
+        other => Err(anyhow!(
+            "{file_path}: unsupported special file mode {other:o} for full adoption"
+        )),
+    }
+}
+
 fn stable_placeholder(prefix: &str, file_path: &str) -> String {
     format!("{prefix}-{}", file_path.replace('/', "_"))
 }
@@ -250,6 +303,25 @@ mod tests {
             compute_cas_backed_file_hash("/etc/kmsg", 0o020600, None, None, &cas).unwrap_err();
 
         assert_error_contains(error, &["/etc/kmsg", "unsupported special file"]);
+    }
+
+    #[test]
+    fn full_adoption_validation_checks_inputs_without_creating_cas_state() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let source = tmp.path().join("preview-source");
+        std::fs::write(&source, b"preview bytes").unwrap();
+        let objects = tmp.path().join("objects");
+        let files = vec![file_tuple(
+            source.to_str().unwrap(),
+            13,
+            0o100644,
+            None,
+            None,
+        )];
+
+        validate_cas_backed_package_files("preview", &files).unwrap();
+
+        assert!(!objects.exists());
     }
 
     #[test]

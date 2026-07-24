@@ -1050,6 +1050,15 @@ mod tests {
 
     #[test]
     fn classify_adoption_dry_runs_with_precise_labels() {
+        let package = policy(&["conary", "system", "adopt", "curl", "--dry-run"]);
+        assert_eq!(
+            package.command_label.as_ref(),
+            "conary system adopt <pkg> --dry-run"
+        );
+        assert_eq!(package.risk, CommandRisk::DryRunOnly);
+        assert!(package.dry_run);
+        assert!(!package.requires_ack());
+
         let system = policy(&["conary", "system", "adopt", "--system", "--dry-run"]);
         assert_eq!(
             system.command_label.as_ref(),

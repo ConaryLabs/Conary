@@ -107,12 +107,7 @@ pub(super) async fn dispatch_system_command(
                 )
                 .await
             } else {
-                if dry_run {
-                    anyhow::bail!(
-                        "single-package adoption dry-run is not implemented yet; use `conary system adopt --system --dry-run` for a system-wide preview or rerun without --dry-run when ready to adopt package(s)"
-                    );
-                }
-                commands::cmd_adopt(&packages, &db.db_path, full).await
+                commands::cmd_adopt(&packages, &db.db_path, full, dry_run).await
             }
         }
 

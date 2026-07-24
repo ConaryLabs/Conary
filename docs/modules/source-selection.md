@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-07-16
-revision: 6
-summary: Route supported distro policy through M4d profiles
+last_updated: 2026-07-24
+revision: 7
+summary: Document source policy and native package-adoption planning
 ---
 
 # Source Selection Module (conary-core/src/repository/ + conary-core/src/model/)
@@ -193,6 +193,26 @@ between RPM, DEB, and Arch versions for this ranking step.
 
 ## Flow Behavior
 
+### Native Package Adoption
+
+`conary system adopt <pkg> --dry-run` builds the same package-specific plan
+that apply consumes. The preview opens an existing current-schema database
+read-only and never migrates it. Native discovery resolves the exact installed
+package identity, version, and architecture, then inventories files,
+dependencies, provides, existing Conary tracking, and tracked-file ownership.
+
+Each requested package is classified as ready, already tracked, missing,
+ambiguous, unsupported, or blocked by a tracked-file conflict. Shared
+directories keep their existing owner instead of being reassigned. `--full`
+also validates that every planned regular file or symlink is readable for CAS
+capture, but preview never creates CAS state.
+
+Apply consumes that plan, rechecks file ownership inside its database
+transaction, and only then writes checkpoints, package metadata, CAS objects,
+changesets, and the state snapshot. Track and full adoption both preserve
+native package-manager authority until an explicit takeover or
+selected-generation handoff.
+
 ### Install
 
 Install uses the shared effective policy and then layers root-only request
@@ -283,6 +303,8 @@ affinity data.
 - `crates/conary-core/src/model/parser.rs` for `[system]` parsing and precedence
 - `apps/conary/src/commands/install/source_policy.rs` for install request-scope
   policy construction and canonical package name resolution
+- `apps/conary/src/commands/adopt/packages.rs` for shared single-package
+  adoption preview/apply planning and native-authority preservation
 - `apps/conary/src/commands/update/mod.rs` for update module routing
 - `apps/conary/src/commands/update/package.rs` for single-package update
   execution, delta/full update handling, and legacy replay preflight

@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-07-18
-revision: 19
-summary: Document profile-aware initialization and packaged-host privileges
+last_updated: 2026-07-24
+revision: 20
+summary: Document package-adoption preview and packaged-host behavior
 ---
 
 # Conaryopedia v2
@@ -667,11 +667,20 @@ Conary can coexist with your system's native package manager (dnf, apt, pacman).
 #### Adopting Individual Packages
 
 ```bash
-conary system adopt nginx curl vim  # Adopt specific packages
-conary system adopt nginx --full    # Adopt with files copied to CAS
+conary system adopt nginx curl vim            # Adopt specific packages
+conary system adopt nginx --dry-run           # Preview track adoption
+conary system adopt nginx --full --dry-run    # Preview full adoption
+conary system adopt nginx --full              # Adopt with files copied to CAS
 ```
 
 The `--full` flag copies all files into Conary's content-addressable store. This is slower but enables rollback and integrity verification for those packages.
+
+Package-specific `--dry-run` resolves the installed native package identity,
+version, architecture, files, dependencies, and provides through the same plan
+used by apply. It reports packages that are already tracked, missing,
+ambiguous, unsupported, or blocked by tracked-file conflicts. Preview opens
+SQLite read-only and does not write database rows or schema, checkpoints, CAS
+objects, native package-manager state, hooks, generations, or live-root paths.
 
 #### Adopting the Entire System
 
