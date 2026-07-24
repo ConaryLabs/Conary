@@ -593,7 +593,8 @@ async fn install_converted_ccs_with_pending(
             }
 
             if !dep_plan.to_adopt.is_empty() && !dry_run {
-                crate::commands::adopt::cmd_adopt(&dep_plan.to_adopt, db_path, false).await?;
+                crate::commands::adopt::cmd_adopt(&dep_plan.to_adopt, db_path, false, false)
+                    .await?;
             }
 
             if !dep_plan.to_install.is_empty() {

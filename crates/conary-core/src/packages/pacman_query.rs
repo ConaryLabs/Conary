@@ -68,6 +68,19 @@ pub fn query_package(name: &str) -> Result<InstalledPacmanInfo> {
     }
 
     let info_str = String::from_utf8_lossy(&output.stdout);
+    let matched_names = info_str
+        .lines()
+        .filter_map(|line| {
+            let (key, value) = line.split_once(':')?;
+            (key.trim() == "Name").then(|| value.trim().to_string())
+        })
+        .collect::<Vec<_>>();
+    if matched_names.len() > 1 {
+        return Err(Error::ConflictError(format!(
+            "Package '{name}' matches multiple installed pacman packages: {}. Use an exact native package name.",
+            matched_names.join(", ")
+        )));
+    }
     let mut pkg_name = name.to_string();
     let mut version = String::new();
     let mut arch = String::new();

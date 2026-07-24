@@ -110,8 +110,9 @@ pub enum SystemCommands {
         status: bool,
 
         /// Show what would be adopted without making changes
-        /// Used by: --system, --convert, --refresh. Single-package dry-run is
-        /// rejected until it has a true non-mutating preview path.
+        /// Used by: package names, --system, --convert, and --refresh. Package
+        /// preview shares discovery and policy with apply without writing
+        /// SQLite, CAS, native package-manager, generation, hook, or live-root state.
         #[arg(long, conflicts_with_all = ["status", "sync_hook"])]
         dry_run: bool,
 

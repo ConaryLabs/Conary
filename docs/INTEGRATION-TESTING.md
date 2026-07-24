@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-07-23
-revision: 32
-summary: Document installed-host support-bundle privilege proof
+last_updated: 2026-07-24
+revision: 33
+summary: Document native package-adoption preview and integration proof
 ---
 
 # Integration Testing
@@ -472,7 +472,7 @@ Always runs. Tests basic conary operations against a live Remi server:
 | T07-T12 | Install/Remove | Install, verify files, list, remove, verify cleanup |
 | T13-T17 | Package Info | Version, info, file list, path ownership |
 | T18-T19 | Multi-package | Install second package, verify coexistence |
-| T20-T21c | Adopt/Unadopt | Adopt system package, check status, dry-run/apply single-package unadopt, re-adopt, dry-run/apply all-package unadopt |
+| T20-T21c | Adopt/Unadopt | Preview/adopt system package, check status, dry-run/apply single-package unadopt, re-adopt, dry-run/apply all-package unadopt |
 | T22-T23 | Pin | Pin/unpin package |
 | T24 | History | Changeset history |
 | T25-T27 | Dependencies | Install with deps, verify, multi-package coexist |
@@ -485,6 +485,15 @@ Phase 1. When `phase1-advanced` is run on `fedora44`, `ubuntu-26.04`, and
 `arch`, they prove that `curl` can be unadopted one package at a time and with
 `--all` without deleting native package files: `curl --version` still works,
 while `conary list curl` no longer reports Conary tracking.
+
+The focused CLI regression
+`apps/conary/tests/live_host_mutation_safety.rs` runs
+`conary system adopt <pkg> --dry-run` through a query-only fake native package
+manager. It snapshots every SQLite schema entry and table cell plus the
+surrounding test filesystem before and after the real binary runs. The test
+proves package identity and planned record counts are rendered without an
+acknowledgement prompt or changes to SQLite, checkpoints, CAS, native package
+manager state, hooks, generations, or live-root paths.
 
 The focused CLI integration test
 `apps/conary/tests/native_pm_live_root.rs` complements the manifest matrix for

@@ -2,6 +2,10 @@
 
 mod common;
 
+use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn run_conary(args: &[&str]) -> std::process::Output {
@@ -9,6 +13,50 @@ fn run_conary(args: &[&str]) -> std::process::Output {
         .args(args)
         .output()
         .expect("failed to run conary")
+}
+
+#[cfg(unix)]
+fn write_executable(path: &Path, contents: &str) {
+    fs::write(path, contents).unwrap();
+    let mut permissions = fs::metadata(path).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(path, permissions).unwrap();
+}
+
+fn tree_snapshot(root: &Path, db_name: &str) -> Vec<(PathBuf, String, Vec<u8>)> {
+    let mut snapshot = walkdir::WalkDir::new(root)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path() != root)
+        .filter(|entry| {
+            !entry
+                .path()
+                .file_name()
+                .is_some_and(|name| name.to_string_lossy().starts_with(db_name))
+        })
+        .map(|entry| {
+            let path = entry.path();
+            let relative = path.strip_prefix(root).unwrap().to_path_buf();
+            if entry.file_type().is_dir() {
+                (relative, "directory".to_string(), Vec::new())
+            } else if entry.file_type().is_symlink() {
+                (
+                    relative,
+                    "symlink".to_string(),
+                    fs::read_link(path)
+                        .unwrap()
+                        .to_string_lossy()
+                        .as_bytes()
+                        .to_vec(),
+                )
+            } else {
+                (relative, "file".to_string(), fs::read(path).unwrap())
+            }
+        })
+        .collect::<Vec<_>>();
+    snapshot.sort_by(|left, right| left.0.cmp(&right.0));
+    snapshot
 }
 
 fn seed_adopted_trove_without_source_identity(db_path: &str, name: &str) {
@@ -467,23 +515,96 @@ fn system_adopt_status_bypasses_gate() {
     assert!(!stderr.contains("--allow-live-system-mutation"));
 }
 
+#[cfg(unix)]
 #[test]
-fn system_adopt_package_dry_run_is_rejected_without_ack_prompt() {
-    let (_tmp, db_path) = common::setup_command_test_db();
+fn system_adopt_package_dry_run_previews_without_mutation_or_ack_prompt() {
+    let (tmp, db_path, conn) = common::create_test_db();
+    drop(conn);
 
-    let output = run_conary(&[
-        "system",
-        "adopt",
-        "curl",
-        "--dry-run",
-        "--db-path",
-        &db_path,
-    ]);
+    let live_root = tmp.path().join("live-root");
+    let live_file = live_root.join("usr/bin/fixture");
+    fs::create_dir_all(live_file.parent().unwrap()).unwrap();
+    fs::write(&live_file, b"native fixture payload").unwrap();
 
-    assert!(!output.status.success());
+    let fake_bin = tmp.path().join("fake-bin");
+    fs::create_dir(&fake_bin).unwrap();
+    write_executable(
+        &fake_bin.join("dpkg-query"),
+        "#!/bin/sh
+if [ \"$1\" = \"--version\" ]; then
+    printf 'dpkg-query fixture 1.0\\n'
+    exit 0
+fi
+case \"$3\" in
+    *Description*)
+        printf 'fixture\\0361.2.3\\036amd64\\036Fixture package\\036Test maintainer\\036\\036utils\\036optional\\0361\\n'
+        ;;
+    *Depends*)
+        printf 'libc6 (>= 2.0)\\n'
+        ;;
+    *Provides*)
+        printf 'fixture\\nfixture-capability\\n'
+        ;;
+    *)
+        exit 1
+        ;;
+esac
+",
+    );
+    write_executable(
+        &fake_bin.join("dpkg"),
+        &format!(
+            "#!/bin/sh
+if [ \"$1\" = \"-L\" ] && [ \"$2\" = \"fixture\" ]; then
+    printf '%s\\n' '{}'
+    exit 0
+fi
+exit 1
+",
+            live_file.display()
+        ),
+    );
+
+    let db_name = Path::new(&db_path)
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let database_before = common::database_snapshot(&db_path);
+    let tree_before = tree_snapshot(tmp.path(), &db_name);
+    let live_file_before = fs::read(&live_file).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_conary"))
+        .args([
+            "system",
+            "adopt",
+            "fixture",
+            "--dry-run",
+            "--db-path",
+            &db_path,
+        ])
+        .env("PATH", &fake_bin)
+        .output()
+        .expect("failed to run conary package adoption preview");
+
+    assert!(
+        output.status.success(),
+        "preview failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("single-package adoption dry-run is not implemented"));
+    assert!(stdout.contains("Package adoption preview"));
+    assert!(stdout.contains("fixture 1.2.3 [amd64]"));
+    assert!(stdout.contains("track (metadata only)"));
+    assert!(stdout.contains("1 package, 1 files, 1 dependencies, 2 provides"));
+    assert!(stderr.contains("Preview only:"));
     assert!(!stderr.contains("--allow-live-system-mutation"));
+    assert!(!stderr.contains("--yes"));
+
+    assert_eq!(common::database_snapshot(&db_path), database_before);
+    assert_eq!(tree_snapshot(tmp.path(), &db_name), tree_before);
+    assert_eq!(fs::read(&live_file).unwrap(), live_file_before);
 }
 
 #[test]

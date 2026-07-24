@@ -12,6 +12,98 @@ use conary_core::db::models::{
 };
 use tempfile::TempDir;
 
+#[allow(dead_code)]
+#[derive(Debug, PartialEq, Eq)]
+pub struct DatabaseSnapshot {
+    schema: Vec<(String, String, Option<String>)>,
+    rows: Vec<(String, Vec<Vec<Vec<u8>>>)>,
+}
+
+/// Capture every user-visible SQLite schema entry and table cell.
+///
+/// SQLite may update file-level bookkeeping while opening a database. Comparing
+/// the logical contents avoids mistaking that bookkeeping for a row or schema
+/// mutation while still covering every table.
+#[allow(dead_code)]
+pub fn database_snapshot(db_path: &str) -> DatabaseSnapshot {
+    use rusqlite::types::ValueRef;
+
+    let conn = rusqlite::Connection::open_with_flags(
+        db_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .unwrap();
+    let mut schema = conn
+        .prepare(
+            "SELECT type, name, sql FROM sqlite_schema
+             WHERE name NOT LIKE 'sqlite_autoindex_%'
+             ORDER BY type, name",
+        )
+        .unwrap()
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+            ))
+        })
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    schema.sort();
+
+    let table_names = schema
+        .iter()
+        .filter(|(kind, _, _)| kind == "table")
+        .map(|(_, name, _)| name.clone())
+        .collect::<Vec<_>>();
+    let mut rows = Vec::with_capacity(table_names.len());
+    for table in table_names {
+        let quoted = table.replace('"', "\"\"");
+        let mut statement = conn
+            .prepare(&format!("SELECT * FROM \"{quoted}\""))
+            .unwrap();
+        let column_count = statement.column_count();
+        let mut table_rows = statement
+            .query_map([], |row| {
+                (0..column_count)
+                    .map(|column| {
+                        Ok(match row.get_ref(column)? {
+                            ValueRef::Null => vec![0],
+                            ValueRef::Integer(value) => {
+                                let mut encoded = vec![1];
+                                encoded.extend_from_slice(&value.to_be_bytes());
+                                encoded
+                            }
+                            ValueRef::Real(value) => {
+                                let mut encoded = vec![2];
+                                encoded.extend_from_slice(&value.to_bits().to_be_bytes());
+                                encoded
+                            }
+                            ValueRef::Text(value) => {
+                                let mut encoded = vec![3];
+                                encoded.extend_from_slice(value);
+                                encoded
+                            }
+                            ValueRef::Blob(value) => {
+                                let mut encoded = vec![4];
+                                encoded.extend_from_slice(value);
+                                encoded
+                            }
+                        })
+                    })
+                    .collect::<rusqlite::Result<Vec<_>>>()
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        table_rows.sort();
+        rows.push((table, table_rows));
+    }
+
+    DatabaseSnapshot { schema, rows }
+}
+
 /// Create an empty test database with schema initialized.
 ///
 /// Returns (TempDir, db_path, Connection) - keep the TempDir alive to prevent cleanup.

@@ -78,13 +78,13 @@ pub fn list_installed_packages() -> Result<Vec<String>> {
 pub fn query_package(name: &str) -> Result<InstalledRpmInfo> {
     debug!("Querying package info: {}", name);
 
-    // Query format: NAME|VERSION|RELEASE|EPOCH|ARCH|DESCRIPTION|SUMMARY|LICENSE|URL|VENDOR|SOURCERPM|BUILDHOST|INSTALLTIME
+    // ASCII record/unit separators keep multiline descriptions unambiguous.
     let output = Command::new("rpm")
         .args([
             "-q",
             name,
             "--queryformat",
-            "%{NAME}|%{VERSION}|%{RELEASE}|%{EPOCH}|%{ARCH}|%{DESCRIPTION}|%{SUMMARY}|%{LICENSE}|%{URL}|%{VENDOR}|%{SOURCERPM}|%{BUILDHOST}|%{INSTALLTIME}\n",
+            "%{NAME}\x1e%{VERSION}\x1e%{RELEASE}\x1e%{EPOCH}\x1e%{ARCH}\x1e%{DESCRIPTION}\x1e%{SUMMARY}\x1e%{LICENSE}\x1e%{URL}\x1e%{VENDOR}\x1e%{SOURCERPM}\x1e%{BUILDHOST}\x1e%{INSTALLTIME}\x1f",
         ])
         .output()
         .map_err(|e| Error::InitError(format!("Failed to run rpm: {}", e)))?;
@@ -96,14 +96,24 @@ pub fn query_package(name: &str) -> Result<InstalledRpmInfo> {
         )));
     }
 
-    let line = String::from_utf8_lossy(&output.stdout);
-    let line = line.trim();
-    let parts: Vec<&str> = line.split('|').collect();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let records = split_package_query_records(&stdout);
+    if records.len() > 1 {
+        let variants = records
+            .iter()
+            .filter(|parts| parts.len() >= 5)
+            .map(|parts| format!("{} [{}]", parts[0], parts[4]))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(Error::ConflictError(format!(
+            "Package '{name}' matches multiple installed RPM variants: {variants}. Use an architecture-qualified native package name."
+        )));
+    }
+    let parts = records.first().cloned().unwrap_or_default();
 
     if parts.len() < 8 {
         return Err(Error::InitError(format!(
-            "Unexpected rpm output format: {}",
-            line
+            "Unexpected rpm output format for package '{name}'"
         )));
     }
 
@@ -133,6 +143,15 @@ pub fn query_package(name: &str) -> Result<InstalledRpmInfo> {
         build_host: parts.get(11).and_then(rpm_none_to_option),
         install_time: parts.get(12).and_then(rpm_none_to_option),
     })
+}
+
+fn split_package_query_records(output: &str) -> Vec<Vec<&str>> {
+    output
+        .split('\x1f')
+        .map(|record| record.trim_matches(['\r', '\n']))
+        .filter(|record| !record.is_empty())
+        .map(|record| record.split('\x1e').collect())
+        .collect()
 }
 
 /// Query files belonging to an installed package
@@ -625,5 +644,16 @@ mod tests {
         let dep = parse_rpm_dependency("glibc = 2.38");
         assert_eq!(dep.name, "glibc");
         assert_eq!(dep.constraint, Some("= 2.38".to_string()));
+    }
+
+    #[test]
+    fn package_query_records_preserve_multiline_descriptions_and_variants() {
+        let output = "fixture\x1e1.2.3\x1e4.fc44\x1e(none)\x1ex86_64\x1efirst line\nsecond line\x1esummary\x1eMIT\x1f\
+                      fixture\x1e1.2.3\x1e4.fc44\x1e(none)\x1eaarch64\x1edescription\x1esummary\x1eMIT\x1f";
+        let records = split_package_query_records(output);
+
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0][5], "first line\nsecond line");
+        assert_eq!(records[1][4], "aarch64");
     }
 }

@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-08
-revision: 34
+last_updated: 2026-07-24
+revision: 35
 summary: Compact assistant subsystem orientation index with detailed path and proof routing delegated to feature ownership cards.
 ---
 
@@ -87,6 +87,9 @@ commands.
   state, build the generation artifact, then mount or export it.
 - Adoption preserves native package-manager authority until explicit takeover or
   selected-generation handoff.
+- Single-package adoption preview and apply share the planner in
+  `apps/conary/src/commands/adopt/packages.rs`; preview stops before every
+  SQLite, checkpoint, CAS, native-PM, hook, generation, and live-root write.
 - Trust defaults matter; keep HTTPS peer pinning and signature verification
   strict unless the task explicitly changes the trust model.
 
