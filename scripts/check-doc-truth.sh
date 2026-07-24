@@ -238,7 +238,10 @@ check_release_doc_versions() {
             if [[ "$text" != *"$current_tag"* ]]; then
                 report_error "$file:$line_no has stale conary release reference; expected ${current_tag}: $text"
             fi
-        done < <(rg -nH -- 'v[0-9]+\.[0-9]+\.[0-9]+' "$path" || true)
+        done < <(
+            rg -nH -P -- '(?<![A-Za-z0-9_-])v[0-9]+\.[0-9]+\.[0-9]+' "$path" ||
+                true
+        )
 
         while IFS=: read -r file line_no text; do
             if [[ "$text" != *"$current_artifact_dash"* && "$text" != *"$current_artifact_underscore"* ]]; then

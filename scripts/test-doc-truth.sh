@@ -142,6 +142,7 @@ EOF
 | Product | Source commit | Binary download or package URL | Required evidence |
 | --- | --- | --- | --- |
 | `conary` | `v0.10.1` | https://github.com/ConaryLabs/Conary/releases/tag/v0.10.1 | release-build green |
+| `remi` | `remi-v0.7.0` | https://github.com/ConaryLabs/Conary/releases/tag/remi-v0.7.0 | independent service release |
 EOF
 
     cat > "$root/site/src/routes/about/+page.svelte" <<'EOF'
