@@ -8,12 +8,15 @@
 //! Range files:
 //! - v1_v20: Migrations 1-20 (core tables, repos, components, labels)
 //! - v21_v40: Migrations 21-40 (config, security, federation, derived packages)
-//! - v41_current: Migrations 41-current (collections, TUF, canonical, derivations)
+//! - v41_current: Migrations 41-78 (collections, TUF, canonical, derivations)
+//! - v79_current: Migrations 79-current (scriptlet evidence reconciliation)
 
 mod v1_v20;
 mod v21_v40;
 mod v41_current;
+mod v79_current;
 
 pub use v1_v20::*;
 pub use v21_v40::*;
 pub use v41_current::*;
+pub use v79_current::*;

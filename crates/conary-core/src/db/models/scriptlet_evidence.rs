@@ -6,6 +6,10 @@ use crate::error::{Error, Result};
 use rusqlite::{Connection, OptionalExtension, Row, ToSql, params};
 use serde::{Deserialize, Serialize};
 
+mod reconciliation;
+
+pub use reconciliation::ScriptletEvidenceClusterReconciliationLink;
+
 pub const CLUSTER_KEY_PREFIX: &str = "s1-";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -113,6 +117,8 @@ pub struct ScriptletEvidenceClusterDetail {
     pub samples: Vec<ScriptletEvidenceSample>,
     pub state_events: Vec<ScriptletEvidenceStateEvent>,
     pub notes: Vec<ScriptletEvidenceNote>,
+    pub outgoing_reconciliation_links: Vec<ScriptletEvidenceClusterReconciliationLink>,
+    pub incoming_reconciliation_links: Vec<ScriptletEvidenceClusterReconciliationLink>,
 }
 
 impl ScriptletEvidenceCluster {
@@ -237,6 +243,10 @@ impl ScriptletEvidenceCluster {
             samples: ScriptletEvidenceSample::list_for_cluster(conn, cluster_key)?,
             state_events: ScriptletEvidenceStateEvent::list_for_cluster(conn, cluster_key)?,
             notes: ScriptletEvidenceNote::list_for_cluster(conn, cluster_key)?,
+            outgoing_reconciliation_links:
+                ScriptletEvidenceClusterReconciliationLink::list_outgoing(conn, cluster_key)?,
+            incoming_reconciliation_links:
+                ScriptletEvidenceClusterReconciliationLink::list_incoming(conn, cluster_key)?,
         }))
     }
 
@@ -914,6 +924,46 @@ mod tests {
         assert_eq!(detail.samples.len(), 1);
         assert_eq!(detail.state_events.len(), 1);
         assert_eq!(detail.notes.len(), 1);
+        assert!(detail.outgoing_reconciliation_links.is_empty());
+        assert!(detail.incoming_reconciliation_links.is_empty());
+    }
+
+    #[test]
+    fn detail_exposes_reconciliation_links_in_both_directions() {
+        let conn = test_conn();
+        let mut source = new_cluster();
+        source.cluster_key = "s1-source".to_string();
+        source.normalization_version = 1;
+        ScriptletEvidenceCluster::upsert(&conn, &source).unwrap();
+
+        let mut target = new_cluster();
+        target.cluster_key = "s1-target".to_string();
+        ScriptletEvidenceCluster::upsert(&conn, &target).unwrap();
+
+        let link = ScriptletEvidenceClusterReconciliationLink::record(
+            &conn,
+            "s1-source",
+            "s1-target",
+            2,
+            3,
+        )
+        .unwrap();
+        assert_eq!(link.migrated_sample_count, 3);
+
+        let source_detail = ScriptletEvidenceCluster::detail(&conn, "s1-source")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            source_detail.outgoing_reconciliation_links,
+            vec![link.clone()]
+        );
+        assert!(source_detail.incoming_reconciliation_links.is_empty());
+
+        let target_detail = ScriptletEvidenceCluster::detail(&conn, "s1-target")
+            .unwrap()
+            .unwrap();
+        assert!(target_detail.outgoing_reconciliation_links.is_empty());
+        assert_eq!(target_detail.incoming_reconciliation_links, vec![link]);
     }
 
     #[test]

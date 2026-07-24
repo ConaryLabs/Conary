@@ -5,7 +5,8 @@
 /// This does not change CCS conversion, adapter selection, legacy replay, or
 /// publication authority. It only decides whether an already-unknown command
 /// is useful adapter-planning evidence in Remi's admin queue.
-pub const UNKNOWN_COMMAND_NORMALIZATION_VERSION: i64 = 2;
+pub const UNKNOWN_COMMAND_NORMALIZATION_VERSION: i64 =
+    super::SCRIPTLET_EVIDENCE_NORMALIZATION_VERSION;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnknownCommandDisposition {

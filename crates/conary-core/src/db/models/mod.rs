@@ -109,8 +109,9 @@ pub use scriptlet_entry::ScriptletEntry;
 pub use scriptlet_evidence::{
     BackfillStatus, CLUSTER_KEY_PREFIX, NewScriptletEvidenceCluster, NewScriptletEvidenceSample,
     ScriptletEvidenceBackfillRun, ScriptletEvidenceCluster, ScriptletEvidenceClusterDetail,
-    ScriptletEvidenceClusterListFilter, ScriptletEvidenceClusterSummary, ScriptletEvidenceNote,
-    ScriptletEvidenceSample, ScriptletEvidenceState, ScriptletEvidenceStateEvent,
+    ScriptletEvidenceClusterListFilter, ScriptletEvidenceClusterReconciliationLink,
+    ScriptletEvidenceClusterSummary, ScriptletEvidenceNote, ScriptletEvidenceSample,
+    ScriptletEvidenceState, ScriptletEvidenceStateEvent,
 };
 pub use state::{RestorePlan, StateDiff, StateEngine, StateMember, SystemState};
 pub use subpackage::{RelatedPackages, SubpackageRelationship, show_subpackage_guidance};

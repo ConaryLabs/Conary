@@ -151,7 +151,7 @@
 		<dl class="stack-list">
 			<div><dt>Language</dt><dd>Rust, Edition 2024 · 8-member Cargo workspace</dd></div>
 			<div><dt>Filesystem</dt><dd>EROFS · optional composefs and fs-verity integration for generations</dd></div>
-			<div><dt>Database</dt><dd>SQLite · schema version 78 · DB-first runtime state</dd></div>
+			<div><dt>Database</dt><dd>SQLite · schema version 79 · DB-first runtime state</dd></div>
 			<div><dt>Hashing</dt><dd>SHA-256 · XXH128</dd></div>
 			<div><dt>Compression</dt><dd>Zstd · Gzip · XZ</dd></div>
 			<div><dt>Server</dt><dd>Axum · Tantivy full-text search</dd></div>

@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-07-16
-revision: 11
-summary: Map fixture ownership, including the public versioned v4 QEMU image and SSH identity contract
+last_updated: 2026-07-24
+revision: 12
+summary: Map fixture ownership, including versioned queue reconciliation and the public v4 QEMU image contract
 ---
 
 # Test Fixtures And Proof Maps
@@ -263,17 +263,23 @@ Each fixture family should record:
   `apps/remi/src/server/scriptlet_evidence_queue/classification.rs`;
   `apps/remi/src/server/scriptlet_evidence_queue/aggregation.rs`;
   `apps/remi/src/server/scriptlet_evidence_queue/reconciliation.rs`;
+  `apps/remi/src/server/scriptlet_evidence_queue/reconciliation/apparmor.rs`;
+  `apps/remi/src/server/scriptlet_evidence_queue/reconciliation/apparmor/tests.rs`;
   `apps/remi/src/server/handlers/admin/scriptlet_evidence.rs`.
 - **Consumes:** RPM, DEB, and Arch unknown-command classification; bounded
-  dry-run/apply reconciliation; active versus superseded cluster listings; and
+  unknown-command and AppArmor dry-run/apply reconciliation; AppArmor
+  identity, split, merge, missing-source, and idempotence fixtures; active
+  versus superseded cluster listings; source-to-target link readback; and
   private-history preservation.
 - **Fast proof:** `cargo test -p remi scriptlet_evidence`.
 - **Medium proof:** `cargo test -p remi publication`;
   `cargo test -p conary --test conversion_integration golden_conversion`.
 - **Regeneration:** Hand-maintained summaries and temporary SQLite databases.
 - **Safety notes:** Ambiguous identifiers stay visible. Reconciliation must not
-  delete samples, notes, or state events, and must not mutate
-  `converted_packages.publication_status`.
+  delete unknown-command history, duplicate rematerialized AppArmor
+  observations, discard source notes or state events, or mutate
+  `converted_packages.publication_status`. New target clusters do not inherit
+  conflicting source dispositions implicitly.
 
 ### remi-scriptlet-publication-gate
 

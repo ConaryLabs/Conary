@@ -12,16 +12,13 @@ use super::{check_scope, validate_path_param};
 use crate::server::ServerState;
 use crate::server::auth::{Scope, TokenName, TokenScopes, json_error};
 
+mod reconciliation;
+
+pub use reconciliation::*;
+
 #[derive(Debug, Deserialize)]
 pub struct BackfillRequest {
     pub limit: Option<usize>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct UnknownCommandReconciliationRequest {
-    pub dry_run: Option<bool>,
-    pub limit: Option<usize>,
-    pub after_cluster_key: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -88,6 +85,8 @@ struct ClusterDetailResponse {
     samples: Vec<SampleSummaryResponse>,
     state_events: Vec<StateEventResponse>,
     notes: Vec<NoteResponse>,
+    outgoing_reconciliation_links: Vec<ReconciliationLinkResponse>,
+    incoming_reconciliation_links: Vec<ReconciliationLinkResponse>,
 }
 
 #[derive(Debug, Serialize)]
@@ -126,6 +125,15 @@ struct NoteResponse {
     body: String,
     created_at: String,
     updated_at: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ReconciliationLinkResponse {
+    source_cluster_key: String,
+    target_cluster_key: String,
+    normalization_version: i64,
+    migrated_sample_count: i64,
+    created_at: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -184,65 +192,6 @@ pub async fn scriptlet_evidence_backfill(
             500,
             &format!("Scriptlet evidence backfill task failed: {error}"),
             "SCRIPTLET_EVIDENCE_BACKFILL_TASK_FAILED",
-        ),
-    }
-}
-
-pub async fn reconcile_scriptlet_evidence_unknown_commands(
-    State(state): State<Arc<RwLock<ServerState>>>,
-    scopes: Option<Extension<TokenScopes>>,
-    request: Option<Json<UnknownCommandReconciliationRequest>>,
-) -> Response {
-    if let Some(err) = check_scope(&scopes, Scope::Admin) {
-        return err;
-    }
-
-    let request = request.map(|Json(request)| request);
-    let dry_run = request
-        .as_ref()
-        .and_then(|request| request.dry_run)
-        .unwrap_or(true);
-    let limit = request
-        .as_ref()
-        .and_then(|request| request.limit)
-        .unwrap_or(500)
-        .clamp(1, 5000);
-    let after_cluster_key = request.and_then(|request| request.after_cluster_key);
-    if after_cluster_key
-        .as_ref()
-        .is_some_and(|cluster_key| cluster_key.len() > 256)
-    {
-        return json_error(
-            400,
-            "after_cluster_key must be at most 256 bytes",
-            "INVALID_PARAMETER",
-        );
-    }
-    let db_path = {
-        let state = state.read().await;
-        state.config.db_path.clone()
-    };
-
-    match tokio::task::spawn_blocking(move || {
-        crate::server::scriptlet_evidence_queue::reconciliation::reconcile_unknown_command_batch(
-            &db_path,
-            dry_run,
-            limit,
-            after_cluster_key.as_deref(),
-        )
-    })
-    .await
-    {
-        Ok(Ok(result)) => Json(result).into_response(),
-        Ok(Err(error)) => json_error(
-            500,
-            &format!("Scriptlet evidence reconciliation failed: {error}"),
-            "SCRIPTLET_EVIDENCE_RECONCILIATION_FAILED",
-        ),
-        Err(error) => json_error(
-            500,
-            &format!("Scriptlet evidence reconciliation task failed: {error}"),
-            "SCRIPTLET_EVIDENCE_RECONCILIATION_TASK_FAILED",
         ),
     }
 }
@@ -631,6 +580,16 @@ impl From<conary_core::db::models::ScriptletEvidenceClusterDetail> for ClusterDe
                 .map(StateEventResponse::from)
                 .collect(),
             notes: value.notes.into_iter().map(NoteResponse::from).collect(),
+            outgoing_reconciliation_links: value
+                .outgoing_reconciliation_links
+                .into_iter()
+                .map(ReconciliationLinkResponse::from)
+                .collect(),
+            incoming_reconciliation_links: value
+                .incoming_reconciliation_links
+                .into_iter()
+                .map(ReconciliationLinkResponse::from)
+                .collect(),
         }
     }
 }
@@ -681,6 +640,20 @@ impl From<conary_core::db::models::ScriptletEvidenceNote> for NoteResponse {
             body: value.body,
             created_at: value.created_at,
             updated_at: value.updated_at,
+        }
+    }
+}
+
+impl From<conary_core::db::models::ScriptletEvidenceClusterReconciliationLink>
+    for ReconciliationLinkResponse
+{
+    fn from(value: conary_core::db::models::ScriptletEvidenceClusterReconciliationLink) -> Self {
+        Self {
+            source_cluster_key: value.source_cluster_key,
+            target_cluster_key: value.target_cluster_key,
+            normalization_version: value.normalization_version,
+            migrated_sample_count: value.migrated_sample_count,
+            created_at: value.created_at,
         }
     }
 }

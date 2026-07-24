@@ -445,7 +445,7 @@ sudo conary system init --profile fedora-44
 Use `--profile ubuntu-26.04` or `--profile arch` on those supported hosts. This
 creates the SQLite database at `/var/lib/conary/conary.db`, configures Remi and
 only the selected profile's native repositories, and sets up all tables
-(currently schema v78). The database is the single source of truth for all
+(currently schema v79). The database is the single source of truth for all
 package state -- there are no configuration files for runtime state. Recovery
 metadata is SQLite-native: first-wave adoption and unadoption paths write
 checkpoint backups under the runtime root, and generation publication writes a

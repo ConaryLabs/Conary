@@ -11,6 +11,12 @@ use super::classification::{
     UNKNOWN_COMMAND_NORMALIZATION_VERSION, UnknownCommandDisposition, classify_unknown_command,
 };
 
+mod apparmor;
+
+pub use apparmor::{
+    AppArmorReconciliationMapping, AppArmorReconciliationResult, reconcile_apparmor_batch,
+};
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct UnknownCommandReconciliationResult {
     pub normalization_version: i64,

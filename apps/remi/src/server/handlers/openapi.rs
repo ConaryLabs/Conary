@@ -197,6 +197,27 @@ pub async fn openapi_spec() -> Response {
                     "responses": { "200": { "description": "Unknown-command reconciliation batch result" }, "400": { "description": "Invalid cursor" }, "401": { "description": "Invalid or missing token" }, "403": { "description": "Insufficient scope" } }
                 }
             },
+            "/v1/admin/scriptlet-evidence/reconcile-apparmor": {
+                "post": {
+                    "operationId": "reconcileScriptletEvidenceAppArmor",
+                    "summary": "Reconcile historical AppArmor queue identity",
+                    "description": "Rematerializes one bounded batch of historical AppArmor observations under the current approved-path normalization contract. Dry-run is the default. Applied batches move observations to current clusters, persist merge/split links, preserve source workflow history, and do not change converted-package publication state.",
+                    "tags": ["scriptlet-evidence"],
+                    "security": [{ "bearerAuth": [] }],
+                    "requestBody": {
+                        "required": false,
+                        "content": { "application/json": { "schema": {
+                            "type": "object",
+                            "properties": {
+                                "dry_run": { "type": "boolean", "default": true },
+                                "limit": { "type": "integer", "minimum": 1, "maximum": 5000, "default": 500 },
+                                "after_cluster_key": { "type": "string", "maxLength": 256 }
+                            }
+                        }}}
+                    },
+                    "responses": { "200": { "description": "AppArmor reconciliation batch result" }, "400": { "description": "Invalid cursor" }, "401": { "description": "Invalid or missing token" }, "403": { "description": "Insufficient scope" } }
+                }
+            },
             "/v1/admin/scriptlet-evidence/clusters": {
                 "get": {
                     "operationId": "listScriptletEvidenceClusters",
@@ -221,7 +242,7 @@ pub async fn openapi_spec() -> Response {
                 "get": {
                     "operationId": "getScriptletEvidenceCluster",
                     "summary": "Get scriptlet evidence cluster detail",
-                    "description": "Returns admin-only cluster detail, sample summaries, state events, and maintainer notes. Sample data exposes review-artifact availability and staleness but never raw local artifact paths.",
+                    "description": "Returns admin-only cluster detail, sample summaries, state events, maintainer notes, and incoming/outgoing normalization reconciliation links. Sample data exposes review-artifact availability and staleness but never raw local artifact paths.",
                     "tags": ["scriptlet-evidence"],
                     "security": [{ "bearerAuth": [] }],
                     "parameters": [{ "name": "cluster_key", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Stable s1-prefixed scriptlet evidence cluster key" }],
@@ -737,6 +758,10 @@ mod tests {
             ("/v1/admin/scriptlet-evidence/backfill", &["post"][..]),
             (
                 "/v1/admin/scriptlet-evidence/reconcile-unknown-commands",
+                &["post"][..],
+            ),
+            (
+                "/v1/admin/scriptlet-evidence/reconcile-apparmor",
                 &["post"][..],
             ),
             ("/v1/admin/scriptlet-evidence/clusters", &["get"][..]),
