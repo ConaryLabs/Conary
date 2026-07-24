@@ -11,6 +11,9 @@ use conary_core::db::models::{
 
 use crate::server::publication;
 
+use super::classification::{
+    UNKNOWN_COMMAND_NORMALIZATION_VERSION, UnknownCommandDisposition, classify_unknown_command,
+};
 use super::normalization::{
     normalize_command_shape, sanitize_boot_security_intents, sanitize_security_policy_intents,
     stable_cluster_key, target_profile_for_distro,
@@ -49,7 +52,13 @@ pub fn evidence_samples_from_converted(
 
     let unknown_commands = sorted_unique(summary.unknown_commands.iter().map(String::as_str));
     if !unknown_commands.is_empty() {
-        for command in unknown_commands {
+        let signal_commands = unknown_commands.into_iter().filter(|command| {
+            matches!(
+                classify_unknown_command(command),
+                UnknownCommandDisposition::Signal
+            )
+        });
+        for command in signal_commands {
             samples.push(build_pending_sample(
                 converted,
                 cache_dir,
@@ -60,7 +69,9 @@ pub fn evidence_samples_from_converted(
                 "unknown",
             )?);
         }
-        return Ok(samples);
+        if !samples.is_empty() {
+            return Ok(samples);
+        }
     }
 
     let blocked_classes = sorted_unique(summary.blocked_classes.iter().map(String::as_str));
@@ -129,6 +140,7 @@ fn build_pending_sample(
         cluster: NewScriptletEvidenceCluster {
             cluster_key: stable.cluster_key.clone(),
             schema_version: i64::from(CLUSTER_SCHEMA_VERSION),
+            normalization_version: UNKNOWN_COMMAND_NORMALIZATION_VERSION,
             distro: distro.clone(),
             target_profile,
             blocked_class: blocked_class.to_string(),
@@ -385,6 +397,101 @@ mod tests {
         assert!(!intents.contains("/tmp/foo.pp"));
         assert!(!intents.contains("/home/remi"));
         assert!(!intents.contains("SECRET=/home"));
+    }
+
+    #[test]
+    fn queue_filters_rpm_shell_structure_but_keeps_real_unknown_commands() {
+        let summary = ScriptletBundleSummary {
+            scriptlet_fidelity: "legacy".to_string(),
+            target_compatibility: "private-review".to_string(),
+            publication_status: "private-review".to_string(),
+            unknown_commands: vec![
+                "set".to_string(),
+                "$1".to_string(),
+                "{".to_string(),
+                "custom-rpm-helper".to_string(),
+            ],
+            ..ScriptletBundleSummary::default()
+        };
+        let converted = converted_package_with_summary(summary);
+
+        let samples = evidence_samples_from_converted(&converted, Path::new("/tmp/cache")).unwrap();
+
+        assert_eq!(samples.len(), 1);
+        assert_eq!(samples[0].cluster.command, "custom-rpm-helper");
+        assert_eq!(
+            samples[0].cluster.normalization_version,
+            UNKNOWN_COMMAND_NORMALIZATION_VERSION
+        );
+    }
+
+    #[test]
+    fn queue_filters_deb_dispatch_structure_but_keeps_real_unknown_commands() {
+        let summary = ScriptletBundleSummary {
+            scriptlet_fidelity: "legacy".to_string(),
+            target_compatibility: "private-review".to_string(),
+            publication_status: "private-review".to_string(),
+            unknown_commands: vec![
+                "true".to_string(),
+                "configure)".to_string(),
+                "postinst".to_string(),
+                "custom-deb-helper".to_string(),
+            ],
+            ..ScriptletBundleSummary::default()
+        };
+        let mut converted = converted_package_with_summary(summary);
+        converted.distro = Some("ubuntu".to_string());
+
+        let samples = evidence_samples_from_converted(&converted, Path::new("/tmp/cache")).unwrap();
+
+        assert_eq!(samples.len(), 1);
+        assert_eq!(samples[0].cluster.command, "custom-deb-helper");
+        assert_eq!(samples[0].cluster.target_profile, "ubuntu-26.04");
+    }
+
+    #[test]
+    fn queue_filters_arch_function_structure_but_keeps_real_unknown_commands() {
+        let summary = ScriptletBundleSummary {
+            scriptlet_fidelity: "legacy".to_string(),
+            target_compatibility: "private-review".to_string(),
+            publication_status: "private-review".to_string(),
+            unknown_commands: vec![
+                "post_install".to_string(),
+                "return".to_string(),
+                "custom-arch-helper".to_string(),
+            ],
+            ..ScriptletBundleSummary::default()
+        };
+        let mut converted = converted_package_with_summary(summary);
+        converted.distro = Some("arch".to_string());
+
+        let samples = evidence_samples_from_converted(&converted, Path::new("/tmp/cache")).unwrap();
+
+        assert_eq!(samples.len(), 1);
+        assert_eq!(samples[0].cluster.command, "custom-arch-helper");
+        assert_eq!(samples[0].cluster.target_profile, "arch");
+    }
+
+    #[test]
+    fn all_noise_unknown_commands_fall_through_to_high_signal_blocked_class() {
+        let summary = ScriptletBundleSummary {
+            scriptlet_fidelity: "blocked".to_string(),
+            target_compatibility: "blocked".to_string(),
+            publication_status: "blocked".to_string(),
+            unknown_commands: vec!["set".to_string(), "true".to_string()],
+            blocked_reason_codes: vec!["blocked-class-package-manager-recursion".to_string()],
+            blocked_classes: vec!["package-manager-recursion".to_string()],
+            ..ScriptletBundleSummary::default()
+        };
+        let converted = converted_package_with_summary(summary);
+
+        let samples = evidence_samples_from_converted(&converted, Path::new("/tmp/cache")).unwrap();
+
+        assert_eq!(samples.len(), 1);
+        assert_eq!(
+            samples[0].cluster.blocked_class,
+            "package-manager-recursion"
+        );
     }
 
     #[test]
