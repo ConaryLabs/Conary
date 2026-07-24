@@ -48,10 +48,15 @@ Use standard Rust formatting (`cargo fmt`) and keep Clippy clean. Indentation is
 Recent history uses conventional-style prefixes such as `fix:`, `security:`, and `docs:`. Keep commit subjects short and imperative, e.g. `security(federation): pin https peer identity`. PRs should explain the problem, summarize the fix, list verification commands run, and link the relevant issue/plan entry. Include logs or API examples when behavior changes are not obvious from the diff.
 
 ## Maintainability & Refactor Discipline
-Treat large files as review signals, not automatic failures. When a change adds
-substantial behavior to a Rust file over 1000 lines, or adds or changes
-behavior in a Rust file over 1500 lines, name the ownership boundary you are
-preserving or improving before editing. Files over 2500 lines should get a
+Treat large files as review signals, not automatic failures. Planning has a
+hard gate: when a proposed slice would add behavior to a source file that is
+already over 1000 lines, the issue, design, or plan must include an
+ownership-based refactor or reorganization in that same slice. Put the new
+behavior in the resulting focused module; do not defer the reorganization to a
+follow-up. Thin hub registration, dispatch, and re-export wiring may remain in
+the large file when they do not add business logic. When changing existing
+behavior in a Rust file over 1500 lines, name the ownership boundary being
+preserved or improved before editing. Files over 2500 lines should get a
 reviewed decomposition path before major feature work unless the task is an
 urgent fix.
 

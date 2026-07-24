@@ -175,6 +175,13 @@ them focused: name the current responsibility, the module or helper that should
 own it, and the focused verification command that proves behavior is preserved
 or intentionally changed.
 
+Before implementation, any planned slice that adds behavior to a source file
+already over 1000 lines must include an ownership-based reorganization in the
+same issue, design, or plan. Add the behavior through the resulting focused
+module instead of deferring the split to later. Thin registration, dispatch,
+and re-export wiring may remain in the large hub when it adds no business
+logic.
+
 Large files are review signals. Use `scripts/line-count-report.sh` to refresh
 the current hotspot list when planning broad maintenance work. Do not split a
 file only to reduce line count; split when a responsibility has a clearer home.

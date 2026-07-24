@@ -11,9 +11,8 @@ use conary_core::db::models::{
 
 use crate::server::publication;
 
-use super::classification::{
-    UNKNOWN_COMMAND_NORMALIZATION_VERSION, UnknownCommandDisposition, classify_unknown_command,
-};
+use super::SCRIPTLET_EVIDENCE_NORMALIZATION_VERSION;
+use super::classification::{UnknownCommandDisposition, classify_unknown_command};
 use super::normalization::{
     normalize_command_shape, sanitize_boot_security_intents, sanitize_security_policy_intents,
     stable_cluster_key, target_profile_for_distro,
@@ -140,7 +139,7 @@ fn build_pending_sample(
         cluster: NewScriptletEvidenceCluster {
             cluster_key: stable.cluster_key.clone(),
             schema_version: i64::from(CLUSTER_SCHEMA_VERSION),
-            normalization_version: UNKNOWN_COMMAND_NORMALIZATION_VERSION,
+            normalization_version: SCRIPTLET_EVIDENCE_NORMALIZATION_VERSION,
             distro: distro.clone(),
             target_profile,
             blocked_class: blocked_class.to_string(),
@@ -421,7 +420,7 @@ mod tests {
         assert_eq!(samples[0].cluster.command, "custom-rpm-helper");
         assert_eq!(
             samples[0].cluster.normalization_version,
-            UNKNOWN_COMMAND_NORMALIZATION_VERSION
+            SCRIPTLET_EVIDENCE_NORMALIZATION_VERSION
         );
     }
 

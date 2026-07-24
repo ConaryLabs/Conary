@@ -65,10 +65,9 @@ triage. Approved system policy paths are preserved only when absolute and free
 of `..` traversal components. Preserving `/etc/apparmor.d/<profile>` changes the
 shape of newly observed scriptlet-evidence samples. The bounded admin backfill
 resumes after its stored converted-package high-water mark and does not rebuild
-existing samples; because observation identity includes the normalization-derived
-cluster key, historical AppArmor clusters may retain the older `<path>` shape.
-Consistent historical rematerialization requires a future explicit, versioned
-rebuild or reconciliation path.
+existing samples. Historical AppArmor observations that retain the older
+`<path>` shape are handled by the explicit versioned reconciliation path
+described below rather than by rewinding the forward-only backfill checkpoint.
 
 ### Scriptlet Evidence Queue
 
@@ -117,6 +116,28 @@ by default. Applied batches retain real command signals and supersede structural
 noise without deleting samples, triage state, state events, private notes, or
 evidence digests. Normal cluster listings omit superseded rows; operators can
 request `include_superseded=true` to inspect their history and disposition.
+
+AppArmor path identity also uses normalization contract v2. Operators inspect
+and reconcile older AppArmor clusters with
+`POST /v1/admin/scriptlet-evidence/reconcile-apparmor`. The admin-only route is
+bounded to at most 5,000 source clusters per call, accepts an ordered
+`after_cluster_key` cursor, and defaults to dry-run. It rematerializes queue
+observations from the unchanged `converted_packages` scriptlet summary, so
+approved traversal-free `/etc/apparmor.d/<profile>` paths become part of the
+current cluster key while unsafe or unavailable source evidence stays active
+and reports an unresolved reason.
+
+Applied AppArmor batches run transactionally. One source observation moves to
+the current target cluster when the key changes; a collapsed historical
+observation can split into multiple current clusters, and multiple historical
+clusters can merge into one target. Schema v79 records every non-identity
+source-to-target relationship and migrated-sample count. Samples are moved or
+rematerialized without retaining a second active historical copy. The
+superseded source keeps its triage state, state events, and private notes, while
+a new target starts at `needs-triage` and an existing target keeps its own
+state. Admin cluster detail exposes incoming and outgoing reconciliation links,
+making conflicting source dispositions inspectable without silently choosing
+one. A repeat apply is a no-op once no unresolved v1 AppArmor clusters remain.
 
 The queue is not publication authority. Moving a cluster to
 `covered-public-ready` records maintainer workflow state only; it does not
