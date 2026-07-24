@@ -4,6 +4,399 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [remi-v0.7.0] - 2026-07-24
+
+### Fixed
+- prepare limited public preview
+
+### Security
+- integrate release-green authority baseline
+- version sysctl target-profile policy
+- route sysctl conversion through target profiles
+- apply sysctl target policy to scriptlet bundles
+- harden sysctl public policy matching
+- require target policy for sysctl public status
+- record scriptlet public target profile
+- allow generation file capabilities after xattr preflight
+- preserve file capability xattrs in generations
+- encode generation file capability xattrs
+- persist installed file capability authority
+- require typed scriptlet publication summaries
+- close stale scriptlet publication gaps
+- stale scriptlet conversions before public serving
+- gate high risk file capabilities from public status
+- add file capability public policy helper
+- remove vulnerable quick-xml versions
+- share command risk taxonomy
+- refresh cargo advisory gate
+- fail closed on requested verity mounts
+- share critical package blocklist
+
+### Other
+- fix(remi): make scriptlet evidence queue triageable (#53)
+- feat(adopt): preview single-package adoption (#52)
+- ops(site): deploy static routes with real 404s
+- ci: deploy release sites from exact tag
+- fix(ci): satisfy Rust 1.97 Clippy
+- fix(repository): normalize Remi public targets
+- security(remi): preserve parser-quoted policy paths
+- security(remi): redact quoted private values
+- security(remi): preserve dynamic policy semantics
+- security(remi): harden publication sanitizer
+- security(remi): sanitize scriptlet publication reports
+- fix(scriptlets): catch git --config-env clone
+- test(ccs): satisfy PAM support matrix lint
+- test(ccs): guard against known pam support rows
+- style: format local-only Remi tests
+- style: satisfy workspace clippy lints
+- style: format scriptlet bundle policy helpers
+- feat(conversion): model security-sensitive scriptlets
+- ux(cli): quiet logs and normalize status output
+- fix(ccs): keep security policy fixtures complete
+- feat(remi): queue generic LSM policy intent evidence
+- feat(ccs): capture AppArmor helpers as policy review intent
+- feat(ccs): bridge SELinux effects to generic policy intent
+- feat(ccs): add generic LSM policy intent metadata
+- feat(ccs): model optional SELinux policy intent
+- feat(ccs): model native and Debian scriptlet evidence
+- feat(remi): add scriptlet evidence queue
+- fix(scriptlets): surface boot security refusals
+- test(ccs): add m4e lifecycle proof corpus
+- fix(ccs): validate v2 writer structurally
+- feat(remi): validate native lifecycle by release profile
+- fix(ccs): validate v2 debug projection structurally
+- feat(ccs): project lifecycle authority for profiles
+- feat(ccs): validate lifecycle authoring by target profile
+- feat(ccs): add config native authoring projection
+- ci(release): build rpm artifacts on fedora 44
+- test(kitchen): skip hermetic setup checks without runner privileges
+- feat(remi): validate routes with supported profiles
+- feat(ccs): validate lifecycle authority with supported profiles
+- feat(repository): add supported target profiles
+- docs(remi): document native ccs publication
+- fix(remi): satisfy native publication clippy
+- feat(remi): carry native release identity in clients
+- feat(remi): expose native publications in public indexes
+- feat(remi): serve native package downloads
+- feat(remi): persist native release publications
+- feat(remi): expose verified publish gate candidates
+- feat(remi): add native publish module boundary
+- feat(remi): add native publication schema
+- test(ccs): cover chunked v2 authoring payloads
+- fix(ccs): finish m4b verification cleanup
+- test(ccs): prove m4b local authoring loop
+- feat(ccs): add v2 authoring lint
+- feat(ccs): project authoring builds into v2 authority
+- feat(ccs): add minimal v2 authoring template
+- fix(ccs): clean v2 lint diagnostics
+- test(ccs): preserve v2 publish and verify gates
+- feat(ccs): route package adapter through v2 authority
+- feat(ccs): add v2 content identity projection
+- test(ccs): add signed v2 package fixture writer
+- feat(ccs): read signed v2 authority
+- feat(ccs): surface v2 validation diagnostics
+- feat(ccs): validate v2 authority contract
+- feat(ccs): add v2 authority schema
+- feat(ccs): seed v2 authority module
+- feat(record): orchestrate cook record mode
+- feat(record): derive draft recipe
+- feat(record): add recording report contract
+- test(try): cover watch mode integration
+- feat(try): add active generation replacement
+- feat(try): add watch source identity
+- feat(diagnostics): add try watch events
+- fix(try): centralize launcher and boot identity
+- test(try): lock m3c0 tiny-fix regressions
+- feat(packaging): project m3a records into agent results
+- feat(conary): add local packaging mcp startup path
+- feat(static-repo): expose publish trust snapshot
+- feat(packaging): render cook json diagnostics
+- feat(packaging): add operation record store
+- security(packaging): add diagnostic redaction policy
+- feat(packaging): add diagnostic event dto
+- security(packaging): finalize m2 release surface
+- feat(remi): publish attested artifacts to release endpoint
+- security(remi): gate release uploads before visibility
+- security(remi): refresh distro timestamp metadata
+- security(remi): configure trusted release signers
+- feat(cook): emit foreign conversion boundaries
+- security(publish): enable attested artifact-form publish
+- security(publish): sign project-form build attestations
+- security(static): prepare publish context
+- security(static): add artifact publish gate
+- security(hermetic): gate ecosystem offline policy
+- security(ccs): compute attested output identity
+- security(ccs): bind attestations to manifest integrity
+- security(ccs): add build attestation envelopes
+- fix(packaging): stabilize m2a verification paths
+- feat(packaging): record host hermetic divergence evidence
+- fix(packaging): use sysroot-only mounts for hermetic builds
+- fix(packaging): prefetch hermetic sources from input base
+- feat(packaging): route isolated cook through hermetic builds
+- refactor(packaging): split hermetic env scanner
+- fix(packaging): reject opaque hermetic shell scripts
+- fix(packaging): reject stdin-fed hermetic shell bypasses
+- fix(packaging): reject process substitution in hermetic guards
+- fix(packaging): validate hermetic wrapper operands
+- fix(packaging): reject shell quote removal in hermetic guards
+- fix(packaging): reject glob expansion in hermetic guards
+- fix(packaging): reject command substitution in hermetic guards
+- fix(packaging): reject dynamic shell expansion in hermetic guards
+- fix(packaging): reject make include import options
+- fix(packaging): reject abbreviated make import options
+- fix(packaging): reject bundled make import options
+- fix(packaging): reject makefile import env bypasses
+- fix(packaging): reject nested make env overrides
+- fix(packaging): reject make variable env bypasses
+- fix(packaging): reject bash function env imports
+- fix(packaging): reject shell startup env in hermetic builds
+- fix(packaging): reject shell trap env bypasses
+- fix(packaging): reject shell alias env bypasses
+- fix(packaging): reject shell keyword env mutations
+- fix(packaging): reject local hermetic env mutations
+- fix(packaging): normalize shell array env targets
+- fix(packaging): reject declare nameref env mutations
+- fix(packaging): reject append and readarray env mutations
+- fix(packaging): reject shell builtin hermetic env mutations
+- fix(packaging): reject busybox shell hermetic bypasses
+- fix(packaging): validate nested env hermetic commands
+- fix(packaging): reject nested shell hermetic env bypasses
+- fix(packaging): scan shell control words for hermetic env mutations
+- fix(packaging): reject readonly hermetic env mutations
+- fix(packaging): peel shell env wrappers in hermetic builds
+- fix(packaging): reject env split-string in hermetic builds
+- fix(packaging): fail closed on env long options
+- fix(packaging): scan env assignments after options
+- fix(packaging): reject env clearing in hermetic builds
+- fix(packaging): close hermetic env mutation gaps
+- fix(packaging): require exact reproducibility remaps
+- feat(packaging): record hermetic reproducibility controls
+- fix(packaging): align hermetic patch execution roots
+- fix(packaging): harden hermetic plan trust boundaries
+- feat(packaging): assemble hermetic build plans
+- fix(packaging): preserve redirection in command risk fallback
+- fix(packaging): treat background shell op as command break
+- fix(packaging): constrain raw command risk pairing
+- fix(packaging): cover command risk review gaps
+- security(packaging): classify hermetic build command risks
+- fix(packaging): tighten cargo ecosystem policy
+- fix(packaging): hash cargo replacements from filesystem
+- fix(packaging): accept pinned cargo source caches
+- feat(packaging): add hermetic ecosystem policy
+- feat(packaging): hash and materialize hermetic local sources
+- fix(packaging): align hermetic evidence dto contract
+- feat(packaging): add unsigned hermetic evidence model
+- refactor(ccs): split manifest provenance types
+- fix(deploy): restore Remi site publishing path
+- fix(packaging): skip try preflight for DB-free commands
+- security(packaging): gate unsafe try hooks
+- feat(try): persist try sessions
+- feat(packaging): cook inferred source trees
+- feat(packaging): resolve inference targets
+- feat(packaging): materialize inferred recipes
+- feat(packaging): infer recipes from source trees
+- feat(packaging): add inference trace model
+- security(static-repo): fail closed on publisher state
+- feat(static-repo): publish file-based repositories
+- security(keys): create private keys with restrictive modes
+- feat(cook): align recipe builds with M1a
+- fix(recipe): reject unsafe local source cache paths
+- docs(recipe): clarify local source base dir
+- test(recipe): update gcc companion source assertions
+- test(recipe): update tier2 source policy assertions
+- feat(recipe): add local source workspaces
+- security(static-repo): verify CCS package keys on install
+- feat(repo): add static trust establishment
+- feat(static-repo): sync verified static indexes
+- feat(static-repo): persist package signing keys
+- security(tuf): handle static repo no-change syncs
+- feat(static-repo): support local file fetches
+- feat(static-repo): add v1 format validation
+- fix(deploy): verify remi release artifacts
+- ci: gate release builds with workspace validation
+- refactor(core): extract generation rebuild orchestration
+- refactor(core): extract generation creation orchestration
+- refactor(core): extract generation boot asset resolution
+- refactor(core): extract generation builder runtime inputs
+- refactor(core): extract generation builder primitives
+- refactor(core): extract scriptlet bundle builder
+- refactor(core): extract scriptlet bundle evidence digest
+- refactor(core): extract scriptlet bundle entry construction
+- refactor(core): extract scriptlet bundle metadata projection
+- refactor(core): extract scriptlet bundle classification helpers
+- refactor(core): extract scriptlet bundle public types
+- refactor(scriptlet): extract legacy contracts
+- refactor(scriptlet): extract process execution
+- refactor(scriptlet): extract sandbox policy
+- refactor(scriptlet): extract executor core
+- refactor(scriptlet): extract public types
+- refactor(remi): extract conversion workflow
+- refactor(remi): extract conversion benchmark paths
+- refactor(remi): extract conversion recipe build
+- refactor(remi): extract conversion persistence
+- refactor(remi): extract conversion storage helpers
+- refactor(remi): extract conversion package lookup
+- refactor(remi): extract conversion safety guards
+- refactor(remi): extract conversion metadata helpers
+- refactor(remi): extract conversion result types
+- fix(remi): prune stale distro help
+- fix(remi): harden admin upload metadata writes
+- test(core): gate scriptlet adapter parity with golden evidence
+- refactor(core): keep regex scriptlet analysis advisory
+- test(remi): cover scriptlet publication golden outcomes
+- test(cli): cover legacy scriptlet lifecycle refusals
+- test(core): add legacy scriptlet golden classification corpus
+- test(core): cover legacy scriptlet support matrix fixtures
+- fix(core): shrink legacy replay refusal error path
+- feat(cli): gate legacy replay with host compatibility policy
+- feat(core): add legacy replay compatibility matrix
+- test(ccs): cover no-scripts legacy replay
+- security(ccs): harden foreign legacy replay
+- security(install): fail closed for batch legacy replay
+- security(remove): execute installed legacy replay
+- feat(scriptlets): plumb legacy replay options
+- feat(scriptlets): add legacy executor contracts
+- feat(scriptlets): persist installed legacy bundles
+- feat(scriptlets): add legacy replay planner
+- docs(remi): document scriptlet publication gate
+- feat(remi): add scriptlet review artifacts
+- feat(remi): gate chunk blobs by public reachability
+- feat(remi): hide non-public conversions from discovery
+- feat(remi): gate package serving by scriptlet policy
+- feat(remi): thread publication outcomes through jobs
+- feat(remi): add scriptlet publication policy
+- test(scriptlets): verify passive bundle metadata flow
+- fix(remi): ignore stale converted scriptlet rows
+- feat(scriptlets): expose passive remi metadata
+- feat(scriptlets): persist remi scriptlet metadata
+- feat(scriptlets): store passive metadata on conversions
+- feat(scriptlets): embed passive bundles during conversion
+- feat(scriptlets): build passive legacy bundles
+- feat(scriptlets): add passive bundle summary types
+- fix(scriptlets): align native ABI classification test
+- feat(scriptlets): guard bootstrap classification conversion
+- feat(scriptlets): add alternatives and cache refresh adapters
+- feat(scriptlets): add tmpfiles and sysusers adapters
+- feat(scriptlets): complete safe ldconfig and systemd adapters
+- feat(scriptlets): pass payload context to adapters
+- feat(scriptlets): add payload hint evidence
+- feat(scriptlets): expose conversion classification evidence
+- feat(scriptlets): add adapter support matrix
+- feat(scriptlets): add conservative adapter registry
+- feat(scriptlets): add blocked class registry
+- feat(scriptlets): add effect classification report
+- feat(scriptlets): add command evidence model
+- test(generation): track helper-based composefs publication
+- test(packages): cover native abi parser contract
+- feat(packages): extract rpm native scriptlet abi
+- feat(packages): extract deb native scriptlet abi
+- feat(packages): extract arch native scriptlet abi
+- feat(packages): add native scriptlet abi model
+- style: format legacy scriptlet bundle work
+- feat(ccs): preserve legacy scriptlet bundles in archives
+- feat(ccs): embed legacy scriptlet bundle in manifests
+- feat(ccs): validate legacy scriptlet bundles
+- feat(ccs): add legacy scriptlet bundle schema
+- fix(remi): clean up benchmark clippy findings
+- feat(remi): add conversion benchmark command
+- feat(remi): record conversion phase timing
+- feat(remi): add scriptlet corpus summary
+- feat(remi): add conversion timing report types
+- security(scriptlets): harden live-root trust semantics
+- fix(recovery): add generation db backups
+- recovery(db): add adoption checkpoint backups
+- docs(core): mark conary-core internal
+- test(generation): update publication contract assertion
+- fix(fs): harden durable generation publication writes
+- fix(recovery): honor pending generation publication debt
+- fix(generation): durably sync current generation link
+- feat(core): add generation publication debt model
+- security(adopt): harden adoption safety invariants
+- feat(mcp): dispatch stateless resource requests
+- feat(mcp): model stateless resource results
+- test(mcp): guard stateless discovery route boundary
+- feat(mcp): parse raw stateless HTTP request bytes
+- fix(mcp): reject malformed raw stateless headers
+- docs(mcp): record raw stateless proof boundary
+- test(mcp): prove raw stateless error mapping
+- test(mcp): prove raw stateless JSON-RPC envelope policy
+- test(mcp): prove raw stateless header extraction
+- feat(mcp): add raw stateless HTTP proof
+- test(mcp): guard stateless adapter boundary
+- feat(mcp): model stateless discovery results
+- feat(mcp): add stateless request validation
+- fix(agent): address operations review findings
+- docs(agent): classify high-risk MCP mutations
+- test(agent): record MCP catalog budget debt
+- fix(agent): remove fake automation ai commands
+- feat(mcp): expose contract schema helpers
+- docs(agent): resolve operations spec review
+- docs(llms): retire Claude assistant guidance
+- feat(generation): harden boot artifact trust
+- security(scriptlet): isolate live-root sandbox writes
+- feat(update): ingest trusted security advisories
+- test(native): expand daily-driver corpus validation
+- fix(generation): boot installed-runtime exports
+- test(matrix): harden native package manager parity evidence
+- fix(resolver): require declared provider metadata
+- feat(query): align provider and breakage diagnostics
+- feat(repo): track security advisory support
+- feat(adopt): add unadopt escape hatch
+- docs(remi): classify public write route controls
+- fix(generation): complete composefs atomic switching
+- fix(generation): enforce composefs artifact activation
+- fix(export): harden artifact-backed OCI export
+- refactor(export): load OCI generations from artifacts
+- fix(generation): require complete recovery artifacts
+- fix(generation): honor recovery mount policy
+- fix(generation): fail closed on recovery and rollback fallbacks
+- test(generation): guard boot-time activation contract
+- fix(generation): make activation boot-time first
+- fix(boot): fail closed without generation root erofs
+- fix(generation): route remaining runtime paths
+- refactor(generation): centralize runtime root paths
+- fix(install): enforce converted capability policy before metadata writes
+- fix(qemu): unblock local validation gate
+- ci: pause forge validation lanes
+- ci(forge): surface validation prerequisites
+- ci(forge): reclaim container storage before validation
+- ops(forge): restore trusted-runner preflight
+- fix(generation): boot self-contained runtime exports
+- test(generation): cover missing runtime CAS object
+- feat(generation): share runtime input validation
+- feat(generation): classify runtime generation inputs
+- chore(test): switch active Fedora baseline to 44
+- fix(generation): stabilize artifact export validation
+- fix(remi): unblock deploy access and conversion bursts
+- chore(generation): finalize export slice state
+- feat(generation): unify artifact image export
+- fix(generation): stabilize export validation tests
+- feat(generation): export artifacts as disk images
+- feat(generation): project export staging trees
+- refactor(image): share repart backend
+- feat(generation): emit runtime export artifacts
+- feat(bootstrap): emit exportable generation artifacts
+- feat(generation): validate export artifacts
+- feat(generation): define export artifact manifests
+- feat(generation): record artifact manifest digest
+- refactor(bootstrap): remove legacy generation image builder
+- security(rust): upgrade vulnerable crates and centralize shared deps
+- docs(operations): clarify remi hostnames and access
+- fix(bootstrap): complete truthful self-host qcow2 flow
+- fix(bootstrap): stage gcc pass2 companion sources
+- fix(bootstrap): initialize temp-tools usr merge layout
+- fix(bootstrap): fall back from gnu ftpmirror
+- fix(bootstrap): keep kitchen legacy for lfs phases
+- fix(bootstrap): align patched recipes with kitchen
+- chore(test): format tier2 recipe policy test
+- feat(bootstrap): add self-host guest profile
+- feat(bootstrap): implement tier2 package execution
+- fix(bootstrap): refresh tier2 recipe policy
+- fix(bootstrap): enforce strict tier2 checksums
+- fix(bootstrap): add sqlite to final system order
+- fix(ci): fall back to release assets for expired source runs
+- feat(deploy): add conaryd Forge staging deploy path
+- fix(release): checkout before publish verify-tag
 ## [v0.12.0] - 2026-07-23
 
 ### Fixed
