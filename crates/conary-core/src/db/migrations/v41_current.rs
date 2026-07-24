@@ -1360,6 +1360,33 @@ pub fn migrate_v77(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Version 78: Versioned scriptlet evidence normalization and supersession
+pub fn migrate_v78(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "
+        ALTER TABLE scriptlet_evidence_clusters
+            ADD COLUMN normalization_version INTEGER NOT NULL DEFAULT 1;
+        ALTER TABLE scriptlet_evidence_clusters
+            ADD COLUMN superseded_at TEXT;
+        ALTER TABLE scriptlet_evidence_clusters
+            ADD COLUMN superseded_reason TEXT;
+        ALTER TABLE scriptlet_evidence_clusters
+            ADD COLUMN superseded_by_cluster_key TEXT;
+
+        CREATE INDEX idx_scriptlet_evidence_clusters_active_normalization
+            ON scriptlet_evidence_clusters(
+                superseded_at,
+                blocked_class,
+                normalization_version,
+                cluster_key
+            );
+        ",
+    )?;
+
+    info!("Schema version 78 applied successfully (versioned scriptlet evidence normalization)");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1538,6 +1565,32 @@ mod tests {
             )
             .unwrap();
         assert_eq!(default_value, "'[]'");
+    }
+
+    #[test]
+    fn test_migrate_v78_versions_queue_normalization_without_dropping_history() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::db::schema::migrate(&conn).unwrap();
+
+        let columns = table_columns(&conn, "scriptlet_evidence_clusters");
+        for column in [
+            "normalization_version",
+            "superseded_at",
+            "superseded_reason",
+            "superseded_by_cluster_key",
+        ] {
+            assert!(columns.contains(&column.to_string()), "missing {column}");
+        }
+
+        let default_value: String = conn
+            .query_row(
+                "SELECT dflt_value FROM pragma_table_info('scriptlet_evidence_clusters')
+                 WHERE name = 'normalization_version'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(default_value, "1");
     }
 
     #[test]

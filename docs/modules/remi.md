@@ -99,6 +99,25 @@ local review artifact paths. Private packets include sanitized artifact
 references for maintainer follow-up; `public-sanitized` packets omit review
 artifacts and private notes.
 
+Unknown-command queue classification uses normalization contract v2. It drops
+only provable queue noise: shell grammar and punctuation, variable references,
+environment assignments, function-definition syntax, queue-structural command
+builtins, and unambiguous package-manager lifecycle dispatch labels. Ambiguous
+identifiers and builtins whose behavior itself needs adapter review remain
+adapter-planning signal. This classification is queue-only: it does not rewrite
+CCS summaries, adapter decisions, support-matrix outcomes, legacy replay, or
+publication state.
+
+Schema v78 persists each cluster's `normalization_version` and optional
+supersession metadata. New observations use the current version. Operators
+reconcile historical unknown-command clusters with
+`POST /v1/admin/scriptlet-evidence/reconcile-unknown-commands`; the route is
+admin-only, bounded to at most 5,000 clusters per call, resumable, and dry-run
+by default. Applied batches retain real command signals and supersede structural
+noise without deleting samples, triage state, state events, private notes, or
+evidence digests. Normal cluster listings omit superseded rows; operators can
+request `include_superseded=true` to inspect their history and disposition.
+
 The queue is not publication authority. Moving a cluster to
 `covered-public-ready` records maintainer workflow state only; it does not
 rewrite `converted_packages.publication_status`, make blocked rows public, call

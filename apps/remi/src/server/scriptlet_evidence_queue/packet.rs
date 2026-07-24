@@ -54,6 +54,7 @@ pub fn build_packet(detail: ScriptletEvidenceClusterDetail, visibility: PacketVi
         "visibility": visibility.as_str(),
         "cluster": {
             "cluster_key": detail.cluster.cluster_key,
+            "normalization_version": detail.cluster.normalization_version,
             "state": detail.cluster.state.as_str(),
             "distro": detail.cluster.distro,
             "target_profile": detail.cluster.target_profile,
@@ -65,6 +66,9 @@ pub fn build_packet(detail: ScriptletEvidenceClusterDetail, visibility: PacketVi
             "first_seen": detail.cluster.first_seen,
             "last_seen": detail.cluster.last_seen,
             "updated_at": detail.cluster.updated_at,
+            "superseded_at": detail.cluster.superseded_at,
+            "superseded_reason": detail.cluster.superseded_reason,
+            "superseded_by_cluster_key": detail.cluster.superseded_by_cluster_key,
         },
         "impact": {
             "attempt_count": samples.len(),

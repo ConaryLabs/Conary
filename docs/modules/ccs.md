@@ -278,6 +278,12 @@ Common PAM stack helpers (`authselect`, `authconfig`, `pam-auth-update`, and
 manifest authority or public Remi eligibility without a future native PAM
 policy adapter and target-profile PAM facts.
 
+Remi's unknown-command normalization v2 is an admin queue classification layer,
+not CCS conversion authority. Suppressing provable shell/control-flow noise
+from that queue does not remove unknown commands from the signed conversion
+summary, change entry decisions, grant adapter coverage, enable raw replay, or
+make an artifact public.
+
 Live network fetches and nested package-manager calls remain blocked conversion
 evidence. A scriptlet that fetches content with `curl`, `wget`, `scp`, `ssh`, or
 `git clone`, or that invokes a nested package manager such as `dnf`, `apt`,

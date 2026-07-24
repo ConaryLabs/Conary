@@ -108,6 +108,10 @@ pub fn create_external_admin_router(
             post(admin_handlers::scriptlet_evidence_backfill),
         )
         .route(
+            "/v1/admin/scriptlet-evidence/reconcile-unknown-commands",
+            post(admin_handlers::reconcile_scriptlet_evidence_unknown_commands),
+        )
+        .route(
             "/v1/admin/scriptlet-evidence/clusters",
             get(admin_handlers::list_scriptlet_evidence_clusters),
         )

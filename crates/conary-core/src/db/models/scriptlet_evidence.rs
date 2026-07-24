@@ -55,6 +55,7 @@ impl ScriptletEvidenceState {
 pub struct NewScriptletEvidenceCluster {
     pub cluster_key: String,
     pub schema_version: i64,
+    pub normalization_version: i64,
     pub distro: String,
     pub target_profile: String,
     pub blocked_class: String,
@@ -68,6 +69,7 @@ pub struct NewScriptletEvidenceCluster {
 pub struct ScriptletEvidenceCluster {
     pub cluster_key: String,
     pub schema_version: i64,
+    pub normalization_version: i64,
     pub distro: String,
     pub target_profile: String,
     pub blocked_class: String,
@@ -79,6 +81,9 @@ pub struct ScriptletEvidenceCluster {
     pub first_seen: String,
     pub last_seen: String,
     pub updated_at: String,
+    pub superseded_at: Option<String>,
+    pub superseded_reason: Option<String>,
+    pub superseded_by_cluster_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -88,6 +93,7 @@ pub struct ScriptletEvidenceClusterListFilter {
     pub blocked_class: Option<String>,
     pub command: Option<String>,
     pub package: Option<String>,
+    pub include_superseded: bool,
     pub limit: Option<i64>,
     pub offset: Option<i64>,
 }
@@ -110,19 +116,21 @@ pub struct ScriptletEvidenceClusterDetail {
 }
 
 impl ScriptletEvidenceCluster {
-    const COLUMNS: &'static str = "cluster_key, schema_version, distro, target_profile, \
+    const COLUMNS: &'static str = "cluster_key, schema_version, normalization_version, distro, target_profile, \
          blocked_class, command, normalized_command_shape, normalized_command_shape_hash, \
-         lifecycle_phase, state, first_seen, last_seen, updated_at";
+         lifecycle_phase, state, first_seen, last_seen, updated_at, superseded_at, \
+         superseded_reason, superseded_by_cluster_key";
 
     pub fn upsert(conn: &Connection, cluster: &NewScriptletEvidenceCluster) -> Result<Self> {
         conn.execute(
             "INSERT INTO scriptlet_evidence_clusters (
-                cluster_key, schema_version, distro, target_profile, blocked_class,
+                cluster_key, schema_version, normalization_version, distro, target_profile, blocked_class,
                 command, normalized_command_shape, normalized_command_shape_hash,
                 lifecycle_phase
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
             ON CONFLICT(cluster_key) DO UPDATE SET
                 schema_version = excluded.schema_version,
+                normalization_version = excluded.normalization_version,
                 distro = excluded.distro,
                 target_profile = excluded.target_profile,
                 blocked_class = excluded.blocked_class,
@@ -135,6 +143,7 @@ impl ScriptletEvidenceCluster {
             params![
                 &cluster.cluster_key,
                 cluster.schema_version,
+                cluster.normalization_version,
                 &cluster.distro,
                 &cluster.target_profile,
                 &cluster.blocked_class,
@@ -197,6 +206,9 @@ impl ScriptletEvidenceCluster {
         if let Some(package) = filter.package.as_ref() {
             sql.push_str(" AND s.package_name = ?");
             values.push(Box::new(package.clone()));
+        }
+        if !filter.include_superseded {
+            sql.push_str(" AND c.superseded_at IS NULL");
         }
 
         let limit = filter.limit.unwrap_or(100).clamp(1, 1000);
@@ -274,26 +286,30 @@ impl ScriptletEvidenceCluster {
     }
 
     fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
-        let state: String = row.get(9)?;
+        let state: String = row.get(10)?;
         Ok(Self {
             cluster_key: row.get(0)?,
             schema_version: row.get(1)?,
-            distro: row.get(2)?,
-            target_profile: row.get(3)?,
-            blocked_class: row.get(4)?,
-            command: row.get(5)?,
-            normalized_command_shape: row.get(6)?,
-            normalized_command_shape_hash: row.get(7)?,
-            lifecycle_phase: row.get(8)?,
-            state: ScriptletEvidenceState::from_db(&state, 9)?,
-            first_seen: row.get(10)?,
-            last_seen: row.get(11)?,
-            updated_at: row.get(12)?,
+            normalization_version: row.get(2)?,
+            distro: row.get(3)?,
+            target_profile: row.get(4)?,
+            blocked_class: row.get(5)?,
+            command: row.get(6)?,
+            normalized_command_shape: row.get(7)?,
+            normalized_command_shape_hash: row.get(8)?,
+            lifecycle_phase: row.get(9)?,
+            state: ScriptletEvidenceState::from_db(&state, 10)?,
+            first_seen: row.get(11)?,
+            last_seen: row.get(12)?,
+            updated_at: row.get(13)?,
+            superseded_at: row.get(14)?,
+            superseded_reason: row.get(15)?,
+            superseded_by_cluster_key: row.get(16)?,
         })
     }
 
     fn summary_from_row(row: &Row<'_>) -> rusqlite::Result<ScriptletEvidenceClusterSummary> {
-        let architectures: String = row.get(15)?;
+        let architectures: String = row.get(19)?;
         let mut architectures = architectures
             .split(',')
             .filter(|value| !value.is_empty())
@@ -303,10 +319,10 @@ impl ScriptletEvidenceCluster {
 
         Ok(ScriptletEvidenceClusterSummary {
             cluster: Self::from_row(row)?,
-            attempt_count: row.get(13)?,
-            unique_package_count: row.get(14)?,
+            attempt_count: row.get(17)?,
+            unique_package_count: row.get(18)?,
             architectures,
-            stale_sample_count: row.get(16)?,
+            stale_sample_count: row.get(20)?,
         })
     }
 }
@@ -773,6 +789,7 @@ mod tests {
         NewScriptletEvidenceCluster {
             cluster_key: "s1-dracut".to_string(),
             schema_version: 1,
+            normalization_version: 2,
             distro: "fedora".to_string(),
             target_profile: "fedora-44".to_string(),
             blocked_class: "initramfs".to_string(),

@@ -2,8 +2,10 @@
 
 pub mod aggregation;
 pub mod backfill;
+pub mod classification;
 pub mod normalization;
 pub mod packet;
+pub mod reconciliation;
 pub mod storage;
 pub mod types;
 

@@ -11,7 +11,7 @@ use rusqlite::Connection;
 use tracing::info;
 
 /// Current schema version
-pub const SCHEMA_VERSION: i32 = 77;
+pub const SCHEMA_VERSION: i32 = 78;
 
 /// Initialize the schema version tracking table
 fn init_schema_version(conn: &Connection) -> Result<()> {
@@ -201,6 +201,7 @@ fn apply_migration(conn: &Connection, version: i32) -> Result<()> {
         75 => migrations::migrate_v75(conn),
         76 => migrations::migrate_v76(conn),
         77 => migrations::migrate_v77(conn),
+        78 => migrations::migrate_v78(conn),
         _ => Err(crate::error::Error::InitError(format!(
             "Unknown migration version: {}",
             version
@@ -565,7 +566,7 @@ mod tests {
         migrate(&conn).unwrap();
 
         assert_eq!(get_schema_version(&conn).unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 77);
+        assert_eq!(SCHEMA_VERSION, 78);
 
         let columns: Vec<(String, String, bool, Option<String>, i32)> = conn
             .prepare("PRAGMA table_info(try_sessions)")
@@ -945,5 +946,45 @@ mod tests {
             .unwrap();
         assert!(indexes.contains(&"idx_installed_file_capabilities_trove".to_string()));
         assert!(indexes.contains(&"idx_installed_file_capabilities_path".to_string()));
+    }
+
+    #[test]
+    fn migration_v78_preserves_existing_scriptlet_evidence_history() {
+        let (_temp, conn) = create_test_db_at_version(77);
+        conn.execute(
+            "INSERT INTO scriptlet_evidence_clusters (
+                cluster_key, schema_version, distro, target_profile, blocked_class,
+                command, normalized_command_shape, normalized_command_shape_hash,
+                lifecycle_phase, state
+             ) VALUES (
+                's1-history', 1, 'ubuntu', 'ubuntu-26.04', 'unknown-command',
+                'set', 'set', 'shape-hash', 'postinstall', 'adapter-candidate'
+             )",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO scriptlet_evidence_notes (cluster_key, actor, body)
+             VALUES ('s1-history', 'maintainer', 'keep me')",
+            [],
+        )
+        .unwrap();
+
+        migrate(&conn).unwrap();
+
+        let (normalization_version, state, note_count): (i64, String, i64) = conn
+            .query_row(
+                "SELECT c.normalization_version, c.state, COUNT(n.id)
+                 FROM scriptlet_evidence_clusters c
+                 LEFT JOIN scriptlet_evidence_notes n ON n.cluster_key = c.cluster_key
+                 WHERE c.cluster_key = 's1-history'
+                 GROUP BY c.cluster_key",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(normalization_version, 1);
+        assert_eq!(state, "adapter-candidate");
+        assert_eq!(note_count, 1);
     }
 }

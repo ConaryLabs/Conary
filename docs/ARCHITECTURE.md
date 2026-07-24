@@ -93,7 +93,7 @@ crates/conary-core/      Core library crate
     +-- lib.rs           Internal workspace crate surface, not a stable external API
     +-- operations.rs    Shared operation vocabulary across CLI and daemon boundaries
     +-- db/              Database layer
-    |   +-- schema.rs    Schema v77, migration dispatcher
+    |   +-- schema.rs    Schema v78, migration dispatcher
     |   +-- migrations/  Migration functions grouped into v1_v20.rs, v21_v40.rs, v41_current.rs
     |   +-- models/      ORM-style model structs
     |   |   +-- try_session.rs M1b package try session state
@@ -476,7 +476,7 @@ itself.
 Supports x86_64, aarch64, and riscv64 targets. Dry-run mode
 (`--dry-run`) validates the full pipeline without building.
 
-## Database Schema (v77)
+## Database Schema (v78)
 
 All runtime state lives in SQLite, and migrations are dispatched from
 `crates/conary-core/src/db/schema.rs`.
@@ -489,7 +489,7 @@ The stable table families are:
 - Try state: active/kept/rolled-back package try sessions and selected generation metadata
 - Security and provenance: TUF metadata, provenance records, admin tokens, and audit data
 - Service and federation state: conversion/cache/download analytics, federation peers, and test-run persistence
-- Remi review workflow state: admin-only scriptlet evidence clusters, samples, state events, notes, and backfill runs
+- Remi review workflow state: admin-only scriptlet evidence clusters, samples, state events, notes, backfill runs, and versioned normalization/supersession metadata
 
 When exact table names or counts matter, inspect `crates/conary-core/src/db/models/`
 and the active migration functions instead of relying on this overview.

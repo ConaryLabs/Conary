@@ -251,6 +251,30 @@ Each fixture family should record:
   Remi publication fixtures; see `remi-scriptlet-publication-gate` for
   server-side gates.
 
+### remi-scriptlet-evidence-queue
+
+- **Owner:** Remi queue normalization and reconciliation under
+  `apps/remi/src/server/scriptlet_evidence_queue/`, with persisted row helpers
+  under `crates/conary-core/src/db/models/scriptlet_evidence.rs`.
+- **Purpose:** Keep admin adapter-planning clusters focused on real unsupported
+  commands while preserving historical queue evidence across versioned
+  normalization.
+- **Fixture sources:**
+  `apps/remi/src/server/scriptlet_evidence_queue/classification.rs`;
+  `apps/remi/src/server/scriptlet_evidence_queue/aggregation.rs`;
+  `apps/remi/src/server/scriptlet_evidence_queue/reconciliation.rs`;
+  `apps/remi/src/server/handlers/admin/scriptlet_evidence.rs`.
+- **Consumes:** RPM, DEB, and Arch unknown-command classification; bounded
+  dry-run/apply reconciliation; active versus superseded cluster listings; and
+  private-history preservation.
+- **Fast proof:** `cargo test -p remi scriptlet_evidence`.
+- **Medium proof:** `cargo test -p remi publication`;
+  `cargo test -p conary --test conversion_integration golden_conversion`.
+- **Regeneration:** Hand-maintained summaries and temporary SQLite databases.
+- **Safety notes:** Ambiguous identifiers stay visible. Reconciliation must not
+  delete samples, notes, or state events, and must not mutate
+  `converted_packages.publication_status`.
+
 ### remi-scriptlet-publication-gate
 
 - **Owner:** Remi server: `apps/remi/src/server/publication.rs`.

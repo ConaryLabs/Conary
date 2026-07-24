@@ -18,12 +18,20 @@ pub struct BackfillRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct UnknownCommandReconciliationRequest {
+    pub dry_run: Option<bool>,
+    pub limit: Option<usize>,
+    pub after_cluster_key: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct ClusterListQuery {
     pub state: Option<String>,
     pub distro: Option<String>,
     pub blocked_class: Option<String>,
     pub command: Option<String>,
     pub package: Option<String>,
+    pub include_superseded: Option<bool>,
     pub limit: Option<i64>,
     pub offset: Option<i64>,
 }
@@ -53,6 +61,7 @@ struct ClusterListResponse {
 struct ClusterSummaryResponse {
     cluster_key: String,
     schema_version: i64,
+    normalization_version: i64,
     distro: String,
     target_profile: String,
     blocked_class: String,
@@ -64,6 +73,9 @@ struct ClusterSummaryResponse {
     first_seen: String,
     last_seen: String,
     updated_at: String,
+    superseded_at: Option<String>,
+    superseded_reason: Option<String>,
+    superseded_by_cluster_key: Option<String>,
     attempt_count: i64,
     unique_package_count: i64,
     architectures: Vec<String>,
@@ -172,6 +184,65 @@ pub async fn scriptlet_evidence_backfill(
             500,
             &format!("Scriptlet evidence backfill task failed: {error}"),
             "SCRIPTLET_EVIDENCE_BACKFILL_TASK_FAILED",
+        ),
+    }
+}
+
+pub async fn reconcile_scriptlet_evidence_unknown_commands(
+    State(state): State<Arc<RwLock<ServerState>>>,
+    scopes: Option<Extension<TokenScopes>>,
+    request: Option<Json<UnknownCommandReconciliationRequest>>,
+) -> Response {
+    if let Some(err) = check_scope(&scopes, Scope::Admin) {
+        return err;
+    }
+
+    let request = request.map(|Json(request)| request);
+    let dry_run = request
+        .as_ref()
+        .and_then(|request| request.dry_run)
+        .unwrap_or(true);
+    let limit = request
+        .as_ref()
+        .and_then(|request| request.limit)
+        .unwrap_or(500)
+        .clamp(1, 5000);
+    let after_cluster_key = request.and_then(|request| request.after_cluster_key);
+    if after_cluster_key
+        .as_ref()
+        .is_some_and(|cluster_key| cluster_key.len() > 256)
+    {
+        return json_error(
+            400,
+            "after_cluster_key must be at most 256 bytes",
+            "INVALID_PARAMETER",
+        );
+    }
+    let db_path = {
+        let state = state.read().await;
+        state.config.db_path.clone()
+    };
+
+    match tokio::task::spawn_blocking(move || {
+        crate::server::scriptlet_evidence_queue::reconciliation::reconcile_unknown_command_batch(
+            &db_path,
+            dry_run,
+            limit,
+            after_cluster_key.as_deref(),
+        )
+    })
+    .await
+    {
+        Ok(Ok(result)) => Json(result).into_response(),
+        Ok(Err(error)) => json_error(
+            500,
+            &format!("Scriptlet evidence reconciliation failed: {error}"),
+            "SCRIPTLET_EVIDENCE_RECONCILIATION_FAILED",
+        ),
+        Err(error) => json_error(
+            500,
+            &format!("Scriptlet evidence reconciliation task failed: {error}"),
+            "SCRIPTLET_EVIDENCE_RECONCILIATION_TASK_FAILED",
         ),
     }
 }
@@ -446,6 +517,7 @@ fn cluster_filter(
             blocked_class: query.blocked_class,
             command: query.command,
             package: query.package,
+            include_superseded: query.include_superseded.unwrap_or(false),
             limit: Some(query.limit.unwrap_or(100).clamp(1, 1000)),
             offset: Some(query.offset.unwrap_or(0).max(0)),
         },
@@ -486,6 +558,7 @@ impl From<conary_core::db::models::ScriptletEvidenceClusterSummary> for ClusterS
         Self {
             cluster_key: cluster.cluster_key,
             schema_version: cluster.schema_version,
+            normalization_version: cluster.normalization_version,
             distro: cluster.distro,
             target_profile: cluster.target_profile,
             blocked_class: cluster.blocked_class,
@@ -497,6 +570,9 @@ impl From<conary_core::db::models::ScriptletEvidenceClusterSummary> for ClusterS
             first_seen: cluster.first_seen,
             last_seen: cluster.last_seen,
             updated_at: cluster.updated_at,
+            superseded_at: cluster.superseded_at,
+            superseded_reason: cluster.superseded_reason,
+            superseded_by_cluster_key: cluster.superseded_by_cluster_key,
             attempt_count: value.attempt_count,
             unique_package_count: value.unique_package_count,
             architectures: value.architectures,
@@ -736,6 +812,7 @@ mod tests {
         let cluster = NewScriptletEvidenceCluster {
             cluster_key: "s1-test".to_string(),
             schema_version: 1,
+            normalization_version: 2,
             distro: "fedora".to_string(),
             target_profile: "fedora-44".to_string(),
             blocked_class: "initramfs".to_string(),
@@ -771,11 +848,127 @@ mod tests {
         .unwrap();
     }
 
+    fn seed_unknown_command_cluster(db_path: &std::path::Path, cluster_key: &str, command: &str) {
+        let conn = rusqlite::Connection::open(db_path).unwrap();
+        ScriptletEvidenceCluster::upsert(
+            &conn,
+            &NewScriptletEvidenceCluster {
+                cluster_key: cluster_key.to_string(),
+                schema_version: 1,
+                normalization_version: 1,
+                distro: "ubuntu".to_string(),
+                target_profile: "ubuntu-26.04".to_string(),
+                blocked_class: "unknown-command".to_string(),
+                command: command.to_string(),
+                normalized_command_shape: command.to_string(),
+                normalized_command_shape_hash: format!("hash-{cluster_key}"),
+                lifecycle_phase: "unknown".to_string(),
+            },
+        )
+        .unwrap();
+        ScriptletEvidenceSample::upsert(
+            &conn,
+            &NewScriptletEvidenceSample {
+                cluster_key: cluster_key.to_string(),
+                converted_package_id: None,
+                original_checksum: format!("sha256:{cluster_key}"),
+                distro: "ubuntu".to_string(),
+                package_name: format!("pkg-{cluster_key}"),
+                package_version: "1.0.0".to_string(),
+                package_architecture: Some("amd64".to_string()),
+                publication_status: "private-review".to_string(),
+                scriptlet_fidelity: "legacy".to_string(),
+                target_compatibility: "private-review".to_string(),
+                reason_codes_json: r#"["unknown-command"]"#.to_string(),
+                blocked_classes_json: "[]".to_string(),
+                boot_security_intents_json: "[]".to_string(),
+                security_policy_intents_json: "[]".to_string(),
+                review_artifact_path: None,
+                review_artifact_stale: false,
+                evidence_digest: Some(format!("sha256:evidence-{cluster_key}")),
+                curation_evidence_digest: None,
+            },
+        )
+        .unwrap();
+    }
+
     async fn response_body(response: axum::response::Response) -> String {
         let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap();
         String::from_utf8(bytes.to_vec()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn unknown_command_reconciliation_defaults_to_dry_run_and_preserves_history() {
+        let (app, db_path) = test_app().await;
+        seed_unknown_command_cluster(&db_path, "s1-set-noise", "set");
+
+        let dry_run = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/admin/scriptlet-evidence/reconcile-unknown-commands")
+                    .header("authorization", "Bearer test-admin-token-12345")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(dry_run.status(), StatusCode::OK);
+        let body = response_body(dry_run).await;
+        assert!(body.contains("\"dry_run\":true"));
+        assert!(body.contains("\"superseded_noise_cluster_count\":1"));
+
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let before = ScriptletEvidenceCluster::find(&conn, "s1-set-noise")
+            .unwrap()
+            .unwrap();
+        assert!(before.superseded_at.is_none());
+
+        let app = rebuild_app(&db_path);
+        let apply = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/admin/scriptlet-evidence/reconcile-unknown-commands")
+                    .header("authorization", "Bearer test-admin-token-12345")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"dry_run":false,"limit":1}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(apply.status(), StatusCode::OK);
+
+        let app = rebuild_app(&db_path);
+        let active = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/admin/scriptlet-evidence/clusters")
+                    .header("authorization", "Bearer test-admin-token-12345")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(active.status(), StatusCode::OK);
+        assert!(!response_body(active).await.contains("s1-set-noise"));
+
+        let app = rebuild_app(&db_path);
+        let historical = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/admin/scriptlet-evidence/clusters?include_superseded=true")
+                    .header("authorization", "Bearer test-admin-token-12345")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = response_body(historical).await;
+        assert!(body.contains("s1-set-noise"));
+        assert!(body.contains("normalization-v2:shell-builtin"));
     }
 
     #[tokio::test]

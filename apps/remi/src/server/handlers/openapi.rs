@@ -176,6 +176,27 @@ pub async fn openapi_spec() -> Response {
                     "responses": { "200": { "description": "Backfill batch result" }, "401": { "description": "Invalid or missing token" }, "403": { "description": "Insufficient scope" } }
                 }
             },
+            "/v1/admin/scriptlet-evidence/reconcile-unknown-commands": {
+                "post": {
+                    "operationId": "reconcileScriptletEvidenceUnknownCommands",
+                    "summary": "Reconcile unknown-command queue noise",
+                    "description": "Classifies one bounded batch of legacy unknown-command clusters under the current queue-only normalization contract. Dry-run is the default. Applied batches retain real command signals and supersede provable shell or maintainer-dispatch noise without deleting samples, notes, state events, or changing converted-package publication state.",
+                    "tags": ["scriptlet-evidence"],
+                    "security": [{ "bearerAuth": [] }],
+                    "requestBody": {
+                        "required": false,
+                        "content": { "application/json": { "schema": {
+                            "type": "object",
+                            "properties": {
+                                "dry_run": { "type": "boolean", "default": true },
+                                "limit": { "type": "integer", "minimum": 1, "maximum": 5000, "default": 500 },
+                                "after_cluster_key": { "type": "string", "maxLength": 256 }
+                            }
+                        }}}
+                    },
+                    "responses": { "200": { "description": "Unknown-command reconciliation batch result" }, "400": { "description": "Invalid cursor" }, "401": { "description": "Invalid or missing token" }, "403": { "description": "Insufficient scope" } }
+                }
+            },
             "/v1/admin/scriptlet-evidence/clusters": {
                 "get": {
                     "operationId": "listScriptletEvidenceClusters",
@@ -189,6 +210,7 @@ pub async fn openapi_spec() -> Response {
                         { "name": "blocked_class", "in": "query", "required": false, "schema": { "type": "string" } },
                         { "name": "command", "in": "query", "required": false, "schema": { "type": "string" } },
                         { "name": "package", "in": "query", "required": false, "schema": { "type": "string" } },
+                        { "name": "include_superseded", "in": "query", "required": false, "schema": { "type": "boolean", "default": false } },
                         { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "maximum": 1000 } },
                         { "name": "offset", "in": "query", "required": false, "schema": { "type": "integer", "minimum": 0 } }
                     ],
@@ -713,6 +735,10 @@ mod tests {
                 &["get"][..],
             ),
             ("/v1/admin/scriptlet-evidence/backfill", &["post"][..]),
+            (
+                "/v1/admin/scriptlet-evidence/reconcile-unknown-commands",
+                &["post"][..],
+            ),
             ("/v1/admin/scriptlet-evidence/clusters", &["get"][..]),
             (
                 "/v1/admin/scriptlet-evidence/clusters/{cluster_key}",
