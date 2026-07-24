@@ -131,7 +131,12 @@ fn sorted_classification_evidence(
             } => serde_json::json!({
                 "entry_id": &entry.entry_id,
                 "outcome": "unknown",
-                "command": command,
+                "command": &command.command,
+                "argv": &command.argv,
+                "phase": &command.phase,
+                "lifecycle_paths": &command.lifecycle_paths,
+                "source": &command.source,
+                "environment": &command.environment,
                 "reason_code": reason_code,
             }),
             ScriptletClassification::Review {
@@ -216,7 +221,7 @@ fn sorted_entry_decision_digest(bundle: &LegacyScriptletBundle) -> Vec<serde_jso
                 "decision": entry.decision.as_str(),
                 "reason_code": &entry.reason_code,
                 "body_sha256": &entry.body_sha256,
-                "unknown_commands": &entry.unknown_commands,
+                "unknown_command_evidence": &entry.unknown_command_evidence,
                 "blocked_classes": &entry.blocked_classes,
             })
         })
@@ -293,7 +298,21 @@ mod tests {
             "scriptlet:0:post-install",
             ScriptletClassification::Unknown {
                 reason_code: "unknown-command".to_string(),
-                command: "custom-helper".to_string(),
+                command: crate::ccs::convert::effects::ScriptletCommandEvidence {
+                    command: "custom-helper".to_string(),
+                    command_provenance:
+                        crate::ccs::legacy_scriptlets::CommandArgumentProvenance::Literal,
+                    argv: vec!["--do-it".to_string()],
+                    argument_provenance: vec![
+                        crate::ccs::legacy_scriptlets::CommandArgumentProvenance::Literal,
+                    ],
+                    phase: Some("post-install".to_string()),
+                    lifecycle_paths: vec!["post-install".to_string()],
+                    raw_line: Some("custom-helper --do-it".to_string()),
+                    source: crate::ccs::legacy_scriptlets::CommandEvidenceSource::ShellAst,
+                    environment: Vec::new(),
+                    ..crate::ccs::convert::effects::ScriptletCommandEvidence::default()
+                },
             },
         );
         let unknown_digest = bundle_for_metadata(&metadata, &files, &unknown)

@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-07-24
-revision: 12
-summary: Map fixture ownership, including versioned queue reconciliation and the public v4 QEMU image contract
+revision: 13
+summary: Map fixture ownership, including typed foreign-package lifecycle evidence and the public v4 QEMU image contract
 ---
 
 # Test Fixtures And Proof Maps
@@ -34,6 +34,7 @@ Each fixture family should record:
 | Family ID | Owner | Fast proof |
 |-----------|-------|------------|
 | `ccs-convert-golden-cases` | CCS convert | `cargo test -p conary-core golden_fixtures`; `cargo test -p conary-core support_matrix` |
+| `foreign-package-lifecycle-evidence` | CCS command parser and lifecycle adapters | `cargo test -p conary-core ccs::convert`; `cargo test -p remi scriptlet_evidence` |
 | `ccs-v2-native-authority-fixtures` | CCS v2 native authority | `cargo test -p conary-core ccs::v2`; `cargo test -p conary --test packaging_m4a` |
 | `ccs-v2-local-authoring-smoke` | CCS v2 local authoring | `cargo test -p conary --test packaging_m4b` |
 | `ccs-v2-lifecycle-authoring-proof` | CCS v2 lifecycle authoring | `cargo test -p conary --test packaging_m4e`; `cargo test -p conary-core ccs::v2` |
@@ -253,33 +254,28 @@ Each fixture family should record:
 
 ### remi-scriptlet-evidence-queue
 
-- **Owner:** Remi queue normalization and reconciliation under
+- **Owner:** Remi queue aggregation and privacy normalization under
   `apps/remi/src/server/scriptlet_evidence_queue/`, with persisted row helpers
   under `crates/conary-core/src/db/models/scriptlet_evidence.rs`.
-- **Purpose:** Keep admin adapter-planning clusters focused on real unsupported
-  commands while preserving historical queue evidence across versioned
-  normalization.
+- **Purpose:** Materialize parser-produced typed command evidence for adapter
+  engineering without giving queue workflow state publication authority.
 - **Fixture sources:**
-  `apps/remi/src/server/scriptlet_evidence_queue/classification.rs`;
   `apps/remi/src/server/scriptlet_evidence_queue/aggregation.rs`;
-  `apps/remi/src/server/scriptlet_evidence_queue/reconciliation.rs`;
-  `apps/remi/src/server/scriptlet_evidence_queue/reconciliation/apparmor.rs`;
-  `apps/remi/src/server/scriptlet_evidence_queue/reconciliation/apparmor/tests.rs`;
-  `apps/remi/src/server/handlers/admin/scriptlet_evidence.rs`.
-- **Consumes:** RPM, DEB, and Arch unknown-command classification; bounded
-  unknown-command and AppArmor dry-run/apply reconciliation; AppArmor
-  identity, split, merge, missing-source, and idempotence fixtures; active
-  versus superseded cluster listings; source-to-target link readback; and
-  private-history preservation.
+  `apps/remi/src/server/scriptlet_evidence_queue/normalization.rs`;
+  `apps/remi/src/server/handlers/admin/scriptlet_evidence/tests.rs`;
+  `crates/conary-core/src/ccs/convert/command_evidence.rs`.
+- **Consumes:** RPM, DEB, and Arch typed command nodes, lifecycle-sensitive
+  cluster identity, privacy-safe packets, current-only schema initialization,
+  state/note workflow, and bounded backfill.
 - **Fast proof:** `cargo test -p remi scriptlet_evidence`.
 - **Medium proof:** `cargo test -p remi publication`;
   `cargo test -p conary --test conversion_integration golden_conversion`.
-- **Regeneration:** Hand-maintained summaries and temporary SQLite databases.
-- **Safety notes:** Ambiguous identifiers stay visible. Reconciliation must not
-  delete unknown-command history, duplicate rematerialized AppArmor
-  observations, discard source notes or state events, or mutate
-  `converted_packages.publication_status`. New target clusters do not inherit
-  conflicting source dispositions implicitly.
+- **Regeneration:** Reconvert authoritative package inputs and run the bounded
+  backfill against a fresh current-epoch database.
+- **Safety notes:** The queue does not re-tokenize shell text or filter command
+  nodes through string heuristics. Normalized display shapes are discovery and
+  privacy metadata only. Queue state must not mutate
+  `converted_packages.publication_status`.
 
 ### remi-scriptlet-publication-gate
 

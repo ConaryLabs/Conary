@@ -2,6 +2,7 @@
 
 //! Update candidate selection, source-switch previewing, and security metadata checks.
 
+use super::super::{InstalledPackageSelector, resolve_installed_package};
 use anyhow::Result;
 use chrono::Utc;
 use conary_core::db::models::{
@@ -395,6 +396,24 @@ pub(super) fn security_metadata_unavailable_error(count: usize) -> String {
     format!(
         "Cannot run security-only update because {count} source(s) cannot prove security metadata support. Mark the source supported only after its repository metadata publishes advisory data."
     )
+}
+
+pub(super) fn installed_troves_for_update(
+    conn: &rusqlite::Connection,
+    package: Option<String>,
+    package_version: Option<String>,
+    architecture: Option<String>,
+) -> Result<Vec<Trove>> {
+    if let Some(pkg_name) = package {
+        let selector = InstalledPackageSelector::new(pkg_name, package_version, architecture);
+        return Ok(vec![resolve_installed_package(conn, &selector)?.trove]);
+    }
+
+    if package_version.is_some() || architecture.is_some() {
+        anyhow::bail!("A package name is required with --version or --arch for update");
+    }
+
+    Ok(Trove::list_all(conn)?)
 }
 
 #[cfg(test)]

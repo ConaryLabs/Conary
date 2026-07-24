@@ -300,7 +300,8 @@ pub(crate) mod test_support {
             scriptlet_risk_report_hash: None,
             conversion_boundary_hash: None,
             publish_policy_digest: "m2-policy-v1".to_string(),
-            command_risk_classifier_version: "m2-command-risk-v1".to_string(),
+            command_risk_classifier_version:
+                crate::security::command_risk::COMMAND_RISK_CLASSIFIER_VERSION.to_string(),
             sandbox_profile: "kitchen-pristine-network-none".to_string(),
             seccomp_profile: Some("scriptlet-v1".to_string()),
             builder_identity: "conary-test-builder".to_string(),

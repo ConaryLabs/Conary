@@ -41,7 +41,7 @@ fn selinux_policy_intent_from_effect(
         .unwrap_or_else(|| operation_from_kind(&effect.kind))
         .to_string();
 
-    let scope = scope_from_selinux_effect(effect, &operation);
+    let scope = scope_from_selinux_effect(effect);
     let payload_paths = payload_paths(effect);
     let mut desired_state = BTreeMap::new();
     for key in [
@@ -183,7 +183,7 @@ fn apparmor_operation_from_kind(kind: &str) -> &str {
     }
 }
 
-fn scope_from_selinux_effect(effect: &ScriptletEffect, operation: &str) -> SecurityPolicyScope {
+fn scope_from_selinux_effect(effect: &ScriptletEffect) -> SecurityPolicyScope {
     match effect.kind.as_str() {
         "selinux-boolean" => SecurityPolicyScope {
             kind: "boolean".to_string(),
@@ -205,7 +205,7 @@ fn scope_from_selinux_effect(effect: &ScriptletEffect, operation: &str) -> Secur
             port: None,
             extra: BTreeMap::new(),
         },
-        _ if operation.contains("file-context") => SecurityPolicyScope {
+        "selinux-file-context" => SecurityPolicyScope {
             kind: "file-context".to_string(),
             name: effect.path.clone(),
             paths: payload_paths(effect),
@@ -251,7 +251,7 @@ mod tests {
     ) -> ScriptletEffect {
         ScriptletEffect {
             kind: kind.to_string(),
-            source: EffectSource::StaticSignal,
+            source: EffectSource::ShellAst,
             confidence: EffectConfidence::Inferred,
             replacement: EffectReplacement::Complete,
             adapter_id: Some(adapter_id.to_string()),
@@ -286,7 +286,7 @@ mod tests {
     fn non_lsm_effects_do_not_project_policy_intent() {
         let effect = ScriptletEffect {
             kind: "dynamic-linker-cache".to_string(),
-            source: EffectSource::StaticSignal,
+            source: EffectSource::ShellAst,
             confidence: EffectConfidence::Inferred,
             replacement: EffectReplacement::Complete,
             adapter_id: Some("ldconfig/v2".to_string()),

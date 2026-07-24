@@ -63,6 +63,9 @@ one external tester who completed the full flow on two supported hosts.
 - Treat package-manager, scriptlet, trust, and release claims as evidence
   bearing. Focused tests do not substitute for an explicitly required QEMU,
   clean-host, installed-binary, or external-user proof.
+- Use heuristics only for diagnostics, redaction, discovery, and prioritization.
+  Compatibility, publication, mutation, and security authority require parsed
+  typed contracts plus payload or persisted-state validation.
 - Preserve privacy in tester and operator evidence. Do not request secrets,
   private keys, credential files, broad machine dumps, or live databases by
   default.
@@ -80,7 +83,7 @@ the stated scope, not whether a workstream happens to be active.
 | Adoption, unadoption, and native handoff | solid | Proof covers the current three-distro scope; the released Arch package initializes only its exact native profile and synchronizes Remi. |
 | Database, CAS, native parsing, and resolution | solid | Some advanced repository-policy abstractions and integration edges remain incomplete. |
 | Packaging, static repositories, trust, and self-update | solid | `v0.12.0` has exact tag, artifact hashes, signature, supported Arch-path, deployment, and real installed-binary self-update proof. No SBOM/provenance sidecars are published or planned. |
-| CCS conversion and scriptlet authority | limited | The reviewed authority work has green local plus public-redownload QEMU file-capability fixture proof and is published in `v0.12.0`; the deliberately narrow public scriptlet scope remains separate. |
+| CCS conversion and scriptlet authority | limited | Current work uses formal shell AST evidence and exact helper grammars; `dpkg-maintscript-helper rm_conffile` has a native generation model, while other lifecycle transitions remain explicitly typed engineering gaps. |
 | Generation build and export | limited | Proven paths are x86_64; non-x86 assets, signed boot authority, and persistent-effect rollback remain later work. |
 | Model, source selection, and replatforming | limited | Some resolution deltas and builder inputs are not wired end to end. |
 | Bootstrap and self-hosting | limited | Rootful, chroot, fixture, and QEMU dependencies need repeatable current proof. |
@@ -366,7 +369,7 @@ Its final independent review found no Critical or Important issue and returned
 | Claim | Canonical owners | Required focused proof |
 | --- | --- | --- |
 | Network fetch and package-manager recursion remain non-public and blocked. | `docs/SCRIPTLET_SECURITY.md`, `docs/modules/ccs.md`, and the CCS/Remi feature cards | `blocked_classes_block_live_fetch_and_package_manager_recursion`; `live_fetch_and_package_manager_classes_remain_blocked_without_native_adapters` and its fake-Known-row guard; `corpus_summary_marks_live_fetch_and_package_manager_recursion`; and `blocked_live_fetch_and_package_manager_reports_stay_private_and_non_public_only`. |
-| Stale publication summaries fail closed; public responses are sanitized while raw review artifacts remain private. | `docs/modules/remi.md` and `docs/SCRIPTLET_SECURITY.md` | `converted_ccs_path_for_download_rejects_stale_conversion_records`; `stale_converted_rows_are_not_scriptlet_public_ready`; `publication_report_sanitizes_boot_and_security_policy_intents`; `publication_report_sanitizes_unknown_commands_and_reasons_while_raw_report_retains_them`; `raw_publication_report_retains_private_intents_for_review_artifacts`; and the non-public/admin sanitization tests `non_public_test_serving_manifest_returns_sanitized_blocked_metadata` and `non_public_test_serving_manifest_sanitizes_private_intent_values`. |
+| Stale publication summaries fail closed; public responses are sanitized while raw review artifacts remain private. | `docs/modules/remi.md` and `docs/SCRIPTLET_SECURITY.md` | `converted_ccs_path_for_download_rejects_stale_conversion_records`; `stale_converted_rows_are_not_scriptlet_public_ready`; `publication_report_sanitizes_boot_and_security_policy_intents`; `publication_reports_share_the_same_sanitized_typed_command_evidence`; `raw_publication_report_retains_private_intents_for_review_artifacts`; and the non-public/admin sanitization tests `non_public_test_serving_manifest_returns_sanitized_blocked_metadata` and `non_public_test_serving_manifest_sanitizes_private_intent_values`. |
 
 W1 closed the two nonblocking review notes as follows:
 
@@ -411,9 +414,8 @@ The following rehearsal gates passed:
 - `cargo test -p conary-core public_policy` (15 matched tests) and
   `cargo test -p conary-core file_capability` (11);
 - `cargo test -p conary generation_file_capabilities` (7);
-- `cargo test -p remi publication` (18),
-  `cargo test -p remi non_public_test_serving` (11), and
-  `cargo test -p remi scriptlet_corpus` (5); and
+- `cargo test -p remi publication` (18) and
+  `cargo test -p remi non_public_test_serving` (11); and
 - `cargo run -p conary-test -- list` (28 suites, 334 cases).
 
 No selector correction was required because every named focused filter matched
@@ -429,8 +431,8 @@ confirmed clean and the authority worktree remained at the pinned head.
 
 - Repair the highest-impact adoption, resolution, scriptlet, or service
   friction shown by real testers.
-- Expand public scriptlet authority only through positive target policy and
-  end-to-end preservation proof.
+- Expand public scriptlet authority only through formal package/helper
+  contracts, positive target policy, and end-to-end preservation proof.
 - Preserve fail-closed serving and explicit native-package-manager authority.
 - Refresh supported-distro proof before adding breadth.
 

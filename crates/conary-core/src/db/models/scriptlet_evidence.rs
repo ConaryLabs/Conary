@@ -2,15 +2,45 @@
 
 //! Row helpers for Remi's admin-only scriptlet evidence queue.
 
+use crate::ccs::legacy_scriptlets::{BootSecurityIntentEvidence, UnknownCommandEvidence};
 use crate::error::{Error, Result};
-use rusqlite::{Connection, OptionalExtension, Row, ToSql, params};
+use rusqlite::{Connection, OptionalExtension, Row, ToSql, params, types::Type};
 use serde::{Deserialize, Serialize};
 
-mod reconciliation;
-
-pub use reconciliation::ScriptletEvidenceClusterReconciliationLink;
-
 pub const CLUSTER_KEY_PREFIX: &str = "s1-";
+pub const SCRIPTLET_EVIDENCE_RECORD_SCHEMA_V1: &str = "conary.remi.scriptlet-evidence-record.v1";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScriptletEvidenceRecord {
+    pub schema: String,
+    #[serde(flatten)]
+    pub evidence: ScriptletEvidenceKind,
+}
+
+impl ScriptletEvidenceRecord {
+    pub fn new(evidence: ScriptletEvidenceKind) -> Self {
+        Self {
+            schema: SCRIPTLET_EVIDENCE_RECORD_SCHEMA_V1.to_string(),
+            evidence,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum ScriptletEvidenceKind {
+    UnknownCommand {
+        command: UnknownCommandEvidence,
+    },
+    BootSecurity {
+        intent: BootSecurityIntentEvidence,
+    },
+    SummaryClass {
+        blocked_class: String,
+        reason_codes: Vec<String>,
+    },
+    MalformedSummary,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -59,7 +89,6 @@ impl ScriptletEvidenceState {
 pub struct NewScriptletEvidenceCluster {
     pub cluster_key: String,
     pub schema_version: i64,
-    pub normalization_version: i64,
     pub distro: String,
     pub target_profile: String,
     pub blocked_class: String,
@@ -73,7 +102,6 @@ pub struct NewScriptletEvidenceCluster {
 pub struct ScriptletEvidenceCluster {
     pub cluster_key: String,
     pub schema_version: i64,
-    pub normalization_version: i64,
     pub distro: String,
     pub target_profile: String,
     pub blocked_class: String,
@@ -85,9 +113,6 @@ pub struct ScriptletEvidenceCluster {
     pub first_seen: String,
     pub last_seen: String,
     pub updated_at: String,
-    pub superseded_at: Option<String>,
-    pub superseded_reason: Option<String>,
-    pub superseded_by_cluster_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -97,7 +122,6 @@ pub struct ScriptletEvidenceClusterListFilter {
     pub blocked_class: Option<String>,
     pub command: Option<String>,
     pub package: Option<String>,
-    pub include_superseded: bool,
     pub limit: Option<i64>,
     pub offset: Option<i64>,
 }
@@ -117,26 +141,22 @@ pub struct ScriptletEvidenceClusterDetail {
     pub samples: Vec<ScriptletEvidenceSample>,
     pub state_events: Vec<ScriptletEvidenceStateEvent>,
     pub notes: Vec<ScriptletEvidenceNote>,
-    pub outgoing_reconciliation_links: Vec<ScriptletEvidenceClusterReconciliationLink>,
-    pub incoming_reconciliation_links: Vec<ScriptletEvidenceClusterReconciliationLink>,
 }
 
 impl ScriptletEvidenceCluster {
-    const COLUMNS: &'static str = "cluster_key, schema_version, normalization_version, distro, target_profile, \
+    const COLUMNS: &'static str = "cluster_key, schema_version, distro, target_profile, \
          blocked_class, command, normalized_command_shape, normalized_command_shape_hash, \
-         lifecycle_phase, state, first_seen, last_seen, updated_at, superseded_at, \
-         superseded_reason, superseded_by_cluster_key";
+         lifecycle_phase, state, first_seen, last_seen, updated_at";
 
     pub fn upsert(conn: &Connection, cluster: &NewScriptletEvidenceCluster) -> Result<Self> {
         conn.execute(
             "INSERT INTO scriptlet_evidence_clusters (
-                cluster_key, schema_version, normalization_version, distro, target_profile, blocked_class,
+                cluster_key, schema_version, distro, target_profile, blocked_class,
                 command, normalized_command_shape, normalized_command_shape_hash,
                 lifecycle_phase
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
             ON CONFLICT(cluster_key) DO UPDATE SET
                 schema_version = excluded.schema_version,
-                normalization_version = excluded.normalization_version,
                 distro = excluded.distro,
                 target_profile = excluded.target_profile,
                 blocked_class = excluded.blocked_class,
@@ -149,7 +169,6 @@ impl ScriptletEvidenceCluster {
             params![
                 &cluster.cluster_key,
                 cluster.schema_version,
-                cluster.normalization_version,
                 &cluster.distro,
                 &cluster.target_profile,
                 &cluster.blocked_class,
@@ -213,10 +232,6 @@ impl ScriptletEvidenceCluster {
             sql.push_str(" AND s.package_name = ?");
             values.push(Box::new(package.clone()));
         }
-        if !filter.include_superseded {
-            sql.push_str(" AND c.superseded_at IS NULL");
-        }
-
         let limit = filter.limit.unwrap_or(100).clamp(1, 1000);
         let offset = filter.offset.unwrap_or(0).max(0);
         sql.push_str(" GROUP BY c.cluster_key ORDER BY c.last_seen DESC LIMIT ? OFFSET ?");
@@ -243,10 +258,6 @@ impl ScriptletEvidenceCluster {
             samples: ScriptletEvidenceSample::list_for_cluster(conn, cluster_key)?,
             state_events: ScriptletEvidenceStateEvent::list_for_cluster(conn, cluster_key)?,
             notes: ScriptletEvidenceNote::list_for_cluster(conn, cluster_key)?,
-            outgoing_reconciliation_links:
-                ScriptletEvidenceClusterReconciliationLink::list_outgoing(conn, cluster_key)?,
-            incoming_reconciliation_links:
-                ScriptletEvidenceClusterReconciliationLink::list_incoming(conn, cluster_key)?,
         }))
     }
 
@@ -296,30 +307,26 @@ impl ScriptletEvidenceCluster {
     }
 
     fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
-        let state: String = row.get(10)?;
+        let state: String = row.get(9)?;
         Ok(Self {
             cluster_key: row.get(0)?,
             schema_version: row.get(1)?,
-            normalization_version: row.get(2)?,
-            distro: row.get(3)?,
-            target_profile: row.get(4)?,
-            blocked_class: row.get(5)?,
-            command: row.get(6)?,
-            normalized_command_shape: row.get(7)?,
-            normalized_command_shape_hash: row.get(8)?,
-            lifecycle_phase: row.get(9)?,
-            state: ScriptletEvidenceState::from_db(&state, 10)?,
-            first_seen: row.get(11)?,
-            last_seen: row.get(12)?,
-            updated_at: row.get(13)?,
-            superseded_at: row.get(14)?,
-            superseded_reason: row.get(15)?,
-            superseded_by_cluster_key: row.get(16)?,
+            distro: row.get(2)?,
+            target_profile: row.get(3)?,
+            blocked_class: row.get(4)?,
+            command: row.get(5)?,
+            normalized_command_shape: row.get(6)?,
+            normalized_command_shape_hash: row.get(7)?,
+            lifecycle_phase: row.get(8)?,
+            state: ScriptletEvidenceState::from_db(&state, 9)?,
+            first_seen: row.get(10)?,
+            last_seen: row.get(11)?,
+            updated_at: row.get(12)?,
         })
     }
 
     fn summary_from_row(row: &Row<'_>) -> rusqlite::Result<ScriptletEvidenceClusterSummary> {
-        let architectures: String = row.get(19)?;
+        let architectures: String = row.get(15)?;
         let mut architectures = architectures
             .split(',')
             .filter(|value| !value.is_empty())
@@ -329,10 +336,10 @@ impl ScriptletEvidenceCluster {
 
         Ok(ScriptletEvidenceClusterSummary {
             cluster: Self::from_row(row)?,
-            attempt_count: row.get(17)?,
-            unique_package_count: row.get(18)?,
+            attempt_count: row.get(13)?,
+            unique_package_count: row.get(14)?,
             architectures,
-            stale_sample_count: row.get(20)?,
+            stale_sample_count: row.get(16)?,
         })
     }
 }
@@ -349,6 +356,7 @@ pub struct NewScriptletEvidenceSample {
     pub publication_status: String,
     pub scriptlet_fidelity: String,
     pub target_compatibility: String,
+    pub typed_evidence: ScriptletEvidenceRecord,
     pub reason_codes_json: String,
     pub blocked_classes_json: String,
     pub boot_security_intents_json: String,
@@ -372,6 +380,7 @@ pub struct ScriptletEvidenceSample {
     pub publication_status: String,
     pub scriptlet_fidelity: String,
     pub target_compatibility: String,
+    pub typed_evidence: ScriptletEvidenceRecord,
     pub reason_codes_json: String,
     pub blocked_classes_json: String,
     pub boot_security_intents_json: String,
@@ -386,20 +395,21 @@ pub struct ScriptletEvidenceSample {
 impl ScriptletEvidenceSample {
     const COLUMNS: &'static str = "id, cluster_key, converted_package_id, original_checksum, \
          distro, package_name, package_version, package_architecture, publication_status, \
-         scriptlet_fidelity, target_compatibility, reason_codes_json, blocked_classes_json, \
-         boot_security_intents_json, security_policy_intents_json, review_artifact_path, \
+         scriptlet_fidelity, target_compatibility, typed_evidence_json, reason_codes_json, \
+         blocked_classes_json, boot_security_intents_json, security_policy_intents_json, review_artifact_path, \
          review_artifact_stale, evidence_digest, curation_evidence_digest, observed_at";
 
     pub fn upsert(conn: &Connection, sample: &NewScriptletEvidenceSample) -> Result<i64> {
+        let typed_evidence_json = serde_json::to_string(&sample.typed_evidence)?;
         let review_artifact_stale = i64::from(sample.review_artifact_stale);
         conn.execute(
             "INSERT OR IGNORE INTO scriptlet_evidence_cluster_samples (
                 cluster_key, converted_package_id, original_checksum, distro, package_name,
                 package_version, package_architecture, publication_status, scriptlet_fidelity,
-                target_compatibility, reason_codes_json, blocked_classes_json,
+                target_compatibility, typed_evidence_json, reason_codes_json, blocked_classes_json,
                 boot_security_intents_json, security_policy_intents_json, review_artifact_path,
                 review_artifact_stale, evidence_digest, curation_evidence_digest
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
             params![
                 &sample.cluster_key,
                 sample.converted_package_id,
@@ -411,6 +421,7 @@ impl ScriptletEvidenceSample {
                 &sample.publication_status,
                 &sample.scriptlet_fidelity,
                 &sample.target_compatibility,
+                &typed_evidence_json,
                 &sample.reason_codes_json,
                 &sample.blocked_classes_json,
                 &sample.boot_security_intents_json,
@@ -429,14 +440,15 @@ impl ScriptletEvidenceSample {
                  publication_status = ?8,
                  scriptlet_fidelity = ?9,
                  target_compatibility = ?10,
-                 reason_codes_json = ?11,
-                 blocked_classes_json = ?12,
-                 boot_security_intents_json = ?13,
-                 security_policy_intents_json = ?14,
-                 review_artifact_path = ?15,
-                 review_artifact_stale = ?16,
-                 evidence_digest = ?17,
-                 curation_evidence_digest = ?18,
+                 typed_evidence_json = ?11,
+                 reason_codes_json = ?12,
+                 blocked_classes_json = ?13,
+                 boot_security_intents_json = ?14,
+                 security_policy_intents_json = ?15,
+                 review_artifact_path = ?16,
+                 review_artifact_stale = ?17,
+                 evidence_digest = ?18,
+                 curation_evidence_digest = ?19,
                  observed_at = (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
              WHERE cluster_key = ?1
                AND original_checksum = ?2
@@ -454,6 +466,7 @@ impl ScriptletEvidenceSample {
                 &sample.publication_status,
                 &sample.scriptlet_fidelity,
                 &sample.target_compatibility,
+                &typed_evidence_json,
                 &sample.reason_codes_json,
                 &sample.blocked_classes_json,
                 &sample.boot_security_intents_json,
@@ -502,7 +515,11 @@ impl ScriptletEvidenceSample {
     }
 
     fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
-        let stale: i64 = row.get(16)?;
+        let stale: i64 = row.get(17)?;
+        let typed_evidence_json: String = row.get(11)?;
+        let typed_evidence = serde_json::from_str(&typed_evidence_json).map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(11, Type::Text, Box::new(error))
+        })?;
         Ok(Self {
             id: row.get(0)?,
             cluster_key: row.get(1)?,
@@ -515,15 +532,16 @@ impl ScriptletEvidenceSample {
             publication_status: row.get(8)?,
             scriptlet_fidelity: row.get(9)?,
             target_compatibility: row.get(10)?,
-            reason_codes_json: row.get(11)?,
-            blocked_classes_json: row.get(12)?,
-            boot_security_intents_json: row.get(13)?,
-            security_policy_intents_json: row.get(14)?,
-            review_artifact_path: row.get(15)?,
+            typed_evidence,
+            reason_codes_json: row.get(12)?,
+            blocked_classes_json: row.get(13)?,
+            boot_security_intents_json: row.get(14)?,
+            security_policy_intents_json: row.get(15)?,
+            review_artifact_path: row.get(16)?,
             review_artifact_stale: stale != 0,
-            evidence_digest: row.get(17)?,
-            curation_evidence_digest: row.get(18)?,
-            observed_at: row.get(19)?,
+            evidence_digest: row.get(18)?,
+            curation_evidence_digest: row.get(19)?,
+            observed_at: row.get(20)?,
         })
     }
 }
@@ -799,7 +817,6 @@ mod tests {
         NewScriptletEvidenceCluster {
             cluster_key: "s1-dracut".to_string(),
             schema_version: 1,
-            normalization_version: 2,
             distro: "fedora".to_string(),
             target_profile: "fedora-44".to_string(),
             blocked_class: "initramfs".to_string(),
@@ -822,6 +839,7 @@ mod tests {
             publication_status: "blocked".to_string(),
             scriptlet_fidelity: "blocked".to_string(),
             target_compatibility: "blocked".to_string(),
+            typed_evidence: ScriptletEvidenceRecord::new(ScriptletEvidenceKind::MalformedSummary),
             reason_codes_json: r#"["boot-security-initramfs"]"#.to_string(),
             blocked_classes_json: r#"["initramfs"]"#.to_string(),
             boot_security_intents_json: r#"[{"command":"dracut"}]"#.to_string(),
@@ -924,46 +942,6 @@ mod tests {
         assert_eq!(detail.samples.len(), 1);
         assert_eq!(detail.state_events.len(), 1);
         assert_eq!(detail.notes.len(), 1);
-        assert!(detail.outgoing_reconciliation_links.is_empty());
-        assert!(detail.incoming_reconciliation_links.is_empty());
-    }
-
-    #[test]
-    fn detail_exposes_reconciliation_links_in_both_directions() {
-        let conn = test_conn();
-        let mut source = new_cluster();
-        source.cluster_key = "s1-source".to_string();
-        source.normalization_version = 1;
-        ScriptletEvidenceCluster::upsert(&conn, &source).unwrap();
-
-        let mut target = new_cluster();
-        target.cluster_key = "s1-target".to_string();
-        ScriptletEvidenceCluster::upsert(&conn, &target).unwrap();
-
-        let link = ScriptletEvidenceClusterReconciliationLink::record(
-            &conn,
-            "s1-source",
-            "s1-target",
-            2,
-            3,
-        )
-        .unwrap();
-        assert_eq!(link.migrated_sample_count, 3);
-
-        let source_detail = ScriptletEvidenceCluster::detail(&conn, "s1-source")
-            .unwrap()
-            .unwrap();
-        assert_eq!(
-            source_detail.outgoing_reconciliation_links,
-            vec![link.clone()]
-        );
-        assert!(source_detail.incoming_reconciliation_links.is_empty());
-
-        let target_detail = ScriptletEvidenceCluster::detail(&conn, "s1-target")
-            .unwrap()
-            .unwrap();
-        assert!(target_detail.outgoing_reconciliation_links.is_empty());
-        assert_eq!(target_detail.incoming_reconciliation_links, vec![link]);
     }
 
     #[test]

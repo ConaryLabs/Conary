@@ -319,8 +319,7 @@ pub enum CcsCommands {
 
     /// Enhance converted packages with CCS features
     ///
-    /// Retroactively adds capability inference, provenance extraction,
-    /// and subpackage detection to packages converted from legacy formats.
+    /// Records exact conversion provenance for packages converted from legacy formats.
     Enhance {
         #[command(flatten)]
         db: DbArgs,
@@ -337,8 +336,7 @@ pub enum CcsCommands {
         #[arg(long)]
         update_outdated: bool,
 
-        /// Enhancement types to run (comma-separated: capabilities,provenance,subpackages)
-        /// Default: all
+        /// Enhancement type to run (provenance)
         #[arg(long, value_delimiter = ',')]
         types: Option<Vec<String>>,
 
@@ -353,9 +351,5 @@ pub enum CcsCommands {
         /// Show what would be enhanced without making changes
         #[arg(long)]
         dry_run: bool,
-
-        /// Install root for reading package files (default: /)
-        #[arg(long, default_value = "/")]
-        install_root: String,
     },
 }

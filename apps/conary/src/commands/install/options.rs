@@ -38,11 +38,6 @@ pub struct InstallOptions<'a> {
     pub allow_capabilities: bool,
     /// Convert legacy packages to CCS format
     pub convert_to_ccs: bool,
-    /// Skip the automatic state snapshot that is normally captured after
-    /// a successful install.  Named `no_capture` for CLI consistency with
-    /// `--no-capture`; equivalent to "skip scriptlet output capture" in
-    /// some package managers but here it controls state snapshots.
-    pub no_capture: bool,
     /// Force install/reinstall checks, but not adopted-package ownership
     pub force: bool,
     /// Dependency handling mode: satisfy, adopt, takeover.

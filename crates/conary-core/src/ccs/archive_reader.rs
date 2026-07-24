@@ -464,7 +464,7 @@ license = "MIT"
         let body = "ldconfig\n";
         LegacyScriptletBundle {
             schema: LEGACY_SCRIPTLET_SCHEMA_V1.to_string(),
-            schema_revision: 1,
+            schema_revision: 2,
             source_format: SourceFormat::Rpm,
             source_family: "fedora-rhel".to_string(),
             source_distro: Some("fedora".to_string()),
@@ -531,7 +531,7 @@ license = "MIT"
                 source_evidence_refs: vec![],
                 effects: vec![ScriptletEffect {
                     kind: "ldconfig".to_string(),
-                    source: EffectSource::StaticSignal,
+                    source: EffectSource::ShellAst,
                     confidence: EffectConfidence::Declared,
                     replacement: EffectReplacement::Complete,
                     adapter_id: Some("ldconfig/v1".to_string()),
@@ -542,7 +542,7 @@ license = "MIT"
                     reason_code: Some("ldconfig-cache-refresh".to_string()),
                     extra: BTreeMap::new(),
                 }],
-                unknown_commands: vec![],
+                unknown_command_evidence: vec![],
                 blocked_classes: vec![],
                 boot_security_intents: Vec::new(),
                 security_policy_intents: Vec::new(),

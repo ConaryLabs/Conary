@@ -548,7 +548,6 @@ mod tests {
             "2:10.1.0-7.fc44".to_string(),
             "rpm".to_string(),
             "sha256:native".to_string(),
-            "high".to_string(),
             &[],
             ccs_bytes.len() as i64,
             "sha256:ccs".to_string(),

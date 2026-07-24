@@ -6,6 +6,7 @@ use crate::ccs::convert::effects::{
 };
 use crate::ccs::legacy_scriptlets::{
     BootSecurityIntentEvidence, EffectReplacement, ScriptletDecision, ScriptletEffect,
+    UnknownCommandEvidence,
 };
 use crate::ccs::security_policy::{
     SECURITY_POLICY_INTENT_SCHEMA_V1, SecurityPolicyFallback, SecurityPolicyIntent,
@@ -20,7 +21,7 @@ pub(super) struct EntryOutcome {
     pub(super) decision: ScriptletDecision,
     pub(super) reason_code: String,
     pub(super) effects: Vec<ScriptletEffect>,
-    pub(super) unknown_commands: Vec<String>,
+    pub(super) unknown_command_evidence: Vec<UnknownCommandEvidence>,
     pub(super) blocked_classes: Vec<String>,
     pub(super) boot_security_intents: Vec<BootSecurityIntentEvidence>,
     pub(super) security_policy_intents: Vec<SecurityPolicyIntent>,
@@ -40,10 +41,21 @@ pub(super) fn classify_entry(
             _ => Vec::new(),
         })
         .collect::<Vec<_>>();
-    let unknown_commands = classifications
+    let unknown_command_evidence = classifications
         .iter()
         .filter_map(|entry| match &entry.classification {
-            ScriptletClassification::Unknown { command, .. } => Some(command.clone()),
+            ScriptletClassification::Unknown { command, .. } => Some(UnknownCommandEvidence {
+                command: command.command.clone(),
+                command_provenance: command.command_provenance,
+                argv: command.argv.clone(),
+                argument_provenance: command.argument_provenance.clone(),
+                execution_context: command.execution_context,
+                phase: command.phase.clone(),
+                lifecycle_paths: command.lifecycle_paths.clone(),
+                source: command.source,
+                environment: command.environment.clone(),
+                pipeline_id: command.pipeline_id,
+            }),
             _ => None,
         })
         .collect::<BTreeSet<_>>()
@@ -81,7 +93,7 @@ pub(super) fn classify_entry(
             decision: ScriptletDecision::Blocked,
             reason_code,
             effects,
-            unknown_commands,
+            unknown_command_evidence,
             blocked_classes,
             boot_security_intents,
             security_policy_intents,
@@ -93,7 +105,7 @@ pub(super) fn classify_entry(
             decision: ScriptletDecision::Blocked,
             reason_code: reason_code.clone(),
             effects,
-            unknown_commands,
+            unknown_command_evidence,
             blocked_classes,
             boot_security_intents,
             security_policy_intents,
@@ -112,7 +124,7 @@ pub(super) fn classify_entry(
             decision: ScriptletDecision::Review,
             reason_code,
             effects,
-            unknown_commands,
+            unknown_command_evidence,
             blocked_classes,
             boot_security_intents,
             security_policy_intents,
@@ -124,7 +136,7 @@ pub(super) fn classify_entry(
             decision: ScriptletDecision::Review,
             reason_code: reason_code.clone(),
             effects,
-            unknown_commands,
+            unknown_command_evidence,
             blocked_classes,
             boot_security_intents,
             security_policy_intents,
@@ -143,7 +155,7 @@ pub(super) fn classify_entry(
             decision: ScriptletDecision::Legacy,
             reason_code,
             effects,
-            unknown_commands,
+            unknown_command_evidence,
             blocked_classes,
             boot_security_intents,
             security_policy_intents,
@@ -169,7 +181,7 @@ pub(super) fn classify_entry(
             },
             reason_code,
             effects,
-            unknown_commands,
+            unknown_command_evidence,
             blocked_classes,
             boot_security_intents,
             security_policy_intents,
@@ -183,7 +195,7 @@ pub(super) fn classify_entry(
             .unwrap_or("scriptlet-preserved-for-review")
             .to_string(),
         effects,
-        unknown_commands,
+        unknown_command_evidence,
         blocked_classes,
         boot_security_intents,
         security_policy_intents,
@@ -219,9 +231,15 @@ fn intent_from_command(
         class_id: class_id.to_string(),
         reason_code: reason_code.to_string(),
         command: command.command.clone(),
+        command_provenance: command.command_provenance,
         argv: command.argv.clone(),
+        argument_provenance: command.argument_provenance.clone(),
+        execution_context: command.execution_context,
         phase: command.phase.clone(),
         lifecycle_paths: command.lifecycle_paths.clone(),
+        source: command.source,
+        environment: command.environment.clone(),
+        pipeline_id: command.pipeline_id,
     }
 }
 
@@ -356,8 +374,9 @@ mod tests {
                 phase: Some("post-install".to_string()),
                 lifecycle_paths: vec!["post-install".to_string()],
                 raw_line: None,
-                source: "static-signal".to_string(),
+                source: crate::ccs::legacy_scriptlets::CommandEvidenceSource::ShellAst,
                 environment: Vec::new(),
+                ..ScriptletCommandEvidence::default()
             }),
         };
 
@@ -408,8 +427,9 @@ mod tests {
                     phase: Some("post-install".to_string()),
                     lifecycle_paths: vec!["post-install".to_string()],
                     raw_line: None,
-                    source: "static-signal".to_string(),
+                    source: crate::ccs::legacy_scriptlets::CommandEvidenceSource::ShellAst,
                     environment: Vec::new(),
+                    ..ScriptletCommandEvidence::default()
                 }),
             };
 

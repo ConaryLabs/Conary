@@ -363,12 +363,15 @@ pub async fn download_non_public_test_package(
 }
 
 #[cfg(test)]
+mod test_support;
+
+#[cfg(test)]
 mod tests {
+    use super::test_support::boot_security_intent;
     use crate::server::handlers::admin::test_helpers::test_app;
     use axum::body::{Body, to_bytes};
     use axum::http::{Method, Request, StatusCode, header};
     use conary_core::ccs::convert::ScriptletBundleSummary;
-    use conary_core::ccs::legacy_scriptlets::BootSecurityIntentEvidence;
     use conary_core::ccs::security_policy::{
         SECURITY_POLICY_INTENT_SCHEMA_V1, SecurityPolicyFallback, SecurityPolicyIntent,
         SecurityPolicyPayloadEvidence, SecurityPolicyProvider, SecurityPolicyReconciliation,
@@ -435,7 +438,6 @@ mod tests {
             "1.0".to_string(),
             "rpm".to_string(),
             format!("sha256:source-{architecture}"),
-            "high".to_string(),
             &["abc".to_string()],
             14,
             format!("sha256:content-{architecture}"),
@@ -492,33 +494,30 @@ mod tests {
                 "bootloader".to_string(),
             ],
             boot_security_intents: vec![
-                BootSecurityIntentEvidence {
-                    class_id: "kernel-module".to_string(),
-                    reason_code: "blocked-class-kernel-module".to_string(),
-                    command: "depmod".to_string(),
-                    argv: vec!["6.10.12-200.fc40.x86_64".to_string()],
-                    phase: Some("postinstall".to_string()),
-                    lifecycle_paths: vec!["/lib/modules/6.10.12-200.fc40.x86_64".to_string()],
-                },
-                BootSecurityIntentEvidence {
-                    class_id: "initramfs".to_string(),
-                    reason_code: "blocked-class-initramfs".to_string(),
-                    command: "dracut".to_string(),
-                    argv: vec![
+                boot_security_intent(
+                    "kernel-module",
+                    "blocked-class-kernel-module",
+                    "depmod",
+                    vec!["6.10.12-200.fc40.x86_64".to_string()],
+                    vec!["/lib/modules/6.10.12-200.fc40.x86_64".to_string()],
+                ),
+                boot_security_intent(
+                    "initramfs",
+                    "blocked-class-initramfs",
+                    "dracut",
+                    vec![
                         "--force".to_string(),
                         "/boot/initramfs-6.10.12-200.fc40.x86_64.img".to_string(),
                     ],
-                    phase: Some("postinstall".to_string()),
-                    lifecycle_paths: vec!["/boot".to_string()],
-                },
-                BootSecurityIntentEvidence {
-                    class_id: "bootloader".to_string(),
-                    reason_code: "blocked-class-bootloader".to_string(),
-                    command: "grub2-mkconfig".to_string(),
-                    argv: vec!["-o".to_string(), "/boot/grub2/grub.cfg".to_string()],
-                    phase: Some("postinstall".to_string()),
-                    lifecycle_paths: vec!["/boot/grub2/grub.cfg".to_string()],
-                },
+                    vec!["/boot".to_string()],
+                ),
+                boot_security_intent(
+                    "bootloader",
+                    "blocked-class-bootloader",
+                    "grub2-mkconfig",
+                    vec!["-o".to_string(), "/boot/grub2/grub.cfg".to_string()],
+                    vec!["/boot/grub2/grub.cfg".to_string()],
+                ),
             ],
             review_artifact_path: Some("/tmp/private-review-secret.json".to_string()),
             ..ScriptletBundleSummary::default()
@@ -823,7 +822,7 @@ mod tests {
                 version: "1.0",
                 architecture: Some("x86_64"),
                 original_format: "rpm",
-                conversion_fidelity: "blocked",
+                scriptlet_fidelity: &summary.scriptlet_fidelity,
                 conversion_version: conary_core::db::models::CONVERSION_VERSION,
                 ccs_content_hash: "sha256:raw-private-workflow",
                 ccs_total_size: 14,

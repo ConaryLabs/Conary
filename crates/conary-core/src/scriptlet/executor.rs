@@ -148,7 +148,7 @@ impl ScriptletExecutor {
             content.to_string()
         };
 
-        // Analyze script for dangerous patterns
+        // Analyze the formal shell command evidence.
         let analysis = analyze_script(&script_content);
 
         // Determine if we should sandbox based on mode and risk

@@ -35,18 +35,49 @@ pub fn collect_recipe_command_text(recipe: &Recipe) -> Vec<BuildCommandText> {
         if content.trim().is_empty() {
             return None;
         }
-        Some(BuildCommandText::new(phase, content.clone()))
+        Some(BuildCommandText::new(
+            phase,
+            recipe_command_for_analysis(recipe, content),
+        ))
     })
     .collect()
+}
+
+fn recipe_command_for_analysis(recipe: &Recipe, content: &str) -> String {
+    let mut rendered = recipe.substitute(content, "/__conary_destdir__");
+    rendered = rendered.replace(
+        "%(jobs)s",
+        &recipe.build.jobs.unwrap_or(1).max(1).to_string(),
+    );
+    rendered = rendered.replace(
+        "%(target)s",
+        recipe
+            .cross
+            .as_ref()
+            .and_then(|cross| cross.target.as_deref())
+            .unwrap_or("analysis-target"),
+    );
+    rendered = rendered.replace(
+        "%(stage1_sysroot)s",
+        recipe
+            .cross
+            .as_ref()
+            .and_then(|cross| cross.sysroot.as_deref())
+            .unwrap_or("/__conary_sysroot__"),
+    );
+    rendered
 }
 
 pub fn classify_build_commands(commands: &[BuildCommandText]) -> BuildCommandRiskReport {
     let mut entries = Vec::new();
 
     for command_text in commands {
+        let content = command_text
+            .content
+            .replace("%(destdir)s", "/__conary_destdir__");
         let report = crate::security::command_risk::classify_shell_text(
             &format!("recipe:{}", command_text.phase),
-            &command_text.content,
+            &content,
         );
         entries.extend(
             report
@@ -265,7 +296,7 @@ mod tests {
     }
 
     #[test]
-    fn raw_fallback_does_not_pair_multiword_signals_across_shell_segments() {
+    fn formal_ast_does_not_pair_signals_across_shell_commands() {
         let report = classify_build_commands(&[BuildCommandText::new(
             "make",
             "go env && make install\ngit status & make clone\npython script.py && echo -c\ngo env&make install",
@@ -287,7 +318,7 @@ mod tests {
     }
 
     #[test]
-    fn raw_fallback_keeps_redirections_inside_multiword_signals() {
+    fn formal_ast_preserves_command_arguments_across_redirections() {
         let cases = [
             ("go 2>&1 install example.org/tool", "package-manager-fetch"),
             (
@@ -314,5 +345,26 @@ mod tests {
             );
             assert_reason(&report, reason_code);
         }
+    }
+
+    #[test]
+    fn formal_wrapper_contracts_fail_closed_without_guessing_nested_programs() {
+        let unresolved = [
+            "env -S 'npm install foo'",
+            "bash -c \"$BUILD_PROGRAM\"",
+            "env --unknown-option npm install foo",
+        ];
+        for content in unresolved {
+            let report = classify_build_commands(&[BuildCommandText::new("make", content)]);
+            assert_eq!(report.status, PolicyStatus::Blocked, "{content}");
+            assert_reason(&report, "command-form-unresolved");
+        }
+
+        let literal_mention = classify_build_commands(&[BuildCommandText::new(
+            "make",
+            "printf '%s\\n' 'npm install is documentation, not an invocation'",
+        )]);
+        assert_eq!(literal_mention.status, PolicyStatus::Clean);
+        assert!(literal_mention.entries.is_empty());
     }
 }

@@ -616,7 +616,6 @@ mod tests {
             version.to_string(),
             "rpm".to_string(),
             format!("sha256:{package}-{version}-source"),
-            "high".to_string(),
             &[format!("sha256:{package}-{version}-chunk")],
             42,
             format!("sha256:{package}-{version}-content"),

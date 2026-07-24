@@ -9,6 +9,19 @@ pub enum BlockedClassOutcome {
     Blocked,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlockedCommandRule {
+    ChmodSetId,
+    LdconfigNonstandard,
+    SystemdRuntimeAction,
+    SystemdUserScope,
+    TmpfilesNoncreate,
+    SysusersNonstandard,
+    AlternativesInteractiveOrBroad,
+    CacheRefreshNonstandard,
+    UdevMutation,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BlockedClass {
     pub id: &'static str,
@@ -16,7 +29,7 @@ pub struct BlockedClass {
     pub default_outcome: BlockedClassOutcome,
     pub reason_code: &'static str,
     pub command_names: &'static [&'static str],
-    pub command_forms: &'static [&'static str],
+    pub command_rules: &'static [BlockedCommandRule],
     pub affected_formats: &'static [&'static str],
     pub preview_distros: &'static [&'static str],
     pub unblock_criteria: &'static str,
@@ -114,14 +127,7 @@ impl Default for BlockedClassRegistry {
                 "Setuid and file capability mutation is security-sensitive.",
                 "blocked-class-setuid-setcap",
                 &["setcap", "setpriv"],
-                &[
-                    "chmod u+s*",
-                    "chmod g+s*",
-                    "chmod +s*",
-                    "chmod 2*",
-                    "chmod 4*",
-                    "chmod 6*",
-                ],
+                &[BlockedCommandRule::ChmodSetId],
                 "Model executable privilege metadata in the package manifest and verify it at install time.",
             ),
             blocked_class(
@@ -160,17 +166,7 @@ impl Default for BlockedClassRegistry {
                 "ldconfig forms with custom roots, caches, link-only modes, print modes, or explicit directories need review.",
                 "review-class-ldconfig-nonstandard",
                 &[],
-                &[
-                    "ldconfig -p*",
-                    "ldconfig -l*",
-                    "ldconfig -n*",
-                    "ldconfig -N*",
-                    "ldconfig -X*",
-                    "ldconfig -C*",
-                    "ldconfig -f*",
-                    "ldconfig -r*",
-                    "ldconfig /*",
-                ],
+                &[BlockedCommandRule::LdconfigNonstandard],
                 "Add a dynamic-linker adapter that models the specific root/cache/link semantics.",
             ),
             review_class(
@@ -178,20 +174,7 @@ impl Default for BlockedClassRegistry {
                 "systemd runtime service actions signal a live manager and are not passive metadata changes.",
                 "review-class-systemd-runtime-action",
                 &["service", "invoke-rc.d"],
-                &[
-                    "systemctl start*",
-                    "systemctl stop*",
-                    "systemctl restart*",
-                    "systemctl try-restart*",
-                    "systemctl reload*",
-                    "systemctl reload-or-restart*",
-                    "systemctl enable --now*",
-                    "systemctl disable --now*",
-                    "systemctl preset --now*",
-                    "systemctl preset-all*",
-                    "service *",
-                    "invoke-rc.d *",
-                ],
+                &[BlockedCommandRule::SystemdRuntimeAction],
                 "Add modeled service runtime semantics or keep the package review-only.",
             ),
             review_class(
@@ -199,7 +182,7 @@ impl Default for BlockedClassRegistry {
                 "systemd user/global scope enablement is target-user policy, not package-global metadata.",
                 "review-class-systemd-user-scope",
                 &[],
-                &["systemctl --user*", "systemctl --global*"],
+                &[BlockedCommandRule::SystemdUserScope],
                 "Add user-scope service policy and target compatibility checks.",
             ),
             review_class(
@@ -215,14 +198,7 @@ impl Default for BlockedClassRegistry {
                 "tmpfiles cleanup, removal, boot-only, user, purge, replace, or stdin forms need lifecycle-specific review.",
                 "review-class-tmpfiles-noncreate",
                 &[],
-                &[
-                    "systemd-tmpfiles *--remove*",
-                    "systemd-tmpfiles *--clean*",
-                    "systemd-tmpfiles *--purge*",
-                    "systemd-tmpfiles *--boot*",
-                    "systemd-tmpfiles *--user*",
-                    "systemd-tmpfiles *--replace*",
-                ],
+                &[BlockedCommandRule::TmpfilesNoncreate],
                 "Add tmpfiles lifecycle semantics and remove/purge ordering tests.",
             ),
             review_class(
@@ -230,7 +206,7 @@ impl Default for BlockedClassRegistry {
                 "sysusers root, replace, or stdin forms need explicit target-root and input modeling.",
                 "review-class-sysusers-nonstandard",
                 &[],
-                &["systemd-sysusers *--replace*", "systemd-sysusers *--root*"],
+                &[BlockedCommandRule::SysusersNonstandard],
                 "Add sysusers root/input modeling before claiming replacement.",
             ),
             review_class(
@@ -254,18 +230,7 @@ impl Default for BlockedClassRegistry {
                 "Interactive or broad alternatives commands can alter administrator choice state.",
                 "review-class-alternatives-interactive-or-broad",
                 &[],
-                &[
-                    "update-alternatives *--config*",
-                    "update-alternatives *--set*",
-                    "update-alternatives *--auto*",
-                    "update-alternatives *--all*",
-                    "update-alternatives *--remove-all*",
-                    "alternatives *--config*",
-                    "alternatives *--set*",
-                    "alternatives *--auto*",
-                    "alternatives *--all*",
-                    "alternatives *--remove-all*",
-                ],
+                &[BlockedCommandRule::AlternativesInteractiveOrBroad],
                 "Model administrator alternatives state before claiming replacement.",
             ),
             review_class(
@@ -273,18 +238,7 @@ impl Default for BlockedClassRegistry {
                 "Cache refresh command uses nonstandard paths or options outside the bootstrap adapter contract.",
                 "review-class-cache-refresh-nonstandard",
                 &[],
-                &[
-                    "update-mime-database */opt*",
-                    "update-mime-database */usr/local*",
-                    "update-desktop-database */opt*",
-                    "update-desktop-database */usr/local*",
-                    "gtk-update-icon-cache */opt*",
-                    "gtk-update-icon-cache */usr/local*",
-                    "glib-compile-schemas */opt*",
-                    "glib-compile-schemas */usr/local*",
-                    "fc-cache */opt*",
-                    "fc-cache */usr/local*",
-                ],
+                &[BlockedCommandRule::CacheRefreshNonstandard],
                 "Add a cache-specific adapter rule for the nonstandard path or keep package review-only.",
             ),
             blocked_metadata_class(
@@ -328,7 +282,7 @@ impl Default for BlockedClassRegistry {
                 "udev trigger/control operations affect host device state.",
                 "review-class-udev",
                 &[],
-                &["udevadm trigger*", "udevadm control*"],
+                &[BlockedCommandRule::UdevMutation],
                 "Add target udev policy support or prove the package only ships static rules.",
             ),
             blocked_metadata_class(
@@ -361,7 +315,6 @@ impl BlockedClassRegistry {
     }
 
     pub fn match_invocation(&self, invocation: &CommandInvocation) -> Option<&BlockedClass> {
-        let form = invocation_form(invocation);
         self.classes.iter().find(|class| {
             (class.id == "network" && git_clone_subcommand_after_global_options(invocation))
                 || class
@@ -369,9 +322,9 @@ impl BlockedClassRegistry {
                     .iter()
                     .any(|command| *command == invocation.command)
                 || class
-                    .command_forms
+                    .command_rules
                     .iter()
-                    .any(|pattern| form_matches(pattern, &form))
+                    .any(|rule| command_rule_matches(*rule, invocation))
         })
     }
 }
@@ -414,7 +367,7 @@ fn blocked_class(
     description: &'static str,
     reason_code: &'static str,
     command_names: &'static [&'static str],
-    command_forms: &'static [&'static str],
+    command_rules: &'static [BlockedCommandRule],
     unblock_criteria: &'static str,
 ) -> BlockedClass {
     BlockedClass {
@@ -423,7 +376,7 @@ fn blocked_class(
         default_outcome: BlockedClassOutcome::Blocked,
         reason_code,
         command_names,
-        command_forms,
+        command_rules,
         affected_formats: &["rpm", "deb", "arch"],
         preview_distros: &["fedora", "ubuntu", "arch"],
         unblock_criteria,
@@ -435,7 +388,7 @@ fn review_class(
     description: &'static str,
     reason_code: &'static str,
     command_names: &'static [&'static str],
-    command_forms: &'static [&'static str],
+    command_rules: &'static [BlockedCommandRule],
     unblock_criteria: &'static str,
 ) -> BlockedClass {
     BlockedClass {
@@ -444,7 +397,7 @@ fn review_class(
         default_outcome: BlockedClassOutcome::Review,
         reason_code,
         command_names,
-        command_forms,
+        command_rules,
         affected_formats: &["rpm", "deb", "arch"],
         preview_distros: &["fedora", "ubuntu", "arch"],
         unblock_criteria,
@@ -464,7 +417,7 @@ fn blocked_metadata_class(
         default_outcome,
         reason_code,
         command_names: &[],
-        command_forms: &[],
+        command_rules: &[],
         affected_formats: &["rpm", "deb", "arch"],
         preview_distros: &["fedora", "ubuntu", "arch"],
         unblock_criteria,
@@ -482,430 +435,155 @@ fn assert_unique_class_ids(classes: &[BlockedClass]) {
     }
 }
 
-fn invocation_form(invocation: &CommandInvocation) -> String {
-    if invocation.argv.is_empty() {
-        invocation.command.clone()
-    } else {
-        format!("{} {}", invocation.command, invocation.argv.join(" "))
+fn command_rule_matches(rule: BlockedCommandRule, invocation: &CommandInvocation) -> bool {
+    match rule {
+        BlockedCommandRule::ChmodSetId => crate::security::command_risk::is_setid_chmod(invocation),
+        BlockedCommandRule::LdconfigNonstandard => ldconfig_is_nonstandard(invocation),
+        BlockedCommandRule::SystemdRuntimeAction => systemd_runtime_action(invocation),
+        BlockedCommandRule::SystemdUserScope => {
+            invocation.command == "systemctl"
+                && invocation
+                    .argv
+                    .iter()
+                    .any(|arg| matches!(arg.as_str(), "--user" | "--global"))
+        }
+        BlockedCommandRule::TmpfilesNoncreate => {
+            invocation.command == "systemd-tmpfiles"
+                && has_option_name(
+                    &invocation.argv,
+                    &[
+                        "--remove",
+                        "--clean",
+                        "--purge",
+                        "--boot",
+                        "--user",
+                        "--replace",
+                    ],
+                )
+        }
+        BlockedCommandRule::SysusersNonstandard => {
+            invocation.command == "systemd-sysusers"
+                && has_option_name(&invocation.argv, &["--replace", "--root"])
+        }
+        BlockedCommandRule::AlternativesInteractiveOrBroad => {
+            matches!(
+                invocation.command.as_str(),
+                "update-alternatives" | "alternatives"
+            ) && has_exact_option(
+                &invocation.argv,
+                &["--config", "--set", "--auto", "--all", "--remove-all"],
+            )
+        }
+        BlockedCommandRule::CacheRefreshNonstandard => {
+            matches!(
+                invocation.command.as_str(),
+                "update-mime-database"
+                    | "update-desktop-database"
+                    | "gtk-update-icon-cache"
+                    | "glib-compile-schemas"
+                    | "fc-cache"
+            ) && invocation.argv.iter().any(|arg| {
+                let path = std::path::Path::new(arg);
+                path.is_absolute() && (path.starts_with("/opt") || path.starts_with("/usr/local"))
+            })
+        }
+        BlockedCommandRule::UdevMutation => {
+            invocation.command == "udevadm"
+                && first_non_option(&invocation.argv)
+                    .is_some_and(|arg| matches!(arg, "trigger" | "control"))
+        }
     }
 }
 
-fn form_matches(pattern: &str, form: &str) -> bool {
-    if !pattern.contains('*') {
-        return pattern == form;
+fn ldconfig_is_nonstandard(invocation: &CommandInvocation) -> bool {
+    if invocation.command != "ldconfig" {
+        return false;
     }
+    invocation.argv.iter().any(|arg| {
+        matches!(
+            arg.as_str(),
+            "-p" | "--print-cache" | "-l" | "-n" | "-N" | "-X" | "-C" | "-f" | "-r"
+        ) || arg.starts_with("-C")
+            || arg.starts_with("-f")
+            || arg.starts_with("-r")
+            || std::path::Path::new(arg).is_absolute()
+    })
+}
 
-    let parts: Vec<&str> = pattern.split('*').collect();
-    let mut position = 0;
+fn systemd_runtime_action(invocation: &CommandInvocation) -> bool {
+    if invocation.command != "systemctl"
+        || invocation
+            .argv
+            .iter()
+            .any(|arg| matches!(arg.as_str(), "--user" | "--global"))
+    {
+        return false;
+    }
+    let Some(action) = systemctl_subcommand(&invocation.argv) else {
+        return false;
+    };
+    matches!(
+        action,
+        "start"
+            | "stop"
+            | "restart"
+            | "try-restart"
+            | "reload"
+            | "reload-or-restart"
+            | "preset-all"
+    ) || matches!(action, "enable" | "disable" | "preset")
+        && invocation.argv.iter().any(|arg| arg == "--now")
+}
 
-    for (index, part) in parts.iter().enumerate() {
-        if part.is_empty() {
-            continue;
-        }
-        if index == 0 && !pattern.starts_with('*') {
-            if !form[position..].starts_with(part) {
-                return false;
+fn systemctl_subcommand(argv: &[String]) -> Option<&str> {
+    let mut index = 0;
+    while let Some(arg) = argv.get(index) {
+        match arg.as_str() {
+            "--root" | "--image" | "--machine" | "--host" | "--type" | "--state" | "--property" => {
+                index += 2
             }
-            position += part.len();
-        } else if index == parts.len() - 1 && !pattern.ends_with('*') {
-            if !form.ends_with(part) {
-                return false;
+            "--system" | "--user" | "--global" | "--runtime" | "--no-reload" | "--no-block"
+            | "--no-pager" | "--no-legend" | "--plain" | "--quiet" | "--full" | "--force"
+            | "--dry-run" => index += 1,
+            value
+                if value.starts_with("--root=")
+                    || value.starts_with("--image=")
+                    || value.starts_with("--machine=")
+                    || value.starts_with("--host=")
+                    || value.starts_with("--type=")
+                    || value.starts_with("--state=")
+                    || value.starts_with("--property=") =>
+            {
+                index += 1;
             }
-            let start = form.len() - part.len();
-            if start < position {
-                return false;
-            }
-            position = form.len();
-        } else if let Some(offset) = form[position..].find(part) {
-            position += offset + part.len();
-        } else {
-            return false;
+            value if value.starts_with('-') => return None,
+            value => return Some(value),
         }
     }
+    None
+}
 
-    true
+fn has_exact_option(argv: &[String], options: &[&str]) -> bool {
+    argv.iter().any(|arg| options.contains(&arg.as_str()))
+}
+
+fn has_option_name(argv: &[String], options: &[&str]) -> bool {
+    argv.iter().any(|arg| {
+        options.iter().any(|option| {
+            arg == option
+                || arg
+                    .strip_prefix(option)
+                    .is_some_and(|rest| rest.starts_with('='))
+        })
+    })
+}
+
+fn first_non_option(argv: &[String]) -> Option<&str> {
+    argv.iter()
+        .find(|arg| !arg.starts_with('-'))
+        .map(String::as_str)
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::ccs::convert::command_evidence::{CommandEvidenceSource, CommandInvocation};
-
-    fn invocation(command: &str, argv: &[&str]) -> CommandInvocation {
-        CommandInvocation {
-            id: format!("entry:line0:cmd0:{command}"),
-            entry_id: "entry".to_string(),
-            source: CommandEvidenceSource::StaticSignal,
-            phase: Some("post-install".to_string()),
-            lifecycle_paths: vec!["post-install".to_string()],
-            interpreter: Some("/bin/sh".to_string()),
-            command: command.to_string(),
-            argv: argv.iter().map(|arg| arg.to_string()).collect(),
-            raw_line: Some(format!("{} {}", command, argv.join(" ")).trim().to_string()),
-            cwd: None,
-            environment: vec![],
-        }
-    }
-
-    #[test]
-    fn blocked_classes_block_live_fetch_and_package_manager_recursion() {
-        let registry = BlockedClassRegistry::default();
-
-        for (command, argv) in [
-            ("curl", vec!["https://example.invalid"]),
-            ("wget", vec!["https://example.invalid/package.tar.gz"]),
-            ("scp", vec!["host:/tmp/pkg", "/tmp/pkg"]),
-            ("ssh", vec!["builder.example.invalid", "true"]),
-            ("git", vec!["clone", "https://example.invalid/repo.git"]),
-            (
-                "git",
-                vec!["-C", "/tmp", "clone", "https://example.invalid/repo.git"],
-            ),
-            (
-                "git",
-                vec![
-                    "-c",
-                    "http.sslVerify=false",
-                    "clone",
-                    "https://example.invalid/repo.git",
-                ],
-            ),
-            (
-                "git",
-                vec![
-                    "--git-dir",
-                    "/tmp/repo",
-                    "clone",
-                    "https://example.invalid/repo.git",
-                ],
-            ),
-            (
-                "git",
-                vec![
-                    "--work-tree",
-                    "/tmp/work",
-                    "clone",
-                    "https://example.invalid/repo.git",
-                ],
-            ),
-            (
-                "git",
-                vec![
-                    "--config-env",
-                    "foo=BAR",
-                    "clone",
-                    "https://example.invalid/repo.git",
-                ],
-            ),
-        ] {
-            let class = registry
-                .match_invocation(&invocation(command, &argv))
-                .unwrap_or_else(|| panic!("missing network blocked class for {command}"));
-            assert_eq!(class.id, "network");
-            assert_eq!(class.reason_code, "blocked-class-network");
-            assert_eq!(class.default_outcome, BlockedClassOutcome::Blocked);
-        }
-
-        assert!(
-            registry
-                .match_invocation(&invocation(
-                    "git",
-                    &["config", "--global", "demo.value", "1"]
-                ))
-                .is_none(),
-            "only live-fetch git forms are blocked in this slice"
-        );
-        assert!(
-            registry
-                .match_invocation(&invocation("git", &["help", "clone"]))
-                .is_none(),
-            "git help clone is not a live-fetch clone form"
-        );
-        assert!(
-            registry
-                .match_invocation(&invocation(
-                    "git",
-                    &["config", "remote.origin.tagOpt", "clone"]
-                ))
-                .is_none(),
-            "git config ... clone is not a live-fetch clone form"
-        );
-
-        for (command, argv) in [
-            ("apk", vec!["add", "demo"]),
-            ("apt", vec!["install", "demo"]),
-            ("apt-get", vec!["install", "demo"]),
-            ("dnf", vec!["install", "demo"]),
-            ("dnf5", vec!["install", "demo"]),
-            ("dpkg", vec!["-i", "demo.deb"]),
-            ("microdnf", vec!["install", "demo"]),
-            ("pacman", vec!["-S", "demo"]),
-            ("rpm", vec!["-Uvh", "demo.rpm"]),
-            ("yum", vec!["install", "demo"]),
-            ("zypper", vec!["install", "demo"]),
-        ] {
-            let class = registry
-                .match_invocation(&invocation(command, &argv))
-                .unwrap_or_else(|| {
-                    panic!("missing package-manager recursion blocked class for {command}")
-                });
-            assert_eq!(class.id, "package-manager-recursion");
-            assert_eq!(class.reason_code, "blocked-class-package-manager-recursion");
-            assert_eq!(class.default_outcome, BlockedClassOutcome::Blocked);
-        }
-    }
-
-    #[test]
-    fn blocked_classes_goal8_boundaries_have_stable_outcomes() {
-        let registry = BlockedClassRegistry::default();
-        let cases = [
-            (
-                "package-manager-recursion",
-                BlockedClassOutcome::Blocked,
-                "blocked-class-package-manager-recursion",
-            ),
-            (
-                "rpm-trigger",
-                BlockedClassOutcome::Review,
-                "review-class-rpm-trigger",
-            ),
-            (
-                "deb-trigger",
-                BlockedClassOutcome::Review,
-                "review-class-deb-trigger",
-            ),
-            (
-                "arch-install-function",
-                BlockedClassOutcome::Review,
-                "review-class-arch-install-function",
-            ),
-        ];
-
-        for (class_id, expected_outcome, expected_reason) in cases {
-            let class = registry
-                .class_by_id(class_id)
-                .unwrap_or_else(|| panic!("missing blocked class {class_id}"));
-
-            assert_eq!(
-                class.default_outcome, expected_outcome,
-                "{class_id} outcome"
-            );
-            assert_eq!(class.reason_code, expected_reason, "{class_id} reason");
-        }
-    }
-
-    #[test]
-    fn blocked_classes_mark_dbus_and_debconf_for_review() {
-        let registry = BlockedClassRegistry::default();
-
-        let dbus =
-            registry.match_invocation(&invocation("dbus-update-activation-environment", &[]));
-        assert_eq!(dbus.unwrap().default_outcome, BlockedClassOutcome::Review);
-
-        let debconf = registry.class_by_id("debconf").expect("debconf class");
-        assert_eq!(debconf.reason_code, "review-class-debconf");
-    }
-
-    #[test]
-    fn blocked_classes_mark_rpm_verify_legacy_init_and_udev() {
-        let registry = BlockedClassRegistry::default();
-
-        let verify = registry
-            .class_by_id("rpm-verify")
-            .expect("rpm verify class");
-        assert_eq!(verify.reason_code, "review-class-rpm-verify");
-
-        let init = registry.match_invocation(&invocation("update-rc.d", &["demo", "defaults"]));
-        assert_eq!(init.unwrap().reason_code, "blocked-class-legacy-init");
-
-        let udev = registry.match_invocation(&invocation("udevadm", &["trigger"]));
-        assert_eq!(udev.unwrap().default_outcome, BlockedClassOutcome::Review);
-        assert_eq!(udev.unwrap().reason_code, "review-class-udev");
-
-        assert!(
-            registry
-                .match_invocation(&invocation("udevadm", &["info"]))
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn blocked_classes_cover_kernel_install_selinux_module_and_label_tools() {
-        let registry = BlockedClassRegistry::default();
-
-        for (command, argv, class_id) in [
-            (
-                "kernel-install",
-                vec!["add", "6.10.0", "/lib/modules/6.10.0/vmlinuz"],
-                "kernel-module",
-            ),
-            ("semodule", vec!["-i", "/tmp/demo.pp"], "selinux"),
-            ("fixfiles", vec!["restore"], "selinux"),
-        ] {
-            let class = registry
-                .match_invocation(&invocation(command, &argv))
-                .unwrap_or_else(|| panic!("missing blocked class for {command}"));
-            assert_eq!(class.id, class_id);
-            assert_eq!(class.default_outcome, BlockedClassOutcome::Blocked);
-        }
-    }
-
-    #[test]
-    fn blocked_classes_cover_common_pam_stack_helpers() {
-        let registry = BlockedClassRegistry::default();
-
-        for (command, argv) in [
-            ("authselect", vec!["select", "sssd", "with-mkhomedir"]),
-            ("authconfig", vec!["--enablefaillock", "--update"]),
-            ("pam-auth-update", vec!["--package"]),
-            ("pam-config", vec!["--add", "--mkhomedir"]),
-        ] {
-            let class = registry
-                .match_invocation(&invocation(command, &argv))
-                .unwrap_or_else(|| panic!("missing blocked class for {command}"));
-            assert_eq!(class.id, "pam");
-            assert_eq!(class.reason_code, "blocked-class-pam");
-            assert_eq!(class.default_outcome, BlockedClassOutcome::Blocked);
-        }
-    }
-
-    #[test]
-    fn blocked_classes_match_command_forms() {
-        let registry = BlockedClassRegistry::default();
-
-        let chmod_form = registry.match_invocation(&invocation("chmod", &["u+s", "/usr/bin/foo"]));
-        assert_eq!(
-            chmod_form.unwrap().reason_code,
-            "blocked-class-setuid-setcap"
-        );
-
-        let chmod_mode = registry.match_invocation(&invocation("chmod", &["4755", "/usr/bin/foo"]));
-        assert_eq!(
-            chmod_mode.unwrap().reason_code,
-            "blocked-class-setuid-setcap"
-        );
-
-        for argv in [
-            vec!["g+s", "/usr/bin/foo"],
-            vec!["+s", "/usr/bin/foo"],
-            vec!["2755", "/usr/bin/foo"],
-            vec!["6755", "/usr/bin/foo"],
-        ] {
-            let chmod_form = registry.match_invocation(&invocation("chmod", &argv));
-            assert_eq!(
-                chmod_form.unwrap().reason_code,
-                "blocked-class-setuid-setcap"
-            );
-        }
-    }
-
-    #[test]
-    fn blocked_classes_review_systemd_runtime_user_and_deb_helpers() {
-        let registry = BlockedClassRegistry::default();
-
-        let runtime =
-            registry.match_invocation(&invocation("systemctl", &["restart", "demo.service"]));
-        assert_eq!(
-            runtime.unwrap().reason_code,
-            "review-class-systemd-runtime-action"
-        );
-
-        let service_without_args = registry.match_invocation(&invocation("service", &[]));
-        assert_eq!(
-            service_without_args.unwrap().reason_code,
-            "review-class-systemd-runtime-action"
-        );
-
-        let invoke_rc_without_args = registry.match_invocation(&invocation("invoke-rc.d", &[]));
-        assert_eq!(
-            invoke_rc_without_args.unwrap().reason_code,
-            "review-class-systemd-runtime-action"
-        );
-
-        let user = registry.match_invocation(&invocation(
-            "systemctl",
-            &["--user", "enable", "demo.service"],
-        ));
-        assert_eq!(user.unwrap().reason_code, "review-class-systemd-user-scope");
-
-        let deb = registry.match_invocation(&invocation(
-            "deb-systemd-helper",
-            &["enable", "demo.service"],
-        ));
-        assert_eq!(deb.unwrap().reason_code, "review-class-deb-systemd-helper");
-
-        let preset_all = registry.match_invocation(&invocation("systemctl", &["preset-all"]));
-        assert_eq!(
-            preset_all.unwrap().reason_code,
-            "review-class-systemd-runtime-action"
-        );
-    }
-
-    #[test]
-    fn blocked_classes_review_tmpfiles_and_sysusers_unsupported_forms() {
-        let registry = BlockedClassRegistry::default();
-
-        let tmpfiles_remove =
-            registry.match_invocation(&invocation("systemd-tmpfiles", &["--remove"]));
-        assert_eq!(
-            tmpfiles_remove.unwrap().reason_code,
-            "review-class-tmpfiles-noncreate"
-        );
-
-        let tmpfiles_boot =
-            registry.match_invocation(&invocation("systemd-tmpfiles", &["--boot", "--create"]));
-        assert_eq!(
-            tmpfiles_boot.unwrap().reason_code,
-            "review-class-tmpfiles-noncreate"
-        );
-
-        let tmpfiles_create_boot =
-            registry.match_invocation(&invocation("systemd-tmpfiles", &["--create", "--boot"]));
-        assert_eq!(
-            tmpfiles_create_boot.unwrap().reason_code,
-            "review-class-tmpfiles-noncreate"
-        );
-
-        let sysusers_replace = registry.match_invocation(&invocation(
-            "systemd-sysusers",
-            &["--replace=/usr/lib/sysusers.d/demo.conf"],
-        ));
-        assert_eq!(
-            sysusers_replace.unwrap().reason_code,
-            "review-class-sysusers-nonstandard"
-        );
-
-        let sysusers_root =
-            registry.match_invocation(&invocation("systemd-sysusers", &["--root=/tmp/root"]));
-        assert_eq!(
-            sysusers_root.unwrap().reason_code,
-            "review-class-sysusers-nonstandard"
-        );
-
-        let sysusers_late_root = registry.match_invocation(&invocation(
-            "systemd-sysusers",
-            &["/usr/lib/sysusers.d/demo.conf", "--root=/tmp/root"],
-        ));
-        assert_eq!(
-            sysusers_late_root.unwrap().reason_code,
-            "review-class-sysusers-nonstandard"
-        );
-    }
-
-    #[test]
-    fn blocked_classes_review_gconf_and_install_info_helpers() {
-        let registry = BlockedClassRegistry::default();
-
-        let gconf = registry.match_invocation(&invocation(
-            "gconftool-2",
-            &["--makefile-install-rule", "/etc/gconf/schemas/demo.schemas"],
-        ));
-        assert_eq!(gconf.unwrap().reason_code, "review-class-gconf-schema");
-
-        let info = registry.match_invocation(&invocation(
-            "install-info",
-            &["/usr/share/info/demo.info.gz", "/usr/share/info/dir"],
-        ));
-        assert_eq!(info.unwrap().reason_code, "review-class-install-info");
-    }
-}
+#[path = "blocked_classes/tests.rs"]
+mod tests;

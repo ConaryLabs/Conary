@@ -1,6 +1,6 @@
 // conary-core/tests/native_abi.rs
 
-use conary_core::ccs::convert::{ConversionOptions, FidelityLevel, LegacyConverter};
+use conary_core::ccs::convert::{ConversionOptions, LegacyConverter};
 use conary_core::db::models::{Trove, TroveType};
 use conary_core::packages::common::PackageMetadata;
 use conary_core::packages::native_scriptlet_support::upstream_native_scriptlet_support_rows;
@@ -430,9 +430,6 @@ fn assert_conversion_preserves_native_entries(
 ) {
     let output = TempDir::new().expect("converter output tempdir");
     let converter = LegacyConverter::new(ConversionOptions {
-        capture_scriptlets: false,
-        enable_inference: false,
-        min_fidelity: FidelityLevel::Low,
         output_dir: output.path().to_path_buf(),
         ..ConversionOptions::default()
     });

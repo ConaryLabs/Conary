@@ -48,6 +48,21 @@ Use standard Rust formatting (`cargo fmt`) and keep Clippy clean. Indentation is
 Recent history uses conventional-style prefixes such as `fix:`, `security:`, and `docs:`. Keep commit subjects short and imperative, e.g. `security(federation): pin https peer identity`. PRs should explain the problem, summarize the fix, list verification commands run, and link the relevant issue/plan entry. Include logs or API examples when behavior changes are not obvious from the diff.
 
 ## Maintainability & Refactor Discipline
+Correctness authority must not come from heuristics, regexes, substring
+matching, or manually curated token lists. Those mechanisms may produce
+diagnostics, privacy redaction, discovery evidence, or work prioritization
+only. Compatibility, publication, mutation, and security decisions require a
+parsed typed contract, an exact documented grammar, and validation against the
+relevant payload or persisted state. When that proof is missing, preserve a
+typed unsupported semantic class and engineer the missing model; do not build
+an operator reconciliation loop around the guess.
+
+Until Conary has external users, prefer a clean current contract over
+backward-compatibility machinery. Breaking schema or persisted-format changes
+must still be issue-backed and explicit about rebuild/reset impact, but may
+replace and delete superseded migrations, adapters, routes, and compatibility
+paths instead of carrying them forward.
+
 Treat large files as review signals, not automatic failures. Planning has a
 hard gate: when a proposed slice would add behavior to a source file that is
 already over 1000 lines, the issue, design, or plan must include an

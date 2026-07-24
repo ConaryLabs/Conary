@@ -165,7 +165,7 @@ mod tests {
             source_evidence_refs: Vec::new(),
             effects: vec![ScriptletEffect {
                 kind: "sysctl-setting".to_string(),
-                source: EffectSource::StaticSignal,
+                source: EffectSource::ShellAst,
                 confidence: EffectConfidence::Declared,
                 replacement,
                 adapter_id: Some("sysctl/v1".to_string()),
@@ -176,7 +176,7 @@ mod tests {
                 reason_code: Some("helper-complete-sysctl".to_string()),
                 extra,
             }],
-            unknown_commands: Vec::new(),
+            unknown_command_evidence: Vec::new(),
             blocked_classes: Vec::new(),
             boot_security_intents: Vec::new(),
             security_policy_intents: Vec::new(),

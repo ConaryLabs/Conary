@@ -820,7 +820,7 @@ mod tests {
 
         LegacyScriptletBundle {
             schema: LEGACY_SCRIPTLET_SCHEMA_V1.to_string(),
-            schema_revision: 1,
+            schema_revision: 2,
             source_format: SourceFormat::Rpm,
             source_family: "fedora-rhel".to_string(),
             source_distro: Some("fedora".to_string()),
@@ -890,7 +890,7 @@ mod tests {
             )),
             source_evidence_refs: vec![format!("capture:{id}")],
             effects: vec![],
-            unknown_commands: vec![],
+            unknown_command_evidence: vec![],
             blocked_classes: vec![],
             boot_security_intents: Vec::new(),
             security_policy_intents: Vec::new(),

@@ -1,10 +1,13 @@
 // conary-core/src/ccs/convert/command_evidence.rs
 
+pub use crate::ccs::legacy_scriptlets::CommandEvidenceSource;
+use crate::ccs::legacy_scriptlets::{CommandArgumentProvenance, CommandExecutionContext};
 use crate::packages::native_abi::{
     ArchNativeScriptletMetadata, NativeLifecyclePath, NativeScriptletEntry, NativeScriptletKind,
     NativeScriptletMetadata, NativeScriptletSupport,
 };
 use crate::packages::traits::Scriptlet;
+use tree_sitter::{Node, Parser, Point};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandInvocation {
@@ -15,31 +18,29 @@ pub struct CommandInvocation {
     pub lifecycle_paths: Vec<String>,
     pub interpreter: Option<String>,
     pub command: String,
+    pub command_provenance: CommandArgumentProvenance,
     pub argv: Vec<String>,
+    pub argument_provenance: Vec<CommandArgumentProvenance>,
+    pub execution_context: CommandExecutionContext,
+    pub pipeline_id: Option<usize>,
     pub raw_line: Option<String>,
     pub cwd: Option<String>,
     pub environment: Vec<CommandEnvironmentFact>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CommandEvidenceSource {
-    StaticSignal,
-    CaptureLog,
-    NativeMetadata,
-    PayloadHeuristic,
-    CuratedRule,
-}
-
-impl CommandEvidenceSource {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::StaticSignal => "static-signal",
-            Self::CaptureLog => "capture-log",
-            Self::NativeMetadata => "native-metadata",
-            Self::PayloadHeuristic => "payload-heuristic",
-            Self::CuratedRule => "curated-rule",
-        }
-    }
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ShellParseError {
+    #[error("failed to initialize the tree-sitter Bash grammar")]
+    LanguageInitialization,
+    #[error("tree-sitter returned no Bash syntax tree")]
+    MissingTree,
+    #[error("shell syntax error at {start_row}:{start_column}-{end_row}:{end_column}")]
+    Syntax {
+        start_row: usize,
+        start_column: usize,
+        end_row: usize,
+        end_column: usize,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,34 +52,36 @@ pub struct CommandEnvironmentFact {
 pub fn extract_scriptlet_invocations(
     entry_id: &str,
     scriptlet: &Scriptlet,
-) -> Vec<CommandInvocation> {
+) -> Result<Vec<CommandInvocation>, ShellParseError> {
     if !is_shell_interpreter(&scriptlet.interpreter) {
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
     extract_invocations_from_text(InvocationText {
         entry_id,
         content: &scriptlet.content,
-        source: CommandEvidenceSource::StaticSignal,
+        source: CommandEvidenceSource::ShellAst,
         phase: Some(scriptlet.phase.to_string()),
         lifecycle_paths: vec![scriptlet.phase.to_string()],
         interpreter: Some(scriptlet.interpreter.clone()),
     })
 }
 
-pub fn extract_native_entry_invocations(entry: &NativeScriptletEntry) -> Vec<CommandInvocation> {
+pub fn extract_native_entry_invocations(
+    entry: &NativeScriptletEntry,
+) -> Result<Vec<CommandInvocation>, ShellParseError> {
     if entry.kind != NativeScriptletKind::Executable {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     if !matches!(
         entry.support,
         NativeScriptletSupport::Parsed | NativeScriptletSupport::DeferredReview { .. }
     ) {
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
     let Some(content) = native_entry_invocation_text(entry) else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
 
     if !entry
@@ -86,13 +89,13 @@ pub fn extract_native_entry_invocations(entry: &NativeScriptletEntry) -> Vec<Com
         .as_deref()
         .is_none_or(is_shell_interpreter)
     {
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
     extract_invocations_from_text(InvocationText {
         entry_id: &entry.id,
         content,
-        source: CommandEvidenceSource::NativeMetadata,
+        source: CommandEvidenceSource::NativeShellAst,
         phase: entry.compatibility_phase.map(|phase| phase.to_string()),
         lifecycle_paths: entry
             .lifecycle_paths
@@ -118,11 +121,11 @@ pub fn extract_invocations_from_shell_text(
     entry_id: &str,
     content: &str,
     phase: Option<&str>,
-) -> Vec<CommandInvocation> {
+) -> Result<Vec<CommandInvocation>, ShellParseError> {
     extract_invocations_from_text(InvocationText {
         entry_id,
         content,
-        source: CommandEvidenceSource::StaticSignal,
+        source: CommandEvidenceSource::ShellAst,
         phase: phase.map(str::to_string),
         lifecycle_paths: phase.map(str::to_string).into_iter().collect(),
         interpreter: Some("/bin/sh".to_string()),
@@ -138,250 +141,320 @@ struct InvocationText<'a> {
     interpreter: Option<String>,
 }
 
-fn extract_invocations_from_text(input: InvocationText<'_>) -> Vec<CommandInvocation> {
-    let mut invocations = Vec::new();
-
-    for (line_index, line) in input.content.lines().enumerate() {
-        let raw_line = line.trim();
-        if raw_line.is_empty() || raw_line.starts_with('#') {
-            continue;
-        }
-
-        let mut command_index = 0;
-        for segment in split_command_segments(raw_line) {
-            let Some(invocation) =
-                invocation_from_segment(&input, line_index, command_index, raw_line, &segment)
-            else {
-                continue;
-            };
-            invocations.push(invocation);
-            command_index += 1;
-        }
+fn extract_invocations_from_text(
+    input: InvocationText<'_>,
+) -> Result<Vec<CommandInvocation>, ShellParseError> {
+    let mut parser = Parser::new();
+    parser
+        .set_language(&tree_sitter_bash::LANGUAGE.into())
+        .map_err(|_| ShellParseError::LanguageInitialization)?;
+    let tree = parser
+        .parse(input.content, None)
+        .ok_or(ShellParseError::MissingTree)?;
+    let root = tree.root_node();
+    if root.has_error() {
+        let range = first_syntax_error(root)
+            .map(|node| node.range())
+            .unwrap_or_else(|| root.range());
+        return Err(syntax_error(range.start_point, range.end_point));
     }
 
-    invocations
+    let mut invocations = Vec::new();
+    collect_command_nodes(
+        root,
+        CommandExecutionContext::Unconditional,
+        &input,
+        &mut invocations,
+    );
+    Ok(invocations)
 }
 
-fn invocation_from_segment(
+fn collect_command_nodes(
+    node: Node<'_>,
+    inherited_context: CommandExecutionContext,
     input: &InvocationText<'_>,
-    line_index: usize,
-    command_index: usize,
-    raw_line: &str,
-    segment: &str,
-) -> Option<CommandInvocation> {
-    let tokens: Vec<&str> = segment.split_whitespace().collect();
-    let mut environment = Vec::new();
-    let mut index = 0;
-
-    while let Some(token) = tokens.get(index).copied() {
-        if let Some(fact) = environment_fact(token) {
-            environment.push(fact);
-            index += 1;
-            continue;
-        }
-        if is_shell_keyword(token) {
-            index += 1;
-            continue;
-        }
-        break;
+    invocations: &mut Vec<CommandInvocation>,
+) {
+    let context = context_for_node(node.kind(), inherited_context);
+    if node.kind() == "command"
+        && let Some(invocation) = invocation_from_command_node(node, context, input)
+    {
+        invocations.push(invocation);
     }
 
-    index = skip_wrappers(&tokens, index, &mut environment);
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        collect_command_nodes(child, context, input, invocations);
+    }
+}
 
-    let command_token = tokens.get(index)?;
-    let command = normalize_command(command_token)?;
-    let argv = tokens
-        .iter()
-        .skip(index + 1)
-        .filter(|arg| !is_redirect(arg))
-        .map(|arg| clean_token(arg))
-        .filter(|arg| !arg.is_empty())
-        .collect();
+fn invocation_from_command_node(
+    node: Node<'_>,
+    execution_context: CommandExecutionContext,
+    input: &InvocationText<'_>,
+) -> Option<CommandInvocation> {
+    let name = node.child_by_field_name("name")?;
+    let command_provenance = token_provenance(name, input.content);
+    let command_text = node_text(name, input.content);
+    let command = if command_provenance == CommandArgumentProvenance::Literal {
+        decode_literal_shell_word(command_text)
+            .rsplit('/')
+            .next()
+            .unwrap_or_default()
+            .to_string()
+    } else {
+        "<dynamic-command>".to_string()
+    };
+    if command.is_empty() {
+        return None;
+    }
+
+    let mut argv = Vec::new();
+    let mut argument_provenance = Vec::new();
+    let mut environment = Vec::new();
+    let mut cursor = node.walk();
+    if cursor.goto_first_child() {
+        loop {
+            let child = cursor.node();
+            match cursor.field_name() {
+                Some("argument") => {
+                    let provenance = token_provenance(child, input.content);
+                    let raw = node_text(child, input.content);
+                    let value = if provenance == CommandArgumentProvenance::Literal {
+                        decode_literal_shell_word(raw)
+                    } else {
+                        raw.to_string()
+                    };
+                    argv.push(value);
+                    argument_provenance.push(provenance);
+                }
+                _ if child.kind() == "variable_assignment" => {
+                    if let Some(fact) = environment_fact_from_node(child, input.content) {
+                        environment.push(fact);
+                    }
+                }
+                _ => {}
+            }
+            if !cursor.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+    append_redirect_suffix_arguments(node, input.content, &mut argv, &mut argument_provenance);
 
     Some(CommandInvocation {
-        id: format!("{}:line{line_index}:cmd{command_index}", input.entry_id),
+        id: format!("{}:byte{}", input.entry_id, node.start_byte()),
         entry_id: input.entry_id.to_string(),
         source: input.source,
         phase: input.phase.clone(),
         lifecycle_paths: input.lifecycle_paths.clone(),
         interpreter: input.interpreter.clone(),
         command,
+        command_provenance,
         argv,
-        raw_line: Some(raw_line.to_string()),
+        argument_provenance,
+        execution_context,
+        pipeline_id: ancestor_start_byte(node, "pipeline"),
+        raw_line: Some(node_text(node, input.content).to_string()),
         cwd: None,
         environment,
     })
 }
 
-fn split_command_segments(line: &str) -> Vec<String> {
-    let mut segments = Vec::new();
-    let mut current = String::new();
-    let mut chars = line.chars().peekable();
-    let mut quote = None;
-    let mut escaped = false;
+fn ancestor_start_byte(mut node: Node<'_>, kind: &str) -> Option<usize> {
+    while let Some(parent) = node.parent() {
+        if parent.kind() == kind {
+            return Some(parent.start_byte());
+        }
+        node = parent;
+    }
+    None
+}
 
-    while let Some(ch) = chars.next() {
+fn append_redirect_suffix_arguments(
+    command: Node<'_>,
+    source: &str,
+    argv: &mut Vec<String>,
+    argument_provenance: &mut Vec<CommandArgumentProvenance>,
+) {
+    let Some(parent) = command.parent() else {
+        return;
+    };
+    if parent.kind() != "redirected_statement" {
+        return;
+    }
+
+    let mut parent_cursor = parent.walk();
+    for redirect in parent.named_children(&mut parent_cursor) {
+        if redirect.kind() != "file_redirect" || redirect.start_byte() < command.end_byte() {
+            continue;
+        }
+        let mut destination_seen = false;
+        let mut redirect_cursor = redirect.walk();
+        if !redirect_cursor.goto_first_child() {
+            continue;
+        }
+        loop {
+            let child = redirect_cursor.node();
+            if redirect_cursor.field_name() == Some("destination") {
+                if destination_seen {
+                    let provenance = token_provenance(child, source);
+                    let raw = node_text(child, source);
+                    let value = if provenance == CommandArgumentProvenance::Literal {
+                        decode_literal_shell_word(raw)
+                    } else {
+                        raw.to_string()
+                    };
+                    argv.push(value);
+                    argument_provenance.push(provenance);
+                } else {
+                    destination_seen = true;
+                }
+            }
+            if !redirect_cursor.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+}
+
+fn environment_fact_from_node(node: Node<'_>, source: &str) -> Option<CommandEnvironmentFact> {
+    let name = node.child_by_field_name("name")?;
+    let name = node_text(name, source);
+    let value = node
+        .child_by_field_name("value")
+        .map(|value| node_text(value, source).to_string());
+    Some(CommandEnvironmentFact {
+        name: name.to_string(),
+        value,
+    })
+}
+
+fn token_provenance(node: Node<'_>, source: &str) -> CommandArgumentProvenance {
+    let mut kinds = Vec::new();
+    collect_dynamic_kinds(node, source, &mut kinds);
+    kinds.sort();
+    kinds.dedup();
+    match kinds.as_slice() {
+        [] => CommandArgumentProvenance::Literal,
+        [kind] => *kind,
+        _ => CommandArgumentProvenance::Mixed,
+    }
+}
+
+fn collect_dynamic_kinds(node: Node<'_>, source: &str, kinds: &mut Vec<CommandArgumentProvenance>) {
+    match node.kind() {
+        "command_substitution" => kinds.push(CommandArgumentProvenance::CommandSubstitution),
+        "process_substitution" => kinds.push(CommandArgumentProvenance::ProcessSubstitution),
+        "simple_expansion" | "expansion" | "arithmetic_expansion" => {
+            kinds.push(CommandArgumentProvenance::Expansion);
+        }
+        "extglob_pattern" => kinds.push(CommandArgumentProvenance::Glob),
+        "word" if contains_unescaped_glob(node_text(node, source)) => {
+            kinds.push(CommandArgumentProvenance::Glob);
+        }
+        _ => {}
+    }
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        collect_dynamic_kinds(child, source, kinds);
+    }
+}
+
+fn contains_unescaped_glob(value: &str) -> bool {
+    let mut escaped = false;
+    for ch in value.chars() {
         if escaped {
-            current.push(ch);
             escaped = false;
             continue;
         }
         if ch == '\\' {
-            current.push(ch);
             escaped = true;
-            continue;
-        }
-        if let Some(quote_ch) = quote {
-            current.push(ch);
-            if ch == quote_ch {
-                quote = None;
-            }
-            continue;
-        }
-        if ch == '"' || ch == '\'' {
-            current.push(ch);
-            quote = Some(ch);
-            continue;
-        }
-
-        match ch {
-            '&' if chars.peek() == Some(&'&') => {
-                chars.next();
-                push_segment(&mut segments, &mut current);
-            }
-            '|' => {
-                if chars.peek() == Some(&'|') {
-                    chars.next();
-                }
-                push_segment(&mut segments, &mut current);
-            }
-            ';' | '(' | ')' | '`' => push_segment(&mut segments, &mut current),
-            '$' if chars.peek() == Some(&'(') => {
-                chars.next();
-                push_segment(&mut segments, &mut current);
-            }
-            _ => current.push(ch),
+        } else if matches!(ch, '*' | '?' | '[') {
+            return true;
         }
     }
-
-    push_segment(&mut segments, &mut current);
-    segments
+    false
 }
 
-fn push_segment(segments: &mut Vec<String>, current: &mut String) {
-    let segment = current.trim();
-    if !segment.is_empty() {
-        segments.push(segment.to_string());
-    }
-    current.clear();
-}
-
-fn skip_wrappers(
-    tokens: &[&str],
-    mut index: usize,
-    environment: &mut Vec<CommandEnvironmentFact>,
-) -> usize {
-    while let Some(token) = tokens.get(index).map(|token| clean_token(token)) {
-        match token.as_str() {
-            "chroot" => {
-                index += 1;
-                while tokens
-                    .get(index)
-                    .is_some_and(|token| token.starts_with('-'))
-                {
-                    index += 1;
-                }
-                if index < tokens.len() {
-                    index += 1;
+fn decode_literal_shell_word(value: &str) -> String {
+    let mut decoded = String::with_capacity(value.len());
+    let mut chars = value.chars().peekable();
+    let mut quote = None;
+    while let Some(ch) = chars.next() {
+        match quote {
+            Some('\'') => {
+                if ch == '\'' {
+                    quote = None;
+                } else {
+                    decoded.push(ch);
                 }
             }
-            "sudo" => {
-                index += 1;
-                while let Some(flag) = tokens.get(index).map(|token| clean_token(token)) {
-                    if !flag.starts_with('-') {
-                        break;
-                    }
-                    index += 1;
-                    if sudo_flag_takes_arg(&flag) && index < tokens.len() {
-                        index += 1;
+            Some('"') => match ch {
+                '"' => quote = None,
+                '\\' => {
+                    if let Some(next) = chars.peek().copied()
+                        && matches!(next, '$' | '`' | '"' | '\\' | '\n')
+                    {
+                        chars.next();
+                        if next != '\n' {
+                            decoded.push(next);
+                        }
+                    } else {
+                        decoded.push(ch);
                     }
                 }
-            }
-            "env" => {
-                index += 1;
-                while let Some(token) = tokens.get(index).copied() {
-                    if token.starts_with('-') {
-                        index += 1;
-                        continue;
+                _ => decoded.push(ch),
+            },
+            _ => match ch {
+                '\'' | '"' => quote = Some(ch),
+                '\\' => {
+                    if let Some(next) = chars.next()
+                        && next != '\n'
+                    {
+                        decoded.push(next);
                     }
-                    if let Some(fact) = environment_fact(token) {
-                        environment.push(fact);
-                        index += 1;
-                        continue;
-                    }
-                    break;
                 }
-            }
-            _ => break,
+                _ => decoded.push(ch),
+            },
         }
     }
-
-    index
+    decoded
 }
 
-fn sudo_flag_takes_arg(flag: &str) -> bool {
-    matches!(
-        flag,
-        "-u" | "-g" | "-h" | "-p" | "--user" | "--group" | "--host" | "--prompt"
-    )
-}
-
-fn environment_fact(token: &str) -> Option<CommandEnvironmentFact> {
-    let (name, value) = token.split_once('=')?;
-    if name.is_empty() || name.starts_with('/') || !is_env_name(name) {
-        return None;
+fn context_for_node(kind: &str, inherited: CommandExecutionContext) -> CommandExecutionContext {
+    match kind {
+        "command_substitution" => CommandExecutionContext::CommandSubstitution,
+        "function_definition" => CommandExecutionContext::Function,
+        "for_statement" | "c_style_for_statement" | "while_statement" => {
+            CommandExecutionContext::Loop
+        }
+        "if_statement" | "case_statement" | "list" => CommandExecutionContext::Conditional,
+        "pipeline" => CommandExecutionContext::Pipeline,
+        "subshell" => CommandExecutionContext::Subshell,
+        _ => inherited,
     }
-    Some(CommandEnvironmentFact {
-        name: name.to_string(),
-        value: Some(clean_token(value)),
-    })
 }
 
-fn is_env_name(name: &str) -> bool {
-    let mut chars = name.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    if !(first == '_' || first.is_ascii_alphabetic()) {
-        return false;
+fn first_syntax_error(node: Node<'_>) -> Option<Node<'_>> {
+    if node.is_error() || node.is_missing() {
+        return Some(node);
     }
-    chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+    let mut cursor = node.walk();
+    node.children(&mut cursor).find_map(first_syntax_error)
 }
 
-fn normalize_command(token: &str) -> Option<String> {
-    let cleaned = clean_token(token);
-    let command = cleaned.rsplit('/').next().unwrap_or(cleaned.as_str());
-    if command.is_empty() || command.starts_with('-') || command.contains('=') {
-        return None;
+fn syntax_error(start: Point, end: Point) -> ShellParseError {
+    ShellParseError::Syntax {
+        start_row: start.row + 1,
+        start_column: start.column + 1,
+        end_row: end.row + 1,
+        end_column: end.column + 1,
     }
-    Some(command.to_string())
 }
 
-fn clean_token(token: &str) -> String {
-    token
-        .trim_matches(|ch: char| matches!(ch, '"' | '\'' | '[' | ']'))
-        .to_string()
-}
-
-fn is_redirect(token: &str) -> bool {
-    token.starts_with('>') || token.starts_with("2>")
-}
-
-fn is_shell_keyword(token: &str) -> bool {
-    matches!(
-        token,
-        "if" | "then" | "else" | "elif" | "fi" | "do" | "done" | "while" | "for" | "case" | "esac"
-    )
+fn node_text<'a>(node: Node<'_>, source: &'a str) -> &'a str {
+    node.utf8_text(source.as_bytes()).unwrap_or_default()
 }
 
 fn is_shell_interpreter(interpreter: &str) -> bool {
@@ -488,12 +561,13 @@ mod tests {
         let invocations = extract_scriptlet_invocations(
             "rpm:%post",
             &scriptlet("VAR=1 /usr/bin/systemctl daemon-reload && /sbin/ldconfig\n"),
-        );
+        )
+        .unwrap();
 
         assert_eq!(invocations.len(), 2);
-        assert_eq!(invocations[0].id, "rpm:%post:line0:cmd0");
+        assert_eq!(invocations[0].id, "rpm:%post:byte0");
         assert_eq!(invocations[0].entry_id, "rpm:%post");
-        assert_eq!(invocations[0].source, CommandEvidenceSource::StaticSignal);
+        assert_eq!(invocations[0].source, CommandEvidenceSource::ShellAst);
         assert_eq!(invocations[0].phase.as_deref(), Some("post-install"));
         assert_eq!(invocations[0].lifecycle_paths, vec!["post-install"]);
         assert_eq!(invocations[0].interpreter.as_deref(), Some("/bin/sh"));
@@ -506,20 +580,33 @@ mod tests {
         );
         assert_eq!(invocations[0].command, "systemctl");
         assert_eq!(invocations[0].argv, vec!["daemon-reload"]);
-        assert_eq!(invocations[1].id, "rpm:%post:line0:cmd1");
+        assert_eq!(
+            invocations[0].execution_context,
+            CommandExecutionContext::Conditional
+        );
         assert_eq!(invocations[1].command, "ldconfig");
     }
 
     #[test]
-    fn command_evidence_skips_wrappers_and_preserves_raw_line() {
+    fn command_evidence_preserves_wrapper_semantics_instead_of_guessing_through_them() {
         let invocations = extract_scriptlet_invocations(
             "deb:postinst",
             &scriptlet("env -i chroot /target /usr/bin/update-mime-database /usr/share/mime\n"),
-        );
+        )
+        .unwrap();
 
         assert_eq!(invocations.len(), 1);
-        assert_eq!(invocations[0].command, "update-mime-database");
-        assert_eq!(invocations[0].argv, vec!["/usr/share/mime"]);
+        assert_eq!(invocations[0].command, "env");
+        assert_eq!(
+            invocations[0].argv,
+            vec![
+                "-i",
+                "chroot",
+                "/target",
+                "/usr/bin/update-mime-database",
+                "/usr/share/mime"
+            ]
+        );
         assert_eq!(
             invocations[0].raw_line.as_deref(),
             Some("env -i chroot /target /usr/bin/update-mime-database /usr/share/mime")
@@ -527,15 +614,19 @@ mod tests {
     }
 
     #[test]
-    fn command_evidence_skips_wrapper_positional_arguments() {
+    fn command_evidence_does_not_promote_nested_wrapper_text_to_an_invocation() {
         let invocations = extract_scriptlet_invocations(
             "rpm:%post",
             &scriptlet("sudo -u nobody chroot /target /sbin/ldconfig\n"),
-        );
+        )
+        .unwrap();
 
         assert_eq!(invocations.len(), 1);
-        assert_eq!(invocations[0].command, "ldconfig");
-        assert!(invocations[0].argv.is_empty());
+        assert_eq!(invocations[0].command, "sudo");
+        assert_eq!(
+            invocations[0].argv,
+            vec!["-u", "nobody", "chroot", "/target", "/sbin/ldconfig"]
+        );
     }
 
     #[test]
@@ -543,7 +634,11 @@ mod tests {
         let mut perl = scriptlet("#!/usr/bin/perl\nprint 'ok';\n");
         perl.interpreter = "/usr/bin/perl".to_string();
 
-        assert!(extract_scriptlet_invocations("deb:config", &perl).is_empty());
+        assert!(
+            extract_scriptlet_invocations("deb:config", &perl)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -551,12 +646,13 @@ mod tests {
         let invocations = extract_native_entry_invocations(&native_entry(
             "/sbin/ldconfig\n",
             NativeScriptletSupport::Parsed,
-        ));
+        ))
+        .unwrap();
 
         assert_eq!(invocations.len(), 1);
-        assert_eq!(invocations[0].id, "rpm:%post:line0:cmd0");
+        assert_eq!(invocations[0].id, "rpm:%post:byte0");
         assert_eq!(invocations[0].entry_id, "rpm:%post");
-        assert_eq!(invocations[0].source, CommandEvidenceSource::NativeMetadata);
+        assert_eq!(invocations[0].source, CommandEvidenceSource::NativeShellAst);
         assert_eq!(invocations[0].phase.as_deref(), Some("post-install"));
         assert_eq!(invocations[0].lifecycle_paths, vec!["post-install"]);
         assert_eq!(invocations[0].command, "ldconfig");
@@ -566,7 +662,8 @@ mod tests {
             NativeScriptletSupport::DeferredReview {
                 reason_code: "rpm-trigger-semantics-deferred".to_string(),
             },
-        ));
+        ))
+        .unwrap();
         assert_eq!(deferred.len(), 1);
         assert_eq!(deferred[0].command, "ldconfig");
     }
@@ -584,7 +681,7 @@ post_install() {
 ";
         let entry = arch_install_entry(install_source, "post_install", "/sbin/ldconfig\n");
 
-        let invocations = extract_native_entry_invocations(&entry);
+        let invocations = extract_native_entry_invocations(&entry).unwrap();
 
         assert_eq!(invocations.len(), 1);
         assert_eq!(invocations[0].entry_id, "arch:post_install");
@@ -598,11 +695,12 @@ post_install() {
             "recipe:make",
             "npm install atomic-lockfile && bun add js-digest",
             Some("make"),
-        );
+        )
+        .unwrap();
 
         assert_eq!(invocations.len(), 2);
         assert_eq!(invocations[0].entry_id, "recipe:make");
-        assert_eq!(invocations[0].source, CommandEvidenceSource::StaticSignal);
+        assert_eq!(invocations[0].source, CommandEvidenceSource::ShellAst);
         assert_eq!(invocations[0].phase.as_deref(), Some("make"));
         assert_eq!(invocations[0].lifecycle_paths, vec!["make"]);
         assert_eq!(invocations[0].interpreter.as_deref(), Some("/bin/sh"));
@@ -610,5 +708,76 @@ post_install() {
         assert_eq!(invocations[0].argv, vec!["install", "atomic-lockfile"]);
         assert_eq!(invocations[1].command, "bun");
         assert_eq!(invocations[1].argv, vec!["add", "js-digest"]);
+        assert!(invocations.iter().all(|invocation| {
+            invocation.execution_context == CommandExecutionContext::Conditional
+        }));
+    }
+
+    #[test]
+    fn parser_rejects_malformed_shell_instead_of_emitting_fake_commands() {
+        let error = extract_invocations_from_shell_text(
+            "rpm:%post",
+            "if true; then systemctl daemon-reload",
+            Some("post-install"),
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, ShellParseError::Syntax { .. }));
+    }
+
+    #[test]
+    fn parser_records_dynamic_arguments_and_nested_execution_context() {
+        let invocations = extract_invocations_from_shell_text(
+            "deb:postinst",
+            "if test \"$1\" = configure; then helper \"$@\"; fi",
+            Some("post-install"),
+        )
+        .unwrap();
+        let helper = invocations
+            .iter()
+            .find(|invocation| invocation.command == "helper")
+            .unwrap();
+
+        assert_eq!(
+            helper.argument_provenance,
+            [CommandArgumentProvenance::Expansion]
+        );
+        assert_eq!(
+            helper.execution_context,
+            CommandExecutionContext::Conditional
+        );
+    }
+
+    #[test]
+    fn parser_preserves_quoted_maintscript_argv_forwarding() {
+        let invocations = extract_invocations_from_shell_text(
+            "deb:preinst",
+            "dpkg-maintscript-helper rm_conffile /etc/demo.conf 2.0-1~ demo -- \"$@\"",
+            Some("pre-install"),
+        )
+        .unwrap();
+
+        assert_eq!(invocations.len(), 1);
+        assert_eq!(invocations[0].argv.last().unwrap(), "\"$@\"");
+        assert_eq!(
+            invocations[0].argument_provenance.last().unwrap(),
+            &CommandArgumentProvenance::Expansion
+        );
+    }
+
+    #[test]
+    fn parser_preserves_arguments_after_file_descriptor_redirection() {
+        let invocations = extract_invocations_from_shell_text(
+            "recipe:make",
+            "go 2>&1 install example.org/tool",
+            Some("make"),
+        )
+        .unwrap();
+
+        assert_eq!(invocations.len(), 1);
+        assert_eq!(
+            invocations[0].argv,
+            ["install".to_string(), "example.org/tool".to_string()]
+        );
     }
 }

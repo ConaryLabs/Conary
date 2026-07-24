@@ -98,7 +98,6 @@ pub(super) fn make_conversion_result(
     blobs: std::collections::HashMap<String, Vec<u8>>,
 ) -> ConversionResult {
     use conary_core::ccs::builder::{BuildResult, FileEntry};
-    use conary_core::ccs::convert::FidelityReport;
     use conary_core::ccs::manifest::{CcsManifest, Hooks, Package};
 
     let manifest = CcsManifest {
@@ -144,12 +143,8 @@ pub(super) fn make_conversion_result(
     ConversionResult {
         build_result,
         package_path: None,
-        fidelity: FidelityReport::default(),
         original_format: "rpm".to_string(),
         original_checksum: "sha256:test".to_string(),
-        detected_hooks: Hooks::default(),
-        inferred_capabilities: None,
-        inference_error: None,
         legacy_provenance: None,
         scriptlet_classification: Default::default(),
         legacy_scriptlets: None,

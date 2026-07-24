@@ -15,27 +15,23 @@
 //! | Atomic transactions | Yes | Yes |
 //! | Unified verification | Yes | Yes |
 //!
-//! ## Scriptlet Handling: Idempotent Overlay
+//! ## Scriptlet Handling: Typed Lifecycle Evidence
 //!
-//! 1. Extract declarative hooks (users, groups, systemd, etc.)
-//! 2. Run declarative hooks first
-//! 3. Run original scriptlet as-is (don't modify/strip)
-//! 4. Assume scripts are idempotent (standard practice)
+//! 1. Parse shell scriptlets with a formal grammar.
+//! 2. Dispatch exact native and helper contracts to typed adapters.
+//! 3. Promote only complete adapter effects into declarative manifest hooks.
+//! 4. Preserve original scriptlets and unresolved evidence for replay policy.
 
 pub mod adapters;
-mod analyzer;
 mod apparmor_adapters;
 pub mod blocked_classes;
-pub mod capture;
 pub mod command_evidence;
 mod converter;
 mod debian_adapters;
 pub mod effects;
-mod fidelity;
 #[cfg(test)]
 mod golden_fixtures;
 pub mod legacy_provenance;
-pub mod mock;
 pub mod payload_hints;
 mod public_policy;
 pub mod scriptlet_bundle;
@@ -43,9 +39,7 @@ mod security_policy;
 mod selinux_adapters;
 pub mod support_matrix;
 
-pub use analyzer::{DetectedHook, ScriptletAnalyzer};
 pub use converter::{ConversionOptions, ConversionResult, LegacyConverter};
-pub use fidelity::{FidelityLevel, FidelityReport};
 pub use legacy_provenance::LegacyProvenance;
 pub use scriptlet_bundle::{
     ScriptletBundleBuild, ScriptletBundleInput, ScriptletBundleSummary,

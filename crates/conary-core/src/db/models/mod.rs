@@ -108,10 +108,11 @@ pub use resolution::{CacheTier, PackageResolution, PrimaryStrategy, ResolutionSt
 pub use scriptlet_entry::ScriptletEntry;
 pub use scriptlet_evidence::{
     BackfillStatus, CLUSTER_KEY_PREFIX, NewScriptletEvidenceCluster, NewScriptletEvidenceSample,
-    ScriptletEvidenceBackfillRun, ScriptletEvidenceCluster, ScriptletEvidenceClusterDetail,
-    ScriptletEvidenceClusterListFilter, ScriptletEvidenceClusterReconciliationLink,
-    ScriptletEvidenceClusterSummary, ScriptletEvidenceNote, ScriptletEvidenceSample,
-    ScriptletEvidenceState, ScriptletEvidenceStateEvent,
+    SCRIPTLET_EVIDENCE_RECORD_SCHEMA_V1, ScriptletEvidenceBackfillRun, ScriptletEvidenceCluster,
+    ScriptletEvidenceClusterDetail, ScriptletEvidenceClusterListFilter,
+    ScriptletEvidenceClusterSummary, ScriptletEvidenceKind, ScriptletEvidenceNote,
+    ScriptletEvidenceRecord, ScriptletEvidenceSample, ScriptletEvidenceState,
+    ScriptletEvidenceStateEvent,
 };
 pub use state::{RestorePlan, StateDiff, StateEngine, StateMember, SystemState};
 pub use subpackage::{RelatedPackages, SubpackageRelationship, show_subpackage_guidance};

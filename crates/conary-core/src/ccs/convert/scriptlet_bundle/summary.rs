@@ -30,10 +30,10 @@ pub(super) fn summary_from_bundle(
     ));
     review_reason_codes.sort();
     review_reason_codes.dedup();
-    let unknown_commands = bundle
+    let unknown_command_evidence = bundle
         .entries
         .iter()
-        .flat_map(|entry| entry.unknown_commands.iter().cloned())
+        .flat_map(|entry| entry.unknown_command_evidence.iter().cloned())
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();
@@ -77,7 +77,7 @@ pub(super) fn summary_from_bundle(
         },
         blocked_reason_codes,
         review_reason_codes,
-        unknown_commands,
+        unknown_command_evidence,
         blocked_classes,
         boot_security_intents,
         security_policy_intents,
@@ -260,7 +260,7 @@ mod tests {
 
         ScriptletEffect {
             kind: "file-capability".to_string(),
-            source: EffectSource::StaticSignal,
+            source: EffectSource::ShellAst,
             confidence: EffectConfidence::Declared,
             replacement: EffectReplacement::Complete,
             adapter_id: Some("file-capability/v1".to_string()),
@@ -302,7 +302,7 @@ mod tests {
             )),
             source_evidence_refs: Vec::new(),
             effects: vec![file_capability_effect(capability)],
-            unknown_commands: Vec::new(),
+            unknown_command_evidence: Vec::new(),
             blocked_classes: Vec::new(),
             boot_security_intents: Vec::new(),
             security_policy_intents: Vec::new(),
@@ -346,7 +346,7 @@ mod tests {
             source_evidence_refs: Vec::new(),
             effects: vec![ScriptletEffect {
                 kind: "sysctl-setting".to_string(),
-                source: EffectSource::StaticSignal,
+                source: EffectSource::ShellAst,
                 confidence: EffectConfidence::Declared,
                 replacement: EffectReplacement::Complete,
                 adapter_id: Some("sysctl/v1".to_string()),
@@ -357,7 +357,7 @@ mod tests {
                 reason_code: Some("helper-complete-sysctl".to_string()),
                 extra,
             }],
-            unknown_commands: Vec::new(),
+            unknown_command_evidence: Vec::new(),
             blocked_classes: Vec::new(),
             boot_security_intents: Vec::new(),
             security_policy_intents: Vec::new(),
@@ -372,7 +372,7 @@ mod tests {
     fn stale_public_sysctl_bundle(key: &str) -> LegacyScriptletBundle {
         LegacyScriptletBundle {
             schema: LEGACY_SCRIPTLET_SCHEMA_V1.to_string(),
-            schema_revision: 1,
+            schema_revision: 2,
             source_format: SourceFormat::Rpm,
             source_family: "fedora-rhel".to_string(),
             source_distro: Some("fedora".to_string()),
@@ -408,7 +408,7 @@ mod tests {
     fn stale_public_file_capability_bundle(capability: &str) -> LegacyScriptletBundle {
         LegacyScriptletBundle {
             schema: LEGACY_SCRIPTLET_SCHEMA_V1.to_string(),
-            schema_revision: 1,
+            schema_revision: 2,
             source_format: SourceFormat::Rpm,
             source_family: "fedora-rhel".to_string(),
             source_distro: Some("fedora".to_string()),
@@ -456,7 +456,7 @@ mod tests {
         );
         assert!(summary.blocked_reason_codes.is_empty());
         assert!(summary.review_reason_codes.is_empty());
-        assert!(summary.unknown_commands.is_empty());
+        assert!(summary.unknown_command_evidence.is_empty());
         assert!(summary.blocked_classes.is_empty());
         assert!(summary.boot_security_intents.is_empty());
         assert!(summary.security_policy_intents.is_empty());

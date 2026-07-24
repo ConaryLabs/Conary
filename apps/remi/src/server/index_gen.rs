@@ -53,8 +53,8 @@ pub struct VersionEntry {
     pub version: String,
     /// Original package format (rpm, deb, arch)
     pub original_format: String,
-    /// Conversion fidelity (full, high, partial, low)
-    pub fidelity: String,
+    /// Typed aggregate scriptlet fidelity.
+    pub scriptlet_fidelity: String,
     /// When this version was converted
     pub converted_at: Option<String>,
     /// SHA-256 checksum of original package
@@ -262,7 +262,7 @@ fn get_packages_for_distro(
             VersionEntry {
                 version: version.clone(),
                 original_format: conv.original_format.clone(),
-                fidelity: conv.conversion_fidelity.clone(),
+                scriptlet_fidelity: conv.scriptlet_fidelity.clone(),
                 converted_at: conv.converted_at.clone(),
                 original_checksum: conv.original_checksum.clone(),
                 scriptlets: Some(ScriptletPackageMetadata::from(&conv.scriptlet_summary())),
@@ -272,7 +272,7 @@ fn get_packages_for_distro(
             VersionEntry {
                 version,
                 original_format: distro_to_format(distro),
-                fidelity: "pending".to_string(),
+                scriptlet_fidelity: "pending".to_string(),
                 converted_at: None,
                 original_checksum: String::new(),
                 scriptlets: None,
@@ -284,7 +284,7 @@ fn get_packages_for_distro(
 
     // Also add packages from converted_packages that match this distro,
     // using the structured identity fields (package_name, package_version,
-    // distro) instead of parsing detected_hooks JSON.
+    // distro).
     for conv in public_ready {
         // Match on the structured distro field first; fall back to format
         // matching for legacy records that predate the identity fields.
@@ -308,7 +308,7 @@ fn get_packages_for_distro(
                 entry.versions.push(VersionEntry {
                     version: version.to_string(),
                     original_format: conv.original_format.clone(),
-                    fidelity: conv.conversion_fidelity.clone(),
+                    scriptlet_fidelity: conv.scriptlet_fidelity.clone(),
                     converted_at: conv.converted_at.clone(),
                     original_checksum: conv.original_checksum.clone(),
                     scriptlets: Some(ScriptletPackageMetadata::from(&conv.scriptlet_summary())),
@@ -451,7 +451,7 @@ mod tests {
                     versions: vec![VersionEntry {
                         version: "1.24.0-1".to_string(),
                         original_format: "arch".to_string(),
-                        fidelity: "high".to_string(),
+                        scriptlet_fidelity: "fully-replaced".to_string(),
                         converted_at: Some("2026-01-16T12:00:00Z".to_string()),
                         original_checksum: "sha256:abc123".to_string(),
                         scriptlets: None,
@@ -481,7 +481,6 @@ mod tests {
             "1.0".to_string(),
             "rpm".to_string(),
             "sha256:source".to_string(),
-            "high".to_string(),
             &["sha256:chunk".to_string()],
             3,
             "sha256:content".to_string(),
@@ -533,7 +532,6 @@ mod tests {
             "1.0".to_string(),
             "rpm".to_string(),
             "sha256:private-only-source".to_string(),
-            "high".to_string(),
             &["sha256:private-only-chunk".to_string()],
             42,
             "sha256:private-only-content".to_string(),

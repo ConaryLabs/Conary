@@ -183,10 +183,6 @@ struct ConversionBenchmarkArgs {
     #[arg(long)]
     jsonl: bool,
 
-    /// Parse package metadata and scriptlets without writing converted CCS packages.
-    #[arg(long)]
-    scan_only: bool,
-
     /// Optional R2 endpoint. When omitted, R2 write-through timing is recorded as skipped.
     #[arg(long)]
     r2_endpoint: Option<String>,
@@ -476,15 +472,9 @@ fn run_conversion_benchmark_command(args: ConversionBenchmarkArgs) -> Result<()>
         }
 
         for package in packages {
-            let result = if args.scan_only {
-                service
-                    .scan_package_scriptlets(&args.distro, &package, None, None)
-                    .await
-            } else {
-                service
-                    .benchmark_package_conversion(&args.distro, &package, None, None)
-                    .await
-            };
+            let result = service
+                .benchmark_package_conversion(&args.distro, &package, None, None)
+                .await;
 
             match result {
                 Ok(evidence) => {

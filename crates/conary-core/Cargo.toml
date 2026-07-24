@@ -98,6 +98,8 @@ hex.workspace = true                      # Hex encoding for chunk hashes
 
 # Regex for scriptlet analysis
 regex.workspace = true
+tree-sitter.workspace = true
+tree-sitter-bash.workspace = true
 
 # Enum string conversion macros
 strum = "0.28"

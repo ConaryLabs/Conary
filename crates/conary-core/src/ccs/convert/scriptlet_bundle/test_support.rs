@@ -30,7 +30,7 @@ pub(super) fn package_metadata(name: &str, version: &str) -> PackageMetadata {
 pub(super) fn complete_effect(kind: &str, command: &str) -> ScriptletEffectEvidence {
     ScriptletEffectEvidence {
         kind: kind.to_string(),
-        source: EffectSource::StaticSignal,
+        source: EffectSource::ShellAst,
         confidence: EffectConfidence::Inferred,
         replacement: EffectReplacement::Complete,
         adapter_id: Some("test-adapter/v1".to_string()),

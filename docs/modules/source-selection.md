@@ -323,6 +323,8 @@ affinity data.
   replatform summaries
 - `apps/conary/src/commands/model/apply.rs` for model apply execution and
   replatform install dispatch
+- `apps/conary/src/commands/model/apply/derived.rs` for persisted
+  derived-package definition and build ownership
 - `apps/conary/src/commands/model/remote_diff.rs` and
   `apps/conary/src/commands/model/lock.rs` for remote include drift and
   lockfile behavior

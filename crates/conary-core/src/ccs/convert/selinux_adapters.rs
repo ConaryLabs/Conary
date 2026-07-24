@@ -413,10 +413,10 @@ fn short_flag_chars_are(arg: &str, allowed: &[char]) -> bool {
 
 fn effect_source(source: CommandEvidenceSource) -> EffectSource {
     match source {
-        CommandEvidenceSource::StaticSignal => EffectSource::StaticSignal,
-        CommandEvidenceSource::CaptureLog => EffectSource::CaptureLog,
-        CommandEvidenceSource::NativeMetadata => EffectSource::NativeMetadata,
-        CommandEvidenceSource::PayloadHeuristic => EffectSource::PayloadHeuristic,
-        CommandEvidenceSource::CuratedRule => EffectSource::CuratedRule,
+        CommandEvidenceSource::ShellAst => EffectSource::ShellAst,
+        CommandEvidenceSource::NativeShellAst => EffectSource::NativeShellAst,
+        CommandEvidenceSource::PackageMetadata => EffectSource::PackageMetadata,
+        CommandEvidenceSource::HelperGrammar => EffectSource::HelperGrammar,
+        CommandEvidenceSource::Unresolved => EffectSource::Unknown("unresolved".to_string()),
     }
 }

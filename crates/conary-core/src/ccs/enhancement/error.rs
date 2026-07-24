@@ -21,10 +21,6 @@ pub enum EnhancementError {
     #[error("enhancement already in progress for trove_id={0}")]
     AlreadyInProgress(i64),
 
-    /// Capability inference failed
-    #[error("capability inference failed: {0}")]
-    InferenceFailed(String),
-
     /// Provenance extraction failed
     #[error("provenance extraction failed: {0}")]
     ProvenanceFailed(String),

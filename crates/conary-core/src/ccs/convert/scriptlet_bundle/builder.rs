@@ -5,8 +5,8 @@ use super::entries::build_entries;
 use super::summary::{aggregate_status, decision_counts, summary_from_bundle};
 use super::types::{ScriptletBundleBuild, ScriptletBundleInput};
 use crate::ccs::legacy_scriptlets::{
-    ForeignReplayPolicy, LEGACY_SCRIPTLET_SCHEMA_V1, LegacyScriptletBundle, SourceFormat,
-    VersionScheme,
+    ForeignReplayPolicy, LEGACY_SCRIPTLET_SCHEMA_REVISION, LEGACY_SCRIPTLET_SCHEMA_V1,
+    LegacyScriptletBundle, SourceFormat, VersionScheme,
 };
 use std::collections::BTreeMap;
 
@@ -48,7 +48,7 @@ pub fn build_legacy_scriptlet_bundle(
 
     let mut bundle = LegacyScriptletBundle {
         schema: LEGACY_SCRIPTLET_SCHEMA_V1.to_string(),
-        schema_revision: 1,
+        schema_revision: LEGACY_SCRIPTLET_SCHEMA_REVISION,
         source_format: format.clone(),
         source_family: source_family(&format).to_string(),
         source_distro: Some(source_distro),

@@ -6,11 +6,12 @@ use clap::Parser;
 use conary::cli::{Cli, Commands, QueryCommands};
 use conary_core::ccs::builder::{CcsBuilder, write_ccs_package};
 use conary_core::ccs::legacy_scriptlets::{
-    DecisionCounts, EffectConfidence, EffectReplacement, EffectSource, ForeignReplayPolicy,
+    CommandArgumentProvenance, CommandEvidenceSource, CommandExecutionContext, DecisionCounts,
+    EffectConfidence, EffectReplacement, EffectSource, ForeignReplayPolicy,
     LEGACY_SCRIPTLET_SCHEMA_V1, LegacyScriptletBundle, LegacyScriptletEntry, LifecyclePath,
     NativeInvocation, PublicationPolicy, PublicationStatus, RpmTriggerMetadata,
     RpmTriggerTargetConstraint, ScriptletDecision, ScriptletEffect, ScriptletFidelity,
-    SourceFormat, TargetCompatibility, TransactionOrder, VersionScheme,
+    SourceFormat, TargetCompatibility, TransactionOrder, UnknownCommandEvidence, VersionScheme,
 };
 use conary_core::ccs::manifest::CcsManifest;
 use conary_core::db;
@@ -96,7 +97,7 @@ fn bundle_fixture() -> LegacyScriptletBundle {
     let legacy_body = "systemctl daemon-reload\n";
     LegacyScriptletBundle {
         schema: LEGACY_SCRIPTLET_SCHEMA_V1.to_string(),
-        schema_revision: 1,
+        schema_revision: 2,
         source_format: SourceFormat::Rpm,
         source_family: "fedora-rhel".to_string(),
         source_distro: Some("fedora".to_string()),
@@ -199,7 +200,7 @@ fn entry_fixture(
         source_evidence_refs: vec!["capture:rpm:%post".to_string()],
         effects: vec![ScriptletEffect {
             kind: "ldconfig".to_string(),
-            source: EffectSource::StaticSignal,
+            source: EffectSource::ShellAst,
             confidence: EffectConfidence::Declared,
             replacement: EffectReplacement::Complete,
             adapter_id: Some("ldconfig/v1".to_string()),
@@ -213,7 +214,21 @@ fn entry_fixture(
             reason_code: Some("ldconfig-cache-refresh".to_string()),
             extra: BTreeMap::new(),
         }],
-        unknown_commands: vec!["systemctl".to_string()],
+        unknown_command_evidence: vec![UnknownCommandEvidence {
+            command: "systemctl".to_string(),
+            command_provenance: CommandArgumentProvenance::Literal,
+            argv: vec!["restart".to_string(), "nginx.service".to_string()],
+            argument_provenance: vec![
+                CommandArgumentProvenance::Literal,
+                CommandArgumentProvenance::Literal,
+            ],
+            execution_context: CommandExecutionContext::Unconditional,
+            phase: Some("post-install".to_string()),
+            lifecycle_paths: vec!["post-install".to_string()],
+            source: CommandEvidenceSource::ShellAst,
+            environment: Vec::new(),
+            pipeline_id: None,
+        }],
         blocked_classes: vec![],
         boot_security_intents: Vec::new(),
         security_policy_intents: Vec::new(),

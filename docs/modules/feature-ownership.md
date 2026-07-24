@@ -53,7 +53,9 @@ while preserving live-mutation labels, dry-run bypasses, command risk checks,
 and top-level command UX.
 
 **Start here:** `apps/conary/src/dispatch.rs`;
-`apps/conary/src/dispatch/root.rs`; `apps/conary/src/dispatch/context.rs`;
+`apps/conary/src/dispatch/root.rs`;
+`apps/conary/src/dispatch/root/try_preflight.rs`;
+`apps/conary/src/dispatch/context.rs`;
 `apps/conary/src/dispatch/`; `apps/conary/src/cli/`;
 `apps/conary/src/command_risk.rs`; `apps/conary/src/live_host_safety.rs`.
 
@@ -100,6 +102,7 @@ mutation flows for local package operations.
 `apps/conary/src/commands/install/blocklist.rs`;
 `apps/conary/src/commands/install/ccs_transaction.rs`;
 `apps/conary/src/commands/install/conversion.rs`;
+`apps/conary/src/commands/install/conversion/tests/`;
 `apps/conary/src/commands/install/dep_mode.rs`;
 `apps/conary/src/commands/install/dep_resolution.rs`;
 `apps/conary/src/commands/install/validation.rs`;
@@ -230,6 +233,7 @@ replatform convergence behavior.
 `apps/conary/src/commands/model/presentation.rs`;
 `apps/conary/src/commands/model/diff.rs`;
 `apps/conary/src/commands/model/apply.rs`;
+`apps/conary/src/commands/model/apply/derived.rs`;
 `apps/conary/src/commands/model/check.rs`;
 `apps/conary/src/commands/model/snapshot.rs`;
 `apps/conary/src/commands/model/remote_diff.rs`;
@@ -340,6 +344,7 @@ install CCS packages, and preserve/replay legacy scriptlet metadata safely.
 `apps/conary/src/commands/ccs/payload_paths.rs`;
 `docs/modules/ccs.md`;
 `docs/modules/test-fixtures.md`;
+`docs/specs/foreign-package-lifecycle-contracts.md`;
 `docs/specs/static-repo-format-v1.md`.
 
 **Neighbor systems:** install orchestration, Remi publication, repository
@@ -373,6 +378,7 @@ crosses Remi publication;
 `cargo test -p remi publication` when conversion output affects public serving.
 
 **Docs to update:** `docs/modules/ccs.md`; `docs/modules/test-fixtures.md`;
+`docs/specs/foreign-package-lifecycle-contracts.md`;
 `docs/specs/static-repo-format-v1.md`; `docs/llms/subsystem-map.md`; active CCS
 designs or plans when the change is still in flight.
 
@@ -383,8 +389,10 @@ version-routing/adaptation surfaces. Config-only v2 packages do not require a
 target profile; lifecycle-bearing authoring must use exact public profile IDs
 (`fedora-44`, `ubuntu-26.04`, or `arch`). Debug TOML is never install
 authority. Text-pattern detections are advisory, public-ready serving is gated
-by adapter/support-matrix evidence, and raw legacy replay remains local and
-fail-closed.
+by formal parser evidence, exact helper grammar, payload/state validation, and
+adapter/support-matrix evidence. Heuristics may prioritize engineering work but
+cannot grant compatibility, publication, mutation, or security authority. Raw
+legacy replay remains local and fail-closed.
 
 ## Packaging, Try Sessions, And Static Repository Publishing
 
@@ -410,6 +418,7 @@ pinned by the repository.
 `apps/conary/src/commands/new.rs`;
 `apps/conary/src/commands/publish.rs`;
 `apps/conary/src/commands/cook.rs`;
+`apps/conary/src/commands/cook/foreign_package.rs`;
 `apps/conary/src/commands/record_mode/`;
 `apps/conary/src/commands/diagnostics.rs`;
 `apps/conary/src/commands/operation_records.rs`;
@@ -605,6 +614,7 @@ release uploads, and static test fixtures through Remi.
 `apps/remi/src/server/conversion/benchmark.rs`;
 `apps/remi/src/server/index_gen.rs`;
 `apps/remi/src/server/prewarm.rs`; `apps/remi/src/server/handlers/`;
+`apps/remi/src/server/handlers/admin/scriptlet_evidence/tests.rs`;
 `docs/modules/remi.md`; `docs/modules/test-fixtures.md`.
 
 **Neighbor systems:** CCS conversion metadata, repository client behavior,

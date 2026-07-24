@@ -1,10 +1,8 @@
 // apps/remi/src/server/conversion/benchmark.rs
-//! Conversion benchmark and scan-only scriptlet corpus evidence.
+//! Conversion benchmark evidence.
 
-use super::lookup::PackageDownloadRefresh;
 use super::{ConversionBenchmarkEvidence, ConversionService};
-use anyhow::{Context, Result, anyhow};
-use tempfile::TempDir;
+use anyhow::{Result, anyhow};
 
 impl ConversionService {
     pub async fn benchmark_package_sample(
@@ -42,71 +40,6 @@ impl ConversionService {
         .map_err(|e| anyhow!("benchmark package sample task panicked: {e}"))?
     }
 
-    pub async fn scan_package_scriptlets(
-        &self,
-        distro: &str,
-        package_name: &str,
-        version: Option<&str>,
-        architecture: Option<&str>,
-    ) -> Result<ConversionBenchmarkEvidence> {
-        // Goal 0 accepts full package downloads for scriptlet-only scanning so the
-        // evidence path reuses existing parsers. Before production-scale corpus
-        // scans, optimize this with ranged reads for RPM headers and DEB control
-        // archives.
-        let repo_pkg = self
-            .find_package_for_conversion_async(distro, package_name, version, architecture)
-            .await?;
-        let cache_dir = self
-            .cache_dir
-            .canonicalize()
-            .unwrap_or_else(|_| self.cache_dir.clone());
-        let temp_dir = TempDir::new_in(&cache_dir).context("Failed to create temp directory")?;
-        let (repo_pkg, pkg_path) = self
-            .download_package_with_refresh_async(PackageDownloadRefresh {
-                distro,
-                package_name,
-                version,
-                architecture,
-                repo_pkg,
-                dest_dir: temp_dir.path(),
-            })
-            .await?;
-        let package_version = repo_pkg.version.clone();
-        let service = self.clone();
-        let distro_owned = distro.to_string();
-        let package_owned = package_name.to_string();
-        let summary_result = tokio::task::spawn_blocking(
-            move || -> Result<crate::server::scriptlet_corpus::ScriptletCorpusSummary> {
-                let (mut metadata, _files, _format) =
-                    service.parse_package(&pkg_path, &distro_owned)?;
-                Self::apply_repository_identity(&mut metadata, &repo_pkg);
-                Ok(
-                    crate::server::scriptlet_corpus::ScriptletCorpusSummary::from_scriptlets(
-                        &distro_owned,
-                        &package_owned,
-                        &metadata.scriptlets,
-                    ),
-                )
-            },
-        )
-        .await
-        .map_err(|e| anyhow!("scriptlet scan task panicked: {e}"))?;
-        let summary = summary_result?;
-
-        Ok(ConversionBenchmarkEvidence {
-            distro: distro.to_string(),
-            package: package_name.to_string(),
-            version: Some(package_version),
-            scan_only: true,
-            cache_state: "scan-only".to_string(),
-            r2_configured: self.r2_store.is_some(),
-            timing: None,
-            scriptlet_summary: Some(summary),
-            converted: false,
-            error: None,
-        })
-    }
-
     pub async fn benchmark_package_conversion(
         &self,
         distro: &str,
@@ -124,11 +57,9 @@ impl ConversionService {
                     distro: distro.to_string(),
                     package: package_name.to_string(),
                     version: Some(result.version),
-                    scan_only: false,
                     cache_state: result.cache_state,
                     r2_configured: self.r2_store.is_some(),
                     timing: result.timing,
-                    scriptlet_summary: None,
                     converted: true,
                     error: None,
                 })
@@ -137,11 +68,9 @@ impl ConversionService {
                 distro: distro.to_string(),
                 package: package_name.to_string(),
                 version: version.map(ToString::to_string),
-                scan_only: false,
                 cache_state: "error".to_string(),
                 r2_configured: self.r2_store.is_some(),
                 timing: None,
-                scriptlet_summary: None,
                 converted: false,
                 error: Some(err.to_string()),
             }),

@@ -1,7 +1,9 @@
 // conary-core/src/ccs/convert/scriptlet_bundle/types.rs
 
 use crate::ccs::convert::effects::ScriptletClassificationReport;
-use crate::ccs::legacy_scriptlets::{BootSecurityIntentEvidence, LegacyScriptletBundle};
+use crate::ccs::legacy_scriptlets::{
+    BootSecurityIntentEvidence, LegacyScriptletBundle, UnknownCommandEvidence,
+};
 use crate::ccs::security_policy::SecurityPolicyIntent;
 use crate::packages::common::PackageMetadata;
 use crate::packages::traits::ExtractedFile;
@@ -31,7 +33,6 @@ pub struct ScriptletBundleBuild {
 
 /// Internal conversion summary. Do not serialize directly in public API responses.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
 pub struct ScriptletBundleSummary {
     pub scriptlet_fidelity: String,
     pub target_compatibility: String,
@@ -41,7 +42,7 @@ pub struct ScriptletBundleSummary {
     pub decision_counts: ScriptletDecisionCountsSummary,
     pub blocked_reason_codes: Vec<String>,
     pub review_reason_codes: Vec<String>,
-    pub unknown_commands: Vec<String>,
+    pub unknown_command_evidence: Vec<UnknownCommandEvidence>,
     pub blocked_classes: Vec<String>,
     #[serde(default)]
     pub boot_security_intents: Vec<BootSecurityIntentEvidence>,
@@ -62,7 +63,7 @@ impl Default for ScriptletBundleSummary {
             decision_counts: ScriptletDecisionCountsSummary::default(),
             blocked_reason_codes: Vec::new(),
             review_reason_codes: Vec::new(),
-            unknown_commands: Vec::new(),
+            unknown_command_evidence: Vec::new(),
             blocked_classes: Vec::new(),
             boot_security_intents: Vec::new(),
             security_policy_intents: Vec::new(),

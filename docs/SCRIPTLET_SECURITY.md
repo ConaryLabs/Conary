@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-07-16
-revision: 14
-summary: Record file-capability policy and the green public Group O shipping proof
+last_updated: 2026-07-24
+revision: 15
+summary: Use formal shell evidence for scriptlet authority and runtime risk
 ---
 
 # Scriptlet Security Model
@@ -29,19 +29,35 @@ Conary implements multiple defense layers:
 
 ### 1. Script Risk Analysis
 
-Before execution, scripts are analyzed for dangerous patterns:
+Before execution, `analyze_script()` consumes the shared tree-sitter Bash
+command evidence from `security/command_risk.rs`. Exact command and argument
+grammars identify destructive filesystem operations, network and package
+manager fetches, dynamic execution, persistence, credential paths, and related
+risks. Runtime `--sandbox=auto`, recipe validation, and conversion therefore
+share the same versioned classifier instead of separate regex or substring
+tables.
 
-| Risk Level | Patterns | Action |
-|------------|----------|--------|
-| Critical | `curl\|sh`, `wget\|sh`, `eval $` | Remote code execution |
-| High | `rm -rf /`, `mkfs`, `dd if=* of=/dev/`, fork bombs | System destruction |
-| Medium | `chmod u+s`, `crontab`, `/etc/shadow`, `/etc/sudoers` | Privilege escalation |
-| Low | `nc`, `/dev/tcp/`, `base64 -d` | Network backdoors, obfuscation |
+Malformed shell and dynamic command names produce typed unresolved findings and
+select protected execution. Literal danger words in comments, documentation,
+or quoted data do not become commands. Risk classification can select a stricter
+sandbox or report risk, but it never proves that a script is safe, equivalent to
+native behavior, compatible with a target, or eligible for publication.
 
-Risk analysis is performed by `analyze_script()` in
-`crates/conary-core/src/container/mod.rs`.
+### 2. Formal Conversion Authority
 
-### 2. Sandbox Modes
+Legacy conversion parses shell scriptlets with the tree-sitter Bash grammar.
+Each command node records command and argument provenance plus execution
+context. Only an adapter for an exact documented helper grammar, validated
+against package payload or persisted state and backed by a named native model,
+can establish replacement authority. Dynamic or conditional helper forms are
+retained as typed discovery evidence unless the adapter explicitly proves that
+expansion as part of the documented grammar.
+
+Malformed shell produces a parser diagnostic rather than a guessed list of
+commands. Regexes and normalized strings remain useful for diagnostics,
+redaction, and engineering prioritization only.
+
+### 3. Sandbox Modes
 
 Scriptlet execution supports three sandbox modes:
 
@@ -61,7 +77,7 @@ Configure via CLI or environment:
 - `--sandbox=never` - Legacy direct execution; scriptlets can mutate the live
   host with the package manager's privileges
 
-### 3. Container Isolation
+### 4. Container Isolation
 
 Protected mode, target-root execution, and direct legacy execution are distinct
 boundaries. Changeset metadata records both the requested sandbox mode
@@ -133,20 +149,15 @@ execution for low-risk live-root scripts; those runs record
 - Wall-clock timeout: 60 seconds (configurable)
 - Scripts exceeding timeout are killed with SIGKILL
 
-### 4. Scriptlet Capture Mode
+### 5. Typed Lifecycle Conversion
 
-When adopting legacy packages (RPM/DEB), Conary can **capture** the intent of imperative scriptlets instead of running them on the user's system.
-
-This mode runs the scriptlet in a strict, ephemeral sandbox with **mocked system tools** (`useradd`, `systemctl`, etc.).
-
-#### How Capture Works
-1.  **Mock Environment:** A temporary root is created with fake binaries that log their arguments instead of modifying the system.
-2.  **Execution:** The script runs in a network-isolated sandbox.
-3.  **Diff:** Files created by the script (e.g., config generation) are captured and added to the package payload.
-4.  **Intent Parsing:** Calls to mock tools are parsed and converted to declarative CCS Hooks (e.g., `useradd nginx` -> `[[hooks.users]] name="nginx"`).
-5.  **Discard:** The original imperative script is discarded.
-
-This transforms unsafe runtime scripts into safe, atomic build-time declarations.
+Foreign package conversion does not execute scriptlets against mocked tools or
+infer declarations from observed command strings. Conary parses shell
+scriptlets with a formal Bash grammar and combines that syntax with exact
+RPM, dpkg, and libalpm lifecycle metadata. A versioned adapter may emit native
+hooks only when its documented grammar and target-state model prove complete
+replacement. Otherwise the original scriptlet and structured residual evidence
+remain available to the guarded replay policy and engineering queue.
 
 ### Boot And Security Scriptlet Evidence
 
@@ -186,7 +197,7 @@ eligible for native policy handling only when AppArmor is present. Conversion
 never runs `apparmor_parser` against the host policy store. Mode changes such
 as `aa-enforce` and `aa-complain`, profile disable/status helpers, broad
 directory reloads, and non-payload profile paths remain blocked/private and use
-`block-on-enforcing-target` fallback when captured as review intent.
+`block-on-enforcing-target` fallback when represented as review intent.
 Promoting any broader SELinux or AppArmor form requires target-provider facts
 for availability, mode, policy store behavior, profile or module content
 validation where applicable, and an operator-visible absent-provider fallback.

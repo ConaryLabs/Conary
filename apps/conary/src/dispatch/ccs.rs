@@ -171,7 +171,6 @@ pub(super) async fn dispatch_ccs_command(
             force,
             stats,
             dry_run,
-            install_root,
         } => {
             commands::ccs::cmd_ccs_enhance(
                 &db.db_path,
@@ -182,7 +181,6 @@ pub(super) async fn dispatch_ccs_command(
                 force,
                 stats,
                 dry_run,
-                &install_root,
             )
             .await
         }

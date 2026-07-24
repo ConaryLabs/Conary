@@ -113,13 +113,11 @@ impl ConversionService {
             metadata.version.clone(),
             format.to_string(),
             original_checksum,
-            conversion_result.fidelity.level.to_string(),
             &chunk_hashes,
             total_size as i64,
             content_hash.clone(),
             final_ccs_path.to_string_lossy().to_string(),
         );
-        converted.detected_hooks = Some(serde_json::to_string(&conversion_result.detected_hooks)?);
         converted.set_scriptlet_metadata(&conversion_result.scriptlet_metadata)?;
         converted.package_architecture = package_architecture;
         let publication = converted.scriptlet_summary_for_publication();
@@ -127,7 +125,6 @@ impl ConversionService {
         if decision_refusal(decision).is_some() {
             let mut report = raw_report_from_summary(&publication.summary, publication.valid);
             report.review_artifact_available = true;
-            let conversion_fidelity = conversion_result.fidelity.level.to_string();
             let artifact_path = write_review_artifact(
                 &self.cache_dir,
                 ReviewArtifactInput {
@@ -136,7 +133,7 @@ impl ConversionService {
                     version: &metadata.version,
                     architecture: converted.package_architecture.as_deref(),
                     original_format: &conversion_result.original_format,
-                    conversion_fidelity: &conversion_fidelity,
+                    scriptlet_fidelity: &publication.summary.scriptlet_fidelity,
                     conversion_version: CONVERSION_VERSION,
                     ccs_content_hash: &content_hash,
                     ccs_total_size: total_size,
@@ -266,9 +263,19 @@ mod tests {
     };
     use super::*;
     use conary_core::ccs::convert::{ScriptletBundleSummary, ScriptletDecisionCountsSummary};
+    use conary_core::ccs::legacy_scriptlets::UnknownCommandEvidence;
     use conary_core::db::models::{ConvertedPackage, RepositoryPackage};
     use conary_core::packages::common::PackageMetadata;
     use std::path::PathBuf;
+
+    fn unknown_command(command: &str, phase: &str) -> UnknownCommandEvidence {
+        UnknownCommandEvidence {
+            command: command.to_string(),
+            phase: Some(phase.to_string()),
+            source: conary_core::ccs::legacy_scriptlets::CommandEvidenceSource::PackageMetadata,
+            ..UnknownCommandEvidence::default()
+        }
+    }
 
     #[test]
     fn test_build_result_from_existing_with_server_fields() {
@@ -289,7 +296,6 @@ mod tests {
             "1.24.0".to_string(),
             "rpm".to_string(),
             "sha256:orig".to_string(),
-            "high".to_string(),
             &["chunk1".to_string(), "chunk2".to_string()],
             2048,
             "sha256:content_abc".to_string(),
@@ -339,7 +345,6 @@ mod tests {
             "8.5.0".to_string(),
             "rpm".to_string(),
             "sha256:curl-orig".to_string(),
-            "high".to_string(),
             &[],
             512,
             "sha256:curl-content".to_string(),
@@ -403,8 +408,8 @@ mod tests {
             .review_reason_codes
             .push("review-class-deb-trigger".to_string());
         review_required
-            .unknown_commands
-            .push("custom-helper".to_string());
+            .unknown_command_evidence
+            .push(unknown_command("custom-helper", "post-install"));
 
         let mut blocked = goal8a_scriptlet_summary("blocked", "blocked", "blocked");
         blocked.decision_counts = ScriptletDecisionCountsSummary {
@@ -569,7 +574,7 @@ mod tests {
             evidence_digest: Some(conary_core::hash::sha256_prefixed(b"remi-scriptlets")),
             blocked_reason_codes: vec!["blocked-class-network".to_string()],
             review_reason_codes: vec!["review-class-debconf".to_string()],
-            unknown_commands: vec!["custom-helper".to_string()],
+            unknown_command_evidence: vec![unknown_command("custom-helper", "post-install")],
             blocked_classes: vec!["network".to_string()],
             review_artifact_path: Some("/tmp/review-artifact.json".to_string()),
             ..ScriptletBundleSummary::default()

@@ -440,16 +440,16 @@ mod tests {
 
         // Insert a converted package with chunk_hashes_json
         conn.execute(
-            "INSERT INTO converted_packages (original_format, original_checksum, conversion_version, conversion_fidelity, chunk_hashes_json)
-             VALUES ('rpm', 'sha256:test1', 1, 'high', ?1)",
+            "INSERT INTO converted_packages (original_format, original_checksum, conversion_version, chunk_hashes_json)
+             VALUES ('rpm', 'sha256:test1', 1, ?1)",
             [r#"["hash_a","hash_b","hash_c"]"#],
         )
         .unwrap();
 
         // Insert another with different hashes
         conn.execute(
-            "INSERT INTO converted_packages (original_format, original_checksum, conversion_version, conversion_fidelity, chunk_hashes_json)
-             VALUES ('deb', 'sha256:test2', 1, 'high', ?1)",
+            "INSERT INTO converted_packages (original_format, original_checksum, conversion_version, chunk_hashes_json)
+             VALUES ('deb', 'sha256:test2', 1, ?1)",
             [r#"["hash_b","hash_d"]"#],
         )
         .unwrap();

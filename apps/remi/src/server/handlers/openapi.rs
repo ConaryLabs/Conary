@@ -176,48 +176,6 @@ pub async fn openapi_spec() -> Response {
                     "responses": { "200": { "description": "Backfill batch result" }, "401": { "description": "Invalid or missing token" }, "403": { "description": "Insufficient scope" } }
                 }
             },
-            "/v1/admin/scriptlet-evidence/reconcile-unknown-commands": {
-                "post": {
-                    "operationId": "reconcileScriptletEvidenceUnknownCommands",
-                    "summary": "Reconcile unknown-command queue noise",
-                    "description": "Classifies one bounded batch of legacy unknown-command clusters under the current queue-only normalization contract. Dry-run is the default. Applied batches retain real command signals and supersede provable shell or maintainer-dispatch noise without deleting samples, notes, state events, or changing converted-package publication state.",
-                    "tags": ["scriptlet-evidence"],
-                    "security": [{ "bearerAuth": [] }],
-                    "requestBody": {
-                        "required": false,
-                        "content": { "application/json": { "schema": {
-                            "type": "object",
-                            "properties": {
-                                "dry_run": { "type": "boolean", "default": true },
-                                "limit": { "type": "integer", "minimum": 1, "maximum": 5000, "default": 500 },
-                                "after_cluster_key": { "type": "string", "maxLength": 256 }
-                            }
-                        }}}
-                    },
-                    "responses": { "200": { "description": "Unknown-command reconciliation batch result" }, "400": { "description": "Invalid cursor" }, "401": { "description": "Invalid or missing token" }, "403": { "description": "Insufficient scope" } }
-                }
-            },
-            "/v1/admin/scriptlet-evidence/reconcile-apparmor": {
-                "post": {
-                    "operationId": "reconcileScriptletEvidenceAppArmor",
-                    "summary": "Reconcile historical AppArmor queue identity",
-                    "description": "Rematerializes one bounded batch of historical AppArmor observations under the current approved-path normalization contract. Dry-run is the default. Applied batches move observations to current clusters, persist merge/split links, preserve source workflow history, and do not change converted-package publication state.",
-                    "tags": ["scriptlet-evidence"],
-                    "security": [{ "bearerAuth": [] }],
-                    "requestBody": {
-                        "required": false,
-                        "content": { "application/json": { "schema": {
-                            "type": "object",
-                            "properties": {
-                                "dry_run": { "type": "boolean", "default": true },
-                                "limit": { "type": "integer", "minimum": 1, "maximum": 5000, "default": 500 },
-                                "after_cluster_key": { "type": "string", "maxLength": 256 }
-                            }
-                        }}}
-                    },
-                    "responses": { "200": { "description": "AppArmor reconciliation batch result" }, "400": { "description": "Invalid cursor" }, "401": { "description": "Invalid or missing token" }, "403": { "description": "Insufficient scope" } }
-                }
-            },
             "/v1/admin/scriptlet-evidence/clusters": {
                 "get": {
                     "operationId": "listScriptletEvidenceClusters",
@@ -231,7 +189,6 @@ pub async fn openapi_spec() -> Response {
                         { "name": "blocked_class", "in": "query", "required": false, "schema": { "type": "string" } },
                         { "name": "command", "in": "query", "required": false, "schema": { "type": "string" } },
                         { "name": "package", "in": "query", "required": false, "schema": { "type": "string" } },
-                        { "name": "include_superseded", "in": "query", "required": false, "schema": { "type": "boolean", "default": false } },
                         { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "maximum": 1000 } },
                         { "name": "offset", "in": "query", "required": false, "schema": { "type": "integer", "minimum": 0 } }
                     ],
@@ -242,7 +199,7 @@ pub async fn openapi_spec() -> Response {
                 "get": {
                     "operationId": "getScriptletEvidenceCluster",
                     "summary": "Get scriptlet evidence cluster detail",
-                    "description": "Returns admin-only cluster detail, sample summaries, state events, maintainer notes, and incoming/outgoing normalization reconciliation links. Sample data exposes review-artifact availability and staleness but never raw local artifact paths.",
+                    "description": "Returns admin-only cluster detail, sample summaries, state events, and maintainer notes. Sample data exposes review-artifact availability and staleness but never raw local artifact paths.",
                     "tags": ["scriptlet-evidence"],
                     "security": [{ "bearerAuth": [] }],
                     "parameters": [{ "name": "cluster_key", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Stable s1-prefixed scriptlet evidence cluster key" }],
@@ -371,7 +328,6 @@ pub async fn openapi_spec() -> Response {
                             "type": "object",
                             "required": ["url"],
                             "properties": {
-                                "name": { "type": "string", "description": "Ignored (renames not supported). Optional for backwards compatibility." },
                                 "url": { "type": "string", "description": "Base URL for repository metadata" },
                                 "content_url": { "type": "string", "description": "Separate URL for package downloads" },
                                 "enabled": { "type": "boolean", "description": "Whether the repo is active" },
@@ -756,14 +712,6 @@ mod tests {
                 &["get"][..],
             ),
             ("/v1/admin/scriptlet-evidence/backfill", &["post"][..]),
-            (
-                "/v1/admin/scriptlet-evidence/reconcile-unknown-commands",
-                &["post"][..],
-            ),
-            (
-                "/v1/admin/scriptlet-evidence/reconcile-apparmor",
-                &["post"][..],
-            ),
             ("/v1/admin/scriptlet-evidence/clusters", &["get"][..]),
             (
                 "/v1/admin/scriptlet-evidence/clusters/{cluster_key}",

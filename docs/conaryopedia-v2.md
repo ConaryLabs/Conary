@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-07-24
-revision: 20
-summary: Document package-adoption preview and packaged-host behavior
+revision: 21
+summary: Document the current-only pre-alpha database epoch
 ---
 
 # Conaryopedia v2
@@ -35,7 +35,7 @@ The original Conaryopedia documented the rPath-era Conary (2005-2012). This docu
 - [6.1 Architecture Overview](#61-architecture-overview) -- [6.2 Configuration](#62-toml-configuration) -- [6.3 Conversion Pipeline](#63-on-demand-conversion-pipeline) -- [6.4 Chunk Storage](#64-content-addressed-chunk-storage) -- [6.5 LRU Eviction](#65-lru-cache-eviction) -- [6.6 Bloom Filter](#66-bloom-filter-dos-protection) -- [6.7 Pull-Through Caching](#67-pull-through-caching-and-request-coalescing) -- [6.8 Chunk Endpoints](#68-chunk-serving-endpoints) -- [6.9 R2/CDN](#69-r2cdn-integration) -- [6.10 Sparse Index](#610-sparse-http-index) -- [6.11 Search](#611-full-text-search) -- [6.12 OCI Distribution](#612-oci-distribution-spec-v2) -- [6.13 Security](#613-security) -- [6.14 Negative Cache](#614-negative-cache) -- [6.15 Job Management](#615-job-management) -- [6.16 Analytics](#616-analytics-and-metrics) -- [6.17 Delta Manifests](#617-delta-manifests) -- [6.18 Pre-Warming](#618-pre-warming-pipeline) -- [6.19 Federated Index](#619-federated-sparse-index) -- [6.20 Remi Lite](#620-remi-lite-zero-config-lan-proxy) -- [6.21 Index Signing](#621-index-generation-and-signing) -- [6.22 Deployment](#622-deployment) -- [6.23 API Reference](#623-complete-api-reference) -- [6.24 Test Data API](#624-test-data-api) -- [6.25 Canonical Package Mapping](#625-canonical-package-mapping) -- [6.26 Chunk Garbage Collection](#626-chunk-garbage-collection)
 
 **7. [Security and Trust](#7-security-and-trust)**
-- [7.1 Capability Declarations](#71-capability-declarations) -- [7.2 Capability Inference](#72-capability-inference) -- [7.3 Capability Enforcement](#73-capability-enforcement) -- [7.4 Capability-Based Resolution](#74-capability-based-dependency-resolution) -- [7.5 Capability Audit](#75-capability-audit) -- [7.6 Container Sandboxing](#76-container-sandboxing) -- [7.7 Package DNA](#77-package-dna-provenance) -- [7.8 TUF Supply Chain Trust](#78-tuf-supply-chain-trust) -- [7.9 Hermetic Build Security](#79-hermetic-build-security) -- [7.10 Security Architecture Summary](#710-security-architecture-summary)
+- [7.1 Capability Declarations](#71-capability-declarations) -- [7.2 Capability Enforcement](#72-capability-enforcement) -- [7.3 Capability-Based Resolution](#73-capability-based-dependency-resolution) -- [7.4 Capability Audit](#74-capability-audit) -- [7.5 Container Sandboxing](#75-container-sandboxing) -- [7.6 Package DNA](#76-package-dna-provenance) -- [7.7 TUF Supply Chain Trust](#77-tuf-supply-chain-trust) -- [7.8 Hermetic Build Security](#78-hermetic-build-security) -- [7.9 Security Architecture Summary](#79-security-architecture-summary)
 
 **8. [Advanced Topics](#chapter-8----advanced-topics)**
 - [8.1 Bootstrap](#81-bootstrap-building-an-os-from-nothing) -- [8.2 CAS Federation](#82-cas-federation-distributed-content-sharing) -- [8.3 Delta Updates](#83-delta-updates-binary-diffs) -- [8.4 System Model](#84-system-model-declarative-os-state) -- [8.5 Recipe System](#85-recipe-system-building-from-source) -- [8.6 Automated Maintenance](#86-automated-maintenance) -- [8.7 Transaction Engine](#87-transaction-engine-crash-safe-operations) -- [8.8 Putting It All Together](#88-putting-it-all-together)
@@ -444,9 +444,10 @@ sudo conary system init --profile fedora-44
 
 Use `--profile ubuntu-26.04` or `--profile arch` on those supported hosts. This
 creates the SQLite database at `/var/lib/conary/conary.db`, configures Remi and
-only the selected profile's native repositories, and sets up all tables
-(currently schema v79). The database is the single source of truth for all
-package state -- there are no configuration files for runtime state. Recovery
+only the selected profile's native repositories, and initializes the one
+current pre-alpha schema epoch. Databases from the former migration chain must
+be rebuilt rather than upgraded. The database is the single source of truth
+for all package state -- there are no configuration files for runtime state. Recovery
 metadata is SQLite-native: first-wave adoption and unadoption paths write
 checkpoint backups under the runtime root, and generation publication writes a
 DB backup under `/conary/generations/<n>/state/`.
@@ -510,7 +511,12 @@ When installing a legacy package (RPM/DEB/Arch), you can convert it to CCS forma
 conary install nginx --convert-to-ccs --yes
 ```
 
-This enables CAS deduplication, component selection, and changeset-backed state tracking for the installed package. Scriptlets can be captured and converted to declarative hooks during conversion flows; imperative scriptlets that still run at install time use the scriptlet sandbox controls below.
+This enables CAS deduplication, component selection, and changeset-backed state
+tracking for the installed package. Conary preserves original scriptlets and
+promotes only complete, typed lifecycle-adapter effects into declarative hooks.
+Unresolved scriptlets remain explicit evidence for guarded replay or engineering;
+Conary does not execute scriptlets against mocked tools and guess hooks from the
+result.
 
 #### What Happens During Install
 
@@ -1999,22 +2005,24 @@ Executes a single command with the specified package available, then cleans up.
 
 ### 4.10 Enhancement
 
-Packages converted from legacy formats (RPM/DEB/Arch) can be retroactively enhanced with CCS features:
+Packages converted from legacy formats (RPM/DEB/Arch) can have exact conversion
+provenance recorded after installation:
 
 ```bash
 conary ccs enhance --all-pending         # Enhance all pending packages
 conary ccs enhance --trove-id 42         # Enhance a specific trove
 conary ccs enhance --update-outdated     # Re-enhance with latest version
-conary ccs enhance --types capabilities,provenance  # Specific enhancements
+conary ccs enhance --types provenance       # Explicit enhancement type
 conary ccs enhance --force               # Re-enhance even if already done
 conary ccs enhance --stats               # Show enhancement statistics
 conary ccs enhance --dry-run             # Preview
 ```
 
-Enhancement types:
-- **capabilities**: Infer what system resources the package needs (network, filesystem, syscalls)
-- **provenance**: Extract source origin, build environment, and signature information
-- **subpackages**: Detect relationships between subpackages (e.g., `nginx`, `nginx-devel`, `nginx-doc`)
+The only enhancement type is **provenance**. Capability policy must be declared
+by package authority or derived from exact package metadata such as file
+capabilities; package-name and file-path guesses never become policy.
+Subpackage relationships must likewise come from package-manager metadata, not
+name suffixes.
 
 ### 4.11 Lockfiles
 
@@ -3764,114 +3772,7 @@ Seven predefined syscall profiles cover common package archetypes:
 
 Each profile is a static array of syscall names. Explicit `allow` and `deny` lists are merged with the profile: `final = (profile + allow) - deny`.
 
-## 7.2 Capability Inference
-
-Most packages don't ship with explicit capability declarations. Conary's 4-tier inference engine (`src/capability/inference/`) automatically deduces what a package needs, with each tier trading speed for accuracy.
-
-### Tier 1: Well-Known Profiles
-
-The fastest and most reliable tier. A curated registry of 100+ well-known packages maps package names to pre-defined capability profiles (`src/capability/inference/wellknown.rs`).
-
-```rust
-static PROFILES: LazyLock<HashMap<&'static str, InferredCapabilities>> = LazyLock::new(|| {
-    let mut m = HashMap::new();
-    m.insert("nginx", network_server_profile("nginx",
-        &["80", "443"],
-        &["/etc/nginx", "/etc/ssl/certs", "/usr/share/nginx"],
-        &["/var/log/nginx", "/var/cache/nginx", "/run/nginx.pid"]));
-    // ... 100+ more profiles
-    m
-});
-```
-
-Coverage includes web servers (nginx, Apache, Caddy), databases (PostgreSQL, MySQL, Redis, MongoDB, Elasticsearch), message queues (RabbitMQ), DNS (bind9, unbound, CoreDNS), mail (Postfix, Dovecot), VPN (OpenVPN, WireGuard), monitoring (Prometheus, Grafana), Kubernetes components, container tools, shells, editors, build tools, programming languages, package managers, and more.
-
-Lookup handles versioned names: `python3.11` matches the `python` profile by checking if the suffix after the known name starts with a digit.
-
-### Tier 2: Heuristic Rules
-
-Rule-based analysis using package metadata without reading binary contents (`src/capability/inference/heuristics.rs`). Four signal categories:
-
-**Package name patterns**:
-- Ends with `-server` or `d` (daemon) -> `network-server` profile
-- Ends with `-client` or `-cli` -> network client
-- Starts with `lib` -> library (minimal profile)
-
-**File path analysis**:
-- `/usr/sbin/` executables -> system daemon
-- `/etc/<name>/` files -> adds read path
-- `/var/log/<name>/` files -> adds write path
-- `/var/lib/<name>/` files -> adds write path
-
-**Systemd service analysis**: Parses `[Unit]` section for `After=network`, extracts `ListenStream=` port directives, checks for `PrivateNetwork=true` (which means no network needed).
-
-**Dependency analysis**: Linking against `libssl` implies outbound port 443. Linking against `libpq` implies outbound port 5432. GUI libraries (GTK, Qt, X11, Wayland) trigger the `gui-app` profile.
-
-### Tier 3: Configuration File Scanning
-
-Regex-based scanning of package configuration files for network and filesystem hints:
-
-```rust
-// Network patterns
-static PORT_RE: LazyLock<Regex> = LazyLock::new(||
-    Regex::new(r"(?i)(?:listen|port|bind)[=:\s]+(\d{1,5})").unwrap());
-
-// Filesystem patterns
-static PATH_RE: LazyLock<Regex> = LazyLock::new(||
-    Regex::new(r"(?i)(?:file|path|dir|log|root)[=:\s]+(/[^\s;#]+)").unwrap());
-```
-
-This catches cases where the binary is generic (e.g., a Python interpreter) but the configuration reveals the actual resource usage (e.g., `listen_port = 8080` in a config file).
-
-### Tier 4: ELF Binary Analysis
-
-The slowest but most accurate tier. Uses `goblin` to parse ELF binaries and extract evidence (`src/capability/inference/binary.rs`):
-
-**Linked libraries**: `libssl.so.3` -> network + SSL. `libpq.so.5` -> database. `libgtk-3.so.0` -> GUI.
-
-**Imported symbols**: Socket calls (`socket`, `bind`, `listen`, `accept`, `connect`) -> network. Privileged calls (`setuid`, `chroot`, `mount`) -> system daemon. Exec calls (`execve`, `fork`, `system`) -> needs execute paths.
-
-Uses `rayon` for parallel analysis when a package contains multiple executables.
-
-### Inference Pipeline
-
-```rust
-pub fn infer_capabilities(name: &str, ..., options: &InferenceOptions) -> InferredCapabilities {
-    // Tier 1: Check well-known profiles
-    if let Some(profile) = WellKnownProfiles::lookup(name) { return profile; }
-
-    // Tier 2: Heuristic rules
-    let heuristic = HeuristicInferrer::infer(&files, &metadata)?;
-    if heuristic.confidence.overall() >= Confidence::Medium { return heuristic; }
-
-    // Tier 3: Config file scanning (integrated into main infer fn)
-    let config_merged = scan_config_files_and_merge(heuristic);
-
-    // Tier 4: Binary analysis (opt-in, slow)
-    if options.enable_binary_analysis {
-        let binary = BinaryAnalyzer::analyze_all(&executables)?;
-        return config_merged.merge(binary);
-    }
-
-    config_merged
-}
-```
-
-Results are cached in a global LRU cache keyed by `name + version + file_hashes`. The `merge()` function combines results from multiple tiers, preferring higher-confidence evidence for each capability category.
-
-### Confidence Levels
-
-Every inference result carries a confidence score:
-- **High**: Well-known profile or positive binary evidence (linked library, imported symbol)
-- **Medium**: Heuristic match (name pattern, file paths, dependencies)
-- **Low**: No strong evidence found (inference is a best guess)
-
-The `InferenceOptions` struct controls behavior:
-- `max_tier`: Stop at this tier (default: 2, for speed)
-- `enable_binary_analysis`: Allow tier 4 (default: false)
-- `min_confidence`: Reject results below this threshold
-
-## 7.3 Capability Enforcement
+## 7.2 Capability Enforcement
 
 Declarations without enforcement are just documentation. Conary uses two Linux kernel mechanisms to make capability declarations real: Landlock LSM for filesystem access and seccomp-BPF for system call filtering. Both are applied post-fork, pre-exec during scriptlet execution.
 
@@ -4076,7 +3977,7 @@ default_tier = "prompt"
 
 **Implementation:** `conary-core/src/capability/policy.rs`
 
-## 7.4 Capability-Based Dependency Resolution
+## 7.3 Capability-Based Dependency Resolution
 
 Beyond enforcing capabilities at runtime, Conary uses them for dependency resolution. Instead of depending on a specific package name, a recipe can depend on a *capability* (`src/capability/resolver.rs`).
 
@@ -4115,7 +4016,7 @@ The resolver queries both the `provides` table (traditional dependency matching)
 
 Filesystem matching supports both exact paths and prefix matching (path `/etc/ssl/certs` matches a capability for `/etc/ssl`).
 
-## 7.5 Capability Audit
+## 7.4 Capability Audit
 
 The audit system (`src/capability/mod.rs`) compares declared capabilities against actual behavior:
 
@@ -4148,7 +4049,7 @@ The audit workflow:
 - `conary capability run <package> -- <command>` -- enforces capability restrictions (landlock + seccomp) while running `<command>`
 - `conary capability run <package> --audit -- <command>` -- audit/log mode; violations are logged but not blocked
 
-## 7.6 Container Sandboxing
+## 7.5 Container Sandboxing
 
 Scriptlet execution (install/remove hooks) runs inside a lightweight Linux container (`src/container/mod.rs`). This protects the host from malicious or buggy scripts without requiring a full container runtime.
 
@@ -4272,7 +4173,7 @@ namespace support or using a VM. Direct legacy execution remains available only
 through `--sandbox=never` plus the live-host mutation acknowledgement and records
 `effective_sandbox=direct`.
 
-## 7.7 Package DNA (Provenance)
+## 7.6 Package DNA (Provenance)
 
 Conary can track package provenance through a 4-layer "Package DNA" system
 (`src/provenance/`). Each layer captures a different aspect of the package's
@@ -4476,7 +4377,7 @@ pub fn build_slsa_statement(name: &str, version: &str, provenance: &Provenance) 
 
 Materials include upstream sources, git commits, and build dependencies with their DNA hashes (using Package URL format: `pkg:conary/{name}@{version}`).
 
-## 7.8 TUF Supply Chain Trust
+## 7.7 TUF Supply Chain Trust
 
 Conary implements The Update Framework (TUF, spec v1.0.31) for securing repository metadata (`src/trust/`). TUF provides protection against four classes of attack:
 
@@ -4630,7 +4531,7 @@ conary trust rotate-key -- Rotate a role's key with old+new+root keys
 
 Disabling TUF requires `--force` to prevent accidental downgrade of security guarantees.
 
-## 7.9 Hermetic Build Security
+## 7.8 Hermetic Build Security
 
 Conary's recipe system enforces build reproducibility through a two-phase model with different security contexts:
 
@@ -4655,7 +4556,7 @@ conary cook --no-isolation recipe.toml # Unsafe: disable all isolation
 
 **Cache invalidation** uses `DependencyHashes` -- a hash over the content of all installed build dependencies (not just their version strings). If any dependency is rebuilt differently (even at the same version), the cache key changes and the package is rebuilt.
 
-## 7.10 Security Architecture Summary
+## 7.9 Security Architecture Summary
 
 The security layers work together as defense-in-depth:
 

@@ -15,10 +15,23 @@ use crate::server::auth::{Scope, TokenScopes, json_error};
 
 use super::{check_scope, validate_path_param};
 
-/// Request body for creating or updating a repository.
+/// Request body for creating a repository.
 #[derive(Debug, Deserialize)]
-pub struct RepoRequest {
-    pub name: Option<String>,
+#[serde(deny_unknown_fields)]
+pub struct CreateRepoRequest {
+    pub name: String,
+    pub url: String,
+    pub content_url: Option<String>,
+    pub enabled: Option<bool>,
+    pub priority: Option<i32>,
+    pub gpg_check: Option<bool>,
+    pub metadata_expire: Option<i32>,
+}
+
+/// Request body for replacing a repository's mutable configuration.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateRepoRequest {
     pub url: String,
     pub content_url: Option<String>,
     pub enabled: Option<bool>,
@@ -95,16 +108,13 @@ pub async fn list_repos(
 pub async fn create_repo(
     State(state): State<Arc<RwLock<ServerState>>>,
     scopes: Option<axum::Extension<TokenScopes>>,
-    Json(body): Json<RepoRequest>,
+    Json(body): Json<CreateRepoRequest>,
 ) -> Response {
     if let Some(err) = check_scope(&scopes, Scope::ReposWrite) {
         return err;
     }
 
-    let name = match body.name.as_deref() {
-        Some(n) => n.trim(),
-        None => return json_error(400, "Name is required", "INVALID_INPUT"),
-    };
+    let name = body.name.trim();
     if name.is_empty() || name.len() > 128 {
         return json_error(
             400,
@@ -190,7 +200,7 @@ pub async fn update_repo(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path(name): Path<String>,
     scopes: Option<axum::Extension<TokenScopes>>,
-    Json(body): Json<RepoRequest>,
+    Json(body): Json<UpdateRepoRequest>,
 ) -> Response {
     if let Some(err) = check_scope(&scopes, Scope::ReposWrite) {
         return err;
@@ -205,15 +215,6 @@ pub async fn update_repo(
     }
     if url::Url::parse(&url).is_err() {
         return json_error(400, "Invalid URL format", "INVALID_INPUT");
-    }
-
-    if let Some(ref n) = body.name {
-        let n = n.trim();
-        if !n.is_empty()
-            && let Some(err) = validate_path_param(n, "repo name")
-        {
-            return err;
-        }
     }
 
     if let Some(ref cu) = body.content_url {
@@ -454,7 +455,6 @@ mod tests {
         // Update repo
         let app4 = rebuild_app(&db_path);
         let update_body = serde_json::json!({
-            "name": "fedora",
             "url": "https://example.org/fedora",
             "priority": 20
         });
@@ -625,7 +625,6 @@ mod tests {
 
         let app2 = rebuild_app(&db_path);
         let update_body = serde_json::json!({
-            "name": "fedora",
             "url": "https://93.184.216.34/fedora",
             "content_url": "http://10.0.0.42/content"
         });
@@ -642,5 +641,47 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_update_repo_rejects_create_only_name_field() {
+        let (app, db_path) = test_app().await;
+
+        let create_body = serde_json::json!({
+            "name": "fedora",
+            "url": "https://93.184.216.34/fedora"
+        });
+        let create_resp = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/v1/admin/repos")
+                    .header("Authorization", "Bearer test-admin-token-12345")
+                    .header("Content-Type", "application/json")
+                    .body(axum::body::Body::from(create_body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(create_resp.status(), StatusCode::CREATED);
+
+        let update_body = serde_json::json!({
+            "name": "ignored-by-old-contract",
+            "url": "https://93.184.216.34/fedora"
+        });
+        let response = rebuild_app(&db_path)
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("PUT")
+                    .uri("/v1/admin/repos/fedora")
+                    .header("Authorization", "Bearer test-admin-token-12345")
+                    .header("Content-Type", "application/json")
+                    .body(axum::body::Body::from(update_body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
     }
 }

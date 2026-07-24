@@ -327,11 +327,7 @@ fn convert_single_package_inner(
         format_str, trove.name, trove.version, arch_suffix
     );
 
-    let mut converted = ConvertedPackage::new(
-        format_str.to_string(),
-        original_checksum,
-        "high".to_string(),
-    );
+    let mut converted = ConvertedPackage::new(format_str.to_string(), original_checksum);
     converted.package_name = Some(trove.name.clone());
     converted.package_version = Some(trove.version.clone());
     converted.total_size = Some(build_result.total_size as i64);

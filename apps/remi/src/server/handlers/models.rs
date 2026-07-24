@@ -13,12 +13,16 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use conary_core::db::models::{CollectionMember, Trove, TroveType};
-use conary_core::model::remote::{CollectionData, CollectionMemberData};
+use conary_core::model::remote::CollectionData;
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+
+#[cfg(test)]
+use conary_core::model::remote::CollectionMemberData;
+#[cfg(test)]
+use std::collections::BTreeMap;
 
 /// Summary entry for the collection listing endpoint
 #[derive(Serialize)]
@@ -421,83 +425,41 @@ fn store_collection(
 
 /// Build CollectionData for a named collection from the database.
 ///
-/// Checks `remote_collections` first for a stored wire format (which preserves
-/// includes/pins/exclude from the original PUT). Falls back to reconstructing
-/// from troves + collection_members for legacy data.
+/// Loads the stored wire format, which is the current authority for published
+/// collection semantics including includes, pins, and exclusions.
 fn build_collection_data(
     db_path: &std::path::Path,
     name: &str,
 ) -> Result<Option<CollectionData>, anyhow::Error> {
     let conn = Connection::open(db_path)?;
 
-    // Try the stored wire format first (preserves includes/pins/exclude).
-    // Use '' sentinel for label (matching the normalized convention).
-    // Also check NULL for backwards compatibility with pre-v58 data.
     let stored: Option<String> = conn
         .query_row(
             "SELECT data_json FROM remote_collections
-             WHERE name = ?1 AND (label = '' OR label IS NULL)
+             WHERE name = ?1 AND label = ''
              ORDER BY fetched_at DESC LIMIT 1",
             [name],
             |row| row.get(0),
         )
         .optional()?;
 
-    if let Some(json) = stored {
-        if let Ok(data) = serde_json::from_str::<CollectionData>(&json) {
-            return Ok(Some(data));
-        }
-        // If deserialization fails, fall through to reconstruction
-        tracing::warn!(
-            "Stored wire format for collection '{}' is invalid, reconstructing",
-            name
-        );
-    }
-
-    // Fallback: reconstruct from troves + collection_members (legacy path)
-    let troves = Trove::find_by_name(&conn, name)?;
-    let collection = troves
-        .into_iter()
-        .find(|t| t.trove_type == TroveType::Collection);
-
-    let coll = match collection {
-        Some(c) => c,
-        None => return Ok(None),
-    };
-
-    let coll_id = coll
-        .id
-        .ok_or_else(|| anyhow::anyhow!("Collection has no ID"))?;
-
-    // Get members
-    let members = CollectionMember::find_by_collection(&conn, coll_id)?;
-
-    let member_data: Vec<CollectionMemberData> = members
-        .iter()
-        .map(|m| CollectionMemberData {
-            name: m.member_name.clone(),
-            version_constraint: m.member_version.clone(),
-            is_optional: m.is_optional,
+    stored
+        .map(|json| {
+            serde_json::from_str(&json)
+                .map_err(|error| anyhow::anyhow!("invalid stored collection {name}: {error}"))
         })
-        .collect();
+        .transpose()
+}
 
-    // Compute content hash using the canonical method (content_hash blanked)
-    let mut reconstructed = CollectionData {
-        name: name.to_string(),
-        version: coll.version.clone(),
-        members: member_data,
-        includes: Vec::new(),
-        pins: BTreeMap::new(),
-        exclude: Vec::new(),
-        content_hash: String::new(),
-        published_at: coll
-            .installed_at
-            .unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
-    };
-    let canonical_json = serde_json::to_vec(&reconstructed)?;
-    reconstructed.content_hash = conary_core::hash::sha256_prefixed(&canonical_json);
-
-    Ok(Some(reconstructed))
+#[cfg(test)]
+fn insert_invalid_stored_collection(conn: &Connection, name: &str) {
+    conn.execute(
+        "INSERT INTO remote_collections (
+            name, label, content_hash, data_json, expires_at
+        ) VALUES (?1, '', 'sha256:invalid', '{', '2099-12-31T23:59:59Z')",
+        [name],
+    )
+    .unwrap();
 }
 
 /// Build a listing of all collections with member counts in a single query
@@ -542,7 +504,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_model_returns_collection() {
+    fn test_unpublished_collection_is_not_reconstructed() {
         let (temp_file, conn) = create_test_db();
 
         // Create a collection
@@ -563,24 +525,17 @@ mod tests {
             .optional();
         m2.insert(&conn).unwrap();
 
-        // Build collection data
-        let data = build_collection_data(temp_file.path(), "group-base")
-            .unwrap()
-            .unwrap();
+        let data = build_collection_data(temp_file.path(), "group-base").unwrap();
+        assert!(data.is_none());
+    }
 
-        assert_eq!(data.name, "group-base");
-        assert_eq!(data.version, "1.0.0");
-        assert_eq!(data.members.len(), 2);
-        assert!(data.content_hash.starts_with("sha256:"));
+    #[test]
+    fn test_invalid_stored_collection_fails_closed() {
+        let (temp_file, conn) = create_test_db();
+        insert_invalid_stored_collection(&conn, "group-invalid");
 
-        // Check member details
-        let nginx = data.members.iter().find(|m| m.name == "nginx").unwrap();
-        assert!(!nginx.is_optional);
-        assert!(nginx.version_constraint.is_none());
-
-        let redis = data.members.iter().find(|m| m.name == "redis").unwrap();
-        assert!(redis.is_optional);
-        assert_eq!(redis.version_constraint, Some("7.0.*".to_string()));
+        let error = build_collection_data(temp_file.path(), "group-invalid").unwrap_err();
+        assert!(error.to_string().contains("invalid stored collection"));
     }
 
     #[test]

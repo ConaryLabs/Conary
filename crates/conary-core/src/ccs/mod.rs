@@ -16,6 +16,7 @@ pub mod builder;
 pub mod chunking;
 pub mod convert;
 pub mod enhancement;
+pub mod evidence_normalization;
 pub mod export;
 pub mod hooks;
 pub mod inspector;
@@ -36,9 +37,7 @@ pub mod verify;
 pub use binary_manifest::{BinaryManifest, ComponentRef, Hash, MerkleTree};
 pub use builder::{BuildResult, CcsBuilder, ChunkStats, ComponentData, FileEntry, FileType};
 pub use chunking::{Chunk, ChunkStore, ChunkedFile, Chunker, DeltaStats, StoreStats};
-pub use convert::{
-    ConversionOptions, ConversionResult, FidelityLevel, FidelityReport, LegacyConverter,
-};
+pub use convert::{ConversionOptions, ConversionResult, LegacyConverter};
 pub use enhancement::{
     ENHANCEMENT_VERSION, EnhancementContext, EnhancementEngine, EnhancementError,
     EnhancementRegistry, EnhancementRunner, EnhancementStatus, EnhancementType,
@@ -46,7 +45,8 @@ pub use enhancement::{
 pub use hooks::{AppliedHook, HookExecutionResults, HookExecutor, HookResult, HookType};
 pub use inspector::InspectedPackage;
 pub use legacy_scriptlets::{
-    LEGACY_SCRIPTLET_SCHEMA_V1, LegacyScriptletBundle, LegacyScriptletEntry,
+    LEGACY_SCRIPTLET_SCHEMA_REVISION, LEGACY_SCRIPTLET_SCHEMA_V1, LegacyScriptletBundle,
+    LegacyScriptletEntry,
 };
 pub use lockfile::{
     DependencyKind, LOCKFILE_NAME, LOCKFILE_VERSION, LockedDependency, Lockfile, LockfileError,

@@ -12,10 +12,6 @@ use super::{check_scope, validate_path_param};
 use crate::server::ServerState;
 use crate::server::auth::{Scope, TokenName, TokenScopes, json_error};
 
-mod reconciliation;
-
-pub use reconciliation::*;
-
 #[derive(Debug, Deserialize)]
 pub struct BackfillRequest {
     pub limit: Option<usize>,
@@ -28,7 +24,6 @@ pub struct ClusterListQuery {
     pub blocked_class: Option<String>,
     pub command: Option<String>,
     pub package: Option<String>,
-    pub include_superseded: Option<bool>,
     pub limit: Option<i64>,
     pub offset: Option<i64>,
 }
@@ -58,7 +53,6 @@ struct ClusterListResponse {
 struct ClusterSummaryResponse {
     cluster_key: String,
     schema_version: i64,
-    normalization_version: i64,
     distro: String,
     target_profile: String,
     blocked_class: String,
@@ -70,9 +64,6 @@ struct ClusterSummaryResponse {
     first_seen: String,
     last_seen: String,
     updated_at: String,
-    superseded_at: Option<String>,
-    superseded_reason: Option<String>,
-    superseded_by_cluster_key: Option<String>,
     attempt_count: i64,
     unique_package_count: i64,
     architectures: Vec<String>,
@@ -85,8 +76,6 @@ struct ClusterDetailResponse {
     samples: Vec<SampleSummaryResponse>,
     state_events: Vec<StateEventResponse>,
     notes: Vec<NoteResponse>,
-    outgoing_reconciliation_links: Vec<ReconciliationLinkResponse>,
-    incoming_reconciliation_links: Vec<ReconciliationLinkResponse>,
 }
 
 #[derive(Debug, Serialize)]
@@ -125,15 +114,6 @@ struct NoteResponse {
     body: String,
     created_at: String,
     updated_at: String,
-}
-
-#[derive(Debug, Serialize)]
-struct ReconciliationLinkResponse {
-    source_cluster_key: String,
-    target_cluster_key: String,
-    normalization_version: i64,
-    migrated_sample_count: i64,
-    created_at: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -466,7 +446,6 @@ fn cluster_filter(
             blocked_class: query.blocked_class,
             command: query.command,
             package: query.package,
-            include_superseded: query.include_superseded.unwrap_or(false),
             limit: Some(query.limit.unwrap_or(100).clamp(1, 1000)),
             offset: Some(query.offset.unwrap_or(0).max(0)),
         },
@@ -507,7 +486,6 @@ impl From<conary_core::db::models::ScriptletEvidenceClusterSummary> for ClusterS
         Self {
             cluster_key: cluster.cluster_key,
             schema_version: cluster.schema_version,
-            normalization_version: cluster.normalization_version,
             distro: cluster.distro,
             target_profile: cluster.target_profile,
             blocked_class: cluster.blocked_class,
@@ -519,9 +497,6 @@ impl From<conary_core::db::models::ScriptletEvidenceClusterSummary> for ClusterS
             first_seen: cluster.first_seen,
             last_seen: cluster.last_seen,
             updated_at: cluster.updated_at,
-            superseded_at: cluster.superseded_at,
-            superseded_reason: cluster.superseded_reason,
-            superseded_by_cluster_key: cluster.superseded_by_cluster_key,
             attempt_count: value.attempt_count,
             unique_package_count: value.unique_package_count,
             architectures: value.architectures,
@@ -580,16 +555,6 @@ impl From<conary_core::db::models::ScriptletEvidenceClusterDetail> for ClusterDe
                 .map(StateEventResponse::from)
                 .collect(),
             notes: value.notes.into_iter().map(NoteResponse::from).collect(),
-            outgoing_reconciliation_links: value
-                .outgoing_reconciliation_links
-                .into_iter()
-                .map(ReconciliationLinkResponse::from)
-                .collect(),
-            incoming_reconciliation_links: value
-                .incoming_reconciliation_links
-                .into_iter()
-                .map(ReconciliationLinkResponse::from)
-                .collect(),
         }
     }
 }
@@ -644,612 +609,9 @@ impl From<conary_core::db::models::ScriptletEvidenceNote> for NoteResponse {
     }
 }
 
-impl From<conary_core::db::models::ScriptletEvidenceClusterReconciliationLink>
-    for ReconciliationLinkResponse
-{
-    fn from(value: conary_core::db::models::ScriptletEvidenceClusterReconciliationLink) -> Self {
-        Self {
-            source_cluster_key: value.source_cluster_key,
-            target_cluster_key: value.target_cluster_key,
-            normalization_version: value.normalization_version,
-            migrated_sample_count: value.migrated_sample_count,
-            created_at: value.created_at,
-        }
-    }
-}
-
 fn parse_json_array(value: &str) -> serde_json::Value {
     serde_json::from_str(value).unwrap_or_else(|_| serde_json::Value::Array(Vec::new()))
 }
 
 #[cfg(test)]
-mod tests {
-    use super::super::test_helpers::{rebuild_app, test_app};
-    use axum::body::Body;
-    use axum::http::{Request, StatusCode};
-    use conary_core::ccs::convert::ScriptletBundleSummary;
-    use conary_core::db::models::{
-        ConvertedPackage, NewScriptletEvidenceCluster, NewScriptletEvidenceSample,
-        ScriptletEvidenceCluster, ScriptletEvidenceSample,
-    };
-    use tower::ServiceExt;
-
-    fn seed_blocked_converted_package(db_path: &std::path::Path) {
-        let conn = rusqlite::Connection::open(db_path).unwrap();
-        let summary = ScriptletBundleSummary {
-            scriptlet_fidelity: "blocked".to_string(),
-            target_compatibility: "blocked".to_string(),
-            publication_status: "blocked".to_string(),
-            blocked_reason_codes: vec!["network-egress".to_string()],
-            blocked_classes: vec!["network".to_string()],
-            ..ScriptletBundleSummary::default()
-        };
-        let mut converted = ConvertedPackage::new_server(
-            "fedora".to_string(),
-            "blocked-pkg".to_string(),
-            "1.0.0".to_string(),
-            "rpm".to_string(),
-            "sha256:blocked-pkg".to_string(),
-            "partial".to_string(),
-            &["sha256:chunk".to_string()],
-            42,
-            "sha256:content".to_string(),
-            "/tmp/blocked-pkg.ccs".to_string(),
-        );
-        converted.set_scriptlet_metadata(&summary).unwrap();
-        converted.insert(&conn).unwrap();
-    }
-
-    #[tokio::test]
-    async fn scriptlet_evidence_backfill_requires_admin_scope() {
-        let (app, _db_path) = test_app().await;
-
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/v1/admin/scriptlet-evidence/backfill")
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"limit": 100}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-    }
-
-    #[tokio::test]
-    async fn scriptlet_evidence_backfill_materializes_existing_rows() {
-        let (app, db_path) = test_app().await;
-        seed_blocked_converted_package(&db_path);
-
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/v1/admin/scriptlet-evidence/backfill")
-                    .header("authorization", "Bearer test-admin-token-12345")
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"limit": 100}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-
-        let conn = rusqlite::Connection::open(&db_path).unwrap();
-        let sample_count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM scriptlet_evidence_cluster_samples",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(sample_count, 1);
-    }
-
-    #[tokio::test]
-    async fn scriptlet_evidence_backfill_accepts_missing_request_body() {
-        let (app, db_path) = test_app().await;
-        seed_blocked_converted_package(&db_path);
-
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/v1/admin/scriptlet-evidence/backfill")
-                    .header("authorization", "Bearer test-admin-token-12345")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-
-        let conn = rusqlite::Connection::open(&db_path).unwrap();
-        let sample_count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM scriptlet_evidence_cluster_samples",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(sample_count, 1);
-    }
-
-    fn seed_evidence_cluster(db_path: &std::path::Path) {
-        let conn = rusqlite::Connection::open(db_path).unwrap();
-        let cluster = NewScriptletEvidenceCluster {
-            cluster_key: "s1-test".to_string(),
-            schema_version: 1,
-            normalization_version: 2,
-            distro: "fedora".to_string(),
-            target_profile: "fedora-44".to_string(),
-            blocked_class: "initramfs".to_string(),
-            command: "dracut".to_string(),
-            normalized_command_shape: "dracut --force <boot>/initramfs-<kver>.img".to_string(),
-            normalized_command_shape_hash: "shape-hash".to_string(),
-            lifecycle_phase: "postinstall".to_string(),
-        };
-        ScriptletEvidenceCluster::upsert(&conn, &cluster).unwrap();
-        ScriptletEvidenceSample::upsert(
-            &conn,
-            &NewScriptletEvidenceSample {
-                cluster_key: "s1-test".to_string(),
-                converted_package_id: None,
-                original_checksum: "sha256:sample".to_string(),
-                distro: "fedora".to_string(),
-                package_name: "kernel".to_string(),
-                package_version: "1.0.0".to_string(),
-                package_architecture: Some("x86_64".to_string()),
-                publication_status: "blocked".to_string(),
-                scriptlet_fidelity: "blocked".to_string(),
-                target_compatibility: "blocked".to_string(),
-                reason_codes_json: r#"["boot-security-initramfs"]"#.to_string(),
-                blocked_classes_json: r#"["initramfs"]"#.to_string(),
-                boot_security_intents_json: r#"[{"command":"semodule","argv":["--module=/tmp/foo.pp","--install=/home/remi/private.pp","SECRET=/home/remi/token"],"lifecycle_paths":["/home/remi/private.pp"]}]"#.to_string(),
-                security_policy_intents_json: r#"[{"provider":"selinux","source":{"command":"semodule","argv":["--module=/tmp/foo.pp","--install=/home/remi/private.pp","SECRET=/home/remi/token"]},"scope":{"kind":"path","paths":["/home/remi/private.pp"]},"payload_evidence":{"payload_backed":true,"paths":["/tmp/foo.pp","/usr/share/selinux/packages/public.pp"]}}]"#.to_string(),
-                review_artifact_path: Some("/tmp/private-review-secret.json".to_string()),
-                review_artifact_stale: true,
-                evidence_digest: Some("sha256:evidence".to_string()),
-                curation_evidence_digest: None,
-            },
-        )
-        .unwrap();
-    }
-
-    fn seed_unknown_command_cluster(db_path: &std::path::Path, cluster_key: &str, command: &str) {
-        let conn = rusqlite::Connection::open(db_path).unwrap();
-        ScriptletEvidenceCluster::upsert(
-            &conn,
-            &NewScriptletEvidenceCluster {
-                cluster_key: cluster_key.to_string(),
-                schema_version: 1,
-                normalization_version: 1,
-                distro: "ubuntu".to_string(),
-                target_profile: "ubuntu-26.04".to_string(),
-                blocked_class: "unknown-command".to_string(),
-                command: command.to_string(),
-                normalized_command_shape: command.to_string(),
-                normalized_command_shape_hash: format!("hash-{cluster_key}"),
-                lifecycle_phase: "unknown".to_string(),
-            },
-        )
-        .unwrap();
-        ScriptletEvidenceSample::upsert(
-            &conn,
-            &NewScriptletEvidenceSample {
-                cluster_key: cluster_key.to_string(),
-                converted_package_id: None,
-                original_checksum: format!("sha256:{cluster_key}"),
-                distro: "ubuntu".to_string(),
-                package_name: format!("pkg-{cluster_key}"),
-                package_version: "1.0.0".to_string(),
-                package_architecture: Some("amd64".to_string()),
-                publication_status: "private-review".to_string(),
-                scriptlet_fidelity: "legacy".to_string(),
-                target_compatibility: "private-review".to_string(),
-                reason_codes_json: r#"["unknown-command"]"#.to_string(),
-                blocked_classes_json: "[]".to_string(),
-                boot_security_intents_json: "[]".to_string(),
-                security_policy_intents_json: "[]".to_string(),
-                review_artifact_path: None,
-                review_artifact_stale: false,
-                evidence_digest: Some(format!("sha256:evidence-{cluster_key}")),
-                curation_evidence_digest: None,
-            },
-        )
-        .unwrap();
-    }
-
-    async fn response_body(response: axum::response::Response) -> String {
-        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        String::from_utf8(bytes.to_vec()).unwrap()
-    }
-
-    #[tokio::test]
-    async fn unknown_command_reconciliation_defaults_to_dry_run_and_preserves_history() {
-        let (app, db_path) = test_app().await;
-        seed_unknown_command_cluster(&db_path, "s1-set-noise", "set");
-
-        let dry_run = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/v1/admin/scriptlet-evidence/reconcile-unknown-commands")
-                    .header("authorization", "Bearer test-admin-token-12345")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(dry_run.status(), StatusCode::OK);
-        let body = response_body(dry_run).await;
-        assert!(body.contains("\"dry_run\":true"));
-        assert!(body.contains("\"superseded_noise_cluster_count\":1"));
-
-        let conn = rusqlite::Connection::open(&db_path).unwrap();
-        let before = ScriptletEvidenceCluster::find(&conn, "s1-set-noise")
-            .unwrap()
-            .unwrap();
-        assert!(before.superseded_at.is_none());
-
-        let app = rebuild_app(&db_path);
-        let apply = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/v1/admin/scriptlet-evidence/reconcile-unknown-commands")
-                    .header("authorization", "Bearer test-admin-token-12345")
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"dry_run":false,"limit":1}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(apply.status(), StatusCode::OK);
-
-        let app = rebuild_app(&db_path);
-        let active = app
-            .oneshot(
-                Request::builder()
-                    .uri("/v1/admin/scriptlet-evidence/clusters")
-                    .header("authorization", "Bearer test-admin-token-12345")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(active.status(), StatusCode::OK);
-        assert!(!response_body(active).await.contains("s1-set-noise"));
-
-        let app = rebuild_app(&db_path);
-        let historical = app
-            .oneshot(
-                Request::builder()
-                    .uri("/v1/admin/scriptlet-evidence/clusters?include_superseded=true")
-                    .header("authorization", "Bearer test-admin-token-12345")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let body = response_body(historical).await;
-        assert!(body.contains("s1-set-noise"));
-        assert!(body.contains("normalization-v2:shell-builtin"));
-    }
-
-    #[tokio::test]
-    async fn scriptlet_evidence_admin_list_rejects_missing_and_insufficient_scope() {
-        let (app, db_path) = test_app().await;
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/v1/admin/scriptlet-evidence/clusters")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-
-        let conn = rusqlite::Connection::open(&db_path).unwrap();
-        let hash = crate::server::auth::hash_token("repos-read-token");
-        conary_core::db::models::admin_token::create(&conn, "reader", &hash, "repos:read").unwrap();
-        let app = rebuild_app(&db_path);
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/v1/admin/scriptlet-evidence/clusters")
-                    .header("authorization", "Bearer repos-read-token")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
-    }
-
-    #[tokio::test]
-    async fn scriptlet_evidence_admin_lists_clusters_with_stale_counts() {
-        let (app, db_path) = test_app().await;
-        seed_evidence_cluster(&db_path);
-
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/v1/admin/scriptlet-evidence/clusters")
-                    .header("authorization", "Bearer test-admin-token-12345")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        let body = response_body(response).await;
-        assert!(body.contains("\"cluster_key\":\"s1-test\""));
-        assert!(body.contains("\"stale_sample_count\":1"));
-    }
-
-    #[tokio::test]
-    async fn scriptlet_evidence_admin_detail_hides_private_paths_and_validates_key() {
-        let (app, db_path) = test_app().await;
-        seed_evidence_cluster(&db_path);
-
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/v1/admin/scriptlet-evidence/clusters/s1-test")
-                    .header("authorization", "Bearer test-admin-token-12345")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        let body = response_body(response).await;
-        assert!(body.contains("\"cluster_key\":\"s1-test\""));
-        assert!(body.contains("\"review_artifact_available\":true"));
-        assert!(body.contains("--module=<path>"));
-        assert!(body.contains("--install=<path>"));
-        assert!(body.contains("<env-assignment>"));
-        assert!(!body.contains("/tmp/private-review-secret"));
-        assert!(!body.contains("/tmp/foo.pp"));
-        assert!(!body.contains("/home/remi"));
-        assert!(!body.contains("SECRET=/home"));
-        assert!(!body.contains("review_artifact_path"));
-
-        let app = rebuild_app(&db_path);
-        let invalid = app
-            .oneshot(
-                Request::builder()
-                    .uri("/v1/admin/scriptlet-evidence/clusters/bad..key")
-                    .header("authorization", "Bearer test-admin-token-12345")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
-
-        let app = rebuild_app(&db_path);
-        let missing = app
-            .oneshot(
-                Request::builder()
-                    .uri("/v1/admin/scriptlet-evidence/clusters/s1-missing")
-                    .header("authorization", "Bearer test-admin-token-12345")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
-    }
-
-    #[tokio::test]
-    async fn scriptlet_evidence_state_updates_events_and_notes_are_admin_only() {
-        let (app, db_path) = test_app().await;
-        seed_evidence_cluster(&db_path);
-
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri("/v1/admin/scriptlet-evidence/clusters/s1-test/state")
-                    .header("authorization", "Bearer test-admin-token-12345")
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        r#"{"state":"adapter-candidate","reason":"repeated dracut shape"}"#,
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-
-        let app = rebuild_app(&db_path);
-        let note = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/v1/admin/scriptlet-evidence/clusters/s1-test/notes")
-                    .header("authorization", "Bearer test-admin-token-12345")
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        r#"{"body":"Check Fedora kernel fixture first."}"#,
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(note.status(), StatusCode::OK);
-
-        let app = rebuild_app(&db_path);
-        let detail = app
-            .oneshot(
-                Request::builder()
-                    .uri("/v1/admin/scriptlet-evidence/clusters/s1-test")
-                    .header("authorization", "Bearer test-admin-token-12345")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let body = response_body(detail).await;
-        assert!(body.contains("\"state\":\"adapter-candidate\""));
-        assert!(body.contains("repeated dracut shape"));
-        assert!(body.contains("Check Fedora kernel fixture first."));
-    }
-
-    #[tokio::test]
-    async fn scriptlet_evidence_state_and_note_validation_fail_closed() {
-        let (app, db_path) = test_app().await;
-        seed_evidence_cluster(&db_path);
-
-        let invalid = app
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri("/v1/admin/scriptlet-evidence/clusters/s1-test/state")
-                    .header("authorization", "Bearer test-admin-token-12345")
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"state":"public-ready"}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
-
-        let app = rebuild_app(&db_path);
-        let empty_note = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/v1/admin/scriptlet-evidence/clusters/s1-test/notes")
-                    .header("authorization", "Bearer test-admin-token-12345")
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"body":""}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(empty_note.status(), StatusCode::BAD_REQUEST);
-    }
-
-    #[tokio::test]
-    async fn scriptlet_evidence_state_covered_does_not_publish_converted_packages() {
-        let (app, db_path) = test_app().await;
-        seed_evidence_cluster(&db_path);
-        seed_blocked_converted_package(&db_path);
-
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri("/v1/admin/scriptlet-evidence/clusters/s1-test/state")
-                    .header("authorization", "Bearer test-admin-token-12345")
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"state":"covered-public-ready"}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-
-        let conn = rusqlite::Connection::open(&db_path).unwrap();
-        let status: String = conn
-            .query_row(
-                "SELECT publication_status FROM converted_packages WHERE package_name = 'blocked-pkg'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(status, "blocked");
-    }
-
-    #[tokio::test]
-    async fn scriptlet_evidence_packet_private_and_public_visibility_are_sanitized() {
-        let (app, db_path) = test_app().await;
-        seed_evidence_cluster(&db_path);
-        let conn = rusqlite::Connection::open(&db_path).unwrap();
-        conary_core::db::models::ScriptletEvidenceNote::insert(
-            &conn,
-            "s1-test",
-            "maintainer",
-            "Private maintainer note",
-        )
-        .unwrap();
-
-        let private = app
-            .oneshot(
-                Request::builder()
-                    .uri("/v1/admin/scriptlet-evidence/clusters/s1-test/packet")
-                    .header("authorization", "Bearer test-admin-token-12345")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(private.status(), StatusCode::OK);
-        let private_body = response_body(private).await;
-        assert!(private_body.contains("conary.remi.scriptlet-evidence-packet.v1"));
-        assert!(private_body.contains("Private maintainer note"));
-        assert!(private_body.contains("blocked-class-initramfs"));
-        assert!(private_body.contains("\"security_policy_intents\":[{"));
-        assert!(private_body.contains("\"provider\":\"selinux\""));
-        assert!(private_body.contains("--module=<path>"));
-        assert!(private_body.contains("--install=<path>"));
-        assert!(private_body.contains("<env-assignment>"));
-        assert!(private_body.contains("/usr/share/selinux/packages/public.pp"));
-        assert!(!private_body.contains("/tmp/private-review-secret"));
-        assert!(!private_body.contains("/tmp/foo.pp"));
-        assert!(!private_body.contains("/home/remi"));
-        assert!(!private_body.contains("SECRET=/home"));
-
-        let app = rebuild_app(&db_path);
-        let public = app
-            .oneshot(
-                Request::builder()
-                    .uri("/v1/admin/scriptlet-evidence/clusters/s1-test/packet?visibility=public-sanitized")
-                    .header("authorization", "Bearer test-admin-token-12345")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(public.status(), StatusCode::OK);
-        let public_body = response_body(public).await;
-        assert!(public_body.contains("\"visibility\":\"public-sanitized\""));
-        assert!(public_body.contains("\"security_policy_intents\":[{"));
-        assert!(public_body.contains("\"provider\":\"selinux\""));
-        assert!(public_body.contains("--module=<path>"));
-        assert!(public_body.contains("--install=<path>"));
-        assert!(public_body.contains("<env-assignment>"));
-        assert!(public_body.contains("/usr/share/selinux/packages/public.pp"));
-        assert!(!public_body.contains("Private maintainer note"));
-        assert!(!public_body.contains("maintainer_notes"));
-        assert!(!public_body.contains("review_artifacts"));
-        assert!(!public_body.contains("/tmp/"));
-        assert!(!public_body.contains("/home/"));
-        assert!(!public_body.contains("SECRET=/home"));
-        assert!(!public_body.contains("6.10.12-200"));
-
-        let app = rebuild_app(&db_path);
-        let missing = app
-            .oneshot(
-                Request::builder()
-                    .uri("/v1/admin/scriptlet-evidence/clusters/s1-missing/packet")
-                    .header("authorization", "Bearer test-admin-token-12345")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
-    }
-}
+mod tests;

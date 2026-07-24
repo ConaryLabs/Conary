@@ -3,6 +3,7 @@
 
 use crate::server::conversion_timing::ConversionTimingReport;
 use conary_core::ccs::convert::{ScriptletBundleSummary, ScriptletDecisionCountsSummary};
+use conary_core::ccs::legacy_scriptlets::UnknownCommandEvidence;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -32,7 +33,7 @@ pub struct ScriptletPackageMetadata {
     pub decision_counts: ScriptletDecisionCountsSummary,
     pub blocked_reason_codes: Vec<String>,
     pub review_reason_codes: Vec<String>,
-    pub unknown_commands: Vec<String>,
+    pub unknown_command_evidence: Vec<UnknownCommandEvidence>,
     pub blocked_classes: Vec<String>,
     pub review_artifact_available: bool,
 }
@@ -48,7 +49,7 @@ impl From<&ScriptletBundleSummary> for ScriptletPackageMetadata {
             decision_counts: summary.decision_counts,
             blocked_reason_codes: summary.blocked_reason_codes.clone(),
             review_reason_codes: summary.review_reason_codes.clone(),
-            unknown_commands: summary.unknown_commands.clone(),
+            unknown_command_evidence: summary.unknown_command_evidence.clone(),
             blocked_classes: summary.blocked_classes.clone(),
             review_artifact_available: summary.review_artifact_path.is_some(),
         }
@@ -60,11 +61,9 @@ pub struct ConversionBenchmarkEvidence {
     pub distro: String,
     pub package: String,
     pub version: Option<String>,
-    pub scan_only: bool,
     pub cache_state: String,
     pub r2_configured: bool,
     pub timing: Option<ConversionTimingReport>,
-    pub scriptlet_summary: Option<crate::server::scriptlet_corpus::ScriptletCorpusSummary>,
     pub converted: bool,
     pub error: Option<String>,
 }

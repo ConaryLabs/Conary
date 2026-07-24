@@ -238,7 +238,7 @@ mod tests {
     fn fixture_effect() -> ScriptletEffect {
         ScriptletEffect {
             kind: "daemon-reload".to_string(),
-            source: EffectSource::StaticSignal,
+            source: EffectSource::ShellAst,
             confidence: EffectConfidence::Declared,
             replacement: EffectReplacement::None,
             adapter_id: None,
@@ -283,7 +283,7 @@ mod tests {
             evidence_digest: None,
             source_evidence_refs: Vec::new(),
             effects: vec![fixture_effect()],
-            unknown_commands: Vec::new(),
+            unknown_command_evidence: Vec::new(),
             blocked_classes: Vec::new(),
             boot_security_intents: Vec::new(),
             security_policy_intents: Vec::new(),
@@ -298,7 +298,7 @@ mod tests {
     fn fixture_bundle() -> LegacyScriptletBundle {
         LegacyScriptletBundle {
             schema: LEGACY_SCRIPTLET_SCHEMA_V1.to_string(),
-            schema_revision: 1,
+            schema_revision: 2,
             source_format: SourceFormat::Rpm,
             source_family: "fedora".to_string(),
             source_distro: Some("fedora".to_string()),

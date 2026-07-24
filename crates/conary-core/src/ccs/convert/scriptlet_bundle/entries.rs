@@ -78,7 +78,7 @@ fn build_flat_entry(
         evidence_digest: None,
         source_evidence_refs: Vec::new(),
         effects: outcome.effects,
-        unknown_commands: outcome.unknown_commands,
+        unknown_command_evidence: outcome.unknown_command_evidence,
         blocked_classes: outcome.blocked_classes,
         boot_security_intents: outcome.boot_security_intents,
         security_policy_intents,
@@ -137,7 +137,7 @@ fn build_native_entry(
         evidence_digest: None,
         source_evidence_refs: Vec::new(),
         effects: outcome.effects,
-        unknown_commands: outcome.unknown_commands,
+        unknown_command_evidence: outcome.unknown_command_evidence,
         blocked_classes: outcome.blocked_classes,
         boot_security_intents: outcome.boot_security_intents,
         security_policy_intents,
@@ -169,10 +169,12 @@ mod tests {
         bundle_for_metadata, complete_effect, known_report_with_effect, native_entry_with_body,
         package_metadata,
     };
-    use crate::ccs::convert::effects::{ScriptletClassification, ScriptletClassificationReport};
+    use crate::ccs::convert::effects::{
+        ScriptletClassification, ScriptletClassificationReport, ScriptletCommandEvidence,
+    };
     use crate::ccs::legacy_scriptlets::{
-        ForeignReplayPolicy, PublicationPolicy, PublicationStatus, ScriptletDecision,
-        ScriptletFidelity, TargetCompatibility,
+        CommandArgumentProvenance, CommandExecutionContext, ForeignReplayPolicy, PublicationPolicy,
+        PublicationStatus, ScriptletDecision, ScriptletFidelity, TargetCompatibility,
     };
     use crate::packages::native_abi::NativeScriptletSupport;
     use crate::packages::traits::{Scriptlet, ScriptletPhase};
@@ -241,7 +243,18 @@ mod tests {
             "scriptlet:0:post-install",
             ScriptletClassification::Unknown {
                 reason_code: "unknown-command".to_string(),
-                command: "custom-helper".to_string(),
+                command: ScriptletCommandEvidence {
+                    command: "custom-helper".to_string(),
+                    command_provenance: CommandArgumentProvenance::Literal,
+                    argv: vec!["--do-thing".to_string()],
+                    argument_provenance: vec![CommandArgumentProvenance::Literal],
+                    phase: Some("post-install".to_string()),
+                    lifecycle_paths: vec!["post-install".to_string()],
+                    raw_line: Some("custom-helper --do-thing".to_string()),
+                    source: crate::ccs::legacy_scriptlets::CommandEvidenceSource::ShellAst,
+                    environment: Vec::new(),
+                    ..ScriptletCommandEvidence::default()
+                },
             },
         );
 
@@ -250,7 +263,13 @@ mod tests {
 
         assert_eq!(entry.decision, ScriptletDecision::Legacy);
         assert_eq!(entry.reason_code, "unknown-command");
-        assert_eq!(entry.unknown_commands, vec!["custom-helper"]);
+        assert_eq!(entry.unknown_command_evidence.len(), 1);
+        assert_eq!(entry.unknown_command_evidence[0].command, "custom-helper");
+        assert_eq!(entry.unknown_command_evidence[0].argv, vec!["--do-thing"]);
+        assert_eq!(
+            entry.unknown_command_evidence[0].phase.as_deref(),
+            Some("post-install")
+        );
         assert_eq!(build.bundle.decision_counts.legacy, 1);
         assert_eq!(
             build.bundle.scriptlet_fidelity,
@@ -277,7 +296,10 @@ mod tests {
         assert_eq!(build.summary.target_compatibility, "source-native");
         assert_eq!(build.summary.publication_status, "local-only");
         assert_eq!(build.summary.decision_counts.legacy, 1);
-        assert_eq!(build.summary.unknown_commands, vec!["custom-helper"]);
+        assert_eq!(
+            build.summary.unknown_command_evidence,
+            entry.unknown_command_evidence
+        );
     }
 
     #[test]
@@ -373,12 +395,19 @@ mod tests {
                 class_id: "initramfs".to_string(),
                 command: Some(crate::ccs::convert::effects::ScriptletCommandEvidence {
                     command: "dracut".to_string(),
+                    command_provenance: CommandArgumentProvenance::Literal,
                     argv: vec!["--force".to_string(), "<boot>/initramfs.img".to_string()],
+                    argument_provenance: vec![
+                        CommandArgumentProvenance::Literal,
+                        CommandArgumentProvenance::Literal,
+                    ],
+                    execution_context: CommandExecutionContext::Unconditional,
                     phase: Some("post-install".to_string()),
                     lifecycle_paths: vec!["post-install".to_string()],
                     raw_line: Some("dracut --force /boot/initramfs.img".to_string()),
-                    source: "static-signal".to_string(),
+                    source: crate::ccs::legacy_scriptlets::CommandEvidenceSource::ShellAst,
                     environment: Vec::new(),
+                    ..crate::ccs::convert::effects::ScriptletCommandEvidence::default()
                 }),
             },
         );

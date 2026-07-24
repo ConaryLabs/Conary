@@ -330,7 +330,7 @@ description = "legacy scriptlets"
 
 [legacy_scriptlets]
 schema = "conary.legacy-scriptlets.v1"
-schema_revision = 1
+schema_revision = 2
 source_format = "rpm"
 source_family = "fedora-rhel"
 source_distro = "fedora"
@@ -370,7 +370,7 @@ reason_code = "protected-replay-required"
 
 [[legacy_scriptlets.entries.effects]]
 kind = "ldconfig"
-source = "static-signal"
+source = "shell-ast"
 confidence = "declared"
 replacement = "complete"
 "#

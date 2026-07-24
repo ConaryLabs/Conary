@@ -62,22 +62,22 @@ private paths and secret-bearing tokens are redacted, and local
 `review_artifact_path` values remain private. Private review artifact files use
 the raw report helper so operators can still inspect exact blocked paths during
 triage. Approved system policy paths are preserved only when absolute and free
-of `..` traversal components. Preserving `/etc/apparmor.d/<profile>` changes the
-shape of newly observed scriptlet-evidence samples. The bounded admin backfill
-resumes after its stored converted-package high-water mark and does not rebuild
-existing samples. Historical AppArmor observations that retain the older
-`<path>` shape are handled by the explicit versioned reconciliation path
-described below rather than by rewinding the forward-only backfill checkpoint.
+of `..` traversal components. The bounded admin backfill resumes after its
+stored converted-package high-water mark and does not rebuild existing
+samples.
 
 ### Scriptlet Evidence Queue
 
 Remi maintains an admin/operator-only scriptlet evidence queue for adapter
-planning. Schema v76 and later store `scriptlet_evidence_*` queue samples with
-sanitized boot/security and generic LSM intent evidence, clustering blocked,
-review-required, and malformed conversion evidence by stable command shape,
-blocked class, distro, target profile, and lifecycle phase. Conary-core owns the
-database schema and model helpers; Remi owns the normalization, aggregation,
-backfill, admin routes, and packet export modules under
+engineering. The current schema stores `scriptlet_evidence_*` queue samples with
+one privacy-normalized typed evidence record per observation plus sanitized
+boot/security and generic LSM intent evidence. The typed record retains command
+and argument provenance, execution context, lifecycle, source, environment
+names, and pipeline identity. Stable command shape, blocked class, distro,
+target profile, and lifecycle phase remain discovery indexes rather than
+semantic authority. Conary-core owns the current-only database schema and model
+helpers; Remi owns privacy
+normalization, aggregation, backfill, admin routes, and packet export under
 `apps/remi/src/server/scriptlet_evidence_queue/` and
 `apps/remi/src/server/handlers/admin/scriptlet_evidence.rs`.
 
@@ -98,46 +98,17 @@ local review artifact paths. Private packets include sanitized artifact
 references for maintainer follow-up; `public-sanitized` packets omit review
 artifacts and private notes.
 
-Unknown-command queue classification uses normalization contract v2. It drops
-only provable queue noise: shell grammar and punctuation, variable references,
-environment assignments, function-definition syntax, queue-structural command
-builtins, and unambiguous package-manager lifecycle dispatch labels. Ambiguous
-identifiers and builtins whose behavior itself needs adapter review remain
-adapter-planning signal. This classification is queue-only: it does not rewrite
-CCS summaries, adapter decisions, support-matrix outcomes, legacy replay, or
-publication state.
+Unknown-command samples come directly from the formal shell parser's typed
+command nodes. Remi does not re-tokenize bodies or use string classification to
+drop shell-looking values. Command-shape normalization is privacy and discovery
+metadata only; it cannot rewrite CCS summaries, adapter decisions,
+support-matrix outcomes, legacy replay, or publication state.
 
-Schema v78 persists each cluster's `normalization_version` and optional
-supersession metadata. New observations use the current version. Operators
-reconcile historical unknown-command clusters with
-`POST /v1/admin/scriptlet-evidence/reconcile-unknown-commands`; the route is
-admin-only, bounded to at most 5,000 clusters per call, resumable, and dry-run
-by default. Applied batches retain real command signals and supersede structural
-noise without deleting samples, triage state, state events, private notes, or
-evidence digests. Normal cluster listings omit superseded rows; operators can
-request `include_superseded=true` to inspect their history and disposition.
-
-AppArmor path identity also uses normalization contract v2. Operators inspect
-and reconcile older AppArmor clusters with
-`POST /v1/admin/scriptlet-evidence/reconcile-apparmor`. The admin-only route is
-bounded to at most 5,000 source clusters per call, accepts an ordered
-`after_cluster_key` cursor, and defaults to dry-run. It rematerializes queue
-observations from the unchanged `converted_packages` scriptlet summary, so
-approved traversal-free `/etc/apparmor.d/<profile>` paths become part of the
-current cluster key while unsafe or unavailable source evidence stays active
-and reports an unresolved reason.
-
-Applied AppArmor batches run transactionally. One source observation moves to
-the current target cluster when the key changes; a collapsed historical
-observation can split into multiple current clusters, and multiple historical
-clusters can merge into one target. Schema v79 records every non-identity
-source-to-target relationship and migrated-sample count. Samples are moved or
-rematerialized without retaining a second active historical copy. The
-superseded source keeps its triage state, state events, and private notes, while
-a new target starts at `needs-triage` and an existing target keeps its own
-state. Admin cluster detail exposes incoming and outgoing reconciliation links,
-making conflicting source dispositions inspectable without silently choosing
-one. A repeat apply is a no-op once no unresolved v1 AppArmor clusters remain.
+There is no queue normalization migration or reconciliation API. Schema,
+conversion-contract, or sanitizer changes rebuild the pre-alpha database and
+reconvert authoritative package inputs. The retired normalization-version,
+supersession, source-to-target link, and reconciliation-route machinery is not
+part of the current contract.
 
 The queue is not publication authority. Moving a cluster to
 `covered-public-ready` records maintainer workflow state only; it does not
@@ -193,6 +164,14 @@ Sparse-index and search responses use `converted=true` only for rows that do
 not need reconversion and pass the same public-ready scriptlet gate. A completed
 conversion row that requires legacy replay, review, or blocking remains private
 server state and is not advertised as a normal converted artifact.
+
+Public package lookup and download orchestration remain in
+`apps/remi/src/server/handlers/packages.rs`; delta lookup is owned by
+`apps/remi/src/server/handlers/packages/delta.rs`. Chunk serving and batch
+transport remain in `handlers/chunks.rs`, while cache statistics, eviction,
+Bloom rebuild, and chunk-directory scanning are owned by
+`handlers/chunks/admin.rs`. Focused handler tests live beside those modules
+under `handlers/{packages,chunks,index,oci}/tests.rs`.
 
 ### Non-Public Test Serving
 
@@ -289,30 +268,9 @@ To measure cloud write-through, pass `--r2-endpoint`, `--r2-bucket`,
 `--r2-prefix`, and `--r2-region` with `CONARY_R2_ACCESS_KEY` and
 `CONARY_R2_SECRET_KEY` set in the environment.
 
-Use `--scan-only` to parse package metadata and summarize scriptlet helper
-commands without writing converted CCS packages:
-
-```bash
-cargo run -p remi -- conversion-benchmark \
-  --db /var/lib/conary/conary.db \
-  --chunk-dir /var/lib/conary/data/chunks \
-  --cache-dir /var/lib/conary/data/cache \
-  --distro fedora \
-  --max-packages 25 \
-  --scan-only \
-  --jsonl
-```
-
-The scriptlet corpus summary is evidence for adapter planning only. It is not
-the authority for declaring a scriptlet `replaced`; that authority belongs to
-the legacy scriptlet semantics bundle decision model.
-
-Scan-only network and package-manager hints are advisory. They help maintainers
-find packages that attempted live fetch or nested package-manager recursion,
-but those hints do not make a conversion `replaced` and do not bypass the
-public-ready gate. Valid blocked rows remain available only through the
-default-off admin test lane.
-
-Running without `--scan-only` performs real conversions and writes CCS/CAS cache
+The benchmark runs the real conversion contract and writes CCS/CAS cache
 artifacts under the supplied cache and chunk directories. Use scratch paths for
 local experiments unless you intentionally want to warm a real Remi cache.
+The former scan-only corpus tokenizer was removed because line splitting and
+manual command lists duplicated the formal shell/parser pipeline and produced
+non-authoritative evidence that required ongoing heuristic maintenance.

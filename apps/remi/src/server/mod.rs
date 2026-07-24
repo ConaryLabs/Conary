@@ -44,7 +44,6 @@ pub mod r2;
 pub mod rate_limit;
 pub mod release_publish;
 mod routes;
-pub mod scriptlet_corpus;
 pub mod scriptlet_evidence_queue;
 pub mod search;
 pub mod security;

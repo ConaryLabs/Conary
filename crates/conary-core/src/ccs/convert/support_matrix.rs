@@ -102,6 +102,13 @@ fn adapter_entry(adapter_id: &'static str) -> SupportMatrixEntry {
             &["adapter-deb-systemd-helper-unit-state"],
             &["deb"],
         ),
+        "dpkg-maintscript-helper/v1" => (
+            Some("dpkg-maintscript-helper documented actions"),
+            "helper-complete-dpkg-maintscript-transition",
+            "The four documented dpkg-maintscript-helper actions are parsed through their exact generated argv grammar; final-state transitions are complete only when the package payload proves the native generation model.",
+            &["adapter-dpkg-maintscript-helper-rm-conffile"],
+            &["deb"],
+        ),
         "systemd-tmpfiles-create/v1" => (
             Some("systemd-tmpfiles --create"),
             "helper-complete-tmpfiles-create",

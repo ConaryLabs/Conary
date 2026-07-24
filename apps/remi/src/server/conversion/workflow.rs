@@ -193,8 +193,7 @@ impl ConversionService {
     fn record_cache_hit_skips(timing: &mut ConversionTimingReport) {
         for phase in [
             ConversionPhase::ArchiveExtraction,
-            ConversionPhase::NativeMetadataExtraction,
-            ConversionPhase::Capture,
+            ConversionPhase::NativeShellAstExtraction,
             ConversionPhase::AdapterDispatch,
             ConversionPhase::Chunking,
             ConversionPhase::CasWrite,
@@ -251,7 +250,7 @@ impl ConversionService {
             metadata.provides.len()
         );
         phase_timings.push(ConversionPhaseTiming {
-            phase: ConversionPhase::NativeMetadataExtraction,
+            phase: ConversionPhase::NativeShellAstExtraction,
             duration_ms: started.elapsed().as_millis(),
         });
 
@@ -261,8 +260,6 @@ impl ConversionService {
         let options = ConversionOptions {
             enable_chunking: true,
             output_dir,
-            auto_classify: true,
-            ..Default::default()
         };
 
         let target_profile = Self::public_target_profile_for_route(distro)?;
@@ -270,17 +267,6 @@ impl ConversionService {
             .with_source_distro(distro)
             .with_target_profile_id(target_profile.id())
             .with_conversion_tool("remi");
-        if metadata.scriptlets.is_empty() {
-            skipped_phases.push(ConversionSkippedPhase {
-                phase: ConversionPhase::Capture,
-                reason: "package has no native scriptlets to capture".to_string(),
-            });
-        } else {
-            skipped_phases.push(ConversionSkippedPhase {
-                phase: ConversionPhase::Capture,
-                reason: "capture timing is included in legacy converter timing".to_string(),
-            });
-        }
         skipped_phases.push(ConversionSkippedPhase {
             phase: ConversionPhase::AdapterDispatch,
             reason: "adapter dispatch timing is included in legacy converter timing".to_string(),
@@ -296,8 +282,8 @@ impl ConversionService {
         });
 
         info!(
-            "Conversion complete: fidelity={}",
-            conversion_result.fidelity.level
+            "Conversion complete: scriptlet_fidelity={}",
+            conversion_result.scriptlet_metadata.scriptlet_fidelity
         );
 
         Ok(ParsedConversion {

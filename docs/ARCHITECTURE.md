@@ -93,8 +93,8 @@ crates/conary-core/      Core library crate
     +-- lib.rs           Internal workspace crate surface, not a stable external API
     +-- operations.rs    Shared operation vocabulary across CLI and daemon boundaries
     +-- db/              Database layer
-    |   +-- schema.rs    Schema v79, migration dispatcher
-    |   +-- migrations/  Migration functions grouped into v1_v20.rs, v21_v40.rs, v41_current.rs, v79_current.rs
+    |   +-- schema.rs    Current pre-alpha schema epoch initializer and rebuild gate
+    |   +-- migrations/  One current schema split into package-manager, repository, and Remi ownership files
     |   +-- models/      ORM-style model structs
     |   |   +-- try_session.rs M1b package try session state
     +-- transaction/     Composefs-native transaction engine
@@ -132,7 +132,8 @@ crates/conary-core/      Core library crate
     +-- repository/      Remote package sources
     |   +-- static_repo/ Static repository format, publishing, sync, and key persistence
     |   +-- metadata.rs  Index parsing (RPM repodata, DEB Packages, Arch DB)
-    |   +-- remi.rs      Remi client (CCS chunk fetcher)
+    |   +-- remi.rs      Remi client hub (sync client)
+    |   +-- remi/        Remi protocol DTOs, refusal formatting, async client, and tests
     |   +-- chunk_fetcher.rs ChunkFetcher trait + HTTP/local/composite impls
     |   +-- mirror_health.rs Mirror health scoring
     |   +-- mirror_selector.rs Ranked mirror selection
@@ -156,12 +157,13 @@ crates/conary-core/      Core library crate
     |   +-- common.rs    Unified PackageMetadata
     +-- ccs/             Native package format
     |   +-- builder.rs   CCS package builder
-    |   +-- manifest.rs  Root CCS TOML/CBOR manifest schema and validation
+    |   +-- manifest.rs  Root CCS TOML/CBOR manifest schema and validation hub
+    |   +-- manifest/    Declarative hook schemas and manifest tests
     |   +-- manifest_provenance.rs Provenance DTOs embedded by the root manifest
     |   +-- signing.rs   Ed25519 signing
     |   +-- lockfile.rs  ccs.lock dependency pinning
     |   +-- convert/     Legacy-to-CCS conversion
-    |   +-- enhancement/ Retroactive CCS hook application
+    |   +-- enhancement/ Exact post-conversion provenance recording
     |   +-- export/      OCI image export
     |   +-- hooks/       systemd, tmpfiles, sysctl, user/group, alternatives
     |   +-- policy.rs    Build policy engine
@@ -189,7 +191,6 @@ crates/conary-core/      Core library crate
     +-- capability/      Package capability system
     |   +-- declaration.rs Capability declarations (network, fs, syscalls)
     |   +-- enforcement/ Landlock (filesystem) + seccomp-BPF (syscalls)
-    |   +-- inference/   Heuristic capability detection
     |   +-- resolver.rs  Capability-aware dependency resolution
     +-- provenance/      Package DNA tracking
     |   +-- source.rs    Source provenance (URL, VCS, checksums)
@@ -476,10 +477,19 @@ itself.
 Supports x86_64, aarch64, and riscv64 targets. Dry-run mode
 (`--dry-run`) validates the full pipeline without building.
 
-## Database Schema (v79)
+## Database Schema
 
-All runtime state lives in SQLite, and migrations are dispatched from
-`crates/conary-core/src/db/schema.rs`.
+All runtime state lives in SQLite. The pre-alpha database contract has one
+current schema epoch initialized by `crates/conary-core/src/db/schema.rs`.
+The schema itself is split by ownership under
+`crates/conary-core/src/db/migrations/current/`: local package-manager state,
+repository/service state, and Remi conversion/administration state.
+
+Databases from the former incremental migration epoch are rejected with an
+explicit rebuild requirement. Conary does not carry the retired migration
+chain or attempt to preserve derived queue and workflow history while there are
+no external users. Rebuilds must come from authoritative package, repository,
+and conversion inputs.
 
 The stable table families are:
 
@@ -489,10 +499,10 @@ The stable table families are:
 - Try state: active/kept/rolled-back package try sessions and selected generation metadata
 - Security and provenance: TUF metadata, provenance records, admin tokens, and audit data
 - Service and federation state: conversion/cache/download analytics, federation peers, and test-run persistence
-- Remi review workflow state: admin-only scriptlet evidence clusters, samples, state events, notes, backfill runs, and versioned normalization/supersession metadata
+- Remi review workflow state: admin-only scriptlet evidence clusters, samples, state events, notes, and backfill runs
 
 When exact table names or counts matter, inspect `crates/conary-core/src/db/models/`
-and the active migration functions instead of relying on this overview.
+and the current ownership SQL instead of relying on this overview.
 
 ## Package Graph
 

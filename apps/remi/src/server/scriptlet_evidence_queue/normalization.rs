@@ -1,34 +1,21 @@
 // apps/remi/src/server/scriptlet_evidence_queue/normalization.rs
 
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    sync::LazyLock,
-};
+use std::collections::{BTreeMap, BTreeSet};
 
-use conary_core::ccs::legacy_scriptlets::BootSecurityIntentEvidence;
+use conary_core::ccs::evidence_normalization::{
+    is_approved_policy_path, matching_quote_wrapper, normalize_tokens, requires_privacy_redaction,
+};
+pub use conary_core::ccs::evidence_normalization::{normalize_command_shape, normalize_token};
+use conary_core::ccs::legacy_scriptlets::{BootSecurityIntentEvidence, UnknownCommandEvidence};
 use conary_core::ccs::security_policy::{
     SecurityPolicyFallback, SecurityPolicyIntent, SecurityPolicyProvider,
     SecurityPolicyReconciliationState,
 };
 use conary_core::db::models::CLUSTER_KEY_PREFIX;
 use conary_core::repository::supported_profiles;
-use regex::Regex;
 use serde_json::{Value, json};
 
 use super::types::{ClusterKeyInput, StableClusterKey};
-
-static ENV_REF_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})$").unwrap()
-});
-static ENV_ASSIGNMENT_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^[A-Za-z_][A-Za-z0-9_]*=.*$").unwrap());
-static EMBEDDED_ENV_ASSIGNMENT_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"(^|[=,:;\s"'])[A-Za-z_][A-Za-z0-9_]*=.*$"#).unwrap());
-static KERNEL_VERSION_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\d+\.\d+\.\d+[-._A-Za-z0-9]*").unwrap());
-static WHITESPACE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s+").unwrap());
-static EMBEDDED_ABSOLUTE_PATH_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"(^|[=,:;\s"'])/+(?:$|[A-Za-z0-9._@%+-][^\s,;:="']*)"#).unwrap());
 
 const SECURITY_POLICY_INTENT_FIELDS: &[&str] = &[
     "schema",
@@ -45,91 +32,50 @@ const SECURITY_POLICY_INTENT_FIELDS: &[&str] = &[
 ];
 const SECURITY_POLICY_SCOPE_FIELDS: &[&str] = &["kind", "name", "paths", "service", "port"];
 
-pub fn normalize_command_shape(command: &str, argv: &[String]) -> String {
-    let mut parts = Vec::with_capacity(argv.len() + 1);
-    if let Some(command) = normalize_command_token(command) {
-        parts.push(command);
-    }
-    parts.extend(argv.iter().filter_map(|token| normalize_token(token)));
-    collapse_whitespace(&parts.join(" "))
-}
-
-pub fn normalize_token(token: &str) -> Option<String> {
-    let token = token.trim();
-    if token.is_empty() {
-        return None;
-    }
-    if let Some(unwrapped) = matching_quote_wrapper(token)
-        && (requires_privacy_redaction(unwrapped) || is_approved_lsm_path(unwrapped))
-    {
-        return normalize_token(unwrapped);
-    }
-    if ENV_ASSIGNMENT_RE.is_match(token) {
-        return Some("<env-assignment>".to_string());
-    }
-    if ENV_REF_RE.is_match(token) {
-        return Some("<env>".to_string());
-    }
-    if let Some((name, separator, value)) = option_value(token) {
-        return Some(format!(
-            "{name}{separator}{}",
-            normalize_option_value(value)
-        ));
-    }
-    if EMBEDDED_ENV_ASSIGNMENT_RE.is_match(token) {
-        return Some("<env-assignment>".to_string());
-    }
-    let absolute_path_count = absolute_path_count(token);
-    if absolute_path_count > 1 || (contains_parent_dir(token) && absolute_path_count > 0) {
-        return Some("<path>".to_string());
-    }
-    if is_approved_lsm_path(token) {
-        return Some(token.to_string());
-    }
-
-    let had_img_extension = token.ends_with(".img");
-    let mut token = KERNEL_VERSION_RE.replace_all(token, "<kver>").to_string();
-    if had_img_extension && !token.ends_with(".img") {
-        token.push_str(".img");
-    }
-    if let Some(rest) = token.strip_prefix("/boot/") {
-        return Some(format!("<boot>/{rest}"));
-    }
-    if is_approved_kernel_module_path(&token) {
-        return Some(token);
-    }
-    if token.starts_with('/') {
-        return Some("<path>".to_string());
-    }
-    if contains_absolute_path(&token) {
-        return Some("<path>".to_string());
-    }
-
-    Some(collapse_whitespace(&token))
-}
-
 pub fn sanitize_boot_security_intents(
     intents: &[BootSecurityIntentEvidence],
 ) -> Vec<BootSecurityIntentEvidence> {
-    intents
-        .iter()
-        .map(|intent| BootSecurityIntentEvidence {
-            class_id: intent.class_id.clone(),
-            reason_code: intent.reason_code.clone(),
-            command: normalize_token(&intent.command).unwrap_or_else(|| "unknown".to_string()),
-            argv: intent
-                .argv
-                .iter()
-                .filter_map(|token| normalize_token(token))
-                .collect(),
-            phase: intent.phase.clone(),
-            lifecycle_paths: intent
-                .lifecycle_paths
-                .iter()
-                .filter_map(|path| normalize_token(path))
-                .collect(),
-        })
-        .collect()
+    intents.iter().map(sanitize_boot_security_intent).collect()
+}
+
+pub fn sanitize_boot_security_intent(
+    intent: &BootSecurityIntentEvidence,
+) -> BootSecurityIntentEvidence {
+    BootSecurityIntentEvidence {
+        class_id: intent.class_id.clone(),
+        reason_code: intent.reason_code.clone(),
+        command: normalize_token(&intent.command).unwrap_or_else(|| "unknown".to_string()),
+        command_provenance: intent.command_provenance,
+        argv: normalize_tokens(&intent.argv),
+        argument_provenance: intent.argument_provenance.clone(),
+        execution_context: intent.execution_context,
+        phase: intent.phase.clone(),
+        lifecycle_paths: intent
+            .lifecycle_paths
+            .iter()
+            .filter_map(|path| normalize_token(path))
+            .collect(),
+        source: intent.source,
+        environment: normalize_tokens(&intent.environment),
+        pipeline_id: intent.pipeline_id,
+    }
+}
+
+pub fn sanitize_unknown_command_evidence(
+    evidence: &UnknownCommandEvidence,
+) -> UnknownCommandEvidence {
+    UnknownCommandEvidence {
+        command: normalize_token(&evidence.command).unwrap_or_else(|| "unknown".to_string()),
+        command_provenance: evidence.command_provenance,
+        argv: normalize_tokens(&evidence.argv),
+        argument_provenance: evidence.argument_provenance.clone(),
+        execution_context: evidence.execution_context,
+        phase: evidence.phase.clone(),
+        lifecycle_paths: evidence.lifecycle_paths.clone(),
+        source: evidence.source,
+        environment: normalize_tokens(&evidence.environment),
+        pipeline_id: evidence.pipeline_id,
+    }
 }
 
 pub fn sanitize_boot_security_intents_value(value: &str) -> Value {
@@ -193,53 +139,6 @@ pub fn stable_cluster_key(input: &ClusterKeyInput) -> StableClusterKey {
         cluster_key: format!("{CLUSTER_KEY_PREFIX}{}", conary_core::hash::sha256(&bytes)),
         normalized_command_shape_hash,
     }
-}
-
-fn normalize_command_token(command: &str) -> Option<String> {
-    let command = command.trim();
-    if command.is_empty() {
-        None
-    } else {
-        Some(collapse_whitespace(command))
-    }
-}
-
-fn option_value(token: &str) -> Option<(&str, char, &str)> {
-    if let Some((name, value)) = token.split_once('=') {
-        return name.starts_with('-').then_some((name, '=', value));
-    }
-    if let Some((name, value)) = token.split_once(':') {
-        return name.starts_with('-').then_some((name, ':', value));
-    }
-    None
-}
-
-fn normalize_option_value(value: &str) -> String {
-    let value = value.trim();
-    if value.is_empty() {
-        return String::new();
-    }
-    let value = option_value_for_inspection(value);
-    if ENV_ASSIGNMENT_RE.is_match(value) || EMBEDDED_ENV_ASSIGNMENT_RE.is_match(value) {
-        return "<env-assignment>".to_string();
-    }
-    if ENV_REF_RE.is_match(value) {
-        return "<env>".to_string();
-    }
-
-    let absolute_path_count = absolute_path_count(value);
-    if absolute_path_count > 1 || (contains_parent_dir(value) && absolute_path_count > 0) {
-        return "<path>".to_string();
-    }
-    if is_approved_lsm_path(value) {
-        return value.to_string();
-    }
-
-    let value = KERNEL_VERSION_RE.replace_all(value, "<kver>").to_string();
-    if contains_absolute_path(&value) {
-        return "<path>".to_string();
-    }
-    collapse_whitespace(&value)
 }
 
 fn sanitize_security_policy_intent(intent: &mut SecurityPolicyIntent) {
@@ -418,7 +317,7 @@ fn normalize_dynamic_policy_string(value: &str) -> String {
     let inspected = matching_quote_wrapper(value).unwrap_or(value);
     if requires_privacy_redaction(inspected) {
         normalize_token(inspected).unwrap_or_else(|| value.to_string())
-    } else if inspected != value && is_approved_lsm_path(inspected) {
+    } else if inspected != value && is_approved_policy_path(inspected) {
         inspected.to_string()
     } else {
         value.to_string()
@@ -436,103 +335,6 @@ fn collision_safe_key(base: String, occupied: &mut BTreeSet<String>) -> String {
         }
     }
     unreachable!("unbounded numeric suffixes must yield an unused key")
-}
-
-fn is_approved_lsm_path(token: &str) -> bool {
-    let path = std::path::Path::new(token);
-    if !path.is_absolute()
-        || contains_parent_dir(token)
-        || token.contains('"')
-        || token.contains('\'')
-    {
-        return false;
-    }
-
-    token.starts_with("/etc/apparmor.d/")
-        || token.starts_with("/etc/selinux/")
-        || token.starts_with("/usr/share/selinux/")
-}
-
-fn is_approved_kernel_module_path(token: &str) -> bool {
-    let path = std::path::Path::new(token);
-    path.is_absolute()
-        && !contains_parent_dir(token)
-        && (token.starts_with("/lib/modules/<kver>/")
-            || token.starts_with("/usr/lib/modules/<kver>/"))
-}
-
-fn contains_parent_dir(value: &str) -> bool {
-    std::path::Path::new(value)
-        .components()
-        .any(|component| matches!(component, std::path::Component::ParentDir))
-}
-
-fn requires_privacy_redaction(token: &str) -> bool {
-    let token = token.trim();
-    if token.is_empty() {
-        return false;
-    }
-    if let Some(unwrapped) = matching_quote_wrapper(token) {
-        return requires_privacy_redaction(unwrapped);
-    }
-    if ENV_ASSIGNMENT_RE.is_match(token) || ENV_REF_RE.is_match(token) {
-        return true;
-    }
-    if let Some((_, _, value)) = option_value(token) {
-        let value = value.trim();
-        let value = matching_quote_wrapper(value).unwrap_or(value);
-        return ENV_ASSIGNMENT_RE.is_match(value)
-            || EMBEDDED_ENV_ASSIGNMENT_RE.is_match(value)
-            || ENV_REF_RE.is_match(value)
-            || contains_absolute_path(value);
-    }
-    if EMBEDDED_ENV_ASSIGNMENT_RE.is_match(token) {
-        return true;
-    }
-
-    let absolute_path_count = absolute_path_count(token);
-    if absolute_path_count > 1 || (contains_parent_dir(token) && absolute_path_count > 0) {
-        return true;
-    }
-    if is_approved_lsm_path(token) || token.starts_with("/boot/") {
-        return false;
-    }
-    let kernel_normalized = KERNEL_VERSION_RE.replace_all(token, "<kver>");
-    if is_approved_kernel_module_path(&kernel_normalized) {
-        return false;
-    }
-
-    token.starts_with('/') || absolute_path_count > 0
-}
-
-fn contains_absolute_path(value: &str) -> bool {
-    EMBEDDED_ABSOLUTE_PATH_RE.is_match(value)
-}
-
-fn absolute_path_count(value: &str) -> usize {
-    EMBEDDED_ABSOLUTE_PATH_RE.find_iter(value).count()
-}
-
-fn matching_quote_wrapper(value: &str) -> Option<&str> {
-    let bytes = value.as_bytes();
-    if bytes.len() < 2 {
-        return None;
-    }
-    match (bytes[0], bytes[bytes.len() - 1]) {
-        (b'\'', b'\'') | (b'"', b'"') => Some(value[1..value.len() - 1].trim()),
-        _ => None,
-    }
-}
-
-fn option_value_for_inspection(value: &str) -> &str {
-    matching_quote_wrapper(value)
-        .or_else(|| value.strip_prefix('"'))
-        .or_else(|| value.strip_prefix('\''))
-        .unwrap_or(value)
-}
-
-fn collapse_whitespace(value: &str) -> String {
-    WHITESPACE_RE.replace_all(value.trim(), " ").to_string()
 }
 
 #[cfg(test)]
@@ -646,27 +448,25 @@ mod tests {
 
     #[test]
     fn sanitizer_preserves_parser_quoted_approved_policy_paths() {
-        for (shell_text, parser_token) in [
-            (
-                r#"apparmor_parser --profile="/etc/apparmor.d/vendor.1.2.3""#,
-                r#"--profile="/etc/apparmor.d/vendor.1.2.3"#,
-            ),
-            (
-                "apparmor_parser --profile='/etc/apparmor.d/vendor.1.2.3'",
-                "--profile='/etc/apparmor.d/vendor.1.2.3",
-            ),
+        for shell_text in [
+            r#"apparmor_parser --profile="/etc/apparmor.d/vendor.1.2.3""#,
+            "apparmor_parser --profile='/etc/apparmor.d/vendor.1.2.3'",
         ] {
             let invocations =
                 conary_core::ccs::convert::command_evidence::extract_invocations_from_shell_text(
                     "test:post-install",
                     shell_text,
                     None,
-                );
+                )
+                .unwrap();
 
             assert_eq!(invocations.len(), 1);
-            assert_eq!(invocations[0].argv, vec![parser_token.to_string()]);
             assert_eq!(
-                normalize_token(parser_token).as_deref(),
+                invocations[0].argv,
+                vec!["--profile=/etc/apparmor.d/vendor.1.2.3"]
+            );
+            assert_eq!(
+                normalize_token(&invocations[0].argv[0]).as_deref(),
                 Some("--profile=/etc/apparmor.d/vendor.1.2.3")
             );
         }
@@ -718,7 +518,7 @@ mod tests {
         );
         assert_eq!(
             normalize_token("file:///home/remi/private"),
-            Some("<path>".to_string())
+            Some("<url>".to_string())
         );
         assert_eq!(
             normalize_token("--root=//home/remi/private"),
@@ -868,7 +668,7 @@ mod tests {
         assert_eq!(unsafe_intent.provider.as_str(), "<path>");
         assert_eq!(unsafe_intent.operation, "<env-assignment>");
         assert_eq!(unsafe_intent.fallback.as_str(), "<path>");
-        assert_eq!(unsafe_intent.reconciliation.state.as_str(), "<path>");
+        assert_eq!(unsafe_intent.reconciliation.state.as_str(), "<url>");
     }
 
     #[test]

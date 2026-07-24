@@ -91,7 +91,7 @@ pub(super) fn legacy_replatform_upgrade_bundle(
     let entry = legacy_replatform_upgrade_entry();
     LegacyScriptletBundle {
         schema: LEGACY_SCRIPTLET_SCHEMA_V1.to_string(),
-        schema_revision: 1,
+        schema_revision: 2,
         source_format: SourceFormat::Rpm,
         source_family: "fedora-rhel".to_string(),
         source_distro: Some("fedora".to_string()),
@@ -159,7 +159,7 @@ fn legacy_replatform_upgrade_entry() -> LegacyScriptletEntry {
         )),
         source_evidence_refs: vec!["capture:rpm:%pre".to_string()],
         effects: Vec::new(),
-        unknown_commands: Vec::new(),
+        unknown_command_evidence: Vec::new(),
         blocked_classes: Vec::new(),
         boot_security_intents: Vec::new(),
         security_policy_intents: Vec::new(),

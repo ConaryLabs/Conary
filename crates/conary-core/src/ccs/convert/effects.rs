@@ -1,7 +1,11 @@
 // conary-core/src/ccs/convert/effects.rs
 
 use crate::ccs::convert::command_evidence::CommandInvocation;
-use crate::ccs::legacy_scriptlets::{EffectConfidence, EffectReplacement, EffectSource};
+use crate::ccs::evidence_normalization::{normalize_command_token, normalize_tokens};
+use crate::ccs::legacy_scriptlets::{
+    CommandArgumentProvenance, CommandEvidenceSource, CommandExecutionContext, EffectConfidence,
+    EffectReplacement, EffectSource,
+};
 use crate::packages::native_abi::NativeScriptletEntry;
 use std::collections::BTreeMap;
 
@@ -20,69 +24,42 @@ pub struct ScriptletEffectEvidence {
     pub extra: BTreeMap<String, toml::Value>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ScriptletCommandEvidence {
     pub command: String,
+    pub command_provenance: CommandArgumentProvenance,
     pub argv: Vec<String>,
+    pub argument_provenance: Vec<CommandArgumentProvenance>,
+    pub execution_context: CommandExecutionContext,
     pub phase: Option<String>,
     pub lifecycle_paths: Vec<String>,
     pub raw_line: Option<String>,
-    pub source: String,
+    pub source: CommandEvidenceSource,
     pub environment: Vec<String>,
+    pub pipeline_id: Option<usize>,
 }
 
 impl ScriptletCommandEvidence {
     pub fn from_invocation(invocation: &CommandInvocation) -> Self {
         Self {
-            command: invocation.command.clone(),
-            argv: sanitize_command_argv(&invocation.argv),
+            command: normalize_command_token(&invocation.command)
+                .unwrap_or_else(|| "unknown".to_string()),
+            command_provenance: invocation.command_provenance,
+            argv: normalize_tokens(&invocation.argv),
+            argument_provenance: invocation.argument_provenance.clone(),
+            execution_context: invocation.execution_context,
             phase: invocation.phase.clone(),
             lifecycle_paths: invocation.lifecycle_paths.clone(),
             raw_line: invocation.raw_line.clone(),
-            source: invocation.source.as_str().to_string(),
+            source: invocation.source,
             environment: invocation
                 .environment
                 .iter()
                 .map(|fact| fact.name.clone())
                 .collect(),
+            pipeline_id: invocation.pipeline_id,
         }
     }
-}
-
-fn sanitize_command_argv(argv: &[String]) -> Vec<String> {
-    argv.iter().map(|arg| sanitize_command_arg(arg)).collect()
-}
-
-fn sanitize_command_arg(arg: &str) -> String {
-    if let Some(rest) = arg.strip_prefix("/boot/") {
-        return format!("<boot>/{}", sanitize_path_segments(rest));
-    }
-
-    sanitize_path_segments(arg)
-}
-
-fn sanitize_path_segments(path: &str) -> String {
-    path.split('/')
-        .map(|segment| {
-            if looks_like_kernel_version(segment) {
-                "<kver>"
-            } else {
-                segment
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("/")
-}
-
-fn looks_like_kernel_version(segment: &str) -> bool {
-    let mut parts = segment.split('.');
-    matches!(
-        (parts.next(), parts.next(), parts.next()),
-        (Some(major), Some(minor), Some(patch))
-            if major.chars().all(|ch| ch.is_ascii_digit())
-                && minor.chars().all(|ch| ch.is_ascii_digit())
-                && patch.chars().next().is_some_and(|ch| ch.is_ascii_digit())
-    )
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -93,7 +70,7 @@ pub enum ScriptletClassification {
     },
     Unknown {
         reason_code: String,
-        command: String,
+        command: ScriptletCommandEvidence,
     },
     Review {
         reason_code: String,
@@ -191,7 +168,7 @@ mod tests {
                 reason_code: "known-helper-requires-adapter-coverage".to_string(),
                 effects: vec![ScriptletEffectEvidence {
                     kind: "dynamic-linker-cache".to_string(),
-                    source: EffectSource::StaticSignal,
+                    source: EffectSource::ShellAst,
                     confidence: EffectConfidence::Inferred,
                     replacement: EffectReplacement::None,
                     adapter_id: Some("ldconfig/v1".to_string()),
@@ -211,7 +188,16 @@ mod tests {
             "rpm:%post",
             ScriptletClassification::Unknown {
                 reason_code: "unknown-command".to_string(),
-                command: "custom-helper".to_string(),
+                command: ScriptletCommandEvidence {
+                    command: "custom-helper".to_string(),
+                    argv: vec!["--do-it".to_string()],
+                    phase: Some("post-install".to_string()),
+                    lifecycle_paths: vec!["post-install".to_string()],
+                    raw_line: Some("custom-helper --do-it".to_string()),
+                    source: CommandEvidenceSource::ShellAst,
+                    environment: Vec::new(),
+                    ..ScriptletCommandEvidence::default()
+                },
             },
         );
         report.push(

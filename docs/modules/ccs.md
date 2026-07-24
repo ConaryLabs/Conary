@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-07-23
-revision: 25
-summary: Document root-contained payload symlink normalization
+last_updated: 2026-07-24
+revision: 26
+summary: Route foreign lifecycle authority through formal shell parsing and exact helper contracts
 ---
 
 # CCS Module (conary-core/src/ccs/)
@@ -50,19 +50,21 @@ CcsBuilder::new(manifest, source_dir)
 | `HookExecutor` | hooks/ | Runs declarative hooks with rollback tracking |
 | `LegacyScriptletBundle` | legacy_scriptlets.rs | Converted RPM/DEB/Arch scriptlet decisions and local replay policy |
 | `BuildPolicy` (trait) | policy.rs | Pluggable build policy (DenyPaths, StripBinaries, FixShebangs, etc.) |
-| `EnhancementEngine` (trait) | enhancement/ | Post-conversion enhancement (capabilities, provenance, subpackages) |
+| `EnhancementEngine` (trait) | enhancement/ | Exact post-conversion provenance recording |
 
 ## Submodules
 
 **manifest.rs and manifest_provenance.rs** -- `ccs::manifest` remains the root
-manifest schema and validation owner. The provenance DTOs live in
-`ccs::manifest_provenance` and are re-exported from `ccs::manifest` so existing
-imports keep working. M2 release publish stores hermetic evidence, signed
+manifest schema and validation owner. Declarative hook schemas, capability
+validation, and hook reversibility live in `ccs::manifest::hooks` and are
+re-exported through that root entrypoint. The provenance DTOs live in
+`ccs::manifest_provenance` and are likewise re-exported so existing imports
+keep working. M2 release publish stores hermetic evidence, signed
 build-attestation envelopes, and foreign conversion boundaries in manifest
 provenance. Artifact-form `conary publish <pkg.ccs> <target>` is allowed only
-after `repository::static_repo::publish_gate` verifies package signatures, TOML
-integrity, attestation authority, output identity, command-risk evidence, and
-foreign-boundary hashes.
+after `repository::static_repo::publish_gate` verifies package signatures,
+TOML integrity, attestation authority, output identity, command-risk evidence,
+and foreign-boundary hashes.
 
 **hooks/** -- Declarative hook executors. Pre-install order: groups, users,
 directories. Post-install order: systemd, tmpfiles, sysctl, alternatives.
@@ -73,10 +75,38 @@ Hook types: User, Group, Directory, Systemd, Tmpfiles, Sysctl, Alternatives.
 **convert/** -- Legacy (RPM/DEB/Arch) to CCS conversion. Builds scriptlet
 decisions from the adapter registry, blocked-class registry, support matrix,
 replay policy, and target compatibility checks. Declarative manifest hooks are
-emitted only from adapter-backed or curated evidence; text-pattern detections
-remain advisory metadata for review diagnostics. Remaining scripts are
+emitted only from adapter-backed typed evidence. Shell bodies are parsed with
+the tree-sitter Bash grammar into command nodes that retain command/argument
+provenance and execution context. Malformed shell produces a typed parser
+diagnostic and no guessed commands. Text-pattern detections remain advisory
+metadata for review diagnostics and can never grant compatibility,
+publication, mutation, or security authority. Remaining scripts are
 preserved for guarded local replay or review when they cannot be safely
-captured. The `sysctl/v1` adapter projects only narrow, validated
+replaced. The authoritative package-manager lifecycle and helper-source map is
+`docs/specs/foreign-package-lifecycle-contracts.md`.
+
+`adapters.rs` is the thin registry and authority gate;
+`adapters/builtin.rs` owns cross-distribution implementations;
+`debian_adapters.rs`, `selinux_adapters.rs`, and `apparmor_adapters.rs` own
+provider-specific grammars. Complete adapter results are downgraded to typed
+discovery-only evidence unless the AST form is literal and unconditional or an
+adapter validates an exact documented expansion grammar.
+
+`converter.rs` remains the conversion orchestration hub.
+`converter/evidence.rs` owns foreign conversion evidence and command-risk
+projection, while `converter/authority.rs` owns scriptlet classification and
+the projection of complete adapter effects into native manifest authority.
+Tests live under `converter/tests/`.
+
+The `dpkg-maintscript-helper/v1` adapter parses the four documented dpkg
+actions and the required `-- "$@"` forwarding contract. `rm_conffile` is a
+complete native replacement when the obsolete path is absent from the new
+payload because Conary's generation `/etc` three-way merge removes unchanged
+package configuration and preserves a user-modified orphan. The other three
+actions remain typed partial evidence with the missing native transition model
+named explicitly.
+
+The `sysctl/v1` adapter projects only narrow, validated
 `sysctl -w <key>=<value>` invocations into native `hooks.sysctl`; broad forms
 such as `sysctl -p` and denied security-sensitive keys remain blocked. One
 validated write still counts as complete native replacement evidence, but
@@ -111,26 +141,33 @@ The `apparmor-policy/v1` adapter projects only payload-backed
 `apparmor_parser -r|--replace /etc/apparmor.d/<profile>` reloads into generic
 `SecurityPolicyIntent` metadata with dormant optional-policy fallback. AppArmor
 mode changes, disable/status helpers, broad reloads, and unbacked paths remain
-blocked/private and use `block-on-enforcing-target` fallback when captured as
-review intent. Tracks conversion fidelity (High/Medium/Low) via
-`FidelityReport`.
+blocked/private and use `block-on-enforcing-target` fallback when classified as
+review intent. Aggregate scriptlet fidelity is derived only from typed lifecycle
+coverage in the durable scriptlet bundle; the retired regex analyzer and its
+parallel guessed-hook score no longer exist.
 Future LSM expansion must add target-provider facts and content semantics
 before any mode change, status, disable, directory reload, or policy-store
 mutation can become public-ready.
 
-Non-default scriptlet publication summaries must include both
+Non-default scriptlet publication summaries must include typed command
+evidence plus both
 `boot_security_intents` and `security_policy_intents`; rows that predate the
 current conversion version are stale and must be reconverted before they can be
-public-ready. The empty `{}` summary shape remains a constructor compatibility
-path for native/default rows without scriptlet evidence.
+public-ready. The empty `{}` summary shape is reserved for native/default rows
+without scriptlet evidence.
 
-**legacy_scriptlets.rs** -- Versioned metadata for converted package scriptlet
+**legacy_scriptlets.rs** -- Current metadata for converted package scriptlet
 semantics and local replay planning. The v1 bundle lives in the TOML manifest as
 `[legacy_scriptlets]` and records source package identity, target
 compatibility, per-entry decisions, effects, reserved trigger/purge metadata,
 timeouts, and evidence digests. It is TOML-only in this revision; the CBOR
 `BinaryManifest` remains unchanged and archive reads overlay the TOML field
 when both manifest formats are present.
+
+The large conversion surfaces are split by ownership. Adapter registry tests
+live under `convert/adapters/tests/`; legacy bundle tests live under
+`ccs/legacy_scriptlets/tests.rs`; Remi protocol, async-client, and client tests
+live under `repository/remi/`.
 
 **v2/** -- CCS v2 native package authority. Start in
 `crates/conary-core/src/ccs/v2/` for v2 authority, validation, diagnostics,
@@ -147,8 +184,9 @@ into signed v2 authority. Debug TOML consistency checks live in
 against signed authority and never becomes install-time authority.
 
 **enhancement/** -- Post-conversion enrichment via trait-based plugins.
-Adds capabilities, provenance, and subpackage relationships that the
-original format lacked. Uses EnhancementRunner with a registry pattern.
+Records exact conversion provenance. The retired capability and subpackage
+enhancers guessed authority from package names and file paths; declared
+capabilities and source package-manager metadata own those contracts instead.
 
 **export/** -- OCI image export. Produces OCI-layout archives with gzipped
 tar layers, image config, and manifest. ContainerConfig controls entrypoint,
@@ -278,11 +316,11 @@ Common PAM stack helpers (`authselect`, `authconfig`, `pam-auth-update`, and
 manifest authority or public Remi eligibility without a future native PAM
 policy adapter and target-profile PAM facts.
 
-Remi's unknown-command normalization v2 is an admin queue classification layer,
-not CCS conversion authority. Suppressing provable shell/control-flow noise
-from that queue does not remove unknown commands from the signed conversion
-summary, change entry decisions, grant adapter coverage, enable raw replay, or
-make an artifact public.
+Remi consumes the typed command nodes emitted by conversion and never
+reclassifies their strings. Its privacy normalization changes only displayed
+argument values and clustering keys; it does not remove commands from the
+signed conversion summary, change entry decisions, grant adapter coverage,
+enable raw replay, or make an artifact public.
 
 Live network fetches and nested package-manager calls remain blocked conversion
 evidence. A scriptlet that fetches content with `curl`, `wget`, `scp`, `ssh`, or

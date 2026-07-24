@@ -53,7 +53,6 @@ pub(super) async fn resolve_and_parse_package(
     repo: Option<&str>,
     architecture: Option<&str>,
     convert_to_ccs: bool,
-    no_capture: bool,
     policy: &ResolutionPolicy,
     primary_flavor: Option<RepositoryDependencyFlavor>,
     ccs_opts: &CcsInstallParams<'_>,
@@ -185,7 +184,6 @@ pub(super) async fn resolve_and_parse_package(
             &resolved.path,
             format,
             db_path,
-            !no_capture,
             ccs_opts.allow_capabilities,
         )
         .await?

@@ -97,6 +97,7 @@ commands.
 
 - [`docs/modules/federation.md`](../modules/federation.md) for federation background
 - [`docs/modules/ccs.md`](../modules/ccs.md) for CCS format and conversion context
+- [`docs/specs/foreign-package-lifecycle-contracts.md`](../specs/foreign-package-lifecycle-contracts.md) for authoritative RPM, Debian, and Arch lifecycle parsing and adapter rules
 - [`docs/modules/feature-ownership.md`](../modules/feature-ownership.md) for feature ownership cards, neighboring systems, and interaction verification gates
 - [`docs/modules/test-fixtures.md`](../modules/test-fixtures.md) for Remi and CCS fixture ownership and proof commands
 - [`docs/modules/bootstrap.md`](../modules/bootstrap.md) for bootstrap and stage flows
