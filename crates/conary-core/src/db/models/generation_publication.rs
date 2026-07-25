@@ -1,5 +1,6 @@
 // conary-core/src/db/models/generation_publication.rs
 
+use crate::config_transaction::GenerationConfigTransaction;
 use crate::error::Result;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use strum_macros::{AsRefStr, Display, EnumString};
@@ -65,6 +66,7 @@ pub struct GenerationPublication {
     pub state_number: Option<i64>,
     pub generation_number: Option<i64>,
     pub summary: String,
+    pub config_transaction: GenerationConfigTransaction,
     pub last_error: Option<String>,
     pub retry_count: i64,
     pub recoverable: bool,
@@ -75,8 +77,9 @@ pub struct GenerationPublication {
 
 impl GenerationPublication {
     const COLUMNS: &'static str = "id, trigger_changeset_id, published_through_changeset_id, \
-        tx_uuid, db_path, runtime_root, phase, status, state_number, generation_number, \
-        summary, last_error, retry_count, recoverable, created_at, updated_at, completed_at";
+        tx_uuid, db_path, runtime_root, phase, status, state_number, \
+        generation_number, summary, config_transaction_json, last_error, retry_count, \
+        recoverable, created_at, updated_at, completed_at";
 
     pub fn create_pending(
         conn: &Connection,
@@ -85,11 +88,15 @@ impl GenerationPublication {
         db_path: &str,
         runtime_root: &str,
         summary: &str,
+        config_transaction: &GenerationConfigTransaction,
     ) -> Result<Self> {
+        config_transaction.validate()?;
+        let config_transaction_json = serde_json::to_string(config_transaction)?;
         conn.execute(
             "INSERT INTO generation_publications (
-                trigger_changeset_id, tx_uuid, db_path, runtime_root, phase, status, summary
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                trigger_changeset_id, tx_uuid, db_path, runtime_root, phase, status,
+                summary, config_transaction_json
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 trigger_changeset_id,
                 tx_uuid,
@@ -98,6 +105,7 @@ impl GenerationPublication {
                 GenerationPublicationPhase::PendingBuild.as_str(),
                 GenerationPublicationStatus::Pending.as_str(),
                 summary,
+                config_transaction_json,
             ],
         )?;
         Self::find_by_id(conn, conn.last_insert_rowid())?.ok_or_else(|| {
@@ -144,9 +152,29 @@ impl GenerationPublication {
             .map_err(Into::into)
     }
 
+    /// Retire forward publication debt when its package changeset is rolled
+    /// back. The compensating rollback publication is recorded separately.
+    pub fn abandon_recoverable_for_changeset(
+        conn: &Connection,
+        changeset_id: i64,
+    ) -> Result<usize> {
+        conn.execute(
+            "UPDATE generation_publications
+             SET status = 'abandoned',
+                 recoverable = 0,
+                 updated_at = CURRENT_TIMESTAMP,
+                 completed_at = CURRENT_TIMESTAMP
+             WHERE trigger_changeset_id = ?1
+               AND recoverable = 1
+               AND status IN ('pending', 'running', 'failed')",
+            [changeset_id],
+        )
+        .map_err(Into::into)
+    }
+
     pub fn applied_high_water_changeset_id(conn: &Connection) -> Result<Option<i64>> {
         conn.query_row(
-            "SELECT MAX(id) FROM changesets WHERE status IN ('applied', 'post_hooks_failed')",
+            "SELECT MAX(id) FROM changesets WHERE status = 'applied'",
             [],
             |row| row.get(0),
         )
@@ -261,7 +289,25 @@ impl GenerationPublication {
                     Box::new(e),
                 )
             })?;
-        let recoverable: i32 = row.get(13)?;
+        let config_transaction_json: String = row.get(11)?;
+        let config_transaction = serde_json::from_str::<GenerationConfigTransaction>(
+            &config_transaction_json,
+        )
+        .map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(
+                11,
+                rusqlite::types::Type::Text,
+                Box::new(error),
+            )
+        })?;
+        config_transaction.validate().map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(
+                11,
+                rusqlite::types::Type::Text,
+                Box::new(error),
+            )
+        })?;
+        let recoverable: i32 = row.get(14)?;
         Ok(Self {
             id: Some(row.get(0)?),
             trigger_changeset_id: row.get(1)?,
@@ -274,12 +320,13 @@ impl GenerationPublication {
             state_number: row.get(8)?,
             generation_number: row.get(9)?,
             summary: row.get(10)?,
-            last_error: row.get(11)?,
-            retry_count: row.get(12)?,
+            config_transaction,
+            last_error: row.get(12)?,
+            retry_count: row.get(13)?,
             recoverable: recoverable != 0,
-            created_at: row.get(14)?,
-            updated_at: row.get(15)?,
-            completed_at: row.get(16)?,
+            created_at: row.get(15)?,
+            updated_at: row.get(16)?,
+            completed_at: row.get(17)?,
         })
     }
 }
@@ -287,7 +334,30 @@ impl GenerationPublication {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::payload::{PayloadNode, ResolvedPayloadNode};
     use std::str::FromStr;
+
+    fn exact_config_transaction() -> GenerationConfigTransaction {
+        let node = ResolvedPayloadNode::from_numeric_source(PayloadNode::regular(0o640)).unwrap();
+        let artifact = crate::config_transaction::ConfigArtifact::regular(b"exact", node).unwrap();
+        GenerationConfigTransaction {
+            entries: vec![crate::config_transaction::ConfigPathTransaction {
+                path: "/etc/exact.conf".to_string(),
+                operation: crate::config_transaction::ConfigTransactionOperation::Install,
+                before: None,
+                current: None,
+                after: Some(crate::config_transaction::ConfigPackageState {
+                    source: crate::db::models::ConfigSource::Auto,
+                    noreplace: false,
+                    ghost: false,
+                    original_sha256: Some(artifact.sha256().to_string()),
+                    artifact: Some(artifact),
+                }),
+                auxiliaries: Vec::new(),
+            }],
+            ..Default::default()
+        }
+    }
 
     #[test]
     fn phase_and_status_reject_unknown_values() {
@@ -327,6 +397,7 @@ mod tests {
             "/tmp/conary.db",
             "/tmp/conary",
             "A",
+            &Default::default(),
         )
         .unwrap();
         let b = GenerationPublication::create_pending(
@@ -336,6 +407,7 @@ mod tests {
             "/tmp/conary.db",
             "/tmp/conary",
             "B",
+            &Default::default(),
         )
         .unwrap();
         a.mark_failed(&conn, "forced").unwrap();
@@ -375,6 +447,7 @@ mod tests {
             "/tmp/conary.db",
             "/tmp/conary",
             "A",
+            &Default::default(),
         )
         .unwrap();
         assert_eq!(
@@ -391,6 +464,88 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn abandoning_changeset_debt_excludes_forward_transaction_from_retry() {
+        let (_tmp, conn) = crate::db::testing::create_test_db();
+        conn.execute(
+            "INSERT INTO changesets (description, status) VALUES ('upgrade', 'applied')",
+            [],
+        )
+        .unwrap();
+        let changeset_id = conn.last_insert_rowid();
+        GenerationPublication::create_pending(
+            &conn,
+            Some(changeset_id),
+            None,
+            "/tmp/conary.db",
+            "/tmp/conary",
+            "upgrade",
+            &exact_config_transaction(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            GenerationPublication::abandon_recoverable_for_changeset(&conn, changeset_id).unwrap(),
+            1
+        );
+        assert!(
+            GenerationPublication::pending_recoverable(&conn)
+                .unwrap()
+                .is_empty()
+        );
+        let status: String = conn
+            .query_row(
+                "SELECT status FROM generation_publications
+                 WHERE trigger_changeset_id = ?1",
+                [changeset_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(status, "abandoned");
+    }
+
+    #[test]
+    fn publication_snapshot_obeys_the_callers_sql_transaction() {
+        let (_tmp, conn) = crate::db::testing::create_test_db();
+        let snapshot = exact_config_transaction();
+
+        {
+            let tx = conn.unchecked_transaction().unwrap();
+            GenerationPublication::create_pending(
+                &tx,
+                None,
+                None,
+                "/tmp/conary.db",
+                "/tmp/conary",
+                "rolled back",
+                &snapshot,
+            )
+            .unwrap();
+        }
+        assert!(
+            GenerationPublication::pending_recoverable(&conn)
+                .unwrap()
+                .is_empty()
+        );
+
+        let tx = conn.unchecked_transaction().unwrap();
+        GenerationPublication::create_pending(
+            &tx,
+            None,
+            None,
+            "/tmp/conary.db",
+            "/tmp/conary",
+            "committed",
+            &snapshot,
+        )
+        .unwrap();
+        tx.commit().unwrap();
+
+        let debts = GenerationPublication::pending_recoverable(&conn).unwrap();
+        assert_eq!(debts.len(), 1);
+        assert_eq!(debts[0].config_transaction, snapshot);
     }
 
     #[test]

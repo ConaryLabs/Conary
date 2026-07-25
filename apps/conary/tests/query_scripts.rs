@@ -4,21 +4,19 @@ mod common;
 
 use clap::Parser;
 use conary::cli::{Cli, Commands, QueryCommands};
-use conary_core::ccs::builder::{CcsBuilder, write_ccs_package};
-use conary_core::ccs::legacy_scriptlets::{
-    CommandArgumentProvenance, CommandEvidenceSource, CommandExecutionContext, DecisionCounts,
-    EffectConfidence, EffectReplacement, EffectSource, ForeignReplayPolicy,
-    LEGACY_SCRIPTLET_SCHEMA_V1, LegacyScriptletBundle, LegacyScriptletEntry, LifecyclePath,
-    NativeInvocation, PublicationPolicy, PublicationStatus, RpmTriggerMetadata,
-    RpmTriggerTargetConstraint, ScriptletDecision, ScriptletEffect, ScriptletFidelity,
-    SourceFormat, TargetCompatibility, TransactionOrder, UnknownCommandEvidence, VersionScheme,
-};
+use conary_core::ccs::builder::{CcsBuilder, write_signed_current_ccs_package};
 use conary_core::ccs::manifest::CcsManifest;
+use conary_core::ccs::native_lifecycle::{
+    LifecyclePath, NATIVE_LIFECYCLE_SCHEMA_REVISION, NATIVE_LIFECYCLE_SCHEMA_V1, NativeInvocation,
+    NativeLifecycleBundle, NativeLifecycleEntry, NativeLifecycleEntryKind, RpmTriggerAction,
+    RpmTriggerKind, RpmTriggerMetadata, RpmTriggerTargetConstraint, ScriptletFidelity,
+    SourceFormat, TransactionOrder, VersionScheme,
+};
 use conary_core::db;
 use conary_core::db::models::{
-    Changeset, ChangesetStatus, InstalledLegacyScriptletBundle, ScriptletEntry, Trove, TroveType,
+    Changeset, ChangesetStatus, InstalledCcsRemoveHook, InstalledNativeLifecycleBundle, Trove,
+    TroveType,
 };
-use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::process::{Command, Output};
 use tempfile::TempDir;
@@ -76,28 +74,68 @@ fn assert_failure(output: &Output) {
 fn build_ccs_fixture(
     name: &str,
     version: &str,
-    bundle: Option<LegacyScriptletBundle>,
-) -> (TempDir, PathBuf) {
+    bundle: Option<NativeLifecycleBundle>,
+) -> (TempDir, PathBuf, PathBuf) {
     let temp = tempfile::tempdir().unwrap();
     let source_dir = temp.path().join("src");
     std::fs::create_dir_all(source_dir.join("usr/bin")).unwrap();
     std::fs::write(source_dir.join("usr/bin/fixture"), b"fixture\n").unwrap();
 
     let mut manifest = CcsManifest::new_minimal(name, version);
-    manifest.legacy_scriptlets = bundle;
+    if let Some(bundle) = &bundle {
+        manifest.package.version_scheme = match &bundle.source_format {
+            SourceFormat::Rpm => conary_core::repository::versioning::VersionScheme::Rpm,
+            SourceFormat::Deb => conary_core::repository::versioning::VersionScheme::Debian,
+            SourceFormat::Arch => conary_core::repository::versioning::VersionScheme::Arch,
+        };
+    }
+    manifest.native_lifecycle = bundle;
 
     let result = CcsBuilder::new(manifest, &source_dir).build().unwrap();
     let package_path = temp.path().join(format!("{name}.ccs"));
-    write_ccs_package(&result, &package_path).unwrap();
+    let policy_path = temp.path().join("ccs-trust-policy.toml");
+    let signer = conary_core::ccs::SigningKeyPair::generate().with_key_id("query-integration");
+    write_signed_current_ccs_package(&result, &package_path, &signer, false).unwrap();
+    std::fs::write(
+        &policy_path,
+        format!("trusted_keys = [\"{}\"]\n", signer.public_key_base64()),
+    )
+    .unwrap();
+    let policy = conary_core::ccs::TrustPolicy::from_file(&policy_path).unwrap();
+    conary_core::ccs::verify::verify_package(&package_path, &policy)
+        .expect("query fixture must carry trusted current authority");
+    (temp, package_path, policy_path)
+}
+
+fn build_rpm_fixture() -> (TempDir, PathBuf) {
+    let temp = tempfile::tempdir().unwrap();
+    let source_dir = temp.path().join("src");
+    std::fs::create_dir_all(source_dir.join("usr/bin")).unwrap();
+    std::fs::write(
+        source_dir.join("usr/bin/native-query-fixture"),
+        b"fixture\n",
+    )
+    .unwrap();
+
+    let mut manifest = CcsManifest::new_minimal("native-query-fixture", "1.0.0");
+    manifest.package.license = Some("MIT".to_string());
+    manifest.package.platform = Some(conary_core::ccs::manifest::Platform {
+        arch: Some("x86_64".to_string()),
+        ..Default::default()
+    });
+    let result = CcsBuilder::new(manifest, &source_dir).build().unwrap();
+    let package_path = temp.path().join("native-query-fixture.rpm");
+    conary_core::ccs::native_export::rpm::generate(&result, &package_path)
+        .expect("generate native RPM query fixture");
     (temp, package_path)
 }
 
-fn bundle_fixture() -> LegacyScriptletBundle {
-    let replaced_body = "ldconfig\n";
-    let legacy_body = "systemctl daemon-reload\n";
-    LegacyScriptletBundle {
-        schema: LEGACY_SCRIPTLET_SCHEMA_V1.to_string(),
-        schema_revision: 2,
+fn bundle_fixture() -> NativeLifecycleBundle {
+    let pre_remove_body = "ldconfig\n";
+    let post_install_body = "systemctl daemon-reload\n";
+    NativeLifecycleBundle {
+        schema: NATIVE_LIFECYCLE_SCHEMA_V1.to_string(),
+        schema_revision: NATIVE_LIFECYCLE_SCHEMA_REVISION,
         source_format: SourceFormat::Rpm,
         source_family: "fedora-rhel".to_string(),
         source_distro: Some("fedora".to_string()),
@@ -111,59 +149,30 @@ fn bundle_fixture() -> LegacyScriptletBundle {
         version_scheme: VersionScheme::Rpm,
         conversion_tool: "remi".to_string(),
         conversion_tool_version: "0.8.0".to_string(),
-        conversion_policy: "safe-or-legacy".to_string(),
-        adapter_registry_digest: Some(
-            "sha256:4444444444444444444444444444444444444444444444444444444444444444".to_string(),
-        ),
-        target_policy_digest: None,
+        conversion_policy: "typed-native-lifecycle".to_string(),
         evidence_digest: Some(
             "sha256:5555555555555555555555555555555555555555555555555555555555555555".to_string(),
         ),
-        target_compatibility: TargetCompatibility::SourceNative,
-        allowed_targets: vec!["rpm/fedora/44/x86_64".to_string()],
-        foreign_replay_policy: ForeignReplayPolicy::Deny,
-        publication_policy: PublicationPolicy::PublicIfNoBlocked,
-        publication_status: PublicationStatus::PrivateReview,
-        scriptlet_fidelity: ScriptletFidelity::Mixed,
-        decision_counts: DecisionCounts {
-            replaced: 1,
-            legacy: 1,
-            blocked: 0,
-            review: 0,
-            extra: BTreeMap::new(),
-        },
-        unsupported_class_counts: BTreeMap::new(),
-        security_policy_intents: Vec::new(),
+        scriptlet_fidelity: ScriptletFidelity::NativeLifecycle,
         entries: vec![
-            entry_fixture(
-                "rpm:%preun",
-                ScriptletDecision::Replaced,
-                replaced_body,
-                true,
-            ),
-            entry_fixture("rpm:%post", ScriptletDecision::Legacy, legacy_body, false),
+            entry_fixture("rpm:%preun", pre_remove_body, true),
+            entry_fixture("rpm:%post", post_install_body, false),
         ],
-        extra: BTreeMap::new(),
     }
 }
 
-fn zero_entry_bundle_fixture() -> LegacyScriptletBundle {
+fn zero_entry_bundle_fixture() -> NativeLifecycleBundle {
     let mut bundle = bundle_fixture();
     bundle.entries.clear();
-    bundle.decision_counts = DecisionCounts::default();
     bundle.scriptlet_fidelity = ScriptletFidelity::NativeFree;
     bundle
 }
 
-fn entry_fixture(
-    id: &str,
-    decision: ScriptletDecision,
-    body: &str,
-    with_reserved_metadata: bool,
-) -> LegacyScriptletEntry {
-    LegacyScriptletEntry {
+fn entry_fixture(id: &str, body: &str, with_reserved_metadata: bool) -> NativeLifecycleEntry {
+    NativeLifecycleEntry {
         id: id.to_string(),
         native_slot: id.split(':').nth(1).unwrap_or("%post").to_string(),
+        kind: NativeLifecycleEntryKind::Executable,
         phase: if id.ends_with("%preun") {
             LifecyclePath::PreRemove
         } else {
@@ -180,77 +189,48 @@ fn entry_fixture(
             environment: vec!["RPM_INSTALL_PREFIX=/".to_string()],
             stdin: Some("none".to_string()),
             chroot: Some("install-root".to_string()),
-            extra: BTreeMap::new(),
         },
         transaction_order: TransactionOrder {
             position: "after-payload".to_string(),
             before: vec![],
             after: vec!["payload".to_string()],
-            extra: BTreeMap::new(),
         },
         timeout_ms: 30_000,
         sandbox: None,
         capabilities: vec!["ldconfig".to_string()],
-        decision,
-        reason_code: "protected-replay-required".to_string(),
-        human_reason: Some("fixture reason".to_string()),
         evidence_digest: Some(
             "sha256:6666666666666666666666666666666666666666666666666666666666666666".to_string(),
         ),
         source_evidence_refs: vec!["capture:rpm:%post".to_string()],
-        effects: vec![ScriptletEffect {
-            kind: "ldconfig".to_string(),
-            source: EffectSource::ShellAst,
-            confidence: EffectConfidence::Declared,
-            replacement: EffectReplacement::Complete,
-            adapter_id: Some("ldconfig/v1".to_string()),
-            adapter_digest: Some(
-                "sha256:7777777777777777777777777777777777777777777777777777777777777777"
-                    .to_string(),
-            ),
-            command: Some("ldconfig".to_string()),
-            args: vec!["-X".to_string()],
-            path: Some("/usr/lib64".to_string()),
-            reason_code: Some("ldconfig-cache-refresh".to_string()),
-            extra: BTreeMap::new(),
-        }],
-        unknown_command_evidence: vec![UnknownCommandEvidence {
-            command: "systemctl".to_string(),
-            command_provenance: CommandArgumentProvenance::Literal,
-            argv: vec!["restart".to_string(), "nginx.service".to_string()],
-            argument_provenance: vec![
-                CommandArgumentProvenance::Literal,
-                CommandArgumentProvenance::Literal,
-            ],
-            execution_context: CommandExecutionContext::Unconditional,
-            phase: Some("post-install".to_string()),
-            lifecycle_paths: vec!["post-install".to_string()],
-            source: CommandEvidenceSource::ShellAst,
-            environment: Vec::new(),
-            pipeline_id: None,
-        }],
-        blocked_classes: vec![],
-        boot_security_intents: Vec::new(),
-        security_policy_intents: Vec::new(),
         rpm_trigger: with_reserved_metadata.then(|| RpmTriggerMetadata {
-            kind: "file-trigger".to_string(),
-            condition: Some("in".to_string()),
+            kind: RpmTriggerKind::File,
             target_constraints: vec![RpmTriggerTargetConstraint {
                 package: "systemd".to_string(),
+                action: RpmTriggerAction::Install,
                 operator: Some(">=".to_string()),
                 version: Some("255".to_string()),
-                extra: BTreeMap::new(),
+                raw_flags: 0,
             }],
             priority: Some(100),
-            file_globs: vec!["/usr/lib/systemd/system/*.service".to_string()],
-            stdin_contract: Some("paths".to_string()),
-            transaction_order: Some("post-transaction".to_string()),
-            extra: BTreeMap::new(),
+            path_prefixes: vec!["/usr/lib/systemd/system".to_string()],
         }),
+        rpm_runtime: Some(conary_core::ccs::native_lifecycle::RpmRuntimeMetadata {
+            program: conary_core::ccs::native_lifecycle::RpmProgram::External,
+            body_transforms: Vec::new(),
+            critical: false,
+            criticality: conary_core::ccs::native_lifecycle::RpmCriticality::WarningOnly,
+            raw_flags: 0,
+            unknown_flags: 0,
+            install_prefixes: Vec::new(),
+            macro_context: Default::default(),
+            header_context: Default::default(),
+            package_rpm_version: None,
+        }),
+        rpm_sysusers: None,
         deb_maintainer: None,
         arch_install: None,
-        residual_replay: None,
-        extra: BTreeMap::new(),
+        arch_hook: None,
+        residual_lifecycle: None,
     }
 }
 
@@ -358,30 +338,23 @@ fn install_scriptlet_query_fixture() -> (TempDir, String) {
             "nginx".to_string(),
             "1.28.0".to_string(),
             TroveType::Package,
+            conary_core::repository::versioning::VersionScheme::Conary,
         );
         trove.architecture = Some("x86_64".to_string());
         trove.installed_by_changeset_id = Some(changeset_id);
         let trove_id = trove.insert(tx)?;
 
-        let mut flattened = ScriptletEntry::new(
+        InstalledCcsRemoveHook::new(
             trove_id,
-            "pre-install".to_string(),
-            "/bin/sh".to_string(),
-            "echo flattened scriptlet body must stay hidden\n".to_string(),
-            "rpm",
-        );
-        flattened.insert(tx)?;
+            "echo CCS remove hook body must stay hidden\n".to_string(),
+            Some(true),
+        )
+        .insert_or_replace(tx)?;
 
         let bundle = bundle_fixture();
-        let mut installed_bundle = InstalledLegacyScriptletBundle::new(
-            trove_id,
-            Some(changeset_id),
-            "rpm/fedora/44/x86_64".to_string(),
-            "goal6-safe-replay".to_string(),
-            false,
-            &bundle,
-        )
-        .expect("build installed bundle row");
+        let mut installed_bundle =
+            InstalledNativeLifecycleBundle::new(trove_id, Some(changeset_id), &bundle)
+                .expect("build installed bundle row");
         installed_bundle
             .insert_or_replace(tx)
             .expect("insert installed bundle row");
@@ -395,7 +368,7 @@ fn install_scriptlet_query_fixture() -> (TempDir, String) {
 }
 
 #[test]
-fn query_scripts_installed_package_distinguishes_flattened_and_bundle_entries() {
+fn query_scripts_installed_package_distinguishes_ccs_hook_and_native_entries() {
     let (_temp, db_path) = install_scriptlet_query_fixture();
     let output = run_conary(&[
         "query",
@@ -412,59 +385,70 @@ fn query_scripts_installed_package_distinguishes_flattened_and_bundle_entries() 
     assert_success(&output);
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Installed package: nginx 1.28.0 [x86_64]"));
-    assert!(stdout.contains("Flattened native scriptlets (scriptlets table): 1"));
+    assert!(stdout.contains("Installed CCS remove hook (installed_ccs_remove_hooks): present"));
     assert!(
-        stdout.contains("Installed legacy bundle entries (installed_legacy_scriptlet_bundles): 2")
+        stdout.contains("source=installed_ccs_remove_hooks interpreter=/bin/sh reversible=true")
     );
-    assert!(stdout.contains("pre-install"));
-    assert!(stdout.contains("package_format=rpm"));
+    assert!(stdout.contains("Installed native lifecycle entries: 2"));
     assert!(stdout.contains("rpm:%post"));
-    assert!(stdout.contains("decision=legacy"));
     assert!(stdout.contains("lifecycle=post-install"));
-    assert!(!stdout.contains("echo flattened scriptlet body must stay hidden"));
+    assert!(!stdout.contains("echo CCS remove hook body must stay hidden"));
     assert!(!stdout.contains("systemctl daemon-reload"));
 }
 
 #[test]
 fn query_scripts_ccs_bundle_prints_summary() {
-    let (_temp, package_path) = build_ccs_fixture("nginx", "1.28.0", Some(bundle_fixture()));
-    let output = run_conary(&["query", "scripts", package_path.to_str().unwrap()]);
+    let (_temp, package_path, policy_path) =
+        build_ccs_fixture("nginx", "1.28.0", Some(bundle_fixture()));
+    let output = run_conary(&[
+        "query",
+        "scripts",
+        package_path.to_str().unwrap(),
+        "--policy",
+        policy_path.to_str().unwrap(),
+    ]);
 
     assert_success(&output);
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("Legacy scriptlet bundle: conary.legacy-scriptlets.v1"));
-    assert!(stdout.contains("Entries: 1 replaced, 1 legacy, 0 blocked, 0 review"));
+    assert!(stdout.contains("Native lifecycle bundle: conary.native-lifecycles.v1"));
+    assert!(stdout.contains("Native entries: 2"));
     assert!(stdout.contains("rpm:%post"));
     assert!(!stdout.contains("systemctl daemon-reload"));
 }
 
 #[test]
-fn query_scripts_ccs_bundle_verbose_prints_effects() {
-    let (_temp, package_path) = build_ccs_fixture("nginx", "1.28.0", Some(bundle_fixture()));
+fn query_scripts_ccs_bundle_verbose_prints_exact_metadata() {
+    let (_temp, package_path, policy_path) =
+        build_ccs_fixture("nginx", "1.28.0", Some(bundle_fixture()));
     let output = run_conary(&[
         "query",
         "scripts",
         package_path.to_str().unwrap(),
         "--verbose",
+        "--policy",
+        policy_path.to_str().unwrap(),
     ]);
 
     assert_success(&output);
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("Effects:"));
-    assert!(stdout.contains("ldconfig"));
+    assert!(stdout.contains("Interpreter: /bin/sh"));
+    assert!(stdout.contains("Lifecycle paths: install:first"));
     assert!(stdout.contains("body_sha256="));
     assert!(!stdout.contains("systemctl daemon-reload"));
 }
 
 #[test]
 fn query_scripts_ccs_bundle_entry_filter_prints_single_entry() {
-    let (_temp, package_path) = build_ccs_fixture("nginx", "1.28.0", Some(bundle_fixture()));
+    let (_temp, package_path, policy_path) =
+        build_ccs_fixture("nginx", "1.28.0", Some(bundle_fixture()));
     let output = run_conary(&[
         "query",
         "scripts",
         package_path.to_str().unwrap(),
         "--entry",
         "rpm:%post",
+        "--policy",
+        policy_path.to_str().unwrap(),
     ]);
 
     assert_success(&output);
@@ -475,32 +459,43 @@ fn query_scripts_ccs_bundle_entry_filter_prints_single_entry() {
 
 #[test]
 fn query_scripts_ccs_bundle_missing_entry_exits_with_error() {
-    let (_temp, package_path) = build_ccs_fixture("nginx", "1.28.0", Some(bundle_fixture()));
+    let (_temp, package_path, policy_path) =
+        build_ccs_fixture("nginx", "1.28.0", Some(bundle_fixture()));
     let output = run_conary(&[
         "query",
         "scripts",
         package_path.to_str().unwrap(),
         "--entry",
         "rpm:%missing",
+        "--policy",
+        policy_path.to_str().unwrap(),
     ]);
 
     assert_failure(&output);
     assert!(
-        output_text(&output).contains("legacy scriptlet bundle entry 'rpm:%missing' not found")
+        output_text(&output).contains("native lifecycle bundle entry 'rpm:%missing' not found")
     );
 }
 
 #[test]
 fn query_scripts_ccs_bundle_json_is_stable() {
-    let (_temp, package_path) = build_ccs_fixture("nginx", "1.28.0", Some(bundle_fixture()));
-    let output = run_conary(&["query", "scripts", package_path.to_str().unwrap(), "--json"]);
+    let (_temp, package_path, policy_path) =
+        build_ccs_fixture("nginx", "1.28.0", Some(bundle_fixture()));
+    let output = run_conary(&[
+        "query",
+        "scripts",
+        package_path.to_str().unwrap(),
+        "--json",
+        "--policy",
+        policy_path.to_str().unwrap(),
+    ]);
 
     assert_success(&output);
     let stdout = String::from_utf8_lossy(&output.stdout);
     let json: serde_json::Value = serde_json::from_str(&stdout).expect("valid json");
     assert_eq!(json["package"]["name"], "nginx");
     assert_eq!(json["bundle_present"], true);
-    assert_eq!(json["bundle"]["schema"], "conary.legacy-scriptlets.v1");
+    assert_eq!(json["bundle"]["schema"], "conary.native-lifecycles.v1");
     assert_eq!(json["entries"][0]["id"], "rpm:%preun");
     assert!(json["entries"][0]["body"].is_null());
     assert!(stdout.contains("body_sha256"));
@@ -509,17 +504,30 @@ fn query_scripts_ccs_bundle_json_is_stable() {
 
 #[test]
 fn query_scripts_ccs_without_bundle_exits_successfully() {
-    let (_temp, package_path) = build_ccs_fixture("plain", "1.0.0", None);
-    let output = run_conary(&["query", "scripts", package_path.to_str().unwrap()]);
+    let (_temp, package_path, policy_path) = build_ccs_fixture("plain", "1.0.0", None);
+    let output = run_conary(&[
+        "query",
+        "scripts",
+        package_path.to_str().unwrap(),
+        "--policy",
+        policy_path.to_str().unwrap(),
+    ]);
 
     assert_success(&output);
-    assert!(String::from_utf8_lossy(&output.stdout).contains("No legacy scriptlet bundle found"));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("No native lifecycle bundle found"));
 }
 
 #[test]
 fn query_scripts_ccs_without_bundle_json_reports_absent_bundle() {
-    let (_temp, package_path) = build_ccs_fixture("plain", "1.0.0", None);
-    let output = run_conary(&["query", "scripts", package_path.to_str().unwrap(), "--json"]);
+    let (_temp, package_path, policy_path) = build_ccs_fixture("plain", "1.0.0", None);
+    let output = run_conary(&[
+        "query",
+        "scripts",
+        package_path.to_str().unwrap(),
+        "--json",
+        "--policy",
+        policy_path.to_str().unwrap(),
+    ]);
 
     assert_success(&output);
     let json: serde_json::Value =
@@ -536,9 +544,16 @@ fn query_scripts_ccs_without_bundle_json_reports_absent_bundle() {
 
 #[test]
 fn query_scripts_ccs_zero_entry_bundle_json_reports_empty_entries() {
-    let (_temp, package_path) =
+    let (_temp, package_path, policy_path) =
         build_ccs_fixture("native-free", "1.0.0", Some(zero_entry_bundle_fixture()));
-    let output = run_conary(&["query", "scripts", package_path.to_str().unwrap(), "--json"]);
+    let output = run_conary(&[
+        "query",
+        "scripts",
+        package_path.to_str().unwrap(),
+        "--json",
+        "--policy",
+        policy_path.to_str().unwrap(),
+    ]);
 
     assert_success(&output);
     let json: serde_json::Value =
@@ -554,26 +569,24 @@ fn query_scripts_ccs_zero_entry_bundle_json_reports_empty_entries() {
 
 #[test]
 fn query_scripts_native_json_reports_ccs_bundle_only() {
-    let temp = tempfile::NamedTempFile::with_suffix(".rpm").unwrap();
-    std::fs::write(temp.path(), b"not really rpm").unwrap();
-    let output = run_conary(&["query", "scripts", temp.path().to_str().unwrap(), "--json"]);
+    let (_temp, package_path) = build_rpm_fixture();
+    let output = run_conary(&["query", "scripts", package_path.to_str().unwrap(), "--json"]);
 
     assert_failure(&output);
-    assert!(output_text(&output).contains("only available for CCS legacy scriptlet bundles"));
+    assert!(output_text(&output).contains("only available for CCS native lifecycle bundles"));
 }
 
 #[test]
 fn query_scripts_native_entry_filter_reports_ccs_bundle_only() {
-    let temp = tempfile::NamedTempFile::with_suffix(".rpm").unwrap();
-    std::fs::write(temp.path(), b"not really rpm").unwrap();
+    let (_temp, package_path) = build_rpm_fixture();
     let output = run_conary(&[
         "query",
         "scripts",
-        temp.path().to_str().unwrap(),
+        package_path.to_str().unwrap(),
         "--entry",
         "rpm:%post",
     ]);
 
     assert_failure(&output);
-    assert!(output_text(&output).contains("only available for CCS legacy scriptlet bundles"));
+    assert!(output_text(&output).contains("only available for CCS native lifecycle bundles"));
 }

@@ -233,12 +233,6 @@ impl FileCapability {
                 self.path
             )));
         }
-        if self.inheritable {
-            return Err(ManifestError::Invalid(format!(
-                "inheritable file capabilities are not supported yet for {}",
-                self.path
-            )));
-        }
         Ok(())
     }
 
@@ -328,14 +322,18 @@ pub struct Service {
     pub reversible: Option<bool>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum ServiceAction {
     Enable,
     Disable,
     Start,
     Stop,
+    Reload,
     Restart,
+    TryRestart,
+    ReloadOrRestart,
+    ReloadOrTryRestart,
 }
 
 /// User creation hook (sysusers-style)
@@ -418,20 +416,22 @@ pub struct SystemdHook {
 
 /// tmpfiles.d entry
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TmpfilesHook {
     #[serde(rename = "type")]
     pub entry_type: String,
 
     pub path: String,
 
-    #[serde(default = "default_mode")]
     pub mode: String,
 
-    #[serde(default = "default_owner")]
-    pub owner: String,
+    pub user: String,
 
-    #[serde(default = "default_group")]
     pub group: String,
+
+    pub age: String,
+
+    pub argument: String,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reversible: Option<bool>,
@@ -443,9 +443,6 @@ pub struct SysctlHook {
     pub key: String,
     pub value: String,
 
-    #[serde(default)]
-    pub only_if_lower: bool,
-
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reversible: Option<bool>,
 }
@@ -453,6 +450,8 @@ pub struct SysctlHook {
 /// Alternatives system hook
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AlternativeHook {
+    /// Exact generic link managed by the alternatives implementation.
+    pub link: String,
     pub name: String,
     pub path: String,
 

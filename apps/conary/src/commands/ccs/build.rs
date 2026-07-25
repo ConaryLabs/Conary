@@ -3,11 +3,10 @@
 //! CCS package building
 //!
 //! Commands for building CCS packages from manifests,
-//! including generation of legacy format packages.
+//! including native package export.
 
-use crate::cli::CcsBuildFormat;
 use anyhow::{Context, Result};
-use conary_core::ccs::{CcsBuilder, CcsManifest, builder, legacy};
+use conary_core::ccs::{CcsBuilder, CcsManifest, builder, native_export};
 use std::path::Path;
 
 #[derive(Debug, Clone)]
@@ -16,13 +15,10 @@ pub struct CcsBuildOptions {
     pub output: String,
     pub target: String,
     pub source: Option<String>,
-    pub no_classify: bool,
     pub chunked: bool,
     pub dry_run: bool,
-    pub format: CcsBuildFormat,
     pub local_dev: bool,
     pub key: Option<String>,
-    pub target_profile: Option<String>,
 }
 
 /// Build a CCS package from a manifest
@@ -32,25 +28,6 @@ pub async fn cmd_ccs_build(options: CcsBuildOptions) -> Result<()> {
     if options.local_dev && options.key.is_some() {
         anyhow::bail!("--local-dev and --key are mutually exclusive signing options");
     }
-    if options.format == CcsBuildFormat::V1 && (options.key.is_some() || options.local_dev) {
-        anyhow::bail!("--key and --local-dev are only supported when building with --format v2");
-    }
-    if options.format == CcsBuildFormat::V2 && options.target != "ccs" {
-        anyhow::bail!("--format v2 only supports --target ccs in M4b");
-    }
-    if options.format == CcsBuildFormat::V2 && options.key.is_none() && !options.local_dev {
-        anyhow::bail!("ccs build --format v2 requires --key <private-key> or --local-dev");
-    }
-    let target_profile =
-        super::target_profile::resolve_target_profile(options.target_profile.as_deref())?;
-    let authoring_target_profile =
-        target_profile.map(
-            |profile| conary_core::ccs::v2::authoring::V2AuthoringTargetProfile {
-                public_id: profile.id(),
-                query: profile,
-            },
-        );
-
     // Find the manifest
     let manifest_path =
         if path.is_file() && path.file_name().map(|n| n == "ccs.toml").unwrap_or(false) {
@@ -71,22 +48,6 @@ pub async fn cmd_ccs_build(options: CcsBuildOptions) -> Result<()> {
     // Parse the manifest
     println!("Parsing manifest...");
     let manifest = CcsManifest::from_file(&manifest_path).context("Failed to parse ccs.toml")?;
-
-    if options.format == CcsBuildFormat::V2 {
-        let findings = conary_core::ccs::v2::authoring::lint_manifest_for_v2_authoring(
-            &manifest,
-            authoring_target_profile,
-        );
-        if findings.iter().any(|finding| finding.blocks_build) {
-            for finding in &findings {
-                if finding.blocks_build {
-                    eprintln!("{}: {}", finding.code, finding.message);
-                    eprintln!("  fix: {}", finding.suggestion);
-                }
-            }
-            anyhow::bail!("ccs build --format v2 blocked by M4b authoring lint");
-        }
-    }
 
     println!(
         "Building {} v{}",
@@ -124,6 +85,25 @@ pub async fn cmd_ccs_build(options: CcsBuildOptions) -> Result<()> {
         }
         parsed
     };
+    let builds_ccs = targets.contains(&"ccs");
+    if builds_ccs && options.key.is_none() && !options.local_dev {
+        anyhow::bail!("CCS output requires --key <private-key> or --local-dev");
+    }
+    if !builds_ccs && (options.key.is_some() || options.local_dev) {
+        anyhow::bail!("--key and --local-dev require a CCS output target");
+    }
+    if builds_ccs {
+        let findings = conary_core::ccs::v2::authoring::lint_manifest_for_v2_authoring(&manifest);
+        if findings.iter().any(|finding| finding.blocks_build) {
+            for finding in &findings {
+                if finding.blocks_build {
+                    eprintln!("{}: {}", finding.code, finding.message);
+                    eprintln!("  fix: {}", finding.suggestion);
+                }
+            }
+            anyhow::bail!("CCS build blocked by current-authority authoring lint");
+        }
+    }
 
     // Create output directory
     let output_dir = Path::new(&options.output);
@@ -143,9 +123,6 @@ pub async fn cmd_ccs_build(options: CcsBuildOptions) -> Result<()> {
         println!("Scanning {} files...", file_count);
 
         let mut builder_instance = CcsBuilder::new(manifest.clone(), &source_dir);
-        if options.no_classify {
-            builder_instance = builder_instance.no_classify();
-        }
         if options.chunked {
             builder_instance = builder_instance.with_chunking();
         } else {
@@ -170,18 +147,12 @@ pub async fn cmd_ccs_build(options: CcsBuildOptions) -> Result<()> {
 
     for t in &targets {
         let filename = match *t {
-            "ccs" if options.format == CcsBuildFormat::V2 => {
-                let release = manifest
-                    .package
-                    .release
-                    .as_deref()
-                    .context("v2 output naming requires package.release")?;
+            "ccs" => {
                 format!(
                     "{}-{}-{}.ccs",
-                    manifest.package.name, manifest.package.version, release
+                    manifest.package.name, manifest.package.version, manifest.package.release
                 )
             }
-            "ccs" => format!("{}-{}.ccs", manifest.package.name, manifest.package.version),
             "deb" => format!(
                 "{}_{}_amd64.deb",
                 manifest.package.name, manifest.package.version
@@ -210,56 +181,49 @@ pub async fn cmd_ccs_build(options: CcsBuildOptions) -> Result<()> {
             match *t {
                 "ccs" => {
                     println!();
-                    if options.format == CcsBuildFormat::V2 {
-                        println!("Writing CCS v2 package...");
-                        let debug_toml = manifest.to_toml().context("serialize debug ccs.toml")?;
-                        let projected = conary_core::ccs::v2::project_build_result_to_v2(
-                            conary_core::ccs::v2::V2AuthoringInput {
-                                build: result,
-                                local_dev: options.local_dev,
-                                debug_toml: Some(debug_toml),
-                                target_profile: authoring_target_profile,
-                            },
-                        )
-                        .context("project v2 package authority")?;
-                        let signing_key = if options.local_dev {
-                            super::local_dev::load_or_create_local_dev_key()?
-                        } else {
-                            let key_path = options
-                                .key
-                                .as_deref()
-                                .context("missing --key for v2 release signing")?;
-                            conary_core::ccs::signing::SigningKeyPair::load_from_file(Path::new(
-                                key_path,
-                            ))
-                            .map_err(anyhow::Error::from)?
-                        };
-                        builder::write_v2_ccs_package(
-                            &projected.authority,
-                            &projected.payloads_by_path,
-                            &output_path,
-                            &signing_key,
-                            projected.debug_toml.as_deref(),
-                            None,
-                            None,
-                        )
-                        .context("Failed to write CCS v2 package")?;
-                        if options.local_dev {
-                            println!(
-                                "  Signed with local-dev CCS key; release publish will reject this artifact."
-                            );
-                        }
+                    println!("Writing signed CCS v2 package...");
+                    let debug_toml = manifest.to_toml().context("serialize debug ccs.toml")?;
+                    let projected = conary_core::ccs::v2::project_build_result_to_v2(
+                        conary_core::ccs::v2::V2AuthoringInput {
+                            build: result,
+                            local_dev: options.local_dev,
+                            debug_toml: Some(debug_toml),
+                        },
+                    )
+                    .context("project v2 package authority")?;
+                    let signing_key = if options.local_dev {
+                        super::local_dev::load_or_create_local_dev_key()?
                     } else {
-                        println!("Writing CCS package...");
-                        builder::write_ccs_package(result, &output_path)
-                            .context("Failed to write CCS package")?;
+                        let key_path = options
+                            .key
+                            .as_deref()
+                            .context("missing --key for CCS release signing")?;
+                        conary_core::ccs::signing::SigningKeyPair::load_from_file(Path::new(
+                            key_path,
+                        ))
+                        .map_err(anyhow::Error::from)?
+                    };
+                    builder::write_v2_ccs_package(
+                        &projected.authority,
+                        &projected.payloads_by_path,
+                        &output_path,
+                        &signing_key,
+                        projected.debug_toml.as_deref(),
+                        None,
+                        None,
+                    )
+                    .context("Failed to write CCS v2 package")?;
+                    if options.local_dev {
+                        println!(
+                            "  Signed with local-dev CCS key; release publish will reject this artifact."
+                        );
                     }
                     println!("  Created: {}", output_path.display());
                 }
                 "deb" => {
                     println!();
                     println!("Generating DEB package...");
-                    let gen_result = legacy::deb::generate(result, &output_path)
+                    let gen_result = native_export::deb::generate(result, &output_path)
                         .context("Failed to generate DEB package")?;
                     println!(
                         "  Created: {} ({} bytes)",
@@ -271,7 +235,7 @@ pub async fn cmd_ccs_build(options: CcsBuildOptions) -> Result<()> {
                 "rpm" => {
                     println!();
                     println!("Generating RPM package...");
-                    let gen_result = legacy::rpm::generate(result, &output_path)
+                    let gen_result = native_export::rpm::generate(result, &output_path)
                         .context("Failed to generate RPM package")?;
                     println!(
                         "  Created: {} ({} bytes)",
@@ -283,7 +247,7 @@ pub async fn cmd_ccs_build(options: CcsBuildOptions) -> Result<()> {
                 "arch" => {
                     println!();
                     println!("Generating Arch package...");
-                    let gen_result = legacy::arch::generate(result, &output_path)
+                    let gen_result = native_export::arch::generate(result, &output_path)
                         .context("Failed to generate Arch package")?;
                     println!(
                         "  Created: {} ({} bytes)",

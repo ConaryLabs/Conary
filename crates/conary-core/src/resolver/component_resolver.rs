@@ -327,7 +327,12 @@ mod tests {
         name: &str,
         components: &[&str],
     ) -> (i64, Vec<i64>) {
-        let mut trove = Trove::new(name.to_string(), "1.0.0".to_string(), TroveType::Package);
+        let mut trove = Trove::new(
+            name.to_string(),
+            "1.0.0".to_string(),
+            TroveType::Package,
+            crate::repository::versioning::VersionScheme::Conary,
+        );
         let trove_id = trove.insert(conn).unwrap();
 
         let mut comp_ids = Vec::new();

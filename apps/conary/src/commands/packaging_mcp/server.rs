@@ -16,8 +16,8 @@ use rmcp::{
 
 use super::service::PackagingAgentService;
 use super::types::{
-    DiagnoseLatestFailureInput, ExplainInferenceInput, InspectProjectInput,
-    OperationRecordsListInput, OperationRecordsReadInput, PublishApplyInput, PublishPlanInput,
+    DiagnoseLatestFailureInput, InspectProjectInput, OperationRecordsListInput,
+    OperationRecordsReadInput, PublishApplyInput, PublishPlanInput,
 };
 
 #[derive(Clone)]
@@ -48,22 +48,6 @@ impl PackagingMcpServer {
         Parameters(input): Parameters<InspectProjectInput>,
     ) -> Result<CallToolResult, McpError> {
         let result = self.service.inspect_project(input).map_err(map_internal)?;
-        contract_tool_result(&result)
-    }
-
-    #[tool(
-        name = "conary.packaging.explain_inference",
-        description = "Explain recipe inference for a local source tree.",
-        annotations(read_only_hint = true, open_world_hint = false)
-    )]
-    async fn explain_inference(
-        &self,
-        Parameters(input): Parameters<ExplainInferenceInput>,
-    ) -> Result<CallToolResult, McpError> {
-        let result = self
-            .service
-            .explain_inference(input)
-            .map_err(map_internal)?;
         contract_tool_result(&result)
     }
 
@@ -151,8 +135,8 @@ impl ServerHandler for PackagingMcpServer {
         server_info(
             "conary-packaging-mcp",
             env!("CARGO_PKG_VERSION"),
-            "Local-only Conary packaging MCP server for read-only project inspection, \
-             inference explanation, operation-record lookup, and packaging failure diagnosis.",
+            "Local-only Conary packaging MCP server for explicit-recipe inspection, \
+             operation-record lookup, and packaging failure diagnosis.",
         )
     }
 
@@ -195,7 +179,6 @@ mod tests {
             .collect::<BTreeSet<_>>();
 
         assert!(names.contains("conary.packaging.inspect_project"));
-        assert!(names.contains("conary.packaging.explain_inference"));
         assert!(names.contains("conary.packaging.diagnose_latest_failure"));
         assert!(names.contains("conary.packaging.operation_records.list"));
         assert!(names.contains("conary.packaging.operation_records.read"));

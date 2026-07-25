@@ -3,7 +3,7 @@
 //! Package and delta download functionality
 //!
 //! Functions for downloading packages and delta updates from repositories,
-//! with checksum and GPG signature verification.
+//! with checksum and ecosystem-native signature verification.
 //!
 //! # Architecture
 //!
@@ -11,11 +11,11 @@
 //! - Filename construction from URL
 //! - Download (with optional progress tracking)
 //! - Checksum verification with cleanup on failure
-//! - Optional GPG signature verification
+//! - Required native package authority for non-static repositories
 //!
 //! The public functions are thin wrappers providing ergonomic APIs.
 
-use crate::db::models::RepositoryPackage;
+use crate::db::models::{Repository, RepositoryPackage};
 use crate::error::{Error, Result};
 use crate::filesystem::path::sanitize_filename;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
@@ -26,21 +26,26 @@ use super::client::{
     RepositoryClient, download_static_or_http_file,
     download_static_or_http_file_with_expected_size, is_file_or_local_reference,
 };
-use super::gpg::GpgVerifier;
 use super::metadata::DeltaInfo;
-use super::remi::RemiClient;
+use super::trust::openpgp::PreparedOpenPgpTrust;
+use super::trust::{ArchSignatureRequirement, RepositoryTrustPolicy, TrustRole};
 
-/// Options for package download with GPG verification
+/// Prepared native package authority for one exact repository.
 #[derive(Debug, Clone)]
 pub struct DownloadOptions {
-    /// Whether to verify GPG signatures
-    pub gpg_check: bool,
-    /// When true, packages MUST have valid GPG signatures - missing signatures are errors
-    pub gpg_strict: bool,
-    /// Directory where GPG keys are stored
-    pub keyring_dir: PathBuf,
-    /// Name of the repository (for key lookup)
-    pub repository_name: String,
+    trust: PreparedOpenPgpTrust,
+}
+
+impl DownloadOptions {
+    pub fn for_repository(repo: &Repository, keyring_dir: &Path) -> Result<Self> {
+        Ok(Self {
+            trust: PreparedOpenPgpTrust::from_prepared(
+                &repo.name,
+                keyring_dir,
+                repo.require_trust_policy()?,
+            )?,
+        })
+    }
 }
 
 // =============================================================================
@@ -58,19 +63,6 @@ async fn download_package_inner(
     progress: Option<&ProgressBar>,
     allow_local_file_reference: bool,
 ) -> Result<PathBuf> {
-    if let Some((base_url, distro, name)) = parse_remi_download_url(&repo_pkg.download_url) {
-        let client = RemiClient::new(&base_url)?;
-        return client
-            .fetch_package(
-                &distro,
-                &name,
-                Some(&repo_pkg.version),
-                repo_pkg.architecture.as_deref(),
-                dest_dir,
-            )
-            .await;
-    }
-
     let expected_size = u64::try_from(repo_pkg.size).map_err(|_| {
         Error::DownloadError("negative package size in repository metadata".to_string())
     })?;
@@ -136,36 +128,16 @@ async fn download_package_inner(
         )));
     }
 
-    // GPG verification if enabled
-    if let Some(opts) = options {
-        verify_gpg_signature(repo_pkg, &dest_path, opts).await?;
+    // Native package authority is mandatory whenever this is not a static
+    // TUF download.
+    if let Some(opts) = options
+        && let Err(error) = verify_native_package(repo_pkg, &dest_path, opts).await
+    {
+        let _ = std::fs::remove_file(&dest_path);
+        return Err(error);
     }
 
     Ok(dest_path)
-}
-
-fn parse_remi_download_url(url: &str) -> Option<(String, String, String)> {
-    let (base_url, path) = url.split_once("/v1/")?;
-    if !base_url.starts_with("http://") && !base_url.starts_with("https://") {
-        return None;
-    }
-
-    let path = path.split('?').next()?;
-    let mut segments = path.split('/');
-    let distro = segments.next()?;
-    if segments.next()? != "packages" {
-        return None;
-    }
-    let name = segments.next()?;
-    if segments.next()? != "download" || segments.next().is_some() {
-        return None;
-    }
-
-    Some((
-        base_url.to_string(),
-        urlencoding::decode(distro).ok()?.into_owned(),
-        urlencoding::decode(name).ok()?.into_owned(),
-    ))
 }
 
 fn staged_static_dest_path(dest_path: &Path) -> PathBuf {
@@ -199,44 +171,63 @@ fn construct_dest_path(repo_pkg: &RepositoryPackage, dest_dir: &Path) -> PathBuf
     dest_dir.join(filename)
 }
 
-/// Verify GPG signature with appropriate error handling
-async fn verify_gpg_signature(
+async fn verify_native_package(
     repo_pkg: &RepositoryPackage,
     dest_path: &Path,
     opts: &DownloadOptions,
 ) -> Result<()> {
-    if !opts.gpg_check {
-        return Ok(());
-    }
-
-    match verify_package_signature(dest_path, &repo_pkg.download_url, opts).await {
-        Ok(()) => {
-            info!("GPG signature verified for {}", repo_pkg.name);
+    match opts.trust.policy() {
+        RepositoryTrustPolicy::Debian { .. } => {
+            // The authenticated Release -> Packages SHA256 -> package SHA256
+            // chain terminates in the checksum already verified above.
             Ok(())
         }
-        Err(Error::NotFound(msg)) if msg.contains("No signature file") => {
-            if opts.gpg_strict {
-                Err(Error::GpgVerificationFailed(format!(
-                    "GPG signature required but not found for '{}' (strict mode enabled).\n\
-                     The repository '{}' requires all packages to have valid GPG signatures.\n\
-                     Either provide a signed package or disable strict mode.",
-                    repo_pkg.name, opts.repository_name
-                )))
-            } else {
-                warn!("No GPG signature found for {} ({})", repo_pkg.name, msg);
-                Ok(())
+        RepositoryTrustPolicy::Rpm { .. } => {
+            let keyring = opts.trust.armored_keyring(TrustRole::RpmPackage)?;
+            let verifier =
+                rpm::signature::pgp::Verifier::from_asc_bytes(&keyring).map_err(|error| {
+                    Error::GpgVerificationFailed(format!(
+                        "failed to construct RPM package verifier: {error}"
+                    ))
+                })?;
+            let package = rpm::Package::open(dest_path).map_err(|error| {
+                Error::ParseError(format!(
+                    "failed to parse downloaded RPM package '{}': {error}",
+                    repo_pkg.name
+                ))
+            })?;
+            package.verify_signature(verifier).map_err(|error| {
+                Error::GpgVerificationFailed(format!(
+                    "embedded RPM signature verification failed for '{}': {error}",
+                    repo_pkg.name
+                ))
+            })
+        }
+        RepositoryTrustPolicy::Arch { sig_level, .. } => {
+            let signature_url = format!("{}.sig", repo_pkg.download_url);
+            let client = RepositoryClient::new()?;
+            match client.download_to_bytes(&signature_url).await {
+                Ok(signature) => opts.trust.verify_detached(
+                    TrustRole::ArchPackage,
+                    &std::fs::read(dest_path).map_err(|error| {
+                        Error::IoError(format!(
+                            "failed to read downloaded Arch package {}: {error}",
+                            dest_path.display()
+                        ))
+                    })?,
+                    &signature,
+                ),
+                Err(Error::HttpStatus {
+                    status: 403 | 404, ..
+                }) if sig_level.package == ArchSignatureRequirement::Optional => Ok(()),
+                Err(Error::HttpStatus {
+                    status: 403 | 404, ..
+                }) => Err(Error::GpgVerificationFailed(format!(
+                    "Arch SigLevel requires package signature {signature_url}"
+                ))),
+                Err(error) => Err(error),
             }
         }
-        Err(Error::NotFound(msg)) if msg.contains("GPG key not found") => {
-            Err(Error::GpgVerificationFailed(format!(
-                "GPG verification failed for '{}': {}.\n\
-                 To fix this, run:\n  \
-                 conary key-import {} <key-url-or-file>\n\
-                 Or disable GPG checking for this repository.",
-                repo_pkg.name, msg, opts.repository_name
-            )))
-        }
-        Err(e) => Err(e),
     }
 }
 
@@ -244,36 +235,13 @@ async fn verify_gpg_signature(
 // Public API (thin wrappers around download_package_inner)
 // =============================================================================
 
-/// Download a package from a repository
-///
-/// Downloads the package and verifies its checksum against the trusted metadata.
-/// If verification fails, the corrupted/invalid file is removed before returning
-/// the error to prevent cache pollution.
-pub async fn download_package(repo_pkg: &RepositoryPackage, dest_dir: &Path) -> Result<PathBuf> {
-    download_package_inner(repo_pkg, dest_dir, None, None, false).await
-}
-
-/// Download a package with optional GPG signature verification
-///
-/// This function extends `download_package` with GPG signature checking.
-/// When `options` is provided and `gpg_check` is true, it will:
-/// 1. Download the package and verify its checksum
-/// 2. Attempt to download and verify a detached signature (.sig or .asc)
-///
-/// # Failure Modes
-/// - Invalid signature: Always fails (security boundary)
-/// - Missing signature: Fails in strict mode, warns otherwise
-/// - Missing key: Fails with actionable error message
-///
-/// # Strict Mode
-/// When `gpg_strict` is true, missing signatures are treated as errors.
-/// This ensures all packages from the repository have valid signatures.
+/// Download a package through its required native trust contract.
 pub async fn download_package_verified(
     repo_pkg: &RepositoryPackage,
     dest_dir: &Path,
-    options: Option<&DownloadOptions>,
+    options: &DownloadOptions,
 ) -> Result<PathBuf> {
-    download_package_inner(repo_pkg, dest_dir, options, None, false).await
+    download_package_inner(repo_pkg, dest_dir, Some(options), None, false).await
 }
 
 /// Download a package from a verified static repository.
@@ -288,77 +256,6 @@ pub async fn download_static_package_verified(
     options: Option<&DownloadOptions>,
 ) -> Result<PathBuf> {
     download_package_inner(repo_pkg, dest_dir, options, None, true).await
-}
-
-/// Verify GPG signature for a downloaded package
-///
-/// Attempts to download detached signature files (.sig, .asc) and verify
-/// them against the imported GPG key for the repository.
-async fn verify_package_signature(
-    package_path: &Path,
-    download_url: &str,
-    options: &DownloadOptions,
-) -> Result<()> {
-    debug!(
-        "Verifying GPG signature for {:?} from repository '{}'",
-        package_path, options.repository_name
-    );
-
-    // Create verifier
-    let verifier = GpgVerifier::new(options.keyring_dir.clone())?;
-
-    // Check if we have a key for this repository
-    if !verifier.has_key(&options.repository_name) {
-        return Err(Error::NotFound(format!(
-            "GPG key not found for repository '{}'",
-            options.repository_name
-        )));
-    }
-
-    // Try to download signature file (try .sig first, then .asc)
-    let client = RepositoryClient::new()?;
-    let signature_extensions = [".sig", ".asc"];
-
-    for ext in &signature_extensions {
-        let sig_url = format!("{}{}", download_url, ext);
-        debug!("Trying to download signature from: {}", sig_url);
-
-        // Try to download signature
-        match client.download_to_bytes(&sig_url).await {
-            Ok(sig_data) => {
-                // Save signature to temp file
-                let sig_path = package_path.with_extension(
-                    package_path
-                        .extension()
-                        .map(|e| format!("{}{}", e.to_string_lossy(), ext))
-                        .unwrap_or_else(|| ext[1..].to_string()),
-                );
-
-                std::fs::write(&sig_path, &sig_data).map_err(|e| {
-                    Error::IoError(format!("Failed to write signature file: {}", e))
-                })?;
-
-                // Verify signature
-                let result =
-                    verifier.verify_signature(package_path, &sig_path, &options.repository_name);
-
-                // Clean up signature file
-                let _ = std::fs::remove_file(&sig_path);
-
-                return result;
-            }
-            Err(_) => {
-                // Try next extension
-                debug!("Signature not found at {}", sig_url);
-                continue;
-            }
-        }
-    }
-
-    // No signature file found
-    Err(Error::NotFound(
-        "No signature file found (.sig or .asc)".to_string(),
-    ))
 }
 
 /// Download a delta update file
@@ -465,30 +362,14 @@ fn create_progress_bar(size: u64, name: &str) -> ProgressBar {
     pb
 }
 
-/// Download a package with progress bar display
-///
-/// Shows download progress including bytes downloaded, speed, and package name.
-/// If checksum verification fails, the invalid file is removed before returning
-/// the error to prevent cache pollution.
-pub async fn download_package_with_progress(
-    repo_pkg: &RepositoryPackage,
-    dest_dir: &Path,
-    progress_bar: Option<&ProgressBar>,
-) -> Result<PathBuf> {
-    download_package_inner(repo_pkg, dest_dir, None, progress_bar, false).await
-}
-
-/// Download a package with progress and optional GPG verification
-///
-/// Combines progress display with GPG signature verification.
-/// See [`download_package_verified`] for details on strict mode behavior.
+/// Download a package with progress through its required native trust contract.
 pub async fn download_package_verified_with_progress(
     repo_pkg: &RepositoryPackage,
     dest_dir: &Path,
-    options: Option<&DownloadOptions>,
+    options: &DownloadOptions,
     progress_bar: Option<&ProgressBar>,
 ) -> Result<PathBuf> {
-    download_package_inner(repo_pkg, dest_dir, options, progress_bar, false).await
+    download_package_inner(repo_pkg, dest_dir, Some(options), progress_bar, false).await
 }
 
 /// Download a verified static-repository package with progress reporting.
@@ -621,12 +502,14 @@ mod tests {
     use super::*;
     use crate::db::models::RepositoryPackage;
     use crate::hash::sha256;
+    use crate::repository::versioning::VersionScheme;
 
     fn package_for_download(url: String, content: &[u8], size: i64) -> RepositoryPackage {
         RepositoryPackage::new(
             1,
             "static-local".to_string(),
             "1.0.0".to_string(),
+            VersionScheme::Conary,
             sha256(content),
             size,
             url,
@@ -702,37 +585,6 @@ mod tests {
         format!("http://{addr}/generic-http.ccs")
     }
 
-    #[test]
-    fn parse_remi_download_url_accepts_plain_download_endpoint() {
-        let parsed =
-            parse_remi_download_url("https://remi.conary.io/v1/fedora/packages/tree/download");
-
-        assert_eq!(
-            parsed,
-            Some((
-                "https://remi.conary.io".to_string(),
-                "fedora".to_string(),
-                "tree".to_string(),
-            ))
-        );
-    }
-
-    #[test]
-    fn parse_remi_download_url_accepts_versioned_download_endpoint() {
-        let parsed = parse_remi_download_url(
-            "https://remi.conary.io/v1/fedora/packages/glibc/download?version=2.42-4.fc44",
-        );
-
-        assert_eq!(
-            parsed,
-            Some((
-                "https://remi.conary.io".to_string(),
-                "fedora".to_string(),
-                "glibc".to_string(),
-            ))
-        );
-    }
-
     #[tokio::test]
     async fn download_package_copies_file_url_and_verifies_checksum() {
         let dir = tempfile::tempdir().unwrap();
@@ -791,7 +643,9 @@ mod tests {
             i64::try_from(content.len()).unwrap(),
         );
 
-        let error = download_package(&package, &dest_dir).await.unwrap_err();
+        let error = download_package_inner(&package, &dest_dir, None, None, false)
+            .await
+            .unwrap_err();
 
         assert!(
             error.to_string().contains("local")
@@ -810,7 +664,9 @@ mod tests {
         let url = serve_http_package_once(content.to_vec()).await;
         let package = package_for_download(url, content, i64::try_from(content.len() + 1).unwrap());
 
-        let error = download_package(&package, &dest_dir).await.unwrap_err();
+        let error = download_package_inner(&package, &dest_dir, None, None, false)
+            .await
+            .unwrap_err();
 
         assert!(
             error.to_string().contains("size"),

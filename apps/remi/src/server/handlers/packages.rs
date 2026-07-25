@@ -8,10 +8,6 @@
 use crate::server::ServerState;
 use crate::server::conversion::ScriptletPackageMetadata;
 use crate::server::jobs::{JobId, JobStatus};
-use crate::server::publication::{
-    PublicationDecision, PublicationGateReport, PublicationRefusal, classify_converted_package,
-    refusal_response,
-};
 use axum::{
     Json,
     extract::{Path, Query, State},
@@ -52,7 +48,7 @@ pub struct PackageManifest {
     pub converted: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_kind: Option<String>,
-    /// Passive legacy scriptlet metadata summary.
+    /// Passive native lifecycle metadata summary.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scriptlets: Option<ScriptletPackageMetadata>,
 }
@@ -76,15 +72,11 @@ pub struct ConversionAccepted {
 
 enum ConvertedManifestLookup {
     Ready(PackageManifest),
-    ReviewRequired(PublicationGateReport),
-    Blocked(PublicationGateReport),
     Missing,
 }
 
 enum ConvertedDownloadLookup {
     Ready(std::path::PathBuf),
-    ReviewRequired(PublicationGateReport),
-    Blocked(PublicationGateReport),
     Missing,
 }
 
@@ -246,22 +238,6 @@ pub async fn get_package(
     .await
     {
         Ok(Ok(ConvertedManifestLookup::Ready(manifest))) => return Json(manifest).into_response(),
-        Ok(Ok(ConvertedManifestLookup::ReviewRequired(report))) => {
-            return refusal_response(
-                PublicationRefusal::ReviewRequired(report),
-                &distro,
-                &name,
-                query.version.as_deref(),
-            );
-        }
-        Ok(Ok(ConvertedManifestLookup::Blocked(report))) => {
-            return refusal_response(
-                PublicationRefusal::Blocked(report),
-                &distro,
-                &name,
-                query.version.as_deref(),
-            );
-        }
         Ok(Ok(ConvertedManifestLookup::Missing)) => {}
         Ok(Err(e)) => {
             tracing::error!("Database error checking conversion: {}", e);
@@ -363,7 +339,7 @@ fn check_converted(
 ) -> Result<ConvertedManifestLookup, anyhow::Error> {
     use conary_core::db::models::ConvertedPackage;
 
-    // Open database connection (use open_fast to skip migrations on every request)
+    // Startup already validated the current schema, so this hot path can skip it.
     let conn = conary_core::db::open_fast(db_path)?;
 
     // Query for existing conversion
@@ -379,71 +355,26 @@ fn check_converted(
         if converted.needs_reconversion() {
             return Ok(ConvertedManifestLookup::Missing);
         }
-        // Check if the CCS file still exists
-        if let Some(ccs_path_str) = &converted.ccs_path {
-            let ccs_path = std::path::Path::new(ccs_path_str);
-            if ccs_path.exists() {
-                // Build manifest from stored data
-                let chunk_hashes: Vec<String> = converted
-                    .chunk_hashes_json
-                    .as_ref()
-                    .and_then(|json| match serde_json::from_str(json) {
-                        Ok(v) => Some(v),
-                        Err(e) => {
-                            tracing::warn!(
-                                "Failed to parse chunk_hashes JSON for {}/{}: {}",
-                                distro,
-                                name,
-                                e
-                            );
-                            None
-                        }
-                    })
-                    .unwrap_or_default();
+        let artifact = converted.repository_artifact()?;
+        let ccs_path = std::path::Path::new(artifact.ccs_path);
+        if ccs_path.exists() {
+            let chunks = exact_chunk_refs(&conn, &artifact.chunk_hashes)?;
+            let scriptlet_summary = converted.scriptlet_summary()?;
+            let manifest = PackageManifest {
+                name: artifact.package_name.to_string(),
+                version: artifact.package_version.to_string(),
+                release: None,
+                distro: artifact.distro.to_string(),
+                chunks,
+                total_size: artifact.total_size,
+                content_hash: artifact.content_hash.to_string(),
+                native: false,
+                converted: true,
+                source_kind: Some("converted".to_string()),
+                scriptlets: Some(ScriptletPackageMetadata::from(&scriptlet_summary)),
+            };
 
-                let chunks: Vec<ChunkRef> = chunk_hashes
-                    .iter()
-                    .enumerate()
-                    .map(|(i, hash)| ChunkRef {
-                        hash: hash.clone(),
-                        size: 0, // Size per chunk not stored, use 0
-                        offset: i as u64,
-                    })
-                    .collect();
-                let scriptlet_summary = converted.scriptlet_summary();
-                let decision = classify_converted_package(&converted);
-
-                let manifest = PackageManifest {
-                    name: converted.package_name.unwrap_or_else(|| name.to_string()),
-                    version: converted.package_version.unwrap_or_else(|| {
-                        tracing::warn!(
-                            "Package {}/{} has no stored version, falling back to 'unknown'",
-                            distro,
-                            name
-                        );
-                        "unknown".to_string()
-                    }),
-                    release: None,
-                    distro: converted.distro.unwrap_or_else(|| distro.to_string()),
-                    chunks,
-                    total_size: converted.total_size.unwrap_or(0) as u64,
-                    content_hash: converted.content_hash.unwrap_or_default(),
-                    native: false,
-                    converted: true,
-                    source_kind: Some("converted".to_string()),
-                    scriptlets: Some(ScriptletPackageMetadata::from(&scriptlet_summary)),
-                };
-
-                return match decision {
-                    PublicationDecision::Ready => Ok(ConvertedManifestLookup::Ready(manifest)),
-                    PublicationDecision::ReviewRequired(report) => {
-                        Ok(ConvertedManifestLookup::ReviewRequired(report))
-                    }
-                    PublicationDecision::Blocked(report) => {
-                        Ok(ConvertedManifestLookup::Blocked(report))
-                    }
-                };
-            }
+            return Ok(ConvertedManifestLookup::Ready(manifest));
         }
     }
 
@@ -487,6 +418,13 @@ async fn run_conversion(state: Arc<RwLock<ServerState>>, job_id: JobId) {
             state_guard.config.cache_dir.clone(),
             state_guard.config.db_path.clone(),
             state_guard.r2_store.clone(),
+        )
+        .with_repository_keys_dir(
+            state_guard
+                .config
+                .release_publish
+                .repository_keys_dir
+                .clone(),
         );
         (job, svc)
     };
@@ -525,8 +463,7 @@ async fn run_conversion(state: Arc<RwLock<ServerState>>, job_id: JobId) {
         let mut state_guard = state.write().await;
         match result {
             Ok(outcome) => {
-                let status = outcome.job_status();
-                let conversion_result = outcome.into_result();
+                let conversion_result = outcome;
                 tracing::info!(
                     "Conversion complete: {}:{} -> {} chunks (job {})",
                     job.distro,
@@ -542,11 +479,10 @@ async fn run_conversion(state: Arc<RwLock<ServerState>>, job_id: JobId) {
                     ccs_path: conversion_result.ccs_path,
                     actual_version: conversion_result.version,
                     scriptlets: conversion_result.scriptlets,
-                    publication: conversion_result.publication,
                 };
                 state_guard
                     .job_manager
-                    .complete_with_result(&job_id, status, job_result);
+                    .complete_with_result(&job_id, job_result);
             }
             Err(e) => {
                 tracing::error!(
@@ -686,41 +622,6 @@ pub async fn download_package(
                 }
                 // Result missing or file deleted - fall through to filesystem lookup
             }
-            crate::server::jobs::JobStatus::ReviewRequired => {
-                if let Some(report) = job
-                    .result
-                    .as_ref()
-                    .and_then(|result| result.publication.clone())
-                {
-                    return refusal_response(
-                        PublicationRefusal::ReviewRequired(report),
-                        &distro,
-                        &name,
-                        query.version.as_deref(),
-                    );
-                }
-                return (StatusCode::CONFLICT, "Conversion requires scriptlet review")
-                    .into_response();
-            }
-            crate::server::jobs::JobStatus::Blocked => {
-                if let Some(report) = job
-                    .result
-                    .as_ref()
-                    .and_then(|result| result.publication.clone())
-                {
-                    return refusal_response(
-                        PublicationRefusal::Blocked(report),
-                        &distro,
-                        &name,
-                        query.version.as_deref(),
-                    );
-                }
-                return (
-                    StatusCode::FORBIDDEN,
-                    "Conversion blocked by scriptlet policy",
-                )
-                    .into_response();
-            }
             crate::server::jobs::JobStatus::Failed(error) => {
                 // Conversion failed - return error
                 return (
@@ -773,22 +674,6 @@ pub async fn download_package(
     .await
     {
         Ok(Ok(ConvertedDownloadLookup::Ready(path))) => path,
-        Ok(Ok(ConvertedDownloadLookup::ReviewRequired(report))) => {
-            return refusal_response(
-                PublicationRefusal::ReviewRequired(report),
-                &distro,
-                &name,
-                query.version.as_deref(),
-            );
-        }
-        Ok(Ok(ConvertedDownloadLookup::Blocked(report))) => {
-            return refusal_response(
-                PublicationRefusal::Blocked(report),
-                &distro,
-                &name,
-                query.version.as_deref(),
-            );
-        }
         Ok(Ok(ConvertedDownloadLookup::Missing)) => {
             return get_package(State(state), Path((distro, name)), Query(query)).await;
         }
@@ -839,23 +724,40 @@ fn converted_ccs_path_for_download(
     if converted.needs_reconversion() {
         return Ok(ConvertedDownloadLookup::Missing);
     }
-
-    let Some(ccs_path) = &converted.ccs_path else {
-        return Ok(ConvertedDownloadLookup::Missing);
-    };
-
-    let ccs_path = std::path::PathBuf::from(ccs_path);
+    converted.scriptlet_summary()?;
+    let artifact = converted.repository_artifact()?;
+    let ccs_path = std::path::PathBuf::from(artifact.ccs_path);
     if ccs_path.exists() {
-        match classify_converted_package(&converted) {
-            PublicationDecision::Ready => Ok(ConvertedDownloadLookup::Ready(ccs_path)),
-            PublicationDecision::ReviewRequired(report) => {
-                Ok(ConvertedDownloadLookup::ReviewRequired(report))
-            }
-            PublicationDecision::Blocked(report) => Ok(ConvertedDownloadLookup::Blocked(report)),
-        }
+        Ok(ConvertedDownloadLookup::Ready(ccs_path))
     } else {
         Ok(ConvertedDownloadLookup::Missing)
     }
+}
+
+fn exact_chunk_refs(
+    conn: &rusqlite::Connection,
+    chunk_hashes: &[String],
+) -> Result<Vec<ChunkRef>, anyhow::Error> {
+    use conary_core::db::models::ChunkAccess;
+
+    let mut offset = 0_u64;
+    let mut chunks = Vec::with_capacity(chunk_hashes.len());
+    for hash in chunk_hashes {
+        let access = ChunkAccess::find_by_hash(conn, hash)?.ok_or_else(|| {
+            anyhow::anyhow!("converted artifact chunk {hash} has no exact size record")
+        })?;
+        let size = u64::try_from(access.size_bytes)
+            .map_err(|_| anyhow::anyhow!("converted artifact chunk {hash} has negative size"))?;
+        chunks.push(ChunkRef {
+            hash: hash.clone(),
+            size,
+            offset,
+        });
+        offset = offset
+            .checked_add(size)
+            .ok_or_else(|| anyhow::anyhow!("converted artifact chunk offsets overflow"))?;
+    }
+    Ok(chunks)
 }
 
 /// Stream a CCS file as a response, recording analytics only on success.

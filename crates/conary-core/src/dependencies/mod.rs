@@ -22,7 +22,5 @@
 //! ```
 
 mod classes;
-mod detection;
 
 pub use classes::{DependencyClass, LanguageDep};
-pub use detection::LanguageDepDetector;

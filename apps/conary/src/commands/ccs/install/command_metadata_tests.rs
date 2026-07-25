@@ -1,14 +1,15 @@
-// src/commands/ccs/install/command_metadata_tests.rs
+// apps/conary/src/commands/ccs/install/command_metadata_tests.rs
 
 use std::collections::HashMap;
 
 use super::command::cmd_ccs_install;
-use super::test_support::{ccs_init_file, seed_test_init_trove, stage_test_boot_assets};
+use super::test_support::{
+    ccs_init_file, ccs_regular_file, seed_test_init_trove, stage_test_boot_assets,
+};
 
 #[tokio::test]
 async fn ccs_install_records_payload_without_direct_live_root_write() {
-    use conary_core::ccs::builder::write_ccs_package;
-    use conary_core::ccs::{BuildResult, CcsManifest, ComponentData, FileEntry, FileType};
+    use conary_core::ccs::{BuildResult, CcsManifest, ComponentData};
     use conary_core::hash;
 
     let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
@@ -28,26 +29,20 @@ async fn ccs_install_records_payload_without_direct_live_root_write() {
     let init_hash = hash::sha256(&init_content);
     let total_size = (content.len() + init_content.len()) as u64;
     let files = vec![
-        FileEntry {
-            path: "/usr/bin/from-ccs".to_string(),
-            hash: file_hash.clone(),
-            size: content.len() as u64,
-            mode: 0o100755,
-            component: "runtime".to_string(),
-            file_type: FileType::Regular,
-            target: None,
-            chunks: None,
-        },
-        FileEntry {
-            path: "/usr/sbin/init".to_string(),
-            hash: init_hash.clone(),
-            size: init_content.len() as u64,
-            mode: 0o100755,
-            component: "runtime".to_string(),
-            file_type: FileType::Regular,
-            target: None,
-            chunks: None,
-        },
+        ccs_regular_file(
+            "/usr/bin/from-ccs".to_string(),
+            file_hash.clone(),
+            content.len() as u64,
+            0o100755,
+            "runtime".to_string(),
+        ),
+        ccs_regular_file(
+            "/usr/sbin/init".to_string(),
+            init_hash.clone(),
+            init_content.len() as u64,
+            0o100755,
+            "runtime".to_string(),
+        ),
     ];
     let result = BuildResult {
         manifest: CcsManifest::new_minimal("composefs-only", "1.0.0"),
@@ -69,21 +64,18 @@ async fn ccs_install_records_payload_without_direct_live_root_write() {
         chunked: false,
         chunk_stats: None,
     };
-    write_ccs_package(&result, &package_path).unwrap();
+    let trust_policy_path = super::test_support::write_signed_test_package(&result, &package_path);
 
     cmd_ccs_install(
         package_path.to_str().unwrap(),
         db_path_str,
         install_root.to_str().unwrap(),
         false,
-        true,
+        Some(trust_policy_path.to_string_lossy().into_owned()),
         None,
-        None,
-        crate::commands::SandboxMode::None,
+        crate::commands::SandboxMode::Always,
         true,
         false,
-        false,
-        None,
     )
     .await
     .unwrap();
@@ -112,8 +104,7 @@ async fn ccs_install_records_payload_without_direct_live_root_write() {
 
 #[tokio::test]
 async fn ccs_install_strips_special_permission_bits_from_db_metadata() {
-    use conary_core::ccs::builder::write_ccs_package;
-    use conary_core::ccs::{BuildResult, CcsManifest, ComponentData, FileEntry, FileType};
+    use conary_core::ccs::{BuildResult, CcsManifest, ComponentData};
     use conary_core::hash;
 
     let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
@@ -133,26 +124,20 @@ async fn ccs_install_strips_special_permission_bits_from_db_metadata() {
     let init_hash = hash::sha256(&init_content);
     let total_size = (content.len() + init_content.len()) as u64;
     let files = vec![
-        FileEntry {
-            path: "/usr/bin/setid-tool".to_string(),
-            hash: file_hash.clone(),
-            size: content.len() as u64,
-            mode: 0o106755,
-            component: "runtime".to_string(),
-            file_type: FileType::Regular,
-            target: None,
-            chunks: None,
-        },
-        FileEntry {
-            path: "/usr/sbin/init".to_string(),
-            hash: init_hash.clone(),
-            size: init_content.len() as u64,
-            mode: 0o100755,
-            component: "runtime".to_string(),
-            file_type: FileType::Regular,
-            target: None,
-            chunks: None,
-        },
+        ccs_regular_file(
+            "/usr/bin/setid-tool".to_string(),
+            file_hash.clone(),
+            content.len() as u64,
+            0o106755,
+            "runtime".to_string(),
+        ),
+        ccs_regular_file(
+            "/usr/sbin/init".to_string(),
+            init_hash.clone(),
+            init_content.len() as u64,
+            0o100755,
+            "runtime".to_string(),
+        ),
     ];
     let result = BuildResult {
         manifest: CcsManifest::new_minimal("special-mode", "1.0.0"),
@@ -171,44 +156,34 @@ async fn ccs_install_strips_special_permission_bits_from_db_metadata() {
         chunked: false,
         chunk_stats: None,
     };
-    write_ccs_package(&result, &package_path).unwrap();
+    let trust_policy_path = super::test_support::write_signed_test_package(&result, &package_path);
 
     cmd_ccs_install(
         package_path.to_str().unwrap(),
         db_path_str,
         install_root.to_str().unwrap(),
         false,
-        true,
+        Some(trust_policy_path.to_string_lossy().into_owned()),
         None,
-        None,
-        crate::commands::SandboxMode::None,
+        crate::commands::SandboxMode::Always,
         true,
         false,
-        false,
-        None,
     )
     .await
     .unwrap();
 
     let conn = conary_core::db::open(db_path_str).unwrap();
-    let permissions: i32 = conn
-        .query_row(
-            "SELECT permissions FROM files WHERE path = '/usr/bin/setid-tool'",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap();
-    assert_eq!(permissions, 0o100755);
-    assert_eq!(permissions & 0o6000, 0);
+    let stored =
+        conary_core::db::models::FileEntry::find_by_path(&conn, "/usr/bin/setid-tool").unwrap();
+    let mode = stored.unwrap().node.source.mode;
+    assert_eq!(mode, libc::S_IFREG | 0o755);
+    assert_eq!(mode & 0o6000, 0);
 }
 
 #[tokio::test]
 async fn ccs_install_persists_manifest_provides() {
-    use conary_core::ccs::{BuildResult, CcsManifest, ComponentData, FileEntry, FileType};
+    use conary_core::ccs::{BuildResult, CcsManifest, ComponentData};
     use conary_core::hash;
-    use flate2::Compression;
-    use flate2::write::GzEncoder;
-    use tar::Builder;
 
     let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
     let temp_dir = tempfile::tempdir().unwrap();
@@ -223,16 +198,13 @@ async fn ccs_install_persists_manifest_provides() {
 
     let init_content = b"#!/bin/sh\nexec true\n".to_vec();
     let init_hash = hash::sha256(&init_content);
-    let files = vec![FileEntry {
-        path: "/usr/sbin/init".to_string(),
-        hash: init_hash.clone(),
-        size: init_content.len() as u64,
-        mode: 0o100755,
-        component: "runtime".to_string(),
-        file_type: FileType::Regular,
-        target: None,
-        chunks: None,
-    }];
+    let files = vec![ccs_regular_file(
+        "/usr/sbin/init".to_string(),
+        init_hash.clone(),
+        init_content.len() as u64,
+        0o100755,
+        "runtime".to_string(),
+    )];
 
     let mut manifest = CcsManifest::new_minimal("manifest-provides", "1.0.0");
     manifest.provides.capabilities = vec!["virtual-web-server".to_string()];
@@ -257,47 +229,18 @@ async fn ccs_install_persists_manifest_provides() {
         chunked: false,
         chunk_stats: None,
     };
-
-    let package_root = temp_dir.path().join("package-root");
-    let components_dir = package_root.join("components");
-    let object_path = package_root
-        .join("objects")
-        .join(&init_hash[..2])
-        .join(&init_hash[2..]);
-    std::fs::create_dir_all(&components_dir).unwrap();
-    std::fs::create_dir_all(object_path.parent().unwrap()).unwrap();
-    std::fs::write(
-        package_root.join("MANIFEST.toml"),
-        result.manifest.to_toml().unwrap(),
-    )
-    .unwrap();
-    std::fs::write(
-        components_dir.join("runtime.json"),
-        serde_json::to_string_pretty(result.components.get("runtime").unwrap()).unwrap(),
-    )
-    .unwrap();
-    std::fs::write(object_path, &init_content).unwrap();
-
-    let output = std::fs::File::create(&package_path).unwrap();
-    let encoder = GzEncoder::new(output, Compression::default());
-    let mut archive = Builder::new(encoder);
-    archive.append_dir_all(".", &package_root).unwrap();
-    let encoder = archive.into_inner().unwrap();
-    encoder.finish().unwrap();
+    let trust_policy_path = super::test_support::write_signed_test_package(&result, &package_path);
 
     cmd_ccs_install(
         package_path.to_str().unwrap(),
         db_path_str,
         install_root.to_str().unwrap(),
         false,
-        true,
+        Some(trust_policy_path.to_string_lossy().into_owned()),
         None,
-        None,
-        crate::commands::SandboxMode::None,
+        crate::commands::SandboxMode::Always,
         true,
         false,
-        false,
-        None,
     )
     .await
     .unwrap();
@@ -333,11 +276,8 @@ async fn ccs_install_persists_manifest_provides() {
 
 #[tokio::test]
 async fn ccs_install_persists_typed_provide_when_name_collides() {
-    use conary_core::ccs::{BuildResult, CcsManifest, ComponentData, FileEntry, FileType};
+    use conary_core::ccs::{BuildResult, CcsManifest, ComponentData};
     use conary_core::hash;
-    use flate2::Compression;
-    use flate2::write::GzEncoder;
-    use tar::Builder;
 
     let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
     let temp_dir = tempfile::tempdir().unwrap();
@@ -352,16 +292,13 @@ async fn ccs_install_persists_typed_provide_when_name_collides() {
 
     let init_content = b"#!/bin/sh\nexec true\n".to_vec();
     let init_hash = hash::sha256(&init_content);
-    let files = vec![FileEntry {
-        path: "/usr/sbin/init".to_string(),
-        hash: init_hash.clone(),
-        size: init_content.len() as u64,
-        mode: 0o100755,
-        component: "runtime".to_string(),
-        file_type: FileType::Regular,
-        target: None,
-        chunks: None,
-    }];
+    let files = vec![ccs_regular_file(
+        "/usr/sbin/init".to_string(),
+        init_hash.clone(),
+        init_content.len() as u64,
+        0o100755,
+        "runtime".to_string(),
+    )];
 
     let mut manifest = CcsManifest::new_minimal("collision-tool", "1.0.0");
     manifest.provides.binaries = vec!["collision-tool".to_string()];
@@ -383,47 +320,18 @@ async fn ccs_install_persists_typed_provide_when_name_collides() {
         chunked: false,
         chunk_stats: None,
     };
-
-    let package_root = temp_dir.path().join("package-root");
-    let components_dir = package_root.join("components");
-    let object_path = package_root
-        .join("objects")
-        .join(&init_hash[..2])
-        .join(&init_hash[2..]);
-    std::fs::create_dir_all(&components_dir).unwrap();
-    std::fs::create_dir_all(object_path.parent().unwrap()).unwrap();
-    std::fs::write(
-        package_root.join("MANIFEST.toml"),
-        result.manifest.to_toml().unwrap(),
-    )
-    .unwrap();
-    std::fs::write(
-        components_dir.join("runtime.json"),
-        serde_json::to_string_pretty(result.components.get("runtime").unwrap()).unwrap(),
-    )
-    .unwrap();
-    std::fs::write(object_path, &init_content).unwrap();
-
-    let output = std::fs::File::create(&package_path).unwrap();
-    let encoder = GzEncoder::new(output, Compression::default());
-    let mut archive = Builder::new(encoder);
-    archive.append_dir_all(".", &package_root).unwrap();
-    let encoder = archive.into_inner().unwrap();
-    encoder.finish().unwrap();
+    let trust_policy_path = super::test_support::write_signed_test_package(&result, &package_path);
 
     cmd_ccs_install(
         package_path.to_str().unwrap(),
         db_path_str,
         install_root.to_str().unwrap(),
         false,
-        true,
+        Some(trust_policy_path.to_string_lossy().into_owned()),
         None,
-        None,
-        crate::commands::SandboxMode::None,
+        crate::commands::SandboxMode::Always,
         true,
         false,
-        false,
-        None,
     )
     .await
     .unwrap();
@@ -440,7 +348,6 @@ async fn ccs_install_persists_typed_provide_when_name_collides() {
 
 #[tokio::test]
 async fn ccs_install_registers_metadata_only_package_without_files() {
-    use conary_core::ccs::builder::write_ccs_package;
     use conary_core::ccs::{BuildResult, CcsManifest};
 
     let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
@@ -464,21 +371,18 @@ async fn ccs_install_registers_metadata_only_package_without_files() {
         chunked: false,
         chunk_stats: None,
     };
-    write_ccs_package(&result, &package_path).unwrap();
+    let trust_policy_path = super::test_support::write_signed_test_package(&result, &package_path);
 
     cmd_ccs_install(
         package_path.to_str().unwrap(),
         db_path_str,
         install_root.to_str().unwrap(),
         false,
-        true,
+        Some(trust_policy_path.to_string_lossy().into_owned()),
         None,
-        None,
-        crate::commands::SandboxMode::None,
+        crate::commands::SandboxMode::Always,
         true,
         false,
-        false,
-        None,
     )
     .await
     .unwrap();
@@ -507,8 +411,7 @@ async fn ccs_install_registers_metadata_only_package_without_files() {
 
 #[tokio::test]
 async fn ccs_install_records_ldconfig_trigger_for_shared_libraries() {
-    use conary_core::ccs::builder::write_ccs_package;
-    use conary_core::ccs::{BuildResult, CcsManifest, ComponentData, FileEntry, FileType};
+    use conary_core::ccs::{BuildResult, CcsManifest, ComponentData};
     use conary_core::hash;
 
     let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
@@ -525,16 +428,13 @@ async fn ccs_install_records_ldconfig_trigger_for_shared_libraries() {
     let content = b"not a real elf; trigger matching is path-based".to_vec();
     let file_hash = hash::sha256(&content);
     let (init_file, init_content, init_hash) = ccs_init_file();
-    let lib_file = FileEntry {
-        path: "/usr/lib64/libtrigger-test.so.1".to_string(),
-        hash: file_hash.clone(),
-        size: content.len() as u64,
-        mode: 0o100644,
-        component: "lib".to_string(),
-        file_type: FileType::Regular,
-        target: None,
-        chunks: None,
-    };
+    let lib_file = ccs_regular_file(
+        "/usr/lib64/libtrigger-test.so.1".to_string(),
+        file_hash.clone(),
+        content.len() as u64,
+        0o100644,
+        "lib".to_string(),
+    );
     let files = vec![lib_file.clone(), init_file.clone()];
 
     let result = BuildResult {
@@ -565,21 +465,18 @@ async fn ccs_install_records_ldconfig_trigger_for_shared_libraries() {
         chunked: false,
         chunk_stats: None,
     };
-    write_ccs_package(&result, &package_path).unwrap();
+    let trust_policy_path = super::test_support::write_signed_test_package(&result, &package_path);
 
     cmd_ccs_install(
         package_path.to_str().unwrap(),
         db_path_str,
         install_root.to_str().unwrap(),
         false,
-        true,
+        Some(trust_policy_path.to_string_lossy().into_owned()),
         None,
-        None,
-        crate::commands::SandboxMode::None,
+        crate::commands::SandboxMode::Always,
         true,
         false,
-        false,
-        None,
     )
     .await
     .unwrap();

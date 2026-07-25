@@ -6,11 +6,18 @@
 //! using the `dpkg-query` command-line tool.
 
 use crate::error::{Error, Result};
+use crate::packages::InstalledPackageIdentity;
 use crate::packages::archive_utils::get_file_metadata;
-use crate::packages::query_common::{DependencyInfo, InstalledFileInfo, run_query_command};
-use std::collections::HashMap;
+use crate::packages::install_reason::{InstallReasonAuthorityError, query_package_names};
+use crate::packages::query_common::{InstalledFileInfo, InstalledPackageRecord, run_query_command};
+use crate::repository::dependency_model::{RepositoryRequirementGroup, RepositoryRequirementKind};
+use crate::repository::requirement::parse_native_requirement;
+use crate::repository::versioning::VersionScheme;
+use std::collections::{HashMap, HashSet};
 use std::process::Command;
-use tracing::{debug, warn};
+use tracing::debug;
+
+const DPKG_PACKAGE_RECORD_FORMAT: &str = "${binary:Package}\x1e${Package}\x1e${Version}\x1e${Architecture}\x1e${Description}\x1e${Maintainer}\x1e${Homepage}\x1e${Section}\x1e${Priority}\x1e${Installed-Size}\x1f";
 
 /// Information about an installed dpkg package
 #[derive(Debug, Clone)]
@@ -41,33 +48,14 @@ impl InstalledDpkgInfo {
     }
 }
 
-/// List all installed package names
-pub fn list_installed_packages() -> Result<Vec<String>> {
-    debug!("Querying installed dpkg packages");
-
-    let stdout = run_query_command("dpkg-query", &["-W", "-f", "${Package}\n"])?;
-    let packages: Vec<String> = stdout
-        .lines()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect();
-
-    debug!("Found {} installed packages", packages.len());
-    Ok(packages)
-}
-
 /// Query detailed information about an installed package
-pub fn query_package(name: &str) -> Result<InstalledDpkgInfo> {
+pub fn query_package(name: &str) -> Result<InstalledPackageRecord<InstalledDpkgInfo>> {
     debug!("Querying package info: {}", name);
 
     // ASCII record/unit separators keep multiline descriptions unambiguous.
     let output = Command::new("dpkg-query")
-        .args([
-            "-W",
-            "-f",
-            "${Package}\x1e${Version}\x1e${Architecture}\x1e${Description}\x1e${Maintainer}\x1e${Homepage}\x1e${Section}\x1e${Priority}\x1e${Installed-Size}\x1f",
-            name,
-        ])
+        .args(["-W", "-f", DPKG_PACKAGE_RECORD_FORMAT, name])
+        .env("LC_ALL", "C")
         .output()
         .map_err(|e| Error::InitError(format!("Failed to run dpkg-query: {}", e)))?;
 
@@ -78,65 +66,104 @@ pub fn query_package(name: &str) -> Result<InstalledDpkgInfo> {
         )));
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let records = split_package_query_records(&stdout);
+    let stdout = String::from_utf8(output.stdout)
+        .map_err(|error| Error::ParseError(format!("dpkg-query output is not UTF-8: {error}")))?;
+    let mut records = parse_package_query_records(&stdout)?;
     if records.len() > 1 {
         let variants = records
             .iter()
-            .filter(|parts| parts.len() >= 3)
-            .map(|parts| format!("{} [{}]", parts[0], parts[2]))
+            .map(|record| record.identity.selector().to_string())
             .collect::<Vec<_>>()
             .join(", ");
         return Err(Error::ConflictError(format!(
             "Package '{name}' matches multiple installed dpkg variants: {variants}. Use an architecture-qualified native package name."
         )));
     }
-    let parts = records.first().cloned().unwrap_or_default();
-
-    if parts.len() < 3 {
-        return Err(Error::InitError(format!(
-            "Malformed dpkg-query output for {}",
-            name
-        )));
-    }
-
-    let installed_size = parts.get(8).and_then(|s| s.parse().ok());
-
-    Ok(InstalledDpkgInfo {
-        name: parts[0].to_string(),
-        version: parts[1].to_string(),
-        arch: parts[2].to_string(),
-        description: parts
-            .get(3)
-            .map(|s| s.to_string())
-            .filter(|s| !s.is_empty()),
-        maintainer: parts
-            .get(4)
-            .map(|s| s.to_string())
-            .filter(|s| !s.is_empty()),
-        homepage: parts
-            .get(5)
-            .map(|s| s.to_string())
-            .filter(|s| !s.is_empty()),
-        section: parts
-            .get(6)
-            .map(|s| s.to_string())
-            .filter(|s| !s.is_empty()),
-        priority: parts
-            .get(7)
-            .map(|s| s.to_string())
-            .filter(|s| !s.is_empty()),
-        installed_size,
+    records.pop().ok_or_else(|| {
+        Error::NotFound(format!("Package '{name}' returned no dpkg database record"))
     })
 }
 
-fn split_package_query_records(output: &str) -> Vec<Vec<&str>> {
+fn parse_package_query_records(
+    output: &str,
+) -> Result<Vec<InstalledPackageRecord<InstalledDpkgInfo>>> {
+    let mut selectors = HashSet::new();
     output
         .split('\x1f')
-        .map(|record| record.trim_matches(['\r', '\n']))
         .filter(|record| !record.is_empty())
-        .map(|record| record.split('\x1e').collect())
+        .enumerate()
+        .map(|(index, record)| {
+            let parts = record.split('\x1e').collect::<Vec<_>>();
+            if parts.len() != 10 {
+                return Err(Error::ParseError(format!(
+                    "dpkg inventory record {} has {} fields; expected exactly 10",
+                    index + 1,
+                    parts.len()
+                )));
+            }
+            let identity = InstalledPackageIdentity::dpkg(parts[0], parts[1], parts[2], parts[3])?;
+            if !selectors.insert(identity.selector().to_string()) {
+                return Err(Error::ConflictError(format!(
+                    "dpkg inventory repeated exact binary package selector '{}'",
+                    identity.selector()
+                )));
+            }
+            let installed_size = match parts[9] {
+                "" => None,
+                value => Some(value.parse::<i64>().map_err(|error| {
+                    Error::ParseError(format!(
+                        "dpkg inventory record {} has invalid Installed-Size {value:?}: {error}",
+                        index + 1
+                    ))
+                })?),
+            };
+            Ok(InstalledPackageRecord {
+                info: InstalledDpkgInfo {
+                    name: parts[1].to_string(),
+                    version: parts[2].to_string(),
+                    arch: parts[3].to_string(),
+                    description: optional_dpkg_field(parts[4]),
+                    maintainer: optional_dpkg_field(parts[5]),
+                    homepage: optional_dpkg_field(parts[6]),
+                    section: optional_dpkg_field(parts[7]),
+                    priority: optional_dpkg_field(parts[8]),
+                    installed_size,
+                },
+                identity,
+            })
+        })
         .collect()
+}
+
+fn optional_dpkg_field(value: &str) -> Option<String> {
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+#[cfg(test)]
+mod owner_query_tests {
+    use super::*;
+
+    #[test]
+    fn owner_records_require_exact_installed_binary_selectors() {
+        let installed = HashSet::from(["libc6:amd64".to_string(), "base-files".to_string()]);
+        assert_eq!(
+            parse_owner_records(
+                "libc6:amd64, base-files: /usr/share/doc/example\n",
+                "/usr/share/doc/example",
+                &installed,
+            )
+            .unwrap(),
+            vec!["libc6:amd64", "base-files"]
+        );
+        assert!(
+            parse_owner_records(
+                "diversion by base-files from: /usr/share/doc/example\n",
+                "/usr/share/doc/example",
+                &installed,
+            )
+            .is_err()
+        );
+    }
 }
 
 /// Query files installed by a package
@@ -146,6 +173,7 @@ pub fn query_package_files(name: &str) -> Result<Vec<InstalledFileInfo>> {
     // Use dpkg -L to list files
     let output = Command::new("dpkg")
         .args(["-L", name])
+        .env("LC_ALL", "C")
         .output()
         .map_err(|e| Error::InitError(format!("Failed to run dpkg: {}", e)))?;
 
@@ -157,21 +185,25 @@ pub fn query_package_files(name: &str) -> Result<Vec<InstalledFileInfo>> {
     }
 
     // Load digest map once to avoid re-reading the md5sums file per file (N+1)
-    let digest_map = load_digest_map(name);
+    let digest_map = load_digest_map(name)?;
+    let stdout = String::from_utf8(output.stdout)
+        .map_err(|error| Error::ParseError(format!("dpkg -L output is not UTF-8: {error}")))?;
 
     let mut files = Vec::new();
 
-    for line in String::from_utf8_lossy(&output.stdout).lines() {
-        let path = line.trim().to_string();
+    for line in stdout.lines() {
+        let path = line.to_string();
         if path.is_empty() {
-            continue;
+            return Err(Error::ParseError(format!(
+                "dpkg -L returned an empty path record for '{name}'"
+            )));
         }
 
-        // Get file metadata (skip files that cannot be stat'd, e.g., removed files)
-        let (size, mode) = match get_file_metadata(&path) {
-            Ok(m) => m,
-            Err(_) => continue,
-        };
+        let (size, mode) = get_file_metadata(&path).map_err(|error| {
+            Error::IoError(format!(
+                "dpkg record '{name}' owns '{path}', but its exact live metadata is unavailable: {error}"
+            ))
+        })?;
 
         // Look up md5sum from pre-loaded digest map
         let search_path = path.strip_prefix('/').unwrap_or(&path);
@@ -179,9 +211,21 @@ pub fn query_package_files(name: &str) -> Result<Vec<InstalledFileInfo>> {
 
         // Check if this is a symlink and get target
         let link_target = if (mode & 0o170000) == 0o120000 {
-            std::fs::read_link(&path)
-                .ok()
-                .map(|p| p.to_string_lossy().to_string())
+            Some(
+                std::fs::read_link(&path)
+                    .map_err(|error| {
+                        Error::IoError(format!(
+                            "failed to read exact symlink target for dpkg path '{path}': {error}"
+                        ))
+                    })?
+                    .into_os_string()
+                    .into_string()
+                    .map_err(|_| {
+                        Error::ParseError(format!(
+                            "dpkg path '{path}' has a non-UTF-8 symlink target"
+                        ))
+                    })?,
+            )
         } else {
             None
         };
@@ -204,131 +248,136 @@ pub fn query_package_files(name: &str) -> Result<Vec<InstalledFileInfo>> {
 
 /// Load the full digest map for a package from the dpkg md5sums file.
 ///
-/// Returns a map of relative path -> md5 digest. Reads the file once,
-/// trying the base package name first, then architecture-qualified variants.
-fn load_digest_map(package: &str) -> HashMap<String, String> {
+/// The exact `${binary:Package}` selector maps directly to dpkg's info-file
+/// basename, including its architecture qualifier when one is required.
+fn load_digest_map(package: &str) -> Result<HashMap<String, String>> {
     let base_path = format!("/var/lib/dpkg/info/{}.md5sums", package);
-    if let Ok(content) = std::fs::read_to_string(&base_path) {
-        return parse_md5sums(&content);
+    match std::fs::read_to_string(&base_path) {
+        Ok(content) => parse_md5sums(&content),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(HashMap::new()),
+        Err(error) => Err(Error::IoError(format!(
+            "failed to read exact dpkg md5sums record '{base_path}': {error}"
+        ))),
     }
-
-    for arch in &["amd64", "i386", "arm64", "armhf", "all"] {
-        let arch_path = format!("/var/lib/dpkg/info/{}:{}.md5sums", package, arch);
-        if let Ok(content) = std::fs::read_to_string(&arch_path) {
-            return parse_md5sums(&content);
-        }
-    }
-
-    HashMap::new()
 }
 
 /// Parse dpkg md5sums file content into a path -> digest map.
-fn parse_md5sums(content: &str) -> HashMap<String, String> {
-    content
-        .lines()
-        .filter_map(|line| {
-            let (digest, path) = line.split_once("  ")?;
-            Some((path.to_string(), digest.to_string()))
-        })
-        .collect()
+fn parse_md5sums(content: &str) -> Result<HashMap<String, String>> {
+    let mut digests = HashMap::new();
+    for (index, line) in content.lines().enumerate() {
+        let (digest, path) = line.split_once("  ").ok_or_else(|| {
+            Error::ParseError(format!(
+                "dpkg md5sums record {} is outside the documented digest/path grammar",
+                index + 1
+            ))
+        })?;
+        if digest.len() != 32
+            || !digest
+                .chars()
+                .all(|character| character.is_ascii_hexdigit())
+        {
+            return Err(Error::ParseError(format!(
+                "dpkg md5sums record {} has an invalid MD5 digest",
+                index + 1
+            )));
+        }
+        if path.is_empty()
+            || digests
+                .insert(path.to_string(), digest.to_string())
+                .is_some()
+        {
+            return Err(Error::ParseError(format!(
+                "dpkg md5sums record {} has an empty or duplicate path",
+                index + 1
+            )));
+        }
+    }
+    Ok(digests)
 }
 
-/// Query dependencies of an installed package (names only)
-pub fn query_package_dependencies(name: &str) -> Result<Vec<String>> {
-    debug!("Querying dependencies for package: {}", name);
-
+/// Query Debian `Pre-Depends` and `Depends` as exact alternative groups.
+pub fn query_package_requirement_groups(name: &str) -> Result<Vec<RepositoryRequirementGroup>> {
     let output = Command::new("dpkg-query")
-        .args(["-W", "-f", "${Depends}\n", name])
+        .args(["-W", "-f", "${Pre-Depends}\x1e${Depends}\x1f", name])
+        .env("LC_ALL", "C")
         .output()
-        .map_err(|e| Error::InitError(format!("Failed to run dpkg-query: {}", e)))?;
-
+        .map_err(|error| Error::InitError(format!("Failed to run dpkg-query: {error}")))?;
     if !output.status.success() {
         return Err(Error::NotFound(format!(
-            "Package '{}' not found in dpkg database",
-            name
+            "Package '{name}' not found in dpkg database"
         )));
     }
 
-    let deps_str = String::from_utf8_lossy(&output.stdout);
-    let deps: Vec<String> = deps_str
-        .split(',')
-        .flat_map(|dep| dep.split('|')) // Handle alternatives (a | b)
-        .map(|s| {
-            // Remove version constraints: "package (>= 1.0)" -> "package"
-            s.split_whitespace().next().unwrap_or("").to_string()
-        })
-        .filter(|s| !s.is_empty())
-        .collect();
-
-    debug!("Found {} dependencies for package {}", deps.len(), name);
-    Ok(deps)
-}
-
-/// Query dependencies of an installed package with full version constraints
-pub fn query_package_dependencies_full(name: &str) -> Result<Vec<DependencyInfo>> {
-    debug!(
-        "Querying dependencies with constraints for package: {}",
-        name
-    );
-
-    let output = Command::new("dpkg-query")
-        .args(["-W", "-f", "${Depends}\n", name])
-        .output()
-        .map_err(|e| Error::InitError(format!("Failed to run dpkg-query: {}", e)))?;
-
-    if !output.status.success() {
-        return Err(Error::NotFound(format!(
-            "Package '{}' not found in dpkg database",
-            name
+    let output = String::from_utf8(output.stdout).map_err(|error| {
+        Error::ParseError(format!(
+            "dpkg-query requirement output is not UTF-8: {error}"
+        ))
+    })?;
+    let records = output
+        .split('\x1f')
+        .filter(|record| !record.is_empty())
+        .collect::<Vec<_>>();
+    if records.len() != 1 {
+        return Err(Error::ParseError(format!(
+            "dpkg-query returned {} requirement records for exact selector '{name}'",
+            records.len()
         )));
     }
+    let fields = records[0].split('\x1e').collect::<Vec<_>>();
+    if fields.len() != 2 {
+        return Err(Error::ParseError(format!(
+            "dpkg-query requirement record for '{name}' has {} fields; expected 2",
+            fields.len()
+        )));
+    }
+    let [pre_depends, depends] = [fields[0], fields[1]];
+    let mut requirements = Vec::new();
+    for (kind, field) in [
+        (RepositoryRequirementKind::PreDepends, pre_depends),
+        (RepositoryRequirementKind::Depends, depends),
+    ] {
+        for native_text in split_debian_requirement_field(field)? {
+            requirements.push(
+                parse_native_requirement(kind, VersionScheme::Debian, native_text)
+                    .map_err(Error::ParseError)?,
+            );
+        }
+    }
+    Ok(requirements)
+}
 
-    let deps_str = String::from_utf8_lossy(&output.stdout);
-    let deps: Vec<DependencyInfo> = deps_str
-        .split(',')
-        .flat_map(|dep| dep.split('|')) // Handle alternatives (a | b)
-        .filter_map(|s| {
-            let s = s.trim();
-            if s.is_empty() {
-                return None;
+fn split_debian_requirement_field(field: &str) -> Result<Vec<&str>> {
+    let mut entries = Vec::new();
+    let mut depth = 0_u32;
+    let mut start = 0;
+    for (offset, character) in field.char_indices() {
+        match character {
+            '(' => depth += 1,
+            ')' => {
+                depth = depth.checked_sub(1).ok_or_else(|| {
+                    Error::ParseError("Debian requirement has an unmatched ')'".to_string())
+                })?;
             }
-            Some(parse_dpkg_dependency(s))
-        })
-        .collect();
-
-    debug!(
-        "Found {} dependencies with constraints for package {}",
-        deps.len(),
-        name
-    );
-    Ok(deps)
-}
-
-/// Parse a dpkg dependency string like "package (>= 1.0)" into DependencyInfo
-fn parse_dpkg_dependency(dep: &str) -> DependencyInfo {
-    // Dpkg dependency format: "package [(op version)]"
-    // Examples: "libc6 (>= 2.17)", "bash", "perl (>> 5.10)"
-    if let Some(paren_start) = dep.find('(') {
-        let name = dep[..paren_start].trim().to_string();
-        let constraint = dep[paren_start..]
-            .trim_start_matches('(')
-            .trim_end_matches(')')
-            .trim()
-            .to_string();
-        DependencyInfo {
-            name,
-            constraint: if constraint.is_empty() {
-                None
-            } else {
-                Some(constraint)
-            },
-        }
-    } else {
-        DependencyInfo {
-            name: dep.trim().to_string(),
-            constraint: None,
+            ',' if depth == 0 => {
+                let entry = field[start..offset].trim();
+                if !entry.is_empty() {
+                    entries.push(entry);
+                }
+                start = offset + character.len_utf8();
+            }
+            _ => {}
         }
     }
+    if depth != 0 {
+        return Err(Error::ParseError(
+            "Debian requirement has an unmatched '('".to_string(),
+        ));
+    }
+    let tail = field[start..].trim();
+    if !tail.is_empty() {
+        entries.push(tail);
+    }
+    Ok(entries)
 }
 
 /// Query what a package provides (capabilities it offers)
@@ -339,7 +388,13 @@ pub fn query_package_provides(name: &str) -> Result<Vec<String>> {
     debug!("Querying provides for dpkg package: {}", name);
 
     let output = Command::new("dpkg-query")
-        .args(["-W", "-f", "${Package}\n${Provides}\n", name])
+        .args([
+            "-W",
+            "-f",
+            "${binary:Package}\x1e${Package}\x1e${Provides}\x1f",
+            name,
+        ])
+        .env("LC_ALL", "C")
         .output()
         .map_err(|e| Error::InitError(format!("Failed to run dpkg-query: {}", e)))?;
 
@@ -351,27 +406,32 @@ pub fn query_package_provides(name: &str) -> Result<Vec<String>> {
         )));
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut provides = Vec::new();
-
-    for line in stdout.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-
-        // First line is the package name itself
-        // Subsequent lines are from Provides field (comma-separated)
-        if line.contains(',') {
-            // Provides field: "foo, bar, baz"
-            for part in line.split(',') {
-                let provide = part.trim();
-                if !provide.is_empty() {
-                    provides.push(provide.to_string());
-                }
-            }
-        } else {
-            provides.push(line.to_string());
+    let stdout = String::from_utf8(output.stdout)
+        .map_err(|error| Error::ParseError(format!("dpkg-query output is not UTF-8: {error}")))?;
+    let records = stdout
+        .split('\x1f')
+        .filter(|record| !record.is_empty())
+        .collect::<Vec<_>>();
+    if records.len() != 1 {
+        return Err(Error::ParseError(format!(
+            "dpkg-query returned {} provides records for exact selector '{name}'",
+            records.len()
+        )));
+    }
+    let fields = records[0].split('\x1e').collect::<Vec<_>>();
+    if fields.len() != 3 || fields[0].is_empty() || fields[1].is_empty() {
+        return Err(Error::ParseError(format!(
+            "dpkg-query provides record for '{name}' is malformed"
+        )));
+    }
+    let mut provides = vec![fields[1].to_string()];
+    if fields[0] != fields[1] {
+        provides.push(fields[0].to_string());
+    }
+    for part in fields[2].split(',') {
+        let provide = part.trim();
+        if !provide.is_empty() {
+            provides.push(provide.to_string());
         }
     }
 
@@ -379,41 +439,12 @@ pub fn query_package_provides(name: &str) -> Result<Vec<String>> {
     Ok(provides)
 }
 
-/// Query all installed packages with their basic info
-/// Returns a map of package name -> InstalledDpkgInfo
-pub fn query_all_packages() -> Result<HashMap<String, InstalledDpkgInfo>> {
+/// Query every installed dpkg database record without collapsing variants.
+pub fn query_all_packages() -> Result<Vec<InstalledPackageRecord<InstalledDpkgInfo>>> {
     debug!("Querying all installed dpkg packages with info");
 
-    // Use ASCII Record Separator (\x1e) to avoid conflicts with | in field values
-    let stdout = run_query_command(
-        "dpkg-query",
-        &["-W", "-f", "${Package}\x1e${Version}\x1e${Architecture}\n"],
-    )?;
-
-    let mut packages = HashMap::new();
-
-    for line in stdout.lines() {
-        let parts: Vec<&str> = line.split('\x1e').collect();
-        if parts.len() < 3 {
-            warn!("Skipping malformed dpkg-query output line: {}", line);
-            continue;
-        }
-
-        let name = parts[0].to_string();
-        let info = InstalledDpkgInfo {
-            name: name.clone(),
-            version: parts[1].to_string(),
-            arch: parts[2].to_string(),
-            description: None,
-            maintainer: None,
-            homepage: None,
-            section: None,
-            priority: None,
-            installed_size: None,
-        };
-
-        packages.insert(name, info);
-    }
+    let stdout = run_query_command("dpkg-query", &["-W", "-f", DPKG_PACKAGE_RECORD_FORMAT])?;
+    let packages = parse_package_query_records(&stdout)?;
 
     debug!("Queried {} installed packages", packages.len());
     Ok(packages)
@@ -421,100 +452,74 @@ pub fn query_all_packages() -> Result<HashMap<String, InstalledDpkgInfo>> {
 
 /// Query which package(s) own a file
 pub fn query_file_owner(path: &str) -> Result<Vec<String>> {
-    let output = Command::new("dpkg")
-        .args(["-S", path])
+    let output = Command::new("dpkg-query")
+        .args(["--search", path])
+        .env("LC_ALL", "C")
         .output()
-        .map_err(|e| Error::InitError(format!("Failed to run dpkg: {}", e)))?;
+        .map_err(|e| Error::InitError(format!("Failed to run dpkg-query: {}", e)))?;
 
     if !output.status.success() {
-        // File not owned by any package
-        return Ok(Vec::new());
+        return Err(Error::NotFound(format!(
+            "dpkg-query could not resolve an owner for {path:?} (status {}): {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
     }
 
-    // Output format: "package: /path/to/file" or "package1, package2: /path"
-    let owners: Vec<String> = String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .filter_map(|line| {
-            line.split(':').next().map(|pkgs| {
-                pkgs.split(',')
-                    .map(|s| s.trim().to_string())
-                    .collect::<Vec<_>>()
-            })
-        })
-        .flatten()
-        .filter(|s| !s.is_empty() && !s.contains("diversion"))
-        .collect();
-
-    Ok(owners)
+    let stdout = String::from_utf8(output.stdout).map_err(|error| {
+        Error::ParseError(format!("dpkg-query owner output is not UTF-8: {error}"))
+    })?;
+    let installed_selectors = query_all_packages()?
+        .into_iter()
+        .map(|record| record.identity.selector().to_string())
+        .collect::<HashSet<_>>();
+    parse_owner_records(&stdout, path, &installed_selectors)
 }
 
-/// Query the set of package names explicitly installed by the user (not auto-deps).
-///
-/// Reads `/var/lib/apt/extended_states` which apt maintains with `Auto-Installed: 1`
-/// entries for dependency-installed packages. Any package not marked auto-installed
-/// is considered user-installed. If the file is absent (pure dpkg without apt, or
-/// insufficient permissions) all packages are treated as user-installed.
-pub fn query_user_installed() -> Result<std::collections::HashSet<String>> {
-    debug!("Querying user-installed dpkg packages via apt extended_states");
-
-    const EXTENDED_STATES: &str = "/var/lib/apt/extended_states";
-
-    let content = match std::fs::read_to_string(EXTENDED_STATES) {
-        Ok(c) => c,
-        Err(e) => {
-            warn!(
-                "Could not read {}: {} — treating all packages as user-installed",
-                EXTENDED_STATES, e
-            );
-            // Fall back: return all installed packages as user-installed
-            return list_installed_packages().map(|pkgs| pkgs.into_iter().collect());
+fn parse_owner_records(
+    output: &str,
+    requested_path: &str,
+    installed_selectors: &HashSet<String>,
+) -> Result<Vec<String>> {
+    let mut owners = Vec::new();
+    let mut seen = HashSet::new();
+    for (index, line) in output.lines().enumerate() {
+        let (owner_list, owned_path) = line.rsplit_once(": ").ok_or_else(|| {
+            Error::ParseError(format!(
+                "dpkg-query owner record {} has no exact owner/path separator",
+                index + 1
+            ))
+        })?;
+        if owned_path != requested_path {
+            return Err(Error::ParseError(format!(
+                "dpkg-query owner record {} names path {owned_path:?}, expected exact path {requested_path:?}",
+                index + 1
+            )));
         }
-    };
-
-    // The file consists of stanzas separated by blank lines:
-    //   Package: foo
-    //   Auto-Installed: 1
-    //
-    //   Package: bar
-    //   Auto-Installed: 0
-    //
-    // Collect packages whose Auto-Installed field is 1.
-    let mut auto_installed = std::collections::HashSet::new();
-    let mut current_pkg: Option<String> = None;
-
-    for line in content.lines() {
-        if line.is_empty() {
-            current_pkg = None;
-            continue;
-        }
-        if let Some((key, value)) = line.split_once(':') {
-            match key.trim() {
-                "Package" => {
-                    current_pkg = Some(value.trim().to_string());
-                }
-                "Auto-Installed" if value.trim() == "1" => {
-                    if let Some(pkg) = current_pkg.take() {
-                        auto_installed.insert(pkg);
-                    }
-                }
-                _ => {}
+        for owner in owner_list.split(", ") {
+            if !installed_selectors.contains(owner) {
+                return Err(Error::ParseError(format!(
+                    "dpkg-query owner record {} names {owner:?}, which is not an exact installed binary package selector",
+                    index + 1
+                )));
+            }
+            if seen.insert(owner) {
+                owners.push(owner.to_string());
             }
         }
     }
+    Ok(owners)
+}
 
-    // User-installed = all installed minus auto-installed
-    let all_installed: std::collections::HashSet<String> =
-        list_installed_packages()?.into_iter().collect();
-    let user_installed = all_installed
-        .into_iter()
-        .filter(|pkg| !auto_installed.contains(pkg))
-        .collect();
-
-    debug!(
-        "Found {} auto-installed dpkg packages; remainder are user-installed",
-        auto_installed.len()
-    );
-    Ok(user_installed)
+/// Query APT's exact manually-installed package set.
+///
+/// `apt-mark showmanual` is the documented package-manager frontend for this
+/// state. Missing APT state/command support is an actionable typed failure; it
+/// is never reinterpreted as every dpkg package being manually installed.
+pub fn query_user_installed()
+-> std::result::Result<std::collections::HashSet<String>, InstallReasonAuthorityError> {
+    debug!("Querying manually-installed dpkg packages via apt-mark authority");
+    query_package_names("APT", "apt-mark", &["showmanual"])
 }
 
 /// RAII guard for a dpkg fcntl lock. Lock is released on drop.
@@ -682,12 +687,44 @@ mod tests {
 
     #[test]
     fn package_query_records_preserve_multiline_descriptions_and_variants() {
-        let output = "fixture\x1e1.2.3\x1eamd64\x1efirst line\nsecond line\x1f\
-                      fixture\x1e1.2.3\x1earm64\x1edescription\x1f";
-        let records = split_package_query_records(output);
+        let output = "fixture:amd64\x1efixture\x1e1.2.3\x1eamd64\x1efirst line\nsecond line\x1emaintainer\x1ehttps://example.invalid\x1eutils\x1eoptional\x1e42\x1f\
+                      fixture:arm64\x1efixture\x1e1.2.3\x1earm64\x1edescription\x1emaintainer\x1ehttps://example.invalid\x1eutils\x1eoptional\x1e42\x1f";
+        let records = parse_package_query_records(output).unwrap();
 
         assert_eq!(records.len(), 2);
-        assert_eq!(records[0][3], "first line\nsecond line");
-        assert_eq!(records[1][2], "arm64");
+        assert_eq!(
+            records[0].info.description.as_deref(),
+            Some("first line\nsecond line")
+        );
+        assert_eq!(records[1].info.arch, "arm64");
+        assert_eq!(records[0].identity.selector(), "fixture:amd64");
+        assert_eq!(records[1].identity.selector(), "fixture:arm64");
+    }
+
+    #[test]
+    fn package_inventory_rejects_malformed_or_duplicate_records() {
+        assert!(parse_package_query_records("missing-fields\x1f").is_err());
+
+        let record = "fixture:amd64\x1efixture\x1e1.2.3\x1eamd64\x1edescription\x1emaintainer\x1ehttps://example.invalid\x1eutils\x1eoptional\x1e42\x1f";
+        assert!(parse_package_query_records(&format!("{record}{record}")).is_err());
+    }
+
+    #[test]
+    fn md5sums_parser_is_exact_and_rejects_malformed_records() {
+        let parsed =
+            parse_md5sums("d41d8cd98f00b204e9800998ecf8427e  usr/share/fixture\n").unwrap();
+        assert_eq!(
+            parsed.get("usr/share/fixture").map(String::as_str),
+            Some("d41d8cd98f00b204e9800998ecf8427e")
+        );
+
+        assert!(parse_md5sums("not-a-record\n").is_err());
+        assert!(
+            parse_md5sums(
+                "d41d8cd98f00b204e9800998ecf8427e  usr/share/fixture\n\
+                 d41d8cd98f00b204e9800998ecf8427e  usr/share/fixture\n"
+            )
+            .is_err()
+        );
     }
 }

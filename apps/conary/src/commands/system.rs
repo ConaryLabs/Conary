@@ -7,49 +7,40 @@ mod init;
 pub use gc::cmd_gc;
 pub use init::cmd_init;
 #[cfg(test)]
-use init::{
-    HOST_PROFILE_SETTING, NATIVE_REPOSITORY_SEEDS, paths_refer_to_same_location,
-    validate_init_privileges,
-};
+use init::{NATIVE_REPOSITORY_SEEDS, paths_refer_to_same_location, validate_init_privileges};
 
 #[cfg(test)]
 use super::FileSnapshot;
 use super::TroveSnapshot;
 use super::open_db;
+use super::progress::RemoveProgress;
+use super::remove::{RemoveLifecycleOptions, execute_installed_trove_remove_graph};
 #[cfg(test)]
 use anyhow::Context;
 use anyhow::{Result, anyhow};
-use conary_core::ccs::legacy_replay::{
-    LegacyReplayLifecycle, LegacyReplayPreflight, LegacyReplayRefusal, plan_legacy_replay,
-};
-use conary_core::db::models::{
-    InstalledLegacyScriptletBundle, PackageResolution, Repository, RepositoryPackage,
-};
+use conary_core::db::models::{PackageResolution, Repository, RepositoryPackage, Trove};
 use conary_core::db::paths::objects_dir;
 use conary_core::filesystem::CasStore;
-use conary_core::repository::supported_profiles::{SupportedProfile, profile_by_public_id};
+#[cfg(test)]
+use conary_core::payload::PayloadNodeKind;
+use conary_core::repository::RepositoryFormat;
 use conary_core::runtime_root::ConaryRuntimeRoot;
 use conary_core::scriptlet::SandboxMode;
-use std::cell::RefCell;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tracing::info;
 
-fn rollback_claim_statuses() -> [&'static str; 2] {
-    ["applied", "post_hooks_failed"]
+fn rollback_claim_status() -> &'static str {
+    "applied"
 }
 
 fn is_rollback_eligible_status(status: &conary_core::db::models::ChangesetStatus) -> bool {
-    matches!(
-        status,
-        conary_core::db::models::ChangesetStatus::Applied
-            | conary_core::db::models::ChangesetStatus::PostHooksFailed
-    )
+    matches!(status, conary_core::db::models::ChangesetStatus::Applied)
 }
 
 /// Rollback a changeset
-pub async fn cmd_rollback(changeset_id: i64, db_path: &str, root: &str) -> Result<()> {
+pub async fn cmd_rollback(changeset_id: i64, db_path: &str) -> Result<()> {
     info!("Rolling back changeset: {}", changeset_id);
     println!("Rolling back changeset: {}", changeset_id);
     std::io::stdout().flush()?;
@@ -109,16 +100,11 @@ pub async fn cmd_rollback(changeset_id: i64, db_path: &str, root: &str) -> Resul
         // within the valid enum while avoiding invalid foreign-key sentinels and
         // still prevents a second concurrent rollback from passing the
         // reversed_by_changeset_id IS NULL guard.
-        let rollback_statuses = rollback_claim_statuses();
+        let rollback_status = rollback_claim_status();
         let claimed = tx.execute(
             "UPDATE changesets SET reversed_by_changeset_id = ?2
-             WHERE id = ?1 AND status IN (?3, ?4) AND reversed_by_changeset_id IS NULL",
-            rusqlite::params![
-                changeset_id,
-                changeset_id,
-                rollback_statuses[0],
-                rollback_statuses[1]
-            ],
+             WHERE id = ?1 AND status = ?3 AND reversed_by_changeset_id IS NULL",
+            rusqlite::params![changeset_id, changeset_id, rollback_status],
         )?;
         if claimed == 0 {
             return Err(conary_core::Error::InitError(format!(
@@ -162,151 +148,51 @@ pub async fn cmd_rollback(changeset_id: i64, db_path: &str, root: &str) -> Resul
             &mut conn,
             &changeset,
             db_path,
-            root,
         )
         .inspect_err(|_| clear_claim(&conn));
     }
 
-    // Otherwise, this is a fresh install - remove the installed packages
-    let files_to_rollback = RefCell::new(Vec::new());
-    let removed_messages = RefCell::new(Vec::new());
-
-    conary_core::db::transaction(&mut conn, |tx| {
-        // Read file history inside the transaction to ensure consistency (TOCTOU)
-        // Note: if this transaction fails, clear_claim (below) resets the -1 sentinel.
-        {
-            let mut stmt =
-                tx.prepare("SELECT path, action FROM file_history WHERE changeset_id = ?1")?;
-            let rows = stmt.query_map([changeset_id], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })?;
-            *files_to_rollback.borrow_mut() = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+    // Otherwise, this is a fresh install. Revert each installed package as
+    // its own exact native transaction graph, in reverse installation order.
+    let files_to_rollback = {
+        let mut stmt =
+            conn.prepare("SELECT path, action FROM file_history WHERE changeset_id = ?1")?;
+        let rows = stmt.query_map([changeset_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    let troves = troves_installed_by_changeset(&conn, changeset_id)?;
+    if troves.is_empty() {
+        clear_claim(&conn);
+        anyhow::bail!("No troves found for this changeset.");
+    }
+    validate_rollback_removal_targets(&conn, &troves)?;
+    let removed_messages = (|| -> Result<Vec<String>> {
+        let mut messages = Vec::with_capacity(troves.len());
+        for trove in troves.iter().rev() {
+            remove_rollback_trove_through_graph(&conn, trove, db_path)?;
+            messages.push(format!("Removed {} version {}", trove.name, trove.version));
         }
+        Ok(messages)
+    })()
+    .inspect_err(|_| clear_claim(&conn))?;
 
-        let troves = {
-            let mut stmt = tx.prepare(
-                "SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id, install_source, install_reason, flavor_spec, pinned, selection_reason, label_id, orphan_since, source_distro, version_scheme, installed_from_repository_id
-                 FROM troves WHERE installed_by_changeset_id = ?1",
-            )?;
-            let rows = stmt.query_map([changeset_id], |row| {
-                let source_str: Option<String> = row.get(8)?;
-                let install_source = match source_str {
-                    Some(s) => s.parse().map_err(|e| {
-                        rusqlite::Error::FromSqlConversionFailure(
-                            8,
-                            rusqlite::types::Type::Text,
-                            Box::new(std::io::Error::new(
-                                std::io::ErrorKind::InvalidData,
-                                format!("Invalid install_source '{}': {}", s, e),
-                            )),
-                        )
-                    })?,
-                    None => conary_core::db::models::InstallSource::File,
-                };
-                let reason_str: Option<String> = row.get(9)?;
-                let install_reason = match reason_str {
-                    Some(s) => s.parse().map_err(|e| {
-                        rusqlite::Error::FromSqlConversionFailure(
-                            9,
-                            rusqlite::types::Type::Text,
-                            Box::new(std::io::Error::new(
-                                std::io::ErrorKind::InvalidData,
-                                format!("Invalid install_reason '{}': {}", s, e),
-                            )),
-                        )
-                    })?,
-                    None => conary_core::db::models::InstallReason::Explicit,
-                };
-                let trove_type_str: String = row.get(3)?;
-                let trove_type = trove_type_str.parse().map_err(|e| {
-                    rusqlite::Error::FromSqlConversionFailure(
-                        3,
-                        rusqlite::types::Type::Text,
-                        Box::new(std::io::Error::new(
-                            std::io::ErrorKind::InvalidData,
-                            format!("Invalid trove_type '{}': {}", trove_type_str, e),
-                        )),
-                    )
-                })?;
-                let flavor_spec: Option<String> = row.get(10)?;
-                let pinned: i32 = row.get(11).unwrap_or(0);
-                let selection_reason: Option<String> = row.get(12).unwrap_or(None);
-                let label_id: Option<i64> = row.get(13).unwrap_or(None);
-                let orphan_since: Option<String> = row.get(14).unwrap_or(None);
-                let source_distro: Option<String> = row.get(15).unwrap_or(None);
-                let version_scheme: Option<String> = row.get(16).unwrap_or(None);
-                Ok(conary_core::db::models::Trove {
-                    id: Some(row.get(0)?),
-                    name: row.get(1)?,
-                    version: row.get(2)?,
-                    trove_type,
-                    architecture: row.get(4)?,
-                    description: row.get(5)?,
-                    installed_at: row.get(6)?,
-                    installed_by_changeset_id: row.get(7)?,
-                    install_source,
-                    install_reason,
-                    flavor_spec,
-                    pinned: pinned != 0,
-                    selection_reason,
-                    label_id,
-                    orphan_since,
-                    source_distro,
-                    version_scheme,
-                    installed_from_repository_id: row.get(17).unwrap_or(None),
-                })
-            })?;
-            rows.collect::<rusqlite::Result<Vec<_>>>()?
-        };
-
-        if troves.is_empty() {
-            return Err(conary_core::Error::InitError(
-                "No troves found for this changeset.".to_string(),
-            ));
-        }
-
+    let _rollback_id = conary_core::db::transaction(&mut conn, |tx| {
         let mut rollback_changeset = conary_core::db::models::Changeset::new(format!(
             "Rollback of changeset {} ({})",
             changeset_id, changeset.description
         ));
-
-        for trove in &troves {
-            if let Some(trove_id) = trove.id {
-                preflight_rollback_installed_bundle(tx, trove_id)
-                    .map_err(|error| conary_core::Error::InitError(error.to_string()))?;
-            }
-        }
-
         let rollback_id = rollback_changeset.insert(tx)?;
-
-        for trove in &troves {
-            if let Some(trove_id) = trove.id {
-                conary_core::db::models::Trove::delete(tx, trove_id)?;
-                removed_messages
-                    .borrow_mut()
-                    .push(format!("Removed {} version {}", trove.name, trove.version));
-            }
-        }
-
         rollback_changeset.update_status(tx, conary_core::db::models::ChangesetStatus::Applied)?;
-
         tx.execute(
             "UPDATE changesets SET status = 'rolled_back', rolled_back_at = CURRENT_TIMESTAMP,
              reversed_by_changeset_id = ?1 WHERE id = ?2",
             [rollback_id, changeset_id],
         )?;
-
-        Ok(troves.len())
+        Ok(rollback_id)
     })
     .inspect_err(|_| clear_claim(&conn))?;
-
-    let files_to_rollback = files_to_rollback.into_inner();
-    let removed_messages = removed_messages.into_inner();
-
-    let summary = format!("Rollback changeset {}", changeset_id);
-    // Composefs-native: rebuild EROFS image from updated DB state and remount.
-    let _gen_num =
-        crate::commands::composefs_ops::rebuild_and_mount(&conn, db_path, &summary, None)?;
 
     for message in &removed_messages {
         println!("{message}");
@@ -337,45 +223,49 @@ fn require_active_generation_for_rollback(changeset_id: i64, db_path: &str) -> R
     Ok(())
 }
 
-fn preflight_rollback_installed_bundle(conn: &rusqlite::Connection, trove_id: i64) -> Result<()> {
-    let Some(installed) = InstalledLegacyScriptletBundle::find_by_trove(conn, trove_id)? else {
-        return Ok(());
-    };
-    let bundle = installed
-        .bundle()
-        .map_err(|error| anyhow!("installed legacy scriptlet bundle is malformed: {error}"))?;
-    let host_context =
-        crate::commands::legacy_replay_policy::resolve_legacy_replay_host_context(conn)?;
-    let input = crate::commands::legacy_replay_policy::legacy_replay_policy_input(
-        &host_context,
-        crate::commands::legacy_replay_policy::LegacyReplayPolicyOptions {
-            replay_enabled: false,
-            foreign_replay_override: false,
-            no_scripts: false,
-            requested_sandbox_mode: SandboxMode::Always,
-        },
-    )?;
-
-    match plan_legacy_replay(Some(&bundle), LegacyReplayLifecycle::RollbackRemove, &input)? {
-        LegacyReplayPreflight::NativeFree | LegacyReplayPreflight::FullyReplaced(_) => Ok(()),
-        LegacyReplayPreflight::RequiresReplay(_) => Err(anyhow!(
-            "legacy scriptlet replay refused (RollbackReplayUnavailable): rollback cannot execute raw legacy replay in Goal 6"
-        )),
-        LegacyReplayPreflight::Refused(refusal) => Err(legacy_replay_refusal_error(refusal)),
-    }
+fn troves_installed_by_changeset(
+    conn: &rusqlite::Connection,
+    changeset_id: i64,
+) -> Result<Vec<Trove>> {
+    Ok(Trove::list_all(conn)?
+        .into_iter()
+        .filter(|trove| trove.installed_by_changeset_id == Some(changeset_id))
+        .collect())
 }
 
-fn legacy_replay_refusal_error(refusal: LegacyReplayRefusal) -> anyhow::Error {
-    let entry = refusal
-        .entry_id
-        .as_deref()
-        .map(|entry_id| format!(" entry={entry_id}"))
-        .unwrap_or_default();
-    anyhow!(
-        "legacy scriptlet replay refused ({:?}{entry}): {}",
-        refusal.kind,
-        refusal.message
-    )
+fn remove_rollback_trove_through_graph(
+    conn: &rusqlite::Connection,
+    trove: &Trove,
+    db_path: &str,
+) -> Result<()> {
+    let progress = RemoveProgress::new(&trove.name);
+    execute_installed_trove_remove_graph(
+        conn,
+        trove,
+        db_path,
+        &trove.name,
+        RemoveLifecycleOptions::new(SandboxMode::Always),
+        &progress,
+    )?;
+    Ok(())
+}
+
+fn validate_rollback_removal_targets(conn: &rusqlite::Connection, troves: &[Trove]) -> Result<()> {
+    for expected in troves {
+        let trove_id = expected
+            .id
+            .ok_or_else(|| anyhow!("rollback removal target has no database identity"))?;
+        let current = Trove::find_by_id(conn, trove_id)?
+            .ok_or_else(|| anyhow!("rollback removal target {trove_id} disappeared"))?;
+        if current.name != expected.name
+            || current.version != expected.version
+            || current.architecture != expected.architecture
+            || current.installed_by_changeset_id != expected.installed_by_changeset_id
+        {
+            anyhow::bail!("rollback removal target {trove_id} changed after lifecycle preflight");
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -392,12 +282,12 @@ fn snapshot_path_under_root(root: &Path, path: &str) -> PathBuf {
 
 #[cfg(test)]
 fn snapshot_entry_is_dir(file: &FileSnapshot) -> bool {
-    file.path.ends_with('/') || (file.permissions as u32 & 0o170000) == 0o040000
+    matches!(file.node.source.kind, PayloadNodeKind::Directory)
 }
 
 #[cfg(test)]
 fn snapshot_entry_is_symlink(file: &FileSnapshot) -> bool {
-    file.symlink_target.is_some() || (file.permissions as u32 & 0o170000) == 0o120000
+    matches!(file.node.source.kind, PayloadNodeKind::Symlink { .. })
 }
 
 #[cfg(test)]
@@ -436,15 +326,12 @@ fn restore_snapshots_to_live_root(
             if snapshot_entry_is_dir(file) {
                 std::fs::create_dir_all(&path)
                     .with_context(|| format!("Failed to restore directory {}", path.display()))?;
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    let mode = (file.permissions as u32) & 0o7777;
-                    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode))
-                        .with_context(|| {
-                            format!("Failed to set permissions on {}", path.display())
-                        })?;
-                }
+                conary_core::generation::root_manifest::apply_resolved_payload_metadata(
+                    &path, &file.node,
+                )
+                .with_context(|| {
+                    format!("Failed to restore directory metadata on {}", path.display())
+                })?;
                 stats.dirs_restored += 1;
                 continue;
             }
@@ -459,13 +346,10 @@ fn restore_snapshots_to_live_root(
             if snapshot_entry_is_symlink(file) {
                 #[cfg(unix)]
                 {
-                    let target = match file.symlink_target.as_deref() {
-                        Some(target) => target.to_string(),
-                        None => cas.retrieve_symlink(&file.sha256_hash).with_context(|| {
-                            format!("Failed to retrieve symlink target for {}", file.path)
-                        })?,
+                    let PayloadNodeKind::Symlink { target } = &file.node.source.kind else {
+                        unreachable!("typed symlink check and payload node diverged")
                     };
-                    std::os::unix::fs::symlink(&target, &path).with_context(|| {
+                    std::os::unix::fs::symlink(target, &path).with_context(|| {
                         format!("Failed to restore symlink {} -> {}", path.display(), target)
                     })?;
                 }
@@ -474,21 +358,36 @@ fn restore_snapshots_to_live_root(
                     anyhow::bail!("Cannot restore symlink {} on this platform", file.path);
                 }
             } else {
+                let PayloadNodeKind::Regular { .. } = &file.node.source.kind else {
+                    anyhow::bail!(
+                        "test rollback helper does not materialize {:?} payload nodes",
+                        file.node.source.kind
+                    );
+                };
+                let authority = file.content.as_ref().ok_or_else(|| {
+                    anyhow!(
+                        "regular rollback snapshot {} has no content authority",
+                        file.path
+                    )
+                })?;
                 let content = cas
-                    .retrieve(&file.sha256_hash)
+                    .retrieve(&authority.sha256)
                     .with_context(|| format!("Failed to retrieve CAS object for {}", file.path))?;
+                if content.len() as u64 != authority.size
+                    || conary_core::hash::sha256(&content) != authority.sha256
+                {
+                    anyhow::bail!(
+                        "rollback snapshot content for {} differs from exact authority",
+                        file.path
+                    );
+                }
                 std::fs::write(&path, content)
                     .with_context(|| format!("Failed to restore file {}", path.display()))?;
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    let mode = (file.permissions as u32) & 0o7777;
-                    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode))
-                        .with_context(|| {
-                            format!("Failed to set permissions on {}", path.display())
-                        })?;
-                }
             }
+            conary_core::generation::root_manifest::apply_resolved_payload_metadata(
+                &path, &file.node,
+            )
+            .with_context(|| format!("Failed to restore payload metadata on {}", path.display()))?;
             stats.files_restored += 1;
         }
     }
@@ -508,15 +407,18 @@ fn restore_snapshot(
                 snapshot.install_source, e
             ))
         })?;
+    let version_scheme = snapshot.version_scheme;
 
     let mut trove = conary_core::db::models::Trove::new_with_source(
         snapshot.name.clone(),
         snapshot.version.clone(),
         conary_core::db::models::TroveType::Package,
         install_source,
+        version_scheme,
     );
     trove.architecture = snapshot.architecture.clone();
     trove.description = snapshot.description.clone();
+    trove.source_distro = snapshot.source_distro.clone();
     trove.installed_by_changeset_id = Some(rollback_changeset_id);
     if let Some(repo_id) = snapshot.installed_from_repository_id {
         let repo_exists: bool = tx
@@ -531,21 +433,64 @@ fn restore_snapshot(
 
     let trove_id = trove.insert(tx)?;
 
+    if let Some(native) = &snapshot.native_lifecycle {
+        let bundle: conary_core::ccs::native_lifecycle::NativeLifecycleBundle =
+            toml::from_str(&native.bundle_toml)
+                .map_err(|error| conary_core::Error::InitError(error.to_string()))?;
+        if bundle.source_package != snapshot.name
+            || bundle.source_version != snapshot.version
+            || bundle.version_scheme.as_str() != version_scheme.as_str()
+        {
+            return Err(conary_core::Error::InitError(format!(
+                "rollback snapshot '{}' native lifecycle identity does not match its installed package identity",
+                snapshot.name
+            )));
+        }
+        let lifecycle_state =
+            conary_core::ccs::native_transaction::DebPackageState::parse(&native.lifecycle_state)
+                .map_err(|error| conary_core::Error::InitError(error.to_string()))?;
+        let mut installed = conary_core::db::models::InstalledNativeLifecycleBundle::new(
+            trove_id,
+            Some(rollback_changeset_id),
+            &bundle,
+        )
+        .map_err(|error| conary_core::Error::InitError(error.to_string()))?;
+        installed.lifecycle_state = lifecycle_state;
+        installed.pending_triggers = native.pending_triggers.clone();
+        installed.awaited_packages = native.awaited_packages.clone();
+        installed
+            .insert_or_replace(tx)
+            .map_err(|error| conary_core::Error::InitError(error.to_string()))?;
+    }
+    if let Some(hook) = &snapshot.ccs_remove_hook {
+        if version_scheme != conary_core::repository::versioning::VersionScheme::Conary {
+            return Err(conary_core::Error::InitError(format!(
+                "rollback snapshot '{}' carries a CCS remove hook with non-Conary version scheme '{}'",
+                snapshot.name,
+                version_scheme.as_str()
+            )));
+        }
+        conary_core::db::models::InstalledCcsRemoveHook::new(
+            trove_id,
+            hook.script.clone(),
+            hook.reversible,
+        )
+        .insert_or_replace(tx)?;
+    }
+
     for file in &snapshot.files {
         let mut file_entry = conary_core::db::models::FileEntry::new(
             file.path.clone(),
-            file.sha256_hash.clone(),
-            file.size,
-            file.permissions,
+            file.node.clone(),
+            file.content.clone(),
             trove_id,
         );
-        file_entry.symlink_target = file.symlink_target.clone();
         file_entry.insert(tx)?;
 
-        if file.sha256_hash.len() == 64 && file.sha256_hash.chars().all(|c| c.is_ascii_hexdigit()) {
+        if let Some(content) = file.content.as_ref() {
             tx.execute(
                 "INSERT INTO file_history (changeset_id, path, sha256_hash, action) VALUES (?1, ?2, ?3, ?4)",
-                [&rollback_changeset_id.to_string(), &file.path, &file.sha256_hash, "add"],
+                rusqlite::params![rollback_changeset_id, &file.path, &content.sha256, "add"],
             )?;
         }
     }
@@ -560,7 +505,6 @@ fn rollback_changeset_with_snapshots(
     conn: &mut rusqlite::Connection,
     changeset: &conary_core::db::models::Changeset,
     db_path: &str,
-    _root: &str,
 ) -> Result<()> {
     if snapshots.is_empty() {
         anyhow::bail!(
@@ -570,39 +514,22 @@ fn rollback_changeset_with_snapshots(
     }
 
     require_active_generation_for_rollback(changeset_id, db_path)?;
-    let removed_messages = RefCell::new(Vec::new());
+    let new_troves = if remove_new_troves {
+        troves_installed_by_changeset(conn, changeset_id)?
+    } else {
+        Vec::new()
+    };
+    validate_rollback_removal_targets(conn, &new_troves)?;
+    let mut removed_messages = Vec::with_capacity(new_troves.len());
+    for trove in new_troves.iter().rev() {
+        remove_rollback_trove_through_graph(conn, trove, db_path)?;
+        removed_messages.push(format!(
+            "  Removed reverted package {} {}",
+            trove.name, trove.version
+        ));
+    }
 
-    conary_core::db::transaction(conn, |tx| {
-        if remove_new_troves {
-            let new_trove_ids: Vec<i64> = {
-                let mut stmt =
-                    tx.prepare("SELECT id FROM troves WHERE installed_by_changeset_id = ?1")?;
-                stmt.query_map([changeset_id], |row| row.get::<_, i64>(0))?
-                    .collect::<rusqlite::Result<Vec<_>>>()?
-            };
-
-            for trove_id in &new_trove_ids {
-                preflight_rollback_installed_bundle(tx, *trove_id)
-                    .map_err(|error| conary_core::Error::InitError(error.to_string()))?;
-            }
-
-            for trove_id in &new_trove_ids {
-                let trove = conary_core::db::models::Trove::find_by_id(tx, *trove_id)?.ok_or_else(
-                    || {
-                        conary_core::Error::InitError(format!(
-                            "Trove {} disappeared during rollback",
-                            trove_id
-                        ))
-                    },
-                )?;
-                conary_core::db::models::Trove::delete(tx, *trove_id)?;
-                removed_messages.borrow_mut().push(format!(
-                    "  Removed reverted package {} {}",
-                    trove.name, trove.version
-                ));
-            }
-        }
-
+    let _rollback_id = conary_core::db::transaction(conn, |tx| {
         let mut rollback_changeset = conary_core::db::models::Changeset::new(format!(
             "Rollback of changeset {} ({})",
             changeset_id, changeset.description
@@ -620,7 +547,7 @@ fn rollback_changeset_with_snapshots(
             [rollback_id, changeset_id],
         )?;
 
-        Ok(())
+        Ok(rollback_id)
     })?;
 
     let summary = if remove_new_troves {
@@ -628,10 +555,10 @@ fn rollback_changeset_with_snapshots(
     } else {
         format!("Rollback removal of {}", snapshots[0].name)
     };
-    let _gen_num =
-        crate::commands::composefs_ops::rebuild_and_mount(conn, db_path, &summary, None)?;
+    let _gen_num = crate::commands::composefs_ops::rebuild_and_mount_from_installed_state(
+        conn, db_path, &summary,
+    )?;
 
-    let removed_messages = removed_messages.into_inner();
     let restored_file_count: usize = snapshots.iter().map(|snapshot| snapshot.files.len()).sum();
 
     for message in &removed_messages {
@@ -670,7 +597,7 @@ pub async fn cmd_verify(
     let objects_dir = objects_dir(db_path);
     let cas = conary_core::filesystem::CasStore::new(&objects_dir)?;
 
-    let files: Vec<(String, String, String)> = if let Some(pkg_name) = package {
+    let files: Vec<(String, Option<String>, String)> = if let Some(pkg_name) = package {
         let troves = conary_core::db::models::Trove::find_by_name(&conn, &pkg_name)?;
         if troves.is_empty() {
             return Err(anyhow::anyhow!("Package '{}' is not installed", pkg_name));
@@ -682,24 +609,34 @@ pub async fn cmd_verify(
                 let trove_files =
                     conary_core::db::models::FileEntry::find_by_trove(&conn, trove_id)?;
                 for file in trove_files {
-                    all_files.push((file.path, file.sha256_hash, trove.name.clone()));
+                    all_files.push((
+                        file.path,
+                        file.content.map(|content| content.sha256),
+                        trove.name.clone(),
+                    ));
                 }
             }
         }
         all_files
     } else {
-        let mut stmt = conn.prepare(
-            "SELECT f.path, f.sha256_hash, t.name FROM files f
-             JOIN troves t ON f.trove_id = t.id ORDER BY t.name, f.path",
-        )?;
-        let rows = stmt.query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-            ))
-        })?;
-        rows.collect::<rusqlite::Result<Vec<_>>>()?
+        let troves = conary_core::db::models::Trove::list_all(&conn)?
+            .into_iter()
+            .filter_map(|trove| trove.id.map(|id| (id, trove.name)))
+            .collect::<std::collections::HashMap<_, _>>();
+        conary_core::db::models::FileEntry::find_all_ordered(&conn)?
+            .into_iter()
+            .map(|file| {
+                let package = troves
+                    .get(&file.trove_id)
+                    .cloned()
+                    .unwrap_or_else(|| format!("<missing-trove:{}>", file.trove_id));
+                (
+                    file.path,
+                    file.content.map(|content| content.sha256),
+                    package,
+                )
+            })
+            .collect()
     };
 
     if files.is_empty() {
@@ -712,7 +649,10 @@ pub async fn cmd_verify(
 
     for (path, expected_hash, pkg_name) in &files {
         // Composefs-native verify: check that the CAS object exists
-        if cas.exists(expected_hash) {
+        if expected_hash
+            .as_deref()
+            .is_none_or(|expected_hash| cas.exists(expected_hash))
+        {
             ok_count += 1;
             info!("OK: {} (from {})", path, pkg_name);
         } else {

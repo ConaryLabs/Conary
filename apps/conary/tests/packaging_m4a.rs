@@ -6,10 +6,11 @@ use conary_core::ccs::builder::write_v2_ccs_package;
 use conary_core::ccs::signing::SigningKeyPair;
 use conary_core::ccs::v2::schema::{
     AuthorityDocumentV2, ComponentAuthorityV2, ConflictPolicyV2, FORMAT_VERSION_V2,
-    FileAuthorityV2, FileTypeV2, LifecycleAuthorityV2, PackageDataV2, PackageIdentityV2,
-    PackageKindTagV2, PackageKindV2, ProvenanceAuthorityV2,
+    FileAuthorityV2, LifecycleAuthorityV2, PackageDataV2, PackageIdentityV2, PackageKindTagV2,
+    PackageKindV2, ProvenanceAuthorityV2,
 };
 use conary_core::ccs::verify::{TrustPolicy, verify_package};
+use conary_core::payload::{PayloadContentAuthority, PayloadNode};
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use std::collections::BTreeMap;
@@ -33,7 +34,7 @@ fn v2_package_verification_rejects_unsigned_manifest() {
 }
 
 #[test]
-fn v2_install_refuses_allow_unsigned_bypass() {
+fn install_rejects_removed_allow_unsigned_flag() {
     let temp = tempfile::tempdir().unwrap();
     let package_path = temp.path().join("unsigned-v2.ccs");
     let db_path = temp.path().join("conary.db");
@@ -50,13 +51,13 @@ fn v2_install_refuses_allow_unsigned_bypass() {
         .arg("--root")
         .arg(&root)
         .arg("--sandbox")
-        .arg("never")
+        .arg("always")
         .arg("--dry-run")
         .arg("--allow-unsigned")
         .output()
         .expect("run conary ccs install");
 
-    assert_failure_contains(&output, &["native CCS v2", "signature verification"]);
+    assert_failure_contains(&output, &["unexpected argument", "--allow-unsigned"]);
 }
 
 #[test]
@@ -72,7 +73,7 @@ fn v2_install_uses_verified_parse_after_signature_check() {
     fs::write(
         &policy_path,
         format!(
-            "trusted_keys = [\"{}\"]\nallow_unsigned = false\n",
+            "trusted_keys = [\"{}\"]\nrequire_timestamp = false\n",
             signer.public_key_base64()
         ),
     )
@@ -87,7 +88,7 @@ fn v2_install_uses_verified_parse_after_signature_check() {
         .arg("--root")
         .arg(&root)
         .arg("--sandbox")
-        .arg("never")
+        .arg("always")
         .arg("--dry-run")
         .arg("--no-deps")
         .arg("--policy")
@@ -130,14 +131,12 @@ fn signed_v2_authority() -> AuthorityDocumentV2 {
 fn v2_authority(name: &str) -> AuthorityDocumentV2 {
     let file = FileAuthorityV2 {
         path: "/usr/bin/hello".to_string(),
-        sha256: conary_core::hash::sha256(b"hello world\n"),
-        size: 12,
-        file_type: FileTypeV2::Regular,
-        mode: 0o755,
-        owner: "root".to_string(),
-        group: "root".to_string(),
+        node: PayloadNode::regular(0o755),
+        content: Some(PayloadContentAuthority {
+            sha256: conary_core::hash::sha256(b"hello world\n"),
+            size: b"hello world\n".len() as u64,
+        }),
         component: "main".to_string(),
-        symlink_target: None,
         config: None,
         conflict: ConflictPolicyV2::Error,
     };
@@ -146,6 +145,7 @@ fn v2_authority(name: &str) -> AuthorityDocumentV2 {
         identity: PackageIdentityV2 {
             name: name.to_string(),
             version: "1.0.0".to_string(),
+            version_scheme: conary_core::repository::versioning::VersionScheme::Conary,
             release: "1".to_string(),
             architecture: Some("x86_64".to_string()),
             platform: Some("linux".to_string()),
@@ -157,7 +157,8 @@ fn v2_authority(name: &str) -> AuthorityDocumentV2 {
             policy: Default::default(),
         }),
         provides: Vec::new(),
-        requires: Vec::new(),
+        requirements: Vec::new(),
+        relations: Vec::new(),
         components: BTreeMap::from([(
             "main".to_string(),
             ComponentAuthorityV2 {

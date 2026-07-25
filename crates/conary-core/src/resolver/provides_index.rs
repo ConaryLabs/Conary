@@ -9,7 +9,7 @@
 //! 3. `appstream_provides` (cross-distro provides from AppStream)
 
 use crate::error::Result;
-use crate::repository::distro::version_scheme_or_rpm;
+use crate::repository::distro::require_version_scheme_from_db;
 use crate::repository::versioning::{RepoVersionConstraint, VersionScheme, repo_version_satisfies};
 use rusqlite::Connection;
 use std::collections::HashMap;
@@ -26,7 +26,7 @@ pub struct ProviderEntry {
     /// Version of the provide (e.g., "3.2.0" for libssl.so.3)
     pub provide_version: Option<String>,
     /// Version comparison scheme
-    pub version_scheme: VersionScheme,
+    pub version_scheme: Option<VersionScheme>,
 }
 
 /// Pre-built capability-to-provider index.
@@ -50,11 +50,20 @@ impl ProvidesIndex {
                  JOIN repositories r ON pkg.repository_id = r.id
                  WHERE r.enabled = 1",
             )?;
-            let rows = stmt.query_map([], |row| {
+            let rows = stmt.query_and_then([], |row| -> Result<(String, ProviderEntry)> {
                 let cap: String = row.get(0)?;
                 let version: Option<String> = row.get(1)?;
                 let scheme_str: Option<String> = row.get(2)?;
                 let pkg_id: i64 = row.get(3)?;
+                let version_scheme = version
+                    .as_ref()
+                    .map(|_| {
+                        require_version_scheme_from_db(
+                            scheme_str.as_deref(),
+                            format!("repository provide '{cap}' for package row {pkg_id}"),
+                        )
+                    })
+                    .transpose()?;
                 Ok((
                     cap,
                     ProviderEntry {
@@ -62,12 +71,13 @@ impl ProvidesIndex {
                         installed_trove_id: None,
                         canonical_id: None,
                         provide_version: version,
-                        version_scheme: version_scheme_or_rpm(scheme_str.as_deref()),
+                        version_scheme,
                     },
                 ))
             })?;
-            for row in rows.flatten() {
-                providers.entry(row.0).or_default().push(row.1);
+            for row in rows {
+                let (capability, provider) = row?;
+                providers.entry(capability).or_default().push(provider);
             }
         }
 
@@ -78,11 +88,12 @@ impl ProvidesIndex {
                  FROM provides p
                  JOIN troves t ON p.trove_id = t.id",
             )?;
-            let rows = stmt.query_map([], |row| {
+            let rows = stmt.query_and_then([], |row| -> Result<(String, ProviderEntry)> {
                 let cap: String = row.get(0)?;
                 let version: Option<String> = row.get(1)?;
-                let scheme_str: Option<String> = row.get(2)?;
+                let installed_scheme = crate::db::models::version_scheme_from_row(row, 2)?;
                 let trove_id: i64 = row.get(3)?;
+                let version_scheme = version.as_ref().map(|_| installed_scheme);
                 Ok((
                     cap,
                     ProviderEntry {
@@ -90,12 +101,13 @@ impl ProvidesIndex {
                         installed_trove_id: Some(trove_id),
                         canonical_id: None,
                         provide_version: version,
-                        version_scheme: version_scheme_or_rpm(scheme_str.as_deref()),
+                        version_scheme,
                     },
                 ))
             })?;
-            for row in rows.flatten() {
-                providers.entry(row.0).or_default().push(row.1);
+            for row in rows {
+                let (capability, provider) = row?;
+                providers.entry(capability).or_default().push(provider);
             }
         }
 
@@ -113,12 +125,13 @@ impl ProvidesIndex {
                         installed_trove_id: None,
                         canonical_id: Some(canonical_id),
                         provide_version: None,
-                        version_scheme: VersionScheme::Rpm,
+                        version_scheme: None,
                     },
                 ))
             })?;
-            for row in rows.flatten() {
-                providers.entry(row.0).or_default().push(row.1);
+            for row in rows {
+                let (capability, provider) = row?;
+                providers.entry(capability).or_default().push(provider);
             }
         }
 
@@ -139,14 +152,21 @@ impl ProvidesIndex {
         capability: &str,
         constraint: &RepoVersionConstraint,
         scheme: VersionScheme,
-    ) -> Vec<&ProviderEntry> {
-        self.find_providers(capability)
-            .iter()
-            .filter(|p| match &p.provide_version {
-                Some(v) => repo_version_satisfies(scheme, v, constraint),
+    ) -> Result<Vec<&ProviderEntry>> {
+        let mut matches = Vec::new();
+        for provider in self.find_providers(capability) {
+            let matched = match &provider.provide_version {
+                Some(version) if provider.version_scheme == Some(scheme) => {
+                    repo_version_satisfies(scheme, version, constraint)?
+                }
+                Some(_) => false,
                 None => matches!(constraint, RepoVersionConstraint::Any),
-            })
-            .collect()
+            };
+            if matched {
+                matches.push(provider);
+            }
+        }
+        Ok(matches)
     }
 
     /// Total number of unique capabilities indexed.
@@ -205,8 +225,8 @@ mod tests {
 
         // Insert a trove and a provide for it
         conn.execute(
-            "INSERT INTO troves (name, version, type, install_source, install_reason)
-             VALUES ('openssl-libs', '3.2.0', 'package', 'repository', 'explicit')",
+            "INSERT INTO troves (name, version, type, install_source, install_reason, version_scheme)
+             VALUES ('openssl-libs', '3.2.0', 'package', 'repository', 'explicit', 'rpm')",
             [],
         )
         .unwrap();
@@ -293,11 +313,13 @@ mod tests {
         assert_eq!(index.find_providers("libfoo.so").len(), 2);
 
         // Only >= 3.0
-        let constrained = index.find_providers_constrained(
-            "libfoo.so",
-            &RepoVersionConstraint::GreaterOrEqual("3.0".to_string()),
-            VersionScheme::Rpm,
-        );
+        let constrained = index
+            .find_providers_constrained(
+                "libfoo.so",
+                &RepoVersionConstraint::GreaterOrEqual("3.0".to_string()),
+                VersionScheme::Rpm,
+            )
+            .unwrap();
         assert_eq!(constrained.len(), 1);
         assert_eq!(constrained[0].provide_version.as_deref(), Some("3.0"));
     }
@@ -315,16 +337,17 @@ mod tests {
         let repo_id = conn.last_insert_rowid();
 
         conn.execute(
-            "INSERT INTO repository_packages (repository_id, name, version, checksum, size, download_url)
-             VALUES (?1, 'pkg', '1.0', 'sha256:x', 100, 'https://example.com/x')",
+            "INSERT INTO repository_packages (repository_id, name, version, checksum, size, download_url, version_scheme)
+             VALUES (?1, 'pkg', '1.0', 'sha256:x', 100, 'https://example.com/x', 'rpm')",
             [repo_id],
         )
         .unwrap();
         let pkg_id = conn.last_insert_rowid();
 
         conn.execute(
-            "INSERT INTO repository_provides (repository_package_id, capability, version, kind)
-             VALUES (?1, 'libfoo.so', '1.0', 'library')",
+            "INSERT INTO repository_provides
+             (repository_package_id, capability, version, kind, version_scheme)
+             VALUES (?1, 'libfoo.so', '1.0', 'library', 'rpm')",
             [pkg_id],
         )
         .unwrap();

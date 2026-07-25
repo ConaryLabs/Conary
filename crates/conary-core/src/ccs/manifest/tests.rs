@@ -2,12 +2,17 @@
 
 use super::*;
 
+mod hooks;
+
 #[test]
 fn test_minimal_manifest() {
     let toml = r#"
 [package]
 name = "test"
 version = "1.0.0"
+version_scheme = "conary"
+release = "1"
+kind = "package"
 description = "A test package"
 "#;
     let manifest = CcsManifest::parse(toml).unwrap();
@@ -21,6 +26,9 @@ fn test_full_manifest() {
 [package]
 name = "myapp"
 version = "1.2.3"
+version_scheme = "conary"
+release = "1"
+kind = "package"
 description = "My application"
 license = "MIT"
 
@@ -31,15 +39,6 @@ libc = "gnu"
 
 [provides]
 capabilities = ["cli-tool", "json-parsing"]
-
-[requires]
-capabilities = [
-    "glibc",
-    { name = "tls", version = ">=1.2" },
-]
-packages = [
-    { name = "openssl", version = ">=3.0" },
-]
 
 [components]
 default = ["runtime", "lib"]
@@ -67,7 +66,7 @@ files = ["/etc/myapp/config.toml"]
     let manifest = CcsManifest::parse(toml).unwrap();
     assert_eq!(manifest.package.name, "myapp");
     assert_eq!(manifest.provides.capabilities.len(), 2);
-    assert_eq!(manifest.requires.capabilities.len(), 2);
+    assert!(manifest.requirements.is_empty());
     assert_eq!(manifest.hooks.users.len(), 1);
     assert_eq!(manifest.hooks.users[0].name, "myapp");
     assert!(manifest.hooks.users[0].system);
@@ -82,12 +81,80 @@ fn test_generate_minimal() {
 }
 
 #[test]
-fn parses_v2_authoring_identity_fields_without_guessing_release() {
+fn manifest_validation_uses_the_declared_package_syscall_architecture() {
+    let mut manifest = CcsManifest::new_minimal("targeted", "1.0.0");
+    manifest.package.platform = Some(Platform {
+        arch: Some("aarch64".to_string()),
+        ..Default::default()
+    });
+    let mut capabilities = CapabilityDeclaration::default();
+    capabilities.syscalls.allow.push("arch_prctl".to_string());
+    manifest.capabilities = Some(capabilities);
+
+    let error = manifest
+        .validate()
+        .expect_err("x86_64-only syscall must not validate for an aarch64 package");
+    assert!(error.to_string().contains("aarch64 ABI"));
+}
+
+#[test]
+fn flat_requires_section_is_not_in_the_current_manifest_schema() {
+    let error = CcsManifest::parse(
+        r#"
+[package]
+name = "legacy-flat"
+version = "1.0.0"
+version_scheme = "conary"
+release = "1"
+kind = "package"
+description = "legacy flat requirement"
+
+[requires]
+packages = [{ name = "openssl", version = ">= 3" }]
+"#,
+    )
+    .unwrap_err();
+
+    assert!(
+        error.to_string().contains("unknown field `requires`"),
+        "{error}"
+    );
+}
+
+#[test]
+fn native_export_rejects_unknown_target_metadata() {
+    let error = CcsManifest::parse(
+        r#"
+[package]
+name = "unknown-native-export"
+version = "1.0.0"
+version_scheme = "conary"
+release = "1"
+kind = "package"
+description = "unknown native export field"
+
+[native_export.rpm]
+invented_license = "MIT"
+"#,
+    )
+    .unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("unknown field `invented_license`"),
+        "{error}"
+    );
+}
+
+#[test]
+fn package_release_and_kind_are_required_current_identity() {
     let manifest = CcsManifest::parse(
         r#"
 [package]
 name = "hello"
 version = "0.1.0"
+version_scheme = "conary"
 release = "1"
 kind = "package"
 description = "hello"
@@ -95,24 +162,90 @@ description = "hello"
     )
     .unwrap();
 
-    assert_eq!(manifest.package.release.as_deref(), Some("1"));
+    assert_eq!(manifest.package.release, "1");
     assert_eq!(
         manifest.package.kind,
-        Some(crate::ccs::v2::PackageKindTagV2::Package)
+        crate::ccs::v2::PackageKindTagV2::Package
     );
 
-    let legacy = CcsManifest::parse(
+    let missing_release = CcsManifest::parse(
         r#"
 [package]
-name = "legacy"
-version = "1.0.0-1"
-description = "legacy"
+name = "missing-release"
+version = "1.0.0"
+version_scheme = "conary"
+kind = "package"
+description = "invalid"
+"#,
+    )
+    .unwrap_err();
+    assert!(
+        missing_release
+            .to_string()
+            .contains("missing field `release`"),
+        "{missing_release}"
+    );
+
+    let missing_kind = CcsManifest::parse(
+        r#"
+[package]
+name = "missing-kind"
+version = "1.0.0"
+version_scheme = "conary"
+release = "1"
+description = "invalid"
+"#,
+    )
+    .unwrap_err();
+    assert!(
+        missing_kind.to_string().contains("missing field `kind`"),
+        "{missing_kind}"
+    );
+}
+
+#[test]
+fn typed_requirements_are_root_authority_and_cannot_hide_under_provides() {
+    let manifest = CcsManifest::parse(
+        r#"
+requirements = [
+    { kind = "Depends", behavior = "Hard", expression = { operator = "atom", operands = { name = "openssl", capability_kind = "PackageName", version_constraint = ">=3.0.0", native_text = "openssl >=3.0.0" } }, alternatives = [{ name = "openssl", capability_kind = "PackageName", version_constraint = ">=3.0.0", native_text = "openssl >=3.0.0" }], native_text = "openssl >=3.0.0" },
+]
+
+[package]
+name = "typed-requirement"
+version = "1.0.0"
+version_scheme = "conary"
+release = "1"
+kind = "package"
+description = "typed requirement"
 "#,
     )
     .unwrap();
 
-    assert_eq!(legacy.package.release, None);
-    assert_eq!(legacy.package.kind, None);
+    assert_eq!(manifest.requirements.len(), 1);
+    assert_eq!(manifest.requirements[0].alternatives[0].name, "openssl");
+
+    let nested_error = CcsManifest::parse(
+        r#"
+[package]
+name = "nested-requirement"
+version = "1.0.0"
+version_scheme = "conary"
+release = "1"
+kind = "package"
+description = "invalid"
+
+[provides]
+requirements = []
+"#,
+    )
+    .unwrap_err();
+    assert!(
+        nested_error
+            .to_string()
+            .contains("unknown field `requirements`"),
+        "{nested_error}"
+    );
 }
 
 #[test]
@@ -134,6 +267,9 @@ fn test_redirects_section_parsing() {
 [package]
 name = "nginx"
 version = "1.24.0"
+version_scheme = "conary"
+release = "1"
+kind = "package"
 description = "High-performance HTTP server"
 
 [[redirects.renames]]
@@ -163,6 +299,9 @@ fn test_redirects_merge_split() {
 [package]
 name = "foo-combined"
 version = "2.0.0"
+version_scheme = "conary"
+release = "1"
+kind = "package"
 description = "Combined package"
 
 [[redirects.merges]]
@@ -197,6 +336,9 @@ fn test_redirects_is_empty() {
 [package]
 name = "simple"
 version = "1.0.0"
+version_scheme = "conary"
+release = "1"
+kind = "package"
 description = "No redirects"
 "#;
     let manifest = CcsManifest::parse(toml).unwrap();
@@ -209,6 +351,9 @@ fn test_manifest_rejects_non_system_user_hooks() {
 [package]
 name = "test"
 version = "1.0.0"
+version_scheme = "conary"
+release = "1"
+kind = "package"
 description = "test"
 
 [[hooks.users]]
@@ -221,27 +366,57 @@ system = false
 }
 
 #[test]
-fn test_manifest_rejects_unsafe_tmpfiles_entries() {
+fn test_manifest_rejects_removed_partial_tmpfiles_shape() {
     let toml = r#"
 [package]
 name = "test"
 version = "1.0.0"
+version_scheme = "conary"
+release = "1"
+kind = "package"
 description = "test"
 
 [[hooks.tmpfiles]]
-entry_type = "L"
-path = "../etc/shadow"
+type = "d"
+path = "/run/test"
 mode = "0755"
-owner = "root"
+user = "root"
 group = "root"
 "#;
 
     let err = CcsManifest::parse(toml).unwrap_err();
-    assert!(
-        err.to_string().contains("tmpfiles")
-            || err.to_string().contains("path")
-            || err.to_string().contains("entry")
-    );
+    assert!(err.to_string().contains("age"));
+}
+
+#[test]
+fn test_manifest_preserves_complete_tmpfiles_entry() {
+    let toml = r#"
+[package]
+name = "test"
+version = "1.0.0"
+version_scheme = "conary"
+release = "1"
+kind = "package"
+description = "test"
+
+[[hooks.tmpfiles]]
+type = "w+!-$"
+path = "/proc/sys/vm/swappiness"
+mode = "-"
+user = "-"
+group = "-"
+age = "-"
+argument = "10 with exact spacing"
+"#;
+
+    let manifest = CcsManifest::parse(toml).unwrap();
+    let entry = &manifest.hooks.tmpfiles[0];
+    assert_eq!(entry.entry_type, "w+!-$");
+    assert_eq!(entry.mode, "-");
+    assert_eq!(entry.user, "-");
+    assert_eq!(entry.group, "-");
+    assert_eq!(entry.age, "-");
+    assert_eq!(entry.argument, "10 with exact spacing");
 }
 
 #[test]
@@ -250,6 +425,9 @@ fn test_manifest_rejects_denied_sysctl_keys() {
 [package]
 name = "test"
 version = "1.0.0"
+version_scheme = "conary"
+release = "1"
+kind = "package"
 description = "test"
 
 [[hooks.sysctl]]
@@ -267,6 +445,9 @@ fn test_manifest_rejects_unsafe_systemd_unit_names() {
 [package]
 name = "test"
 version = "1.0.0"
+version_scheme = "conary"
+release = "1"
+kind = "package"
 description = "test"
 
 [[hooks.systemd]]
@@ -279,11 +460,34 @@ enable = true
 }
 
 #[test]
+fn test_manifest_rejects_unsafe_declarative_service_names() {
+    let toml = r#"
+[package]
+name = "test"
+version = "1.0.0"
+version_scheme = "conary"
+release = "1"
+kind = "package"
+description = "test"
+
+[[hooks.services]]
+name = "../evil.service"
+action = "restart"
+"#;
+
+    let err = CcsManifest::parse(toml).unwrap_err();
+    assert!(err.to_string().contains("services"));
+}
+
+#[test]
 fn test_manifest_accepts_supported_scriptlet_capabilities() {
     let toml = r#"
 [package]
 name = "test"
 version = "1.0.0"
+version_scheme = "conary"
+release = "1"
+kind = "package"
 description = "test"
 
 [[scriptlets.capabilities]]
@@ -306,6 +510,9 @@ fn test_manifest_rejects_unknown_scriptlet_capability() {
 [package]
 name = "test"
 version = "1.0.0"
+version_scheme = "conary"
+release = "1"
+kind = "package"
 description = "test"
 
 [[scriptlets.capabilities]]
@@ -328,6 +535,9 @@ fn test_manifest_accepts_supported_file_capabilities() {
 [package]
 name = "test"
 version = "1.0.0"
+version_scheme = "conary"
+release = "1"
+kind = "package"
 description = "test"
 
 [[file_capabilities]]
@@ -356,6 +566,34 @@ inheritable = false
 }
 
 #[test]
+fn test_manifest_accepts_inheritable_file_capabilities() {
+    let toml = r#"
+[package]
+name = "test"
+version = "1.0.0"
+version_scheme = "conary"
+release = "1"
+kind = "package"
+description = "test"
+
+[[file_capabilities]]
+path = "/usr/bin/demo"
+capabilities = ["cap_net_bind_service"]
+permitted = true
+effective = true
+inheritable = true
+"#;
+
+    let manifest = CcsManifest::parse(toml).unwrap();
+    let capability = &manifest.file_capabilities[0];
+    assert!(capability.inheritable);
+    assert_eq!(
+        capability.to_setcap_spec().unwrap(),
+        "cap_net_bind_service=+eip"
+    );
+}
+
+#[test]
 fn test_manifest_rejects_unsafe_file_capabilities() {
     for (toml, expected) in [
         (
@@ -363,6 +601,9 @@ fn test_manifest_rejects_unsafe_file_capabilities() {
 [package]
 name = "test"
 version = "1.0.0"
+version_scheme = "conary"
+release = "1"
+kind = "package"
 description = "test"
 
 [[file_capabilities]]
@@ -376,6 +617,9 @@ capabilities = ["cap_net_bind_service"]
 [package]
 name = "test"
 version = "1.0.0"
+version_scheme = "conary"
+release = "1"
+kind = "package"
 description = "test"
 
 [[file_capabilities]]
@@ -389,6 +633,9 @@ capabilities = ["cap_not_real"]
 [package]
 name = "test"
 version = "1.0.0"
+version_scheme = "conary"
+release = "1"
+kind = "package"
 description = "test"
 
 [[file_capabilities]]
@@ -399,20 +646,6 @@ effective = true
 "#,
             "effective file capability requires permitted",
         ),
-        (
-            r#"
-[package]
-name = "test"
-version = "1.0.0"
-description = "test"
-
-[[file_capabilities]]
-path = "/usr/bin/demo"
-capabilities = ["cap_net_bind_service"]
-inheritable = true
-"#,
-            "inheritable file capabilities are not supported yet",
-        ),
     ] {
         let err = CcsManifest::parse(toml).unwrap_err();
         assert!(
@@ -422,17 +655,20 @@ inheritable = true
     }
 }
 
-fn manifest_with_legacy_scriptlet_bundle(body: &str, body_sha256: &str) -> String {
+fn manifest_with_native_lifecycle_bundle(body: &str, body_sha256: &str) -> String {
     format!(
         r#"
 [package]
 name = "nginx"
 version = "1.28.0"
+version_scheme = "rpm"
+release = "1"
+kind = "package"
 description = "nginx converted from RPM"
 
-[legacy_scriptlets]
-schema = "conary.legacy-scriptlets.v1"
-schema_revision = 2
+[native_lifecycle]
+schema = "conary.native-lifecycles.v1"
+schema_revision = 17
 source_format = "rpm"
 source_family = "fedora-rhel"
 source_distro = "fedora"
@@ -444,20 +680,13 @@ source_checksum = "sha256:333333333333333333333333333333333333333333333333333333
 version_scheme = "rpm"
 conversion_tool = "remi"
 conversion_tool_version = "0.8.0"
-conversion_policy = "safe-or-legacy"
-target_compatibility = "source-native"
-allowed_targets = ["rpm/fedora/44/x86_64"]
-foreign_replay_policy = "deny"
-publication_policy = "public-if-no-blocked"
-publication_status = "private-review"
-scriptlet_fidelity = "legacy-replay"
+conversion_policy = "typed-native-lifecycle"
+scriptlet_fidelity = "native-lifecycle"
 
-[legacy_scriptlets.decision_counts]
-legacy = 1
-
-[[legacy_scriptlets.entries]]
+[[native_lifecycle.entries]]
 id = "rpm:%post"
 native_slot = "%post"
+kind = "executable"
 phase = "post-install"
 lifecycle_paths = ["install:first"]
 interpreter = "/bin/sh"
@@ -467,62 +696,55 @@ body = "{body}"
 native_invocation = {{ args = ["1"], environment = ["RPM_INSTALL_PREFIX=/"], stdin = "none", chroot = "install-root" }}
 transaction_order = {{ position = "after-payload", after = ["payload"] }}
 timeout_ms = 30000
-decision = "legacy"
-reason_code = "protected-replay-required"
-
-[[legacy_scriptlets.entries.effects]]
-kind = "ldconfig"
-source = "shell-ast"
-confidence = "declared"
-replacement = "complete"
+rpm_runtime = {{ program = "external", critical = false, criticality = "warning-only", raw_flags = 0 }}
 "#
     )
 }
 
 #[test]
-fn manifest_toml_round_trips_legacy_scriptlet_bundle() {
+fn manifest_toml_round_trips_native_lifecycle_bundle() {
     let body = "ldconfig";
     let body_sha256 = crate::hash::sha256_prefixed(body.as_bytes());
-    let toml = manifest_with_legacy_scriptlet_bundle(body, &body_sha256);
+    let toml = manifest_with_native_lifecycle_bundle(body, &body_sha256);
 
     let manifest = CcsManifest::parse(&toml).expect("parse manifest");
     let bundle = manifest
-        .legacy_scriptlets
+        .native_lifecycle
         .as_ref()
-        .expect("legacy scriptlet bundle");
+        .expect("native lifecycle bundle");
 
     assert_eq!(bundle.source_package, "nginx");
     assert_eq!(bundle.entries.len(), 1);
     assert_eq!(bundle.entries[0].id, "rpm:%post");
 
     let encoded = manifest.to_toml().expect("serialize manifest");
-    assert!(encoded.contains("[legacy_scriptlets]"));
+    assert!(encoded.contains("[native_lifecycle]"));
     let decoded = CcsManifest::parse(&encoded).expect("parse serialized manifest");
     assert_eq!(
         decoded
-            .legacy_scriptlets
+            .native_lifecycle
             .as_ref()
-            .expect("legacy bundle")
+            .expect("native lifecycle bundle")
             .entries[0]
-            .effects[0]
-            .kind,
+            .body,
         "ldconfig"
     );
 }
 
 #[test]
-fn manifest_toml_round_trips_generic_security_policy_intent() {
-    let body_sha256 = crate::hash::sha256_prefixed(b"restorecon /usr/share/demo\n");
-    let toml = format!(
-        r#"
+fn manifest_rejects_removed_security_policy_intent_authority() {
+    let toml = r#"
 [package]
 name = "demo-policy"
 version = "1.0.0"
+version_scheme = "rpm"
+release = "1"
+kind = "package"
 description = "policy fixture"
 
-[legacy_scriptlets]
-schema = "conary.legacy-scriptlets.v1"
-schema_revision = 2
+[native_lifecycle]
+schema = "conary.native-lifecycles.v1"
+schema_revision = 17
 source_format = "rpm"
 source_family = "rpm"
 source_distro = "fedora"
@@ -534,134 +756,23 @@ version_scheme = "rpm"
 conversion_tool = "remi"
 conversion_tool_version = "0.10.1"
 conversion_policy = "passive-scriptlet-bundle-goal4"
-target_compatibility = "conary-portable"
-foreign_replay_policy = "deny"
-publication_policy = "public-if-no-blocked"
-publication_status = "public"
-scriptlet_fidelity = "fully-replaced"
+scriptlet_fidelity = "native-free"
+security_policy_intents = []
+"#;
 
-[legacy_scriptlets.decision_counts]
-replaced = 1
-
-[[legacy_scriptlets.security_policy_intents]]
-schema = "conary.security-policy-intent.v1"
-id = "rpm:%post:selinux-label-refresh"
-provider = "selinux"
-operation = "label-refresh"
-fallback = "dormant"
-
-[legacy_scriptlets.security_policy_intents.source]
-source_format = "rpm"
-source_distro = "fedora"
-entry_id = "rpm:%post"
-command = "restorecon"
-argv = ["-R", "/usr/share/demo"]
-adapter_id = "selinux-policy/v1"
-
-[legacy_scriptlets.security_policy_intents.scope]
-kind = "path"
-paths = ["/usr/share/demo"]
-
-[legacy_scriptlets.security_policy_intents.desired_state]
-recursive = true
-
-[legacy_scriptlets.security_policy_intents.requirements]
-required_on_active_provider = false
-tools = ["restorecon"]
-
-[legacy_scriptlets.security_policy_intents.payload_evidence]
-payload_backed = true
-paths = ["/usr/share/demo"]
-
-[legacy_scriptlets.security_policy_intents.reconciliation]
-state = "pending"
-
-[[legacy_scriptlets.entries]]
-id = "rpm:%post"
-native_slot = "%post"
-phase = "post-install"
-lifecycle_paths = ["post-install"]
-interpreter = "/bin/sh"
-body_sha256 = "{body_sha256}"
-body = "restorecon /usr/share/demo\n"
-native_invocation = {{ args = [], environment = [] }}
-transaction_order = {{ position = "after-payload" }}
-timeout_ms = 30000
-decision = "replaced"
-reason_code = "helper-complete-selinux-policy"
-
-[[legacy_scriptlets.entries.security_policy_intents]]
-schema = "conary.security-policy-intent.v1"
-id = "rpm:%post:selinux-label-refresh"
-provider = "selinux"
-operation = "label-refresh"
-fallback = "dormant"
-
-[legacy_scriptlets.entries.security_policy_intents.source]
-source_format = "rpm"
-source_distro = "fedora"
-entry_id = "rpm:%post"
-command = "restorecon"
-argv = ["-R", "/usr/share/demo"]
-adapter_id = "selinux-policy/v1"
-
-[legacy_scriptlets.entries.security_policy_intents.scope]
-kind = "path"
-paths = ["/usr/share/demo"]
-
-[legacy_scriptlets.entries.security_policy_intents.desired_state]
-recursive = true
-
-[legacy_scriptlets.entries.security_policy_intents.requirements]
-required_on_active_provider = false
-tools = ["restorecon"]
-
-[legacy_scriptlets.entries.security_policy_intents.payload_evidence]
-payload_backed = true
-paths = ["/usr/share/demo"]
-
-[legacy_scriptlets.entries.security_policy_intents.reconciliation]
-state = "pending"
-"#
-    );
-
-    let manifest = CcsManifest::parse(&toml).expect("parse manifest");
-    let bundle = manifest.legacy_scriptlets.as_ref().unwrap();
-
-    assert_eq!(bundle.security_policy_intents.len(), 1);
-    assert_eq!(
-        bundle.security_policy_intents[0].provider.as_str(),
-        "selinux"
-    );
-    assert_eq!(
-        bundle.security_policy_intents[0].fallback.as_str(),
-        "dormant"
-    );
-    assert_eq!(bundle.entries[0].security_policy_intents.len(), 1);
-
-    let encoded = manifest.to_toml().expect("serialize manifest");
-    assert!(encoded.contains("[[legacy_scriptlets.security_policy_intents]]"));
-    assert!(encoded.contains("[[legacy_scriptlets.entries.security_policy_intents]]"));
-
-    let decoded = CcsManifest::parse(&encoded).expect("parse serialized manifest");
-    let decoded_bundle = decoded.legacy_scriptlets.as_ref().unwrap();
-    assert_eq!(
-        decoded_bundle.security_policy_intents[0]
-            .reconciliation
-            .state
-            .as_str(),
-        "pending"
-    );
+    let error = CcsManifest::parse(toml)
+        .expect_err("removed metadata-only policy intent authority must fail closed");
+    assert!(error.to_string().contains("security_policy_intents"));
 }
 
 #[test]
-fn manifest_validation_rejects_invalid_legacy_scriptlet_bundle() {
+fn manifest_validation_rejects_invalid_native_lifecycle_bundle() {
     let body_sha256 = crate::hash::sha256_prefixed(b"ldconfig");
-    let toml = manifest_with_legacy_scriptlet_bundle("ldconfig && echo tampered", &body_sha256);
+    let toml = manifest_with_native_lifecycle_bundle("ldconfig && echo tampered", &body_sha256);
 
     let err = CcsManifest::parse(&toml).expect_err("tampered bundle must fail");
 
-    assert!(err.to_string().contains("legacy scriptlet bundle"));
+    assert!(err.to_string().contains("native lifecycle bundle"));
     assert!(err.to_string().contains("body_sha256 mismatch"));
 }
 
@@ -671,6 +782,9 @@ fn manifest_rejects_unknown_hook_keys() {
 [package]
 name = "future-hook"
 version = "1.0.0"
+version_scheme = "conary"
+release = "1"
+kind = "package"
 description = "future hook"
 
 [[hooks.some_new_hook]]
@@ -685,111 +799,47 @@ name = "must-not-be-dropped"
 }
 
 #[test]
-fn hooks_classify_script_service_and_declarative_entries() {
-    let mut hooks = Hooks::default();
-    assert!(!hooks.has_script_hooks());
-    assert!(!hooks.has_service_hooks());
-    assert!(!hooks.has_declarative_hooks());
-    assert!(!hooks.has_irreversible_hooks_for_try_root(HookExecutionRoot::HostRoot));
+fn typed_package_relations_round_trip_through_manifest_toml() {
+    let mut manifest = CcsManifest::new_minimal("replacement", "2.0-1");
+    manifest.package.version_scheme = crate::repository::versioning::VersionScheme::Debian;
+    manifest.relations.push(
+        crate::repository::package_relation::parse_native_relation(
+            crate::repository::dependency_model::RepositoryRequirementKind::Replace,
+            crate::repository::versioning::VersionScheme::Debian,
+            "old-package (<< 2.0)",
+        )
+        .unwrap(),
+    );
 
-    hooks.directories.push(DirectoryHook {
-        path: "/var/lib/conary-test".to_string(),
-        mode: "0755".to_string(),
-        owner: "root".to_string(),
-        group: "root".to_string(),
-        cleanup: None,
-        reversible: None,
-    });
-    assert!(hooks.has_declarative_hooks());
-    assert!(!hooks.has_irreversible_hooks_for_try_root(HookExecutionRoot::TryRoot));
-    assert!(!hooks.has_irreversible_hooks_for_try_root(HookExecutionRoot::GenerationRoot));
-    assert!(hooks.has_irreversible_hooks_for_try_root(HookExecutionRoot::HostRoot));
+    let encoded = manifest.to_toml().unwrap();
+    let decoded = CcsManifest::parse(&encoded).unwrap();
 
-    hooks.services.push(Service {
-        name: "conary-test.service".to_string(),
-        action: ServiceAction::Restart,
-        reversible: None,
-    });
-    assert!(hooks.has_service_hooks());
-    assert!(hooks.has_irreversible_hooks_for_try_root(HookExecutionRoot::TryRoot));
-
-    hooks.post_install = Some(ScriptHook {
-        script: "echo post-install".to_string(),
-        reversible: None,
-    });
-    assert!(hooks.has_script_hooks());
-    assert!(hooks.has_irreversible_hooks_for_try_root(HookExecutionRoot::GenerationRoot));
+    assert_eq!(decoded.relations, manifest.relations);
+    assert_eq!(
+        decoded.package.version_scheme,
+        crate::repository::versioning::VersionScheme::Debian
+    );
 }
 
 #[test]
-fn omitted_reversible_fields_keep_wire_compatibility_and_m1b_defaults() {
-    let toml = r#"
-[package]
-name = "hook-defaults"
-version = "1.0.0"
-description = "hook defaults"
+fn typed_positive_requirements_round_trip_through_manifest_toml() {
+    let mut manifest = CcsManifest::new_minimal("rich-consumer", "1.0-1");
+    manifest.package.version_scheme = crate::repository::versioning::VersionScheme::Rpm;
+    manifest.requirements.push(
+        crate::repository::requirement::parse_native_requirement(
+            crate::repository::dependency_model::RepositoryRequirementKind::Depends,
+            crate::repository::versioning::VersionScheme::Rpm,
+            "((feature-a with feature-b) if engine else fallback)",
+        )
+        .unwrap(),
+    );
 
-[[hooks.users]]
-name = "hookuser"
-system = true
+    let encoded = manifest.to_toml().unwrap();
+    let decoded = CcsManifest::parse(&encoded).unwrap();
 
-[[hooks.services]]
-name = "hook-defaults.service"
-action = "restart"
-
-[hooks.post_install]
-script = "echo post-install"
-"#;
-
-    let manifest = CcsManifest::parse(toml).expect("parse manifest without reversible fields");
-
-    assert_eq!(manifest.hooks.users[0].reversible, None);
-    assert_eq!(manifest.hooks.services[0].reversible, None);
+    assert_eq!(decoded.requirements, manifest.requirements);
     assert_eq!(
-        manifest
-            .hooks
-            .post_install
-            .as_ref()
-            .expect("post-install hook")
-            .reversible,
-        None
-    );
-    assert!(
-        manifest
-            .hooks
-            .has_irreversible_hooks_for_try_root(HookExecutionRoot::TryRoot)
-    );
-
-    let encoded = manifest.to_toml().expect("serialize manifest");
-    assert!(!encoded.contains("reversible"));
-
-    let declarative_only = CcsManifest::parse(
-        r#"
-[package]
-name = "declarative-defaults"
-version = "1.0.0"
-description = "declarative defaults"
-
-[[hooks.groups]]
-name = "hookgroup"
-system = true
-"#,
-    )
-    .expect("parse declarative manifest");
-
-    assert!(
-        !declarative_only
-            .hooks
-            .has_irreversible_hooks_for_try_root(HookExecutionRoot::TryRoot)
-    );
-    assert!(
-        !declarative_only
-            .hooks
-            .has_irreversible_hooks_for_try_root(HookExecutionRoot::GenerationRoot)
-    );
-    assert!(
-        declarative_only
-            .hooks
-            .has_irreversible_hooks_for_try_root(HookExecutionRoot::HostRoot)
+        decoded.package.version_scheme,
+        crate::repository::versioning::VersionScheme::Rpm
     );
 }

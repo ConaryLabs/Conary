@@ -291,22 +291,10 @@ test_resolve_tag_remi_canonical() {
     assert_contains "$output" "product=remi" "canonical remi tag should resolve to remi"
 }
 
-test_resolve_tag_remi_legacy() {
+test_latest_version_from_list_uses_canonical_tags() {
     local output
-    output="$(run_matrix resolve-tag server-v0.5.0 --format shell)"
-    assert_contains "$output" "product=remi" "legacy server tag should resolve to remi"
-}
-
-test_resolve_tag_conary_test_legacy() {
-    local output
-    output="$(run_matrix resolve-tag test-v0.3.0 --format shell)"
-    assert_contains "$output" "product=conary-test" "legacy test tag should resolve to conary-test"
-}
-
-test_latest_version_from_list_mixed_prefixes() {
-    local output
-    output="$(run_matrix latest-version-from-list remi server-v0.5.0 remi-v0.4.0 remi-v0.6.0)"
-    assert_eq "0.6.0" "$output" "mixed-prefix comparison should choose the highest numeric version"
+    output="$(run_matrix latest-version-from-list remi remi-v0.4.0 remi-v0.6.0)"
+    assert_eq "0.6.0" "$output" "canonical tag comparison should choose the highest numeric version"
 }
 
 test_field_conary_test_deploy_mode() {
@@ -342,12 +330,28 @@ test_unknown_tag_prefix_fails() {
     assert_contains "$output" "unknown tag prefix: foo-v1.0.0" "unknown tag prefix should fail clearly"
 }
 
+test_historical_tag_prefixes_are_rejected() {
+    local tag output status
+
+    for tag in server-v0.5.0 test-v0.3.0; do
+        set +e
+        output="$(run_matrix resolve-tag "$tag" 2>&1)"
+        status=$?
+        set -e
+
+        if [[ "$status" -eq 0 ]]; then
+            fail "historical tag prefix unexpectedly resolved: $tag"
+        fi
+        assert_contains "$output" "unknown tag prefix: $tag" "historical tag should fail clearly"
+    done
+}
+
 test_latest_version_from_git_in_fixture() {
     local repo
     local output
 
     repo="$(create_release_fixture)"
-    tag_head "$repo" "server-v1.0.0"
+    tag_head "$repo" "remi-v1.0.0"
     commit_empty "$repo" "chore: canonical release point"
     tag_head "$repo" "remi-v2.0.0"
 
@@ -391,16 +395,16 @@ test_assert_owned_version_rejects_mismatched_manifest() {
         "owned-version mismatch should identify the manifest and versions"
 }
 
-test_release_dry_run_remi_legacy_history() {
+test_release_dry_run_remi_canonical_history() {
     local repo
     local output
 
     repo="$(create_release_fixture)"
-    tag_head "$repo" "server-v0.5.0"
+    tag_head "$repo" "remi-v0.5.0"
     commit_change "$repo" "apps/remi/changes.txt" "fix(remi): tighten deploy flow"
 
     output="$(run_release_dry_run "$repo" remi)"
-    assert_contains "$output" "Tag: remi-v0.5.1" "remi should emit canonical tags after legacy history"
+    assert_contains "$output" "Tag: remi-v0.5.1" "remi should continue its canonical release line"
 }
 
 test_release_dry_run_remi_prefers_highest_numeric_history() {
@@ -408,13 +412,13 @@ test_release_dry_run_remi_prefers_highest_numeric_history() {
     local output
 
     repo="$(create_release_fixture)"
-    tag_head "$repo" "server-v1.0.0"
+    tag_head "$repo" "remi-v1.0.0"
     commit_empty "$repo" "chore: canonical release point"
     tag_head "$repo" "remi-v2.0.0"
     commit_change "$repo" "apps/remi/changes.txt" "fix(remi): tighten deploy flow"
 
     output="$(run_release_dry_run "$repo" remi)"
-    assert_contains "$output" "Current: remi-v2.0.0" "mixed remi history should choose the highest numeric baseline"
+    assert_contains "$output" "Current: remi-v2.0.0" "remi should choose the highest canonical numeric baseline"
 }
 
 test_release_dry_run_conaryd_canonical_history() {
@@ -434,7 +438,7 @@ test_release_dry_run_conary_test_uses_owned_manifest_baseline() {
     local output
 
     repo="$(create_release_fixture)"
-    tag_head "$repo" "test-v0.3.0"
+    tag_head "$repo" "conary-test-v0.3.0"
     commit_change "$repo" "apps/conary-test/changes.txt" "fix(test): update bundle layout"
 
     output="$(run_release_dry_run "$repo" conary-test)"
@@ -740,18 +744,17 @@ test_check_release_matrix_rejects_single_static_site_deploy() {
 main() {
     local -a tests=(
         test_resolve_tag_remi_canonical
-        test_resolve_tag_remi_legacy
-        test_resolve_tag_conary_test_legacy
-        test_latest_version_from_list_mixed_prefixes
+        test_latest_version_from_list_uses_canonical_tags
         test_field_conary_test_deploy_mode
         test_field_conaryd_deploy_mode_paused
         test_field_conary_bundle_name
         test_unknown_tag_prefix_fails
+        test_historical_tag_prefixes_are_rejected
         test_latest_version_from_git_in_fixture
         test_max_owned_version_in_fixture
         test_assert_owned_version_accepts_matching_manifests
         test_assert_owned_version_rejects_mismatched_manifest
-        test_release_dry_run_remi_legacy_history
+        test_release_dry_run_remi_canonical_history
         test_release_dry_run_remi_prefers_highest_numeric_history
         test_release_dry_run_conaryd_canonical_history
         test_release_dry_run_conary_test_uses_owned_manifest_baseline

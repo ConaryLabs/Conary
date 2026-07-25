@@ -9,7 +9,7 @@
 //! - CRUD operations for troves, changesets, files, etc.
 
 pub mod backup;
-pub mod migrations;
+pub mod current_schema;
 pub mod models;
 pub mod paths;
 pub mod schema;
@@ -105,7 +105,7 @@ pub fn init(path: impl AsRef<Path>) -> Result<()> {
 
     let conn = Connection::open(path)?;
     configure(&conn)?;
-    schema::migrate(&conn)?;
+    schema::ensure_current(&conn)?;
 
     info!("Database initialized successfully");
     Ok(())
@@ -129,17 +129,16 @@ pub fn open(path: impl AsRef<Path>) -> Result<Connection> {
     validate_wal_file(path)?;
     let conn = Connection::open(path)?;
     configure(&conn)?;
-    schema::migrate(&conn)?;
+    schema::ensure_current(&conn)?;
 
     Ok(conn)
 }
 
-/// Open an existing Conary database without running migrations
+/// Open an existing Conary database without revalidating its schema epoch.
 ///
-/// This is identical to [`open`] but skips `schema::migrate()`, making it
-/// faster for server hot paths where the schema is already known-good from
-/// startup. The caller is responsible for ensuring migrations have already
-/// been applied (e.g., via a prior `open()` or `init()` call).
+/// This is identical to [`open`] but skips [`schema::ensure_current`], making
+/// it faster for server hot paths. An owning startup path must already have
+/// validated the current schema epoch through [`open`] or [`init`].
 ///
 /// # Arguments
 ///
@@ -188,7 +187,7 @@ where
 ///
 /// Provides [`create_test_db`] to eliminate the duplicated
 /// `NamedTempFile` + `Connection::open` + `PRAGMA foreign_keys` +
-/// `schema::migrate` boilerplate that appears in 20+ test modules.
+/// `schema::ensure_current` boilerplate that appears in 20+ test modules.
 #[cfg(test)]
 pub(crate) mod testing {
     use rusqlite::Connection;
@@ -204,7 +203,7 @@ pub(crate) mod testing {
         let temp_file = NamedTempFile::new().unwrap();
         let conn = Connection::open(temp_file.path()).unwrap();
         conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
-        schema::migrate(&conn).unwrap();
+        schema::ensure_current(&conn).unwrap();
         (temp_file, conn)
     }
 }
@@ -248,14 +247,14 @@ mod tests {
     }
 
     #[test]
-    fn test_open_fast_skips_migration() {
+    fn test_open_fast_uses_startup_validated_schema() {
         let temp_file = NamedTempFile::new().unwrap();
         let db_path = temp_file.path().to_str().unwrap();
 
-        // Initialize the database (runs migrations)
+        // The owning startup path creates or validates the current schema.
         init(db_path).unwrap();
 
-        // Open with open_fast (no migration check)
+        // A hot-path open does not repeat that schema validation.
         let conn = open_fast(db_path).unwrap();
 
         // Verify the schema version is correct (tracked in schema_version table)
@@ -272,7 +271,7 @@ mod tests {
             "Schema version should match SCHEMA_VERSION after init()"
         );
 
-        // Verify we can query a table that only exists after migration
+        // Verify the current schema is available through the hot-path connection.
         let table_count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='troves'",

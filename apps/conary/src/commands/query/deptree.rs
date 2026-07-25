@@ -116,7 +116,8 @@ fn print_dependency_tree(
     }
 
     // Get dependencies for this package
-    let deps = conary_core::db::models::DependencyEntry::find_by_trove(ctx.conn, trove_id)?;
+    let deps =
+        conary_core::db::models::InstalledRequirementAtom::find_by_trove(ctx.conn, trove_id)?;
 
     // Filter to runtime dependencies only, and only those that are installed
     let mut installed_deps = Vec::new();
@@ -193,7 +194,7 @@ fn print_reverse_tree(
 
     // Find packages that depend on this one
     let dependents =
-        conary_core::db::models::DependencyEntry::find_dependents(ctx.conn, package_name)?;
+        conary_core::db::models::InstalledRequirementAtom::find_dependents(ctx.conn, package_name)?;
 
     // Get unique package names
     let mut unique_dependents = Vec::new();

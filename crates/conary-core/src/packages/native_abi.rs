@@ -2,8 +2,6 @@
 //! Native package-manager scriptlet ABI metadata captured by package parsers.
 
 use crate::hash;
-use crate::packages::traits::ScriptletPhase;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeScriptletFormat {
     Rpm,
@@ -24,7 +22,6 @@ pub struct NativeScriptletEntry {
     pub kind: NativeScriptletKind,
     pub native_slot: String,
     pub primary_lifecycle: NativeLifecyclePath,
-    pub compatibility_phase: Option<ScriptletPhase>,
     pub lifecycle_paths: Vec<NativeLifecyclePath>,
     pub interpreter: Option<String>,
     pub interpreter_args: Vec<String>,
@@ -70,18 +67,11 @@ pub enum NativeScriptletBodyEncoding {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NativeScriptletSupport {
     Parsed,
-    DeferredReview { reason_code: String },
-    Unpreservable { reason_code: String },
 }
 
 impl NativeScriptletSupport {
     pub fn reason_code(&self) -> Option<&str> {
-        match self {
-            Self::Parsed => None,
-            Self::DeferredReview { reason_code } | Self::Unpreservable { reason_code } => {
-                Some(reason_code.as_str())
-            }
-        }
+        None
     }
 }
 
@@ -89,12 +79,23 @@ impl NativeScriptletSupport {
 pub enum NativeScriptletMetadata {
     Rpm(RpmNativeScriptletMetadata),
     Deb(DebNativeScriptletMetadata),
+    /// Package-level debconf template authority from `control.tar/templates`.
+    ///
+    /// This is deliberately separate from [`DebNativeScriptletMetadata`]:
+    /// templates belong to the package control archive and may be consumed by
+    /// any maintainer script, not only the optional `config` script.
+    DebconfTemplates(DebconfTemplatesMetadata),
     Arch(ArchNativeScriptletMetadata),
 }
 
+pub const DEBCONF_TEMPLATES_ENTRY_ID: &str = "deb:templates";
+pub const DEBCONF_TEMPLATES_NATIVE_SLOT: &str = "templates";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeLifecyclePath {
+    PackageControl,
     PreInstall,
+    Sysusers,
     PostInstall,
     PreUpgrade,
     PostUpgrade,
@@ -147,6 +148,11 @@ pub enum NativeArgumentValue {
     NewVersion,
     PackageInstanceCount,
     PackageName,
+    InstallingPackageName,
+    InstallingPackageVersion,
+    ConflictingPackageMarker,
+    ConflictingPackageName,
+    ConflictingPackageVersion,
     TriggerName,
     TriggerNames,
     TriggerCount,
@@ -166,6 +172,7 @@ pub enum NativeStdinContract {
     None,
     Debconf,
     Paths,
+    Sysusers,
     Unknown,
 }
 
@@ -207,8 +214,9 @@ pub enum NativeTransactionPosition {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RpmNativeScriptletMetadata {
     pub slot: RpmScriptletSlot,
-    pub scriptlet_flags: Option<RpmScriptletFlagsMetadata>,
+    pub runtime: RpmScriptletRuntimeMetadata,
     pub trigger: Option<RpmTriggerMetadata>,
+    pub sysusers: Option<RpmSysusersMetadata>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -223,19 +231,132 @@ pub enum RpmScriptletSlot {
     PostUnTrans,
     Verify,
     Trigger,
+    Sysusers,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RpmScriptletFlagsMetadata {
     pub names: Vec<String>,
     pub raw_bits: u32,
+    pub unknown_bits: u32,
+    pub expand: bool,
+    pub query_format: bool,
+    pub critical: bool,
+    pub criticality: RpmScriptletCriticality,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RpmScriptletCriticality {
+    Header,
+    SlotDefault,
+    WarningOnly,
+    ForcedWarningOnly,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RpmScriptletRuntimeMetadata {
+    pub program: RpmScriptletProgram,
+    pub flags: RpmScriptletFlagsMetadata,
+    pub install_prefixes: Vec<String>,
+    /// Exact macro definitions available to install-time RPM expansion.
+    ///
+    /// These are package/header facts captured by the parser. Target distro
+    /// configuration and a host RPM installation are never consulted.
+    pub macro_context: RpmMacroContextMetadata,
+    /// Typed RPM header values used by the `-q`/QFORMAT body transform.
+    pub header_context: RpmHeaderContextMetadata,
+    /// RPM version that produced the package, when declared by the header.
+    pub package_rpm_version: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RpmScriptletProgram {
+    External,
+    EmbeddedLua,
+    Sysusers,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RpmMacroContextMetadata {
+    pub definitions: Vec<RpmMacroDefinitionMetadata>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RpmMacroDefinitionMetadata {
+    pub name: String,
+    pub body: String,
+    pub source: RpmMacroDefinitionSource,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RpmMacroDefinitionSource {
+    PackageHeader,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RpmHeaderContextMetadata {
+    pub facts: Vec<RpmHeaderFactMetadata>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RpmHeaderFactMetadata {
+    pub tag: u32,
+    pub name: Option<String>,
+    pub value: RpmHeaderValueMetadata,
+    pub source: RpmHeaderFactSource,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RpmHeaderFactSource {
+    Header,
+    TransactionDerived,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RpmHeaderValueMetadata {
+    Null,
+    Binary(Vec<u8>),
+    Integer(Vec<u64>),
+    String(String),
+    StringArray(Vec<String>),
+    I18nString(Vec<String>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RpmSysusersMetadata {
+    /// Packaged sysusers.d path replaced by the decoded declarations. `None`
+    /// identifies a package-level `%add_sysuser` declaration.
+    pub source_path: Option<String>,
+    pub lines: Vec<String>,
+    pub directives: Vec<RpmSysusersDirective>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RpmSysusersDirective {
+    User {
+        name: String,
+        id: Option<String>,
+        description: Option<String>,
+        home: Option<String>,
+        shell: Option<String>,
+        locked: bool,
+    },
+    Group {
+        name: String,
+        id: Option<String>,
+    },
+    Member {
+        user: String,
+        group: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RpmTriggerMetadata {
     pub family: RpmTriggerFamily,
     pub conditions: Vec<RpmTriggerCondition>,
-    pub file_globs: Vec<String>,
+    pub path_prefixes: Vec<String>,
+    pub priority: Option<i32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -268,6 +389,39 @@ pub struct DebNativeScriptletMetadata {
     pub control_member: DebControlMember,
     pub maintainer_modes: Vec<DebMaintainerInvocation>,
     pub trigger_declarations: Vec<DebTriggerDeclaration>,
+}
+
+/// Parsed package-level authority from a Debian `templates` control member.
+///
+/// `raw_sha256` identifies the byte-preserving
+/// [`NativeScriptletEntry::body`]. Records retain source order, field spelling,
+/// localized field suffixes, and continuation lines. The raw body remains the
+/// canonical serialization.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DebconfTemplatesMetadata {
+    pub raw_sha256: String,
+    pub records: Vec<DebconfTemplateRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DebconfTemplateRecord {
+    /// Semantic value of the required `Template` field.
+    pub template: String,
+    /// Semantic value of the required `Type` field. Extension types are
+    /// preserved instead of being filtered through a local allowlist.
+    pub template_type: String,
+    /// Fields in source order, including unknown and localized variants.
+    pub fields: Vec<DebconfTemplateField>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DebconfTemplateField {
+    /// Original field-name spelling.
+    pub name: String,
+    /// Original first-line value after the optional RFC822 separator byte.
+    pub value: String,
+    /// Original continuation lines, including their leading whitespace.
+    pub continuation_lines: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -336,22 +490,21 @@ pub enum ArchNativeScriptletMetadata {
 pub struct ArchInstallScriptletMetadata {
     pub install_source_sha256: String,
     pub function_name: String,
-    pub function_body: Option<String>,
-    pub function_body_sha256: Option<String>,
-    pub extraction_status: ArchFunctionExtractionStatus,
+    pub selection_contract: ArchInstallSelectionContract,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ArchFunctionExtractionStatus {
-    Parsed,
-    DeferredReview { reason_code: String },
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArchInstallSelectionContract {
+    /// Current libalpm `_alpm_runscriptlet` predicate: 1023-byte `fgets`
+    /// chunks, C-string truncation, `#` comment truncation, literal substring.
+    LibalpmGrepV1,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArchAlpmHookMetadata {
     pub hook_path: String,
     pub triggers: Vec<ArchAlpmHookTrigger>,
-    pub action: Option<ArchAlpmHookAction>,
+    pub action: ArchAlpmHookAction,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -379,6 +532,7 @@ pub struct ArchAlpmHookAction {
     pub description: Option<String>,
     pub when: NativeTransactionPosition,
     pub exec: String,
+    pub argv: Vec<String>,
     pub depends: Vec<String>,
     pub abort_on_fail: bool,
     pub needs_targets: bool,
@@ -444,21 +598,7 @@ mod tests {
     }
 
     #[test]
-    fn native_support_uses_parser_neutral_names() {
+    fn native_support_is_fully_parsed() {
         assert!(NativeScriptletSupport::Parsed.reason_code().is_none());
-        assert_eq!(
-            NativeScriptletSupport::DeferredReview {
-                reason_code: "rpm-verify-scriptlet-deferred".to_string(),
-            }
-            .reason_code(),
-            Some("rpm-verify-scriptlet-deferred")
-        );
-        assert_eq!(
-            NativeScriptletSupport::Unpreservable {
-                reason_code: "native-abi-parser-limitation".to_string(),
-            }
-            .reason_code(),
-            Some("native-abi-parser-limitation")
-        );
     }
 }

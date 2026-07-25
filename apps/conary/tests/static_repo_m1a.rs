@@ -8,10 +8,11 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use conary_core::ccs::builder::{
-    BuildResult, ComponentData, FileEntry, FileType, write_ccs_package,
+    BuildResult, ComponentData, FileEntry, write_signed_current_ccs_package,
 };
 use conary_core::ccs::manifest::CcsManifest;
 use conary_core::ccs::signing::SigningKeyPair;
+use conary_core::payload::{PayloadContentAuthority, PayloadNode};
 use conary_core::repository::StaticIndex;
 use conary_core::repository::static_repo::RepoLocation;
 use conary_core::repository::static_repo::publish::{StaticPublishOptions, publish_static_repo};
@@ -45,7 +46,15 @@ impl StaticRepoFixture {
 
         conary_core::db::init(&db_path).unwrap();
         fs::create_dir_all(&root).unwrap();
-        write_single_payload_ccs(&package_path);
+        fs::create_dir_all(&key_dir).unwrap();
+        let publish_key = SigningKeyPair::generate().with_key_id("publish");
+        publish_key
+            .save_to_files(
+                &key_dir.join("publish.private"),
+                &key_dir.join("publish.public"),
+            )
+            .unwrap();
+        write_single_payload_ccs(&package_path, &publish_key);
 
         let outcome = publish_static_repo(StaticPublishOptions {
             repo_name: REPO_NAME.to_string(),
@@ -57,8 +66,6 @@ impl StaticRepoFixture {
             state_file,
             package_paths: vec![package_path],
             refresh: false,
-            force_reinit: false,
-            accept_destination_state: false,
             rotate_publish_key: false,
             rotate_root_key: false,
             artifact_gate_context: None,
@@ -236,23 +243,24 @@ fn install_test_hello(db_path: &Path, root: &Path) -> Output {
         "--root".into(),
         path_arg(root),
         "--sandbox".into(),
-        "never".into(),
+        "always".into(),
         "--yes".into(),
     ])
 }
 
-fn write_single_payload_ccs(package_path: &Path) {
+fn write_single_payload_ccs(package_path: &Path, signing_key: &SigningKeyPair) {
     fs::create_dir_all(package_path.parent().expect("package parent")).unwrap();
     let content = b"hello from m1a\n".to_vec();
+    let content_size = content.len() as u64;
     let hash = conary_core::hash::sha256(&content);
     let file = FileEntry {
         path: "/usr/share/test-hello/hello.txt".to_string(),
-        hash: hash.clone(),
-        size: content.len() as u64,
-        mode: 0o100644,
+        node: PayloadNode::regular(0o644),
+        content: Some(PayloadContentAuthority {
+            sha256: hash.clone(),
+            size: content_size,
+        }),
         component: "runtime".to_string(),
-        file_type: FileType::Regular,
-        target: None,
         chunks: None,
     };
     let result = BuildResult {
@@ -263,16 +271,16 @@ fn write_single_payload_ccs(package_path: &Path) {
                 name: "runtime".to_string(),
                 files: vec![file.clone()],
                 hash: "runtime".to_string(),
-                size: file.size,
+                size: content_size,
             },
         )]),
         files: vec![file],
         blobs: HashMap::from([(hash, content)]),
-        total_size: b"hello from m1a\n".len() as u64,
+        total_size: content_size,
         chunked: false,
         chunk_stats: None,
     };
-    write_ccs_package(&result, package_path).unwrap();
+    write_signed_current_ccs_package(&result, package_path, signing_key, false).unwrap();
 }
 
 fn replace_published_package_with_unsigned_package(fixture: &StaticRepoFixture) {

@@ -83,7 +83,7 @@ impl EnhancementEngine for ProvenanceEnhancer {
 
     fn enhance(&self, ctx: &mut EnhancementContext) -> EnhancementResult<()> {
         // Preserve the exact source-format and conversion metadata available at
-        // this boundary; source-native extraction belongs to the converter.
+        // this boundary; native-package extraction belongs to the converter.
 
         #[derive(serde::Serialize)]
         struct ExtractedProvenance {

@@ -31,7 +31,10 @@ pub(crate) mod test_helpers;
 
 pub use build_order::{BuildOrderError, BuildStep, Stage, compute_build_order};
 pub use capture::{CaptureError, capture_output};
-pub use compose::{ComposeError, compose_erofs, compose_file_entries, erofs_image_hash};
+pub use compose::{
+    ComposeError, compose_entries, compose_erofs, compose_generation_root, compose_selected_root,
+    erofs_image_hash,
+};
 pub use convergence::{
     ConvergenceReport, PackageComparison, compare_build_sets, compare_seed_builds, load_build_set,
 };
@@ -39,9 +42,9 @@ pub use environment::{BuildEnvironment, EnvironmentError, MutableEnvironment};
 pub use executor::{DerivationExecutor, ExecutionResult, ExecutorError};
 pub use id::{DerivationError, DerivationId, DerivationInputs, SourceDerivationId};
 pub use index::{DerivationIndex, DerivationRecord};
-pub use install::{InstallError, install_to_sysroot, run_ldconfig_if_needed};
+pub use install::{InstallError, install_to_sysroot};
 pub use manifest::{ManifestError, SystemManifest};
-pub use output::{OutputFile, OutputManifest, OutputSymlink, PackageOutput};
+pub use output::{OUTPUT_MANIFEST_VERSION, OutputError, OutputManifest, PackageOutput};
 pub use pipeline::{Pipeline, PipelineConfig, PipelineError, PipelineEvent};
 pub use profile::{
     BuildProfile, ProfileDerivation, ProfileDiff, ProfileMetadata, ProfileSeedRef, ProfileStage,

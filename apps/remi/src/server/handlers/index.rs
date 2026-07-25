@@ -3,12 +3,14 @@
 
 use crate::server::ServerState;
 use crate::server::conversion::ScriptletPackageMetadata;
+use anyhow::Context;
 use axum::{
     extract::{Path, State},
     http::{StatusCode, header},
     response::{IntoResponse, Response},
 };
 use conary_core::db::models::{ConvertedPackage, RepositoryPackage};
+use conary_core::repository::remi_metadata::{RemiProvide, RemiRequirementGroup};
 use rusqlite::Connection;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
@@ -44,10 +46,11 @@ pub struct PackageEntry {
     pub architecture: Option<String>,
     /// Whether this package has been converted to CCS
     pub converted: bool,
-    /// Dependency names (from native repo metadata)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub dependencies: Option<Vec<String>>,
-    /// Additional native metadata, including provides for capability resolution.
+    /// Exact normalized native provides used by dependency resolution.
+    pub provides: Vec<RemiProvide>,
+    /// Exact grouped native requirements and relations.
+    pub requirement_groups: Vec<RemiRequirementGroup>,
+    /// Additional non-authoritative package metadata.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<serde_json::Value>,
 }
@@ -93,17 +96,20 @@ pub async fn get_metadata(
 /// Build repository metadata from database
 fn build_metadata(
     db_path: &std::path::Path,
-    distro: &str,
+    route_slug: &str,
 ) -> Result<RepositoryMetadata, anyhow::Error> {
     let conn = Connection::open(db_path)?;
+    let profile = conary_core::repository::supported_profiles::profile_for_remi_route(route_slug)
+        .ok_or_else(|| anyhow::anyhow!("unsupported public route '{route_slug}'"))?;
 
-    // Find all repositories for this distro (e.g. arch-core + arch-extra)
-    let repositories = find_repositories_for_distro(&conn, distro)?;
+    // Public HTTP routes are stable family slugs; persisted repository
+    // authority is always the exact release profile.
+    let repositories = find_repositories_for_distro(&conn, profile.id())?;
 
     if repositories.is_empty() {
         return Ok(RepositoryMetadata {
-            id: format!("conary-{}", distro),
-            distro: distro.to_string(),
+            id: format!("conary-{route_slug}"),
+            distro: route_slug.to_string(),
             last_sync: None,
             package_count: 0,
             converted_count: 0,
@@ -121,15 +127,14 @@ fn build_metadata(
     // Aggregate packages from all matching repos
     let mut repo_packages = Vec::new();
     for repo in &repositories {
-        if let Some(id) = repo.id {
-            repo_packages.extend(RepositoryPackage::find_by_repository(&conn, id)?);
-        }
+        let id = super::require_persisted_repository_id(repo)?;
+        repo_packages.extend(RepositoryPackage::find_by_repository(&conn, id)?);
     }
     repo_packages.retain(|pkg| pkg.size > 0);
 
     // Query converted packages once so we can both mark repo-backed entries as
     // converted and surface packages that exist only in Remi's CCS store.
-    let converted_packages = load_converted_metadata_rows(&conn, distro)?;
+    let converted_packages = load_converted_metadata_rows(&conn, route_slug)?;
     let converted_set: HashSet<PackageKey> = converted_packages
         .iter()
         .map(|pkg| package_key(&pkg.name, &pkg.version, None, pkg.architecture.as_deref()))
@@ -156,25 +161,35 @@ fn build_metadata(
                 release.as_deref(),
                 pkg.architecture.as_deref(),
             );
-            let dependencies = pkg
-                .dependencies
-                .as_ref()
-                .and_then(|deps_json| serde_json::from_str::<Vec<String>>(deps_json).ok());
-            let metadata = pkg.metadata.as_ref().and_then(|metadata_json| {
-                serde_json::from_str::<serde_json::Value>(metadata_json).ok()
-            });
+            let metadata = pkg
+                .metadata
+                .as_deref()
+                .map(serde_json::from_str::<serde_json::Value>)
+                .transpose()
+                .with_context(|| {
+                    format!(
+                        "repository package '{}' version '{}' has malformed persisted metadata",
+                        pkg.name, pkg.version
+                    )
+                })?;
             let scriptlets = converted_scriptlets_by_key.get(&key);
-            PackageEntry {
+            let exact = crate::server::package_metadata::load_exact_package_metadata(
+                &conn,
+                pkg.id
+                    .ok_or_else(|| anyhow::anyhow!("repository package has no persisted ID"))?,
+            )?;
+            Ok(PackageEntry {
                 name: pkg.name.clone(),
                 version: pkg.version.clone(),
                 release,
                 architecture: pkg.architecture.clone(),
                 converted: converted_set.contains(&key),
-                dependencies,
-                metadata: metadata_with_scriptlets(metadata, scriptlets),
-            }
+                provides: exact.provides,
+                requirement_groups: exact.requirement_groups,
+                metadata: metadata_with_scriptlets(metadata, scriptlets)?,
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>, anyhow::Error>>()?;
 
     let existing_keys: HashSet<PackageKey> = packages
         .iter()
@@ -201,8 +216,9 @@ fn build_metadata(
                 release: None,
                 architecture: converted.architecture,
                 converted: true,
-                dependencies: None,
-                metadata: metadata_with_scriptlets(None, Some(&converted.scriptlets)),
+                provides: Vec::new(),
+                requirement_groups: Vec::new(),
+                metadata: metadata_with_scriptlets(None, Some(&converted.scriptlets))?,
             });
         }
     }
@@ -218,8 +234,8 @@ fn build_metadata(
     let converted_count = packages.iter().filter(|p| p.converted).count();
 
     Ok(RepositoryMetadata {
-        id: format!("conary-{}", distro),
-        distro: distro.to_string(),
+        id: format!("conary-{route_slug}"),
+        distro: route_slug.to_string(),
         last_sync,
         package_count: packages.len(),
         converted_count,
@@ -264,18 +280,21 @@ fn build_converted_packages(
     conn: &Connection,
     distro: &str,
 ) -> Result<Vec<PackageEntry>, anyhow::Error> {
-    Ok(load_converted_metadata_rows(conn, distro)?
+    load_converted_metadata_rows(conn, distro)?
         .into_iter()
-        .map(|row| PackageEntry {
-            name: row.name,
-            version: row.version,
-            release: None,
-            architecture: row.architecture,
-            converted: true,
-            dependencies: None,
-            metadata: metadata_with_scriptlets(None, Some(&row.scriptlets)),
+        .map(|row| {
+            Ok(PackageEntry {
+                name: row.name,
+                version: row.version,
+                release: None,
+                architecture: row.architecture,
+                converted: true,
+                provides: Vec::new(),
+                requirement_groups: Vec::new(),
+                metadata: metadata_with_scriptlets(None, Some(&row.scriptlets))?,
+            })
         })
-        .collect())
+        .collect()
 }
 
 fn load_converted_metadata_rows(
@@ -283,14 +302,11 @@ fn load_converted_metadata_rows(
     distro: &str,
 ) -> Result<Vec<ConvertedMetadataRow>, anyhow::Error> {
     let mut packages = Vec::new();
-    for converted in ConvertedPackage::find_publication_candidates(conn, distro, None)? {
-        let Some(name) = converted.package_name.clone() else {
-            continue;
-        };
-        let Some(version) = converted.package_version.clone() else {
-            continue;
-        };
-        let architecture = converted.package_architecture.clone();
+    for converted in ConvertedPackage::find_current_conversions(conn, distro, None)? {
+        let artifact = converted.repository_artifact()?;
+        let name = artifact.package_name.to_string();
+        let version = artifact.package_version.to_string();
+        let architecture = artifact.package_architecture.map(str::to_string);
 
         // Pre-architecture Remi conversion records cannot be addressed safely
         // once native metadata has multilib packages and epoch-aware versions.
@@ -300,15 +316,13 @@ fn load_converted_metadata_rows(
             continue;
         }
 
-        if !converted.is_scriptlet_public_ready() {
-            continue;
-        }
+        let scriptlet_summary = converted.scriptlet_summary()?;
 
         packages.push(ConvertedMetadataRow {
             name,
             version,
             architecture,
-            scriptlets: ScriptletPackageMetadata::from(&converted.scriptlet_summary()),
+            scriptlets: ScriptletPackageMetadata::from(&scriptlet_summary),
         });
     }
 
@@ -318,12 +332,13 @@ fn load_converted_metadata_rows(
 fn metadata_with_scriptlets(
     metadata: Option<serde_json::Value>,
     scriptlets: Option<&ScriptletPackageMetadata>,
-) -> Option<serde_json::Value> {
+) -> anyhow::Result<Option<serde_json::Value>> {
     let Some(scriptlets) = scriptlets else {
-        return metadata;
+        return Ok(metadata);
     };
-    let scriptlets = serde_json::to_value(scriptlets).ok()?;
-    match metadata {
+    let scriptlets =
+        serde_json::to_value(scriptlets).context("serialize scriptlet package metadata")?;
+    Ok(match metadata {
         Some(serde_json::Value::Object(mut object)) => {
             object.insert("scriptlets".to_string(), scriptlets);
             Some(serde_json::Value::Object(object))
@@ -339,7 +354,7 @@ fn metadata_with_scriptlets(
             object.insert("scriptlets".to_string(), scriptlets);
             Some(serde_json::Value::Object(object))
         }
-    }
+    })
 }
 
 /// GET /v1/:distro/metadata.sig

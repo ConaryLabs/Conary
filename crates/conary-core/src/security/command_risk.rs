@@ -1,14 +1,18 @@
 // conary-core/src/security/command_risk.rs
-//! Shared command-risk taxonomy for build, conversion, and runtime scriptlet evidence.
+//! Shared diagnostic command-observation taxonomy.
+//!
+//! The classifier parses shell structure and records observations for audit and
+//! engineering prioritization. Its severity is never execution, mutation,
+//! compatibility, trust, or publication authority.
 
 use serde::{Deserialize, Serialize};
 
 use crate::ccs::convert::command_evidence::{
     CommandInvocation, extract_invocations_from_shell_text,
 };
-use crate::ccs::legacy_scriptlets::CommandArgumentProvenance;
+use crate::ccs::native_lifecycle::CommandArgumentProvenance;
 
-pub const COMMAND_RISK_CLASSIFIER_VERSION: &str = "m2-command-risk-v2";
+pub const COMMAND_RISK_CLASSIFIER_VERSION: &str = "command-diagnostics-v3";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -68,17 +72,17 @@ pub const PERSISTENCE: &str = CommandRiskReasonCode::Persistence.as_str();
 pub const BPF_OR_EBPF: &str = CommandRiskReasonCode::BpfOrEbpf.as_str();
 pub const PROC_STEALTH_OR_DEBUG: &str = CommandRiskReasonCode::ProcStealthOrDebug.as_str();
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "kebab-case")]
-pub enum CommandRiskStatus {
-    Clean,
-    Review,
-    Blocked,
+pub enum CommandRiskSeverity {
+    None,
+    Notice,
+    Critical,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CommandRiskReport {
-    pub status: CommandRiskStatus,
+    pub highest_severity: CommandRiskSeverity,
     pub classifier_version: String,
     pub entries: Vec<CommandRiskEntry>,
 }
@@ -88,26 +92,17 @@ pub struct CommandRiskEntry {
     pub source: String,
     pub command: String,
     pub reason_code: String,
-    pub severity: CommandRiskStatus,
+    pub severity: CommandRiskSeverity,
     pub evidence: String,
 }
 
 impl CommandRiskReport {
-    pub fn clean() -> Self {
+    pub fn no_findings() -> Self {
         Self {
-            status: CommandRiskStatus::Clean,
+            highest_severity: CommandRiskSeverity::None,
             classifier_version: COMMAND_RISK_CLASSIFIER_VERSION.to_string(),
             entries: Vec::new(),
         }
-    }
-
-    pub fn requires_runtime_sandbox(&self) -> bool {
-        self.entries.iter().any(|entry| {
-            matches!(
-                entry.reason_code.as_str(),
-                PACKAGE_MANAGER_FETCH | NETWORK_FETCH | DYNAMIC_LANGUAGE_EXEC
-            )
-        })
     }
 }
 
@@ -138,10 +133,14 @@ pub fn classify_shell_text(source: &str, content: &str) -> CommandRiskReport {
     }
 
     if entries.is_empty() {
-        CommandRiskReport::clean()
+        CommandRiskReport::no_findings()
     } else {
         CommandRiskReport {
-            status: CommandRiskStatus::Blocked,
+            highest_severity: entries
+                .iter()
+                .map(|entry| entry.severity)
+                .max()
+                .unwrap_or(CommandRiskSeverity::None),
             classifier_version: COMMAND_RISK_CLASSIFIER_VERSION.to_string(),
             entries,
         }
@@ -645,9 +644,21 @@ fn push_entry(
         source: source.to_string(),
         command: command.to_string(),
         reason_code: reason_code.to_string(),
-        severity: CommandRiskStatus::Blocked,
+        severity: severity_for_reason(reason_code),
         evidence: evidence.to_string(),
     });
+}
+
+fn severity_for_reason(reason_code: &str) -> CommandRiskSeverity {
+    match reason_code {
+        ROOT_DELETION
+        | FILESYSTEM_FORMAT
+        | DEVICE_WRITE
+        | REMOTE_SHELL_EXEC
+        | CREDENTIAL_PATH
+        | PROC_STEALTH_OR_DEBUG => CommandRiskSeverity::Critical,
+        _ => CommandRiskSeverity::Notice,
+    }
 }
 
 #[cfg(test)]
@@ -661,7 +672,7 @@ mod tests {
             "npm install atomic-lockfile\nbun add js-digest",
         );
 
-        assert_eq!(report.status, CommandRiskStatus::Blocked);
+        assert_eq!(report.highest_severity, CommandRiskSeverity::Notice);
         assert!(
             report
                 .entries
@@ -692,13 +703,6 @@ mod tests {
     }
 
     #[test]
-    fn runtime_auto_sandbox_maps_shared_medium_signals() {
-        let report = classify_shell_text("scriptlet:install", "node -e 'console.log(1)'");
-
-        assert!(report.requires_runtime_sandbox());
-    }
-
-    #[test]
     fn destructive_commands_use_literal_argv_grammars() {
         let report = classify_shell_text(
             "scriptlet:install",
@@ -714,6 +718,7 @@ mod tests {
         assert!(reasons.contains(&FILESYSTEM_FORMAT));
         assert!(reasons.contains(&DEVICE_WRITE));
         assert!(reasons.contains(&SETUID_MUTATION));
+        assert_eq!(report.highest_severity, CommandRiskSeverity::Critical);
     }
 
     #[test]
@@ -728,11 +733,29 @@ mod tests {
                 .iter()
                 .any(|entry| entry.reason_code == REMOTE_SHELL_EXEC)
         );
+        assert_eq!(remote_shell.highest_severity, CommandRiskSeverity::Critical);
 
         let inert = classify_shell_text(
             "scriptlet:install",
             "printf '%s\\n' 'rm -rf /; mkfs.ext4 /dev/vdb; curl | sh'",
         );
-        assert_eq!(inert, CommandRiskReport::clean());
+        assert_eq!(inert, CommandRiskReport::no_findings());
+    }
+
+    #[test]
+    fn diagnostic_schema_rejects_retired_policy_status_vocabulary() {
+        for retired in ["review", "blocked"] {
+            let error = serde_json::from_value::<CommandRiskSeverity>(serde_json::json!(retired))
+                .unwrap_err();
+            assert!(error.to_string().contains("unknown variant"), "{error}");
+        }
+
+        let old_report = serde_json::json!({
+            "status": "blocked",
+            "classifier_version": "m2-command-risk-v2",
+            "entries": []
+        });
+        let error = serde_json::from_value::<CommandRiskReport>(old_report).unwrap_err();
+        assert!(error.to_string().contains("highest_severity"), "{error}");
     }
 }

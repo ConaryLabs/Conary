@@ -5,6 +5,7 @@
 mod common;
 
 use conary_core::db;
+use conary_core::repository::versioning::VersionScheme;
 use std::process::{Command, Output};
 
 fn run_conary(args: &[&str]) -> Output {
@@ -38,7 +39,12 @@ fn test_query_packages() {
             let mut changeset = Changeset::new(format!("Install {}-{}", name, version));
             let changeset_id = changeset.insert(tx)?;
 
-            let mut trove = Trove::new(name.to_string(), version.to_string(), TroveType::Package);
+            let mut trove = Trove::new(
+                name.to_string(),
+                version.to_string(),
+                TroveType::Package,
+                conary_core::repository::versioning::VersionScheme::Conary,
+            );
             trove.installed_by_changeset_id = Some(changeset_id);
             trove.insert(tx)?;
 
@@ -100,6 +106,7 @@ fn test_whatprovides_query() {
             "openssl".to_string(),
             "3.0.0".to_string(),
             TroveType::Package,
+            conary_core::repository::versioning::VersionScheme::Conary,
         );
         let trove_id = trove.insert(tx)?;
 
@@ -166,8 +173,8 @@ fn test_query_operations() {
     let file = FileEntry::find_by_path(&conn, "/usr/sbin/nginx").unwrap();
     assert!(file.is_some(), "Should find file by path");
     let file = file.unwrap();
-    assert_eq!(file.size, 1024000);
-    assert_eq!(file.permissions, 0o755_i32);
+    assert_eq!(file.content.as_ref().unwrap().size, 1_024_000);
+    assert_eq!(file.node.source.mode & 0o7777, 0o755);
 
     // Test finding files by package
     let nginx_id = nginx_troves[0].id.unwrap();
@@ -192,6 +199,7 @@ fn list_info_refuses_ambiguous_variants_until_selector_is_given() {
             "variant-demo".to_string(),
             "1.0.0".to_string(),
             TroveType::Package,
+            conary_core::repository::versioning::VersionScheme::Conary,
         );
         trove.architecture = Some(arch.to_string());
         trove.insert(&conn).unwrap();
@@ -250,6 +258,7 @@ fn pin_and_unpin_use_same_variant_selector() {
             "pin-demo".to_string(),
             "1.0.0".to_string(),
             TroveType::Package,
+            conary_core::repository::versioning::VersionScheme::Conary,
         );
         trove.architecture = Some(arch.to_string());
         trove.insert(&conn).unwrap();
@@ -299,14 +308,13 @@ fn whatprovides_reports_installed_and_repository_providers() {
         "daily-driver".to_string(),
         "https://example.test/repo".to_string(),
     );
-    repo.gpg_check = false;
-    repo.gpg_strict = false;
     let repo_id = repo.insert(&conn).unwrap();
 
     let mut pkg = RepositoryPackage::new(
         repo_id,
         "openssl-libs".to_string(),
         "3.1.0".to_string(),
+        conary_core::repository::versioning::VersionScheme::Rpm,
         "0".repeat(64),
         10,
         "https://example.test/openssl-libs.ccs".to_string(),
@@ -320,6 +328,7 @@ fn whatprovides_reports_installed_and_repository_providers() {
         None,
         "soname".to_string(),
         Some("libssl.so.3".to_string()),
+        VersionScheme::Rpm,
     )
     .insert(&conn)
     .unwrap();
@@ -351,14 +360,13 @@ fn whatprovides_reads_normalized_repository_provider_metadata() {
         "daily-driver".to_string(),
         "https://example.test/repo".to_string(),
     );
-    repo.gpg_check = false;
-    repo.gpg_strict = false;
     let repo_id = repo.insert(&conn).unwrap();
 
     let mut pkg = RepositoryPackage::new(
         repo_id,
         "openssl-libs".to_string(),
         "3.1.0".to_string(),
+        conary_core::repository::versioning::VersionScheme::Rpm,
         "0".repeat(64),
         10,
         "https://example.test/openssl-libs.ccs".to_string(),
@@ -372,6 +380,7 @@ fn whatprovides_reads_normalized_repository_provider_metadata() {
         None,
         "soname".to_string(),
         Some("libssl.so.3()(64bit)".to_string()),
+        VersionScheme::Rpm,
     )
     .insert(&conn)
     .unwrap();
@@ -432,6 +441,7 @@ fn whatprovides_reads_normalized_installed_provider_metadata_without_guessing_su
         "openssl-libs".to_string(),
         "3.1.0".to_string(),
         TroveType::Package,
+        conary_core::repository::versioning::VersionScheme::Conary,
     );
     let openssl_id = openssl.insert(&conn).unwrap();
     ProvideEntry::new_typed(openssl_id, "soname", "libssl.so.3".to_string(), None)
@@ -442,6 +452,7 @@ fn whatprovides_reads_normalized_installed_provider_metadata_without_guessing_su
         "openssl30-libs".to_string(),
         "3.0.0".to_string(),
         TroveType::Package,
+        conary_core::repository::versioning::VersionScheme::Conary,
     );
     let openssl30_id = openssl30.insert(&conn).unwrap();
     ProvideEntry::new_typed(openssl30_id, "soname", "libssl.so.30".to_string(), None)
@@ -473,13 +484,12 @@ fn whatprovides_ignores_repository_prefix_collisions_and_disabled_repos() {
         "daily-driver".to_string(),
         "https://example.test/enabled".to_string(),
     );
-    enabled_repo.gpg_check = false;
-    enabled_repo.gpg_strict = false;
     let enabled_repo_id = enabled_repo.insert(&conn).unwrap();
     let mut enabled_pkg = RepositoryPackage::new(
         enabled_repo_id,
         "openssl30-libs".to_string(),
         "3.0.0".to_string(),
+        conary_core::repository::versioning::VersionScheme::Rpm,
         "0".repeat(64),
         10,
         "https://example.test/openssl30-libs.ccs".to_string(),
@@ -491,6 +501,7 @@ fn whatprovides_ignores_repository_prefix_collisions_and_disabled_repos() {
         None,
         "soname".to_string(),
         Some("libssl.so.30()(64bit)".to_string()),
+        VersionScheme::Rpm,
     )
     .insert(&conn)
     .unwrap();
@@ -500,13 +511,12 @@ fn whatprovides_ignores_repository_prefix_collisions_and_disabled_repos() {
         "https://example.test/disabled".to_string(),
     );
     disabled_repo.enabled = false;
-    disabled_repo.gpg_check = false;
-    disabled_repo.gpg_strict = false;
     let disabled_repo_id = disabled_repo.insert(&conn).unwrap();
     let mut disabled_pkg = RepositoryPackage::new(
         disabled_repo_id,
         "openssl-libs".to_string(),
         "3.1.0".to_string(),
+        conary_core::repository::versioning::VersionScheme::Rpm,
         "0".repeat(64),
         10,
         "https://example.test/openssl-libs.ccs".to_string(),
@@ -518,6 +528,7 @@ fn whatprovides_ignores_repository_prefix_collisions_and_disabled_repos() {
         None,
         "soname".to_string(),
         Some("libssl.so.3()(64bit)".to_string()),
+        VersionScheme::Rpm,
     )
     .insert(&conn)
     .unwrap();
@@ -556,7 +567,10 @@ fn whatprovides_ignores_repository_prefix_collisions_and_disabled_repos() {
 
 #[test]
 fn whatbreaks_reports_same_dependency_blocker_as_remove() {
-    use conary_core::db::models::{DependencyEntry, FileEntry, InstallSource, Trove, TroveType};
+    use conary_core::db::models::{InstallSource, InstalledRequirementGroup, Trove, TroveType};
+    use conary_core::repository::dependency_model::RepositoryRequirementKind;
+    use conary_core::repository::requirement::parse_native_requirement;
+    use conary_core::repository::versioning::VersionScheme;
 
     let (tmp, db_path, conn) = common::create_test_db();
     let provider_payload = tmp.path().join("usr/bin/provider-demo");
@@ -568,33 +582,33 @@ fn whatbreaks_reports_same_dependency_blocker_as_remove() {
         "1.0.0".to_string(),
         TroveType::Package,
         InstallSource::Repository,
+        conary_core::repository::versioning::VersionScheme::Conary,
     );
     let provider_id = provider.insert(&conn).unwrap();
-    FileEntry::new(
-        "/usr/bin/provider-demo".to_string(),
-        "0".repeat(64),
-        8,
-        0o100755,
-        provider_id,
-    )
-    .insert(&conn)
-    .unwrap();
+    common::regular_file_entry("/usr/bin/provider-demo", b"provider", 0o755, provider_id)
+        .insert(&conn)
+        .unwrap();
 
     let mut consumer = Trove::new_with_source(
         "consumer-demo".to_string(),
         "1.0.0".to_string(),
         TroveType::Package,
         InstallSource::Repository,
+        conary_core::repository::versioning::VersionScheme::Conary,
     );
     let consumer_id = consumer.insert(&conn).unwrap();
-    DependencyEntry::new(
-        consumer_id,
-        "provider-demo".to_string(),
-        None,
-        "runtime".to_string(),
-        None,
+    let dependency = parse_native_requirement(
+        RepositoryRequirementKind::Depends,
+        VersionScheme::Conary,
+        "provider-demo",
     )
-    .insert(&conn)
+    .unwrap();
+    InstalledRequirementGroup::insert_groups(
+        &conn,
+        consumer_id,
+        VersionScheme::Conary,
+        &[dependency],
+    )
     .unwrap();
     drop(conn);
 
@@ -620,9 +634,8 @@ fn whatbreaks_reports_same_dependency_blocker_as_remove() {
         &db_path,
         "--root",
         tmp.path().to_str().unwrap(),
-        "--no-scripts",
         "--sandbox",
-        "never",
+        "always",
         "--yes",
     ]);
     assert!(!remove.status.success(), "{}", output_text(&remove));
@@ -640,6 +653,7 @@ fn update_package_selector_refuses_ambiguous_variants_at_cli() {
             "update-demo".to_string(),
             "1.0.0".to_string(),
             TroveType::Package,
+            conary_core::repository::versioning::VersionScheme::Conary,
         );
         trove.architecture = Some(arch.to_string());
         trove.insert(&conn).unwrap();
@@ -723,7 +737,7 @@ fn list_modes_refuse_ignored_installed_variant_selectors() {
 /// Test dependency query operations (equivalent to cmd_depends/cmd_rdepends)
 #[test]
 fn test_dependency_queries() {
-    use conary_core::db::models::{DependencyEntry, ProvideEntry, Trove};
+    use conary_core::db::models::{InstalledRequirementAtom, ProvideEntry, Trove};
 
     let (_temp_dir, db_path) = common::setup_command_test_db();
     let conn = db::open(&db_path).unwrap();
@@ -731,10 +745,10 @@ fn test_dependency_queries() {
     // Get nginx's dependencies
     let nginx = Trove::find_by_name(&conn, "nginx").unwrap();
     let nginx_id = nginx[0].id.unwrap();
-    let deps = DependencyEntry::find_by_trove(&conn, nginx_id).unwrap();
+    let deps = InstalledRequirementAtom::find_by_trove(&conn, nginx_id).unwrap();
     assert_eq!(deps.len(), 1, "nginx should have 1 dependency");
     assert_eq!(deps[0].depends_on_name, "openssl");
-    assert_eq!(deps[0].depends_on_version, Some(">= 3.0".to_string()));
+    assert_eq!(deps[0].version_constraint, Some(">= 3.0".to_string()));
 
     // Test reverse dependency lookup via provides
     let openssl_providers = ProvideEntry::find_all_by_capability(&conn, "openssl").unwrap();
@@ -818,14 +832,14 @@ fn test_whatprovides_operations() {
 /// Test dependency tree building
 #[test]
 fn test_dependency_tree() {
-    use conary_core::db::models::{DependencyEntry, Trove};
+    use conary_core::db::models::{InstalledRequirementAtom, Trove};
 
     let (_temp_dir, db_path) = common::setup_command_test_db();
     let conn = db::open(&db_path).unwrap();
 
     // Build dependency tree for nginx
     let nginx = Trove::find_by_name(&conn, "nginx").unwrap().pop().unwrap();
-    let nginx_deps = DependencyEntry::find_by_trove(&conn, nginx.id.unwrap()).unwrap();
+    let nginx_deps = InstalledRequirementAtom::find_by_trove(&conn, nginx.id.unwrap()).unwrap();
 
     // nginx depends on openssl
     assert_eq!(nginx_deps.len(), 1);
@@ -836,7 +850,7 @@ fn test_dependency_tree() {
         .unwrap()
         .pop()
         .unwrap();
-    let openssl_deps = DependencyEntry::find_by_trove(&conn, openssl.id.unwrap()).unwrap();
+    let openssl_deps = InstalledRequirementAtom::find_by_trove(&conn, openssl.id.unwrap()).unwrap();
     assert!(
         openssl_deps.is_empty(),
         "openssl should have no deps in test"
@@ -848,7 +862,7 @@ fn test_dependency_tree() {
 /// Test what-breaks analysis (reverse dependency check)
 #[test]
 fn test_what_breaks_analysis() {
-    use conary_core::db::models::{DependencyEntry, Trove};
+    use conary_core::db::models::{InstalledRequirementAtom, Trove};
 
     let (_temp_dir, db_path) = common::setup_command_test_db();
     let conn = db::open(&db_path).unwrap();
@@ -860,7 +874,7 @@ fn test_what_breaks_analysis() {
 
     for trove in &all_troves {
         if let Some(id) = trove.id {
-            let deps = DependencyEntry::find_by_trove(&conn, id).unwrap();
+            let deps = InstalledRequirementAtom::find_by_trove(&conn, id).unwrap();
             for dep in deps {
                 if dep.depends_on_name == "openssl" {
                     dependents.push(trove.name.clone());

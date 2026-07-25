@@ -2,26 +2,11 @@
 
 use crate::capability::enforcement::EnforcementMode;
 use crate::child_wait::wait_with_output;
-use crate::error::{Error, Result};
+use crate::error::{Error, Result, ScriptletFailureKind};
 use std::os::unix::process::ExitStatusExt;
-use std::path::Path;
 use std::process::{Command, ExitStatus};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tracing::{info, warn};
-
-static SECCOMP_WARN_OVERRIDE: AtomicBool = AtomicBool::new(false);
-
-#[cfg(test)]
-pub(super) static ENV_LOCK: std::sync::LazyLock<std::sync::Mutex<()>> =
-    std::sync::LazyLock::new(|| std::sync::Mutex::new(()));
-
-/// Write script content to a file and set it executable (mode 0o700).
-///
-/// Delegates to [`crate::container::write_executable_script`].
-pub(super) fn write_executable_script(path: &Path, content: &str) -> Result<()> {
-    crate::container::write_executable_script(path, content)
-}
 
 pub(super) fn apply_sanitized_command_env(cmd: &mut Command, env: &[(&str, &str)]) {
     cmd.env_clear()
@@ -60,22 +45,13 @@ fn check_scriptlet_status(phase: &str, status: ExitStatus, context: &str) -> Res
         Ok(())
     } else {
         let code = status.code().unwrap_or(-1);
-        Err(Error::ScriptletError(format!(
-            "{} scriptlet failed with exit code {}{}",
-            phase, code, context
-        )))
-    }
-}
-
-pub fn set_seccomp_warn_override(enabled: bool) {
-    SECCOMP_WARN_OVERRIDE.store(enabled, Ordering::Relaxed);
-}
-
-pub(super) fn current_seccomp_mode() -> EnforcementMode {
-    if SECCOMP_WARN_OVERRIDE.load(Ordering::Relaxed) {
-        EnforcementMode::Warn
-    } else {
-        EnforcementMode::Enforce
+        Err(Error::scriptlet(
+            ScriptletFailureKind::ScriptExited,
+            format!(
+                "{} scriptlet failed with exit code {}{}",
+                phase, code, context
+            ),
+        ))
     }
 }
 
@@ -111,13 +87,16 @@ pub(super) fn wait_and_capture(
         let suffix = signal
             .map(|sig| format!(" (killed with signal {sig})"))
             .unwrap_or_default();
-        Err(Error::ScriptletError(format!(
-            "{} scriptlet timed out after {} seconds{}{}",
-            phase,
-            timeout.as_secs(),
-            context,
-            suffix
-        )))
+        Err(Error::scriptlet(
+            ScriptletFailureKind::ScriptTimedOut,
+            format!(
+                "{} scriptlet timed out after {} seconds{}{}",
+                phase,
+                timeout.as_secs(),
+                context,
+                suffix
+            ),
+        ))
     } else {
         check_scriptlet_status(
             phase,
@@ -131,63 +110,69 @@ pub(super) fn wait_and_capture(
 
 /// Build a seccomp BPF filter for scriptlet execution
 ///
-/// Uses the Scriptlet profile with the given enforcement mode.
-/// Returns `None` if seccomp is not supported on this kernel.
-pub(super) fn build_scriptlet_seccomp(mode: EnforcementMode) -> Option<seccompiler::BpfProgram> {
-    use crate::capability::SyscallCapabilities;
-    use crate::capability::enforcement::seccomp_enforce;
-
-    if !seccomp_enforce::check_seccomp_support() {
-        return None;
-    }
-
-    let caps = SyscallCapabilities {
-        profile: Some("scriptlet".to_string()),
-        allow: Vec::new(),
-        deny: Vec::new(),
+/// Uses the closed `scriptlet-v1` executor ABI with the given enforcement mode.
+/// Enforce mode fails closed when the contract cannot be installed; Warn and
+/// Audit retain an explicit diagnostic and may continue without a filter.
+pub(super) fn build_scriptlet_seccomp() -> Result<seccompiler::BpfProgram> {
+    use crate::capability::enforcement::seccomp_enforce::{
+        self, SCRIPTLET_EXECUTOR_ABI_V1, scriptlet_executor_v1_capabilities,
     };
 
-    match seccomp_enforce::build_seccomp_filter(&caps, mode) {
+    if !seccomp_enforce::check_seccomp_support() {
+        return scriptlet_seccomp_unavailable("kernel seccomp support is unavailable");
+    }
+
+    let caps = scriptlet_executor_v1_capabilities();
+
+    match seccomp_enforce::build_seccomp_filter(&caps, EnforcementMode::Enforce) {
         Ok(bpf) => {
-            info!("Built seccomp filter for scriptlet execution ({mode} mode)");
-            Some(bpf)
+            info!(
+                syscall_contract = SCRIPTLET_EXECUTOR_ABI_V1,
+                "Built mandatory seccomp filter for scriptlet execution"
+            );
+            Ok(bpf)
         }
-        Err(e) => {
-            warn!("Failed to build scriptlet seccomp filter: {e}");
-            None
+        Err(error) => {
+            scriptlet_seccomp_unavailable(&format!("failed to build the executor filter: {error}"))
         }
     }
+}
+
+fn scriptlet_seccomp_unavailable(reason: &str) -> Result<seccompiler::BpfProgram> {
+    use crate::capability::enforcement::seccomp_enforce::SCRIPTLET_EXECUTOR_ABI_V1;
+
+    Err(Error::scriptlet(
+        ScriptletFailureKind::EnforcementSetupFailed,
+        format!(
+            "Cannot enforce scriptlet syscall contract \
+             {SCRIPTLET_EXECUTOR_ABI_V1}: {reason}"
+        ),
+    ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::capability::enforcement::EnforcementMode;
 
     #[test]
-    fn test_build_scriptlet_seccomp_returns_filter() {
-        // On Linux with seccomp support, this should return Some(bpf).
-        // On other platforms or kernels without seccomp, it returns None.
-        let result = build_scriptlet_seccomp(EnforcementMode::Warn);
-        // We cannot assert Some unconditionally (CI may lack seccomp),
-        // but we verify the function does not panic and returns a valid option.
+    fn scriptlet_seccomp_is_mandatory() {
         if crate::capability::enforcement::seccomp_enforce::check_seccomp_support() {
-            assert!(
-                result.is_some(),
-                "build_scriptlet_seccomp should return Some when seccomp is supported"
-            );
+            build_scriptlet_seccomp().expect("supported seccomp must build the mandatory filter");
         } else {
             assert!(
-                result.is_none(),
-                "build_scriptlet_seccomp should return None when seccomp is unsupported"
+                build_scriptlet_seccomp().is_err(),
+                "unsupported seccomp must reject lifecycle execution"
             );
         }
     }
 
     #[test]
-    fn test_current_seccomp_mode_defaults_to_enforce() {
-        set_seccomp_warn_override(false);
-        assert_eq!(current_seccomp_mode(), EnforcementMode::Enforce);
+    fn enforce_mode_fails_closed_when_scriptlet_seccomp_is_unavailable() {
+        let error = scriptlet_seccomp_unavailable("forced test failure")
+            .expect_err("enforce mode must not execute without scriptlet-v1");
+        let message = error.to_string();
+        assert!(message.contains("scriptlet-v1"));
+        assert!(message.contains("forced test failure"));
     }
 
     #[test]

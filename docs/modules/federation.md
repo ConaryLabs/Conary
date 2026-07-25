@@ -51,7 +51,7 @@ FederatedChunkFetcher.fetch(chunk_hash)
 | `CircuitBreakerRegistry` | circuit.rs | DashMap-based lock-free registry |
 | `RequestCoalescer` | coalesce.rs | Singleflight pattern via broadcast channels |
 | `FederationManifest` | manifest.rs | Signed resource descriptor (chunks, Ed25519 signature) |
-| `ManifestTrustPolicy` | manifest.rs | Verification rules (trusted keys, allow_unsigned) |
+| `ManifestTrustPolicy` | manifest.rs | Verification rules with explicit trusted keys |
 | `MdnsDiscovery` | mdns.rs | LAN peer auto-discovery via `_conary-cas._tcp.local.` |
 
 ## Routing

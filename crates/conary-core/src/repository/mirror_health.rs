@@ -313,7 +313,7 @@ mod tests {
         let temp_file = NamedTempFile::new().unwrap();
         let conn = Connection::open(temp_file.path()).unwrap();
         conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
-        schema::migrate(&conn).unwrap();
+        schema::ensure_current(&conn).unwrap();
 
         // Insert a test repository
         conn.execute(

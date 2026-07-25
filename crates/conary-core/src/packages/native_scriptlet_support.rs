@@ -55,24 +55,14 @@ impl NativeSlotPattern {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeSupportExpectation {
     Parsed,
-    DeferredReview(&'static str),
-    Unpreservable(&'static str),
 }
 
 impl NativeSupportExpectation {
     pub fn matches(&self, support: &NativeScriptletSupport) -> bool {
-        match (self, support) {
-            (Self::Parsed, NativeScriptletSupport::Parsed) => true,
-            (
-                Self::DeferredReview(expected),
-                NativeScriptletSupport::DeferredReview { reason_code },
-            ) => reason_code == expected,
-            (
-                Self::Unpreservable(expected),
-                NativeScriptletSupport::Unpreservable { reason_code },
-            ) => reason_code == expected,
-            _ => false,
-        }
+        matches!(
+            (self, support),
+            (Self::Parsed, NativeScriptletSupport::Parsed)
+        )
     }
 }
 
@@ -96,57 +86,26 @@ const UPSTREAM_NATIVE_SCRIPTLET_SUPPORT_ROWS: &[NativeScriptletSupportRow] = &[
         kind: NativeScriptletKind::Executable,
         slot: NativeSlotPattern::Exact("%verify"),
         primary_lifecycle: NativeLifecyclePath::Verify,
-        support: NativeSupportExpectation::DeferredReview("rpm-verify-scriptlet-deferred"),
+        support: NativeSupportExpectation::Parsed,
     },
-    rpm_trigger(
-        "%triggerprein",
-        NativeLifecyclePath::Trigger,
-        "rpm-trigger-semantics-deferred",
-    ),
-    rpm_trigger(
-        "%triggerin",
-        NativeLifecyclePath::Trigger,
-        "rpm-trigger-semantics-deferred",
-    ),
-    rpm_trigger(
-        "%triggerun",
-        NativeLifecyclePath::Trigger,
-        "rpm-trigger-semantics-deferred",
-    ),
-    rpm_trigger(
-        "%triggerpostun",
-        NativeLifecyclePath::Trigger,
-        "rpm-trigger-semantics-deferred",
-    ),
-    rpm_trigger(
-        "%filetriggerin",
-        NativeLifecyclePath::FileTrigger,
-        "rpm-file-trigger-semantics-deferred",
-    ),
-    rpm_trigger(
-        "%filetriggerun",
-        NativeLifecyclePath::FileTrigger,
-        "rpm-file-trigger-semantics-deferred",
-    ),
-    rpm_trigger(
-        "%filetriggerpostun",
-        NativeLifecyclePath::FileTrigger,
-        "rpm-file-trigger-semantics-deferred",
-    ),
+    rpm_trigger("%triggerprein", NativeLifecyclePath::Trigger),
+    rpm_trigger("%triggerin", NativeLifecyclePath::Trigger),
+    rpm_trigger("%triggerun", NativeLifecyclePath::Trigger),
+    rpm_trigger("%triggerpostun", NativeLifecyclePath::Trigger),
+    rpm_trigger("%filetriggerin", NativeLifecyclePath::FileTrigger),
+    rpm_trigger("%filetriggerun", NativeLifecyclePath::FileTrigger),
+    rpm_trigger("%filetriggerpostun", NativeLifecyclePath::FileTrigger),
     rpm_trigger(
         "%transfiletriggerin",
         NativeLifecyclePath::TransactionFileTrigger,
-        "rpm-trans-file-trigger-semantics-deferred",
     ),
     rpm_trigger(
         "%transfiletriggerun",
         NativeLifecyclePath::TransactionFileTrigger,
-        "rpm-trans-file-trigger-semantics-deferred",
     ),
     rpm_trigger(
         "%transfiletriggerpostun",
         NativeLifecyclePath::TransactionFileTrigger,
-        "rpm-trans-file-trigger-semantics-deferred",
     ),
     deb_script("config", NativeLifecyclePath::Config),
     deb_script("preinst", NativeLifecyclePath::PreInstall),
@@ -155,12 +114,21 @@ const UPSTREAM_NATIVE_SCRIPTLET_SUPPORT_ROWS: &[NativeScriptletSupportRow] = &[
     deb_script("postrm", NativeLifecyclePath::PostRemove),
     NativeScriptletSupportRow {
         format: NativeScriptletFormat::Deb,
+        upstream_reference: "Debian debconf specification and debconf-devel(7)",
+        upstream_surface: "templates",
+        kind: NativeScriptletKind::ControlArtifact,
+        slot: NativeSlotPattern::Exact("templates"),
+        primary_lifecycle: NativeLifecyclePath::PackageControl,
+        support: NativeSupportExpectation::Parsed,
+    },
+    NativeScriptletSupportRow {
+        format: NativeScriptletFormat::Deb,
         upstream_reference: "Debian Policy maintainer scripts and deb-triggers(5)",
         upstream_surface: "triggers",
         kind: NativeScriptletKind::ControlArtifact,
         slot: NativeSlotPattern::Exact("triggers"),
         primary_lifecycle: NativeLifecyclePath::Trigger,
-        support: NativeSupportExpectation::DeferredReview("deb-trigger-semantics-deferred"),
+        support: NativeSupportExpectation::Parsed,
     },
     arch_install("pre_install", NativeLifecyclePath::PreInstall),
     arch_install("post_install", NativeLifecyclePath::PostInstall),
@@ -175,7 +143,7 @@ const UPSTREAM_NATIVE_SCRIPTLET_SUPPORT_ROWS: &[NativeScriptletSupportRow] = &[
         kind: NativeScriptletKind::ControlArtifact,
         slot: NativeSlotPattern::Prefix("alpm-hook:"),
         primary_lifecycle: NativeLifecyclePath::Trigger,
-        support: NativeSupportExpectation::DeferredReview("arch-alpm-hook-semantics-deferred"),
+        support: NativeSupportExpectation::Parsed,
     },
 ];
 
@@ -197,7 +165,6 @@ const fn rpm_script(
 const fn rpm_trigger(
     slot: &'static str,
     primary_lifecycle: NativeLifecyclePath,
-    reason_code: &'static str,
 ) -> NativeScriptletSupportRow {
     NativeScriptletSupportRow {
         format: NativeScriptletFormat::Rpm,
@@ -206,7 +173,7 @@ const fn rpm_trigger(
         kind: NativeScriptletKind::Executable,
         slot: NativeSlotPattern::Exact(slot),
         primary_lifecycle,
-        support: NativeSupportExpectation::DeferredReview(reason_code),
+        support: NativeSupportExpectation::Parsed,
     }
 }
 

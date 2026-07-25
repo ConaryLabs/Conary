@@ -1,28 +1,27 @@
 // apps/remi/src/server/handlers/chunks/tests.rs
 use super::*;
-use conary_core::ccs::convert::ScriptletBundleSummary;
-use conary_core::db::models::{ChunkAccess, ConvertedPackage};
 
-const PRIVATE_HASH: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-
-fn private_review_summary() -> ScriptletBundleSummary {
-    ScriptletBundleSummary {
-        publication_status: "private-review".to_string(),
-        scriptlet_fidelity: "review-required".to_string(),
-        target_compatibility: "review-required".to_string(),
-        review_reason_codes: vec!["review-class-debconf".to_string()],
-        ..Default::default()
-    }
+#[test]
+fn batch_fetch_request_rejects_removed_json_format() {
+    let error = serde_json::from_value::<BatchFetchRequest>(serde_json::json!({
+        "hashes": [],
+        "format": "json"
+    }))
+    .expect_err("removed JSON batch format must fail");
+    assert!(error.to_string().contains("unknown field `format`"));
 }
+use conary_core::db::models::{CONVERSION_VERSION, ChunkAccess, ConvertedPackage};
+
+const TEST_HASH: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 async fn chunk_state_with_db(
     hash: &str,
-    rows: Vec<ScriptletBundleSummary>,
+    stale_rows: Vec<bool>,
 ) -> (Arc<RwLock<crate::server::ServerState>>, tempfile::TempDir) {
     let temp = tempfile::tempdir().unwrap();
     let db_path = temp.path().join("test.db");
     let conn = rusqlite::Connection::open(&db_path).unwrap();
-    conary_core::db::schema::migrate(&conn).unwrap();
+    conary_core::db::schema::ensure_current(&conn).unwrap();
 
     let chunk_dir = temp.path().join("chunks");
     let cache_dir = temp.path().join("cache");
@@ -30,8 +29,8 @@ async fn chunk_state_with_db(
     std::fs::create_dir_all(chunk_path.parent().unwrap()).unwrap();
     std::fs::write(&chunk_path, b"chunk bytes").unwrap();
 
-    for (index, summary) in rows.into_iter().enumerate() {
-        let mut converted = ConvertedPackage::new_server(
+    for (index, stale) in stale_rows.into_iter().enumerate() {
+        let mut converted = ConvertedPackage::new_repository(
             "fedora".to_string(),
             format!("pkg-{index}"),
             "1.0".to_string(),
@@ -42,7 +41,9 @@ async fn chunk_state_with_db(
             format!("sha256:content-{index}"),
             format!("/tmp/pkg-{index}.ccs"),
         );
-        converted.set_scriptlet_metadata(&summary).unwrap();
+        if stale {
+            converted.conversion_version = CONVERSION_VERSION - 1;
+        }
         converted.insert(&conn).unwrap();
     }
 
@@ -182,76 +183,53 @@ fn test_extract_hash_from_path() {
 }
 
 #[tokio::test]
-async fn get_chunk_returns_not_found_for_non_public_only_hash() {
-    let (state, _temp) = chunk_state_with_db(PRIVATE_HASH, vec![private_review_summary()]).await;
+async fn get_chunk_returns_not_found_for_stale_conversion_only_hash() {
+    let (state, _temp) = chunk_state_with_db(TEST_HASH, vec![true]).await;
 
-    let response = get_chunk(
-        State(state),
-        Path(PRIVATE_HASH.to_string()),
-        HeaderMap::new(),
-    )
-    .await;
+    let response = get_chunk(State(state), Path(TEST_HASH.to_string()), HeaderMap::new()).await;
 
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
-async fn head_chunk_returns_not_found_for_non_public_only_hash() {
-    let (state, _temp) = chunk_state_with_db(PRIVATE_HASH, vec![private_review_summary()]).await;
+async fn head_chunk_returns_not_found_for_stale_conversion_only_hash() {
+    let (state, _temp) = chunk_state_with_db(TEST_HASH, vec![true]).await;
 
-    let response = head_chunk(State(state), Path(PRIVATE_HASH.to_string())).await;
+    let response = head_chunk(State(state), Path(TEST_HASH.to_string())).await;
 
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
-async fn get_chunk_allows_hash_shared_with_public_ready_row() {
-    let (state, _temp) = chunk_state_with_db(
-        PRIVATE_HASH,
-        vec![private_review_summary(), ScriptletBundleSummary::default()],
-    )
-    .await;
+async fn get_chunk_allows_hash_shared_with_current_conversion_row() {
+    let (state, _temp) = chunk_state_with_db(TEST_HASH, vec![true, false]).await;
 
-    let response = get_chunk(
-        State(state),
-        Path(PRIVATE_HASH.to_string()),
-        HeaderMap::new(),
-    )
-    .await;
+    let response = get_chunk(State(state), Path(TEST_HASH.to_string()), HeaderMap::new()).await;
 
     assert_eq!(response.status(), StatusCode::OK);
 }
 
 #[tokio::test]
-async fn head_chunk_allows_hash_shared_with_public_ready_row() {
-    let (state, _temp) = chunk_state_with_db(
-        PRIVATE_HASH,
-        vec![private_review_summary(), ScriptletBundleSummary::default()],
-    )
-    .await;
+async fn head_chunk_allows_hash_shared_with_current_conversion_row() {
+    let (state, _temp) = chunk_state_with_db(TEST_HASH, vec![true, false]).await;
 
-    let response = head_chunk(State(state), Path(PRIVATE_HASH.to_string())).await;
+    let response = head_chunk(State(state), Path(TEST_HASH.to_string())).await;
 
     assert_eq!(response.status(), StatusCode::OK);
 }
 
 #[tokio::test]
 async fn get_chunk_allows_unreferenced_protected_local_cache_hash() {
-    let (state, _temp) = chunk_state_with_db(PRIVATE_HASH, Vec::new()).await;
+    let (state, _temp) = chunk_state_with_db(TEST_HASH, Vec::new()).await;
     {
         let state_guard = state.read().await;
         let conn = rusqlite::Connection::open(&state_guard.config.db_path).unwrap();
-        let mut chunk = ChunkAccess::new(PRIVATE_HASH.to_string(), 11);
+        let mut chunk = ChunkAccess::new(TEST_HASH.to_string(), 11);
         chunk.protected = true;
         chunk.upsert(&conn).unwrap();
     }
 
-    let response = get_chunk(
-        State(state),
-        Path(PRIVATE_HASH.to_string()),
-        HeaderMap::new(),
-    )
-    .await;
+    let response = get_chunk(State(state), Path(TEST_HASH.to_string()), HeaderMap::new()).await;
 
     assert_eq!(response.status(), StatusCode::OK);
 }

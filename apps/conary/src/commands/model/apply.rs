@@ -12,13 +12,12 @@ use super::presentation::{
 use crate::commands::replatform_rendering::{
     render_replatform_blocked_reason, render_replatform_execution_plan,
 };
-use crate::commands::{InstallOptions, LegacyReplayOptions, SandboxMode, cmd_install, cmd_remove};
+use crate::commands::{InstallOptions, SandboxMode, cmd_install, cmd_remove};
 use anyhow::{Result, anyhow};
 use conary_core::db::models::{DistroPin, Repository, Trove, settings};
 use conary_core::filesystem::CasStore;
 use conary_core::model::parser::SystemModel;
 use conary_core::model::{DiffAction, replatform_execution_plan};
-use conary_core::repository::versioning::{VersionScheme, infer_version_scheme};
 use conary_core::repository::{
     SETTINGS_KEY_ALLOWED_DISTROS, SETTINGS_KEY_SELECTION_MODE, resolution_policy::SelectionMode,
 };
@@ -37,7 +36,6 @@ thread_local! {
 pub struct ApplyOptions<'a> {
     pub model_path: &'a str,
     pub db_path: &'a str,
-    #[allow(dead_code)] // reserved for future chroot support
     pub root: &'a str,
     pub dry_run: bool,
     pub skip_optional: bool,
@@ -181,15 +179,9 @@ pub async fn cmd_model_apply(opts: ApplyOptions<'_>) -> Result<()> {
 
     if autoremove {
         println!();
-        if let Err(e) = crate::commands::cmd_autoremove(
-            db_path,
-            root,
-            false,
-            false,
-            crate::commands::SandboxMode::Always,
-            crate::commands::LegacyReplayOptions::default(),
-        )
-        .await
+        if let Err(e) =
+            crate::commands::cmd_autoremove(db_path, false, crate::commands::SandboxMode::Always)
+                .await
         {
             errors.push(format!("Autoremove: {}", e));
         }
@@ -385,18 +377,14 @@ pub(super) async fn apply_replatform_changes(
                 architecture: transaction.architecture.clone(),
                 dry_run: false,
                 no_deps: false,
-                no_scripts: false,
                 selection_reason: Some(selection_reason.as_str()),
-                sandbox_mode: SandboxMode::None,
+                sandbox_mode: SandboxMode::Always,
                 allow_downgrade: true,
-                allow_capabilities: false,
                 convert_to_ccs: false,
-                force: false,
-                dep_mode: None,
+                ownership: None,
                 yes: true,
                 from_distro: None,
                 repository_provenance: None,
-                legacy_replay: LegacyReplayOptions::default(),
             },
         )
         .await
@@ -439,13 +427,7 @@ pub(super) async fn apply_replatform_changes(
 }
 
 fn format_replatform_install_error(package: &str, err: anyhow::Error) -> String {
-    let error = err.to_string();
-    let guidance = if error.contains("LegacyReplayFeatureDisabled") {
-        " Safe choices: select a different target distro or wait for adapter coverage."
-    } else {
-        ""
-    };
-    format!("Replatform '{package}': {error}{guidance}")
+    format!("Replatform '{package}': {err}")
 }
 
 fn finalize_replatform_provenance(
@@ -463,9 +445,8 @@ fn finalize_replatform_provenance(
     let repository_id = repository
         .id
         .ok_or_else(|| anyhow!("repository '{repository_name}' missing id"))?;
-    let version_scheme = infer_version_scheme(&repository)
-        .ok_or_else(|| anyhow!("unable to infer version scheme for '{repository_name}'"))?;
     let installed = find_installed_replatform_trove(conn, transaction)?;
+    let version_scheme = installed.version_scheme;
     let installed_id = installed.id.ok_or_else(|| {
         anyhow!(
             "installed replatform trove '{}' missing id",
@@ -477,7 +458,7 @@ fn finalize_replatform_provenance(
         conn,
         installed_id,
         &transaction.target_distro,
-        version_scheme_to_str(version_scheme),
+        version_scheme,
         repository_id,
         selection_reason,
     )?;
@@ -538,14 +519,6 @@ fn find_current_replatform_source(
         .into_iter()
         .next()
         .and_then(|trove| trove.source_distro))
-}
-
-fn version_scheme_to_str(scheme: VersionScheme) -> &'static str {
-    match scheme {
-        VersionScheme::Rpm => "rpm",
-        VersionScheme::Debian => "debian",
-        VersionScheme::Arch => "arch",
-    }
 }
 
 fn mark_replatform_partial_failure(
@@ -618,13 +591,10 @@ pub(super) async fn apply_package_changes(
                 match cmd_remove(
                     package,
                     db_path,
-                    root,
                     Some(current_version.clone()),
                     arch.cloned(),
-                    false,
                     SandboxMode::Always,
                     false,
-                    LegacyReplayOptions::default(),
                 )
                 .await
                 {
@@ -671,18 +641,14 @@ pub(super) async fn apply_package_changes(
                         architecture: None,
                         dry_run: false,
                         no_deps: false,
-                        no_scripts: false,
                         selection_reason: Some("Installed by model apply"),
                         sandbox_mode: SandboxMode::Always,
                         allow_downgrade: false,
-                        allow_capabilities: false,
                         convert_to_ccs: false,
-                        force: false,
-                        dep_mode: None,
+                        ownership: None,
                         yes: true,
                         from_distro: None,
                         repository_provenance: None,
-                        legacy_replay: LegacyReplayOptions::default(),
                     },
                 )
                 .await
@@ -720,18 +686,14 @@ pub(super) async fn apply_package_changes(
                         architecture: None,
                         dry_run: false,
                         no_deps: false,
-                        no_scripts: false,
                         selection_reason: Some("Updated by model apply"),
                         sandbox_mode: SandboxMode::Always,
                         allow_downgrade: true,
-                        allow_capabilities: false,
                         convert_to_ccs: false,
-                        force: false,
-                        dep_mode: None,
+                        ownership: None,
                         yes: true,
                         from_distro: None,
                         repository_provenance: None,
-                        legacy_replay: LegacyReplayOptions::default(),
                     },
                 )
                 .await
@@ -875,35 +837,53 @@ pub(super) fn apply_metadata_changes(
                 }
                 Err(e) => errors.push(format!("Unpin '{}': {}", package, e)),
             },
-            DiffAction::MarkExplicit { package } => {
-                match Trove::promote_to_explicit(
-                    conn,
-                    package,
-                    Some("Marked explicit by model apply"),
-                ) {
-                    Ok(true) => {
-                        println!("Marked '{}' as explicitly installed", package);
-                        applied += 1;
-                    }
-                    Ok(false) => {
-                        debug!("'{}' already explicit or not found", package);
-                    }
-                    Err(e) => errors.push(format!("MarkExplicit '{}': {}", package, e)),
-                }
-            }
+            DiffAction::MarkExplicit { package } => match Trove::find_one_by_name(conn, package) {
+                Ok(Some(trove)) => match trove.id {
+                    Some(trove_id) => match Trove::promote_to_explicit(
+                        conn,
+                        trove_id,
+                        Some("Marked explicit by model apply"),
+                    ) {
+                        Ok(true) => {
+                            println!("Marked '{}' as explicitly installed", package);
+                            applied += 1;
+                        }
+                        Ok(false) => {
+                            debug!("'{}' already explicit or not found", package);
+                        }
+                        Err(e) => errors.push(format!("MarkExplicit '{}': {}", package, e)),
+                    },
+                    None => errors.push(format!(
+                        "MarkExplicit '{}': installed trove has no persisted ID",
+                        package
+                    )),
+                },
+                Ok(None) => debug!("'{}' not installed", package),
+                Err(e) => errors.push(format!("MarkExplicit '{}': {}", package, e)),
+            },
             DiffAction::MarkDependency { package } => {
-                match conn.execute(
-                    "UPDATE troves SET install_reason = 'dependency' \
-                     WHERE name = ?1 AND install_reason = 'explicit' AND type = 'package'",
-                    rusqlite::params![package],
-                ) {
-                    Ok(rows) if rows > 0 => {
-                        println!("Marked '{}' as dependency", package);
-                        applied += 1;
-                    }
-                    Ok(_) => {
-                        debug!("'{}' already a dependency or not found", package);
-                    }
+                match Trove::find_one_by_name(conn, package) {
+                    Ok(Some(trove)) => match trove.id {
+                        Some(trove_id) => match conn.execute(
+                            "UPDATE troves SET install_reason = 'dependency' \
+                             WHERE id = ?1 AND install_reason = 'explicit' AND type = 'package'",
+                            rusqlite::params![trove_id],
+                        ) {
+                            Ok(rows) if rows > 0 => {
+                                println!("Marked '{}' as dependency", package);
+                                applied += 1;
+                            }
+                            Ok(_) => {
+                                debug!("'{}' already a dependency", package);
+                            }
+                            Err(e) => errors.push(format!("MarkDependency '{}': {}", package, e)),
+                        },
+                        None => errors.push(format!(
+                            "MarkDependency '{}': installed trove has no persisted ID",
+                            package
+                        )),
+                    },
+                    Ok(None) => debug!("'{}' not installed", package),
                     Err(e) => errors.push(format!("MarkDependency '{}': {}", package, e)),
                 }
             }

@@ -3,21 +3,18 @@
 #[cfg(test)]
 mod query_scripts {
     use super::super::*;
-    use conary_core::ccs::legacy_scriptlets::{
-        CommandArgumentProvenance, CommandEvidenceSource, CommandExecutionContext, DecisionCounts,
-        EffectConfidence, EffectReplacement, EffectSource, ForeignReplayPolicy,
-        LEGACY_SCRIPTLET_SCHEMA_V1, LegacyScriptletBundle, LegacyScriptletEntry, LifecyclePath,
-        NativeInvocation, PublicationPolicy, PublicationStatus, ScriptletDecision, ScriptletEffect,
-        ScriptletFidelity, SourceFormat, TargetCompatibility, TransactionOrder, VersionScheme,
+    use conary_core::ccs::native_lifecycle::{
+        LifecyclePath, NATIVE_LIFECYCLE_SCHEMA_REVISION, NATIVE_LIFECYCLE_SCHEMA_V1,
+        NativeInvocation, NativeLifecycleBundle, NativeLifecycleEntry, NativeLifecycleEntryKind,
+        ScriptletFidelity, SourceFormat, TransactionOrder, VersionScheme,
     };
-    use std::collections::BTreeMap;
 
-    fn bundle_fixture() -> LegacyScriptletBundle {
-        let legacy_body = "systemctl daemon-reload\n";
-        let replaced_body = "ldconfig\n";
-        LegacyScriptletBundle {
-            schema: LEGACY_SCRIPTLET_SCHEMA_V1.to_string(),
-            schema_revision: 2,
+    fn bundle_fixture() -> NativeLifecycleBundle {
+        let post_install_body = "systemctl daemon-reload\n";
+        let pre_remove_body = "ldconfig\n";
+        NativeLifecycleBundle {
+            schema: NATIVE_LIFECYCLE_SCHEMA_V1.to_string(),
+            schema_revision: NATIVE_LIFECYCLE_SCHEMA_REVISION,
             source_format: SourceFormat::Rpm,
             source_family: "fedora-rhel".to_string(),
             source_distro: Some("fedora".to_string()),
@@ -32,43 +29,24 @@ mod query_scripts {
             version_scheme: VersionScheme::Rpm,
             conversion_tool: "remi".to_string(),
             conversion_tool_version: "0.8.0".to_string(),
-            conversion_policy: "safe-or-legacy".to_string(),
-            adapter_registry_digest: Some(
-                "sha256:4444444444444444444444444444444444444444444444444444444444444444"
-                    .to_string(),
-            ),
-            target_policy_digest: None,
+            conversion_policy: "typed-native-lifecycle".to_string(),
             evidence_digest: Some(
                 "sha256:5555555555555555555555555555555555555555555555555555555555555555"
                     .to_string(),
             ),
-            target_compatibility: TargetCompatibility::SourceNative,
-            allowed_targets: vec!["rpm/fedora/44/x86_64".to_string()],
-            foreign_replay_policy: ForeignReplayPolicy::Deny,
-            publication_policy: PublicationPolicy::PublicIfNoBlocked,
-            publication_status: PublicationStatus::PrivateReview,
-            scriptlet_fidelity: ScriptletFidelity::Mixed,
-            decision_counts: DecisionCounts {
-                replaced: 1,
-                legacy: 1,
-                blocked: 0,
-                review: 0,
-                extra: BTreeMap::new(),
-            },
-            unsupported_class_counts: BTreeMap::new(),
-            security_policy_intents: Vec::new(),
+            scriptlet_fidelity: ScriptletFidelity::NativeLifecycle,
             entries: vec![
-                entry_fixture("rpm:%preun", ScriptletDecision::Replaced, replaced_body),
-                entry_fixture("rpm:%post", ScriptletDecision::Legacy, legacy_body),
+                entry_fixture("rpm:%preun", pre_remove_body),
+                entry_fixture("rpm:%post", post_install_body),
             ],
-            extra: BTreeMap::new(),
         }
     }
 
-    fn entry_fixture(id: &str, decision: ScriptletDecision, body: &str) -> LegacyScriptletEntry {
-        LegacyScriptletEntry {
+    fn entry_fixture(id: &str, body: &str) -> NativeLifecycleEntry {
+        NativeLifecycleEntry {
             id: id.to_string(),
             native_slot: id.split(':').nth(1).unwrap_or("%post").to_string(),
+            kind: NativeLifecycleEntryKind::Executable,
             phase: if id.ends_with("%preun") {
                 LifecyclePath::PreRemove
             } else {
@@ -85,64 +63,38 @@ mod query_scripts {
                 environment: vec!["RPM_INSTALL_PREFIX=/".to_string()],
                 stdin: Some("none".to_string()),
                 chroot: Some("install-root".to_string()),
-                extra: BTreeMap::new(),
             },
             transaction_order: TransactionOrder {
                 position: "after-payload".to_string(),
                 before: vec![],
                 after: vec!["payload".to_string()],
-                extra: BTreeMap::new(),
             },
             timeout_ms: 30_000,
             sandbox: None,
             capabilities: vec!["ldconfig".to_string()],
-            decision,
-            reason_code: "protected-replay-required".to_string(),
-            human_reason: Some("fixture reason".to_string()),
             evidence_digest: Some(
                 "sha256:6666666666666666666666666666666666666666666666666666666666666666"
                     .to_string(),
             ),
             source_evidence_refs: vec!["capture:rpm:%post".to_string()],
-            effects: vec![ScriptletEffect {
-                kind: "ldconfig".to_string(),
-                source: EffectSource::ShellAst,
-                confidence: EffectConfidence::Declared,
-                replacement: EffectReplacement::Complete,
-                adapter_id: Some("ldconfig/v1".to_string()),
-                adapter_digest: Some(
-                    "sha256:7777777777777777777777777777777777777777777777777777777777777777"
-                        .to_string(),
-                ),
-                command: Some("ldconfig".to_string()),
-                args: vec!["-X".to_string()],
-                path: Some("/usr/lib64".to_string()),
-                reason_code: Some("ldconfig-cache-refresh".to_string()),
-                extra: BTreeMap::new(),
-            }],
-            unknown_command_evidence: vec![UnknownCommandEvidence {
-                command: "systemctl".to_string(),
-                command_provenance: CommandArgumentProvenance::Literal,
-                argv: vec!["restart".to_string(), "nginx.service".to_string()],
-                argument_provenance: vec![
-                    CommandArgumentProvenance::Literal,
-                    CommandArgumentProvenance::Literal,
-                ],
-                execution_context: CommandExecutionContext::Unconditional,
-                phase: Some("post-install".to_string()),
-                lifecycle_paths: vec!["post-install".to_string()],
-                source: CommandEvidenceSource::ShellAst,
-                environment: Vec::new(),
-                pipeline_id: None,
-            }],
-            blocked_classes: vec![],
-            boot_security_intents: Vec::new(),
-            security_policy_intents: Vec::new(),
             rpm_trigger: None,
+            rpm_runtime: Some(conary_core::ccs::native_lifecycle::RpmRuntimeMetadata {
+                program: conary_core::ccs::native_lifecycle::RpmProgram::External,
+                body_transforms: Vec::new(),
+                critical: false,
+                criticality: conary_core::ccs::native_lifecycle::RpmCriticality::WarningOnly,
+                raw_flags: 0,
+                unknown_flags: 0,
+                install_prefixes: Vec::new(),
+                macro_context: Default::default(),
+                header_context: Default::default(),
+                package_rpm_version: None,
+            }),
+            rpm_sysusers: None,
             deb_maintainer: None,
             arch_install: None,
-            residual_replay: None,
-            extra: BTreeMap::new(),
+            arch_hook: None,
+            residual_lifecycle: None,
         }
     }
 
@@ -151,6 +103,41 @@ mod query_scripts {
             name: "nginx".to_string(),
             version: "1.28.0".to_string(),
         }
+    }
+
+    fn signed_ccs_fixture(
+        temp: &tempfile::TempDir,
+    ) -> (
+        std::path::PathBuf,
+        std::path::PathBuf,
+        conary_core::ccs::SigningKeyPair,
+    ) {
+        let source = temp.path().join("source");
+        std::fs::create_dir_all(source.join("usr/bin")).unwrap();
+        std::fs::write(source.join("usr/bin/query-demo"), b"demo\n").unwrap();
+        let result = conary_core::ccs::CcsBuilder::new(
+            conary_core::ccs::CcsManifest::new_minimal("query-demo", "1.0.0"),
+            &source,
+        )
+        .build()
+        .unwrap();
+        let package_path = temp.path().join("query-demo.ccs");
+        let policy_path = temp.path().join("policy.toml");
+        let signer =
+            conary_core::ccs::SigningKeyPair::generate().with_key_id("query-test-authority");
+        conary_core::ccs::builder::write_signed_current_ccs_package(
+            &result,
+            &package_path,
+            &signer,
+            false,
+        )
+        .unwrap();
+        std::fs::write(
+            &policy_path,
+            format!("trusted_keys = [\"{}\"]\n", signer.public_key_base64()),
+        )
+        .unwrap();
+        (package_path, policy_path, signer)
     }
 
     #[test]
@@ -163,8 +150,8 @@ mod query_scripts {
         .expect("render summary");
 
         assert!(output.contains("Package: nginx 1.28.0"));
-        assert!(output.contains("Legacy scriptlet bundle: conary.legacy-scriptlets.v1"));
-        assert!(output.contains("Entries: 1 replaced, 1 legacy, 0 blocked, 0 review"));
+        assert!(output.contains("Native lifecycle bundle: conary.native-lifecycles.v1"));
+        assert!(output.contains("Native entries: 2"));
         assert!(output.contains("rpm:%post"));
         assert!(!output.contains("systemctl daemon-reload"));
     }
@@ -183,7 +170,6 @@ mod query_scripts {
 
         assert!(output.contains("Interpreter: /bin/sh"));
         assert!(output.contains("Timeout: 30000ms"));
-        assert!(output.contains("Effects:"));
         assert!(output.contains("body_sha256="));
         assert!(!output.contains("systemctl daemon-reload"));
     }
@@ -241,7 +227,6 @@ mod query_scripts {
     fn script_query_json_reports_zero_entry_bundle() {
         let mut bundle = bundle_fixture();
         bundle.entries.clear();
-        bundle.decision_counts = DecisionCounts::default();
         bundle.scriptlet_fidelity = ScriptletFidelity::NativeFree;
 
         let output = render_ccs_bundle_json(
@@ -259,5 +244,48 @@ mod query_scripts {
                 .expect("entries array")
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn ccs_file_query_requires_explicit_trust_policy() {
+        let temp = tempfile::tempdir().unwrap();
+        let (package_path, policy_path, _) = signed_ccs_fixture(&temp);
+        let package_path = package_path.to_string_lossy();
+
+        let missing_policy =
+            load_verified_ccs_package(&package_path, &ScriptQueryOptions::default()).unwrap_err();
+        assert!(missing_policy.to_string().contains("requires --policy"));
+
+        let package = load_verified_ccs_package(
+            &package_path,
+            &ScriptQueryOptions {
+                policy_path: Some(policy_path.to_string_lossy().into_owned()),
+                ..ScriptQueryOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(package.manifest().package.name, "query-demo");
+    }
+
+    #[test]
+    fn ccs_file_query_rejects_untrusted_signer() {
+        let temp = tempfile::tempdir().unwrap();
+        let (package_path, policy_path, _) = signed_ccs_fixture(&temp);
+        let untrusted = conary_core::ccs::SigningKeyPair::generate();
+        std::fs::write(
+            &policy_path,
+            format!("trusted_keys = [\"{}\"]\n", untrusted.public_key_base64()),
+        )
+        .unwrap();
+
+        let error = load_verified_ccs_package(
+            &package_path.to_string_lossy(),
+            &ScriptQueryOptions {
+                policy_path: Some(policy_path.to_string_lossy().into_owned()),
+                ..ScriptQueryOptions::default()
+            },
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("not trusted"));
     }
 }

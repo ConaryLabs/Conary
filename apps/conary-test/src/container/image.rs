@@ -100,6 +100,16 @@ fn ensure_phase2_fixture_outputs(fixtures_root: &Path, conary_bin: &Path) -> Res
     if !fixture_root.is_dir() {
         return Ok(());
     }
+    let signing_key = crate::paths::fixture_ccs_key_path_for(fixtures_root);
+    let trust_policy = crate::paths::fixture_ccs_policy_path_for(fixtures_root);
+    for authority_path in [&signing_key, &trust_policy] {
+        if !authority_path.is_file() {
+            bail!(
+                "Phase 2 fixture authority is missing {}; regenerate apps/conary/tests/fixtures/ccs-test-authority",
+                authority_path.display()
+            );
+        }
+    }
 
     for version in ["v1", "v2"] {
         let version_root = fixture_root.join(version);
@@ -110,19 +120,12 @@ fn ensure_phase2_fixture_outputs(fixtures_root: &Path, conary_bin: &Path) -> Res
         }
 
         let output_dir = version_root.join("output");
+        if output_dir.exists() {
+            fs::remove_dir_all(&output_dir)
+                .with_context(|| format!("failed to reset {}", output_dir.display()))?;
+        }
         fs::create_dir_all(&output_dir)
             .with_context(|| format!("failed to create {}", output_dir.display()))?;
-
-        let has_fixture = fs::read_dir(&output_dir)
-            .with_context(|| format!("failed to read {}", output_dir.display()))?
-            .any(|entry| {
-                entry
-                    .map(|entry| entry.path().extension().is_some_and(|ext| ext == "ccs"))
-                    .unwrap_or(false)
-            });
-        if has_fixture {
-            continue;
-        }
 
         let output = std::process::Command::new(conary_bin)
             .args(["ccs", "build"])
@@ -131,6 +134,8 @@ fn ensure_phase2_fixture_outputs(fixtures_root: &Path, conary_bin: &Path) -> Res
             .arg(&source)
             .arg("--output")
             .arg(&output_dir)
+            .arg("--key")
+            .arg(&signing_key)
             .output()
             .with_context(|| {
                 format!(
@@ -146,6 +151,43 @@ fn ensure_phase2_fixture_outputs(fixtures_root: &Path, conary_bin: &Path) -> Res
             bail!(
                 "failed to build Phase 2 fixture {}\nstdout:\n{}\nstderr:\n{}",
                 manifest.display(),
+                stdout.trim_end(),
+                stderr.trim_end()
+            );
+        }
+
+        let packages = fs::read_dir(&output_dir)
+            .with_context(|| format!("failed to read {}", output_dir.display()))?
+            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+            .filter(|path| path.extension().is_some_and(|extension| extension == "ccs"))
+            .collect::<Vec<_>>();
+        if packages.len() != 1 {
+            bail!(
+                "expected one signed Phase 2 fixture in {}, found {}",
+                output_dir.display(),
+                packages.len()
+            );
+        }
+        let verify = std::process::Command::new(conary_bin)
+            .args(["ccs", "verify"])
+            .arg(&packages[0])
+            .arg("--policy")
+            .arg(&trust_policy)
+            .output()
+            .with_context(|| {
+                format!(
+                    "failed to verify Phase 2 fixture {} with {}",
+                    packages[0].display(),
+                    conary_bin.display()
+                )
+            })?;
+        if !verify.status.success() {
+            let stdout = String::from_utf8_lossy(&verify.stdout);
+            let stderr = String::from_utf8_lossy(&verify.stderr);
+            bail!(
+                "Phase 2 fixture {} did not verify under {}\nstdout:\n{}\nstderr:\n{}",
+                packages[0].display(),
+                trust_policy.display(),
                 stdout.trim_end(),
                 stderr.trim_end()
             );
@@ -275,14 +317,18 @@ mod tests {
             .expect("system time before unix epoch")
             .as_nanos();
         let project_root = std::env::temp_dir().join(format!("conary-test-stage-context-{unique}"));
-        let remi_root = project_root.join("tests/integration/remi");
+        let remi_root = project_root.join("apps/conary/tests/integration/remi");
         let containerfile = remi_root.join("containers/Containerfile.fedora44");
 
         fs::create_dir_all(remi_root.join("containers")).expect("create containers");
-        fs::create_dir_all(project_root.join("tests/fixtures/recipes/simple-hello"))
+        fs::create_dir_all(project_root.join("apps/conary/tests/fixtures/recipes/simple-hello"))
             .expect("create fixtures");
-        fs::create_dir_all(project_root.join("tests/fixtures/conary-test-fixture/v1/output"))
-            .expect("create fixture output");
+        fs::create_dir_all(
+            project_root.join("apps/conary/tests/fixtures/conary-test-fixture/v1/output"),
+        )
+        .expect("create fixture output");
+        fs::create_dir_all(project_root.join("apps/conary/tests/fixtures/ccs-test-authority"))
+            .expect("create fixture authority");
         fs::create_dir_all(project_root.join("packaging/arch")).expect("create packaging");
 
         fs::write(
@@ -294,15 +340,26 @@ mod tests {
         fs::write(&containerfile, "FROM scratch\n").expect("write containerfile");
         fs::write(remi_root.join("config.toml"), "[paths]\n").expect("write config");
         fs::write(
-            project_root.join("tests/fixtures/recipes/simple-hello/recipe.toml"),
+            project_root.join("apps/conary/tests/fixtures/recipes/simple-hello/recipe.toml"),
             "name = 'simple-hello'\n",
         )
         .expect("write fixture");
         fs::write(
-            project_root.join("tests/fixtures/conary-test-fixture/v1/output/test.ccs"),
+            project_root.join("apps/conary/tests/fixtures/conary-test-fixture/v1/output/test.ccs"),
             "fixture-bytes",
         )
         .expect("write fixture output");
+        fs::write(
+            project_root
+                .join("apps/conary/tests/fixtures/ccs-test-authority/fixture-signing-key.private"),
+            "test private key\n",
+        )
+        .expect("write fixture private key");
+        fs::write(
+            project_root.join("apps/conary/tests/fixtures/ccs-test-authority/trust-policy.toml"),
+            "trusted_keys = [\"test\"]\n",
+        )
+        .expect("write fixture trust policy");
         fs::write(
             project_root.join("packaging/arch/PKGBUILD"),
             "pkgname=conary\n",
@@ -350,8 +407,9 @@ mod tests {
             .as_nanos();
         let project_root =
             std::env::temp_dir().join(format!("conary-test-phase2-fixtures-{unique}"));
-        let remi_root = project_root.join("tests/integration/remi");
-        let fixture_root = project_root.join("tests/fixtures/conary-test-fixture");
+        let remi_root = project_root.join("apps/conary/tests/integration/remi");
+        let fixture_root = project_root.join("apps/conary/tests/fixtures/conary-test-fixture");
+        let authority_root = project_root.join("apps/conary/tests/fixtures/ccs-test-authority");
         let containerfile = remi_root.join("containers/Containerfile.arch");
         let conary = project_root.join("conary");
 
@@ -360,6 +418,7 @@ mod tests {
             .expect("create v1 fixture source");
         fs::create_dir_all(fixture_root.join("v2/stage/usr/share/conary-test"))
             .expect("create v2 fixture source");
+        fs::create_dir_all(&authority_root).expect("create fixture authority");
         fs::write(
             project_root.join("Cargo.toml"),
             "[workspace]\nmembers = []\n",
@@ -380,16 +439,37 @@ mod tests {
         )
         .expect("write v2 source");
         fs::write(
+            authority_root.join("fixture-signing-key.private"),
+            "test private key\n",
+        )
+        .expect("write fixture private key");
+        fs::write(
+            authority_root.join("trust-policy.toml"),
+            "trusted_keys = [\"test\"]\n",
+        )
+        .expect("write fixture trust policy");
+        fs::write(
             &conary,
             r#"#!/usr/bin/env bash
 set -euo pipefail
+if [[ "$1 $2" == "ccs verify" ]]; then
+  [[ "$4" == "--policy" ]]
+  exit 0
+fi
 manifest="$3"
-output="${!#}"
+output=""
+for ((i = 1; i <= $#; i++)); do
+  if [[ "${!i}" == "--output" ]]; then
+    next=$((i + 1))
+    output="${!next}"
+  fi
+done
 case "$manifest" in
-  */v1/ccs.toml) file="conary-test-fixture-1.0.0.ccs" ;;
-  */v2/ccs.toml) file="conary-test-fixture-2.0.0.ccs" ;;
+  */v1/ccs.toml) file="conary-test-fixture-1.0.0-1.ccs" ;;
+  */v2/ccs.toml) file="conary-test-fixture-2.0.0-1.ccs" ;;
   *) echo "unexpected manifest: $manifest" >&2; exit 2 ;;
 esac
+[[ -n "$output" ]]
 mkdir -p "$output"
 printf 'fixture\n' > "$output/$file"
 "#,
@@ -406,13 +486,13 @@ printf 'fixture\n' > "$output/$file"
         assert!(
             staged
                 .root
-                .join("fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0.ccs")
+                .join("fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0-1.ccs")
                 .is_file()
         );
         assert!(
             staged
                 .root
-                .join("fixtures/conary-test-fixture/v2/output/conary-test-fixture-2.0.0.ccs")
+                .join("fixtures/conary-test-fixture/v2/output/conary-test-fixture-2.0.0-1.ccs")
                 .is_file()
         );
 

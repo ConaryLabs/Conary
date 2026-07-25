@@ -167,16 +167,6 @@ impl AsyncRemiClient {
                         error_msg
                     )));
                 }
-                "review-required" | "blocked" => {
-                    return Err(
-                        terminal_publication_status_error(&status).unwrap_or_else(|| {
-                            Error::DownloadError(format!(
-                                "Remi returned terminal conversion status {} for {}/{}",
-                                status.status, status.distro, status.package
-                            ))
-                        }),
-                    );
-                }
                 "converting" | "queued" => {
                     if let Some(progress) = status.progress {
                         debug!("Converting {} ({}%)...", status.package, progress);
@@ -184,8 +174,10 @@ impl AsyncRemiClient {
                     tokio::time::sleep(POLL_INTERVAL).await;
                 }
                 other => {
-                    warn!("Unknown job status: {}", other);
-                    tokio::time::sleep(POLL_INTERVAL).await;
+                    return Err(Error::DownloadError(format!(
+                        "Remi returned unsupported conversion status {other} for {}/{}",
+                        status.distro, status.package
+                    )));
                 }
             }
         }

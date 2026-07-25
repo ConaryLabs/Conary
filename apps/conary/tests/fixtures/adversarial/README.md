@@ -19,3 +19,10 @@ Use `apps/conary/tests/fixtures/adversarial/build-all.sh` to build every
 fixture set, or run
 `apps/conary/tests/fixtures/adversarial/build-large.sh` directly to regenerate
 the large stress fixtures in `large/`.
+
+Every CCS base package is current signed authority built with the disposable
+key under `../ccs-test-authority/`. Corrupted fixtures are mutated only after
+that signed build, so install failures exercise archive, projection, signature,
+or payload integrity instead of the retired unsigned-package bypass. Rotate
+the authority with `../ccs-test-authority/generate.sh`, then rebuild all CCS
+fixture sets together.

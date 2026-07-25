@@ -2,540 +2,261 @@
 
 use super::*;
 use crate::ccs::convert::ScriptletBundleSummary;
+use crate::db::models::{Trove, TroveType};
 use crate::db::testing::create_test_db;
 
-#[test]
-fn converted_package_defaults_scriptlet_metadata() {
-    let converted = ConvertedPackage::new("rpm".to_string(), "sha256:source".to_string());
+fn server_package(checksum: &str, chunk: &str) -> ConvertedPackage {
+    ConvertedPackage::new_repository(
+        "fedora-44".to_string(),
+        "fixture".to_string(),
+        "1.0-1".to_string(),
+        "rpm".to_string(),
+        checksum.to_string(),
+        &[chunk.to_string()],
+        42,
+        "sha256:content".to_string(),
+        "/tmp/fixture.ccs".to_string(),
+    )
+}
 
-    assert_eq!(converted.scriptlet_fidelity, "unknown");
-    assert_eq!(converted.target_compatibility, "unknown");
-    assert_eq!(converted.publication_status, "public");
-    assert_eq!(converted.blocked_reason_codes_json, "[]");
-    assert_eq!(converted.scriptlet_summary_json, "{}");
-    assert_eq!(converted.review_artifact_path, None);
+fn installed_package(
+    conn: &Connection,
+    original_format: &str,
+    original_checksum: &str,
+) -> ConvertedPackage {
+    let mut trove = Trove::new(
+        format!("installed-{}", conn.last_insert_rowid()),
+        "1".to_string(),
+        TroveType::Package,
+        crate::repository::versioning::VersionScheme::Conary,
+    );
+    let trove_id = trove.insert(conn).unwrap();
+    ConvertedPackage::new_installed(
+        trove_id,
+        original_format.to_string(),
+        original_checksum.to_string(),
+    )
 }
 
 #[test]
-fn converted_package_round_trips_scriptlet_metadata() {
-    let conn = Connection::open_in_memory().unwrap();
-    crate::db::schema::migrate(&conn).unwrap();
-    let mut converted = ConvertedPackage::new_server(
-        "fedora".to_string(),
-        "gtk3".to_string(),
-        "3.24.0-1.fc44".to_string(),
-        "rpm".to_string(),
-        "sha256:source".to_string(),
-        &["sha256:chunk".to_string()],
-        42,
-        "sha256:content".to_string(),
-        "/tmp/gtk3.ccs".to_string(),
+fn converted_package_defaults_to_current_native_free_contract() {
+    let converted =
+        ConvertedPackage::new_installed(1, "rpm".to_string(), "sha256:source".to_string());
+
+    assert_eq!(converted.scriptlet_fidelity, "native-free");
+    assert_eq!(
+        converted.scriptlet_summary().unwrap(),
+        ScriptletBundleSummary::default()
     );
+}
+
+#[test]
+fn converted_package_round_trips_lifecycle_summary() {
+    let conn = Connection::open_in_memory().unwrap();
+    crate::db::schema::ensure_current(&conn).unwrap();
+    let mut converted = server_package("sha256:source", "sha256:chunk");
     let summary = ScriptletBundleSummary {
-        scriptlet_fidelity: "review-required".to_string(),
-        target_compatibility: "review-required".to_string(),
-        publication_status: "private-review".to_string(),
+        scriptlet_fidelity: "native-lifecycle".to_string(),
         evidence_digest: Some(crate::hash::sha256_prefixed(b"evidence")),
-        blocked_reason_codes: vec!["blocked-class-network".to_string()],
-        review_reason_codes: vec!["review-class-debconf".to_string()],
-        unknown_command_evidence: vec![crate::ccs::legacy_scriptlets::UnknownCommandEvidence {
-            command: "custom-helper".to_string(),
-            argv: vec!["--do-it".to_string()],
-            phase: Some("post-install".to_string()),
-            lifecycle_paths: vec!["post-install".to_string()],
-            source: crate::ccs::legacy_scriptlets::CommandEvidenceSource::ShellAst,
-            environment: Vec::new(),
-            ..crate::ccs::legacy_scriptlets::UnknownCommandEvidence::default()
-        }],
-        blocked_classes: vec!["network".to_string()],
-        ..ScriptletBundleSummary::default()
     };
     converted.set_scriptlet_metadata(&summary).unwrap();
     converted.insert(&conn).unwrap();
 
-    let found = ConvertedPackage::find_by_package_identity_with_arch(
-        &conn,
-        "fedora",
-        "gtk3",
-        Some("3.24.0-1.fc44"),
-        None,
-    )
-    .unwrap()
-    .unwrap();
-
-    assert_eq!(found.scriptlet_fidelity, "review-required");
-    assert_eq!(found.target_compatibility, "review-required");
-    assert_eq!(found.publication_status, "private-review");
-    assert_eq!(
-        found.blocked_reason_codes_json,
-        "[\"blocked-class-network\"]"
-    );
-    assert!(found.scriptlet_summary_json.contains("custom-helper"));
+    let found = ConvertedPackage::find_by_checksum(&conn, "sha256:source")
+        .unwrap()
+        .unwrap();
+    assert_eq!(found.scriptlet_summary().unwrap(), summary);
 }
 
 #[test]
-fn scriptlet_summary_recovers_from_malformed_json_with_scalar_fields() {
-    let mut converted = ConvertedPackage::new("rpm".to_string(), "sha256:source".to_string());
-    converted.scriptlet_fidelity = "blocked".to_string();
-    converted.target_compatibility = "blocked".to_string();
-    converted.publication_status = "blocked".to_string();
-    converted.evidence_digest = Some(crate::hash::sha256_prefixed(b"fallback-evidence"));
-    converted.blocked_reason_codes_json = "[\"blocked-class-network\"]".to_string();
+fn malformed_summary_is_explicit_corruption_error() {
+    let mut converted =
+        ConvertedPackage::new_installed(1, "rpm".to_string(), "sha256:source".to_string());
     converted.scriptlet_summary_json = "{not valid json".to_string();
 
-    let summary = converted.scriptlet_summary();
-
-    assert_eq!(summary.scriptlet_fidelity, "blocked");
-    assert_eq!(summary.target_compatibility, "blocked");
-    assert_eq!(summary.publication_status, "blocked");
-    assert_eq!(
-        summary.evidence_digest,
-        Some(crate::hash::sha256_prefixed(b"fallback-evidence"))
+    let error = converted.scriptlet_summary().unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("malformed lifecycle summary JSON")
     );
-    assert_eq!(summary.blocked_reason_codes, vec!["blocked-class-network"]);
-    assert!(summary.review_reason_codes.is_empty());
-    assert!(summary.unknown_command_evidence.is_empty());
 }
 
 #[test]
-fn scriptlet_summary_for_publication_accepts_constructor_default_shape() {
-    let converted = ConvertedPackage::new_server(
-        "fedora".to_string(),
-        "plain".to_string(),
-        "1.0".to_string(),
-        "ccs".to_string(),
-        "upload:fedora:abc".to_string(),
-        &["abc".to_string()],
-        3,
-        "abc".to_string(),
-        "/tmp/plain.ccs".to_string(),
+fn summary_projection_mismatch_is_explicit_corruption_error() {
+    let mut converted =
+        ConvertedPackage::new_installed(1, "rpm".to_string(), "sha256:source".to_string());
+    converted.scriptlet_fidelity = "native-lifecycle".to_string();
+
+    let error = converted.scriptlet_summary().unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("disagrees with indexed projection columns")
     );
-
-    let publication = converted.scriptlet_summary_for_publication();
-
-    assert!(publication.valid);
-    assert_eq!(publication.summary.publication_status, "public");
-    assert!(converted.is_scriptlet_public_ready());
 }
 
 #[test]
-fn stale_converted_rows_are_not_scriptlet_public_ready() {
-    let mut converted = ConvertedPackage::new_server(
-        "fedora".to_string(),
-        "stale".to_string(),
-        "1.0".to_string(),
-        "rpm".to_string(),
-        "sha256:source".to_string(),
-        &["sha256:chunk".to_string()],
-        42,
-        "sha256:content".to_string(),
-        "/tmp/stale.ccs".to_string(),
-    );
-    let summary = ScriptletBundleSummary {
-        scriptlet_fidelity: "fully-replaced".to_string(),
-        target_compatibility: "conary-portable".to_string(),
-        publication_status: "public".to_string(),
-        evidence_digest: Some(crate::hash::sha256_prefixed(b"evidence")),
-        decision_counts: crate::ccs::convert::ScriptletDecisionCountsSummary {
-            replaced: 1,
-            ..Default::default()
-        },
-        ..ScriptletBundleSummary::default()
-    };
-    converted.set_scriptlet_metadata(&summary).unwrap();
-    converted.conversion_version = CONVERSION_VERSION - 1;
-
-    assert!(converted.needs_reconversion());
-    assert!(!converted.is_scriptlet_public_ready());
-}
-
-#[test]
-fn non_default_publication_summary_requires_security_policy_intents() {
-    let mut converted = ConvertedPackage::new("rpm".to_string(), "sha256:source".to_string());
-    converted.scriptlet_fidelity = "fully-replaced".to_string();
-    converted.target_compatibility = "conary-portable".to_string();
-    converted.publication_status = "public".to_string();
-    converted.evidence_digest = Some(crate::hash::sha256_prefixed(b"evidence"));
-    converted.scriptlet_summary_json = serde_json::json!({
-        "scriptlet_fidelity": "fully-replaced",
-        "target_compatibility": "conary-portable",
-        "publication_status": "public",
-        "decision_counts": {
-            "replaced": 1,
-            "legacy": 0,
-            "blocked": 0,
-            "review": 0
-        },
-        "blocked_reason_codes": [],
-        "review_reason_codes": [],
-        "unknown_command_evidence": [],
-        "blocked_classes": [],
-        "boot_security_intents": []
-    })
-    .to_string();
-
-    assert!(!converted.scriptlet_summary_for_publication().valid);
-    assert!(!converted.is_scriptlet_public_ready());
-}
-
-#[test]
-fn older_non_default_summary_without_security_policy_intents_is_stale_and_not_public_ready() {
-    let mut converted = ConvertedPackage::new_server(
-        "fedora".to_string(),
-        "stale-policy".to_string(),
-        "1.0".to_string(),
-        "rpm".to_string(),
-        "sha256:source".to_string(),
-        &["sha256:chunk".to_string()],
-        42,
-        "sha256:content".to_string(),
-        "/tmp/stale-policy.ccs".to_string(),
-    );
-    converted.scriptlet_fidelity = "fully-replaced".to_string();
-    converted.target_compatibility = "conary-portable".to_string();
-    converted.publication_status = "public".to_string();
-    converted.evidence_digest = Some(crate::hash::sha256_prefixed(b"evidence"));
-    converted.conversion_version = CONVERSION_VERSION - 1;
-    converted.scriptlet_summary_json = serde_json::json!({
-        "scriptlet_fidelity": "fully-replaced",
-        "target_compatibility": "conary-portable",
-        "publication_status": "public",
-        "evidence_digest": crate::hash::sha256_prefixed(b"evidence"),
-        "decision_counts": {
-            "replaced": 1,
-            "legacy": 0,
-            "blocked": 0,
-            "review": 0
-        },
-        "blocked_reason_codes": [],
-        "review_reason_codes": [],
-        "unknown_command_evidence": [],
-        "blocked_classes": [],
-        "boot_security_intents": []
-    })
-    .to_string();
-
-    let publication = converted.scriptlet_summary_for_publication();
-
-    assert!(!publication.valid);
-    assert!(converted.needs_reconversion());
-    assert!(!converted.is_scriptlet_public_ready());
-}
-
-#[test]
-fn non_default_publication_summary_accepts_security_policy_intents() {
-    let mut converted = ConvertedPackage::new("rpm".to_string(), "sha256:source".to_string());
-    let summary = ScriptletBundleSummary {
-        scriptlet_fidelity: "fully-replaced".to_string(),
-        target_compatibility: "conary-portable".to_string(),
-        publication_status: "public".to_string(),
-        evidence_digest: Some(crate::hash::sha256_prefixed(b"evidence")),
-        decision_counts: crate::ccs::convert::ScriptletDecisionCountsSummary {
-            replaced: 1,
-            ..Default::default()
-        },
-        ..ScriptletBundleSummary::default()
-    };
-    converted.set_scriptlet_metadata(&summary).unwrap();
-
-    assert!(converted.scriptlet_summary_for_publication().valid);
-    assert!(converted.is_scriptlet_public_ready());
-}
-
-#[test]
-fn scriptlet_summary_for_publication_rejects_default_json_with_scriptlet_evidence() {
-    let mut converted = ConvertedPackage::new("rpm".to_string(), "sha256:source".to_string());
-    converted.scriptlet_fidelity = "blocked".to_string();
-    converted.target_compatibility = "blocked".to_string();
-    converted.publication_status = "public".to_string();
-    converted.evidence_digest = Some(crate::hash::sha256_prefixed(b"evidence"));
+fn insert_rejects_malformed_current_summary() {
+    let (_temp, conn) = create_test_db();
+    let mut converted = installed_package(&conn, "rpm", "sha256:source");
     converted.scriptlet_summary_json = "{}".to_string();
 
-    let publication = converted.scriptlet_summary_for_publication();
-
-    assert!(!publication.valid);
-    assert!(!converted.is_scriptlet_public_ready());
+    assert!(converted.insert(&conn).is_err());
 }
 
 #[test]
-fn scriptlet_summary_for_publication_rejects_partial_and_malformed_json() {
-    let mut converted = ConvertedPackage::new("rpm".to_string(), "sha256:source".to_string());
-    converted.scriptlet_summary_json = r#"{"publication_status":"public"}"#.to_string();
-    assert!(!converted.scriptlet_summary_for_publication().valid);
-
-    converted.scriptlet_summary_json = "{not valid json".to_string();
-    assert!(!converted.scriptlet_summary_for_publication().valid);
-}
-
-#[test]
-fn malformed_typed_summary_json_is_not_valid_for_publication() {
-    let mut converted = ConvertedPackage::new("rpm".to_string(), "sha256:source".to_string());
-    converted.scriptlet_summary_json = serde_json::json!({
-        "scriptlet_fidelity": "fully-replaced",
-        "target_compatibility": "conary-portable",
-        "publication_status": "public",
-        "decision_counts": "bad",
-        "blocked_reason_codes": [],
-        "review_reason_codes": [],
-        "unknown_command_evidence": [],
-        "blocked_classes": [],
-        "boot_security_intents": [],
-        "security_policy_intents": []
-    })
-    .to_string();
-
-    let publication = converted.scriptlet_summary_for_publication();
-
-    assert!(!publication.valid);
-    assert!(!converted.is_scriptlet_public_ready());
-}
-
-#[test]
-fn scriptlet_public_ready_requires_valid_summary_and_public_status() {
-    let mut converted = ConvertedPackage::new("rpm".to_string(), "sha256:source".to_string());
-    let summary = ScriptletBundleSummary {
-        scriptlet_fidelity: "review-required".to_string(),
-        target_compatibility: "review-required".to_string(),
-        publication_status: "private-review".to_string(),
-        review_reason_codes: vec!["review-class-debconf".to_string()],
-        ..ScriptletBundleSummary::default()
-    };
-    converted.set_scriptlet_metadata(&summary).unwrap();
-
-    assert!(converted.scriptlet_summary_for_publication().valid);
-    assert!(!converted.is_scriptlet_public_ready());
-}
-
-#[test]
-fn chunk_public_ready_lookup_requires_at_least_one_public_row() {
+fn stale_rows_are_excluded_from_current_conversion_query() {
     let (_temp, conn) = create_test_db();
-    let shared_hash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    let mut private = ConvertedPackage::new_server(
-        "fedora".to_string(),
-        "private".to_string(),
-        "1.0".to_string(),
-        "rpm".to_string(),
-        "sha256:private".to_string(),
-        &[shared_hash.to_string()],
-        10,
-        "sha256:private-content".to_string(),
-        "/tmp/private.ccs".to_string(),
+    let mut converted = server_package("sha256:source", "sha256:chunk");
+    converted.conversion_version = CONVERSION_VERSION - 1;
+    converted.insert(&conn).unwrap();
+
+    assert!(
+        ConvertedPackage::find_current_conversions(&conn, "fedora-44", Some("fixture"))
+            .unwrap()
+            .is_empty()
     );
-    private
-        .set_scriptlet_metadata(&ScriptletBundleSummary {
-            publication_status: "private-review".to_string(),
-            scriptlet_fidelity: "review-required".to_string(),
-            target_compatibility: "review-required".to_string(),
-            review_reason_codes: vec!["review-class-debconf".to_string()],
-            ..Default::default()
-        })
+}
+
+#[test]
+fn current_typed_summary_is_returned_by_current_conversion_query() {
+    let (_temp, conn) = create_test_db();
+    let mut converted = server_package("sha256:source", "sha256:chunk");
+    converted.insert(&conn).unwrap();
+
+    assert_eq!(
+        ConvertedPackage::find_current_conversions(&conn, "fedora-44", Some("fixture"))
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn repository_artifact_exposes_only_complete_serving_state() {
+    let converted = server_package("sha256:source", "sha256:chunk");
+    let artifact = converted.repository_artifact().unwrap();
+
+    assert_eq!(artifact.package_name, "fixture");
+    assert_eq!(artifact.package_version, "1.0-1");
+    assert_eq!(artifact.distro, "fedora-44");
+    assert_eq!(artifact.chunk_hashes, vec!["sha256:chunk".to_string()]);
+    assert_eq!(artifact.total_size, 42);
+    assert_eq!(artifact.content_hash, "sha256:content");
+    assert_eq!(artifact.ccs_path, "/tmp/fixture.ccs");
+}
+
+#[test]
+fn installed_conversion_rejects_repository_serving_fields() {
+    let (_temp, conn) = create_test_db();
+    let mut converted = installed_package(&conn, "rpm", "sha256:installed");
+    converted.package_name = Some("must-not-serve".to_string());
+
+    let error = converted.insert(&conn).unwrap_err().to_string();
+    assert!(
+        error.contains("carries repository-serving fields"),
+        "{error}"
+    );
+}
+
+#[test]
+fn repository_artifact_rejects_corrupt_chunk_json() {
+    let (_temp, conn) = create_test_db();
+    let mut converted = server_package("sha256:source", "sha256:chunk");
+    converted.insert(&conn).unwrap();
+    conn.execute_batch("PRAGMA ignore_check_constraints = ON;")
         .unwrap();
-    private.insert(&conn).unwrap();
+    conn.execute(
+        "UPDATE converted_packages SET chunk_hashes_json = '{bad' WHERE id = ?1",
+        [converted.id.unwrap()],
+    )
+    .unwrap();
 
-    assert_eq!(
-        ConvertedPackage::chunk_publication_state(&conn, shared_hash).unwrap(),
-        ChunkPublicationState::NonPublicOnly,
-    );
-
-    let mut public = ConvertedPackage::new_server(
-        "fedora".to_string(),
-        "public".to_string(),
-        "1.0".to_string(),
-        "rpm".to_string(),
-        "sha256:public".to_string(),
-        &[shared_hash.to_string()],
-        10,
-        "sha256:public-content".to_string(),
-        "/tmp/public.ccs".to_string(),
-    );
-    public
-        .set_scriptlet_metadata(&ScriptletBundleSummary::default())
+    let found = ConvertedPackage::find_by_checksum(&conn, "sha256:source")
+        .unwrap()
         .unwrap();
-    public.insert(&conn).unwrap();
+    let error = found.repository_artifact().unwrap_err().to_string();
+    assert!(error.contains("malformed chunk_hashes_json"), "{error}");
+}
+
+#[test]
+fn chunk_conversion_state_uses_current_typed_rows() {
+    let (_temp, conn) = create_test_db();
+    let mut converted = server_package("sha256:source", "sha256:chunk");
+    converted.insert(&conn).unwrap();
 
     assert_eq!(
-        ConvertedPackage::chunk_publication_state(&conn, shared_hash).unwrap(),
-        ChunkPublicationState::PublicReady,
+        ConvertedPackage::chunk_conversion_state(&conn, "chunk").unwrap(),
+        ChunkConversionState::CurrentConversion
     );
 }
 
 #[test]
-fn chunk_publication_state_rejects_malformed_typed_summary_json() {
+fn chunk_conversion_state_errors_on_malformed_current_summary() {
     let (_temp, conn) = create_test_db();
-    let shared_hash = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
-    let mut malformed = ConvertedPackage::new_server(
-        "fedora".to_string(),
-        "malformed-public-looking".to_string(),
-        "1.0".to_string(),
-        "rpm".to_string(),
-        "sha256:malformed-public-looking".to_string(),
-        &[shared_hash.to_string()],
-        10,
-        "sha256:malformed-public-looking-content".to_string(),
-        "/tmp/malformed-public-looking.ccs".to_string(),
-    );
-    malformed.scriptlet_summary_json = serde_json::json!({
-        "scriptlet_fidelity": "fully-replaced",
-        "target_compatibility": "conary-portable",
-        "publication_status": "public",
-        "decision_counts": {
-            "replaced": 1,
-            "legacy": 0,
-            "blocked": 0,
-            "review": 0
-        },
-        "blocked_reason_codes": [],
-        "review_reason_codes": [],
-        "unknown_command_evidence": [],
-        "blocked_classes": [],
-        "boot_security_intents": [],
-        "security_policy_intents": "bad"
-    })
-    .to_string();
-    malformed.insert(&conn).unwrap();
+    let mut converted = server_package("sha256:source", "sha256:chunk");
+    converted.insert(&conn).unwrap();
+    conn.execute(
+        "UPDATE converted_packages SET scriptlet_summary_json = '{malformed' WHERE id = ?1",
+        [converted.id.unwrap()],
+    )
+    .unwrap();
+
+    assert!(ConvertedPackage::chunk_conversion_state(&conn, "chunk").is_err());
+}
+
+#[test]
+fn chunk_conversion_state_reports_stale_only_references() {
+    let (_temp, conn) = create_test_db();
+    let mut converted = server_package("sha256:source", "sha256:chunk");
+    converted.conversion_version = CONVERSION_VERSION - 1;
+    converted.insert(&conn).unwrap();
 
     assert_eq!(
-        ConvertedPackage::chunk_publication_state(&conn, shared_hash).unwrap(),
-        ChunkPublicationState::NonPublicOnly,
+        ConvertedPackage::chunk_conversion_state(&conn, "chunk").unwrap(),
+        ChunkConversionState::StaleConversionOnly
     );
 }
 
 #[test]
-fn chunk_publication_state_treats_stale_only_references_as_non_public() {
+fn chunk_conversion_state_allows_unreferenced_hashes() {
     let (_temp, conn) = create_test_db();
-    let shared_hash = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
-    let mut stale = ConvertedPackage::new_server(
-        "fedora".to_string(),
-        "stale-public-looking".to_string(),
-        "1.0".to_string(),
-        "rpm".to_string(),
-        "sha256:stale-public-looking".to_string(),
-        &[format!("sha256:{shared_hash}")],
-        10,
-        "sha256:stale-public-looking-content".to_string(),
-        "/tmp/stale-public-looking.ccs".to_string(),
-    );
-    stale
-        .set_scriptlet_metadata(&ScriptletBundleSummary {
-            scriptlet_fidelity: "fully-replaced".to_string(),
-            target_compatibility: "conary-portable".to_string(),
-            publication_status: "public".to_string(),
-            evidence_digest: Some(crate::hash::sha256_prefixed(b"stale-evidence")),
-            decision_counts: crate::ccs::convert::ScriptletDecisionCountsSummary {
-                replaced: 1,
-                ..Default::default()
-            },
-            ..Default::default()
-        })
-        .unwrap();
-    stale.conversion_version = CONVERSION_VERSION - 1;
-    stale.insert(&conn).unwrap();
+    let mut converted = server_package("sha256:source", "sha256:chunk");
+    converted.insert(&conn).unwrap();
 
     assert_eq!(
-        ConvertedPackage::chunk_publication_state(&conn, shared_hash).unwrap(),
-        ChunkPublicationState::NonPublicOnly,
+        ConvertedPackage::chunk_conversion_state(&conn, "other").unwrap(),
+        ChunkConversionState::NoConvertedReference
     );
 }
 
 #[test]
-fn chunk_publication_state_keeps_current_public_when_stale_also_references_chunk() {
+fn converted_package_crud() {
     let (_temp, conn) = create_test_db();
-    let shared_hash = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
-    let mut stale = ConvertedPackage::new_server(
-        "fedora".to_string(),
-        "stale-public-looking".to_string(),
-        "1.0".to_string(),
-        "rpm".to_string(),
-        "sha256:stale-shared".to_string(),
-        &[shared_hash.to_string()],
-        10,
-        "sha256:stale-shared-content".to_string(),
-        "/tmp/stale-shared.ccs".to_string(),
-    );
-    stale
-        .set_scriptlet_metadata(&ScriptletBundleSummary {
-            scriptlet_fidelity: "fully-replaced".to_string(),
-            target_compatibility: "conary-portable".to_string(),
-            publication_status: "public".to_string(),
-            evidence_digest: Some(crate::hash::sha256_prefixed(b"stale-shared-evidence")),
-            decision_counts: crate::ccs::convert::ScriptletDecisionCountsSummary {
-                replaced: 1,
-                ..Default::default()
-            },
-            ..Default::default()
-        })
-        .unwrap();
-    stale.conversion_version = CONVERSION_VERSION - 1;
-    stale.insert(&conn).unwrap();
-
-    let mut public = ConvertedPackage::new_server(
-        "fedora".to_string(),
-        "current-public".to_string(),
-        "1.0".to_string(),
-        "rpm".to_string(),
-        "sha256:current-public".to_string(),
-        &[shared_hash.to_string()],
-        10,
-        "sha256:current-public-content".to_string(),
-        "/tmp/current-public.ccs".to_string(),
-    );
-    public
-        .set_scriptlet_metadata(&ScriptletBundleSummary::default())
-        .unwrap();
-    public.insert(&conn).unwrap();
-
-    assert_eq!(
-        ConvertedPackage::chunk_publication_state(&conn, shared_hash).unwrap(),
-        ChunkPublicationState::PublicReady,
-    );
-}
-
-#[test]
-fn chunk_publication_state_allows_unreferenced_cas_hashes() {
-    let (_temp, conn) = create_test_db();
-
-    assert_eq!(
-        ConvertedPackage::chunk_publication_state(
-            &conn,
-            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-        )
-        .unwrap(),
-        ChunkPublicationState::NoConvertedReference,
-    );
-}
-
-#[test]
-fn test_converted_package_crud() {
-    let (_temp, conn) = create_test_db();
-
-    // Create a converted package
-    let mut converted = ConvertedPackage::new("rpm".to_string(), "sha256:abc123def456".to_string());
+    let mut converted = installed_package(&conn, "rpm", "sha256:abc123def456");
 
     let id = converted.insert(&conn).unwrap();
     assert!(id > 0);
-
-    // Find by checksum
     let found = ConvertedPackage::find_by_checksum(&conn, "sha256:abc123def456")
         .unwrap()
         .unwrap();
     assert_eq!(found.original_format, "rpm");
-    assert_eq!(found.scriptlet_fidelity, "unknown");
+    assert_eq!(found.scriptlet_fidelity, "native-free");
+    assert_eq!(ConvertedPackage::list_all(&conn).unwrap().len(), 1);
 
-    // List all
-    let all = ConvertedPackage::list_all(&conn).unwrap();
-    assert_eq!(all.len(), 1);
-
-    // Delete
     ConvertedPackage::delete_by_checksum(&conn, "sha256:abc123def456").unwrap();
-    let deleted = ConvertedPackage::find_by_checksum(&conn, "sha256:abc123def456").unwrap();
-    assert!(deleted.is_none());
+    assert!(
+        ConvertedPackage::find_by_checksum(&conn, "sha256:abc123def456")
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]
-fn test_needs_reconversion() {
-    let mut converted = ConvertedPackage::new("deb".to_string(), "sha256:test".to_string());
-    converted.conversion_version = CONVERSION_VERSION;
-
+fn needs_reconversion_tracks_current_contract_revision() {
+    let mut converted =
+        ConvertedPackage::new_installed(1, "deb".to_string(), "sha256:test".to_string());
     assert!(!converted.needs_reconversion());
 
     converted.conversion_version = CONVERSION_VERSION - 1;
@@ -543,97 +264,67 @@ fn test_needs_reconversion() {
 }
 
 #[test]
-fn test_count_by_format() {
+fn count_by_format() {
     let (_temp, conn) = create_test_db();
+    for (format, checksum) in [("rpm", "r1"), ("rpm", "r2"), ("deb", "d1")] {
+        installed_package(&conn, format, &format!("sha256:{checksum}"))
+            .insert(&conn)
+            .unwrap();
+    }
 
-    // Create converted packages with different formats
-    let mut rpm1 = ConvertedPackage::new("rpm".to_string(), "sha256:r1".to_string());
-    rpm1.insert(&conn).unwrap();
-
-    let mut rpm2 = ConvertedPackage::new("rpm".to_string(), "sha256:r2".to_string());
-    rpm2.insert(&conn).unwrap();
-
-    let mut deb1 = ConvertedPackage::new("deb".to_string(), "sha256:d1".to_string());
-    deb1.insert(&conn).unwrap();
-
-    // Count by format
-    let counts = ConvertedPackage::count_by_format(&conn).unwrap();
-    assert_eq!(counts.len(), 2);
-
-    // RPM should be first (most common)
-    assert_eq!(counts[0].0, "rpm");
-    assert_eq!(counts[0].1, 2);
-    assert_eq!(counts[1].0, "deb");
-    assert_eq!(counts[1].1, 1);
+    assert_eq!(
+        ConvertedPackage::count_by_format(&conn).unwrap(),
+        vec![("rpm".to_string(), 2), ("deb".to_string(), 1)]
+    );
 }
 
 #[test]
-fn test_unique_checksum_constraint() {
+fn checksum_is_unique() {
     let (_temp, conn) = create_test_db();
+    installed_package(&conn, "rpm", "sha256:same")
+        .insert(&conn)
+        .unwrap();
 
-    let mut converted1 =
-        ConvertedPackage::new("rpm".to_string(), "sha256:same_checksum".to_string());
-    converted1.insert(&conn).unwrap();
-
-    // Try to insert with same checksum - should fail
-    let mut converted2 =
-        ConvertedPackage::new("deb".to_string(), "sha256:same_checksum".to_string());
-    let result = converted2.insert(&conn);
-    assert!(result.is_err());
+    assert!(
+        installed_package(&conn, "deb", "sha256:same")
+            .insert(&conn)
+            .is_err()
+    );
 }
 
 #[test]
-fn test_enhancement_methods() {
+fn enhancement_state_round_trips() {
     let (_temp, conn) = create_test_db();
-
-    // Create and insert a converted package
-    let mut converted = ConvertedPackage::new("rpm".to_string(), "sha256:enhance_test".to_string());
+    let mut converted = installed_package(&conn, "rpm", "sha256:enhance");
     converted.insert(&conn).unwrap();
-
-    // Check initial enhancement state
-    assert_eq!(converted.enhancement_status, "pending");
-    assert_eq!(converted.enhancement_version, 0);
-    assert!(converted.needs_enhancement(1));
-
-    // Mark as complete
     converted
         .set_enhancement_complete(&conn, 1, Some(r#"{"builder":"conary"}"#))
         .unwrap();
-    assert_eq!(converted.enhancement_status, "complete");
-    assert_eq!(converted.enhancement_version, 1);
-    assert!(!converted.needs_enhancement(1));
-    assert!(converted.needs_enhancement(2)); // outdated
 
-    // Verify persisted in database
-    let found = ConvertedPackage::find_by_checksum(&conn, "sha256:enhance_test")
+    assert!(!converted.needs_enhancement(1));
+    assert!(converted.needs_enhancement(2));
+    let found = ConvertedPackage::find_by_checksum(&conn, "sha256:enhance")
         .unwrap()
         .unwrap();
     assert_eq!(found.enhancement_status, "complete");
     assert_eq!(found.enhancement_version, 1);
-    assert!(found.extracted_provenance_json.is_some());
 }
 
 #[test]
-fn test_enhancement_failure() {
+fn enhancement_failure_round_trips() {
     let (_temp, conn) = create_test_db();
-
-    let mut converted = ConvertedPackage::new("deb".to_string(), "sha256:fail_test".to_string());
+    let mut converted = installed_package(&conn, "deb", "sha256:fail");
     converted.insert(&conn).unwrap();
-
-    // Mark as failed
     converted
         .set_enhancement_failed(&conn, "Test error message")
         .unwrap();
-    assert_eq!(converted.enhancement_status, "failed");
-    assert_eq!(
-        converted.enhancement_error.as_deref(),
-        Some("Test error message")
-    );
 
-    // Verify persisted
-    let found = ConvertedPackage::find_by_checksum(&conn, "sha256:fail_test")
+    let found = ConvertedPackage::find_by_checksum(&conn, "sha256:fail")
         .unwrap()
         .unwrap();
     assert_eq!(found.enhancement_status, "failed");
-    assert!(found.enhancement_error.is_some());
+    assert_eq!(
+        found.enhancement_error.as_deref(),
+        Some("Test error message")
+    );
 }

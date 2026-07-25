@@ -11,13 +11,13 @@ phase = 4
 
 # Setup: initialize DB so commands have a database to query
 [[suite.setup]]
-conary = "system init --profile ${REMI_DISTRO}"
+conary = "system init"
 
 [[suite.setup]]
-run = "rm -rf /tmp/phase4-runtime-fixture-output && mkdir -p /tmp/phase4-runtime-fixture-output && ${CONARY_BIN} ccs build /opt/remi-tests/fixtures/phase4-runtime-fixture --output /tmp/phase4-runtime-fixture-output --source /opt/remi-tests/fixtures/phase4-runtime-fixture/stage"
+run = "rm -rf /tmp/phase4-runtime-fixture-output && mkdir -p /tmp/phase4-runtime-fixture-output && ${CONARY_BIN} ccs build /opt/remi-tests/fixtures/phase4-runtime-fixture --output /tmp/phase4-runtime-fixture-output --source /opt/remi-tests/fixtures/phase4-runtime-fixture/stage --key ${FIXTURE_CCS_KEY}"
 
 [[suite.setup]]
-run = "CCS_FILE=$(ls /tmp/phase4-runtime-fixture-output/*.ccs | head -1) && ${CONARY_BIN} ccs install --yes \"$CCS_FILE\" --allow-unsigned --sandbox never --reinstall --db-path ${DB_PATH}"
+run = "CCS_FILE=$(ls /tmp/phase4-runtime-fixture-output/*.ccs | head -1) && ${CONARY_BIN} ccs install --yes \"$CCS_FILE\" --policy ${FIXTURE_CCS_POLICY} --sandbox always --reinstall --db-path ${DB_PATH}"
 
 [suite.setup.assert]
 exit_code = 0

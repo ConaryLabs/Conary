@@ -10,9 +10,8 @@
 //! Each package can have multiple resolution strategies tried in order:
 //! - **Binary**: Pre-built package at a URL (with optional delta support)
 //! - **Remi**: Convert from distro package on-demand
-//! - **Recipe**: Build from source using recipe instructions
 //! - **Delegate**: Federate to another label/repository
-//! - **Legacy**: Use existing repository_packages entry (backwards compat)
+//! - **RepositoryPackage**: Use the selected typed repository package row
 //!
 //! # Caching Policy
 //!
@@ -73,25 +72,14 @@ pub enum ResolutionStrategy {
         source_name: Option<String>,
     },
 
-    /// Build from source using a recipe
-    Recipe {
-        /// URL to the recipe file
-        recipe_url: String,
-        /// URLs for source archives
-        source_urls: Vec<String>,
-        /// URLs for patch files to apply
-        #[serde(default)]
-        patches: Vec<String>,
-    },
-
     /// Delegate to another label (federation)
     Delegate {
         /// Label to delegate to (e.g., "upstream@fedora:f43")
         label: String,
     },
 
-    /// Use existing repository_packages entry (backwards compatibility)
-    Legacy {
+    /// Use the selected typed repository package row.
+    RepositoryPackage {
         /// ID of the repository_package row
         repository_package_id: i64,
     },
@@ -106,9 +94,8 @@ pub enum ResolutionStrategy {
 pub enum PrimaryStrategy {
     Binary,
     Remi,
-    Recipe,
     Delegate,
-    Legacy,
+    RepositoryPackage,
 }
 
 impl PrimaryStrategy {
@@ -117,9 +104,8 @@ impl PrimaryStrategy {
         match self {
             Self::Binary => "binary",
             Self::Remi => "remi",
-            Self::Recipe => "recipe",
             Self::Delegate => "delegate",
-            Self::Legacy => "legacy",
+            Self::RepositoryPackage => "repository_package",
         }
     }
 
@@ -128,9 +114,8 @@ impl PrimaryStrategy {
         match s {
             "binary" => Ok(Self::Binary),
             "remi" => Ok(Self::Remi),
-            "recipe" => Ok(Self::Recipe),
             "delegate" => Ok(Self::Delegate),
-            "legacy" => Ok(Self::Legacy),
+            "repository_package" => Ok(Self::RepositoryPackage),
             _ => Err(Error::ParseError(format!(
                 "Unknown primary strategy: {}",
                 s
@@ -144,9 +129,8 @@ impl From<&ResolutionStrategy> for PrimaryStrategy {
         match strategy {
             ResolutionStrategy::Binary { .. } => Self::Binary,
             ResolutionStrategy::Remi { .. } => Self::Remi,
-            ResolutionStrategy::Recipe { .. } => Self::Recipe,
             ResolutionStrategy::Delegate { .. } => Self::Delegate,
-            ResolutionStrategy::Legacy { .. } => Self::Legacy,
+            ResolutionStrategy::RepositoryPackage { .. } => Self::RepositoryPackage,
         }
     }
 }
@@ -183,7 +167,7 @@ impl PackageResolution {
         let primary_strategy = strategies
             .first()
             .map(PrimaryStrategy::from)
-            .unwrap_or(PrimaryStrategy::Legacy);
+            .unwrap_or(PrimaryStrategy::RepositoryPackage);
 
         Self {
             id: None,
@@ -223,19 +207,43 @@ impl PackageResolution {
         )
     }
 
-    /// Create a legacy resolution entry (backwards compatibility)
-    pub fn legacy(repository_id: i64, name: String, repository_package_id: i64) -> Self {
+    /// Create a resolution entry for one selected repository package.
+    pub fn repository_package(
+        repository_id: i64,
+        name: String,
+        repository_package_id: i64,
+    ) -> Self {
         Self::new(
             repository_id,
             name,
-            vec![ResolutionStrategy::Legacy {
+            vec![ResolutionStrategy::RepositoryPackage {
                 repository_package_id,
             }],
         )
     }
 
+    fn validate(&self) -> Result<()> {
+        let first = self.strategies.first().ok_or_else(|| {
+            Error::ConfigError(format!(
+                "package resolution for '{}' must declare at least one strategy",
+                self.name
+            ))
+        })?;
+        let expected = PrimaryStrategy::from(first);
+        if self.primary_strategy != expected {
+            return Err(Error::ConfigError(format!(
+                "package resolution for '{}' projects primary strategy '{}' but its first strategy is '{}'",
+                self.name,
+                self.primary_strategy.as_str(),
+                expected.as_str()
+            )));
+        }
+        Ok(())
+    }
+
     /// Insert this resolution entry into the database
     pub fn insert(&mut self, conn: &Connection) -> Result<i64> {
+        self.validate()?;
         let strategies_json = serde_json::to_string(&self.strategies)
             .map_err(|e| Error::ParseError(format!("Failed to serialize strategies: {e}")))?;
 
@@ -336,6 +344,7 @@ impl PackageResolution {
 
     /// Update this resolution entry
     pub fn update(&self, conn: &Connection) -> Result<()> {
+        self.validate()?;
         let id = self.id.ok_or_else(|| {
             Error::MissingId("Cannot update resolution entry without ID".to_string())
         })?;
@@ -419,7 +428,7 @@ pub enum CacheTier {
     Popular,
     /// Common libraries (openssl, zlib) - cache 7 days
     Common,
-    /// Obscure packages - don't cache, recipe-only
+    /// Obscure packages - do not retain in cache
     Obscure,
     /// Group/collection metadata only
     Metadata,
@@ -634,22 +643,31 @@ mod tests {
         };
         assert_eq!(PrimaryStrategy::from(&remi), PrimaryStrategy::Remi);
 
-        let recipe = ResolutionStrategy::Recipe {
-            recipe_url: "url".to_string(),
-            source_urls: vec![],
-            patches: vec![],
-        };
-        assert_eq!(PrimaryStrategy::from(&recipe), PrimaryStrategy::Recipe);
-
         let delegate = ResolutionStrategy::Delegate {
             label: "upstream@fedora:f43".to_string(),
         };
         assert_eq!(PrimaryStrategy::from(&delegate), PrimaryStrategy::Delegate);
 
-        let legacy = ResolutionStrategy::Legacy {
+        let repository_package = ResolutionStrategy::RepositoryPackage {
             repository_package_id: 123,
         };
-        assert_eq!(PrimaryStrategy::from(&legacy), PrimaryStrategy::Legacy);
+        assert_eq!(
+            PrimaryStrategy::from(&repository_package),
+            PrimaryStrategy::RepositoryPackage
+        );
+        assert!(PrimaryStrategy::parse("recipe").is_err());
+        assert!(PrimaryStrategy::parse("legacy").is_err());
+    }
+
+    #[test]
+    fn retired_recipe_resolution_strategy_is_rejected() {
+        let old = serde_json::json!({
+            "type": "recipe",
+            "recipe_url": "https://example.test/package.recipe.toml",
+            "source_urls": [],
+            "patches": []
+        });
+        assert!(serde_json::from_value::<ResolutionStrategy>(old).is_err());
     }
 
     #[test]

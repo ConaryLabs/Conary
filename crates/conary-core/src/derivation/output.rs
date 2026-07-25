@@ -1,61 +1,52 @@
 // conary-core/src/derivation/output.rs
 
-//! Package output types for derivation build results.
-//!
-//! After a derivation builds successfully, the outputs (files, symlinks) are
-//! recorded in an `OutputManifest` whose `output_hash` provides a
-//! content-addressed key for the build result.
+//! Exact package-output authority for derivation build results.
 
 use serde::{Deserialize, Serialize};
 
-use crate::hash;
+use crate::generation::root_manifest::{GenerationRootEntry, validate_payload_tree};
+use crate::payload::ResolvedPayloadNode;
 
-use super::id::DerivationId;
+/// Current derivation-output manifest contract.
+///
+/// Versions 1 and 2 described only regular files and symlinks and silently
+/// discarded ownership, timestamps, xattrs, directories, hardlinks, and
+/// special nodes. They are intentionally unsupported.
+pub const OUTPUT_MANIFEST_VERSION: u32 = 3;
 
-/// A single file produced by a derivation build.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct OutputFile {
-    /// Absolute path within the package.
-    pub path: String,
-    /// SHA-256 hash of the file contents.
-    pub hash: String,
-    /// File size in bytes.
-    pub size: u64,
-    /// Unix file mode (e.g. 0o755).
-    pub mode: u32,
+/// Errors produced while validating or serializing an output manifest.
+#[derive(Debug, thiserror::Error)]
+pub enum OutputError {
+    #[error("invalid output manifest: {0}")]
+    Invalid(String),
+    #[error("output manifest TOML serialization failed: {0}")]
+    Serialize(#[from] toml::ser::Error),
+    #[error("output manifest TOML parsing failed: {0}")]
+    Parse(#[from] toml::de::Error),
 }
 
-/// A symbolic link produced by a derivation build.
+/// Manifest describing the complete exact output tree of one derivation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct OutputSymlink {
-    /// Absolute path of the symlink.
-    pub path: String,
-    /// The symlink target.
-    pub target: String,
-}
-
-/// Manifest describing all outputs of a derivation build.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct OutputManifest {
+    /// Persisted format contract. Only [`OUTPUT_MANIFEST_VERSION`] is accepted.
+    pub format_version: u32,
     /// The derivation that produced these outputs.
     pub derivation_id: String,
-    /// Content hash of all outputs (files + symlinks).
+    /// Package identity used by the remote derivation-cache index.
+    pub package_name: String,
+    /// Package version used by the remote derivation-cache index.
+    pub package_version: String,
+    /// Content hash of the exact root and all output entries.
     pub output_hash: String,
-    /// Hash format version (1 = original, 2 = with permissions).
-    #[serde(default = "default_hash_version")]
-    pub hash_version: u8,
-    /// Files produced by the build.
-    pub files: Vec<OutputFile>,
-    /// Symlinks produced by the build.
-    pub symlinks: Vec<OutputSymlink>,
+    /// Exact numeric metadata of the build output root.
+    pub root: ResolvedPayloadNode,
+    /// Complete, sorted POSIX node and content authority.
+    pub entries: Vec<GenerationRootEntry>,
     /// Wall-clock build duration in seconds.
     pub build_duration_secs: u64,
     /// ISO 8601 timestamp of when the build completed.
     pub built_at: String,
-}
-
-fn default_hash_version() -> u8 {
-    1
 }
 
 /// A complete package output: the manifest plus its serialized bytes and hash.
@@ -69,91 +60,108 @@ pub struct PackageOutput {
     pub manifest_hash: String,
 }
 
+#[derive(Serialize)]
+struct OutputHashAuthority<'a> {
+    format_version: u32,
+    root: &'a ResolvedPayloadNode,
+    entries: &'a [GenerationRootEntry],
+}
+
 impl OutputManifest {
-    /// Compute a deterministic output hash from files and symlinks.
-    ///
-    /// The hash is the SHA-256 of all file hashes (sorted by path) followed by
-    /// all symlink targets (sorted by path), each on its own line.
-    #[must_use]
-    pub fn compute_output_hash(files: &[OutputFile], symlinks: &[OutputSymlink]) -> String {
-        let mut hasher = hash::Hasher::new(hash::HashAlgorithm::Sha256);
-
-        let mut sorted_files: Vec<&OutputFile> = files.iter().collect();
-        sorted_files.sort_by(|a, b| a.path.cmp(&b.path));
-
-        let mut sorted_symlinks: Vec<&OutputSymlink> = symlinks.iter().collect();
-        sorted_symlinks.sort_by(|a, b| a.path.cmp(&b.path));
-
-        for file in sorted_files {
-            hasher.update(format!("file:{}:{}\n", file.path, file.hash).as_bytes());
-        }
-
-        for symlink in sorted_symlinks {
-            hasher.update(format!("symlink:{}:{}\n", symlink.path, symlink.target).as_bytes());
-        }
-
-        hasher.finalize().value
-    }
-
-    /// Compute output hash v2 (includes file permissions).
-    ///
-    /// Format: `file:<path>:<mode_octal>:<content_hash>` sorted by path,
-    /// followed by `symlink:<path>:<target>` sorted by path.
-    #[must_use]
-    pub fn compute_output_hash_v2(files: &[OutputFile], symlinks: &[OutputSymlink]) -> String {
-        let mut hasher = hash::Hasher::new(hash::HashAlgorithm::Sha256);
-
-        let mut sorted_files: Vec<&OutputFile> = files.iter().collect();
-        sorted_files.sort_by(|a, b| a.path.cmp(&b.path));
-
-        let mut sorted_symlinks: Vec<&OutputSymlink> = symlinks.iter().collect();
-        sorted_symlinks.sort_by(|a, b| a.path.cmp(&b.path));
-
-        for file in sorted_files {
-            hasher.update(format!("file:{}:{:o}:{}\n", file.path, file.mode, file.hash).as_bytes());
-        }
-
-        for symlink in sorted_symlinks {
-            hasher.update(format!("symlink:{}:{}\n", symlink.path, symlink.target).as_bytes());
-        }
-
-        hasher.finalize().value
-    }
-
-    /// Build a new `OutputManifest`, computing the output hash automatically.
-    ///
-    /// Uses [`compute_output_hash_v2`] (includes file permissions) and sets
-    /// `hash_version: 2`.
-    #[must_use]
+    /// Build and validate a current-format output manifest.
     pub fn new(
-        derivation_id: &DerivationId,
-        files: Vec<OutputFile>,
-        symlinks: Vec<OutputSymlink>,
+        derivation_id: impl Into<String>,
+        package_name: impl Into<String>,
+        package_version: impl Into<String>,
+        root: ResolvedPayloadNode,
+        entries: Vec<GenerationRootEntry>,
         build_duration_secs: u64,
         built_at: String,
-    ) -> Self {
-        let output_hash = Self::compute_output_hash_v2(&files, &symlinks);
-        Self {
-            derivation_id: derivation_id.to_string(),
+    ) -> Result<Self, OutputError> {
+        let output_hash = Self::compute_output_hash(&root, &entries)?;
+        let manifest = Self {
+            format_version: OUTPUT_MANIFEST_VERSION,
+            derivation_id: derivation_id.into(),
+            package_name: package_name.into(),
+            package_version: package_version.into(),
             output_hash,
-            hash_version: 2,
-            files,
-            symlinks,
+            root,
+            entries,
             build_duration_secs,
             built_at,
+        };
+        manifest.validate()?;
+        Ok(manifest)
+    }
+
+    /// Hash every field that defines the exact output filesystem.
+    pub fn compute_output_hash(
+        root: &ResolvedPayloadNode,
+        entries: &[GenerationRootEntry],
+    ) -> Result<String, OutputError> {
+        let authority = OutputHashAuthority {
+            format_version: OUTPUT_MANIFEST_VERSION,
+            root,
+            entries,
+        };
+        let canonical = crate::json::canonical_json(&authority).map_err(OutputError::Invalid)?;
+        Ok(crate::hash::sha256(&canonical))
+    }
+
+    /// Validate the current format, exact payload tree, and content hash.
+    pub fn validate(&self) -> Result<(), OutputError> {
+        if self.format_version != OUTPUT_MANIFEST_VERSION {
+            return Err(OutputError::Invalid(format!(
+                "unsupported format version {}; expected {}",
+                self.format_version, OUTPUT_MANIFEST_VERSION
+            )));
         }
+        if self.derivation_id.is_empty() || self.derivation_id.contains('\0') {
+            return Err(OutputError::Invalid(
+                "derivation ID must be non-empty and NUL-free".to_string(),
+            ));
+        }
+        if self.package_name.is_empty() || self.package_name.contains('\0') {
+            return Err(OutputError::Invalid(
+                "package name must be non-empty and NUL-free".to_string(),
+            ));
+        }
+        if self.package_version.is_empty() || self.package_version.contains('\0') {
+            return Err(OutputError::Invalid(
+                "package version must be non-empty and NUL-free".to_string(),
+            ));
+        }
+        validate_payload_tree(&self.root, &self.entries)
+            .map_err(|error| OutputError::Invalid(error.to_string()))?;
+        let expected = Self::compute_output_hash(&self.root, &self.entries)?;
+        if self.output_hash != expected {
+            return Err(OutputError::Invalid(format!(
+                "output hash mismatch: manifest has {}, exact payload tree hashes to {expected}",
+                self.output_hash
+            )));
+        }
+        Ok(())
+    }
+
+    /// Parse and validate a current-format TOML manifest.
+    pub fn from_toml(input: &str) -> Result<Self, OutputError> {
+        let manifest: Self = toml::from_str(input)?;
+        manifest.validate()?;
+        Ok(manifest)
+    }
+
+    /// Iterate over regular-file content authorities.
+    pub fn regular_entries(&self) -> impl Iterator<Item = &GenerationRootEntry> {
+        self.entries.iter().filter(|entry| entry.content.is_some())
     }
 }
 
 impl PackageOutput {
-    /// Build a `PackageOutput` from a manifest, serializing to TOML and hashing.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the manifest cannot be serialized to TOML.
-    pub fn from_manifest(manifest: OutputManifest) -> Result<Self, toml::ser::Error> {
+    /// Validate and serialize a package output manifest to TOML.
+    pub fn from_manifest(manifest: OutputManifest) -> Result<Self, OutputError> {
+        manifest.validate()?;
         let manifest_bytes = toml::to_string_pretty(&manifest)?.into_bytes();
-        let manifest_hash = hash::sha256(&manifest_bytes);
+        let manifest_hash = crate::hash::sha256(&manifest_bytes);
         Ok(Self {
             manifest,
             manifest_bytes,
@@ -164,160 +172,124 @@ impl PackageOutput {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::collections::BTreeMap;
 
-    fn sample_files() -> Vec<OutputFile> {
-        vec![
-            OutputFile {
-                path: "/usr/bin/hello".to_owned(),
-                hash: "aaa111".to_owned(),
-                size: 1024,
-                mode: 0o755,
+    use super::*;
+    use crate::generation::root_manifest::GenerationRootEntry;
+    use crate::payload::{
+        PayloadContentAuthority, PayloadIdentity, PayloadNode, PayloadNodeKind, PayloadTimestamp,
+        ResolvedPayloadNode,
+    };
+
+    fn node(kind: PayloadNodeKind, permissions: u32) -> ResolvedPayloadNode {
+        let mode_type = match kind {
+            PayloadNodeKind::Regular { .. } | PayloadNodeKind::Hardlink { .. } => libc::S_IFREG,
+            PayloadNodeKind::Directory => libc::S_IFDIR,
+            PayloadNodeKind::Symlink { .. } => libc::S_IFLNK,
+            PayloadNodeKind::BlockDevice { .. } => libc::S_IFBLK,
+            PayloadNodeKind::CharacterDevice { .. } => libc::S_IFCHR,
+            PayloadNodeKind::Fifo => libc::S_IFIFO,
+            PayloadNodeKind::Socket => libc::S_IFSOCK,
+        };
+        ResolvedPayloadNode {
+            source: PayloadNode {
+                kind,
+                mode: mode_type | permissions,
+                user: PayloadIdentity::Numeric { id: 0 },
+                group: PayloadIdentity::Numeric { id: 0 },
+                mtime: PayloadTimestamp::UNIX_EPOCH,
+                xattrs: BTreeMap::new(),
             },
-            OutputFile {
-                path: "/usr/lib/libhello.so".to_owned(),
-                hash: "bbb222".to_owned(),
-                size: 4096,
-                mode: 0o644,
+            uid: 0,
+            gid: 0,
+        }
+    }
+
+    fn root() -> ResolvedPayloadNode {
+        node(PayloadNodeKind::Directory, 0o755)
+    }
+
+    fn sample_entries() -> Vec<GenerationRootEntry> {
+        vec![
+            GenerationRootEntry {
+                path: "/usr".to_string(),
+                node: node(PayloadNodeKind::Directory, 0o755),
+                content: None,
+            },
+            GenerationRootEntry {
+                path: "/usr/bin".to_string(),
+                node: node(PayloadNodeKind::Directory, 0o755),
+                content: None,
+            },
+            GenerationRootEntry {
+                path: "/usr/bin/hello".to_string(),
+                node: node(
+                    PayloadNodeKind::Regular {
+                        hardlink_identity: None,
+                    },
+                    0o755,
+                ),
+                content: Some(PayloadContentAuthority {
+                    sha256: "a".repeat(64),
+                    size: 1024,
+                }),
             },
         ]
     }
 
-    fn sample_symlinks() -> Vec<OutputSymlink> {
-        vec![OutputSymlink {
-            path: "/usr/lib/libhello.so.1".to_owned(),
-            target: "libhello.so".to_owned(),
-        }]
+    fn manifest() -> OutputManifest {
+        OutputManifest::new(
+            "d".repeat(64),
+            "hello",
+            "1.0",
+            root(),
+            sample_entries(),
+            42,
+            "2026-03-19T00:00:00Z".to_string(),
+        )
+        .unwrap()
     }
 
     #[test]
-    fn output_hash_is_deterministic() {
-        let files = sample_files();
-        let symlinks = sample_symlinks();
+    fn output_hash_is_deterministic_and_covers_exact_metadata() {
+        let entries = sample_entries();
+        let first = OutputManifest::compute_output_hash(&root(), &entries).unwrap();
+        let second = OutputManifest::compute_output_hash(&root(), &entries).unwrap();
+        assert_eq!(first, second);
 
-        let hash1 = OutputManifest::compute_output_hash(&files, &symlinks);
-        let hash2 = OutputManifest::compute_output_hash(&files, &symlinks);
-        assert_eq!(hash1, hash2);
+        let mut changed = entries;
+        changed[2].node.uid = 42;
+        changed[2].node.source.user = PayloadIdentity::Numeric { id: 42 };
+        let changed = OutputManifest::compute_output_hash(&root(), &changed).unwrap();
+        assert_ne!(first, changed);
     }
 
     #[test]
-    fn output_hash_is_order_independent() {
-        let files = sample_files();
-        let mut files_reversed = files.clone();
-        files_reversed.reverse();
-
-        let symlinks = sample_symlinks();
-
-        let hash1 = OutputManifest::compute_output_hash(&files, &symlinks);
-        let hash2 = OutputManifest::compute_output_hash(&files_reversed, &symlinks);
-        assert_eq!(
-            hash1, hash2,
-            "output hash must be independent of input order"
-        );
+    fn output_manifest_round_trips_current_toml() {
+        let manifest = manifest();
+        let toml = toml::to_string_pretty(&manifest).unwrap();
+        assert_eq!(OutputManifest::from_toml(&toml).unwrap(), manifest);
     }
 
     #[test]
-    fn different_file_content_produces_different_hash() {
-        let files1 = sample_files();
-        let symlinks = sample_symlinks();
-
-        let mut files2 = sample_files();
-        files2[0].hash = "changed_hash".to_owned();
-
-        let hash1 = OutputManifest::compute_output_hash(&files1, &symlinks);
-        let hash2 = OutputManifest::compute_output_hash(&files2, &symlinks);
-        assert_ne!(hash1, hash2);
-    }
-
-    #[test]
-    fn output_manifest_serializes_to_toml() {
-        let manifest = OutputManifest {
-            derivation_id: "d".repeat(64),
-            output_hash: "e".repeat(64),
-            hash_version: 1,
-            files: sample_files(),
-            symlinks: sample_symlinks(),
-            build_duration_secs: 42,
-            built_at: "2026-03-19T00:00:00Z".to_owned(),
-        };
-
-        let toml_str = toml::to_string_pretty(&manifest).expect("must serialize");
-        assert!(toml_str.contains("derivation_id"));
-        assert!(toml_str.contains("output_hash"));
-        assert!(toml_str.contains("/usr/bin/hello"));
-
-        // Round-trip.
-        let deserialized: OutputManifest = toml::from_str(&toml_str).expect("must deserialize");
-        assert_eq!(manifest, deserialized);
-    }
-
-    #[test]
-    fn package_output_from_manifest() {
-        let manifest = OutputManifest {
-            derivation_id: "d".repeat(64),
-            output_hash: "e".repeat(64),
-            hash_version: 1,
-            files: sample_files(),
-            symlinks: sample_symlinks(),
-            build_duration_secs: 10,
-            built_at: "2026-03-19T00:00:00Z".to_owned(),
-        };
-
-        let output = PackageOutput::from_manifest(manifest.clone()).expect("must serialize");
-        assert_eq!(output.manifest, manifest);
-        assert!(!output.manifest_bytes.is_empty());
-        assert_eq!(output.manifest_hash.len(), 64);
-        assert!(output.manifest_hash.chars().all(|c| c.is_ascii_hexdigit()));
-    }
-
-    #[test]
-    fn output_hash_v2_includes_permissions() {
-        let files = vec![OutputFile {
-            path: "/usr/bin/hello".into(),
-            hash: "abc123".into(),
-            size: 100,
-            mode: 0o755,
-        }];
-
-        let v1 = OutputManifest::compute_output_hash(&files, &[]);
-        let v2 = OutputManifest::compute_output_hash_v2(&files, &[]);
-        assert_ne!(v1, v2, "v2 should differ from v1 due to permissions");
-    }
-
-    #[test]
-    fn output_hash_v2_changes_with_mode() {
-        let files_755 = vec![OutputFile {
-            path: "/usr/bin/hello".into(),
-            hash: "abc123".into(),
-            size: 100,
-            mode: 0o755,
-        }];
-        let files_644 = vec![OutputFile {
-            path: "/usr/bin/hello".into(),
-            hash: "abc123".into(),
-            size: 100,
-            mode: 0o644,
-        }];
-
-        let h755 = OutputManifest::compute_output_hash_v2(&files_755, &[]);
-        let h644 = OutputManifest::compute_output_hash_v2(&files_644, &[]);
-        assert_ne!(
-            h755, h644,
-            "different modes should produce different hashes"
-        );
-    }
-
-    #[test]
-    fn hash_version_defaults_to_1() {
-        let toml_str = r#"
+    fn old_lossy_manifests_are_not_readable() {
+        let old = r#"
 derivation_id = "test"
 output_hash = "test"
+hash_version = 2
 files = []
 symlinks = []
 build_duration_secs = 0
 built_at = ""
 "#;
-        let parsed: OutputManifest = toml::from_str(toml_str).unwrap();
-        assert_eq!(parsed.hash_version, 1);
+        assert!(OutputManifest::from_toml(old).is_err());
+    }
+
+    #[test]
+    fn tampered_hash_is_rejected() {
+        let mut manifest = manifest();
+        manifest.output_hash = "f".repeat(64);
+        assert!(manifest.validate().is_err());
+        assert!(PackageOutput::from_manifest(manifest).is_err());
     }
 }

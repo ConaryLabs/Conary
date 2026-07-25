@@ -34,7 +34,9 @@ pub async fn cmd_gc(
     let mut referenced_hashes: HashSet<String> = HashSet::new();
 
     let file_hashes: Vec<String> = {
-        let mut stmt = conn.prepare("SELECT DISTINCT sha256_hash FROM files WHERE sha256_hash IS NOT NULL AND sha256_hash != ''")?;
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT content_sha256 FROM files WHERE content_sha256 IS NOT NULL",
+        )?;
         let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
         rows.collect::<rusqlite::Result<Vec<_>>>()?
     };
@@ -199,7 +201,8 @@ fn gc_orphaned_chunks(conn: &rusqlite::Connection, db_path: &str, dry_run: bool)
 
     // Add live file hashes from installed packages so we never delete CAS
     // objects that are still referenced by troves, rollback history, etc.
-    let mut stmt = conn.prepare("SELECT DISTINCT sha256_hash FROM files WHERE sha256_hash IS NOT NULL AND sha256_hash != ''")?;
+    let mut stmt =
+        conn.prepare("SELECT DISTINCT content_sha256 FROM files WHERE content_sha256 IS NOT NULL")?;
     let mut rows = stmt.query([])?;
     while let Some(row) = rows.next()? {
         let hash: String = row.get(0)?;

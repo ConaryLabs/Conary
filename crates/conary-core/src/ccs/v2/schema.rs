@@ -3,9 +3,13 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+use crate::payload::{PayloadContentAuthority, PayloadNode};
+use crate::repository::dependency_model::RepositoryRequirementGroup;
+use crate::repository::versioning::VersionScheme;
+
 pub const FORMAT_VERSION_V2: u16 = 2;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AuthorityDocumentV2 {
     pub format_version: u16,
     pub identity: PackageIdentityV2,
@@ -13,7 +17,9 @@ pub struct AuthorityDocumentV2 {
     #[serde(default)]
     pub provides: Vec<DependencyEntryV2>,
     #[serde(default)]
-    pub requires: Vec<DependencyEntryV2>,
+    pub requirements: Vec<RepositoryRequirementGroup>,
+    #[serde(default)]
+    pub relations: Vec<RepositoryRequirementGroup>,
     #[serde(default)]
     pub components: BTreeMap<String, ComponentAuthorityV2>,
     #[serde(default)]
@@ -28,6 +34,7 @@ pub struct AuthorityDocumentV2 {
 pub struct PackageIdentityV2 {
     pub name: String,
     pub version: String,
+    pub version_scheme: VersionScheme,
     pub release: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub architecture: Option<String>,
@@ -117,36 +124,19 @@ pub enum DependencyKindV2 {
     Binary,
     Soname,
     PkgConfig,
-    Conflict,
-    Replace,
-    Obsolete,
-    Break,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FileAuthorityV2 {
     pub path: String,
-    pub sha256: String,
-    pub size: u64,
-    pub file_type: FileTypeV2,
-    pub mode: u32,
-    pub owner: String,
-    pub group: String,
-    pub component: String,
+    pub node: PayloadNode,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub symlink_target: Option<String>,
+    pub content: Option<PayloadContentAuthority>,
+    pub component: String,
     #[serde(default)]
     pub config: Option<ConfigPolicyV2>,
     #[serde(default)]
     pub conflict: ConflictPolicyV2,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-pub enum FileTypeV2 {
-    Regular,
-    Directory,
-    Symlink,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -179,25 +169,173 @@ pub enum ConflictPolicyV2 {
     Replace,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(deny_unknown_fields)]
 pub struct LifecycleAuthorityV2 {
-    /// M4a carries opaque install-time authority references. Structured
-    /// lifecycle authoring and target-specific validation are deferred to M4b
-    /// and M4d; these strings must still be signed v2 authority.
     #[serde(default)]
-    pub users: Vec<String>,
+    pub users: Vec<LifecycleUserV2>,
     #[serde(default)]
-    pub groups: Vec<String>,
+    pub groups: Vec<LifecycleGroupV2>,
     #[serde(default)]
-    pub directories: Vec<String>,
+    pub directories: Vec<LifecycleDirectoryV2>,
     #[serde(default)]
-    pub services: Vec<String>,
+    pub services: Vec<LifecycleServiceV2>,
     #[serde(default)]
-    pub tmpfiles: Vec<String>,
+    pub systemd: Vec<LifecycleSystemdV2>,
     #[serde(default)]
-    pub sysctl: Vec<String>,
+    pub tmpfiles: Vec<LifecycleTmpfilesV2>,
     #[serde(default)]
-    pub alternatives: Vec<String>,
+    pub sysctl: Vec<LifecycleSysctlV2>,
+    #[serde(default)]
+    pub alternatives: Vec<LifecycleAlternativeV2>,
+    /// Package-scoped capability declarations from `ccs.toml`. Each
+    /// executable hook repeats this exact set so its standalone execution
+    /// contract remains complete.
+    #[serde(default)]
+    pub script_capabilities: Vec<LifecycleScriptCapabilityV2>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub post_install: Option<LifecycleScriptV2>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pre_remove: Option<LifecycleScriptV2>,
+    /// Exact package-manager-native lifecycle contract carried by converted
+    /// packages. This is signed install authority, not debug-TOML evidence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_lifecycle: Option<crate::ccs::native_lifecycle::NativeLifecycleBundle>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct LifecycleUserV2 {
+    pub name: String,
+    pub system: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub home: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shell: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reversible: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct LifecycleGroupV2 {
+    pub name: String,
+    pub system: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reversible: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct LifecycleDirectoryV2 {
+    pub path: String,
+    pub mode: String,
+    pub owner: String,
+    pub group: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cleanup: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reversible: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct LifecycleServiceV2 {
+    pub name: String,
+    pub action: LifecycleServiceActionV2,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reversible: Option<bool>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum LifecycleServiceActionV2 {
+    Enable,
+    Disable,
+    Start,
+    Stop,
+    Reload,
+    Restart,
+    TryRestart,
+    ReloadOrRestart,
+    ReloadOrTryRestart,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct LifecycleSystemdV2 {
+    pub unit: String,
+    pub enable: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reversible: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct LifecycleTmpfilesV2 {
+    #[serde(rename = "type")]
+    pub entry_type: String,
+    pub path: String,
+    pub mode: String,
+    pub user: String,
+    pub group: String,
+    pub age: String,
+    pub argument: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reversible: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct LifecycleSysctlV2 {
+    pub key: String,
+    pub value: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reversible: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct LifecycleAlternativeV2 {
+    pub link: String,
+    pub name: String,
+    pub path: String,
+    pub priority: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reversible: Option<bool>,
+}
+
+/// Executable native CCS lifecycle authority.
+///
+/// `interpreter` and `execution` are explicit even though v2 currently admits
+/// only the contract implemented by `HookExecutor`. This prevents an
+/// interpreter or execution-root guess from entering install authority.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct LifecycleScriptV2 {
+    pub interpreter: String,
+    pub body: String,
+    #[serde(default)]
+    pub capabilities: Vec<LifecycleScriptCapabilityV2>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reversible: Option<bool>,
+    pub execution: LifecycleScriptExecutionV2,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct LifecycleScriptCapabilityV2 {
+    pub name: String,
+    #[serde(default)]
+    pub paths: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum LifecycleScriptExecutionV2 {
+    SandboxedTargetRoot,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -263,14 +401,12 @@ impl AuthorityDocumentV2 {
         if let PackageKindV2::Package(data) = &mut authority.kind {
             data.files.push(FileAuthorityV2 {
                 path: "/usr/bin/hello".to_string(),
-                sha256: crate::hash::sha256(b"hello world\n"),
-                size: 12,
-                file_type: FileTypeV2::Regular,
-                mode: 0o755,
-                owner: "root".to_string(),
-                group: "root".to_string(),
+                node: PayloadNode::regular(0o755),
+                content: Some(PayloadContentAuthority {
+                    sha256: crate::hash::sha256(b"hello world\n"),
+                    size: 12,
+                }),
                 component: "main".to_string(),
-                symlink_target: None,
                 config: None,
                 conflict: ConflictPolicyV2::Error,
             });
@@ -285,6 +421,7 @@ impl AuthorityDocumentV2 {
             identity: PackageIdentityV2 {
                 name: name.to_string(),
                 version: "1.0.0".to_string(),
+                version_scheme: VersionScheme::Conary,
                 release: "1".to_string(),
                 architecture: Some("x86_64".to_string()),
                 platform: Some("linux".to_string()),
@@ -292,7 +429,8 @@ impl AuthorityDocumentV2 {
             },
             kind: PackageKindV2::Package(PackageDataV2::default()),
             provides: Vec::new(),
-            requires: Vec::new(),
+            requirements: Vec::new(),
+            relations: Vec::new(),
             components: BTreeMap::new(),
             lifecycle: LifecycleAuthorityV2::default(),
             provenance: ProvenanceAuthorityV2 {
@@ -321,6 +459,58 @@ mod tests {
     }
 
     #[test]
+    fn typed_relations_round_trip_in_signed_v2_authority() {
+        let mut authority = AuthorityDocumentV2::package_for_tests("replacement");
+        authority.identity.version_scheme = VersionScheme::Rpm;
+        authority.relations.push(
+            crate::repository::package_relation::parse_native_relation(
+                crate::repository::dependency_model::RepositoryRequirementKind::Obsolete,
+                VersionScheme::Rpm,
+                "old-package < 2",
+            )
+            .unwrap(),
+        );
+
+        let bytes = authority.to_cbor().unwrap();
+        let decoded = AuthorityDocumentV2::from_cbor(&bytes).unwrap();
+
+        assert_eq!(decoded.relations, authority.relations);
+        super::super::validation::validate_authority(&decoded).unwrap();
+    }
+
+    #[test]
+    fn tmpfiles_authority_round_trips_exact_seven_columns() {
+        let tmpfiles = LifecycleTmpfilesV2 {
+            entry_type: "x!$".to_string(),
+            path: "/var/cache/example/*".to_string(),
+            mode: "-".to_string(),
+            user: "-".to_string(),
+            group: "-".to_string(),
+            age: "~am:30d".to_string(),
+            argument: "exact argument with spaces".to_string(),
+            reversible: Some(true),
+        };
+        let mut encoded = Vec::new();
+        ciborium::ser::into_writer(&tmpfiles, &mut encoded).unwrap();
+        let decoded: LifecycleTmpfilesV2 = ciborium::from_reader(encoded.as_slice()).unwrap();
+
+        assert_eq!(decoded, tmpfiles);
+    }
+
+    #[test]
+    fn tmpfiles_authority_rejects_removed_partial_shape() {
+        let removed_shape = serde_json::json!({
+            "type": "d",
+            "path": "/run/example",
+            "mode": "0755",
+            "owner": "root",
+            "group": "root"
+        });
+
+        assert!(serde_json::from_value::<LifecycleTmpfilesV2>(removed_shape).is_err());
+    }
+
+    #[test]
     fn group_requires_members_and_has_no_payload_fields() {
         let group = PackageKindV2::Group(GroupDataV2 {
             members: vec![GroupMemberV2 {
@@ -338,10 +528,10 @@ mod tests {
     fn redirect_has_minimum_authority_fields() {
         let redirect = RedirectDataV2 {
             to: "new-name".to_string(),
-            version_constraint: Some(">=1.0".to_string()),
+            version_constraint: Some(">=1.0.0".to_string()),
             reason: Some("package renamed".to_string()),
         };
         assert_eq!(redirect.to, "new-name");
-        assert_eq!(redirect.version_constraint.as_deref(), Some(">=1.0"));
+        assert_eq!(redirect.version_constraint.as_deref(), Some(">=1.0.0"));
     }
 }

@@ -3,7 +3,7 @@
 use super::*;
 use crate::commands::composefs_ops::test_mount_skip_guard;
 use crate::commands::test_helpers::setup_command_test_db;
-use conary_core::db::models::{Repository, RepositoryPackage, Trove};
+use conary_core::db::models::{InstalledRequirementGroup, Repository, RepositoryPackage, Trove};
 use tempfile::tempdir;
 
 #[test]
@@ -23,18 +23,18 @@ fn status_json_includes_major_upgrades() {
 }
 
 #[test]
-fn automation_install_leaves_dependency_mode_model_derived() {
+fn automation_install_leaves_ownership_mode_model_derived() {
     let source = include_str!("../automation.rs");
-    let model_derived_dep_mode = ["dep_mode: ", "None,"].concat();
-    let hard_coded_default = ["dep_mode: Some(super::DepMode", "::default()),"].concat();
+    let model_derived_ownership = ["ownership: ", "None,"].concat();
+    let hard_coded_default = ["ownership: Some(super::OwnershipMode", "::default()),"].concat();
 
     assert!(
-        source.contains(&model_derived_dep_mode),
-        "automation installs must leave dep_mode unset so install derives it from the model"
+        source.contains(&model_derived_ownership),
+        "automation installs must leave ownership unset so install derives it from the model"
     );
     assert!(
         !source.contains(&hard_coded_default),
-        "automation installs must not force the legacy satisfy default"
+        "automation installs must not force an ownership default"
     );
 }
 
@@ -45,11 +45,10 @@ async fn cmd_automation_apply_yes_removes_orphans_and_records_history() {
     let _guard = test_mount_skip_guard();
 
     let conn = crate::commands::open_db(&db_path).unwrap();
-    crate::commands::composefs_ops::rebuild_and_mount(
+    crate::commands::composefs_ops::rebuild_and_mount_from_installed_state(
         &conn,
         &db_path,
         "Initial automation cleanup generation",
-        None,
     )
     .unwrap();
     conn.execute(
@@ -69,13 +68,23 @@ async fn cmd_automation_apply_yes_removes_orphans_and_records_history() {
         [],
     )
     .unwrap();
-    conn.execute(
-        "DELETE FROM dependencies
-         WHERE trove_id = (SELECT id FROM troves WHERE name = 'nginx' LIMIT 1)
-           AND depends_on_name = 'openssl'",
-        [],
-    )
-    .unwrap();
+    let nginx_id = Trove::find_by_name(&conn, "nginx")
+        .unwrap()
+        .into_iter()
+        .next()
+        .and_then(|trove| trove.id)
+        .unwrap();
+    for group in InstalledRequirementGroup::find_by_trove(&conn, nginx_id).unwrap() {
+        if group
+            .requirement
+            .expression
+            .atoms()
+            .iter()
+            .any(|atom| atom.name == "openssl")
+        {
+            InstalledRequirementGroup::delete(&conn, group.id.unwrap()).unwrap();
+        }
+    }
     drop(conn);
 
     cmd_automation_apply(
@@ -84,7 +93,6 @@ async fn cmd_automation_apply_yes_removes_orphans_and_records_history() {
         true,
         Some(vec!["orphans".to_string()]),
         false,
-        true,
     )
     .await
     .expect("orphan cleanup should succeed");
@@ -124,6 +132,7 @@ async fn cmd_automation_apply_records_failed_history_for_unreachable_update() {
         repo_id,
         "nginx".to_string(),
         "1.24.1".to_string(),
+        conary_core::repository::versioning::VersionScheme::Conary,
         "sha256:test-nginx".to_string(),
         1234,
         "http://127.0.0.1:9/nginx-1.24.1.ccs".to_string(),
@@ -138,7 +147,6 @@ async fn cmd_automation_apply_records_failed_history_for_unreachable_update() {
         true,
         Some(vec!["updates".to_string()]),
         false,
-        true,
     )
     .await
     .expect_err("unreachable update should fail");
@@ -186,6 +194,22 @@ fn query_automation_history_returns_latest_first() {
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0].action_id, "newer");
     assert_eq!(rows[1].action_id, "older");
+}
+
+#[test]
+fn query_automation_history_rejects_corrupt_package_identity() {
+    let (_tmp, db_path) = setup_command_test_db();
+    let conn = crate::commands::open_db(&db_path).unwrap();
+    conn.execute(
+        "INSERT INTO automation_history (action_id, category, packages, status, applied_at)
+         VALUES ('corrupt', 'updates', 'not-json', 'applied', '2026-04-08 10:00:00')",
+        [],
+    )
+    .unwrap();
+
+    let error = query_automation_history(&conn, 10, None, None, None)
+        .expect_err("corrupt persisted package identity must not become an empty package set");
+    assert!(error.to_string().contains("corrupt packages"));
 }
 
 #[test]

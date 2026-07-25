@@ -1,21 +1,18 @@
 // apps/remi/src/server/handlers/admin/packages.rs
 //! Admin handlers for publishing custom CCS packages into Remi metadata.
 
-use super::{check_scope, validate_path_param, validate_supported_admin_distro_route};
+use super::{check_scope, validate_supported_admin_distro_route};
 use crate::server::ServerState;
 use crate::server::auth::{Scope, TokenScopes, json_error};
-use crate::server::publication::{
-    ReviewArtifactInput, decision_refusal, raw_report_from_summary, write_review_artifact,
-};
 use axum::{
-    extract::{Path, Query, Request, State},
-    http::{StatusCode, header},
+    extract::{Path, Request, State},
+    http::StatusCode,
     response::{IntoResponse, Response},
 };
 use conary_core::ccs::convert::ScriptletBundleSummary;
-use conary_core::db::models::{CONVERSION_VERSION, ScriptletSummaryForPublication};
+use conary_core::packages::PackageFormat;
 use futures::StreamExt;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
@@ -23,26 +20,6 @@ use tokio::sync::RwLock;
 
 /// Maximum allowed upload size (512 MB).
 const MAX_UPLOAD_SIZE: u64 = 512 * 1024 * 1024;
-
-#[derive(Debug, Deserialize)]
-pub struct ReviewArtifactQuery {
-    pub version: String,
-    pub arch: Option<String>,
-}
-
-#[derive(Debug)]
-enum ReviewArtifactLookup {
-    Found(String),
-    Stale,
-    Ambiguous,
-    Missing,
-}
-
-#[derive(Debug)]
-struct ReviewArtifactRow {
-    conversion_version: i32,
-    review_artifact_path: Option<String>,
-}
 
 struct AtomicReplaceInput {
     db_path: PathBuf,
@@ -54,6 +31,43 @@ struct AtomicReplaceInput {
     size: i64,
     final_ccs_path: String,
     scriptlet_summary: ScriptletBundleSummary,
+}
+
+fn update_converted_ccs_path(
+    db_path: &FsPath,
+    distro: &str,
+    package_name: &str,
+    package_version: &str,
+    package_architecture: Option<&str>,
+    ccs_path: &str,
+) -> anyhow::Result<()> {
+    let conn = crate::server::open_runtime_db(db_path)?;
+    let updated = if let Some(architecture) = package_architecture {
+        conn.execute(
+            "UPDATE converted_packages SET ccs_path = ?1 \
+             WHERE distro = ?2 AND package_name = ?3 AND package_version = ?4 \
+               AND package_architecture = ?5",
+            rusqlite::params![
+                ccs_path,
+                distro,
+                package_name,
+                package_version,
+                architecture
+            ],
+        )?
+    } else {
+        conn.execute(
+            "UPDATE converted_packages SET ccs_path = ?1 \
+             WHERE distro = ?2 AND package_name = ?3 AND package_version = ?4 \
+               AND package_architecture IS NULL",
+            rusqlite::params![ccs_path, distro, package_name, package_version],
+        )?
+    };
+    anyhow::ensure!(
+        updated == 1,
+        "expected one converted package path update for {distro}/{package_name}/{package_version}, updated {updated}"
+    );
+    Ok(())
 }
 
 #[derive(Serialize)]
@@ -126,7 +140,7 @@ async fn atomic_replace_record(
         }
 
         // Insert new record inside the same transaction.
-        let mut converted = conary_core::db::models::ConvertedPackage::new_server(
+        let mut converted = conary_core::db::models::ConvertedPackage::new_repository(
             input.distro.clone(),
             input.package_name.clone(),
             input.package_version.clone(),
@@ -144,6 +158,20 @@ async fn atomic_replace_record(
         converted
             .insert(&tx)
             .map_err(|error| anyhow::anyhow!("insert converted package metadata: {error}"))?;
+        if let Some(existing_chunk) =
+            conary_core::db::models::ChunkAccess::find_by_hash(&tx, &input.content_hash)?
+            && existing_chunk.size_bytes != input.size
+        {
+            anyhow::bail!(
+                "chunk {} size disagrees with persisted CAS authority: {} != {}",
+                input.content_hash,
+                existing_chunk.size_bytes,
+                input.size
+            );
+        }
+        conary_core::db::models::ChunkAccess::new(input.content_hash, input.size)
+            .upsert(&tx)
+            .map_err(|error| anyhow::anyhow!("persist exact chunk size: {error}"))?;
 
         tx.commit()
             .map_err(|error| anyhow::anyhow!("commit converted package metadata: {error}"))?;
@@ -152,196 +180,6 @@ async fn atomic_replace_record(
     })
     .await
     .map_err(|e| anyhow::anyhow!("failed to join blocking db task: {e}"))?
-}
-
-fn matching_review_artifact_rows(
-    conn: &rusqlite::Connection,
-    distro: &str,
-    package: &str,
-    version: &str,
-    architecture: Option<&str>,
-) -> anyhow::Result<Vec<ReviewArtifactRow>> {
-    let mut rows = Vec::new();
-    if let Some(architecture) = architecture {
-        let mut stmt = conn.prepare(
-            "SELECT conversion_version, review_artifact_path
-             FROM converted_packages
-             WHERE distro = ?1 AND package_name = ?2 AND package_version = ?3
-               AND package_architecture = ?4
-             ORDER BY converted_at DESC",
-        )?;
-        let iter = stmt.query_map(
-            rusqlite::params![distro, package, version, architecture],
-            |row| {
-                Ok(ReviewArtifactRow {
-                    conversion_version: row.get(0)?,
-                    review_artifact_path: row.get(1)?,
-                })
-            },
-        )?;
-        for row in iter {
-            rows.push(row?);
-        }
-    } else {
-        let mut stmt = conn.prepare(
-            "SELECT conversion_version, review_artifact_path
-             FROM converted_packages
-             WHERE distro = ?1 AND package_name = ?2 AND package_version = ?3
-             ORDER BY converted_at DESC",
-        )?;
-        let iter = stmt.query_map(rusqlite::params![distro, package, version], |row| {
-            Ok(ReviewArtifactRow {
-                conversion_version: row.get(0)?,
-                review_artifact_path: row.get(1)?,
-            })
-        })?;
-        for row in iter {
-            rows.push(row?);
-        }
-    }
-    Ok(rows)
-}
-
-fn classify_review_artifact_rows(
-    rows: Vec<ReviewArtifactRow>,
-    architecture: Option<&str>,
-) -> ReviewArtifactLookup {
-    if rows.is_empty() {
-        return ReviewArtifactLookup::Missing;
-    }
-
-    let current: Vec<_> = rows
-        .into_iter()
-        .filter(|row| row.conversion_version >= CONVERSION_VERSION)
-        .collect();
-    if current.is_empty() {
-        return ReviewArtifactLookup::Stale;
-    }
-    if architecture.is_none() && current.len() > 1 {
-        return ReviewArtifactLookup::Ambiguous;
-    }
-
-    current
-        .into_iter()
-        .find_map(|row| row.review_artifact_path)
-        .map(ReviewArtifactLookup::Found)
-        .unwrap_or(ReviewArtifactLookup::Missing)
-}
-
-pub async fn get_scriptlet_review_artifact(
-    State(state): State<Arc<RwLock<ServerState>>>,
-    Path((distro, package)): Path<(String, String)>,
-    Query(query): Query<ReviewArtifactQuery>,
-    scopes: Option<axum::Extension<TokenScopes>>,
-) -> Response {
-    if let Some(err) = check_scope(&scopes, Scope::Admin) {
-        return err;
-    }
-    if let Some(err) = validate_supported_admin_distro_route(&distro) {
-        return err;
-    }
-    if let Some(err) = validate_path_param(&package, "package") {
-        return err;
-    }
-    if query.version.is_empty() {
-        return json_error(400, "Version is required", "INVALID_PARAMETER");
-    }
-
-    let (db_path, cache_dir) = {
-        let guard = state.read().await;
-        (guard.config.db_path.clone(), guard.config.cache_dir.clone())
-    };
-    let lookup = tokio::task::spawn_blocking({
-        let distro = distro.clone();
-        let package = package.clone();
-        let version = query.version.clone();
-        let arch = query.arch.clone();
-        move || -> anyhow::Result<ReviewArtifactLookup> {
-            let conn = crate::server::open_runtime_db(&db_path)?;
-            let rows =
-                matching_review_artifact_rows(&conn, &distro, &package, &version, arch.as_deref())?;
-            Ok(classify_review_artifact_rows(rows, arch.as_deref()))
-        }
-    })
-    .await;
-
-    let path = match lookup {
-        Ok(Ok(ReviewArtifactLookup::Found(path))) => PathBuf::from(path),
-        Ok(Ok(ReviewArtifactLookup::Stale)) => {
-            return json_error(
-                409,
-                "Converted package needs reconversion",
-                "STALE_CONVERSION",
-            );
-        }
-        Ok(Ok(ReviewArtifactLookup::Ambiguous)) => {
-            return json_error(
-                409,
-                "Architecture is required for this package/version",
-                "AMBIGUOUS_ARCHITECTURE",
-            );
-        }
-        Ok(Ok(ReviewArtifactLookup::Missing)) => {
-            return json_error(404, "Review artifact not found", "NOT_FOUND");
-        }
-        Ok(Err(error)) => {
-            tracing::error!("Failed to query review artifact row: {error}");
-            return json_error(500, "Failed to query review artifact", "DB_ERROR");
-        }
-        Err(error) => {
-            tracing::error!("Failed to join review artifact lookup task: {error}");
-            return json_error(500, "Failed to query review artifact", "INTERNAL_ERROR");
-        }
-    };
-
-    let metadata = match tokio::fs::metadata(&path).await {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return json_error(404, "Review artifact file not found on disk", "NOT_FOUND");
-        }
-        Err(error) => {
-            tracing::warn!(
-                "Failed to inspect review artifact {}: {}",
-                path.display(),
-                error
-            );
-            return json_error(500, "Failed to inspect review artifact", "IO_ERROR");
-        }
-    };
-    if !metadata.is_file() {
-        return json_error(403, "Review artifact path is invalid", "FORBIDDEN");
-    }
-
-    match crate::server::publication::validate_review_artifact_path(&cache_dir, &path) {
-        Ok(true) => {}
-        Ok(false) => {
-            return json_error(403, "Review artifact path is invalid", "FORBIDDEN");
-        }
-        Err(error) => {
-            tracing::warn!("Review artifact path validation failed: {error}");
-            return json_error(403, "Review artifact path is invalid", "FORBIDDEN");
-        }
-    }
-
-    match tokio::fs::read(&path).await {
-        Ok(bytes) => (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "application/json")],
-            bytes,
-        )
-            .into_response(),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            json_error(404, "Review artifact file not found on disk", "NOT_FOUND")
-        }
-        Err(error) => {
-            tracing::warn!(
-                "Failed to read review artifact {}: {}",
-                path.display(),
-                error
-            );
-            json_error(500, "Failed to read review artifact", "IO_ERROR")
-        }
-    }
 }
 
 pub async fn upload_package(
@@ -357,13 +195,45 @@ pub async fn upload_package(
         return err;
     }
 
-    let (cache_dir, chunk_dir, db_path) = {
+    let (cache_dir, chunk_dir, db_path, repository_keys_dir) = {
         let guard = state.read().await;
         (
             guard.config.cache_dir.clone(),
             guard.config.chunk_dir.clone(),
             guard.config.db_path.clone(),
+            guard.config.release_publish.repository_keys_dir.clone(),
         )
+    };
+    let Some(repository_keys_dir) = repository_keys_dir else {
+        return json_error(
+            500,
+            "CCS publication authority is not configured",
+            "CONFIG_ERROR",
+        );
+    };
+    let public_key_path = repository_keys_dir.join(&distro).join("targets.public");
+    let public_key = match tokio::task::spawn_blocking(move || {
+        conary_core::ccs::signing::load_public_key(&public_key_path)
+    })
+    .await
+    {
+        Ok(Ok(public_key)) => public_key,
+        Ok(Err(error)) => {
+            tracing::error!("Failed to load CCS publication authority key: {error}");
+            return json_error(
+                500,
+                "CCS publication authority key is unavailable",
+                "CONFIG_ERROR",
+            );
+        }
+        Err(error) => {
+            tracing::error!("Failed to join CCS authority key task: {error}");
+            return json_error(
+                500,
+                "Failed to load CCS publication authority",
+                "INTERNAL_ERROR",
+            );
+        }
     };
 
     let packages_dir = cache_dir.join("packages").join(&distro);
@@ -461,21 +331,32 @@ pub async fn upload_package(
         }
     };
 
-    // Step 3: CCS inspection
+    // Step 3: authenticate CCS v2 authority before deriving publication metadata.
     let inspected = match tokio::task::spawn_blocking({
         let temp_path = temp_path.clone();
-        move || conary_core::ccs::inspector::InspectedPackage::from_file(&temp_path)
+        move || -> anyhow::Result<conary_core::ccs::CcsPackage> {
+            let verified = conary_core::ccs::verify::verify_package(
+                &temp_path,
+                &conary_core::ccs::verify::TrustPolicy::strict(vec![public_key]),
+            )?;
+            let path = temp_path
+                .to_str()
+                .ok_or_else(|| anyhow::anyhow!("temporary CCS path is not valid UTF-8"))?;
+            Ok(conary_core::ccs::CcsPackage::from_verified_archive(
+                path, &verified,
+            )?)
+        }
     })
     .await
     {
         Ok(Ok(pkg)) => pkg,
         Ok(Err(err)) => {
-            tracing::warn!("Uploaded package is not a valid CCS archive: {}", err);
+            tracing::warn!("Uploaded package has no trusted CCS v2 authority: {}", err);
             let _ = tokio::fs::remove_file(&temp_path).await;
             return json_error(
                 400,
-                "Uploaded file is not a valid CCS package",
-                "INVALID_CCS",
+                "Uploaded file is not a trusted CCS v2 package",
+                "UNTRUSTED_CCS",
             );
         }
         Err(err) => {
@@ -487,18 +368,12 @@ pub async fn upload_package(
 
     let package_name = inspected.name().to_string();
     let package_version = inspected.version().to_string();
-    let package_architecture = inspected
-        .manifest
-        .package
-        .platform
-        .as_ref()
-        .and_then(|platform| platform.arch.as_deref())
-        .map(str::to_string);
-    let mut scriptlet_summary = match inspected.manifest.legacy_scriptlets.as_ref() {
+    let package_architecture = inspected.architecture().map(str::to_string);
+    let scriptlet_summary = match inspected.manifest().native_lifecycle.as_ref() {
         Some(bundle) => {
             if let Err(err) = bundle.validate() {
                 tracing::warn!(
-                    "Uploaded CCS package {}/{} has invalid legacy scriptlet bundle: {}",
+                    "Uploaded CCS package {}/{} has invalid native lifecycle bundle: {}",
                     package_name,
                     package_version,
                     err
@@ -506,7 +381,7 @@ pub async fn upload_package(
                 let _ = tokio::fs::remove_file(&temp_path).await;
                 return json_error(
                     400,
-                    "Uploaded CCS package has invalid legacy scriptlet metadata",
+                    "Uploaded CCS package has invalid native lifecycle metadata",
                     "INVALID_SCRIPTLETS",
                 );
             }
@@ -530,41 +405,6 @@ pub async fn upload_package(
         );
         let _ = tokio::fs::remove_file(&temp_path).await;
         return json_error(500, "Failed to publish package", "IO_ERROR");
-    }
-
-    let mut review_artifact_path = None;
-    let publication = ScriptletSummaryForPublication {
-        summary: scriptlet_summary.clone(),
-        valid: true,
-    };
-    let decision = crate::server::publication::classify_summary(publication.clone());
-    if decision_refusal(decision).is_some() {
-        let mut report = raw_report_from_summary(&publication.summary, publication.valid);
-        report.review_artifact_available = true;
-        let artifact_path = match write_review_artifact(
-            &cache_dir,
-            ReviewArtifactInput {
-                distro: &distro,
-                package: &package_name,
-                version: &package_version,
-                architecture: package_architecture.as_deref(),
-                original_format: "ccs",
-                scriptlet_fidelity: &scriptlet_summary.scriptlet_fidelity,
-                conversion_version: CONVERSION_VERSION,
-                ccs_content_hash: &content_hash,
-                ccs_total_size: size,
-                publication: report,
-            },
-        ) {
-            Ok(path) => path,
-            Err(err) => {
-                tracing::error!("Failed to write scriptlet review artifact: {err}");
-                let _ = tokio::fs::remove_file(&staged_path).await;
-                return json_error(500, "Failed to publish package", "REVIEW_ARTIFACT_ERROR");
-            }
-        };
-        scriptlet_summary.review_artifact_path = Some(artifact_path.to_string_lossy().to_string());
-        review_artifact_path = Some(artifact_path);
     }
 
     // Step 5: Atomic DB transaction -- point at the STAGED path initially.
@@ -595,9 +435,6 @@ pub async fn upload_package(
             );
             // DB failed -- remove the staged file, old file is untouched.
             let _ = tokio::fs::remove_file(&staged_path).await;
-            if let Some(path) = review_artifact_path.as_ref() {
-                let _ = tokio::fs::remove_file(path).await;
-            }
             return json_error(500, "Failed to update package metadata", "DB_ERROR");
         }
     };
@@ -625,110 +462,97 @@ pub async fn upload_package(
         let version_for_update = package_version.clone();
         let arch_for_update = package_architecture.clone();
         let fp = final_path_str.clone();
-        let update_ok = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-            let conn = crate::server::open_runtime_db(&db_path_for_update)?;
-            if let Some(arch) = arch_for_update {
-                conn.execute(
-                    "UPDATE converted_packages SET ccs_path = ?1 \
-                     WHERE distro = ?2 AND package_name = ?3 AND package_version = ?4 \
-                       AND package_architecture = ?5",
-                    rusqlite::params![
-                        fp,
-                        distro_for_update,
-                        name_for_update,
-                        version_for_update,
-                        arch
-                    ],
-                )?;
-            } else {
-                conn.execute(
-                    "UPDATE converted_packages SET ccs_path = ?1 \
-                     WHERE distro = ?2 AND package_name = ?3 AND package_version = ?4 \
-                       AND package_architecture IS NULL",
-                    rusqlite::params![fp, distro_for_update, name_for_update, version_for_update],
-                )?;
-            }
-            Ok(())
+        let update_result = tokio::task::spawn_blocking(move || {
+            update_converted_ccs_path(
+                &db_path_for_update,
+                &distro_for_update,
+                &name_for_update,
+                &version_for_update,
+                arch_for_update.as_deref(),
+                &fp,
+            )
         })
         .await;
 
-        if update_ok.is_ok() && update_ok.unwrap().is_ok() {
+        if matches!(&update_result, Ok(Ok(()))) {
             serving_path = final_path_str;
         } else {
+            match &update_result {
+                Ok(Err(error)) => tracing::error!("DB path update failed: {error}"),
+                Err(error) => tracing::error!("DB path update task failed: {error}"),
+                Ok(Ok(())) => unreachable!("handled successful update"),
+            }
             // UPDATE failed -- try to rename back so DB (staged path) stays valid.
-            if tokio::fs::rename(&final_ccs_path, &staged_path)
-                .await
-                .is_ok()
-            {
-                // Rename-back succeeded: file is at staged_path, DB points there.
-                tracing::warn!("DB path update failed; reverted rename, serving from staged path");
-                serving_path = staged_path_str.clone();
-            } else {
-                // Rename-back also failed: file is at final_ccs_path, DB points
-                // at staged_path (which no longer exists). Force-update DB to
-                // final_ccs_path as a last resort.
-                tracing::error!(
-                    "DB update failed AND rename-back failed; forcing DB to final path"
-                );
-                let final_str = final_ccs_path.to_string_lossy().to_string();
-                let db2 = db_path.clone();
-                let d2 = distro.clone();
-                let n2 = package_name.clone();
-                let v2 = package_version.clone();
-                let a2 = package_architecture.clone();
-                let fs2 = final_str.clone();
-                let repair_ok = tokio::task::spawn_blocking(move || -> bool {
-                    let Ok(conn) = crate::server::open_runtime_db(&db2) else {
-                        return false;
-                    };
-                    if let Some(arch) = a2 {
-                        conn.execute(
-                            "UPDATE converted_packages SET ccs_path = ?1 \
-                             WHERE distro = ?2 AND package_name = ?3 AND package_version = ?4 \
-                               AND package_architecture = ?5",
-                            rusqlite::params![fs2, d2, n2, v2, arch],
-                        )
-                        .is_ok()
-                    } else {
-                        conn.execute(
-                            "UPDATE converted_packages SET ccs_path = ?1 \
-                             WHERE distro = ?2 AND package_name = ?3 AND package_version = ?4 \
-                               AND package_architecture IS NULL",
-                            rusqlite::params![fs2, d2, n2, v2],
-                        )
-                        .is_ok()
-                    }
-                })
-                .await
-                .unwrap_or(false);
-
-                if repair_ok {
-                    serving_path = final_str;
-                } else {
-                    // All three attempts failed: DB points at vanished staged
-                    // path, we cannot fix it. Return 500 rather than lying.
+            match tokio::fs::rename(&final_ccs_path, &staged_path).await {
+                Ok(()) => {
+                    // Rename-back succeeded: file is at staged_path, DB points there.
+                    tracing::warn!(
+                        "DB path update failed; reverted rename, serving from staged path"
+                    );
+                    serving_path = staged_path_str.clone();
+                }
+                Err(rename_back_error) => {
+                    // Rename-back also failed: file is at final_ccs_path, DB points
+                    // at staged_path (which no longer exists). Force-update DB to
+                    // final_ccs_path as a last resort.
                     tracing::error!(
-                        "All DB repair attempts failed for {}/{}/{}; row is inconsistent",
-                        distro,
-                        package_name,
-                        package_version
+                        "DB update failed AND rename-back failed ({rename_back_error}); forcing DB to final path"
                     );
-                    return json_error(
-                        500,
-                        "Package uploaded but metadata repair failed; re-upload to fix",
-                        "DB_REPAIR_FAILED",
-                    );
+                    let final_str = final_ccs_path.to_string_lossy().to_string();
+                    let db2 = db_path.clone();
+                    let d2 = distro.clone();
+                    let n2 = package_name.clone();
+                    let v2 = package_version.clone();
+                    let a2 = package_architecture.clone();
+                    let fs2 = final_str.clone();
+                    let repair_result = tokio::task::spawn_blocking(move || {
+                        update_converted_ccs_path(&db2, &d2, &n2, &v2, a2.as_deref(), &fs2)
+                    })
+                    .await;
+
+                    if matches!(&repair_result, Ok(Ok(()))) {
+                        serving_path = final_str;
+                    } else {
+                        match &repair_result {
+                            Ok(Err(error)) => tracing::error!("DB path repair failed: {error}"),
+                            Err(error) => tracing::error!("DB path repair task failed: {error}"),
+                            Ok(Ok(())) => unreachable!("handled successful repair"),
+                        }
+                        // All three attempts failed: DB points at vanished staged
+                        // path, we cannot fix it. Return 500 rather than lying.
+                        tracing::error!(
+                            "All DB repair attempts failed for {}/{}/{}; row is inconsistent",
+                            distro,
+                            package_name,
+                            package_version
+                        );
+                        return json_error(
+                            500,
+                            "Package uploaded but metadata repair failed; re-upload to fix",
+                            "DB_REPAIR_FAILED",
+                        );
+                    }
                 }
             }
         }
     }
 
     // Clean up the old file if it had a different path than what we're serving.
-    if let Some(existing) = &existing
-        && let Some(path) = &existing.ccs_path
-        && *path != serving_path
-    {
-        let _ = tokio::fs::remove_file(path).await;
+    if let Some(existing) = &existing {
+        let artifact = match existing.repository_artifact() {
+            Ok(artifact) => artifact,
+            Err(error) => {
+                tracing::error!("Existing converted artifact is corrupt: {error}");
+                return json_error(
+                    500,
+                    "Existing package metadata is corrupt",
+                    "CONVERTED_ARTIFACT_CORRUPT",
+                );
+            }
+        };
+        if artifact.ccs_path != serving_path {
+            let _ = tokio::fs::remove_file(artifact.ccs_path).await;
+        }
     }
 
     // Populate chunk store from the actual serving path.
@@ -739,15 +563,26 @@ pub async fn upload_package(
         tracing::error!("Failed to create chunk dir {}: {}", parent.display(), err);
         return json_error(500, "Failed to create chunk storage", "IO_ERROR");
     }
-    if tokio::fs::try_exists(&chunk_file_path).await.ok() != Some(true)
-        && let Err(err) = tokio::fs::copy(&serving_path, &chunk_file_path).await
-    {
-        tracing::error!(
-            "Failed to copy package into chunk store {}: {}",
-            chunk_file_path.display(),
-            err
-        );
-        return json_error(500, "Failed to store package chunk", "IO_ERROR");
+    match tokio::fs::try_exists(&chunk_file_path).await {
+        Ok(true) => {}
+        Ok(false) => {
+            if let Err(err) = tokio::fs::copy(&serving_path, &chunk_file_path).await {
+                tracing::error!(
+                    "Failed to copy package into chunk store {}: {}",
+                    chunk_file_path.display(),
+                    err
+                );
+                return json_error(500, "Failed to store package chunk", "IO_ERROR");
+            }
+        }
+        Err(err) => {
+            tracing::error!(
+                "Failed to inspect package chunk path {}: {}",
+                chunk_file_path.display(),
+                err
+            );
+            return json_error(500, "Failed to inspect package chunk storage", "IO_ERROR");
+        }
     }
 
     (

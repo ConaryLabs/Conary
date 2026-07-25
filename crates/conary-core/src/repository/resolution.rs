@@ -12,7 +12,7 @@
 //! resolve_package(name, options)
 //!     |
 //!     v
-//! Check local CAS (already have it?) ──> Yes ──> Return LocalCas
+//! Check exact installed state ─────────> Match ─> Return Installed
 //!     |
 //!     No
 //!     v
@@ -24,18 +24,18 @@
 //!     Not found (no routing entry)          v
 //!     |                               Strategy succeeded? ──> Return source
 //!     v                                     |
-//! Construct Legacy strategy                 No, try next
+//! Select repository package                 No, try next
 //! from repository_packages                  |
 //!     |                                     v
 //!     v                               All strategies failed ──> Error
-//! Try Legacy strategy
+//! Download selected repository package
 //! ```
 //!
-//! # Implicit Legacy Fallback
+//! # Repository Package Default
 //!
 //! When no `package_resolution` entry exists for a package, the resolver
-//! implicitly constructs a `Legacy` strategy from the existing `repository_packages`
-//! row. This ensures backwards compatibility without data migration.
+//! constructs a `RepositoryPackage` strategy from the exact
+//! `repository_packages` row selected in step one.
 //!
 //! # Example
 //!
@@ -46,8 +46,6 @@
 //! match source {
 //!     PackageSource::Binary(path) => install_binary(path),
 //!     PackageSource::Ccs(path) => install_ccs(path),
-//!     PackageSource::Delta(delta) => apply_delta(delta),
-//!     PackageSource::LocalCas(hash) => install_from_cas(hash),
 //! }
 //! ```
 
@@ -57,8 +55,6 @@ use crate::db::models::{
 };
 use crate::error::{Error, Result};
 use crate::label::Label;
-use crate::recipe::{Kitchen, KitchenConfig, parse_recipe};
-use crate::repository::client::RepositoryClient;
 use crate::repository::dependency_model::RepositoryDependencyFlavor;
 use crate::repository::remi::RemiClient;
 use crate::repository::resolution_policy::ResolutionPolicy;
@@ -75,20 +71,6 @@ use tracing::{debug, info, warn};
 /// Maximum depth for delegate chain resolution
 const MAX_DELEGATE_DEPTH: usize = 10;
 
-/// Fetch content from a URL as a string
-///
-/// Uses reqwest via `RepositoryClient` to download the content. Supports HTTP(S) URLs
-/// with automatic redirect following and retry support.
-async fn fetch_url_content(url: &str) -> Result<String> {
-    debug!("Fetching content from: {}", url);
-
-    let client = RepositoryClient::new()?;
-    let bytes = client.download_to_bytes(url).await?;
-
-    String::from_utf8(bytes)
-        .map_err(|e| Error::ParseError(format!("Invalid UTF-8 content from {}: {}", url, e)))
-}
-
 /// Options for package resolution
 #[derive(Debug, Clone, Default)]
 pub struct ResolutionOptions {
@@ -100,10 +82,8 @@ pub struct ResolutionOptions {
     pub architecture: Option<String>,
     /// Output directory for downloads
     pub output_dir: Option<PathBuf>,
-    /// GPG verification options
-    pub gpg_options: Option<DownloadOptions>,
-    /// Whether to skip local CAS check
-    pub skip_cas: bool,
+    /// Whether to skip the exact-installed-state short circuit
+    pub skip_installed: bool,
     /// Resolution policy controlling cross-distro selection.
     pub policy: Option<ResolutionPolicy>,
     /// Whether this resolution is for a root (user-typed) request.
@@ -146,14 +126,13 @@ pub enum PackageSource {
         /// repository routed the install through Remi/CCS conversion.
         repository_provenance: Option<RepositorySourceMetadata>,
     },
-    /// Delta update (base version, delta path)
-    Delta {
-        base_version: String,
-        delta_path: PathBuf,
-        _temp_dir: Option<TempDir>,
+    /// Exact installed package identity selected from Conary's persisted state.
+    Installed {
+        name: String,
+        version: String,
+        architecture: Option<String>,
+        trove_id: Option<i64>,
     },
-    /// Package already in local CAS
-    LocalCas { hash: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -167,7 +146,7 @@ pub enum RepositorySourceKind {
 pub struct RepositorySourceMetadata {
     pub repository_id: i64,
     pub source_distro: Option<String>,
-    pub version_scheme: Option<String>,
+    pub version_scheme: VersionScheme,
     pub source_kind: RepositorySourceKind,
 }
 
@@ -177,8 +156,7 @@ impl PackageSource {
         match self {
             Self::Binary { path, .. } => Some(path),
             Self::Ccs { path, .. } => Some(path),
-            Self::Delta { delta_path, .. } => Some(delta_path),
-            Self::LocalCas { .. } => None,
+            Self::Installed { .. } => None,
         }
     }
 }
@@ -270,13 +248,13 @@ impl<'a> PackageResolver<'a> {
     /// Resolve a package to its source
     ///
     /// This is the main entry point for package resolution. It performs:
-    /// 1. Check if package is already installed locally (skip with skip_cas option)
+    /// 1. Check if package is already installed locally unless explicitly skipped
     /// 2. Repository selection (using existing priority logic)
-    /// 3. Strategy lookup from routing table (with implicit legacy fallback)
+    /// 3. Strategy lookup from routing table or exact repository-package default
     /// 4. Strategy execution in priority order
     pub async fn resolve(&self, name: &str, options: &ResolutionOptions) -> Result<PackageSource> {
         // Step 0: Check if already installed locally
-        if !options.skip_cas
+        if !options.skip_installed
             && let Some(installed) = self.check_installed(name, options)?
         {
             return Ok(installed);
@@ -295,7 +273,7 @@ impl<'a> PackageResolver<'a> {
         );
 
         // Step 2: Get resolution strategies
-        let strategies = self.get_strategies_or_legacy(&pkg_with_repo, options)?;
+        let strategies = self.get_strategies(&pkg_with_repo, options)?;
 
         // Step 3: Try each strategy in order
         let mut delegate_ctx = DelegateContext::new();
@@ -303,8 +281,8 @@ impl<'a> PackageResolver<'a> {
             .await
     }
 
-    /// Get resolution strategies from routing table, repo default, or legacy fallback
-    fn get_strategies_or_legacy(
+    /// Get resolution strategies from routing table or the repository contract.
+    fn get_strategies(
         &self,
         pkg_with_repo: &PackageWithRepo,
         options: &ResolutionOptions,
@@ -357,21 +335,19 @@ impl<'a> PackageResolver<'a> {
                         source_name: None, // Use package name as-is
                     }]);
                 }
-                "binary" | "legacy" => {
-                    // Fall through to legacy handling below
-                }
+                "binary" | "static" => {}
                 other => {
-                    warn!(
-                        "Unknown default_strategy '{}' for repo '{}', falling back to legacy",
-                        other, pkg_with_repo.repository.name
-                    );
+                    return Err(Error::ConfigError(format!(
+                        "Repository '{}' declares unsupported default strategy '{}'",
+                        pkg_with_repo.repository.name, other
+                    )));
                 }
             }
         }
 
-        // Implicit legacy fallback - construct from repository_packages
+        // The package selector already established this exact source row.
         debug!(
-            "No routing entry for {}, using legacy fallback",
+            "No routing entry for {}, using selected repository package",
             pkg_with_repo.package.name
         );
 
@@ -380,7 +356,7 @@ impl<'a> PackageResolver<'a> {
             .id
             .ok_or_else(|| Error::InitError("Package missing ID".to_string()))?;
 
-        Ok(vec![ResolutionStrategy::Legacy {
+        Ok(vec![ResolutionStrategy::RepositoryPackage {
             repository_package_id: pkg_id,
         }])
     }
@@ -469,15 +445,6 @@ impl<'a> PackageResolver<'a> {
                 .await
             }
 
-            ResolutionStrategy::Recipe {
-                recipe_url,
-                source_urls,
-                patches,
-            } => {
-                self.try_recipe(recipe_url, source_urls, patches, options)
-                    .await
-            }
-
             ResolutionStrategy::Delegate { label } => {
                 delegate_ctx.enter(label)?;
                 let result = self
@@ -487,10 +454,10 @@ impl<'a> PackageResolver<'a> {
                 result
             }
 
-            ResolutionStrategy::Legacy {
+            ResolutionStrategy::RepositoryPackage {
                 repository_package_id,
             } => {
-                self.try_legacy(*repository_package_id, pkg_with_repo, options)
+                self.try_repository_package(*repository_package_id, pkg_with_repo, options)
                     .await
             }
         }
@@ -498,8 +465,8 @@ impl<'a> PackageResolver<'a> {
 
     /// Check if package is already installed locally
     ///
-    /// Returns `Some(LocalCas)` if the package is installed with a matching version,
-    /// `None` if not installed or version doesn't match.
+    /// Returns `Some(Installed)` if the package is installed with a matching
+    /// version, `None` if not installed or the version does not match.
     fn check_installed(
         &self,
         name: &str,
@@ -514,6 +481,12 @@ impl<'a> PackageResolver<'a> {
 
         // Check if any installed version matches the requested version
         for trove in &installed {
+            let architecture_matches = options.architecture.as_deref().is_none_or(|requested| {
+                PackageSelector::is_architecture_compatible(
+                    trove.architecture.as_deref(),
+                    requested,
+                )
+            });
             let version_matches = match &options.version {
                 // Specific version requested - must match exactly
                 Some(requested) => &trove.version == requested,
@@ -521,16 +494,18 @@ impl<'a> PackageResolver<'a> {
                 None => true,
             };
 
-            if version_matches {
+            if architecture_matches && version_matches {
                 info!(
                     "Package {} {} already installed locally (trove_id: {:?})",
                     trove.name, trove.version, trove.id
                 );
 
-                // Return a LocalCas source with identifier for the installed package
-                // Format: "installed:{name}:{version}" allows downstream to identify this
-                let hash = format!("installed:{}:{}", trove.name, trove.version);
-                return Ok(Some(PackageSource::LocalCas { hash }));
+                return Ok(Some(PackageSource::Installed {
+                    name: trove.name.clone(),
+                    version: trove.version.clone(),
+                    architecture: trove.architecture.clone(),
+                    trove_id: trove.id,
+                }));
             }
         }
 
@@ -573,8 +548,8 @@ impl<'a> PackageResolver<'a> {
             ..pkg_with_repo.package.clone()
         };
 
-        let path =
-            download_package_verified(&temp_pkg, &output_dir, options.gpg_options.as_ref()).await?;
+        let trust = build_download_options(self.conn, &pkg_with_repo.repository)?;
+        let path = download_package_verified(&temp_pkg, &output_dir, &trust).await?;
 
         Ok(PackageSource::Binary {
             path,
@@ -615,57 +590,6 @@ impl<'a> PackageResolver<'a> {
             path,
             _temp_dir: Some(temp_dir),
             repository_provenance: Some(repository_source_metadata(pkg_with_repo)),
-        })
-    }
-
-    /// Try recipe build strategy
-    async fn try_recipe(
-        &self,
-        recipe_url: &str,
-        source_urls: &[String],
-        patches: &[String],
-        options: &ResolutionOptions,
-    ) -> Result<PackageSource> {
-        // TODO: source_urls and patches are part of the resolution strategy schema
-        // but not yet wired into Kitchen. They would allow pre-fetching sources and
-        // applying patches before cooking. For now, the recipe itself specifies sources.
-        if !source_urls.is_empty() {
-            debug!(
-                "Recipe strategy includes {} source URLs (not yet implemented, recipe defines its own sources)",
-                source_urls.len()
-            );
-        }
-        if !patches.is_empty() {
-            debug!(
-                "Recipe strategy includes {} patches (not yet implemented)",
-                patches.len()
-            );
-        }
-
-        let (temp_dir, output_dir) = create_output_dir(options)?;
-
-        // Fetch the recipe file
-        info!("Fetching recipe from: {}", recipe_url);
-        let recipe_content = fetch_url_content(recipe_url).await?;
-
-        // Parse the recipe
-        let recipe = parse_recipe(&recipe_content)
-            .map_err(|e| Error::ParseError(format!("Failed to parse recipe: {}", e)))?;
-
-        info!("Cooking {} from recipe", recipe.package.name);
-
-        // Configure and run the kitchen
-        let config = KitchenConfig::default();
-        let kitchen = Kitchen::new(config);
-
-        let result = kitchen
-            .cook(&recipe, &output_dir)
-            .map_err(|e| Error::IoError(format!("Recipe cooking failed: {}", e)))?;
-
-        Ok(PackageSource::Ccs {
-            path: result.package_path,
-            _temp_dir: Some(temp_dir),
-            repository_provenance: None,
         })
     }
 
@@ -759,7 +683,7 @@ impl<'a> PackageResolver<'a> {
             )?;
 
             // Get strategies for this package in the target repository
-            let strategies = self.get_strategies_or_legacy(&pkg_with_repo, &repo_options)?;
+            let strategies = self.get_strategies(&pkg_with_repo, &repo_options)?;
 
             // Try strategies (but skip Delegate to avoid infinite loops - we're already delegating)
             for strategy in &strategies {
@@ -798,12 +722,12 @@ impl<'a> PackageResolver<'a> {
         )))
     }
 
-    /// Try legacy strategy (existing repository_packages)
+    /// Download the exact repository package selected earlier.
     ///
-    /// The `repository_package_id` is part of the `ResolutionStrategy::Legacy` variant
-    /// for schema completeness, but the actual package data is already available in
-    /// `pkg_with_repo` from the earlier repository selection step.
-    async fn try_legacy(
+    /// The `repository_package_id` is part of the persisted strategy for
+    /// structural identity; package data is already available in
+    /// `pkg_with_repo` from repository selection.
+    async fn try_repository_package(
         &self,
         _repository_package_id: i64,
         pkg_with_repo: &PackageWithRepo,
@@ -812,11 +736,11 @@ impl<'a> PackageResolver<'a> {
         let (temp_dir, output_dir) = create_output_dir(options)?;
 
         // Use the package info we already have from repository selection
-        let path = download_verified_legacy_package(
+        let path = download_verified_repository_package(
             &pkg_with_repo.package,
             &output_dir,
-            options.gpg_options.as_ref(),
             pkg_with_repo,
+            self.conn,
         )
         .await?;
 
@@ -836,25 +760,22 @@ fn repository_source_metadata(pkg_with_repo: &PackageWithRepo) -> RepositorySour
             .distro
             .clone()
             .or_else(|| pkg_with_repo.repository.default_strategy_distro.clone()),
-        version_scheme: resolve_package_version_scheme(
-            &pkg_with_repo.package,
-            &pkg_with_repo.repository,
-        )
-        .map(version_scheme_to_db_string),
+        version_scheme: resolve_package_version_scheme(&pkg_with_repo.package),
         source_kind: selected_repository_source_kind(pkg_with_repo),
     }
 }
 
-async fn download_verified_legacy_package(
+async fn download_verified_repository_package(
     package: &RepositoryPackage,
     output_dir: &Path,
-    gpg_options: Option<&DownloadOptions>,
     pkg_with_repo: &PackageWithRepo,
+    conn: &Connection,
 ) -> Result<PathBuf> {
     if selected_repository_source_kind(pkg_with_repo) == RepositorySourceKind::Static {
-        download_static_package_verified(package, output_dir, gpg_options).await
+        download_static_package_verified(package, output_dir, None).await
     } else {
-        download_package_verified(package, output_dir, gpg_options).await
+        let trust = build_download_options(conn, &pkg_with_repo.repository)?;
+        download_package_verified(package, output_dir, &trust).await
     }
 }
 
@@ -863,14 +784,6 @@ fn selected_repository_source_kind(pkg_with_repo: &PackageWithRepo) -> Repositor
         Some("static") => RepositorySourceKind::Static,
         Some("remi") => RepositorySourceKind::Remi,
         _ => RepositorySourceKind::Native,
-    }
-}
-
-fn version_scheme_to_db_string(scheme: VersionScheme) -> String {
-    match scheme {
-        VersionScheme::Rpm => "rpm".to_string(),
-        VersionScheme::Debian => "debian".to_string(),
-        VersionScheme::Arch => "arch".to_string(),
     }
 }
 
@@ -884,470 +797,23 @@ pub async fn resolve_package(
     resolver.resolve(name, options).await
 }
 
-/// Build GPG verification options for a repository
-pub fn build_gpg_options(repo: &Repository, keyring_dir: &Path) -> Option<DownloadOptions> {
-    if repo.gpg_check {
-        Some(DownloadOptions {
-            gpg_check: true,
-            gpg_strict: repo.gpg_strict,
-            keyring_dir: keyring_dir.to_path_buf(),
-            repository_name: repo.name.clone(),
-        })
-    } else {
-        None
+fn build_download_options(conn: &Connection, repo: &Repository) -> Result<DownloadOptions> {
+    let mut stmt = conn.prepare("PRAGMA database_list")?;
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(1)?, row.get::<_, String>(2)?))
+    })?;
+    for row in rows {
+        let (name, file) = row?;
+        if name == "main" && !file.is_empty() {
+            let keyring = crate::db::paths::keyring_dir(&file);
+            return DownloadOptions::for_repository(repo, &keyring);
+        }
     }
+    Err(Error::ConfigError(format!(
+        "repository '{}' download cannot resolve the database trust-store path",
+        repo.name
+    )))
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::db::testing::create_test_db;
-
-    fn create_test_repo(conn: &Connection) -> i64 {
-        conn.execute(
-            "INSERT INTO repositories (name, url, enabled, priority)
-             VALUES ('test-repo', 'https://example.com', 1, 10)",
-            [],
-        )
-        .unwrap();
-        conn.last_insert_rowid()
-    }
-
-    fn create_test_package(conn: &Connection, repo_id: i64, name: &str, version: &str) -> i64 {
-        conn.execute(
-            "INSERT INTO repository_packages
-             (repository_id, name, version, checksum, size, download_url)
-             VALUES (?1, ?2, ?3, 'sha256:abc123', 1024, 'https://example.com/pkg.rpm')",
-            rusqlite::params![repo_id, name, version],
-        )
-        .unwrap();
-        conn.last_insert_rowid()
-    }
-
-    #[test]
-    fn test_delegate_context_depth_limit() {
-        let mut ctx = DelegateContext::new();
-
-        for i in 0..MAX_DELEGATE_DEPTH {
-            ctx.enter(&format!("label{}", i)).unwrap();
-        }
-
-        // Should fail at max depth
-        let result = ctx.enter("too_deep");
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("too deep"));
-    }
-
-    #[test]
-    fn test_delegate_context_cycle_detection() {
-        let mut ctx = DelegateContext::new();
-
-        ctx.enter("label_a").unwrap();
-        ctx.enter("label_b").unwrap();
-
-        // Should fail on cycle
-        let result = ctx.enter("label_a");
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("cycle"));
-    }
-
-    #[test]
-    fn test_delegate_context_exit_unwinds_state() {
-        let mut ctx = DelegateContext::new();
-
-        ctx.enter("label_a").unwrap();
-        ctx.enter("label_b").unwrap();
-
-        // Exit label_b -- depth and visited should unwind
-        ctx.exit("label_b");
-
-        // Re-entering label_b should succeed (no longer visited)
-        ctx.enter("label_b").unwrap();
-
-        // Exit both
-        ctx.exit("label_b");
-        ctx.exit("label_a");
-
-        // After full unwind, depth should be 0 and entering label_a works
-        ctx.enter("label_a").unwrap();
-        assert_eq!(ctx.depth, 1);
-    }
-
-    #[test]
-    fn test_delegate_context_exit_allows_reuse_after_failure() {
-        let mut ctx = DelegateContext::new();
-
-        // Fill up to max depth
-        for i in 0..MAX_DELEGATE_DEPTH {
-            ctx.enter(&format!("label{}", i)).unwrap();
-        }
-
-        // Should fail at max depth
-        assert!(ctx.enter("overflow").is_err());
-
-        // Exit one level -- should allow a new entry
-        ctx.exit(&format!("label{}", MAX_DELEGATE_DEPTH - 1));
-        ctx.enter("replacement").unwrap();
-    }
-
-    #[test]
-    fn test_resolution_options_to_selection_options() {
-        let res_options = ResolutionOptions {
-            version: Some("1.0.0".to_string()),
-            repository: Some("test-repo".to_string()),
-            architecture: Some("x86_64".to_string()),
-            output_dir: None,
-            gpg_options: None,
-            skip_cas: false,
-            policy: None,
-            is_root: false,
-            primary_flavor: None,
-        };
-
-        let sel_options = res_options.to_selection_options();
-        assert_eq!(sel_options.version, Some("1.0.0".to_string()));
-        assert_eq!(sel_options.repository, Some("test-repo".to_string()));
-        assert_eq!(sel_options.architecture, Some("x86_64".to_string()));
-    }
-
-    #[test]
-    fn test_get_strategies_legacy_fallback() {
-        let (_temp, conn) = create_test_db();
-        let repo_id = create_test_repo(&conn);
-        let _pkg_id = create_test_package(&conn, repo_id, "nginx", "1.24.0");
-
-        // Find package
-        let pkg_with_repo =
-            PackageSelector::find_best_package(&conn, "nginx", &SelectionOptions::default())
-                .unwrap();
-
-        // Get strategies - should fall back to legacy since no routing entry
-        let resolver = PackageResolver::new(&conn);
-        let options = ResolutionOptions::default();
-        let strategies = resolver
-            .get_strategies_or_legacy(&pkg_with_repo, &options)
-            .unwrap();
-
-        assert_eq!(strategies.len(), 1);
-        assert!(matches!(strategies[0], ResolutionStrategy::Legacy { .. }));
-    }
-
-    #[test]
-    fn test_get_strategies_from_routing_table() {
-        let (_temp, conn) = create_test_db();
-        let repo_id = create_test_repo(&conn);
-        let _pkg_id = create_test_package(&conn, repo_id, "nginx", "1.24.0");
-
-        // Create routing entry
-        let mut resolution = PackageResolution::remi(
-            repo_id,
-            "nginx".to_string(),
-            "https://remi.example.com".to_string(),
-            "fedora".to_string(),
-        );
-        resolution.insert(&conn).unwrap();
-
-        // Find package
-        let pkg_with_repo =
-            PackageSelector::find_best_package(&conn, "nginx", &SelectionOptions::default())
-                .unwrap();
-
-        // Get strategies - should use routing entry
-        let resolver = PackageResolver::new(&conn);
-        let options = ResolutionOptions::default();
-        let strategies = resolver
-            .get_strategies_or_legacy(&pkg_with_repo, &options)
-            .unwrap();
-
-        assert_eq!(strategies.len(), 1);
-        assert!(matches!(strategies[0], ResolutionStrategy::Remi { .. }));
-    }
-
-    #[tokio::test]
-    async fn static_repo_binary_routing_does_not_allow_local_download_url() {
-        let (_db_temp, conn) = create_test_db();
-        let repo_id = create_test_repo(&conn);
-        conn.execute(
-            "UPDATE repositories SET default_strategy = 'static' WHERE id = ?1",
-            [repo_id],
-        )
-        .unwrap();
-        let pkg_id = create_test_package(&conn, repo_id, "nginx", "1.24.0");
-
-        let temp = tempfile::tempdir().unwrap();
-        let source = temp.path().join("routed-local.ccs");
-        let output = temp.path().join("downloads");
-        let content = b"local route table payload is not TUF-pinned";
-        std::fs::write(&source, content).unwrap();
-        conn.execute(
-            "UPDATE repository_packages SET size = ?1 WHERE id = ?2",
-            rusqlite::params![i64::try_from(content.len()).unwrap(), pkg_id],
-        )
-        .unwrap();
-
-        let mut resolution = PackageResolution::binary(
-            repo_id,
-            "nginx".to_string(),
-            source.to_str().unwrap().to_string(),
-            crate::hash::sha256(content),
-        );
-        resolution.insert(&conn).unwrap();
-
-        let error = resolve_package(
-            &conn,
-            "nginx",
-            &ResolutionOptions {
-                output_dir: Some(output),
-                ..ResolutionOptions::default()
-            },
-        )
-        .await
-        .unwrap_err();
-
-        assert!(
-            error.to_string().contains("local package reference"),
-            "expected non-TUF-pinned local binary route to fail, got: {error}"
-        );
-    }
-
-    #[test]
-    fn test_effective_remi_version_defaults_to_selected_repo_version() {
-        let (_temp, conn) = create_test_db();
-        let repo_id = create_test_repo(&conn);
-        let _pkg_id = create_test_package(&conn, repo_id, "nginx", "1.24.0");
-
-        let pkg_with_repo =
-            PackageSelector::find_best_package(&conn, "nginx", &SelectionOptions::default())
-                .unwrap();
-
-        let options = ResolutionOptions::default();
-        assert_eq!(
-            effective_remi_version(&pkg_with_repo, &options),
-            Some("1.24.0")
-        );
-    }
-
-    #[test]
-    fn test_effective_remi_version_prefers_explicit_request() {
-        let (_temp, conn) = create_test_db();
-        let repo_id = create_test_repo(&conn);
-        let _pkg_id = create_test_package(&conn, repo_id, "nginx", "1.24.0");
-
-        let pkg_with_repo =
-            PackageSelector::find_best_package(&conn, "nginx", &SelectionOptions::default())
-                .unwrap();
-
-        let options = ResolutionOptions {
-            version: Some("1.25.0".to_string()),
-            ..Default::default()
-        };
-        assert_eq!(
-            effective_remi_version(&pkg_with_repo, &options),
-            Some("1.25.0")
-        );
-    }
-
-    #[test]
-    fn repository_source_metadata_uses_selected_repository_package() {
-        let (_temp, conn) = create_test_db();
-        let repo_id = create_test_repo(&conn);
-        let _pkg_id = create_test_package(&conn, repo_id, "tree", "2.2.1-4.fc44");
-        conn.execute(
-            "UPDATE repositories SET default_strategy_distro = 'fedora' WHERE id = ?1",
-            [repo_id],
-        )
-        .unwrap();
-        conn.execute(
-            "UPDATE repository_packages
-                SET architecture = 'x86_64', distro = 'fedora', version_scheme = 'rpm'
-              WHERE repository_id = ?1 AND name = 'tree'",
-            [repo_id],
-        )
-        .unwrap();
-
-        let pkg_with_repo =
-            PackageSelector::find_best_package(&conn, "tree", &SelectionOptions::default())
-                .unwrap();
-        let metadata = repository_source_metadata(&pkg_with_repo);
-
-        assert_eq!(metadata.repository_id, repo_id);
-        assert_eq!(metadata.source_distro.as_deref(), Some("fedora"));
-        assert_eq!(metadata.version_scheme.as_deref(), Some("rpm"));
-        assert_eq!(metadata.source_kind, RepositorySourceKind::Native);
-    }
-
-    #[test]
-    fn repository_source_metadata_falls_back_to_repository_distro_scheme() {
-        let (_temp, conn) = create_test_db();
-        let repo_id = create_test_repo(&conn);
-        let _pkg_id = create_test_package(&conn, repo_id, "tree", "2.2.1-4");
-        conn.execute(
-            "UPDATE repositories SET default_strategy_distro = 'arch' WHERE id = ?1",
-            [repo_id],
-        )
-        .unwrap();
-
-        let pkg_with_repo =
-            PackageSelector::find_best_package(&conn, "tree", &SelectionOptions::default())
-                .unwrap();
-        let metadata = repository_source_metadata(&pkg_with_repo);
-
-        assert_eq!(metadata.source_distro.as_deref(), Some("arch"));
-        assert_eq!(metadata.version_scheme.as_deref(), Some("arch"));
-        assert_eq!(metadata.source_kind, RepositorySourceKind::Native);
-    }
-
-    #[test]
-    fn repository_source_metadata_tags_static_and_remi_sources() {
-        let (_temp, conn) = create_test_db();
-        conn.execute(
-            "INSERT INTO repositories (name, url, enabled, priority, default_strategy)
-             VALUES ('static-repo', 'https://static.example.invalid', 1, 10, 'static')",
-            [],
-        )
-        .unwrap();
-        let static_repo_id = conn.last_insert_rowid();
-        conn.execute(
-            "INSERT INTO repositories (name, url, enabled, priority, default_strategy)
-             VALUES ('remi-repo', 'https://remi.example.invalid', 1, 10, 'remi')",
-            [],
-        )
-        .unwrap();
-        let remi_repo_id = conn.last_insert_rowid();
-        let _static_pkg_id = create_test_package(&conn, static_repo_id, "static-tree", "1.0.0");
-        let _remi_pkg_id = create_test_package(&conn, remi_repo_id, "remi-tree", "1.0.0");
-
-        let static_pkg =
-            PackageSelector::find_best_package(&conn, "static-tree", &SelectionOptions::default())
-                .unwrap();
-        let remi_pkg =
-            PackageSelector::find_best_package(&conn, "remi-tree", &SelectionOptions::default())
-                .unwrap();
-
-        assert_eq!(
-            repository_source_metadata(&static_pkg).source_kind,
-            RepositorySourceKind::Static
-        );
-        assert_eq!(
-            repository_source_metadata(&remi_pkg).source_kind,
-            RepositorySourceKind::Remi
-        );
-    }
-
-    #[test]
-    fn test_package_source_path() {
-        let temp = TempDir::new().unwrap();
-        let path = temp.path().join("test.ccs");
-        std::fs::write(&path, "test").unwrap();
-
-        let binary = PackageSource::Binary {
-            path: path.clone(),
-            _temp_dir: None,
-            repository_provenance: None,
-        };
-        assert_eq!(binary.path(), Some(path.as_path()));
-
-        let ccs = PackageSource::Ccs {
-            path: path.clone(),
-            _temp_dir: None,
-            repository_provenance: None,
-        };
-        assert_eq!(ccs.path(), Some(path.as_path()));
-
-        let cas = PackageSource::LocalCas {
-            hash: "sha256:abc".to_string(),
-        };
-        assert_eq!(cas.path(), None);
-    }
-
-    #[test]
-    fn test_check_installed_not_installed() {
-        let (_temp, conn) = create_test_db();
-        let resolver = PackageResolver::new(&conn);
-        let options = ResolutionOptions::default();
-
-        // Package not installed - should return None
-        let result = resolver.check_installed("nginx", &options).unwrap();
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_check_installed_matching_version() {
-        let (_temp, conn) = create_test_db();
-
-        // Insert an installed trove
-        conn.execute(
-            "INSERT INTO troves (name, version, type, install_source, install_reason)
-             VALUES ('nginx', '1.24.0', 'package', 'repository', 'explicit')",
-            [],
-        )
-        .unwrap();
-
-        let resolver = PackageResolver::new(&conn);
-
-        // No version specified - should match
-        let options = ResolutionOptions::default();
-        let result = resolver.check_installed("nginx", &options).unwrap();
-        assert!(result.is_some());
-        if let Some(PackageSource::LocalCas { hash }) = result {
-            assert!(hash.starts_with("installed:nginx:1.24.0"));
-        } else {
-            panic!("Expected LocalCas source");
-        }
-
-        // Matching version specified - should match
-        let options = ResolutionOptions {
-            version: Some("1.24.0".to_string()),
-            ..Default::default()
-        };
-        let result = resolver.check_installed("nginx", &options).unwrap();
-        assert!(result.is_some());
-    }
-
-    #[test]
-    fn test_check_installed_different_version() {
-        let (_temp, conn) = create_test_db();
-
-        // Insert an installed trove
-        conn.execute(
-            "INSERT INTO troves (name, version, type, install_source, install_reason)
-             VALUES ('nginx', '1.24.0', 'package', 'repository', 'explicit')",
-            [],
-        )
-        .unwrap();
-
-        let resolver = PackageResolver::new(&conn);
-
-        // Different version requested - should NOT match
-        let options = ResolutionOptions {
-            version: Some("1.25.0".to_string()),
-            ..Default::default()
-        };
-        let result = resolver.check_installed("nginx", &options).unwrap();
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_check_installed_skip_cas() {
-        let (_temp, conn) = create_test_db();
-
-        // Insert an installed trove
-        conn.execute(
-            "INSERT INTO troves (name, version, type, install_source, install_reason)
-             VALUES ('nginx', '1.24.0', 'package', 'repository', 'explicit')",
-            [],
-        )
-        .unwrap();
-
-        let resolver = PackageResolver::new(&conn);
-
-        // With skip_cas=true, check_installed is not called (tested at resolve level)
-        // But we can verify the method itself still works when called directly
-        let options = ResolutionOptions {
-            skip_cas: true, // Note: this doesn't affect check_installed directly
-            ..Default::default()
-        };
-        let result = resolver.check_installed("nginx", &options).unwrap();
-        assert!(result.is_some()); // Method still finds it
-    }
-}
+include!("resolution/tests.rs");

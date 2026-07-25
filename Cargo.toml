@@ -47,6 +47,7 @@ indicatif = "0.18"
 
 # Temp files
 tempfile = "3.10"
+criterion = "0.7"
 
 # IDs
 uuid = { version = "1.0", features = ["v4"] }
@@ -64,6 +65,8 @@ url = "2.5"
 walkdir = "2.5"
 glob = "0.3.3"
 libc = "0.2"
+libseccomp = "0.4"
+caps = "0.5.6"
 inotify = "0.11"
 nix = { version = "0.31", features = ["user", "mount", "sched", "process", "signal", "resource", "fs"] }
 
@@ -77,6 +80,11 @@ x509-cert = { version = "0.2", features = ["pem", "std"] }
 # Archives
 tar = "0.4"
 flate2 = "1.0"
+rpm = { version = "0.25", default-features = false, features = ["payload", "signature-pgp"] }
+rpm-version = "0.5.0"
+debversion = "0.5.4"
+alpm-types = "0.11.2"
+semver = "1.0.28"
 
 # CLI
 clap = { version = "4.5", features = ["derive", "env"] }

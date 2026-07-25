@@ -165,7 +165,7 @@ mod tests {
         let temp_file = NamedTempFile::new().unwrap();
         let conn = rusqlite::Connection::open(temp_file.path()).unwrap();
         conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
-        schema::migrate(&conn).unwrap();
+        schema::ensure_current(&conn).unwrap();
         let path = temp_file.path().to_path_buf();
         (temp_file, path)
     }

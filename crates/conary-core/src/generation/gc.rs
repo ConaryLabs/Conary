@@ -160,7 +160,9 @@ fn should_skip_recent_object(path: &Path, now: SystemTime, grace_period: Duratio
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::models::FileEntry;
     use crate::db::schema;
+    use crate::payload::{PayloadContentAuthority, PayloadNode, ResolvedPayloadNode};
     use rusqlite::params;
     use tempfile::TempDir;
 
@@ -170,7 +172,7 @@ mod tests {
         let db_path = tmp.path().join("test.db");
         let conn = Connection::open(&db_path).unwrap();
         conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
-        schema::migrate(&conn).unwrap();
+        schema::ensure_current(&conn).unwrap();
         (tmp, conn)
     }
 
@@ -182,19 +184,27 @@ mod tests {
         files: &[(&str, &str)], // (path, sha256_hash)
     ) -> i64 {
         conn.execute(
-            "INSERT INTO troves (name, version, type, architecture, install_reason) \
-             VALUES (?1, ?2, 'package', 'x86_64', 'explicit')",
+            "INSERT INTO troves (
+                 name, version, type, architecture, install_source, install_reason, version_scheme
+             ) VALUES (
+                 ?1, ?2, 'package', 'x86_64', 'file', 'explicit', 'conary'
+             )",
             params![name, version],
         )
         .unwrap();
         let trove_id = conn.last_insert_rowid();
 
         for (path, hash) in files {
-            conn.execute(
-                "INSERT INTO files (path, sha256_hash, size, permissions, trove_id) \
-                 VALUES (?1, ?2, 1024, 493, ?3)",
-                params![path, hash, trove_id],
+            FileEntry::new(
+                (*path).to_string(),
+                ResolvedPayloadNode::from_numeric_source(PayloadNode::regular(0o755)).unwrap(),
+                Some(PayloadContentAuthority {
+                    sha256: (*hash).to_string(),
+                    size: 1024,
+                }),
+                trove_id,
             )
+            .insert(conn)
             .unwrap();
         }
 
@@ -230,14 +240,12 @@ mod tests {
         // Snapshot CAS hashes for GC liveness (mirrors create_snapshot_at).
         conn.execute(
             "INSERT OR IGNORE INTO state_cas_hashes (state_id, sha256_hash)
-             SELECT ?1, f.sha256_hash
+             SELECT ?1, f.content_sha256
              FROM state_members sm
              JOIN troves t ON t.name = sm.trove_name AND t.version = sm.trove_version
              JOIN files f ON f.trove_id = t.id
              WHERE sm.state_id = ?1
-               AND f.sha256_hash IS NOT NULL
-               AND f.sha256_hash != ''
-               AND NOT f.sha256_hash LIKE 'adopted-%'",
+               AND f.content_sha256 IS NOT NULL",
             params![state_id],
         )
         .unwrap();

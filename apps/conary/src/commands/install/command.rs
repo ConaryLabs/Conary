@@ -1,20 +1,25 @@
 // src/commands/install/command.rs
 
 use super::acquire::{CcsInstallParams, resolve_and_parse_package};
+use super::ccs_removal_hooks::CcsRemovalHookPlan;
 use super::dependencies::{DepAnalysisContext, handle_dependencies};
+use super::native_events::PreparedNativeTransaction;
 use super::prepare::check_upgrade_status;
 use super::validation::{parse_component_and_validate, try_promote_existing_dep};
 use super::{
-    InstallOptions, InstallProgress, InstallSemantics, ScriptletContext, TransactionContext,
-    UpgradeCheck, build_resolution_policy, execute_install_transaction, extract_and_classify_files,
-    finalize_install, preflight_extracted_live_root_file_ownership,
-    prepare_install_environment_before_scriptlets, resolve_canonical_name,
-    resolve_default_dep_mode_from_model, run_pre_install_phase, show_dry_run_summary,
+    InstallOptions, InstallProgress, InstallSemantics, NativeLifecycleInstallState,
+    TransactionContext, UpgradeCheck, build_execution_mode, build_resolution_policy,
+    execute_install_transaction_in_selected_root, extract_and_classify_files, finalize_install,
+    preflight_extracted_file_ownership, resolve_canonical_name, show_dry_run_summary,
 };
 use crate::commands::open_db;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use conary_core::components::parse_component_spec;
 use conary_core::repository::resolution_policy::RequestScope;
+use conary_core::transaction::{
+    TransactionConfig, plan_package_relations, validate_package_relation_plan,
+};
+use std::path::{Path, PathBuf};
 
 /// Install a package
 ///
@@ -30,18 +35,14 @@ pub async fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> 
         architecture,
         dry_run,
         no_deps,
-        no_scripts,
         selection_reason,
         sandbox_mode,
         allow_downgrade,
-        allow_capabilities,
         convert_to_ccs,
-        force,
-        dep_mode,
+        ownership,
         yes,
         from_distro,
         repository_provenance: requested_repository_provenance,
-        legacy_replay,
     } = opts;
 
     // Hint if source policy is unconfigured (first-run guidance)
@@ -52,9 +53,8 @@ pub async fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> 
     // for the main install transaction.
     let conn = open_db(db_path)?;
 
-    // Resolve dep_mode: if the user explicitly set --dep-mode use that,
-    // otherwise derive from the system model convergence intent.
-    let effective_dep_mode = dep_mode.unwrap_or_else(resolve_default_dep_mode_from_model);
+    // Preserve native ownership unless takeover is explicit on this operation.
+    let effective_ownership = ownership.unwrap_or_default();
 
     // --- Phase 1: Component parsing + canonical resolution + policy ---
     //
@@ -71,7 +71,7 @@ pub async fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> 
         effective_source_policy.resolution,
         from_distro.as_deref(),
         repo.as_deref(),
-    );
+    )?;
     let primary_flavor = effective_source_policy.primary_flavor;
     let resolved_name = resolve_canonical_name(
         &conn,
@@ -90,10 +90,16 @@ pub async fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> 
 
     // --- Phase 2: Component parsing + pre-install validation ---
     let (package_name, component_selection) =
-        parse_component_and_validate(&conn, package, effective_dep_mode, force)?;
+        parse_component_and_validate(&conn, package, architecture.as_deref(), effective_ownership)?;
 
     // --- Phase 3: Dependency-as-explicit promotion check ---
-    if try_promote_existing_dep(&conn, &package_name, version.as_deref(), selection_reason)? {
+    if try_promote_existing_dep(
+        &conn,
+        &package_name,
+        version.as_deref(),
+        architecture.as_deref(),
+        selection_reason,
+    )? {
         return Ok(());
     }
 
@@ -104,13 +110,9 @@ pub async fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> 
         dry_run,
         sandbox_mode,
         no_deps,
-        no_scripts,
         allow_downgrade,
-        allow_capabilities,
-        dep_mode: Some(effective_dep_mode),
         yes,
         repository_provenance: requested_repository_provenance,
-        legacy_replay,
     };
 
     let Some((pkg, format, repository_provenance)) = resolve_and_parse_package(
@@ -131,12 +133,10 @@ pub async fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> 
         // Already installed as CCS — no further processing needed.
         return Ok(());
     };
-    let semantics = InstallSemantics::legacy(format);
+    let semantics = InstallSemantics::native_package(format);
 
     // Promote the pre-install connection to mutable for the main install transaction
     let mut conn = conn;
-
-    let execution_path = prepare_install_environment_before_scriptlets(&conn, db_path, root)?;
 
     // --- Phase 5: Dependency analysis ---
     let dep_ctx = DepAnalysisContext {
@@ -144,124 +144,135 @@ pub async fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> 
         pkg: pkg.as_ref(),
         no_deps,
         dry_run,
-        dep_mode: Some(effective_dep_mode),
         yes,
         allow_downgrade,
         db_path,
-        root,
         sandbox_mode,
-        no_scripts,
-        legacy_replay,
         policy: &policy,
-        execution_path,
+        primary_flavor,
     };
     handle_dependencies(&dep_ctx).await?;
+    let relation_plan = plan_package_relations(&conn, pkg.as_ref(), semantics.version_scheme)
+        .context("Failed to plan package conflicts and replacements")?;
+    validate_package_relation_plan(&conn, &relation_plan)
+        .context("Package conflicts and replacements cannot be applied")?;
 
     // --- Phase 6: Dry run summary ---
     if dry_run {
-        show_dry_run_summary(pkg.as_ref(), &component_selection);
+        show_dry_run_summary(pkg.as_ref(), &component_selection)?;
+        show_relation_removals(&relation_plan);
         return Ok(());
     }
 
-    // --- Phase 7: File extraction + component classification ---
+    // --- Phase 7: File extraction + lossless component assignment ---
     let progress = InstallProgress::single("Installing");
     let extraction = extract_and_classify_files(pkg.as_ref(), &component_selection, &progress)?;
-    preflight_extracted_live_root_file_ownership(&conn, pkg.as_ref(), &extraction, execution_path)?;
+    preflight_extracted_file_ownership(&conn, pkg.as_ref(), &extraction, &relation_plan.removals)?;
 
     // --- Phase 8: Scriptlet execution (pre-install) ---
     let old_trove_to_upgrade =
         match check_upgrade_status(&conn, pkg.as_ref(), &semantics, allow_downgrade)? {
             UpgradeCheck::FreshInstall => None,
+            UpgradeCheck::AlreadyInstalled(trove) => {
+                anyhow::bail!(
+                    "Package {} version {} ({}) is already installed",
+                    trove.name,
+                    trove.version,
+                    trove.architecture.as_deref().unwrap_or("no-arch")
+                )
+            }
             UpgradeCheck::Upgrade(trove) | UpgradeCheck::Downgrade(trove) => Some(trove),
         };
-
-    let scriptlet_ctx = ScriptletContext {
-        root,
-        no_scripts,
-        sandbox_mode,
-        semantics,
-        old_trove: old_trove_to_upgrade.as_deref(),
-    };
-    let pre_scriptlet_state = run_pre_install_phase(
-        &conn,
+    let native_lifecycle_state = NativeLifecycleInstallState::from_native_package(
         pkg.as_ref(),
-        &extraction.installed_component_types,
-        &scriptlet_ctx,
-        &progress,
+        format,
+        &extraction.extracted_files,
     )?;
-
-    // --- Phase 9: Transaction execution ---
+    let native_transaction = PreparedNativeTransaction::prepare_install(
+        &conn,
+        pkg.name(),
+        pkg.version(),
+        pkg.architecture(),
+        semantics.version_scheme,
+        pkg.provides(),
+        native_lifecycle_state.bundle_to_persist.as_ref(),
+        old_trove_to_upgrade.as_deref(),
+        &relation_plan.removals,
+        &relation_plan.deconfigurations,
+        &extraction,
+    )?;
+    let ccs_removal_hook_plan = CcsRemovalHookPlan::prepare(
+        &conn,
+        old_trove_to_upgrade.as_deref().into_iter(),
+        relation_plan.removals.iter(),
+    )?;
+    let native_execution_mode = build_execution_mode(
+        old_trove_to_upgrade
+            .as_deref()
+            .map(|trove| trove.version.as_str()),
+    );
+    let mut selected_root = crate::commands::generation::selected_root::SelectedRootSession::begin(
+        &conn,
+        db_path,
+        format!("Install {}-{}", pkg.name(), pkg.version()),
+    )?;
+    let transaction_root = selected_root.selected_root().to_string_lossy().into_owned();
+    native_transaction.preflight(Path::new(&transaction_root), &native_execution_mode)?;
+    let preflighted_ccs_removal_hooks =
+        ccs_removal_hook_plan.preflight(Path::new(&transaction_root), sandbox_mode)?;
+    preflighted_ccs_removal_hooks.execute()?;
+    // --- Phase 9: Graph-driven lifecycle and transaction execution ---
     let tx_ctx = TransactionContext {
         db_path,
-        root,
+        root: &transaction_root,
         semantics,
         selection_reason,
         old_trove_to_upgrade: old_trove_to_upgrade.as_deref(),
         ccs_manifest_provides: None,
         ccs_capabilities: None,
         ccs_file_capabilities: None,
-        execution_path,
         defer_generation: false,
         repository_provenance,
-        legacy_replay,
-        accepted_legacy_bundle: None,
+        native_lifecycle_bundle: native_lifecycle_state.bundle_to_persist.as_ref(),
+        relation_removals: &relation_plan.removals,
+        relation_deconfigurations: &relation_plan.deconfigurations,
+        retain_replaced_payload_until_lifecycle: native_transaction
+            .requires_upgrade_payload_boundary(),
     };
-    let tx_result =
-        execute_install_transaction(&mut conn, pkg.as_ref(), &extraction, &tx_ctx, &progress)?;
+    let tx_result = execute_install_transaction_in_selected_root(
+        &mut conn,
+        pkg.as_ref(),
+        &extraction,
+        &tx_ctx,
+        &progress,
+        TransactionConfig::from_paths(
+            selected_root.selected_root().to_path_buf(),
+            PathBuf::from(db_path),
+        ),
+        &mut selected_root,
+        &native_transaction,
+        &native_execution_mode,
+    )?;
 
     // --- Phase 10: Post-install finalization ---
     finalize_install(
         &conn,
         pkg.as_ref(),
         &extraction,
-        &scriptlet_ctx,
-        &pre_scriptlet_state,
+        root,
         &tx_result,
         &progress,
     )?;
-
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-
-    #[test]
-    fn package_execution_path_is_prepared_before_dependency_handling() {
-        let source = include_str!("command.rs");
-        let cmd_install_source = source;
-
-        let execution_path_pos = cmd_install_source
-            .find("let execution_path = prepare_install_environment_before_scriptlets")
-            .expect("cmd_install should prepare execution path");
-        let dependency_pos = cmd_install_source
-            .find("handle_dependencies(&dep_ctx).await?")
-            .expect("cmd_install should handle dependencies");
-
-        assert!(
-            execution_path_pos < dependency_pos,
-            "cmd_install must fail closed and recover mutable journals before dependency installs can run scriptlets"
-        );
-    }
-
-    #[test]
-    fn direct_install_preflights_live_root_ownership_before_scriptlets() {
-        let source = include_str!("command.rs");
-        let cmd_install_source = source;
-
-        let extraction_pos = cmd_install_source
-            .find("let extraction = extract_and_classify_files")
-            .expect("cmd_install should extract files");
-        let preflight_pos = cmd_install_source
-            .find("preflight_extracted_live_root_file_ownership(")
-            .expect("cmd_install should preflight live-root ownership");
-        let scriptlet_pos = cmd_install_source
-            .find("run_pre_install_phase(")
-            .expect("cmd_install should run pre-install scriptlets");
-
-        assert!(
-            extraction_pos < preflight_pos && preflight_pos < scriptlet_pos,
-            "direct installs must preflight live-root ownership after extraction and before scriptlets"
+fn show_relation_removals(plan: &conary_core::transaction::PackageRelationPlan) {
+    for removal in &plan.removals {
+        println!(
+            "  Would remove {} {} ({})",
+            removal.package_name,
+            removal.package_version,
+            removal.kind.as_str()
         );
     }
 }

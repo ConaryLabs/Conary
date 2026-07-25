@@ -8,18 +8,18 @@ use crate::security::command_risk::{
     classify_shell_text,
 };
 
-/// Severity levels for dangerous script detection.
+/// Severity levels for diagnostic shell observations.
+///
+/// These labels never select an execution or sandbox policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ScriptRisk {
-    /// Safe - no risky command evidence detected.
+    /// No diagnostic findings.
     Safe,
-    /// Low risk - minor concerns.
-    Low,
-    /// Medium risk - protected execution is required in auto mode.
+    /// A noteworthy command form was observed.
     Medium,
-    /// High risk - the command is destructive or its syntax is unresolved.
+    /// A destructive command form or unresolved syntax was observed.
     High,
-    /// Critical - reserved for formally proven compound destructive behavior.
+    /// A formally parsed compound destructive command was observed.
     Critical,
 }
 
@@ -27,7 +27,6 @@ impl ScriptRisk {
     pub fn as_str(&self) -> &'static str {
         match self {
             ScriptRisk::Safe => "safe",
-            ScriptRisk::Low => "low",
             ScriptRisk::Medium => "medium",
             ScriptRisk::High => "high",
             ScriptRisk::Critical => "critical",
@@ -42,11 +41,12 @@ pub struct ScriptAnalysis {
     pub risk: ScriptRisk,
     /// Typed classifier findings.
     pub patterns: Vec<String>,
-    /// Recommendations.
-    pub recommendations: Vec<String>,
 }
 
-/// Analyze a script using the shared tree-sitter Bash command classifier.
+/// Diagnose a script using the shared tree-sitter Bash command classifier.
+///
+/// The returned report is observability only. The exact selected-root
+/// execution contract and mandatory sandbox configuration remain authoritative.
 pub fn analyze_script(content: &str) -> ScriptAnalysis {
     let report = classify_shell_text("runtime-scriptlet", content);
     let mut patterns = Vec::new();
@@ -58,20 +58,9 @@ pub fn analyze_script(content: &str) -> ScriptAnalysis {
         max_risk = max_risk.max(risk);
     }
 
-    let recommendations = match max_risk {
-        ScriptRisk::Safe => vec!["No risky command evidence was found".to_string()],
-        ScriptRisk::Low => vec!["Consider protected execution for untrusted input".to_string()],
-        ScriptRisk::Medium => vec!["Protected execution required in auto mode".to_string()],
-        ScriptRisk::High | ScriptRisk::Critical => vec![
-            "MUST use protected execution".to_string(),
-            "Inspect the typed command evidence before any direct execution".to_string(),
-        ],
-    };
-
     ScriptAnalysis {
         risk: max_risk,
         patterns,
-        recommendations,
     }
 }
 
@@ -101,7 +90,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn package_manager_fetches_are_medium_for_auto_sandbox() {
+    fn package_manager_fetches_are_medium_diagnostic_evidence() {
         let analysis = analyze_script("npm install atomic-lockfile\nbun add js-digest\n");
 
         assert!(analysis.risk >= ScriptRisk::Medium);
@@ -116,7 +105,7 @@ mod tests {
     }
 
     #[test]
-    fn dynamic_language_execution_is_medium_for_auto_sandbox() {
+    fn dynamic_language_execution_is_medium_diagnostic_evidence() {
         let analysis = analyze_script("python -c 'print(1)'\nnode -e 'console.log(1)'\n");
 
         assert!(analysis.risk >= ScriptRisk::Medium);

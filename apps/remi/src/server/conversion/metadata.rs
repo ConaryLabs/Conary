@@ -11,6 +11,8 @@ use conary_core::packages::deb::DebPackage;
 use conary_core::packages::rpm::RpmPackage;
 use conary_core::packages::traits::{Dependency, DependencyType, ExtractedFile, PackageFormat};
 use conary_core::repository::supported_profiles::ProfilePackageFormat;
+#[cfg(test)]
+use conary_core::repository::versioning::VersionScheme;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
@@ -59,14 +61,13 @@ impl ConversionService {
         distro: &str,
     ) -> Result<(PackageMetadata, Vec<ExtractedFile>, &'static str)> {
         let path_str = path.to_str().ok_or_else(|| anyhow!("Invalid path"))?;
-        let route = conary_core::repository::supported_profiles::route_by_slug(distro)
-            .ok_or_else(|| anyhow!("Unsupported distribution: {}", distro))?;
-        let profile_id = route
-            .public_profile_ids()
-            .first()
-            .ok_or_else(|| anyhow!("No public profile for route: {}", distro))?;
-        let profile = conary_core::repository::supported_profiles::profile_by_public_id(profile_id)
-            .ok_or_else(|| anyhow!("Profile disappeared for route: {}", distro))?;
+        let profile = conary_core::repository::supported_profiles::profile_for_remi_route(distro)
+            .ok_or_else(|| {
+            anyhow!(
+                "distribution route '{}' does not map to exactly one public profile",
+                distro
+            )
+        })?;
 
         match profile.package_format() {
             ProfilePackageFormat::Arch => {
@@ -147,31 +148,14 @@ impl ConversionService {
             package_path: PathBuf::new(), // Not needed for conversion
             name: pkg.name().to_string(),
             version: pkg.version().to_string(),
+            version_scheme: pkg.version_scheme(),
             architecture: pkg.architecture().map(String::from),
             description: pkg.description().map(String::from),
-            files: pkg
-                .files()
-                .iter()
-                .map(|f| conary_core::packages::traits::PackageFile {
-                    path: f.path.clone(),
-                    size: f.size,
-                    mode: f.mode,
-                    sha256: f.sha256.clone(),
-                    symlink_target: f.symlink_target.clone(),
-                })
-                .collect(),
-            dependencies: pkg
-                .dependencies()
-                .iter()
-                .map(|d| conary_core::packages::traits::Dependency {
-                    name: d.name.clone(),
-                    version: d.version.clone(),
-                    dep_type: d.dep_type,
-                    description: d.description.clone(),
-                })
-                .collect(),
+            files: pkg.files().to_vec(),
+            requirements: pkg.requirements().to_vec(),
             provides: pkg.provides().to_vec(),
-            scriptlets: pkg.scriptlets().to_vec(),
+            relations: pkg.relations().to_vec(),
+            diagnostic_scriptlet_evidence: Vec::new(),
             native_scriptlet_abi: pkg.native_scriptlet_abi().to_vec(),
             config_files: pkg.config_files().to_vec(),
         }
@@ -256,6 +240,7 @@ mod tests {
             PathBuf::from("/tmp/qemu-img.rpm"),
             "qemu-img".to_string(),
             "10.1.0-7.fc44".to_string(),
+            VersionScheme::Rpm,
         );
         metadata.architecture = Some("i686".to_string());
 
@@ -263,6 +248,7 @@ mod tests {
             42,
             "qemu-img".to_string(),
             "2:10.1.0-7.fc44".to_string(),
+            VersionScheme::Rpm,
             "sha256:qemu-img".to_string(),
             4096,
             "https://example.com/qemu-img.rpm".to_string(),
@@ -319,6 +305,7 @@ mod tests {
             repo_id,
             "kernel-modules-core".to_string(),
             "6.17.1-300.fc44".to_string(),
+            VersionScheme::Rpm,
             "sha256:kernel-modules-core".to_string(),
             1024,
             "https://example.com/kernel-modules-core.rpm".to_string(),
@@ -333,14 +320,15 @@ mod tests {
             Some("6.17.1-300.fc44.x86_64".to_string()),
             "package".to_string(),
             Some("kernel-uname-r = 6.17.1-300.fc44.x86_64".to_string()),
+            VersionScheme::Rpm,
         );
-        provide = provide.with_version_scheme("rpm".to_string());
         provide.insert(&conn).unwrap();
 
         let mut metadata = PackageMetadata::new(
             PathBuf::from("/tmp/kernel-modules-core.rpm"),
             "kernel-modules-core".to_string(),
             "6.17.1-300.fc44".to_string(),
+            VersionScheme::Rpm,
         );
 
         ConversionService::merge_repository_provides(&conn, &repo_pkg, &mut metadata).unwrap();

@@ -1,6 +1,9 @@
 [package]
 name = "adversarial-path-traversal"
 version = "1.0.0"
+version_scheme = "conary"
+release = "1"
+kind = "package"
 description = "Base fixture for path traversal package extraction tests"
 license = "MIT"
 
@@ -12,10 +15,6 @@ libc = "gnu"
 [provides]
 capabilities = ["adversarial-path-traversal"]
 binaries = ["/usr/bin/traversal-check"]
-
-[requires]
-capabilities = []
-packages = []
 
 [components]
 default = ["runtime"]

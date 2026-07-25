@@ -44,7 +44,7 @@ group = "M"
 fatal = true
 
 [[test.step]]
-conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never --yes"
+conary = "ccs install ${FIXTURE_V1_CCS} --policy ${FIXTURE_CCS_POLICY} --sandbox always --yes"
 
 [test.step.assert]
 exit_code = 0
@@ -83,7 +83,7 @@ conary = "repo sync ${distro_repo} --force"
 exit_code = 0
 
 [[test.step]]
-conary = "install ${small_package} --repo ${distro_repo} --dep-mode takeover --yes --sandbox never"
+conary = "install ${small_package} --repo ${distro_repo} --ownership takeover --yes --sandbox always"
 
 [test.step.assert]
 exit_code = 0
@@ -110,7 +110,7 @@ timeout = 300
 group = "M"
 
 [[test.step]]
-conary = "install ${dep_heavy_package} --repo ${distro_repo} --dep-mode takeover --yes --sandbox never"
+conary = "install ${dep_heavy_package} --repo ${distro_repo} --ownership takeover --yes --sandbox always"
 
 [test.step.assert]
 exit_code = 0
@@ -142,10 +142,10 @@ group = "M"
 fatal = true
 
 [[test.step]]
-run = "${CONARY_BIN} remove ${FIXTURE_PKG_NAME} --no-scripts --yes --db-path ${DB_PATH} 2>/dev/null || true"
+run = "${CONARY_BIN} remove ${FIXTURE_PKG_NAME} --sandbox always --yes --db-path ${DB_PATH} 2>/dev/null || true"
 
 [[test.step]]
-conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never --yes"
+conary = "ccs install ${FIXTURE_V1_CCS} --policy ${FIXTURE_CCS_POLICY} --sandbox always --yes"
 
 [test.step.assert]
 exit_code = 0
@@ -154,7 +154,7 @@ exit_code = 0
 file_checksum = { path = "${FIXTURE_FILE}", sha256 = "${FIXTURE_V1_HELLO_SHA256}" }
 
 [[test.step]]
-conary = "ccs install ${FIXTURE_V2_CCS} --allow-unsigned --sandbox never --yes"
+conary = "ccs install ${FIXTURE_V2_CCS} --policy ${FIXTURE_CCS_POLICY} --sandbox always --yes"
 
 [test.step.assert]
 exit_code = 0
@@ -179,22 +179,22 @@ depends_on = ["T139", "T140"]
 
 # Clean up from prior tests, then reinstall fresh
 [[test.step]]
-run = "${CONARY_BIN} remove ${small_package} --no-scripts --yes --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} remove ${dep_heavy_package} --no-scripts --yes --db-path ${DB_PATH} 2>/dev/null; true"
+run = "${CONARY_BIN} remove ${small_package} --sandbox always --yes --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} remove ${dep_heavy_package} --sandbox always --yes --db-path ${DB_PATH} 2>/dev/null; true"
 
 [[test.step]]
-conary = "install ${small_package} --repo ${distro_repo} --no-deps --yes --sandbox never"
+conary = "install ${small_package} --repo ${distro_repo} --no-deps --yes --sandbox always"
 
 [test.step.assert]
 exit_code = 0
 
 [[test.step]]
-conary = "install ${dep_heavy_package} --repo ${distro_repo} --no-deps --yes --sandbox never"
+conary = "install ${dep_heavy_package} --repo ${distro_repo} --no-deps --yes --sandbox always"
 
 [test.step.assert]
 exit_code = 0
 
 [[test.step]]
-conary = "remove ${small_package} --no-scripts --yes"
+conary = "remove ${small_package} --sandbox always --yes"
 
 [test.step.assert]
 exit_code = 0
@@ -224,7 +224,7 @@ conary = "repo sync ${REPO_NAME} --force"
 exit_code = 0
 
 [[test.step]]
-conary = "update --yes --sandbox never"
+conary = "update --yes --sandbox always"
 
 [test.step.assert]
 stdout_not_contains = "panicked at"
@@ -247,10 +247,10 @@ timeout = 180
 group = "M"
 
 [[test.step]]
-run = "${CONARY_BIN} remove ${FIXTURE_PKG_NAME} --no-scripts --yes --db-path ${DB_PATH} 2>/dev/null || true"
+run = "${CONARY_BIN} remove ${FIXTURE_PKG_NAME} --sandbox always --yes --db-path ${DB_PATH} 2>/dev/null || true"
 
 [[test.step]]
-conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never --yes"
+conary = "ccs install ${FIXTURE_V1_CCS} --policy ${FIXTURE_CCS_POLICY} --sandbox always --yes"
 
 [test.step.assert]
 exit_code = 0
@@ -262,7 +262,7 @@ conary = "pin ${FIXTURE_PKG_NAME}"
 exit_code = 0
 
 [[test.step]]
-conary = "update --yes --sandbox never"
+conary = "update --yes --sandbox always"
 
 [test.step.assert]
 stdout_not_contains = "panicked at"
@@ -293,16 +293,16 @@ group = "M"
 
 # Remove first in case already installed from earlier tests
 [[test.step]]
-run = "${CONARY_BIN} remove ${small_package} --no-scripts --yes --db-path ${DB_PATH} 2>/dev/null; true"
+run = "${CONARY_BIN} remove ${small_package} --sandbox always --yes --db-path ${DB_PATH} 2>/dev/null; true"
 
 [[test.step]]
-conary = "install ${small_package} --repo ${distro_repo} --no-deps --yes --sandbox never"
+conary = "install ${small_package} --repo ${distro_repo} --no-deps --yes --sandbox always"
 
 [test.step.assert]
 exit_code = 0
 
 [[test.step]]
-conary = "remove ${small_package} --no-scripts --yes"
+conary = "remove ${small_package} --sandbox always --yes"
 
 [test.step.assert]
 exit_code = 0
@@ -354,16 +354,16 @@ group = "M"
 fatal = true
 
 [[test.step]]
-run = "${CONARY_BIN} remove ${FIXTURE_PKG_NAME} --no-scripts --yes --db-path ${DB_PATH} 2>/dev/null || true"
+run = "${CONARY_BIN} remove ${FIXTURE_PKG_NAME} --sandbox always --yes --db-path ${DB_PATH} 2>/dev/null || true"
 
 [[test.step]]
-conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never --yes"
+conary = "ccs install ${FIXTURE_V1_CCS} --policy ${FIXTURE_CCS_POLICY} --sandbox always --yes"
 
 [test.step.assert]
 exit_code = 0
 
 [[test.step]]
-conary = "ccs install ${FIXTURE_V2_CCS} --allow-unsigned --sandbox never --yes"
+conary = "ccs install ${FIXTURE_V2_CCS} --policy ${FIXTURE_CCS_POLICY} --sandbox always --yes"
 
 [test.step.assert]
 exit_code = 0
@@ -392,23 +392,23 @@ timeout = 300
 group = "M"
 
 [[test.step]]
-run = "${CONARY_BIN} remove ${FIXTURE_PKG_NAME} --no-scripts --yes --db-path ${DB_PATH} >/dev/null 2>&1 || true"
+run = "${CONARY_BIN} remove ${FIXTURE_PKG_NAME} --sandbox always --yes --db-path ${DB_PATH} >/dev/null 2>&1 || true"
 
 [test.step.assert]
 exit_code = 0
 
 [[test.step]]
-conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never --yes"
+conary = "ccs install ${FIXTURE_V1_CCS} --policy ${FIXTURE_CCS_POLICY} --sandbox always --yes"
 
 [test.step.assert]
 exit_code = 0
 
 # Remove small_package if it exists from prior tests, then reinstall
 [[test.step]]
-run = "${CONARY_BIN} remove ${small_package} --no-scripts --yes --db-path ${DB_PATH} 2>/dev/null; true"
+run = "${CONARY_BIN} remove ${small_package} --sandbox always --yes --db-path ${DB_PATH} 2>/dev/null; true"
 
 [[test.step]]
-conary = "install ${small_package} --repo ${distro_repo} --no-deps --yes --sandbox never"
+conary = "install ${small_package} --repo ${distro_repo} --no-deps --yes --sandbox always"
 
 [test.step.assert]
 exit_code = 0
@@ -434,7 +434,7 @@ fatal = true
 
 # Remove fixture from prior tests, sync, and install fresh
 [[test.step]]
-run = "${CONARY_BIN} remove ${FIXTURE_PKG_NAME} --no-scripts --yes --db-path ${DB_PATH} 2>/dev/null; true"
+run = "${CONARY_BIN} remove ${FIXTURE_PKG_NAME} --sandbox always --yes --db-path ${DB_PATH} 2>/dev/null; true"
 
 [[test.step]]
 conary = "repo sync ${REPO_NAME} --force"
@@ -443,7 +443,7 @@ conary = "repo sync ${REPO_NAME} --force"
 exit_code = 0
 
 [[test.step]]
-conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never --yes"
+conary = "ccs install ${FIXTURE_V1_CCS} --policy ${FIXTURE_CCS_POLICY} --sandbox always --yes"
 
 [test.step.assert]
 exit_code = 0
@@ -453,7 +453,7 @@ file_exists = "${FIXTURE_FILE}"
 
 # Use --reinstall in case repo already has v2 (avoids "already installed")
 [[test.step]]
-conary = "ccs install ${FIXTURE_V2_CCS} --allow-unsigned --sandbox never --reinstall --yes"
+conary = "ccs install ${FIXTURE_V2_CCS} --policy ${FIXTURE_CCS_POLICY} --sandbox always --reinstall --yes"
 
 [test.step.assert]
 exit_code = 0
@@ -478,7 +478,7 @@ conary = "unpin ${FIXTURE_PKG_NAME}"
 exit_code = 0
 
 [[test.step]]
-conary = "remove ${FIXTURE_PKG_NAME} --no-scripts --yes"
+conary = "remove ${FIXTURE_PKG_NAME} --sandbox always --yes"
 
 [test.step.assert]
 exit_code = 0

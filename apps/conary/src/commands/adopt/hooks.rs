@@ -18,12 +18,12 @@ const RPM_FILTER_CONTENT: &str = ".*\n";
 /// RPM file trigger script
 const RPM_SCRIPT_CONTENT: &str = r#"#!/bin/sh
 # Conary sync hook: refresh adopted package tracking after RPM transactions
-/usr/bin/conary system adopt --refresh --quiet --from-sync-hook 2>/dev/null || true
+/usr/bin/conary system adopt --refresh --quiet --from-sync-hook --package-manager rpm 2>/dev/null || true
 "#;
 
 /// APT post-invoke hook configuration
 const APT_HOOK_CONTENT: &str = r#"// Conary sync hook: refresh adopted package tracking after APT transactions
-DPkg::Post-Invoke { "/usr/bin/conary system adopt --refresh --quiet --from-sync-hook 2>/dev/null || true"; };
+DPkg::Post-Invoke { "/usr/bin/conary system adopt --refresh --quiet --from-sync-hook --package-manager dpkg 2>/dev/null || true"; };
 "#;
 
 /// Pacman alpm-hook
@@ -37,7 +37,7 @@ Target = *
 [Action]
 Description = Refreshing Conary adopted package tracking...
 When = PostTransaction
-Exec = /usr/bin/conary system adopt --refresh --quiet --from-sync-hook
+Exec = /usr/bin/conary system adopt --refresh --quiet --from-sync-hook --package-manager pacman
 "#;
 
 /// Hook file paths for each package manager
@@ -70,8 +70,11 @@ fn hook_paths(pkg_mgr: SystemPackageManager) -> Option<HookPaths> {
 /// calls `conary system adopt --refresh --quiet --from-sync-hook` after package transactions.
 ///
 /// When `remove` is true, removes the previously installed hooks.
-pub async fn cmd_sync_hook_install(remove: bool) -> Result<()> {
-    let pkg_mgr = SystemPackageManager::detect();
+pub async fn cmd_sync_hook_install(
+    remove: bool,
+    requested_manager: Option<SystemPackageManager>,
+) -> Result<()> {
+    let pkg_mgr = SystemPackageManager::resolve(requested_manager)?;
     if !pkg_mgr.is_available() {
         return Err(anyhow::anyhow!(
             "No supported package manager found. Conary supports RPM, dpkg, and pacman."
@@ -144,7 +147,7 @@ pub async fn cmd_sync_hook_install(remove: bool) -> Result<()> {
 }
 
 pub(super) fn remove_detected_sync_hooks() -> Result<bool> {
-    let pkg_mgr = SystemPackageManager::detect();
+    let pkg_mgr = SystemPackageManager::detect()?;
     if !pkg_mgr.is_available() {
         return Err(anyhow::anyhow!(
             "No supported package manager found. Conary supports RPM, dpkg, and pacman."
@@ -205,20 +208,14 @@ mod tests {
 
     #[test]
     fn test_rpm_hook_content_format() {
-        assert!(
-            RPM_SCRIPT_CONTENT
-                .contains("/usr/bin/conary system adopt --refresh --quiet --from-sync-hook")
-        );
+        assert!(RPM_SCRIPT_CONTENT.contains("--from-sync-hook --package-manager rpm"));
         assert!(RPM_SCRIPT_CONTENT.starts_with("#!/bin/sh"));
     }
 
     #[test]
     fn test_apt_hook_content_format() {
         assert!(APT_HOOK_CONTENT.contains("DPkg::Post-Invoke"));
-        assert!(
-            APT_HOOK_CONTENT
-                .contains("/usr/bin/conary system adopt --refresh --quiet --from-sync-hook")
-        );
+        assert!(APT_HOOK_CONTENT.contains("--from-sync-hook --package-manager dpkg"));
     }
 
     #[test]
@@ -226,10 +223,7 @@ mod tests {
         assert!(PACMAN_HOOK_CONTENT.contains("[Trigger]"));
         assert!(PACMAN_HOOK_CONTENT.contains("[Action]"));
         assert!(PACMAN_HOOK_CONTENT.contains("PostTransaction"));
-        assert!(
-            PACMAN_HOOK_CONTENT
-                .contains("Exec = /usr/bin/conary system adopt --refresh --quiet --from-sync-hook")
-        );
+        assert!(PACMAN_HOOK_CONTENT.contains("--from-sync-hook --package-manager pacman"));
     }
 
     #[test]

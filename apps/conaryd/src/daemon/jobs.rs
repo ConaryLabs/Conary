@@ -95,12 +95,16 @@ impl DaemonJob {
         let error_json = self
             .error
             .as_ref()
-            .map(|e| serde_json::to_string(e).unwrap_or_default());
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|error| conary_core::Error::IoError(error.to_string()))?;
 
         let result_json = self
             .result
             .as_ref()
-            .map(|r| serde_json::to_string(r).unwrap_or_default());
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|error| conary_core::Error::IoError(error.to_string()))?;
 
         conn.execute(
             "INSERT INTO daemon_jobs (id, idempotency_key, kind, spec_json, status, result_json,
@@ -302,16 +306,46 @@ impl DaemonJob {
                 )
             })?;
 
-        // Parse spec
-        let spec: serde_json::Value =
-            serde_json::from_str(&spec_json).unwrap_or(serde_json::Value::Null);
-
-        // Parse result
-        let result: Option<serde_json::Value> =
-            result_json.and_then(|s| serde_json::from_str(&s).ok());
-
-        // Parse error
-        let error: Option<DaemonError> = error_json.and_then(|s| serde_json::from_str(&s).ok());
+        let spec: serde_json::Value = serde_json::from_str(&spec_json).map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(
+                3,
+                rusqlite::types::Type::Text,
+                Box::new(error),
+            )
+        })?;
+        let result = result_json
+            .map(|json| {
+                serde_json::from_str(&json).map_err(|error| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        5,
+                        rusqlite::types::Type::Text,
+                        Box::new(error),
+                    )
+                })
+            })
+            .transpose()?;
+        let error = error_json
+            .map(|json| {
+                serde_json::from_str(&json).map_err(|error| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        6,
+                        rusqlite::types::Type::Text,
+                        Box::new(error),
+                    )
+                })
+            })
+            .transpose()?;
+        let requested_by_uid = requested_by_uid
+            .map(|uid| {
+                u32::try_from(uid).map_err(|error| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        7,
+                        rusqlite::types::Type::Integer,
+                        Box::new(error),
+                    )
+                })
+            })
+            .transpose()?;
 
         Ok(Self {
             id,
@@ -321,7 +355,7 @@ impl DaemonJob {
             status,
             result,
             error,
-            requested_by_uid: requested_by_uid.map(|u| u as u32),
+            requested_by_uid,
             client_info,
             created_at,
             started_at,
@@ -504,7 +538,7 @@ mod tests {
         let temp_file = NamedTempFile::new().unwrap();
         let conn = Connection::open(temp_file.path()).unwrap();
         conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
-        schema::migrate(&conn).unwrap();
+        schema::ensure_current(&conn).unwrap();
         (temp_file, conn)
     }
 
@@ -538,6 +572,22 @@ mod tests {
         assert_eq!(completed.status, JobStatus::Completed);
         assert!(completed.completed_at.is_some());
         assert!(completed.result.is_some());
+    }
+
+    #[test]
+    fn job_read_rejects_corrupt_persisted_json() {
+        let (_temp, conn) = create_test_db();
+        let job = DaemonJob::new(JobKind::Install, serde_json::json!({"packages": ["nginx"]}));
+        job.insert(&conn).unwrap();
+        conn.execute("PRAGMA ignore_check_constraints = ON", [])
+            .unwrap();
+        conn.execute(
+            "UPDATE daemon_jobs SET spec_json = 'not-json' WHERE id = ?1",
+            [&job.id],
+        )
+        .unwrap();
+
+        assert!(DaemonJob::find_by_id(&conn, &job.id).is_err());
     }
 
     #[test]
@@ -595,7 +645,7 @@ mod tests {
 
         // Enqueue jobs with different priorities
         let job1 = DaemonJob::new(JobKind::Install, serde_json::json!({}));
-        let job2 = DaemonJob::new(JobKind::GarbageCollect, serde_json::json!({}));
+        let job2 = DaemonJob::new(JobKind::Enhance, serde_json::json!({}));
         let job3 = DaemonJob::new(JobKind::Update, serde_json::json!({}));
 
         let id1 = job1.id.clone();
@@ -639,49 +689,32 @@ mod tests {
     }
 
     #[test]
-    fn test_job_kind_storage_strings_match_shared_operation_kind() {
-        use conary_core::OperationKind;
-
+    fn test_job_kind_storage_strings_are_closed_to_executable_jobs() {
         let expected_pairs = [
-            (JobKind::Install, OperationKind::Install, "install"),
-            (JobKind::Remove, OperationKind::Remove, "remove"),
-            (JobKind::Update, OperationKind::Update, "update"),
-            (JobKind::DryRun, OperationKind::DryRun, "dry_run"),
-            (JobKind::Rollback, OperationKind::Rollback, "rollback"),
-            (JobKind::Verify, OperationKind::Verify, "verify"),
-            (
-                JobKind::GarbageCollect,
-                OperationKind::GarbageCollect,
-                "garbage_collect",
-            ),
-            (JobKind::Enhance, OperationKind::Enhance, "enhance"),
+            (JobKind::Install, "install"),
+            (JobKind::Remove, "remove"),
+            (JobKind::Update, "update"),
+            (JobKind::Enhance, "enhance"),
         ];
 
-        for (job_kind, operation_kind, expected) in expected_pairs {
+        for (job_kind, expected) in expected_pairs {
             assert_eq!(job_kind.as_str(), expected);
-            assert_eq!(operation_kind.as_str(), expected);
         }
     }
 
     #[test]
-    fn test_shared_operation_kind_serde_matches_persisted_job_kind_strings() {
-        use conary_core::OperationKind;
-
+    fn test_job_kind_serde_matches_persisted_strings() {
         let expected_pairs = [
-            (OperationKind::Install, "\"install\""),
-            (OperationKind::Remove, "\"remove\""),
-            (OperationKind::Update, "\"update\""),
-            (OperationKind::DryRun, "\"dry_run\""),
-            (OperationKind::Rollback, "\"rollback\""),
-            (OperationKind::Verify, "\"verify\""),
-            (OperationKind::GarbageCollect, "\"garbage_collect\""),
-            (OperationKind::Enhance, "\"enhance\""),
+            (JobKind::Install, "\"install\""),
+            (JobKind::Remove, "\"remove\""),
+            (JobKind::Update, "\"update\""),
+            (JobKind::Enhance, "\"enhance\""),
         ];
 
         for (kind, expected_json) in expected_pairs {
             assert_eq!(serde_json::to_string(&kind).unwrap(), expected_json);
             assert_eq!(
-                serde_json::from_str::<OperationKind>(expected_json).unwrap(),
+                serde_json::from_str::<JobKind>(expected_json).unwrap(),
                 kind
             );
         }

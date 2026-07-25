@@ -7,9 +7,8 @@ use super::persistence::PersistConversionInput;
 use crate::server::conversion_timing::{
     ConversionPhase, ConversionPhaseTiming, ConversionSkippedPhase, ConversionTimingReport,
 };
-use crate::server::publication::ServerConversionOutcome;
 use anyhow::{Context, Result, anyhow};
-use conary_core::ccs::convert::{ConversionOptions, ConversionResult, LegacyConverter};
+use conary_core::ccs::convert::{ConversionOptions, ConversionResult, NativePackageConverter};
 use conary_core::db::models::RepositoryPackage;
 use conary_core::packages::common::PackageMetadata;
 use std::path::PathBuf;
@@ -28,21 +27,11 @@ struct ParsedConversion {
 }
 
 impl ConversionService {
-    fn public_target_profile_for_route(
+    fn public_feed_for_route(
         distro: &str,
     ) -> Result<&'static conary_core::repository::supported_profiles::SupportedProfile> {
-        let route = conary_core::repository::supported_profiles::route_by_slug(distro)
-            .ok_or_else(|| anyhow!("unsupported release distro {distro}"))?;
-        let profile_id = route
-            .public_profile_ids()
-            .first()
-            .ok_or_else(|| anyhow!("release distro {distro} has no public target profile"))?;
-        conary_core::repository::supported_profiles::profile_by_public_id(profile_id).ok_or_else(
-            || {
-                anyhow!(
-                    "release distro {distro} maps to missing public target profile {profile_id}"
-                )
-            },
+        conary_core::repository::supported_profiles::profile_for_remi_route(distro).ok_or_else(
+            || anyhow!("release distro {distro} does not map to exactly one repository feed"),
         )
     }
 
@@ -53,7 +42,7 @@ impl ConversionService {
         package_name: &str,
         version: Option<&str>,
         architecture: Option<&str>,
-    ) -> Result<ServerConversionOutcome> {
+    ) -> Result<super::ServerConversionResult> {
         let mut timing = ConversionTimingReport::new(distro, package_name, version);
         let result = self
             .convert_package_async_inner(distro, package_name, version, architecture, &mut timing)
@@ -63,7 +52,7 @@ impl ConversionService {
             Ok(mut result) => {
                 timing.finish(true);
                 Self::log_conversion_timing(&timing);
-                result.result_mut().timing = Some(timing);
+                result.timing = Some(timing);
                 Ok(result)
             }
             Err(err) => {
@@ -81,18 +70,21 @@ impl ConversionService {
         version: Option<&str>,
         architecture: Option<&str>,
         timing: &mut ConversionTimingReport,
-    ) -> Result<ServerConversionOutcome> {
-        // Refuse to convert critical system packages
-        Self::ensure_package_name_not_critical(package_name)?;
-
+    ) -> Result<super::ServerConversionResult> {
         info!(
             "Converting package: {}:{} (version: {:?})",
             distro, package_name, version
         );
 
         let started = Instant::now();
+        let source_feed = Self::public_feed_for_route(distro)?;
         let repo_pkg = self
-            .find_package_for_conversion_async(distro, package_name, version, architecture)
+            .find_package_for_conversion_async(
+                source_feed.id(),
+                package_name,
+                version,
+                architecture,
+            )
             .await?;
         timing.record(ConversionPhase::PackageLookup, started.elapsed());
         if timing.version.is_none() {
@@ -112,7 +104,7 @@ impl ConversionService {
         let started = Instant::now();
         let (repo_pkg, pkg_path) = self
             .download_package_with_refresh_async(PackageDownloadRefresh {
-                distro,
+                profile: source_feed.id(),
                 package_name,
                 version,
                 architecture,
@@ -241,7 +233,6 @@ impl ConversionService {
         let started = Instant::now();
         Self::apply_repository_identity(&mut metadata, &repo_pkg);
         Self::merge_repository_provides(&conn, &repo_pkg, &mut metadata)?;
-        Self::ensure_metadata_not_critical(&metadata)?;
         info!(
             "Parsed: {} v{} ({} files, {} native provides)",
             metadata.name,
@@ -262,14 +253,21 @@ impl ConversionService {
             output_dir,
         };
 
-        let target_profile = Self::public_target_profile_for_route(distro)?;
-        let converter = LegacyConverter::new(options)
+        let keys_dir = self.repository_keys_dir.as_ref().context(
+            "Remi conversion requires release_publish.repository_keys_dir for CCS authority signing",
+        )?;
+        let signing_key = conary_core::ccs::SigningKeyPair::load_from_file(
+            &keys_dir.join(distro).join("targets.private"),
+        )
+        .map_err(anyhow::Error::from)
+        .with_context(|| format!("load Remi CCS authority key for {distro}"))?;
+        let converter = NativePackageConverter::new(options)
             .with_source_distro(distro)
-            .with_target_profile_id(target_profile.id())
-            .with_conversion_tool("remi");
+            .with_conversion_tool("remi")
+            .with_signing_key(std::sync::Arc::new(signing_key));
         skipped_phases.push(ConversionSkippedPhase {
             phase: ConversionPhase::AdapterDispatch,
-            reason: "adapter dispatch timing is included in legacy converter timing".to_string(),
+            reason: "diagnostic adapter timing is included in native conversion".to_string(),
         });
 
         let started = Instant::now();
@@ -300,38 +298,24 @@ impl ConversionService {
 
 #[cfg(test)]
 mod tests {
-    use super::super::test_support::production_source_without_comments;
+    use super::super::test_support::production_rust_sources;
     use super::ConversionService;
 
     #[test]
     fn remi_server_conversion_paths_do_not_block_on_async_work() {
-        for relative_path in [
-            "src/server/admin_service.rs",
-            "src/server/conversion.rs",
-            "src/server/conversion/benchmark.rs",
-            "src/server/conversion/lookup.rs",
-            "src/server/conversion/metadata.rs",
-            "src/server/conversion/persistence.rs",
-            "src/server/conversion/recipe.rs",
-            "src/server/conversion/safety.rs",
-            "src/server/conversion/storage.rs",
-            "src/server/conversion/types.rs",
-            "src/server/conversion/workflow.rs",
-            "src/server/handlers/packages.rs",
-            "src/server/prewarm.rs",
-        ] {
-            let source = production_source_without_comments(relative_path);
+        for (relative_path, source) in production_rust_sources("src/server") {
             assert!(
                 !source.contains(".block_on("),
-                "{relative_path} must not call Handle::block_on in production Remi server paths"
+                "{} must not call Handle::block_on in production Remi server paths",
+                relative_path.display()
             );
         }
     }
 
     #[test]
-    fn conversion_route_resolves_public_target_profile() {
-        let profile = ConversionService::public_target_profile_for_route("fedora")
-            .expect("fedora route profile");
-        assert_eq!(profile.id(), "fedora-44");
+    fn conversion_route_resolves_repository_feed() {
+        let feed =
+            ConversionService::public_feed_for_route("fedora").expect("fedora repository feed");
+        assert_eq!(feed.id(), "fedora-44");
     }
 }

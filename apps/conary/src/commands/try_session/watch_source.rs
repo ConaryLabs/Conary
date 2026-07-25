@@ -10,21 +10,13 @@ use conary_core::hash::{HashAlgorithm, Hasher};
 use conary_core::recipe::hermetic::source_identity::{
     canonical_local_file_list, detect_ci_mode, validate_canonical_local_file_list,
 };
-use conary_core::recipe::inference::{
-    CookTarget, InferenceOptions, SourceTargetKind, infer_recipe_from_path, resolve_cook_target,
-};
 use conary_core::recipe::{Recipe, is_remote_url, parse_recipe_file};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum WatchSourceMode {
-    ExplicitRecipe,
-    InferredSourceTree,
-}
+use crate::commands::cook::resolve_recipe_path;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct WatchSourceSet {
-    pub(super) mode: WatchSourceMode,
-    pub(super) recipe_path: Option<PathBuf>,
+    pub(super) recipe_path: PathBuf,
     pub(super) local_roots: Vec<PathBuf>,
     pub(super) local_files: Vec<PathBuf>,
 }
@@ -39,36 +31,10 @@ pub(super) fn resolve_watch_source_set(
     target: Option<&str>,
     recipe: Option<&str>,
 ) -> Result<WatchSourceSet> {
-    match resolve_cook_target(target, recipe)? {
-        CookTarget::RecipeFile(recipe_path) => {
-            let parsed = parse_recipe_file(&recipe_path)
-                .with_context(|| format!("failed to parse recipe {}", recipe_path.display()))?;
-            watch_source_set_for_recipe(recipe_path, &parsed)
-        }
-        CookTarget::SourceTree(source_tree) => {
-            if source_tree.kind != SourceTargetKind::Directory {
-                bail!(
-                    "conary try --watch only supports local source directories and recipe projects"
-                );
-            }
-            let _ = infer_recipe_from_path(
-                &source_tree.root,
-                InferenceOptions::for_source_root(source_tree.root.clone()),
-            )
-            .with_context(|| {
-                format!(
-                    "failed to infer recipe from watched source tree {}",
-                    source_tree.root.display()
-                )
-            })?;
-            Ok(WatchSourceSet {
-                mode: WatchSourceMode::InferredSourceTree,
-                recipe_path: None,
-                local_roots: vec![source_tree.root],
-                local_files: Vec::new(),
-            })
-        }
-    }
+    let recipe_path = resolve_recipe_path(target, recipe)?;
+    let parsed = parse_recipe_file(&recipe_path)
+        .with_context(|| format!("failed to parse recipe {}", recipe_path.display()))?;
+    watch_source_set_for_recipe(recipe_path, &parsed)
 }
 
 fn watch_source_set_for_recipe(recipe_path: PathBuf, recipe: &Recipe) -> Result<WatchSourceSet> {
@@ -117,8 +83,7 @@ fn watch_source_set_for_recipe(recipe_path: PathBuf, recipe: &Recipe) -> Result<
     local_roots.dedup();
 
     Ok(WatchSourceSet {
-        mode: WatchSourceMode::ExplicitRecipe,
-        recipe_path: Some(recipe_path),
+        recipe_path,
         local_roots,
         local_files,
     })
@@ -150,11 +115,8 @@ pub(super) fn compute_watch_identity(source_set: &WatchSourceSet) -> Result<Watc
     let mut hasher = Hasher::new(HashAlgorithm::Sha256);
     let mut file_count = 0usize;
 
-    hasher.update(format!("{:?}\0", source_set.mode).as_bytes());
-    if let Some(recipe_path) = &source_set.recipe_path {
-        hasher.update(recipe_path.to_string_lossy().as_bytes());
-        hasher.update(b"\0");
-    }
+    hasher.update(source_set.recipe_path.to_string_lossy().as_bytes());
+    hasher.update(b"\0");
     for root in &source_set.local_roots {
         hasher.update(root.to_string_lossy().as_bytes());
         hasher.update(b"\0");
@@ -297,9 +259,8 @@ path = "src""#,
         )
         .unwrap();
 
-        assert_eq!(set.mode, WatchSourceMode::ExplicitRecipe);
         let recipe_path = temp.path().join("recipe.toml").canonicalize().unwrap();
-        assert_eq!(set.recipe_path.as_deref(), Some(recipe_path.as_path()));
+        assert_eq!(set.recipe_path, recipe_path);
         assert!(set.local_roots.iter().any(|root| root.ends_with("src")));
         assert!(
             set.local_files
@@ -327,6 +288,21 @@ path = "src""#,
             "local additional source should be watched: {:?}",
             archive_set.local_files
         );
+    }
+
+    #[test]
+    fn watch_rejects_source_directory_without_recipe() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            temp.path().join("Cargo.toml"),
+            "[package]\nname = \"demo\"\n",
+        )
+        .unwrap();
+
+        let error =
+            resolve_watch_source_set(Some(temp.path().to_str().unwrap()), None).unwrap_err();
+
+        assert!(error.to_string().contains("does not contain recipe.toml"));
     }
 
     #[test]

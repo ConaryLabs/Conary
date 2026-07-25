@@ -3,7 +3,7 @@
 //! Command implementations for automation system.
 
 use super::open_db;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use conary_core::automation::{
     AutomationManager, AutomationSummary,
     action::{ActionExecutor, PlannedOp},
@@ -96,12 +96,7 @@ fn format_planned_op(op: &PlannedOp) -> String {
     }
 }
 
-async fn execute_planned_op(
-    op: &PlannedOp,
-    db_path: &str,
-    root: &str,
-    no_scripts: bool,
-) -> Result<()> {
+async fn execute_planned_op(op: &PlannedOp, db_path: &str, root: &str) -> Result<()> {
     match op {
         PlannedOp::Install {
             package,
@@ -118,18 +113,14 @@ async fn execute_planned_op(
                     architecture: architecture.clone(),
                     dry_run: false,
                     no_deps: false,
-                    no_scripts,
                     selection_reason: None,
                     sandbox_mode: super::SandboxMode::Always,
                     allow_downgrade: false,
-                    allow_capabilities: false,
                     convert_to_ccs: false,
-                    force: false,
-                    dep_mode: None,
+                    ownership: None,
                     yes: true,
                     from_distro: None,
                     repository_provenance: None,
-                    legacy_replay: super::LegacyReplayOptions::default(),
                 },
             )
             .await
@@ -142,13 +133,10 @@ async fn execute_planned_op(
             super::cmd_remove(
                 package,
                 db_path,
-                root,
                 version.clone(),
                 architecture.clone(),
-                no_scripts,
                 super::SandboxMode::Always,
                 false,
-                super::LegacyReplayOptions::default(),
             )
             .await
         }
@@ -197,7 +185,6 @@ async fn execute_actions(
     actions: &[conary_core::automation::PendingAction],
     db_path: &str,
     root: &str,
-    no_scripts: bool,
 ) -> Result<(usize, usize, usize)> {
     let planner = ActionExecutor::new();
     let mut applied = 0;
@@ -221,7 +208,7 @@ async fn execute_actions(
         let mut succeeded_ops = 0usize;
         let mut errors = Vec::new();
         for op in &plan.ops {
-            if let Err(e) = execute_planned_op(op, db_path, root, no_scripts).await {
+            if let Err(e) = execute_planned_op(op, db_path, root).await {
                 errors.push(format!("{}: {}", format_planned_op(op), e));
             } else {
                 succeeded_ops += 1;
@@ -297,22 +284,33 @@ fn query_automation_history(
 
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(rusqlite::params_from_iter(params.iter()), |row| {
-        let packages_json: Option<String> = row.get(2)?;
-        let packages = packages_json
-            .as_deref()
-            .and_then(|raw| serde_json::from_str::<Vec<String>>(raw).ok())
-            .unwrap_or_default();
-        Ok(AutomationHistoryRow {
-            action_id: row.get(0)?,
-            category: row.get(1)?,
-            packages,
-            status: row.get(3)?,
-            error_message: row.get(4)?,
-            applied_at: row.get(5)?,
-        })
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, Option<String>>(2)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, Option<String>>(4)?,
+            row.get::<_, String>(5)?,
+        ))
     })?;
 
-    Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    rows.map(|row| {
+        let (action_id, category, packages_json, status, error_message, applied_at) = row?;
+        let packages = match packages_json {
+            Some(raw) => serde_json::from_str::<Vec<String>>(&raw)
+                .with_context(|| format!("automation history {action_id} has corrupt packages"))?,
+            None => Vec::new(),
+        };
+        Ok(AutomationHistoryRow {
+            action_id,
+            category,
+            packages,
+            status,
+            error_message,
+            applied_at,
+        })
+    })
+    .collect()
 }
 
 fn load_automation_config_from_path(path: &Path) -> Result<AutomationConfig> {
@@ -585,7 +583,6 @@ pub async fn cmd_automation_apply(
     yes: bool,
     categories: Option<Vec<String>>,
     dry_run: bool,
-    no_scripts: bool,
 ) -> Result<()> {
     let conn = open_db(db_path)?;
 
@@ -640,7 +637,7 @@ pub async fn cmd_automation_apply(
     if yes {
         println!("Applying {} action(s)...", all_actions.len());
         let (applied, failed, partial) =
-            execute_actions(&conn, &all_actions, db_path, root, no_scripts).await?;
+            execute_actions(&conn, &all_actions, db_path, root).await?;
 
         println!();
         println!(
@@ -665,7 +662,7 @@ pub async fn cmd_automation_apply(
         SummaryResponse::ApplyAll => {
             println!("Applying all actions...");
             let (applied, failed, partial) =
-                execute_actions(&conn, &all_actions, db_path, root, no_scripts).await?;
+                execute_actions(&conn, &all_actions, db_path, root).await?;
             println!();
             println!(
                 "Complete: {} applied, {} failed, {} partial",
@@ -684,7 +681,7 @@ pub async fn cmd_automation_apply(
             println!("Reviewing {} action(s)...", actions.len());
             let actions: Vec<_> = actions.into_iter().cloned().collect();
             let (applied, failed, partial) =
-                execute_actions(&conn, &actions, db_path, root, no_scripts).await?;
+                execute_actions(&conn, &actions, db_path, root).await?;
             println!();
             println!(
                 "Complete: {} applied, {} failed, {} partial",

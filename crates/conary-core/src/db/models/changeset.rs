@@ -12,7 +12,6 @@ use strum_macros::{AsRefStr, Display, EnumString};
 pub enum ChangesetStatus {
     Pending,
     Applied,
-    PostHooksFailed,
     RolledBack,
 }
 
@@ -35,7 +34,7 @@ pub struct Changeset {
     /// Transaction UUID for crash recovery correlation
     pub tx_uuid: Option<String>,
     /// Serialized trove metadata snapshot stored before removal operations,
-    /// enabling rollback of remove changesets (added in schema v7).
+    /// enabling rollback of remove changesets.
     /// JSON-encoded trove information; `None` for install/update changesets.
     pub metadata: Option<String>,
 }
@@ -126,7 +125,7 @@ impl Changeset {
         })?;
 
         match new_status {
-            ChangesetStatus::Applied | ChangesetStatus::PostHooksFailed => {
+            ChangesetStatus::Applied => {
                 conn.execute(
                     "UPDATE changesets
                      SET status = ?1, applied_at = COALESCE(applied_at, CURRENT_TIMESTAMP)

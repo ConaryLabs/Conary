@@ -542,7 +542,7 @@ mod tests {
         std::fs::write(&ccs_path, &ccs_bytes).unwrap();
 
         let conn = conary_core::db::open(&db_path).unwrap();
-        let mut converted = conary_core::db::models::ConvertedPackage::new_server(
+        let mut converted = conary_core::db::models::ConvertedPackage::new_repository(
             "fedora".to_string(),
             "qemu-img".to_string(),
             "2:10.1.0-7.fc44".to_string(),

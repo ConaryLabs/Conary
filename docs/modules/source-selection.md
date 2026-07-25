@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-07-24
-revision: 7
-summary: Document source policy and native package-adoption planning
+last_updated: 2026-07-25
+revision: 10
+summary: Document source policy, native repository authority, exact package identity, and lifecycle handoff
 ---
 
 # Source Selection Module (conary-core/src/repository/ + conary-core/src/model/)
@@ -50,9 +50,9 @@ system.toml [system]
 
 | Type | File | Purpose |
 |------|------|---------|
-| `SystemConfig` | `model/parser.rs` | Model-layer source-policy config from `[system]` |
-| `SourcePinConfig` | `model/parser.rs` | Explicit source pin plus mixing strength |
-| `ConvergenceIntent` | `model/parser.rs` | How aggressively Conary should move packages toward Conary-managed state |
+| `SystemConfig` | `model/parser/source_policy.rs` | Model-layer source-policy config from `[system]` |
+| `SourcePinConfig` | `model/parser/source_policy.rs` | Explicit source pin plus source strength |
+| `ConvergenceIntent` | `model/parser/source_policy.rs` | How aggressively Conary should move packages toward Conary-managed state |
 | `SelectionMode` | `repository/resolution_policy.rs` | Candidate ranking mode: `policy` or `latest` |
 | `ResolutionPolicy` | `repository/resolution_policy.rs` | Request scope, mixing, selection mode, and allowlist used by the resolver |
 | `EffectiveSourcePolicy` | `repository/effective_policy.rs` | Runtime policy assembled from DB state plus inferred primary flavor |
@@ -70,13 +70,12 @@ Important fields:
   `latest`.
 - `allowed_distros`: allowlist of source identifiers Conary may use when
   selecting packages.
-- `pin`: richer source pin with distro plus mixing strength.
-- `distro` / `mixing`: compatibility fields that still map into the effective
-  pin when `pin` is not set.
+- `pin`: the source-pin contract, with distro plus mixing strength.
 - `convergence`: how aggressively package ownership should move during source
   transitions.
 
-`SystemConfig::effective_selection_mode()` prefers the explicit
+The removed flat `[system].distro` and `[system].mixing` aliases are rejected;
+write `[system.pin]` directly. `SystemConfig::effective_selection_mode()` prefers the explicit
 `selection_mode` field and falls back to a profile-derived value.
 `SystemConfig::runtime_selection_mode_mirror()` only mirrors an explicit
 override or an explicitly written profile into runtime state.
@@ -92,16 +91,68 @@ Conary persists the runtime source-policy mirror in SQLite:
 `load_effective_policy()` merges those tables into one `EffectiveSourcePolicy`
 and derives the primary distro flavor used for strict or guarded mixing.
 
-M4d supported-target profiles make
+The repository feed catalog makes
 `crates/conary-core/src/repository/supported_profiles/` the source of truth for
-public distro IDs, dependency flavor, version scheme, and Remi route-family
-mapping. Fedora 44, Ubuntu 26.04, and Arch are the only public targets.
-Internal route slugs such as `fedora` and `ubuntu` are not public IDs. The
+configured feed IDs, dependency flavor, version scheme, and Remi route-family
+mapping. Fedora 44, Ubuntu 26.04, and Arch are the currently configured public
+feeds, not the only destination systems Conary supports. Internal route slugs
+such as `fedora` and `ubuntu` are not feed IDs. The
 `repo add --remi-distro` surface accepts only those exact public IDs. Remi
 sync and package fetches translate the stored public ID to the profile-owned
-route slug; runtime lookup still normalizes unambiguous legacy route-slug rows
-written by older Conary releases. The older `data/distros.toml` catalog was
-deleted in M4d.
+route slug. Persisted package identity requires the exact public ID; route slugs
+are never accepted as source-identity aliases. The superseded
+`data/distros.toml` catalog was deleted in M4d.
+
+## Native Repository Authenticity
+
+Native source selection begins only after one typed trust contract authenticates
+the repository grammar. `RepositoryTrustPolicy` in
+`crates/conary-core/src/repository/trust.rs` is the persisted authority;
+`trust/openpgp.rs` prepares exact pinned certificates and the authenticated
+Arch keyring. Parser construction, sync, package download, CLI repository
+creation, Remi's admin API, and the hosted repository manifest all consume that
+same tagged contract. There is no signature-check boolean, permissive mode,
+runtime disable command, key lookup by short ID, or guessed key URL.
+
+The supported chains are:
+
+- Debian: a pinned Release certificate verifies the clearsigned `InRelease`,
+  or the exact `Release` plus `Release.gpg` fallback. The signed Release
+  SHA-256 and size authenticate the selected compressed `Packages` index; each
+  package stanza's exact SHA-256 and size authenticate its `.deb`.
+- RPM: repository metadata and packages have distinct authorities. Either a
+  detached OpenPGP signature or an exact HTTPS metalink identity authenticates
+  `repomd.xml`; its SHA-256 and size authenticate `primary.xml`; primary
+  metadata authenticates the RPM bytes; and an independently pinned package
+  certificate verifies the RPM's embedded OpenPGP signature.
+- Arch: one exact keyring source supplies the pinned master certificates,
+  their certifications, and packager certificates. An explicit threshold says
+  how many distinct pinned masters must certify a packager key; the hosted Arch
+  feeds require three of the current five masters. `SigLevel` is represented
+  directly: package signatures are required, database signatures are required
+  or optional, and any signature that is present must be valid under
+  `TrustedOnly`. `Never`, `TrustAll`, and optional package signatures are not
+  representable.
+
+`crates/conary-core/src/repository/parsers/{debian,fedora,arch}.rs` owns the
+three metadata chains. Fedora metalink identity parsing is isolated in
+`parsers/fedora/metalink.rs`. `repository/download.rs` owns the terminal
+package checks. Missing keys, a missing required signature, an unsupported
+hash, duplicate authority records, invalid certification thresholds, or any
+identity mismatch fail closed and remove a partially downloaded package.
+
+The contract was derived against the package managers' and repository
+generators' own documentation:
+
+- [APT archive authentication](https://manpages.debian.org/bookworm/apt/apt-secure.8.en.html)
+  and the [Debian repository format](https://wiki.debian.org/DebianRepository/Format)
+- [DNF `gpgcheck` and `repo_gpgcheck`](https://dnf.readthedocs.io/en/stable/conf_ref.html),
+  [RPM signatures and digests](https://rpm.org/docs/6.0.x/manual/signatures_digests.html),
+  and the [createrepo_c repomd API](https://rpm-software-management.github.io/createrepo_c/c/group__repomd.html)
+- [`pacman.conf` SigLevel](https://man.archlinux.org/man/pacman.conf.5.en),
+  [ALPM repository database signatures](https://man.archlinux.org/man/extra/alpm-repo-db/alpm-repo-db.7.en),
+  [Arch's master-key trust model](https://archlinux.org/master-keys/), and the
+  [`archlinux-keyring` file list](https://archlinux.org/packages/core/any/archlinux-keyring/files/)
 
 ## Transitional Defaults
 
@@ -145,30 +196,26 @@ Explicit version constraints remain strict and scheme-aware. Cross-distro
 identity mapping helps find equivalent packages; it does not replace native
 version constraint semantics.
 
-## Foreign Legacy Replay Policy
+## Native Lifecycle Source Identity
 
-Source-selection mixing also defines the host-side floor for raw legacy
-scriptlet replay from converted CCS bundles. The installed `DistroPin`
-`mixing_policy` maps into the legacy replay host policy:
+Source policy decides which package artifact may satisfy a request. Once an RPM,
+Debian, or Arch artifact is selected, its typed package-manager lifecycle ABI is
+part of that artifact's identity and is not reinterpreted by `DistroPin`
+mixing policy.
 
-This is a refusal boundary for local replay, not a portability promise. The
-current production target-compatibility matrix has no public cross-distro
-allowances, so different source and host targets fail closed unless explicit
-matrix evidence is added in a later release.
+The lifecycle bundle records the exact source format, distro, release,
+architecture, and native version scheme. Packages with source lifecycle
+programs carry those programs and their exact source ABI into the Conary-owned
+runtime; packages without them carry no invented hooks. Source selection
+cannot change either fact.
 
-- `strict` or an unset/unknown pin denies foreign raw legacy replay, even when
-  `--allow-foreign-legacy-replay` is present.
-- `guarded` allows foreign replay only when the bundle policy is also guarded
-  and the operator supplied both `--allow-legacy-replay` and
-  `--allow-foreign-legacy-replay`.
-- `permissive` allows guarded or permissive bundle policies with both explicit
-  replay flags.
-
-A bundle is not treated as foreign when its source target matches the host
-target or when the host target appears in the bundle's `allowed_targets` list.
-Bundle-level `deny`, unknown foreign policy, review compatibility, blocked
-compatibility, triggers, unsupported ordering, and `review` or `blocked`
-entries still refuse before mutation regardless of host mixing policy.
+Install, update, replatform, and model apply all pass selected lifecycle bundles
+to the same typed transaction planner. The planner derives slots, argv, trigger
+matches, order, and payload visibility from package metadata and transaction
+state. There are no operator replay flags, mixing-policy overrides, shallow
+target matrices, or command-text exceptions. If the selected root cannot
+satisfy a typed interpreter or source-manager semantic, preflight reports that
+semantic before mutation so the missing model can be engineered.
 
 ## Ranking Modes
 
@@ -189,7 +236,11 @@ In the current implementation, that signal comes from Repology status data:
 - missing or stale signal falls back to normal policy ranking
 
 The source-selection system does not attempt cross-scheme version arithmetic
-between RPM, DEB, and Arch versions for this ranking step.
+between RPM, DEB, and Arch versions for this ranking step. A positive latest
+signal or distinct repository priority may select one candidate. If eligible
+candidates remain tied across version schemes, selection returns a typed
+ambiguity and requires an explicit repository scope or priority; repository
+names never break the tie.
 
 ## Flow Behavior
 
@@ -206,6 +257,11 @@ ambiguous, unsupported, or blocked by a tracked-file conflict. Shared
 directories keep their existing owner instead of being reassigned. `--full`
 also validates that every planned regular file or symlink is readable for CAS
 capture, but preview never creates CAS state.
+
+Adoption preserves migration continuity for a machine that already has native
+package-manager state. It is not Conary's foreign-package acquisition path and
+does not prove source-independent cross-distro conversion or lifecycle
+execution.
 
 Apply consumes that plan, rechecks file ownership inside its database
 transaction, and only then writes checkpoints, package metadata, CAS objects,
@@ -232,14 +288,16 @@ supplied.
 
 Update also enforces the limited-preview ownership boundary:
 
-- Conary-owned packages may update on a mutable live root without an active
-  Conary generation. The update resolver downloads the target package and then
-  delegates through the same install path used by `conary install`.
+- Conary-owned updates always delegate to the same selected-root transaction
+  used by `conary install`. When no current generation exists, that transaction
+  materializes authoritative DB/CAS state and publishes the first generation;
+  it never mutates the host root in place.
 - Adopted packages keep native package-manager authority under the default
   `satisfy`/`adopt` behavior. Update reports the skip with native-PM guidance
   instead of silently replacing the package.
-- `--dep-mode takeover` is the explicit package-level ownership crossing.
-  Critical adopted packages remain blocked even under takeover.
+- `--ownership takeover` is the explicit package-level ownership crossing.
+  Package names do not create special takeover exceptions; compatibility and
+  dependency proof come from the selected package and typed provider graph.
 - `--security` only proceeds when each requested Conary-owned update source is
   marked as publishing supported advisory metadata. Sources marked `unknown` or
   `unsupported` cause a refusal before mutation, so security-only output never
@@ -298,16 +356,21 @@ affinity data.
 - [`docs/ARCHITECTURE.md`](../ARCHITECTURE.md) for the workspace-level module map
 - [`docs/llms/subsystem-map.md`](../llms/subsystem-map.md) for assistant-facing entry points
 - `crates/conary-core/src/repository/effective_policy.rs` for runtime policy loading
-- `crates/conary-core/src/repository/supported_profiles/` for supported target
-  IDs, route slugs, flavor, version-scheme, replay-target, and lifecycle policy
-- `crates/conary-core/src/model/parser.rs` for `[system]` parsing and precedence
+- `crates/conary-core/src/repository/trust.rs` and
+  `repository/trust/openpgp.rs` for native repository authority
+- `crates/conary-core/src/repository/parsers/` and
+  `repository/download.rs` for authenticated metadata and package intake
+- `crates/conary-core/src/repository/supported_profiles/` for configured feed
+  IDs, route slugs, parser flavor, and source version scheme
+- `crates/conary-core/src/model/parser/source_policy.rs` for `[system]` parsing
+  and precedence; `model/parser.rs` owns the aggregate model and validation
 - `apps/conary/src/commands/install/source_policy.rs` for install request-scope
   policy construction and canonical package name resolution
 - `apps/conary/src/commands/adopt/packages.rs` for shared single-package
   adoption preview/apply planning and native-authority preservation
 - `apps/conary/src/commands/update/mod.rs` for update module routing
 - `apps/conary/src/commands/update/package.rs` for single-package update
-  execution, delta/full update handling, and legacy replay preflight
+  execution, delta/full update handling, and lifecycle execution preflight
 - `apps/conary/src/commands/update/source_policy.rs` for source-policy update
   preview and replatform update context
 - `apps/conary/src/commands/update/selection.rs` for source-switching update

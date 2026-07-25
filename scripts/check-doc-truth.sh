@@ -16,7 +16,6 @@ fi
 
 DOCS_TRUTH_SCHEMA_CHECK_PATHS=(
     "docs/ARCHITECTURE.md"
-    "docs/conaryopedia-v2.md"
     "site/src"
 )
 
@@ -25,7 +24,6 @@ PRODUCT_DOC_PATHS=(
     "ROADMAP.md"
     "CHANGELOG.md"
     "docs/ARCHITECTURE.md"
-    "docs/conaryopedia-v2.md"
     "docs/modules"
     "docs/operations"
     "docs/roadmaps"
@@ -33,11 +31,10 @@ PRODUCT_DOC_PATHS=(
     "web/src/routes"
 )
 
-POLICYKIT_DOC_PATHS=(
+CONARYD_AUTH_DOC_PATHS=(
     "README.md"
     "ROADMAP.md"
     "docs/ARCHITECTURE.md"
-    "docs/conaryopedia-v2.md"
     "docs/modules"
     "docs/operations"
 )
@@ -46,6 +43,22 @@ PARSER_PATHS=(
     "apps/conary/src/cli"
     "apps/conary/src/dispatch.rs"
     "apps/conary/src/command_risk.rs"
+)
+
+LIVE_DOC_LOCATION_CLAIM_PATHS=(
+    "AGENTS.md"
+    "CONTRIBUTING.md"
+    "docs/llms/README.md"
+    "docs/llms/subsystem-map.md"
+    "docs/modules/feature-ownership.md"
+    "docs/roadmaps/development-roadmap.md"
+)
+
+OPTIONAL_TOOL_SHIMS=(
+    "CLAUDE.md"
+    "GEMINI.md"
+    "REASONIX.md"
+    ".github/copilot-instructions.md"
 )
 
 report_error() {
@@ -93,6 +106,71 @@ check_required_scan_paths() {
         seen+="$path|"
         require_path "$path" || true
     done
+}
+
+check_live_doc_location_claims() {
+    local claim_paths=()
+    local path
+
+    for path in "${LIVE_DOC_LOCATION_CLAIM_PATHS[@]}"; do
+        require_file "$path" || continue
+        claim_paths+=("$path")
+    done
+    for path in "${OPTIONAL_TOOL_SHIMS[@]}"; do
+        if [[ -f "$path" ]]; then
+            claim_paths+=("$path")
+        fi
+    done
+
+    local file line_no token
+    while IFS=: read -r file line_no token; do
+        [[ -n "$token" ]] || continue
+        path="${token#\`}"
+        path="${path%\`}"
+        if [[ ! -d "$path" ]]; then
+            report_error "$file:$line_no names missing live documentation directory: $path"
+        fi
+    done < <(
+        rg -nH -o --pcre2 '`docs/(?:[A-Za-z0-9._-]+/)+`' \
+            "${claim_paths[@]}" || true
+    )
+}
+
+check_canonical_doc_frontmatter() {
+    local file closing_line frontmatter
+    local retired_provider_root
+    retired_provider_root="docs/$(printf '%s%s' 'super' 'powers')"
+
+    while IFS= read -r file; do
+        [[ -n "$file" ]] || continue
+        [[ -f "$file" ]] || continue
+        if [[ "$(sed -n '1p' "$file")" != "---" ]]; then
+            report_error "$file: missing YAML frontmatter"
+            continue
+        fi
+
+        closing_line="$(awk 'NR > 1 && $0 == "---" { print NR; exit }' "$file")"
+        if [[ -z "$closing_line" ]]; then
+            report_error "$file: YAML frontmatter has no closing delimiter"
+            continue
+        fi
+        frontmatter="$(sed -n "2,$((closing_line - 1))p" "$file")"
+
+        if ! rg -q -- '^last_updated: [0-9]{4}-[0-9]{2}-[0-9]{2}$' <<< "$frontmatter"; then
+            report_error "$file: frontmatter requires ISO last_updated"
+        fi
+        if ! rg -q -- '^revision: [1-9][0-9]*$' <<< "$frontmatter"; then
+            report_error "$file: frontmatter requires a positive integer revision"
+        fi
+        if ! rg -q -- '^summary: .+' <<< "$frontmatter"; then
+            report_error "$file: frontmatter requires a non-empty summary"
+        fi
+    done < <(
+        git ls-files --cached --others --exclude-standard -- \
+            "docs/**/*.md" "docs/*.md" |
+            rg -v "^${retired_provider_root}/" |
+            sort -u
+    )
 }
 
 require_match() {
@@ -172,7 +250,7 @@ check_retired_commands() {
     done < <(rg -n -- "$retired_pattern" "${paths[@]}" || true)
 }
 
-check_system_init_profiles() {
+check_system_init_source_independence() {
     local paths=()
     local path
 
@@ -182,8 +260,8 @@ check_system_init_profiles() {
 
     local file line_no text
     while IFS=: read -r file line_no text; do
-        if [[ "$text" != *"--profile "* && "$text" != *"--profile="* ]]; then
-            report_error "$file:$line_no shows system init without an exact --profile: $text"
+        if [[ "$text" == *"--profile "* || "$text" == *"--profile="* ]]; then
+            report_error "$file:$line_no makes system init depend on a host distro profile: $text"
         fi
     done < <(rg -nH -- 'conary system init' "${paths[@]}" || true)
 }
@@ -191,10 +269,11 @@ check_system_init_profiles() {
 check_preview_status() {
     require_match "README.md" 'Conary is still early\. Expect failures\.' 'early preview warning'
     require_match "README.md" 'VM or disposable host' 'VM or disposable host warning'
-    require_match "README.md" '[Ss]criptlet-heavy packages|package scriptlets' 'scriptlet-heavy package caveat'
+    require_match "README.md" '[Pp]rimary adoption path is cross-distro package installation' 'cross-distro package-installation contract'
+    require_match "README.md" '[Ss]ource package format defines the package ABI' 'source package ABI contract'
     require_match "README.md" 'capture the command, distro, package name' 'tester failure data request'
 
-    require_match "ROADMAP.md" 'adoption-led' 'adoption-led preview wording'
+    require_match "ROADMAP.md" 'cross-distro package-installation preview' 'cross-distro preview wording'
     require_match "ROADMAP.md" '[Ff]irst external tester' 'first external tester milestone wording'
     require_match "ROADMAP.md" 'docs/roadmaps/development-roadmap\.md' 'detailed development roadmap link'
     require_match "docs/roadmaps/development-roadmap.md" '[Ff]irst external tester milestone' 'first external tester milestone wording'
@@ -225,7 +304,6 @@ check_release_doc_versions() {
         "docs/guides/agent-assisted-tester-loop.md"
         "docs/operations/release-artifact-matrix.md"
         "docs/roadmaps/external-tester-milestone.md"
-        "docs/operations/external-tester-outreach.md"
         "site/src"
     )
 
@@ -249,6 +327,45 @@ check_release_doc_versions() {
             fi
         done < <(rg -nH -- 'conary[-_][0-9]+\.[0-9]+\.[0-9]+' "$path" || true)
     done
+
+    local planned_doc="docs/operations/external-tester-outreach.md"
+    if [[ -f "$planned_doc" ]]; then
+        local planned_status target_tag
+        planned_status="$(awk -F ': ' '$1 == "status" { print $2; exit }' "$planned_doc")"
+        target_tag="$(awk -F ': ' '$1 == "target_release" { print $2; exit }' "$planned_doc")"
+
+        if [[ "$planned_status" != "postponed" ]]; then
+            report_error "$planned_doc: planned launch packet status must be postponed until release proof exists"
+        fi
+        if [[ ! "$target_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            report_error "$planned_doc: target_release must be an exact vMAJOR.MINOR.PATCH tag"
+            return
+        fi
+
+        require_match "$planned_doc" "$current_tag" "historical current-release baseline ${current_tag}"
+        require_match "$planned_doc" "$target_tag" "planned target release ${target_tag}"
+
+        local file line_no text found_tag
+        while IFS=: read -r file line_no text; do
+            while IFS= read -r found_tag; do
+                if [[ "$found_tag" != "$current_tag" && "$found_tag" != "$target_tag" ]]; then
+                    report_error "$file:$line_no has release reference outside current/target contract: $text"
+                fi
+            done < <(rg -o -P -- '(?<![A-Za-z0-9_-])v[0-9]+\.[0-9]+\.[0-9]+' <<< "$text")
+        done < <(
+            rg -nH -P -- '(?<![A-Za-z0-9_-])v[0-9]+\.[0-9]+\.[0-9]+' "$planned_doc" ||
+                true
+        )
+
+        while IFS=: read -r file line_no text; do
+            if [[ "$text" != *"$target_tag"* ]]; then
+                report_error "$file:$line_no has candidate launch link or checklist item outside target release ${target_tag}: $text"
+            fi
+        done < <(
+            rg -nH -- 'github\.com/ConaryLabs/Conary/(blob|releases/tag)/v|Publish immutable `v' "$planned_doc" ||
+                true
+        )
+    fi
 }
 
 check_site_preview_truth() {
@@ -325,30 +442,37 @@ check_preview_claim_drift() {
     )
 }
 
-check_policykit_truth() {
+check_conaryd_authorization_truth() {
     local auth_file="apps/conaryd/src/daemon/auth.rs"
-    local daemon_file="apps/conaryd/src/daemon/mod.rs"
+    local config_file="apps/conaryd/src/daemon/config.rs"
+    local conaryd_doc="docs/modules/conaryd.md"
     require_file "$auth_file" || return
-    require_file "$daemon_file" || return
+    require_file "$config_file" || return
+    require_file "$conaryd_doc" || return
 
     local overclaim_pattern='Non-root users can be authorized via PolicyKit|write access requires PolicyKit|PolicyKit authorization works|authorized by PolicyKit'
     local file line_no text
-    local policykit_paths=()
+    local auth_doc_paths=()
     while IFS= read -r file; do
-        policykit_paths+=("$file")
-    done < <(existing_paths "${POLICYKIT_DOC_PATHS[@]}")
+        auth_doc_paths+=("$file")
+    done < <(existing_paths "${CONARYD_AUTH_DOC_PATHS[@]}")
 
     while IFS=: read -r file line_no text; do
         report_error "$file:$line_no claims PolicyKit authorization is available today: $text"
-    done < <(rg -n -- "$overclaim_pattern" "$auth_file" "${policykit_paths[@]}" 2>/dev/null || true)
+    done < <(rg -n -- "$overclaim_pattern" "$auth_file" "${auth_doc_paths[@]}" 2>/dev/null || true)
 
-    if ! rg -qi -- 'fail-closed|stubbed|unimplemented|unavailable' "$auth_file"; then
-        report_error "$auth_file: must describe PolicyKit authorization as fail-closed, stubbed, unavailable, or unimplemented"
-    fi
+    while IFS=: read -r file line_no text; do
+        report_error "$file:$line_no retains retired require_polkit configuration: $text"
+    done < <(rg -nH -- 'require_polkit' "$auth_file" "$config_file" "$conaryd_doc" || true)
 
-    if ! rg -q -- 'require_polkit:[ \t]*true' "$daemon_file"; then
-        report_error "$daemon_file: DaemonConfig::default() must keep require_polkit: true until auth docs describe a different behavior"
-    fi
+    require_match "$auth_file" 'Root users|Root always gets full access' 'root authorization contract'
+    require_match "$auth_file" 'Daemon identity|daemon service identity' 'daemon-identity authorization contract'
+    require_match "$auth_file" 'Configured socket group|configured Unix socket group' 'configured-group authorization contract'
+    require_match "$config_file" 'socket_group:[ \t]*Option<String>' 'typed socket-group configuration'
+    require_match "$config_file" 'socket_group:[ \t]*None' 'root/daemon-only default'
+    require_match "$config_file" 'DEFAULT_SOCKET_MODE:[^=]*=[ \t]*0o660' 'socket mode 0660 default'
+    require_match "$conaryd_doc" 'Root, the daemon identity, and members of the exact group' 'documented exact socket-group authority'
+    require_match "$conaryd_doc" 'There is no PolicyKit placeholder' 'retired PolicyKit boundary'
 }
 
 extract_code_routes() {
@@ -458,19 +582,13 @@ check_conaryd_routes() {
     fi
     extract_doc_routes | sort -u > "$doc_routes"
 
-    local route_count
-    route_count="$(wc -l < "$code_routes" | tr -d ' ')"
-    if [[ "$route_count" -lt 25 ]]; then
-        report_error "conaryd route extraction found $route_count method/path pairs; expected at least 25"
-    fi
-
     if ! diff -u "$code_routes" "$doc_routes" >&2; then
         report_error "conaryd route docs differ from apps/conaryd/src/daemon/routes"
     fi
 
     require_match "docs/modules/conaryd.md" '/health.*outside the v1 auth gate|/health.*outside.*auth' '/health auth-boundary wording'
     require_match "docs/modules/conaryd.md" '/v1/\*.*behind the v1 gate|/v1/\*.*auth' '/v1 auth-boundary wording'
-    require_match "docs/modules/conaryd.md" 'Preview stub|preview-stubbed|not implemented' 'preview-stubbed system route wording'
+    require_match "docs/modules/conaryd.md" 'system-operation routes are absent rather than exposed as placeholders' 'absent unimplemented-route boundary'
 }
 
 check_conary_cli_command_refs() {
@@ -605,7 +723,7 @@ check_conary_core_surface() {
     local path
     while IFS= read -r path; do
         active_paths+=("$path")
-    done < <(existing_paths "README.md" "ROADMAP.md" "docs/ARCHITECTURE.md" "docs/conaryopedia-v2.md" "docs/modules" "docs/operations")
+    done < <(existing_paths "README.md" "ROADMAP.md" "docs/ARCHITECTURE.md" "docs/modules" "docs/operations")
 
     local pattern='conary-core.*(stable public API|stable SDK|external library contract)|(stable public API|stable SDK|external library contract).*conary-core'
     local file line_no text
@@ -652,8 +770,8 @@ check_neutral_planning_layout() {
 
     while IFS= read -r path; do
         [[ -n "$path" ]] || continue
-        report_error "neutral layout: planning archive path is tracked: $path"
-    done < <(git ls-files -- "docs/designs/archive/**" "docs/plans/archive/**")
+        report_error "neutral layout: retired design/plan path is tracked: $path"
+    done < <(git ls-files -- "docs/designs/**" "docs/plans/**")
 
     local mandatory_skill_pattern
     mandatory_skill_pattern="(must|required).{0,80}${provider_name}:[A-Za-z0-9_-]+.{0,40}skill"
@@ -694,15 +812,17 @@ check_neutral_planning_layout() {
 }
 
 check_neutral_planning_layout
+check_live_doc_location_claims
+check_canonical_doc_frontmatter
 check_required_scan_paths
 check_schema_versions
 check_retired_commands
-check_system_init_profiles
+check_system_init_source_independence
 check_preview_status
 check_release_doc_versions
 check_site_preview_truth
 check_preview_claim_drift
-check_policykit_truth
+check_conaryd_authorization_truth
 check_conaryd_routes
 check_conary_cli_command_refs
 check_conary_core_surface

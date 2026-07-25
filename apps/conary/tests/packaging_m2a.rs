@@ -1,13 +1,12 @@
 // apps/conary/tests/packaging_m2a.rs
 
-use std::fs::{self, File};
+use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use conary_core::ccs::archive_reader::read_ccs_archive;
-use conary_core::ccs::{CcsManifest, CcsPackage};
-use conary_core::packages::PackageFormat;
+use conary_core::ccs::verify::verify_package;
+use conary_core::ccs::{CcsManifest, CcsPackage, SigningKeyPair, TrustPolicy, VerifiedCcsArchive};
 
 const HASH: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
@@ -23,6 +22,8 @@ fn cook_isolated_fails_without_hermetic_config() {
         .arg(&fixture.output_dir)
         .arg("--source-cache")
         .arg(&fixture.source_cache)
+        .arg("--key")
+        .arg(&fixture.cook_signing_key_path)
         .env_remove("CONARY_HERMETIC_CONFIG")
         .env(
             "XDG_CONFIG_HOME",
@@ -85,7 +86,7 @@ fn publish_project_form_records_hermetic_evidence_with_build_attestation() {
     assert_stdout_contains(&output, "Cooking and attesting");
 
     let package_path = fixture.published_package_path();
-    let manifest = read_package_manifest(&package_path);
+    let manifest = read_package_manifest(&package_path, &fixture.publish_signing_key_path());
     let provenance = manifest.provenance.expect("provenance");
     assert_eq!(provenance.hardening_level.as_deref(), Some("hermetic"));
     assert!(provenance.hermetic_evidence.is_some());
@@ -101,15 +102,8 @@ fn publish_project_form_records_hermetic_evidence_with_build_attestation() {
     );
     assert_eq!(attestation.signer_key_id, "publish");
 
-    let archive = read_package_archive(&package_path);
-    assert!(
-        archive.signature_raw.is_some(),
-        "static publish should sign the CCS manifest"
-    );
-
-    let manifest_text = read_package_manifest_text(&package_path);
-    assert!(manifest_text.contains("build_attestation"));
-    assert!(!manifest_text.contains("attested"));
+    let verified = verify_package_with_key(&package_path, &fixture.publish_signing_key_path());
+    assert_eq!(verified.signature().key_id.as_deref(), Some("publish"));
 }
 
 #[test]
@@ -122,7 +116,7 @@ fn cook_isolated_records_hermetic_evidence() {
     if !assert_success_or_skip_pristine_container_unavailable(&output) {
         return;
     }
-    let manifest = read_package_manifest(&fixture.package_path());
+    let manifest = read_package_manifest(&fixture.package_path(), &fixture.cook_signing_key_path);
     let provenance = manifest.provenance.expect("provenance");
     assert_eq!(provenance.hardening_level.as_deref(), Some("hermetic"));
     assert!(provenance.hermetic_evidence.is_some());
@@ -163,7 +157,7 @@ fn publish_artifact_form_accepts_attested_project_artifact() {
     assert_success(&output);
     assert_stdout_contains(&output, "Published attested artifact");
     let republished = fixture.published_artifact_package_path();
-    let manifest = read_package_manifest(&republished);
+    let manifest = read_package_manifest(&republished, &fixture.publish_signing_key_path());
     assert!(
         manifest
             .provenance
@@ -178,6 +172,7 @@ struct RecipeFixture {
     output_dir: PathBuf,
     source_cache: PathBuf,
     sysroot: PathBuf,
+    cook_signing_key_path: PathBuf,
 }
 
 impl RecipeFixture {
@@ -196,7 +191,7 @@ impl RecipeFixture {
                 r#"
 [package]
 name = "m2a-fixture"
-version = "1.0"
+version = "1.0.0"
 
 [source]
 path = "."
@@ -216,6 +211,11 @@ install = "npm install atomic-lockfile"
         let output_dir = work.path().join("dist");
         let source_cache = work.path().join("source-cache");
         let sysroot = work.path().join("sysroot");
+        let cook_signing_key_path = work.path().join("cook.private");
+        SigningKeyPair::generate()
+            .with_key_id("cook-test")
+            .save_to_files(&cook_signing_key_path, &work.path().join("cook.public"))
+            .unwrap();
 
         fs::create_dir_all(&project_dir).unwrap();
         write(&project_dir, &recipe_path);
@@ -226,6 +226,7 @@ install = "npm install atomic-lockfile"
             output_dir,
             source_cache,
             sysroot,
+            cook_signing_key_path,
         }
     }
 
@@ -259,6 +260,8 @@ sysroot_hash = "{HASH}"
             .arg(&self.output_dir)
             .arg("--source-cache")
             .arg(&self.source_cache)
+            .arg("--key")
+            .arg(&self.cook_signing_key_path)
             .env("CONARY_HERMETIC_CONFIG", config_path)
             .output()
             .expect("run conary cook --isolated")
@@ -281,7 +284,7 @@ sysroot_hash = "{HASH}"
     }
 
     fn package_path(&self) -> PathBuf {
-        self.output_dir.join("m2a-fixture-1.0-1.ccs")
+        self.output_dir.join("m2a-fixture-1.0.0-1.ccs")
     }
 
     fn repo_dir(&self) -> PathBuf {
@@ -298,6 +301,10 @@ sysroot_hash = "{HASH}"
 
     fn state_file(&self) -> PathBuf {
         self.work.path().join("publish-state.toml")
+    }
+
+    fn publish_signing_key_path(&self) -> PathBuf {
+        self.key_dir().join("publish.private")
     }
 
     fn artifact_state_file(&self) -> PathBuf {
@@ -336,7 +343,7 @@ makedepends = ["gcc"]
             r#"
 [package]
 name = "m2a-fixture"
-version = "1.0"
+version = "1.0.0"
 
 [source]
 path = "."
@@ -395,22 +402,21 @@ fn ldd_paths(binary: &Path) -> Vec<PathBuf> {
     paths
 }
 
-fn read_package_manifest(package_path: &Path) -> CcsManifest {
-    CcsPackage::parse(&package_path.to_string_lossy())
+fn verify_package_with_key(package_path: &Path, signing_key_path: &Path) -> VerifiedCcsArchive {
+    let signer = SigningKeyPair::load_from_file(signing_key_path).unwrap();
+    verify_package(
+        package_path,
+        &TrustPolicy::strict(vec![signer.public_key_base64()]),
+    )
+    .unwrap()
+}
+
+fn read_package_manifest(package_path: &Path, signing_key_path: &Path) -> CcsManifest {
+    let verified = verify_package_with_key(package_path, signing_key_path);
+    CcsPackage::from_verified_archive(&package_path.to_string_lossy(), &verified)
         .unwrap()
         .manifest()
         .clone()
-}
-
-fn read_package_archive(
-    package_path: &Path,
-) -> conary_core::ccs::archive_reader::CcsArchiveContents {
-    read_ccs_archive(File::open(package_path).unwrap()).unwrap()
-}
-
-fn read_package_manifest_text(package_path: &Path) -> String {
-    let archive = read_package_archive(package_path);
-    String::from_utf8(archive.toml_raw.expect("MANIFEST.toml")).unwrap()
 }
 
 #[test]

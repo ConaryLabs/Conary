@@ -86,12 +86,13 @@
 				Switching hosts means changing commands and expectations, while package availability and recovery behavior vary.
 			</p>
 			<p>
-				Conary does not ask upstream maintainers to change their packages. Remi converts supported RPM, DEB, and Arch inputs
-				into Conary's CCS format for the matching target, while public serving remains limited to conversion-safe artifacts.
+				Conary does not ask upstream maintainers to change their packages. Remi converts RPM, DEB, and Arch inputs
+				into source-independent CCS transactions that retain the source package ABI and run against typed target capabilities.
 			</p>
 			<p>
-				The first tester loop is narrower than the source tree: package-manager install, adoption, listing/search,
-				dry-run updates, and unadoption. Generation builds remain a separate explicit path.
+				The first cross-distro tester loop installs a foreign-format artifact, inspects it,
+				plans an update, and removes it. Adoption remains a separate migration path for
+				packages already owned by the host package manager.
 			</p>
 		</div>
 	</div>
@@ -115,7 +116,7 @@
 			</div>
 			<div>
 				<dt>Format parsers</dt>
-				<dd>Native RPM, DEB, and Arch parsers feed a shared metadata model while unsupported behavior can still be refused.</dd>
+				<dd>RPM, DEB, and Arch parsers preserve exact lifecycle, dependency, version, payload, and configuration semantics in a shared source-independent model.</dd>
 			</div>
 			<div>
 				<dt>Package changesets</dt>

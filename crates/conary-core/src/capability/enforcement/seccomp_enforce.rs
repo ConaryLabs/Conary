@@ -5,22 +5,343 @@
 //! restrict the process to only the declared syscalls. Uses an allowlist
 //! approach: syscalls not in the allow list are blocked.
 //!
-//! ## Profiles
-//!
-//! Syscall profiles (e.g., "minimal", "network-server") expand to predefined
-//! syscall lists. Explicit `allow` entries are merged with profile syscalls.
-//! Explicit `deny` entries override both.
-//!
-//! ## Wildcard Support
-//!
-//! Syscall names support glob-style wildcards: `epoll_*` expands to
-//! `epoll_create`, `epoll_create1`, `epoll_ctl`, `epoll_wait`, `epoll_pwait`.
+//! Syscall names are exact names in the target architecture's syscall ABI.
+//! Wildcards and semantic aliases are rejected.
 
 use super::{EnforcementError, EnforcementMode};
-use crate::capability::{SyscallCapabilities, SyscallProfile};
+use crate::capability::SyscallCapabilities;
 use seccompiler::{BpfProgram, SeccompAction, SeccompFilter, SeccompRule};
 use std::collections::{BTreeMap, HashSet};
 use tracing::{debug, warn};
+
+/// Protected scriptlets use this executor-owned syscall contract.
+///
+/// This identifier is internal execution metadata, not a package-selectable
+/// profile name.
+pub const SCRIPTLET_EXECUTOR_ABI_V1: &str = "scriptlet-v1";
+
+/// `conary capability run` uses this executor-owned launch contract.
+pub const CAPABILITY_RUN_EXECUTOR_ABI_V1: &str = "capability-run-v1";
+
+#[cfg(target_arch = "x86_64")]
+const SCRIPTLET_EXECUTOR_V1_SYSCALLS: &[&str] = &[
+    "access",
+    "accept",
+    "accept4",
+    "arch_prctl",
+    "bind",
+    "brk",
+    "chdir",
+    "clock_gettime",
+    "clone",
+    "clone3",
+    "close",
+    "connect",
+    "dup",
+    "dup2",
+    "dup3",
+    "epoll_create1",
+    "epoll_ctl",
+    "epoll_pwait",
+    "eventfd2",
+    "execve",
+    "exit",
+    "exit_group",
+    "faccessat",
+    "fchdir",
+    "fchmod",
+    "fchmodat",
+    "fchown",
+    "fchownat",
+    "fcntl",
+    "flock",
+    "fstat",
+    "futex",
+    "getcwd",
+    "getdents64",
+    "getegid",
+    "geteuid",
+    "getgid",
+    "getpeername",
+    "getpgid",
+    "getpid",
+    "getpgrp",
+    "getppid",
+    "getrandom",
+    "getresgid",
+    "getresuid",
+    "getsockname",
+    "getsockopt",
+    "getuid",
+    "ioctl",
+    "kill",
+    "linkat",
+    "listen",
+    "lseek",
+    "madvise",
+    "memfd_create",
+    "mkdirat",
+    "mmap",
+    "mprotect",
+    "munmap",
+    "newfstatat",
+    "openat",
+    "pipe2",
+    "ppoll",
+    "prctl",
+    "pread64",
+    "prlimit64",
+    "pselect6",
+    "pwrite64",
+    "read",
+    "readlinkat",
+    "recvfrom",
+    "recvmsg",
+    "renameat",
+    "rseq",
+    "rt_sigaction",
+    "rt_sigprocmask",
+    "rt_sigreturn",
+    "sendmsg",
+    "sendto",
+    "set_robust_list",
+    "set_tid_address",
+    "setgroups",
+    "setpgid",
+    "setsid",
+    "setsockopt",
+    "shmat",
+    "shmctl",
+    "shmdt",
+    "shmget",
+    "shutdown",
+    "sigaltstack",
+    "socket",
+    "statx",
+    "symlinkat",
+    "umask",
+    "uname",
+    "unlinkat",
+    "wait4",
+    "waitid",
+    "write",
+];
+
+#[cfg(target_arch = "aarch64")]
+const SCRIPTLET_EXECUTOR_V1_SYSCALLS: &[&str] = &[
+    "accept",
+    "accept4",
+    "bind",
+    "brk",
+    "chdir",
+    "clock_gettime",
+    "clone",
+    "clone3",
+    "close",
+    "connect",
+    "dup",
+    "dup3",
+    "epoll_create1",
+    "epoll_ctl",
+    "epoll_pwait",
+    "eventfd2",
+    "execve",
+    "exit",
+    "exit_group",
+    "faccessat",
+    "fchdir",
+    "fchmod",
+    "fchmodat",
+    "fchown",
+    "fchownat",
+    "fcntl",
+    "flock",
+    "fstat",
+    "futex",
+    "getcwd",
+    "getdents64",
+    "getegid",
+    "geteuid",
+    "getgid",
+    "getpeername",
+    "getpid",
+    "getrandom",
+    "getsockname",
+    "getsockopt",
+    "getuid",
+    "ioctl",
+    "kill",
+    "linkat",
+    "listen",
+    "lseek",
+    "madvise",
+    "memfd_create",
+    "mkdirat",
+    "mmap",
+    "mprotect",
+    "munmap",
+    "newfstatat",
+    "openat",
+    "pipe2",
+    "ppoll",
+    "prctl",
+    "pread64",
+    "prlimit64",
+    "pselect6",
+    "pwrite64",
+    "read",
+    "readlinkat",
+    "recvfrom",
+    "recvmsg",
+    "renameat",
+    "rseq",
+    "rt_sigaction",
+    "rt_sigprocmask",
+    "sendmsg",
+    "sendto",
+    "set_robust_list",
+    "set_tid_address",
+    "setgroups",
+    "setsid",
+    "setsockopt",
+    "shmat",
+    "shmctl",
+    "shmdt",
+    "shmget",
+    "shutdown",
+    "sigaltstack",
+    "socket",
+    "statx",
+    "symlinkat",
+    "umask",
+    "unlinkat",
+    "wait4",
+    "waitid",
+    "write",
+];
+
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+const SCRIPTLET_EXECUTOR_V1_SYSCALLS: &[&str] = &[];
+
+#[cfg(target_arch = "x86_64")]
+const CAPABILITY_RUN_EXECUTOR_V1_SYSCALLS: &[&str] = &[
+    "access",
+    "arch_prctl",
+    "brk",
+    "clock_gettime",
+    "close",
+    "execve",
+    "exit",
+    "exit_group",
+    "futex",
+    "getcwd",
+    "getrandom",
+    "madvise",
+    "mmap",
+    "mprotect",
+    "munmap",
+    "newfstatat",
+    "openat",
+    "pread64",
+    "prlimit64",
+    "read",
+    "readlink",
+    "rseq",
+    "rt_sigaction",
+    "rt_sigprocmask",
+    "set_robust_list",
+    "set_tid_address",
+    "write",
+];
+
+#[cfg(target_arch = "aarch64")]
+const CAPABILITY_RUN_EXECUTOR_V1_SYSCALLS: &[&str] = &[
+    "brk",
+    "clock_gettime",
+    "close",
+    "execve",
+    "exit",
+    "exit_group",
+    "faccessat",
+    "futex",
+    "getcwd",
+    "getrandom",
+    "madvise",
+    "mmap",
+    "mprotect",
+    "munmap",
+    "newfstatat",
+    "openat",
+    "pread64",
+    "prlimit64",
+    "read",
+    "readlinkat",
+    "rseq",
+    "rt_sigaction",
+    "rt_sigprocmask",
+    "set_robust_list",
+    "set_tid_address",
+    "write",
+];
+
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+const CAPABILITY_RUN_EXECUTOR_V1_SYSCALLS: &[&str] = &[];
+
+/// Materialize the protected scriptlet executor's exact current-architecture
+/// syscall contract.
+pub fn scriptlet_executor_v1_capabilities() -> SyscallCapabilities {
+    SyscallCapabilities {
+        allow: SCRIPTLET_EXECUTOR_V1_SYSCALLS
+            .iter()
+            .map(|name| (*name).to_string())
+            .collect(),
+        deny: Vec::new(),
+    }
+}
+
+/// Build an ephemeral package-plus-executor syscall contract.
+///
+/// This never changes the stored package declaration. A package deny that
+/// conflicts with the executor ABI is a typed setup failure instead of being
+/// silently overridden.
+pub fn capability_run_executor_v1_capabilities(
+    declared: &SyscallCapabilities,
+) -> Result<SyscallCapabilities, EnforcementError> {
+    declared
+        .validate_for_current_target()
+        .map_err(|error| EnforcementError::Seccomp(error.to_string()))?;
+    if CAPABILITY_RUN_EXECUTOR_V1_SYSCALLS.is_empty() {
+        return Err(EnforcementError::Unsupported {
+            feature: format!(
+                "{CAPABILITY_RUN_EXECUTOR_ABI_V1} on {}",
+                std::env::consts::ARCH
+            ),
+        });
+    }
+
+    let denied: HashSet<&str> = declared.deny.iter().map(String::as_str).collect();
+    if let Some(syscall) = CAPABILITY_RUN_EXECUTOR_V1_SYSCALLS
+        .iter()
+        .find(|syscall| denied.contains(**syscall))
+    {
+        return Err(EnforcementError::Seccomp(format!(
+            "package denies executor-required syscall '{syscall}' from {CAPABILITY_RUN_EXECUTOR_ABI_V1}"
+        )));
+    }
+
+    let mut allow = declared.allow.clone();
+    allow.extend(
+        CAPABILITY_RUN_EXECUTOR_V1_SYSCALLS
+            .iter()
+            .map(|syscall| (*syscall).to_string()),
+    );
+    allow.sort();
+    allow.dedup();
+    Ok(SyscallCapabilities {
+        allow,
+        deny: declared.deny.clone(),
+    })
+}
 
 /// Apply seccomp BPF filter based on declared syscall capabilities
 ///
@@ -63,42 +384,30 @@ pub fn apply_seccomp_filter(
     Ok(())
 }
 
-/// Resolve the final list of allowed syscalls from profile, explicit allow/deny,
-/// and wildcard expansion. Returns a sorted, deduplicated list.
+/// Resolve exact package-declared allow/deny inputs.
+///
+/// Returns a sorted, deduplicated list. Packages cannot select or expand an
+/// executor-owned syscall contract.
 fn resolve_allowed_syscalls(caps: &SyscallCapabilities) -> Result<Vec<String>, EnforcementError> {
     let mut allowed: Vec<String> = Vec::new();
 
-    // Expand profile to syscall list
-    if let Some(ref profile_name) = caps.profile {
-        let profile = SyscallProfile::parse(profile_name).ok_or_else(|| {
-            EnforcementError::Seccomp(format!("Unknown syscall profile: {profile_name}"))
-        })?;
-        for syscall in profile.allowed_syscalls() {
-            allowed.push((*syscall).to_string());
-        }
-    }
-
-    // Merge explicit allow list (with wildcard expansion)
+    // Merge exact explicit allow names.
     for syscall in &caps.allow {
         if syscall.contains('*') {
-            allowed.extend(expand_wildcard(syscall));
-        } else {
-            allowed.push(syscall.clone());
+            return Err(EnforcementError::Seccomp(format!(
+                "wildcard syscall declarations are unsupported: {syscall}"
+            )));
         }
+        allowed.push(syscall.clone());
     }
 
-    // Remove denied syscalls (deny overrides allow) using HashSet for O(1) lookups
-    let deny_set: HashSet<String> = caps
-        .deny
-        .iter()
-        .flat_map(|s| {
-            if s.contains('*') {
-                expand_wildcard(s)
-            } else {
-                vec![s.clone()]
-            }
-        })
-        .collect();
+    // Remove exact denied syscalls (deny overrides allow).
+    if let Some(wildcard) = caps.deny.iter().find(|name| name.contains('*')) {
+        return Err(EnforcementError::Seccomp(format!(
+            "wildcard syscall declarations are unsupported: {wildcard}"
+        )));
+    }
+    let deny_set: HashSet<String> = caps.deny.iter().cloned().collect();
 
     allowed.retain(|s| !deny_set.contains(s));
 
@@ -129,22 +438,14 @@ pub fn build_seccomp_filter(
 
     // Build syscall rules map: allowed syscalls get empty rules (match unconditionally)
     let mut rules: BTreeMap<i64, Vec<SeccompRule>> = BTreeMap::new();
-    let mut unmapped = Vec::new();
-
     for name in &allowed {
-        if let Some(num) = syscall_name_to_number(name) {
-            rules.entry(num).or_default();
-        } else {
-            unmapped.push(name.clone());
-        }
-    }
-
-    if !unmapped.is_empty() {
-        debug!(
-            "Skipped {} unmapped syscalls: {}",
-            unmapped.len(),
-            unmapped.join(", ")
-        );
+        let number = syscall_name_to_number(name).ok_or_else(|| {
+            EnforcementError::Seccomp(format!(
+                "syscall '{name}' is not an exact name in the {} ABI",
+                std::env::consts::ARCH
+            ))
+        })?;
+        rules.entry(number).or_default();
     }
 
     // Determine target architecture
@@ -187,450 +488,49 @@ pub fn check_seccomp_support() -> bool {
     }
 }
 
-/// Expand a wildcard syscall pattern (e.g., "epoll_*") against known syscalls
-pub fn expand_wildcard(pattern: &str) -> Vec<String> {
-    if !pattern.contains('*') {
-        return vec![pattern.to_string()];
-    }
-
-    let prefix = pattern.trim_end_matches('*');
-
-    KNOWN_SYSCALL_NAMES
-        .iter()
-        .filter(|name| name.starts_with(prefix))
-        .map(|name| (*name).to_string())
-        .collect()
-}
-
 /// Get summary of what a seccomp filter would do (for reporting without applying)
 pub fn describe_seccomp_filter(
     caps: &SyscallCapabilities,
     mode: EnforcementMode,
-) -> SeccompFilterInfo {
-    // Use resolve_allowed_syscalls; treat unknown profiles as empty (describe is best-effort)
-    let allowed = resolve_allowed_syscalls(caps).unwrap_or_default();
+) -> Result<SeccompFilterInfo, EnforcementError> {
+    let allowed = resolve_allowed_syscalls(caps)?;
 
-    let denied_explicit: usize = caps
-        .deny
+    let denied_explicit = caps.deny.len();
+
+    if let Some(unmapped) = allowed
         .iter()
-        .flat_map(|s| {
-            if s.contains('*') {
-                expand_wildcard(s)
-            } else {
-                vec![s.clone()]
-            }
-        })
-        .count();
+        .find(|name| syscall_name_to_number(name).is_none())
+    {
+        return Err(EnforcementError::Seccomp(format!(
+            "syscall '{unmapped}' is not an exact name in the {} ABI",
+            std::env::consts::ARCH
+        )));
+    }
 
-    let unmapped: Vec<String> = allowed
-        .iter()
-        .filter(|name| syscall_name_to_number(name).is_none())
-        .cloned()
-        .collect();
-
-    SeccompFilterInfo {
+    Ok(SeccompFilterInfo {
         mode,
-        profile: caps.profile.clone(),
         allowed_count: allowed.len(),
         denied_explicit,
-        unmapped_names: unmapped,
         allowed_syscalls: allowed,
-    }
+    })
 }
 
 /// Information about a seccomp filter (for reporting)
 #[derive(Debug, Clone)]
 pub struct SeccompFilterInfo {
     pub mode: EnforcementMode,
-    pub profile: Option<String>,
     pub allowed_count: usize,
     pub denied_explicit: usize,
-    pub unmapped_names: Vec<String>,
     pub allowed_syscalls: Vec<String>,
 }
 
-/// Map a syscall name to its number on the current architecture
-#[cfg(target_arch = "x86_64")]
-fn syscall_name_to_number(name: &str) -> Option<i64> {
-    Some(match name {
-        // Basic I/O
-        "read" => libc::SYS_read,
-        "write" => libc::SYS_write,
-        "open" => libc::SYS_open,
-        "close" => libc::SYS_close,
-        "stat" => libc::SYS_stat,
-        "fstat" => libc::SYS_fstat,
-        "lstat" => libc::SYS_lstat,
-        "poll" => libc::SYS_poll,
-        "lseek" => libc::SYS_lseek,
-        "pread64" => libc::SYS_pread64,
-        "pwrite64" => libc::SYS_pwrite64,
-        "access" => libc::SYS_access,
-        "pipe" => libc::SYS_pipe,
-        "select" => libc::SYS_select,
-        "dup" => libc::SYS_dup,
-        "dup2" => libc::SYS_dup2,
-        "ioctl" => libc::SYS_ioctl,
-        "fcntl" => libc::SYS_fcntl,
-        "flock" => libc::SYS_flock,
-
-        // Memory management
-        "mmap" => libc::SYS_mmap,
-        "mprotect" => libc::SYS_mprotect,
-        "munmap" => libc::SYS_munmap,
-        "brk" => libc::SYS_brk,
-        "madvise" => libc::SYS_madvise,
-
-        // Signals
-        "rt_sigaction" | "sigaction" => libc::SYS_rt_sigaction,
-        "rt_sigprocmask" => libc::SYS_rt_sigprocmask,
-        "sigaltstack" => libc::SYS_sigaltstack,
-
-        // Process
-        "clone" => libc::SYS_clone,
-        "fork" => libc::SYS_fork,
-        "execve" => libc::SYS_execve,
-        "exit" => libc::SYS_exit,
-        "exit_group" => libc::SYS_exit_group,
-        "wait4" => libc::SYS_wait4,
-        "waitid" => libc::SYS_waitid,
-        "kill" => libc::SYS_kill,
-        "getpid" => libc::SYS_getpid,
-        "getuid" => libc::SYS_getuid,
-        "getgid" => libc::SYS_getgid,
-        "geteuid" => libc::SYS_geteuid,
-        "getegid" => libc::SYS_getegid,
-        "prctl" => libc::SYS_prctl,
-        "prlimit64" => libc::SYS_prlimit64,
-        "arch_prctl" => libc::SYS_arch_prctl,
-        "set_tid_address" => libc::SYS_set_tid_address,
-        "set_robust_list" => libc::SYS_set_robust_list,
-        "futex" => libc::SYS_futex,
-        "setsid" => libc::SYS_setsid,
-        "umask" => libc::SYS_umask,
-        "clone3" => libc::SYS_clone3,
-        "clock_gettime" => libc::SYS_clock_gettime,
-        "getcwd" => libc::SYS_getcwd,
-
-        // Networking
-        "socket" => libc::SYS_socket,
-        "connect" => libc::SYS_connect,
-        "accept" => libc::SYS_accept,
-        "accept4" => libc::SYS_accept4,
-        "bind" => libc::SYS_bind,
-        "listen" => libc::SYS_listen,
-        "sendto" => libc::SYS_sendto,
-        "recvfrom" => libc::SYS_recvfrom,
-        "sendmsg" => libc::SYS_sendmsg,
-        "recvmsg" => libc::SYS_recvmsg,
-        "shutdown" => libc::SYS_shutdown,
-        "setsockopt" => libc::SYS_setsockopt,
-        "getsockopt" => libc::SYS_getsockopt,
-        "getsockname" => libc::SYS_getsockname,
-        "getpeername" => libc::SYS_getpeername,
-
-        // Epoll
-        "epoll_create" => libc::SYS_epoll_create,
-        "epoll_create1" => libc::SYS_epoll_create1,
-        "epoll_ctl" => libc::SYS_epoll_ctl,
-        "epoll_wait" => libc::SYS_epoll_wait,
-        "epoll_pwait" => libc::SYS_epoll_pwait,
-        "pselect6" => libc::SYS_pselect6,
-
-        // Filesystem
-        "openat" => libc::SYS_openat,
-        "newfstatat" => libc::SYS_newfstatat,
-        "statx" => libc::SYS_statx,
-        "getdents64" => libc::SYS_getdents64,
-        "mkdir" => libc::SYS_mkdir,
-        "rmdir" => libc::SYS_rmdir,
-        "unlink" => libc::SYS_unlink,
-        "rename" => libc::SYS_rename,
-        "link" => libc::SYS_link,
-        "symlink" => libc::SYS_symlink,
-        "readlink" => libc::SYS_readlink,
-        "chmod" => libc::SYS_chmod,
-        "fchmod" => libc::SYS_fchmod,
-        "chown" => libc::SYS_chown,
-        "fchown" => libc::SYS_fchown,
-        "chroot" => libc::SYS_chroot,
-        "chdir" => libc::SYS_chdir,
-        "fchdir" => libc::SYS_fchdir,
-
-        // Privilege
-        "setuid" => libc::SYS_setuid,
-        "setgid" => libc::SYS_setgid,
-        "setgroups" => libc::SYS_setgroups,
-
-        // IPC / shared memory
-        "pipe2" => libc::SYS_pipe2,
-        "eventfd2" => libc::SYS_eventfd2,
-        "shmat" => libc::SYS_shmat,
-        "shmdt" => libc::SYS_shmdt,
-        "shmget" => libc::SYS_shmget,
-        "shmctl" => libc::SYS_shmctl,
-        "memfd_create" => libc::SYS_memfd_create,
-
-        // Random
-        "getrandom" => libc::SYS_getrandom,
-
-        // Newer syscalls (numeric fallback if libc doesn't define them)
-        "rseq" => 334,
-        "eventfd" => 284,
-
-        _ => return None,
-    })
-}
-
-/// Map a syscall name to its number on aarch64
+/// Resolve a syscall name through libseccomp's native-architecture table.
 ///
-/// aarch64 uses a different syscall ABI from x86_64. Many "legacy" syscalls
-/// (open, stat, lstat, access, pipe, select, dup2, fork, etc.) do not exist
-/// on aarch64 -- they are replaced by *at variants (openat, fstatat, etc.).
-/// Names that have no aarch64 equivalent return None.
-#[cfg(target_arch = "aarch64")]
+/// Negative pseudo-syscall numbers are not directly enforceable by the
+/// seccompiler BPF map and therefore are not accepted as native ABI names.
 fn syscall_name_to_number(name: &str) -> Option<i64> {
-    Some(match name {
-        // Basic I/O (aarch64 lacks open/stat/lstat/access/pipe/select/dup2)
-        "read" => libc::SYS_read,
-        "write" => libc::SYS_write,
-        "close" => libc::SYS_close,
-        "fstat" => libc::SYS_fstat,
-        "poll" => libc::SYS_ppoll, // aarch64 uses ppoll
-        "lseek" => libc::SYS_lseek,
-        "pread64" => libc::SYS_pread64,
-        "pwrite64" => libc::SYS_pwrite64,
-        "ioctl" => libc::SYS_ioctl,
-        "fcntl" => libc::SYS_fcntl,
-        "flock" => libc::SYS_flock,
-        "dup" => libc::SYS_dup,
-        "dup2" => libc::SYS_dup3,  // aarch64 has dup3, not dup2
-        "pipe" => libc::SYS_pipe2, // aarch64 has pipe2, not pipe
-        "pipe2" => libc::SYS_pipe2,
-
-        // Memory management
-        "mmap" => libc::SYS_mmap,
-        "mprotect" => libc::SYS_mprotect,
-        "munmap" => libc::SYS_munmap,
-        "brk" => libc::SYS_brk,
-        "madvise" => libc::SYS_madvise,
-
-        // Signals
-        "rt_sigaction" | "sigaction" => libc::SYS_rt_sigaction,
-        "rt_sigprocmask" => libc::SYS_rt_sigprocmask,
-        "sigaltstack" => libc::SYS_sigaltstack,
-
-        // Process
-        "clone" => libc::SYS_clone,
-        "clone3" => libc::SYS_clone3,
-        "fork" => return None, // aarch64 has no fork; use clone
-        "execve" => libc::SYS_execve,
-        "exit" => libc::SYS_exit,
-        "exit_group" => libc::SYS_exit_group,
-        "wait4" => libc::SYS_wait4,
-        "waitid" => libc::SYS_waitid,
-        "kill" => libc::SYS_kill,
-        "getpid" => libc::SYS_getpid,
-        "getuid" => libc::SYS_getuid,
-        "getgid" => libc::SYS_getgid,
-        "geteuid" => libc::SYS_geteuid,
-        "getegid" => libc::SYS_getegid,
-        "prctl" => libc::SYS_prctl,
-        "prlimit64" => libc::SYS_prlimit64,
-        "set_tid_address" => libc::SYS_set_tid_address,
-        "set_robust_list" => libc::SYS_set_robust_list,
-        "futex" => libc::SYS_futex,
-        "setsid" => libc::SYS_setsid,
-        "umask" => libc::SYS_umask,
-        "clock_gettime" => libc::SYS_clock_gettime,
-        "getcwd" => libc::SYS_getcwd,
-
-        // Networking
-        "socket" => libc::SYS_socket,
-        "connect" => libc::SYS_connect,
-        "accept" => libc::SYS_accept,
-        "accept4" => libc::SYS_accept4,
-        "bind" => libc::SYS_bind,
-        "listen" => libc::SYS_listen,
-        "sendto" => libc::SYS_sendto,
-        "recvfrom" => libc::SYS_recvfrom,
-        "sendmsg" => libc::SYS_sendmsg,
-        "recvmsg" => libc::SYS_recvmsg,
-        "shutdown" => libc::SYS_shutdown,
-        "setsockopt" => libc::SYS_setsockopt,
-        "getsockopt" => libc::SYS_getsockopt,
-        "getsockname" => libc::SYS_getsockname,
-        "getpeername" => libc::SYS_getpeername,
-
-        // Epoll / I/O multiplexing
-        "epoll_create1" => libc::SYS_epoll_create1,
-        "epoll_create" => libc::SYS_epoll_create1, // aarch64 only has epoll_create1
-        "epoll_ctl" => libc::SYS_epoll_ctl,
-        "epoll_pwait" => libc::SYS_epoll_pwait,
-        "epoll_wait" => libc::SYS_epoll_pwait, // aarch64 uses epoll_pwait
-        "pselect6" => libc::SYS_pselect6,
-        "select" => libc::SYS_pselect6, // aarch64 uses pselect6
-
-        // Filesystem (*at variants are the native aarch64 interface)
-        "openat" => libc::SYS_openat,
-        "open" => libc::SYS_openat, // map legacy open -> openat
-        "newfstatat" => libc::SYS_newfstatat,
-        "stat" => libc::SYS_newfstatat, // map legacy stat -> newfstatat
-        "lstat" => libc::SYS_newfstatat, // map legacy lstat -> newfstatat
-        "statx" => libc::SYS_statx,
-        "getdents64" => libc::SYS_getdents64,
-        "access" => libc::SYS_faccessat, // map legacy access -> faccessat
-        "mkdir" => libc::SYS_mkdirat,    // map legacy mkdir -> mkdirat
-        "unlink" => libc::SYS_unlinkat,  // map legacy unlink -> unlinkat
-        "rmdir" => libc::SYS_unlinkat,   // rmdir is unlinkat with AT_REMOVEDIR
-        "rename" => libc::SYS_renameat,  // map legacy rename -> renameat
-        "link" => libc::SYS_linkat,      // map legacy link -> linkat
-        "symlink" => libc::SYS_symlinkat, // map legacy symlink -> symlinkat
-        "readlink" => libc::SYS_readlinkat, // map legacy readlink -> readlinkat
-        "chmod" => libc::SYS_fchmodat,   // map legacy chmod -> fchmodat
-        "fchmod" => libc::SYS_fchmod,
-        "chown" => libc::SYS_fchownat, // map legacy chown -> fchownat
-        "fchown" => libc::SYS_fchown,
-        "chroot" => libc::SYS_chroot,
-        "chdir" => libc::SYS_chdir,
-        "fchdir" => libc::SYS_fchdir,
-
-        // Privilege
-        "setuid" => libc::SYS_setuid,
-        "setgid" => libc::SYS_setgid,
-        "setgroups" => libc::SYS_setgroups,
-
-        // IPC / shared memory
-        "eventfd2" => libc::SYS_eventfd2,
-        "eventfd" => libc::SYS_eventfd2, // aarch64 only has eventfd2
-        "shmat" => libc::SYS_shmat,
-        "shmdt" => libc::SYS_shmdt,
-        "shmget" => libc::SYS_shmget,
-        "shmctl" => libc::SYS_shmctl,
-        "memfd_create" => libc::SYS_memfd_create,
-
-        // Random
-        "getrandom" => libc::SYS_getrandom,
-
-        // Newer syscalls
-        "rseq" => libc::SYS_rseq,
-
-        // aarch64 has no arch_prctl (x86_64-specific)
-        "arch_prctl" => return None,
-
-        _ => return None,
-    })
+    crate::capability::resolve_native_syscall_number(name)
 }
-
-#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-fn syscall_name_to_number(_name: &str) -> Option<i64> {
-    None
-}
-
-/// Known syscall names for wildcard expansion
-static KNOWN_SYSCALL_NAMES: &[&str] = &[
-    "accept",
-    "accept4",
-    "access",
-    "arch_prctl",
-    "bind",
-    "brk",
-    "chdir",
-    "chmod",
-    "chown",
-    "chroot",
-    "clone",
-    "clone3",
-    "close",
-    "connect",
-    "dup",
-    "dup2",
-    "epoll_create",
-    "epoll_create1",
-    "epoll_ctl",
-    "epoll_pwait",
-    "epoll_wait",
-    "eventfd",
-    "eventfd2",
-    "execve",
-    "exit",
-    "exit_group",
-    "fchdir",
-    "fchmod",
-    "fchown",
-    "fcntl",
-    "flock",
-    "fork",
-    "fstat",
-    "futex",
-    "getrandom",
-    "getdents64",
-    "getegid",
-    "geteuid",
-    "getgid",
-    "getpeername",
-    "getpid",
-    "getsockname",
-    "getsockopt",
-    "getuid",
-    "ioctl",
-    "kill",
-    "link",
-    "listen",
-    "lseek",
-    "lstat",
-    "memfd_create",
-    "mkdir",
-    "mmap",
-    "mprotect",
-    "munmap",
-    "newfstatat",
-    "open",
-    "openat",
-    "pipe",
-    "pipe2",
-    "poll",
-    "prctl",
-    "pread64",
-    "pselect6",
-    "pwrite64",
-    "read",
-    "readlink",
-    "recvfrom",
-    "recvmsg",
-    "rename",
-    "rmdir",
-    "rseq",
-    "rt_sigaction",
-    "rt_sigprocmask",
-    "select",
-    "sendmsg",
-    "sendto",
-    "set_robust_list",
-    "set_tid_address",
-    "setgid",
-    "setgroups",
-    "setsid",
-    "setsockopt",
-    "setuid",
-    "shmat",
-    "shmctl",
-    "shmdt",
-    "shmget",
-    "shutdown",
-    "sigaction",
-    "sigaltstack",
-    "socket",
-    "stat",
-    "statx",
-    "symlink",
-    "umask",
-    "unlink",
-    "wait4",
-    "waitid",
-    "write",
-];
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -659,127 +559,185 @@ mod tests {
     }
 
     #[test]
-    fn test_sigaction_alias() {
+    fn related_syscall_name_is_not_treated_as_an_alias() {
         #[cfg(target_arch = "x86_64")]
         {
-            // "sigaction" should map to rt_sigaction
+            assert_eq!(syscall_name_to_number("sigaction"), None);
             assert_eq!(
-                syscall_name_to_number("sigaction"),
-                syscall_name_to_number("rt_sigaction")
+                syscall_name_to_number("rt_sigaction"),
+                Some(libc::SYS_rt_sigaction)
+            );
+        }
+        #[cfg(target_arch = "aarch64")]
+        for name in [
+            "open",
+            "stat",
+            "lstat",
+            "access",
+            "pipe",
+            "dup2",
+            "epoll_create",
+            "epoll_wait",
+            "select",
+            "eventfd",
+        ] {
+            assert_eq!(
+                syscall_name_to_number(name),
+                None,
+                "{name} must not authorize a different aarch64 syscall"
             );
         }
     }
 
     #[test]
-    fn test_wildcard_expansion_epoll() {
-        let expanded = expand_wildcard("epoll_*");
-        assert!(expanded.contains(&"epoll_create".to_string()));
-        assert!(expanded.contains(&"epoll_create1".to_string()));
-        assert!(expanded.contains(&"epoll_ctl".to_string()));
-        assert!(expanded.contains(&"epoll_wait".to_string()));
-        assert!(expanded.contains(&"epoll_pwait".to_string()));
-        assert_eq!(expanded.len(), 5);
-    }
-
-    #[test]
-    fn test_wildcard_expansion_no_match() {
-        let expanded = expand_wildcard("zzz_nonexistent_*");
-        assert!(expanded.is_empty());
-    }
-
-    #[test]
-    fn test_wildcard_expansion_no_wildcard() {
-        let expanded = expand_wildcard("read");
-        assert_eq!(expanded, vec!["read".to_string()]);
-    }
-
-    #[test]
-    fn test_wildcard_expansion_shm() {
-        let expanded = expand_wildcard("shm*");
-        assert!(expanded.contains(&"shmat".to_string()));
-        assert!(expanded.contains(&"shmdt".to_string()));
-        assert!(expanded.contains(&"shmget".to_string()));
-        assert!(expanded.contains(&"shmctl".to_string()));
-    }
-
-    #[test]
-    fn test_describe_filter_minimal_profile() {
-        let caps = SyscallCapabilities {
-            profile: Some("minimal".to_string()),
-            allow: Vec::new(),
+    fn wildcard_syscall_contracts_are_rejected() {
+        let allow = SyscallCapabilities {
+            allow: vec!["epoll_*".to_string()],
             deny: Vec::new(),
         };
+        let deny = SyscallCapabilities {
+            allow: vec!["read".to_string()],
+            deny: vec!["shm*".to_string()],
+        };
 
-        let info = describe_seccomp_filter(&caps, EnforcementMode::Audit);
-        assert_eq!(info.profile, Some("minimal".to_string()));
-        assert!(info.allowed_count > 0);
-        assert!(info.allowed_syscalls.contains(&"read".to_string()));
-        assert!(info.allowed_syscalls.contains(&"write".to_string()));
+        assert!(resolve_allowed_syscalls(&allow).is_err());
+        assert!(resolve_allowed_syscalls(&deny).is_err());
+    }
+
+    #[test]
+    fn unmapped_allowed_syscall_fails_filter_construction() {
+        let caps = SyscallCapabilities {
+            allow: vec!["definitely_not_a_syscall".to_string()],
+            deny: Vec::new(),
+        };
+        let error = build_seccomp_filter(&caps, EnforcementMode::Enforce)
+            .expect_err("unmapped allowed syscall must not be silently omitted");
+        assert!(error.to_string().contains("not an exact name"));
     }
 
     #[test]
     fn test_describe_filter_with_explicit_allow() {
         let caps = SyscallCapabilities {
-            profile: Some("minimal".to_string()),
-            allow: vec!["socket".to_string(), "connect".to_string()],
+            allow: vec![
+                "read".to_string(),
+                "socket".to_string(),
+                "connect".to_string(),
+            ],
             deny: Vec::new(),
         };
 
-        let info = describe_seccomp_filter(&caps, EnforcementMode::Enforce);
+        let info = describe_seccomp_filter(&caps, EnforcementMode::Enforce).unwrap();
         assert!(info.allowed_syscalls.contains(&"socket".to_string()));
         assert!(info.allowed_syscalls.contains(&"connect".to_string()));
-        assert!(info.allowed_syscalls.contains(&"read".to_string())); // from profile
+        assert!(info.allowed_syscalls.contains(&"read".to_string()));
+    }
+
+    #[test]
+    fn describe_filter_rejects_invalid_exact_declarations() {
+        let caps = SyscallCapabilities {
+            allow: vec!["definitely_not_a_syscall".to_string()],
+            deny: Vec::new(),
+        };
+
+        let error = describe_seccomp_filter(&caps, EnforcementMode::Audit)
+            .expect_err("reporting must not replace an invalid policy with an empty one");
+        assert!(error.to_string().contains("not an exact name"));
     }
 
     #[test]
     fn test_deny_overrides_allow() {
         let caps = SyscallCapabilities {
-            profile: Some("network-server".to_string()),
-            allow: Vec::new(),
+            allow: vec!["read".to_string(), "bind".to_string(), "listen".to_string()],
             deny: vec!["bind".to_string(), "listen".to_string()],
         };
 
-        let info = describe_seccomp_filter(&caps, EnforcementMode::Enforce);
-        // bind and listen should be removed despite being in the network-server profile
+        let info = describe_seccomp_filter(&caps, EnforcementMode::Enforce).unwrap();
         assert!(!info.allowed_syscalls.contains(&"bind".to_string()));
         assert!(!info.allowed_syscalls.contains(&"listen".to_string()));
-        // But read should still be present
         assert!(info.allowed_syscalls.contains(&"read".to_string()));
     }
 
     #[test]
-    fn test_deny_wildcard_overrides() {
-        let caps = SyscallCapabilities {
-            profile: Some("network-server".to_string()),
-            allow: Vec::new(),
-            deny: vec!["epoll_*".to_string()],
-        };
+    fn scriptlet_v1_is_a_closed_exact_current_abi_contract() {
+        assert_eq!(SCRIPTLET_EXECUTOR_ABI_V1, "scriptlet-v1");
+        let caps = scriptlet_executor_v1_capabilities();
+        assert!(!caps.allow.is_empty());
+        assert!(caps.deny.is_empty());
 
-        let info = describe_seccomp_filter(&caps, EnforcementMode::Enforce);
-        assert!(!info.allowed_syscalls.contains(&"epoll_create".to_string()));
-        assert!(!info.allowed_syscalls.contains(&"epoll_wait".to_string()));
+        let unique = caps.allow.iter().collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(unique.len(), caps.allow.len());
+        for syscall in &caps.allow {
+            assert!(
+                syscall_name_to_number(syscall).is_some(),
+                "{SCRIPTLET_EXECUTOR_ABI_V1} contains an unmapped syscall: {syscall}"
+            );
+        }
+        for forbidden in [
+            "bpf",
+            "chroot",
+            "init_module",
+            "kexec_load",
+            "mount",
+            "ptrace",
+            "reboot",
+            "setgid",
+            "setuid",
+        ] {
+            assert!(
+                !caps.allow.iter().any(|syscall| syscall == forbidden),
+                "{SCRIPTLET_EXECUTOR_ABI_V1} must not allow {forbidden}"
+            );
+        }
+
+        build_seccomp_filter(&caps, EnforcementMode::Enforce)
+            .expect("scriptlet-v1 must compile for the current architecture");
     }
 
     #[test]
-    fn test_build_filter_minimal_profile() {
-        let caps = SyscallCapabilities {
-            profile: Some("minimal".to_string()),
-            allow: Vec::new(),
+    fn capability_run_v1_is_a_closed_ephemeral_executor_contract() {
+        assert_eq!(CAPABILITY_RUN_EXECUTOR_ABI_V1, "capability-run-v1");
+        let declared = SyscallCapabilities {
+            allow: vec!["socket".to_string()],
             deny: Vec::new(),
         };
+        let merged = capability_run_executor_v1_capabilities(&declared)
+            .expect("current supported architecture has a capability-run executor ABI");
 
-        // This should succeed on x86_64 (builds the BPF program)
-        #[cfg(target_arch = "x86_64")]
-        {
-            let result = build_seccomp_filter(&caps, EnforcementMode::Audit);
-            assert!(result.is_ok());
+        assert_eq!(declared.allow, ["socket"]);
+        assert!(merged.allow.contains(&"socket".to_string()));
+        assert!(merged.allow.contains(&"execve".to_string()));
+        assert!(merged.allow.contains(&"prlimit64".to_string()));
+        let unique = merged
+            .allow
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(unique.len(), merged.allow.len());
+        for syscall in &merged.allow {
+            assert!(
+                syscall_name_to_number(syscall).is_some(),
+                "{CAPABILITY_RUN_EXECUTOR_ABI_V1} contains an unmapped syscall: {syscall}"
+            );
         }
+    }
+
+    #[test]
+    fn package_deny_cannot_be_silently_overridden_by_capability_run_v1() {
+        let declared = SyscallCapabilities {
+            allow: Vec::new(),
+            deny: vec!["execve".to_string()],
+        };
+        let error = capability_run_executor_v1_capabilities(&declared)
+            .expect_err("executor ABI conflict must fail setup");
+        assert!(
+            error
+                .to_string()
+                .contains("executor-required syscall 'execve'")
+        );
     }
 
     #[test]
     fn test_build_filter_explicit_allow() {
         let caps = SyscallCapabilities {
-            profile: None,
             allow: vec![
                 "read".to_string(),
                 "write".to_string(),

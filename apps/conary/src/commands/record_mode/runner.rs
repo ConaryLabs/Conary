@@ -12,12 +12,10 @@ pub(crate) struct RecordCommandRequest {
     pub(crate) work_root: PathBuf,
     pub(crate) install_root: PathBuf,
     pub(crate) command: Vec<String>,
-    pub(crate) unsafe_host: bool,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct RecordSandboxPlan {
-    pub(crate) unsafe_host: bool,
     pub(crate) cwd: String,
     pub(crate) network_isolated: bool,
     pub(crate) mounts: Vec<(PathBuf, String, bool)>,
@@ -49,27 +47,7 @@ pub(crate) fn sandbox_plan(request: &RecordCommandRequest) -> Result<RecordSandb
     }
     let source_date_epoch = std::env::var("SOURCE_DATE_EPOCH").unwrap_or_else(|_| "0".to_string());
 
-    if request.unsafe_host {
-        let install = request.install_root.to_string_lossy().to_string();
-        return Ok(RecordSandboxPlan {
-            unsafe_host: true,
-            cwd: request.source_root.to_string_lossy().to_string(),
-            network_isolated: false,
-            mounts: Vec::new(),
-            env: vec![
-                ("DESTDIR".to_string(), install.clone()),
-                ("CONARY_DESTDIR".to_string(), install),
-                (
-                    "CONARY_WORKDIR".to_string(),
-                    request.work_root.to_string_lossy().to_string(),
-                ),
-                ("SOURCE_DATE_EPOCH".to_string(), source_date_epoch),
-            ],
-        });
-    }
-
     Ok(RecordSandboxPlan {
-        unsafe_host: false,
         cwd: "/conary/source".to_string(),
         network_isolated: true,
         mounts: vec![
@@ -103,21 +81,6 @@ pub(crate) struct RecordCommandOutcome {
 
 pub(crate) fn run_record_command(request: &RecordCommandRequest) -> Result<RecordCommandOutcome> {
     let plan = sandbox_plan(request)?;
-    if plan.unsafe_host {
-        let mut command = std::process::Command::new(&request.command[0]);
-        command.args(&request.command[1..]);
-        command.current_dir(&request.source_root);
-        for (key, value) in &plan.env {
-            command.env(key, value);
-        }
-        let output = command.output()?;
-        return Ok(RecordCommandOutcome {
-            exit_code: output.status.code().unwrap_or(1),
-            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-        });
-    }
-
     let mut config = ContainerConfig::default().for_untrusted();
     config.timeout = Duration::from_secs(3600);
     config.workdir = PathBuf::from(&plan.cwd);
@@ -187,7 +150,6 @@ mod tests {
             work_root: work.clone(),
             install_root: install.clone(),
             command: vec!["/bin/sh".to_string(), "-c".to_string(), "true".to_string()],
-            unsafe_host: false,
         })
         .unwrap();
 
@@ -203,37 +165,6 @@ mod tests {
     }
 
     #[test]
-    fn unsafe_host_plan_is_explicit_and_still_scoped() {
-        let temp = tempfile::tempdir().unwrap();
-        let request = RecordCommandRequest {
-            source_root: temp.path().join("source"),
-            work_root: temp.path().join("work"),
-            install_root: temp.path().join("destdir"),
-            command: vec!["true".to_string()],
-            unsafe_host: true,
-        };
-        std::fs::create_dir_all(&request.source_root).unwrap();
-        std::fs::create_dir_all(&request.work_root).unwrap();
-        std::fs::create_dir_all(&request.install_root).unwrap();
-
-        let plan = sandbox_plan(&request).unwrap();
-        assert!(plan.unsafe_host);
-        assert_eq!(
-            plan.env_value("DESTDIR"),
-            Some(request.install_root.to_str().unwrap())
-        );
-        assert_eq!(
-            plan.env_value("CONARY_DESTDIR"),
-            Some(request.install_root.to_str().unwrap())
-        );
-        assert_eq!(
-            plan.env_value("CONARY_WORKDIR"),
-            Some(request.work_root.to_str().unwrap())
-        );
-        assert!(plan.env_value("SOURCE_DATE_EPOCH").is_some());
-    }
-
-    #[test]
     fn shell_quote_preserves_destdir_expansion() {
         assert_eq!(
             shell_quote_for_execution("$CONARY_DESTDIR/usr/bin"),
@@ -243,29 +174,5 @@ mod tests {
             render_command_for_shell(&["make install".to_string()]),
             "'make install'"
         );
-    }
-
-    #[test]
-    fn unsafe_host_runner_executes_with_record_environment() {
-        let temp = tempfile::tempdir().unwrap();
-        let request = RecordCommandRequest {
-            source_root: temp.path().join("source"),
-            work_root: temp.path().join("work"),
-            install_root: temp.path().join("destdir"),
-            command: vec![
-                "/bin/sh".to_string(),
-                "-c".to_string(),
-                "printf '%s' \"$CONARY_DESTDIR\"".to_string(),
-            ],
-            unsafe_host: true,
-        };
-        std::fs::create_dir_all(&request.source_root).unwrap();
-        std::fs::create_dir_all(&request.work_root).unwrap();
-        std::fs::create_dir_all(&request.install_root).unwrap();
-
-        let outcome = run_record_command(&request).unwrap();
-
-        assert_eq!(outcome.exit_code, 0);
-        assert_eq!(outcome.stdout, request.install_root.to_string_lossy());
     }
 }

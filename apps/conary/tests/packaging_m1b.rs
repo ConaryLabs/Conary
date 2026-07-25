@@ -7,13 +7,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use conary_core::ccs::builder::write_ccs_package;
-use conary_core::ccs::{
-    BuildResult, CcsManifest, CcsPackage, ComponentData, FileEntry as CcsFileEntry, FileType,
-};
+use conary_core::ccs::builder::write_signed_current_ccs_package;
+use conary_core::ccs::verify::verify_package;
+use conary_core::ccs::{BuildResult, CcsManifest, ComponentData, FileEntry as CcsFileEntry};
+use conary_core::ccs::{CcsPackage, SigningKeyPair, TrustPolicy};
 use conary_core::db::models::{TrySession, TrySessionStatus};
-use conary_core::packages::PackageFormat;
-use conary_core::recipe::parse_recipe_file;
+use conary_core::payload::{PayloadContentAuthority, PayloadNode};
 use conary_core::runtime_root::ConaryRuntimeRoot;
 
 const PACKAGE_NAME: &str = "hello-m1b";
@@ -21,110 +20,34 @@ const PACKAGE_VERSION: &str = "0.1.0";
 const PACKAGE_RELEASE: &str = "1";
 
 #[test]
-fn cook_local_cargo_tree_from_inference_builds_ccs() {
+fn new_from_and_explain_are_removed_without_compatibility_aliases() {
     let fixture = CargoFixture::new();
+    let from = Command::new(env!("CARGO_BIN_EXE_conary"))
+        .args(["new", "hello", "--from"])
+        .arg(fixture.source_dir())
+        .output()
+        .expect("failed to run conary new");
+    assert_failure(&from);
+    assert!(output_text(&from).contains("unexpected argument '--from'"));
 
-    let output = cook(
-        fixture.source_dir(),
-        fixture.output_dir(),
-        fixture.source_cache(),
-    );
-    assert_success(&output);
-
-    assert_cooked_hello_m1b(&fixture.package_path());
+    let explain = Command::new(env!("CARGO_BIN_EXE_conary"))
+        .args(["new", "hello", "--explain"])
+        .output()
+        .expect("failed to run conary new");
+    assert_failure(&explain);
+    assert!(output_text(&explain).contains("unexpected argument '--explain'"));
 }
 
 #[test]
-fn cook_local_tarball_from_inference_builds_ccs() {
+fn cook_rejects_bare_source_tree_and_url_without_inference() {
     let fixture = CargoFixture::new();
-    let archive = fixture.work_dir().join("hello-m1b.tar");
-    write_tarball(fixture.source_dir(), &archive);
+    let source = cook_validate_only(fixture.source_dir());
+    assert_failure(&source);
+    assert!(output_text(&source).contains("does not contain recipe.toml"));
 
-    let output = cook(&archive, fixture.output_dir(), fixture.source_cache());
-    assert_success(&output);
-
-    assert_cooked_hello_m1b(&fixture.package_path());
-}
-
-#[test]
-fn new_from_local_tree_then_cook_recipe_builds_same_package() {
-    let fixture = CargoFixture::new();
-    let recipe = fixture.work_dir().join("recipe.toml");
-
-    let output = new_from(fixture.source_dir(), &recipe);
-    assert_success(&output);
-    assert_recipe_uses_local_source_without_locked_build(&recipe);
-
-    let output = cook(&recipe, fixture.output_dir(), fixture.source_cache());
-    assert_success(&output);
-
-    assert_cooked_hello_m1b(&fixture.package_path());
-}
-
-#[test]
-fn new_from_local_tarball_materializes_recipe() {
-    let fixture = CargoFixture::new();
-    let archive = fixture.work_dir().join("hello-m1b.tar");
-    let recipe = fixture.work_dir().join("recipe.toml");
-    write_tarball(fixture.source_dir(), &archive);
-
-    let output = new_from(&archive, &recipe);
-    assert_success(&output);
-
-    fs::remove_file(&archive).unwrap();
-    let materialized_archive = fixture.work_dir().join("sources/hello-m1b.tar");
-    assert!(
-        materialized_archive.is_file(),
-        "expected local archive to be materialized at {}",
-        materialized_archive.display()
-    );
-    assert_recipe_uses_archive_source_without_locked_build(&recipe, "sources/hello-m1b.tar");
-}
-
-#[test]
-fn new_from_local_tarball_then_cook_recipe_builds_same_package() {
-    let fixture = CargoFixture::new();
-    let archive = fixture.work_dir().join("hello-m1b.tar");
-    let recipe = fixture.work_dir().join("recipe.toml");
-    write_tarball(fixture.source_dir(), &archive);
-
-    let output = new_from(&archive, &recipe);
-    assert_success(&output);
-    fs::remove_file(&archive).unwrap();
-
-    let output = cook(&recipe, fixture.output_dir(), fixture.source_cache());
-    assert_success(&output);
-
-    assert_cooked_hello_m1b(&fixture.package_path());
-}
-
-#[test]
-fn new_from_git_target_materializes_persistent_source_then_cook_builds() {
-    let fixture = CargoFixture::new();
-    let repo = fixture.work_dir().join("hello-m1b.git");
-    let recipe = fixture.work_dir().join("recipe.toml");
-    create_git_repo(&repo);
-
-    let output = new_from(&repo, &recipe);
-    assert_success(&output);
-    fs::remove_dir_all(&repo).unwrap();
-
-    let stable_source = fixture.work_dir().join("sources/hello-m1b.git");
-    assert!(
-        stable_source.join("Cargo.toml").is_file(),
-        "expected git source to be materialized under {}",
-        stable_source.display()
-    );
-    assert!(
-        !stable_source.join(".git").exists(),
-        "materialized git source must not persist clone metadata"
-    );
-    assert_recipe_uses_local_source_without_locked_build(&recipe);
-
-    let output = cook(&recipe, fixture.output_dir(), fixture.source_cache());
-    assert_success(&output);
-
-    assert_cooked_hello_m1b(&fixture.package_path());
+    let remote = cook_validate_only(Path::new("https://example.invalid/source.tar.gz"));
+    assert_failure(&remote);
+    assert!(output_text(&remote).contains("requires an explicit recipe file"));
 }
 
 #[test]
@@ -240,7 +163,6 @@ struct CargoFixture {
     work_dir: PathBuf,
     source_dir: PathBuf,
     output_dir: PathBuf,
-    source_cache: PathBuf,
 }
 
 impl CargoFixture {
@@ -249,8 +171,6 @@ impl CargoFixture {
         let work_dir = work.path().to_path_buf();
         let source_dir = work_dir.join("source");
         let output_dir = work_dir.join("dist");
-        let source_cache = work_dir.join("source-cache");
-
         write_cargo_project(&source_dir);
 
         Self {
@@ -258,7 +178,6 @@ impl CargoFixture {
             work_dir,
             source_dir,
             output_dir,
-            source_cache,
         }
     }
 
@@ -268,14 +187,6 @@ impl CargoFixture {
 
     fn source_dir(&self) -> &Path {
         &self.source_dir
-    }
-
-    fn output_dir(&self) -> &Path {
-        &self.output_dir
-    }
-
-    fn source_cache(&self) -> &Path {
-        &self.source_cache
     }
 
     fn package_path(&self) -> PathBuf {
@@ -306,43 +217,11 @@ edition = "2021"
     .unwrap();
 }
 
-fn write_tarball(source_root: &Path, archive: &Path) {
-    let file = fs::File::create(archive).unwrap();
-    let mut builder = tar::Builder::new(file);
-    builder
-        .append_dir_all(format!("{PACKAGE_NAME}-{PACKAGE_VERSION}"), source_root)
-        .unwrap();
-    builder.finish().unwrap();
-}
-
-fn create_git_repo(root: &Path) {
-    write_cargo_project(root);
-    git(root, &["init"]);
-    git(root, &["config", "user.email", "conary@example.invalid"]);
-    git(root, &["config", "user.name", "Conary Test"]);
-    git(root, &["config", "commit.gpgsign", "false"]);
-    git(root, &["add", "."]);
-    git(root, &["commit", "-m", "initial"]);
-}
-
-fn new_from(source: &Path, recipe: &Path) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_conary"))
-        .args(["new", "--from"])
-        .arg(source)
-        .args(["--output"])
-        .arg(recipe)
-        .output()
-        .expect("failed to run conary new")
-}
-
-fn cook(target: &Path, output_dir: &Path, source_cache: &Path) -> Output {
+fn cook_validate_only(target: &Path) -> Output {
     Command::new(env!("CARGO_BIN_EXE_conary"))
         .arg("cook")
         .arg(target)
-        .args(["--output"])
-        .arg(output_dir)
-        .args(["--source-cache"])
-        .arg(source_cache)
+        .arg("--validate-only")
         .output()
         .expect("failed to run conary cook")
 }
@@ -371,18 +250,18 @@ fn try_fixture_package() -> CargoFixture {
 
 fn write_single_binary_ccs(package_path: &Path, content: Vec<u8>) {
     fs::create_dir_all(package_path.parent().expect("package parent")).unwrap();
+    let total_size = content.len() as u64;
     let hash = conary_core::hash::sha256(&content);
     let file = CcsFileEntry {
         path: format!("/usr/bin/{PACKAGE_NAME}"),
-        hash: hash.clone(),
-        size: content.len() as u64,
-        mode: 0o100755,
+        node: PayloadNode::regular(0o755),
+        content: Some(PayloadContentAuthority {
+            sha256: hash.clone(),
+            size: total_size,
+        }),
         component: "runtime".to_string(),
-        file_type: FileType::Regular,
-        target: None,
         chunks: None,
     };
-    let total_size = file.size;
     let result = BuildResult {
         manifest: CcsManifest::new_minimal(PACKAGE_NAME, PACKAGE_VERSION),
         components: HashMap::from([(
@@ -391,7 +270,7 @@ fn write_single_binary_ccs(package_path: &Path, content: Vec<u8>) {
                 name: "runtime".to_string(),
                 files: vec![file.clone()],
                 hash: "runtime".to_string(),
-                size: file.size,
+                size: total_size,
             },
         )]),
         files: vec![file],
@@ -400,7 +279,14 @@ fn write_single_binary_ccs(package_path: &Path, content: Vec<u8>) {
         chunked: false,
         chunk_stats: None,
     };
-    write_ccs_package(&result, package_path).unwrap();
+    let signer = SigningKeyPair::generate().with_key_id("packaging-m1b");
+    write_signed_current_ccs_package(&result, package_path, &signer, false).unwrap();
+    let verified = verify_package(
+        package_path,
+        &TrustPolicy::strict(vec![signer.public_key_base64()]),
+    )
+    .unwrap();
+    CcsPackage::from_verified_archive(&package_path.to_string_lossy(), &verified).unwrap();
 }
 
 fn try_package(package_path: &Path, db_path: &str, command: Option<&str>) -> Output {
@@ -452,77 +338,6 @@ fn extract_try_session_id(stdout: &str) -> String {
         })
         .unwrap_or_else(|| panic!("missing try session id in stdout:\n{stdout}"))
         .to_string()
-}
-
-fn git(cwd: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(cwd)
-        .output()
-        .unwrap_or_else(|error| panic!("failed to run git {args:?}: {error}"));
-    assert!(
-        output.status.success(),
-        "git {:?} failed\n{}",
-        args,
-        output_text(&output)
-    );
-    String::from_utf8_lossy(&output.stdout).trim().to_string()
-}
-
-fn assert_cooked_hello_m1b(package_path: &Path) {
-    assert!(
-        package_path.is_file(),
-        "expected cooked package at {}",
-        package_path.display()
-    );
-
-    let package = CcsPackage::parse(&package_path.to_string_lossy()).unwrap();
-    assert_eq!(package.name(), PACKAGE_NAME);
-    assert_eq!(package.version(), PACKAGE_VERSION);
-    assert!(
-        package
-            .files()
-            .iter()
-            .any(|file| file.path == "/usr/bin/hello-m1b"),
-        "expected cooked package to include /usr/bin/hello-m1b"
-    );
-}
-
-fn assert_recipe_uses_local_source_without_locked_build(recipe_path: &Path) {
-    let recipe = parse_recipe_file(recipe_path).unwrap();
-    assert_eq!(recipe.package.name, PACKAGE_NAME);
-    assert_eq!(recipe.package.version, PACKAGE_VERSION);
-    assert!(
-        recipe.local_source().is_some(),
-        "expected local source recipe"
-    );
-    assert_cargo_build_omits_locked(recipe_path);
-}
-
-fn assert_recipe_uses_archive_source_without_locked_build(recipe_path: &Path, archive: &str) {
-    let recipe = parse_recipe_file(recipe_path).unwrap();
-    assert_eq!(recipe.package.name, PACKAGE_NAME);
-    assert_eq!(recipe.package.version, PACKAGE_VERSION);
-    let source = recipe
-        .remote_source()
-        .expect("expected archive source recipe");
-    assert_eq!(source.archive, archive);
-    assert!(source.checksum.starts_with("sha256:"));
-    assert_cargo_build_omits_locked(recipe_path);
-}
-
-fn assert_cargo_build_omits_locked(recipe_path: &Path) {
-    let rendered = fs::read_to_string(recipe_path).unwrap();
-    assert!(
-        rendered.contains("cargo build --release"),
-        "expected generated Cargo recipe to build in release mode\n{}",
-        rendered
-    );
-    assert!(
-        !rendered.contains("--locked"),
-        "generated Cargo recipe must omit --locked when Cargo.lock is absent\n{}",
-        rendered
-    );
 }
 
 fn assert_success(output: &Output) {

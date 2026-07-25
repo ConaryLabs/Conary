@@ -1,8 +1,8 @@
 // apps/conary/src/cli/tests.rs
 
 use super::{
-    CcsCommands, Cli, CliSandboxMode, Commands, GenerationCommands, McpCommands, QueryCommands,
-    RepoCommands, SystemCommands,
+    Cli, CliSandboxMode, Commands, GenerationCommands, McpCommands, NativePackageManager,
+    QueryCommands, RepoCommands, SystemCommands,
 };
 use clap::{CommandFactory, Parser};
 
@@ -17,6 +17,14 @@ fn parse_cli<const N: usize>(args: [&str; N]) -> Result<Cli, clap::Error> {
         .expect("parser thread should not panic")
 }
 
+#[test]
+fn cli_rejects_removed_seccomp_warn_bypass() {
+    let error = parse_cli(["conary", "--seccomp-warn", "list"])
+        .err()
+        .expect("scriptlet enforcement has no warning-mode bypass");
+    assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
+}
+
 fn render_help_with_stack<F>(render: F) -> String
 where
     F: FnOnce() -> String + Send + 'static,
@@ -27,12 +35,6 @@ where
         .expect("help-render thread should spawn")
         .join()
         .expect("help-render thread should not panic")
-}
-
-#[test]
-fn cli_accepts_seccomp_warn_flag() {
-    parse_cli(["conary", "--seccomp-warn", "list"])
-        .expect("--seccomp-warn should parse as a global CLI flag");
 }
 
 fn root_help() -> String {
@@ -72,20 +74,21 @@ fn hidden_authoring_surfaces_keep_command_help() {
     assert!(root.contains("try"));
     assert!(!root.contains("\n  cook "));
     assert!(!root.contains("\n  new "));
-    assert!(!root.contains("Create or infer a package recipe"));
+    assert!(!root.contains("Create a named package recipe scaffold"));
     assert!(root.contains("Try a package artifact"));
 
     let cook = subcommand_help("cook");
-    assert!(cook.contains("--explain"));
+    assert!(!cook.contains("--explain"));
     assert!(!cook.contains("M1a"));
 
     let new = subcommand_help("new");
-    assert!(new.contains("--from"));
-    assert!(new.contains("--explain"));
+    assert!(!new.contains("--from"));
+    assert!(!new.contains("--explain"));
 
     let try_help = subcommand_help("try");
     assert!(try_help.contains("--activate"));
-    assert!(try_help.contains("--allow-irreversible"));
+    assert!(try_help.contains("--policy"));
+    assert!(!try_help.contains("--allow-irreversible"));
     assert!(try_help.contains("status"));
     assert!(try_help.contains("rollback"));
     assert!(try_help.contains("keep"));
@@ -120,9 +123,24 @@ fn cook_accepts_optional_target_and_recipe_flag() {
 }
 
 #[test]
-fn cook_accepts_hidden_m1a_compatibility_flags() {
-    assert!(parse_cli(["conary", "cook", "--hermetic", "recipe.toml"]).is_ok());
-    assert!(parse_cli(["conary", "cook", "--no-isolation", "recipe.toml"]).is_ok());
+fn cook_rejects_removed_isolation_aliases() {
+    for flag in ["--hermetic", "--no-isolation"] {
+        assert!(
+            parse_cli(["conary", "cook", flag, "recipe.toml"]).is_err(),
+            "{flag} must not parse"
+        );
+    }
+}
+
+#[test]
+fn bootstrap_rejects_removed_checksum_bypass() {
+    for phase in ["cross-tools", "temp-tools", "system", "tier2"] {
+        let error = match parse_cli(["conary", "bootstrap", phase, "--skip-verify"]) {
+            Ok(_) => panic!("bootstrap checksum verification cannot be disabled"),
+            Err(error) => error,
+        };
+        assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
+    }
 }
 
 #[test]
@@ -152,8 +170,6 @@ fn cook_record_hidden_flags_parse_after_separator() {
             record_backend,
             record_validate,
             keep_raw_trace,
-            record_unsafe_host,
-            record_allow_network,
             record_command,
             ..
         }) => {
@@ -163,8 +179,6 @@ fn cook_record_hidden_flags_parse_after_separator() {
             assert_eq!(record_backend.as_deref(), Some("inotify"));
             assert!(record_validate);
             assert!(!keep_raw_trace);
-            assert!(!record_unsafe_host);
-            assert!(!record_allow_network);
             assert_eq!(
                 record_command,
                 ["make", "install", "DESTDIR=$CONARY_DESTDIR"]
@@ -178,6 +192,16 @@ fn cook_record_hidden_flags_parse_after_separator() {
 }
 
 #[test]
+fn cook_record_rejects_removed_containment_bypasses() {
+    for flag in ["--record-unsafe-host", "--record-allow-network"] {
+        let error = parse_cli(["conary", "cook", "--record", flag, "--", "true"])
+            .err()
+            .expect("record containment bypass must remain unavailable");
+        assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
+    }
+}
+
+#[test]
 fn public_cook_help_hides_record_mode_flags() {
     let help = subcommand_help("cook");
     assert!(!help.contains("--record"));
@@ -186,12 +210,11 @@ fn public_cook_help_hides_record_mode_flags() {
 }
 
 #[test]
-fn cook_accepts_explain() {
-    let cli = parse_cli(["conary", "cook", ".", "--explain"]).unwrap();
-    match cli.command {
-        Some(Commands::Cook { explain, .. }) => assert!(explain),
-        other => panic!("unexpected command: {other:?}"),
-    }
+fn cook_rejects_removed_explain_flag() {
+    let error = parse_cli(["conary", "cook", ".", "--explain"])
+        .err()
+        .expect("recipe inference trace flag must remain removed");
+    assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
 }
 
 #[test]
@@ -219,15 +242,20 @@ fn cook_publish_and_watch_accept_json_flags() {
 }
 
 #[test]
-fn new_from_current_dir_parses_with_explain() {
-    let cli = parse_cli(["conary", "new", "--from", ".", "--explain"]).unwrap();
-    match cli.command {
-        Some(Commands::New { from, explain, .. }) => {
-            assert_eq!(from.as_deref(), Some("."));
-            assert!(explain);
-        }
-        _ => panic!("unexpected command"),
-    }
+fn new_requires_name_and_rejects_removed_inference_flags() {
+    assert!(parse_cli(["conary", "new", "demo"]).is_ok());
+    assert!(parse_cli(["conary", "new"]).is_err());
+    let from_error = parse_cli(["conary", "new", "demo", "--from", "."])
+        .err()
+        .expect("--from must remain removed");
+    assert_eq!(from_error.kind(), clap::error::ErrorKind::UnknownArgument);
+    let explain_error = parse_cli(["conary", "new", "demo", "--explain"])
+        .err()
+        .expect("--explain must remain removed");
+    assert_eq!(
+        explain_error.kind(),
+        clap::error::ErrorKind::UnknownArgument
+    );
 }
 
 #[test]
@@ -269,6 +297,24 @@ fn publish_artifact_form_parses() {
 }
 
 #[test]
+fn publish_rejects_removed_repository_trust_bypasses() {
+    for flag in ["--force-reinit", "--accept-destination-state"] {
+        let error = parse_cli(["conary", "publish", "./repo", flag])
+            .err()
+            .expect("repository trust bypass must remain unavailable");
+        assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
+    }
+}
+
+#[test]
+fn cli_rejects_removed_heuristic_pkgbuild_converter() {
+    let error = parse_cli(["conary", "convert-pkgbuild", "PKGBUILD"])
+        .err()
+        .expect("heuristic PKGBUILD conversion must remain unavailable");
+    assert_eq!(error.kind(), clap::error::ErrorKind::InvalidSubcommand);
+}
+
+#[test]
 fn parses_hidden_mcp_packaging_command() {
     let cli = parse_cli(["conary", "mcp", "packaging"]).unwrap();
     assert!(matches!(
@@ -278,7 +324,7 @@ fn parses_hidden_mcp_packaging_command() {
 }
 
 #[test]
-fn repo_add_rejects_fingerprint_with_gpg_flags_at_parse_time() {
+fn retired_native_trust_bypass_is_rejected_at_parse_time() {
     assert!(
         parse_cli([
             "conary",
@@ -292,6 +338,11 @@ fn repo_add_rejects_fingerprint_with_gpg_flags_at_parse_time() {
         ])
         .is_err()
     );
+}
+
+#[test]
+fn retired_tuf_disable_bypass_is_rejected_at_parse_time() {
+    assert!(parse_cli(["conary", "trust", "disable", "acme", "--force",]).is_err());
 }
 
 #[test]
@@ -379,24 +430,14 @@ fn repo_add_rejects_internal_remi_route_slug_at_parse_time() {
 }
 
 #[test]
-fn system_init_accepts_only_exact_public_profiles() {
-    for expected in ["fedora-44", "ubuntu-26.04", "arch"] {
-        let cli = parse_cli(["conary", "system", "init", "--profile", expected]).unwrap();
-        match cli.command {
-            Some(Commands::System(SystemCommands::Init { profile, .. })) => {
-                assert_eq!(profile, expected);
-            }
-            _ => panic!("expected system init command"),
-        }
+fn system_init_has_no_host_distro_selector() {
+    let cli = parse_cli(["conary", "system", "init"]).unwrap();
+    match cli.command {
+        Some(Commands::System(SystemCommands::Init { .. })) => {}
+        _ => panic!("expected system init command"),
     }
 
-    for unsupported in ["fedora", "ubuntu", "debian-13"] {
-        assert!(
-            parse_cli(["conary", "system", "init", "--profile", unsupported]).is_err(),
-            "{unsupported} must not parse as a public profile"
-        );
-    }
-    assert!(parse_cli(["conary", "system", "init"]).is_err());
+    assert!(parse_cli(["conary", "system", "init", "--profile", "fedora-44"]).is_err());
 }
 
 #[test]
@@ -411,52 +452,43 @@ fn install_defaults_to_always_sandbox() {
 }
 
 #[test]
-fn install_accepts_legacy_replay_flags_defaulting_false() {
-    let cli = parse_cli(["conary", "install", "bash"]).unwrap();
-    match cli.command {
-        Some(Commands::Install {
-            allow_legacy_replay,
-            allow_foreign_legacy_replay,
-            ..
-        }) => {
-            assert!(!allow_legacy_replay);
-            assert!(!allow_foreign_legacy_replay);
-        }
-        _ => panic!("expected install command"),
-    }
-
-    let cli = parse_cli([
-        "conary",
-        "install",
-        "bash",
-        "--allow-legacy-replay",
-        "--allow-foreign-legacy-replay",
-    ])
-    .unwrap();
-    match cli.command {
-        Some(Commands::Install {
-            allow_legacy_replay,
-            allow_foreign_legacy_replay,
-            ..
-        }) => {
-            assert!(allow_legacy_replay);
-            assert!(allow_foreign_legacy_replay);
-        }
-        _ => panic!("expected install command"),
+fn removed_native_replay_opt_in_flags_are_rejected() {
+    for args in [
+        vec!["conary", "install", "bash", "--allow-lifecycle-execution"],
+        vec!["conary", "update", "--allow-foreign-lifecycle-execution"],
+        vec!["conary", "remove", "bash", "--allow-lifecycle-execution"],
+        vec!["conary", "autoremove", "--allow-lifecycle-execution"],
+        vec![
+            "conary",
+            "ccs",
+            "install",
+            "fixture.ccs",
+            "--allow-lifecycle-execution",
+        ],
+    ] {
+        assert!(Cli::try_parse_from(args).is_err());
     }
 }
 
 #[test]
-fn install_accepts_capability_approval_flag() {
-    let cli = parse_cli(["conary", "install", "htop", "--allow-capabilities"]).unwrap();
-    match cli.command {
-        Some(Commands::Install {
-            allow_capabilities, ..
-        }) => {
-            assert!(allow_capabilities);
-        }
-        _ => panic!("expected install command"),
-    }
+fn install_rejects_removed_force_alias() {
+    assert!(parse_cli(["conary", "install", "bash", "--force"]).is_err());
+}
+
+#[test]
+fn install_rejects_removed_capability_approval_flag() {
+    assert!(parse_cli(["conary", "install", "htop", "--allow-capabilities"]).is_err());
+    assert!(
+        parse_cli([
+            "conary",
+            "ccs",
+            "install",
+            "fixture.ccs",
+            "--capability-policy",
+            "policy.toml",
+        ])
+        .is_err()
+    );
 }
 
 #[test]
@@ -471,178 +503,52 @@ fn update_defaults_to_always_sandbox() {
 }
 
 #[test]
-fn update_accepts_legacy_replay_flags_and_no_scripts_defaulting_false() {
+fn lifecycle_bypass_flag_is_rejected_on_every_mutation_surface() {
+    assert!(parse_cli(["conary", "install", "bash", "--no-scripts"]).is_err());
+    assert!(parse_cli(["conary", "remove", "bash", "--no-scripts"]).is_err());
+    assert!(parse_cli(["conary", "update", "bash", "--no-scripts"]).is_err());
+    assert!(parse_cli(["conary", "autoremove", "--no-scripts"]).is_err());
+    assert!(parse_cli(["conary", "ccs", "install", "fixture.ccs", "--no-scripts"]).is_err());
+    assert!(parse_cli(["conary", "automation", "apply", "--no-scripts"]).is_err());
+}
+
+#[test]
+fn unprotected_sandbox_modes_are_rejected_on_every_lifecycle_surface() {
+    for mode in ["never", "auto"] {
+        for args in [
+            vec!["conary", "install", "bash", "--sandbox", mode],
+            vec!["conary", "remove", "bash", "--sandbox", mode],
+            vec!["conary", "update", "bash", "--sandbox", mode],
+            vec!["conary", "autoremove", "--sandbox", mode],
+            vec!["conary", "ccs", "install", "fixture.ccs", "--sandbox", mode],
+        ] {
+            assert!(
+                Cli::try_parse_from(args).is_err(),
+                "--sandbox {mode} must not parse on a lifecycle command"
+            );
+        }
+    }
+}
+
+#[test]
+fn update_ownership_omission_is_model_derived() {
     let cli = parse_cli(["conary", "update"]).unwrap();
     match cli.command {
-        Some(Commands::Update {
-            no_scripts,
-            allow_legacy_replay,
-            allow_foreign_legacy_replay,
-            ..
-        }) => {
-            assert!(!no_scripts);
-            assert!(!allow_legacy_replay);
-            assert!(!allow_foreign_legacy_replay);
-        }
-        _ => panic!("expected update command"),
-    }
-
-    let cli = parse_cli([
-        "conary",
-        "update",
-        "bash",
-        "--no-scripts",
-        "--allow-legacy-replay",
-        "--allow-foreign-legacy-replay",
-    ])
-    .unwrap();
-    match cli.command {
-        Some(Commands::Update {
-            no_scripts,
-            allow_legacy_replay,
-            allow_foreign_legacy_replay,
-            ..
-        }) => {
-            assert!(no_scripts);
-            assert!(allow_legacy_replay);
-            assert!(allow_foreign_legacy_replay);
+        Some(Commands::Update { ownership, .. }) => {
+            assert_eq!(ownership, None);
         }
         _ => panic!("expected update command"),
     }
 }
 
 #[test]
-fn remove_accepts_legacy_replay_flags_defaulting_false() {
-    let cli = parse_cli(["conary", "remove", "bash"]).unwrap();
-    match cli.command {
-        Some(Commands::Remove {
-            allow_legacy_replay,
-            allow_foreign_legacy_replay,
-            ..
-        }) => {
-            assert!(!allow_legacy_replay);
-            assert!(!allow_foreign_legacy_replay);
-        }
-        _ => panic!("expected remove command"),
-    }
-
-    let cli = parse_cli([
-        "conary",
-        "remove",
-        "bash",
-        "--allow-legacy-replay",
-        "--allow-foreign-legacy-replay",
-    ])
-    .unwrap();
-    match cli.command {
-        Some(Commands::Remove {
-            allow_legacy_replay,
-            allow_foreign_legacy_replay,
-            ..
-        }) => {
-            assert!(allow_legacy_replay);
-            assert!(allow_foreign_legacy_replay);
-        }
-        _ => panic!("expected remove command"),
-    }
-}
-
-#[test]
-fn autoremove_accepts_legacy_replay_flags_defaulting_false() {
-    let cli = parse_cli(["conary", "autoremove"]).unwrap();
-    match cli.command {
-        Some(Commands::Autoremove {
-            allow_legacy_replay,
-            allow_foreign_legacy_replay,
-            ..
-        }) => {
-            assert!(!allow_legacy_replay);
-            assert!(!allow_foreign_legacy_replay);
-        }
-        _ => panic!("expected autoremove command"),
-    }
-
-    let cli = parse_cli([
-        "conary",
-        "autoremove",
-        "--allow-legacy-replay",
-        "--allow-foreign-legacy-replay",
-    ])
-    .unwrap();
-    match cli.command {
-        Some(Commands::Autoremove {
-            allow_legacy_replay,
-            allow_foreign_legacy_replay,
-            ..
-        }) => {
-            assert!(allow_legacy_replay);
-            assert!(allow_foreign_legacy_replay);
-        }
-        _ => panic!("expected autoremove command"),
-    }
-}
-
-#[test]
-fn ccs_install_accepts_legacy_replay_flags_and_no_scripts_defaulting_false() {
-    let cli = parse_cli(["conary", "ccs", "install", "fixture.ccs"]).unwrap();
-    match cli.command {
-        Some(Commands::Ccs(CcsCommands::Install {
-            no_scripts,
-            allow_legacy_replay,
-            allow_foreign_legacy_replay,
-            ..
-        })) => {
-            assert!(!no_scripts);
-            assert!(!allow_legacy_replay);
-            assert!(!allow_foreign_legacy_replay);
-        }
-        _ => panic!("expected ccs install command"),
-    }
-
-    let cli = parse_cli([
-        "conary",
-        "ccs",
-        "install",
-        "fixture.ccs",
-        "--no-scripts",
-        "--allow-legacy-replay",
-        "--allow-foreign-legacy-replay",
-    ])
-    .unwrap();
-    match cli.command {
-        Some(Commands::Ccs(CcsCommands::Install {
-            no_scripts,
-            allow_legacy_replay,
-            allow_foreign_legacy_replay,
-            ..
-        })) => {
-            assert!(no_scripts);
-            assert!(allow_legacy_replay);
-            assert!(allow_foreign_legacy_replay);
-        }
-        _ => panic!("expected ccs install command"),
-    }
-}
-
-#[test]
-fn update_dep_mode_omission_is_model_derived() {
-    let cli = parse_cli(["conary", "update"]).unwrap();
-    match cli.command {
-        Some(Commands::Update { dep_mode, .. }) => {
-            assert_eq!(dep_mode, None);
-        }
-        _ => panic!("expected update command"),
-    }
-}
-
-#[test]
-fn update_dep_mode_help_is_model_derived() {
+fn update_ownership_help_is_model_derived() {
     let help = subcommand_help("update");
-    let hard_coded_default = ["[default: ", "satisfy]"].concat();
+    let hard_coded_default = ["[default: ", "preserve]"].concat();
 
     assert!(
         !help.contains(&hard_coded_default),
-        "update dep-mode must not hard-code satisfy as its CLI default:\n{help}"
+        "update ownership must not hard-code preserve as its CLI default:\n{help}"
     );
 }
 

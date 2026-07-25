@@ -4,6 +4,7 @@ use crate::db::models::{
     RepositoryPackage, RepositoryPackageKey, RepositoryProvide, RepositoryRequirement,
     RepositoryRequirementGroup as DbRequirementGroup,
 };
+use crate::repository::remi_metadata::{RemiProvide, RemiRequirementGroup};
 use std::collections::HashMap;
 
 /// A single synced package row with all its normalized capability data.
@@ -11,7 +12,6 @@ use std::collections::HashMap;
 pub(in crate::repository) struct SyncedPackageRow {
     pub(in crate::repository) package: RepositoryPackage,
     pub(in crate::repository) provides: Vec<RepositoryProvide>,
-    pub(in crate::repository) requirements: Vec<RepositoryRequirement>,
     pub(in crate::repository) requirement_groups: Vec<DbRequirementGroup>,
     pub(in crate::repository) requirement_group_clauses: Vec<Vec<RepositoryRequirement>>,
 }
@@ -24,13 +24,13 @@ pub(in crate::repository) enum RepositorySyncSnapshot {
         packages: Vec<SyncedPackageRow>,
         package_keys: Vec<RepositoryPackageKey>,
     },
-    JsonFallback(JsonRepositorySyncSnapshot),
+    JsonContract(JsonRepositorySyncSnapshot),
 }
 
-/// Owned JSON fallback metadata ready to persist.
+/// Owned metadata from a repository that declares the Conary JSON contract.
 #[derive(Debug, Clone)]
 pub(in crate::repository) struct JsonRepositorySyncSnapshot {
-    pub(in crate::repository) packages: Vec<RepositoryPackage>,
+    pub(in crate::repository) packages: Vec<SyncedPackageRow>,
     pub(in crate::repository) deltas: Vec<JsonPackageDelta>,
 }
 
@@ -63,7 +63,8 @@ pub(super) struct RemiPackageEntry {
     #[allow(dead_code)] // Present in wire format; not used by sync logic
     pub(super) converted: bool,
     pub(super) architecture: Option<String>,
-    pub(super) dependencies: Option<Vec<String>>,
+    pub(super) provides: Vec<RemiProvide>,
+    pub(super) requirement_groups: Vec<RemiRequirementGroup>,
     pub(super) metadata: Option<serde_json::Value>,
 }
 
@@ -76,10 +77,6 @@ pub(super) struct CanonicalMapSnapshot {
     pub(super) generated_at: String,
     pub(super) entries: Vec<CanonicalMapEntry>,
 }
-
-/// Backward-compatible alias for existing tests and call sites.
-#[cfg(test)]
-pub(super) type CanonicalMapResponse = CanonicalMapSnapshot;
 
 /// A single entry in the canonical map response.
 #[derive(Debug, serde::Deserialize)]

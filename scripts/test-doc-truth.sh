@@ -29,6 +29,27 @@ stage_fixture() {
     git -C "$1" add -A
 }
 
+add_fixture_doc_frontmatter() {
+    local root="$1"
+    local file tmp
+
+    while IFS= read -r file; do
+        [[ "$(sed -n '1p' "$file")" == "---" ]] && continue
+        tmp="${file}.frontmatter"
+        {
+            printf '%s\n' \
+                '---' \
+                'last_updated: 2026-07-25' \
+                'revision: 1' \
+                'summary: Fixture document for documentation-truth self-tests' \
+                '---' \
+                ''
+            sed -n '1,$p' "$file"
+        } > "$tmp"
+        mv "$tmp" "$file"
+    done < <(find "$root/docs" -type f -name '*.md' | sort)
+}
+
 make_good_repo() {
     local root="$1"
 
@@ -40,6 +61,7 @@ make_good_repo() {
         "$root/crates/conary-core/src/db" \
         "$root/crates/conary-core/src" \
         "$root/docs/guides" \
+        "$root/docs/llms" \
         "$root/docs/modules" \
         "$root/docs/operations" \
         "$root/docs/roadmaps" \
@@ -62,18 +84,13 @@ The database layer uses Schema v69.
 `conary-core` is an internal workspace crate, not a stable external API.
 EOF
 
-    cat > "$root/docs/conaryopedia-v2.md" <<'EOF'
-# Conaryopedia
-
-The local SQLite database is currently schema v69.
-EOF
-
     cat > "$root/README.md" <<'EOF'
 # Conary
 
 Conary is still early. Expect failures.
 Use a VM or disposable host first.
-Scriptlet-heavy packages are expected to fail while adapter work continues.
+The primary adoption path is cross-distro package installation.
+The source package format defines the package ABI.
 If a package install fails, capture the command, distro, package name, Conary version, and refusal text.
 Use `conary system adopt --refresh` to refresh adoption tracking.
 Install the pinned preview release from v0.10.1.
@@ -98,7 +115,7 @@ EOF
     cat > "$root/ROADMAP.md" <<'EOF'
 # Roadmap
 
-The preview remains adoption-led.
+The cross-distro package-installation preview is active.
 Remote Forge validation is paused pending a KVM-capable runner.
 The 2026-05-21 Group O QEMU run is dated local evidence.
 The 2026-05-21 Group P QEMU run is dated local evidence.
@@ -122,10 +139,21 @@ The currently pinned preview release is v0.10.1.
 EOF
 
     cat > "$root/docs/operations/external-tester-outreach.md" <<'EOF'
+---
+last_updated: 2026-07-25
+revision: 1
+status: postponed
+target_release: v0.11.0
+summary: Fixture postponed launch packet
+---
+
 # External Tester Outreach
 
 Do not publish until release readiness is repinned.
-The currently pinned preview release is v0.10.1.
+The historical safety baseline is v0.10.1.
+The intended release is v0.11.0.
+https://github.com/ConaryLabs/Conary/releases/tag/v0.11.0
+- [ ] Publish immutable `v0.11.0`.
 EOF
 
     cat > "$root/docs/INTEGRATION-TESTING.md" <<'EOF'
@@ -160,7 +188,7 @@ EOF
 
     cat > "$root/site/src/routes/install/+page.svelte" <<'EOF'
 <section>
-	<p>Start with the adoption-led limited preview on a VM or non-critical host.</p>
+	<p>Start with the cross-distro limited preview on a VM or non-critical host.</p>
 	<p>Remi cold-start conversion can make first package use slower.</p>
 	<p>Use the pinned preview release.</p>
 </section>
@@ -204,22 +232,27 @@ EOF
     cat > "$root/apps/conaryd/src/daemon/auth.rs" <<'EOF'
 //! Authentication and authorization for the daemon.
 //!
-//! PolicyKit authorization is currently an unimplemented fail-closed stub.
-//! Non-root write operations are denied until a real DBus check and policy-file
-//! contract exist.
+//! Root users, the daemon service identity, and the configured Unix socket group
+//! have full access. Every other peer is denied.
 EOF
 
-    cat > "$root/apps/conaryd/src/daemon/mod.rs" <<'EOF'
+    cat > "$root/apps/conaryd/src/daemon/config.rs" <<'EOF'
 pub struct DaemonConfig {
-    pub require_polkit: bool,
+    pub socket_mode: u32,
+    pub socket_group: Option<String>,
 }
 
 impl Default for DaemonConfig {
     fn default() -> Self {
         Self {
-            require_polkit: true,
+            socket_mode: Self::DEFAULT_SOCKET_MODE,
+            socket_group: None,
         }
     }
+}
+
+impl DaemonConfig {
+    pub const DEFAULT_SOCKET_MODE: u32 = 0o660;
 }
 EOF
 
@@ -253,12 +286,6 @@ pub(super) fn v1_router() -> Router<SharedState> {
     Router::new()
         .route("/version", get(version_handler))
         .route("/metrics", get(metrics_handler))
-        .route("/example", get(list_example_handler).post(create_example_handler))
-        .route("/example/{id}", put(update_example_handler).patch(patch_example_handler).delete(delete_example_handler))
-        .route("/system/states", get(list_states_handler))
-        .route("/system/rollback", post(rollback_handler))
-        .route("/system/verify", post(verify_handler))
-        .route("/system/gc", post(gc_handler))
 }
 EOF
 
@@ -301,20 +328,15 @@ EOF
 # conaryd
 
 `/health` is outside the v1 auth gate. `/v1/*` routes are behind the v1 gate.
+Unimplemented system-operation routes are absent rather than exposed as placeholders.
+
+Root, the daemon identity, and members of the exact group passed through
+`--socket-group` can perform daemon operations. There is no PolicyKit placeholder.
 
 <!-- conaryd-routes:start -->
 GET /health | Health check
 GET /v1/version | Version info
 GET /v1/metrics | Metrics
-GET /v1/example | Example list
-POST /v1/example | Example create
-PUT /v1/example/{id} | Example update
-PATCH /v1/example/{id} | Example patch
-DELETE /v1/example/{id} | Example delete
-GET /v1/system/states | Preview stub
-POST /v1/system/rollback | Preview stub
-POST /v1/system/verify | Preview stub
-POST /v1/system/gc | Preview stub
 GET /v1/transactions | List jobs
 POST /v1/transactions | Create job
 POST /v1/transactions/dry-run | Dry-run job
@@ -336,6 +358,38 @@ GET /v1/events | SSE events
 <!-- conaryd-routes:end -->
 EOF
 
+    cat > "$root/AGENTS.md" <<'EOF'
+# Repository Guidelines
+
+Current roadmap state lives under `docs/roadmaps/`.
+EOF
+
+    cat > "$root/CONTRIBUTING.md" <<'EOF'
+# Contributing
+
+Stable contracts live under `docs/specs/`.
+EOF
+
+    cat > "$root/docs/llms/README.md" <<'EOF'
+# Assistant Map
+
+Subsystem routing lives under `docs/modules/`.
+EOF
+
+    cat > "$root/docs/llms/subsystem-map.md" <<'EOF'
+# Subsystem Map
+
+Canonical specifications live under `docs/specs/`.
+EOF
+
+    cat > "$root/docs/modules/feature-ownership.md" <<'EOF'
+# Feature Ownership
+
+Roadmap ordering lives under `docs/roadmaps/`.
+EOF
+
+    mkdir -p "$root/docs/specs"
+    add_fixture_doc_frontmatter "$root"
     git -C "$root" init -q
     stage_fixture "$root"
 }
@@ -401,8 +455,8 @@ break_policykit_claim() {
 EOF
 }
 
-break_require_polkit_default() {
-    sed -i 's/require_polkit: true/require_polkit: false/' "$1/apps/conaryd/src/daemon/mod.rs"
+break_socket_group_default() {
+    sed -i 's/socket_group: None/socket_group: Some("wheel".to_string())/' "$1/apps/conaryd/src/daemon/config.rs"
 }
 
 break_route_doc() {
@@ -460,7 +514,7 @@ break_release_artifact_version() {
 }
 
 break_system_init_profile() {
-    printf '\n```bash\nconary system init\n```\n' >> "$1/README.md"
+    printf '\n```bash\nconary system init --profile fedora-44\n```\n' >> "$1/README.md"
 }
 
 break_site_release_version() {
@@ -537,9 +591,22 @@ break_mandatory_provider_skill() {
         "$(retired_provider_name)" >> "$1/README.md"
 }
 
-break_planning_archive_directory() {
-    mkdir -p "$1/docs/plans/archive"
-    printf '# Archived active plan\n' > "$1/docs/plans/archive/old-plan.md"
+break_retired_plan_directory() {
+    mkdir -p "$1/docs/plans"
+    printf '# Retired active plan location\n' > "$1/docs/plans/example-plan.md"
+}
+
+break_retired_design_directory() {
+    mkdir -p "$1/docs/designs"
+    printf '# Retired active design location\n' > "$1/docs/designs/example-design.md"
+}
+
+break_live_doc_location_claim() {
+    printf '\nActive designs live under `docs/missing-live-location/`.\n' >> "$1/AGENTS.md"
+}
+
+break_frontmatter_revision() {
+    sed -i '/^revision:/d' "$1/docs/ARCHITECTURE.md"
 }
 
 expect_pass
@@ -548,7 +615,7 @@ expect_failure "unknown CLI command reference" break_cli_command_reference 'unkn
 expect_failure "retired command doc" break_retired_command_doc 'retired command'
 expect_failure "retired command parser" break_retired_command_parser 'retired command'
 expect_failure "PolicyKit overclaim" break_policykit_claim 'PolicyKit'
-expect_failure "require_polkit default" break_require_polkit_default 'require_polkit'
+expect_failure "socket-group default" break_socket_group_default 'root/daemon-only default'
 expect_failure "missing route doc" break_route_doc 'conaryd route'
 expect_failure "missing core publish guard" break_core_publish_guard 'publish = false'
 expect_failure "stable core API claim" break_core_api_claim 'stable.*conary-core'
@@ -556,13 +623,13 @@ expect_failure "preview status drift" break_preview_status 'early preview warnin
 expect_failure "missing detailed roadmap link" break_root_roadmap_link 'detailed.*roadmap'
 expect_failure "missing external tester milestone" break_detailed_roadmap_milestone 'first external tester milestone'
 expect_failure "tracker release version drift" break_tracker_release_version 'stale conary release reference'
-expect_failure "outreach release version drift" break_outreach_release_version 'stale conary release reference'
+expect_failure "outreach release version drift" break_outreach_release_version 'current-release baseline|outside current/target contract'
 expect_failure "missing detailed remote Forge evidence" break_detailed_remote_forge_evidence 'remote Forge paused wording'
 expect_failure "missing detailed Group O evidence" break_detailed_group_o_evidence 'dated Group O evidence'
 expect_failure "missing detailed Group P evidence" break_detailed_group_p_evidence 'dated Group P evidence'
 expect_failure "release doc version drift" break_release_doc_version 'stale conary release reference'
 expect_failure "release artifact version drift" break_release_artifact_version 'stale conary release reference'
-expect_failure "system init exact profile" break_system_init_profile 'system init without an exact --profile'
+expect_failure "system init source independence" break_system_init_profile 'system init depend on a host distro profile'
 expect_failure "site release version drift" break_site_release_version 'stale conary release reference'
 expect_failure "site generation apply intent" break_site_generation_apply_intent 'generation build apply-intent example'
 expect_failure "site federation boundary" break_site_federation_boundary 'federation preview-boundary caveat'
@@ -580,6 +647,9 @@ expect_failure "live retired provider reference" break_live_provider_reference '
 expect_failure "assistant history archive link" break_assistant_history_link 'neutral layout.*assistant history archive'
 expect_failure "deleted validator reference" break_deleted_validator_reference 'neutral layout.*deleted structural validator'
 expect_failure "mandatory provider skill" break_mandatory_provider_skill 'neutral layout.*mandatory provider skill directive'
-expect_failure "planning archive directory" break_planning_archive_directory 'neutral layout.*planning archive path'
+expect_failure "retired plan directory" break_retired_plan_directory 'neutral layout.*retired design/plan path'
+expect_failure "retired design directory" break_retired_design_directory 'neutral layout.*retired design/plan path'
+expect_failure "missing live documentation directory" break_live_doc_location_claim 'names missing live documentation directory'
+expect_failure "missing frontmatter revision" break_frontmatter_revision 'frontmatter requires a positive integer revision'
 
 echo "docs truth self-tests passed."

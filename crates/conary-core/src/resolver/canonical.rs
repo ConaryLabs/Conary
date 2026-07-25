@@ -52,26 +52,49 @@ impl<'db> CanonicalResolver<'db> {
         Self { conn }
     }
 
-    /// Look up repository name for a canonical package implementation.
-    /// Look up the best repository name for a canonical implementation.
-    ///
-    /// Returns the highest-priority enabled repo that carries this package.
-    /// NOTE: This is approximate -- if the same implementation exists in
-    /// multiple repos (e.g., fedora-base and fedora-updates), only the
-    /// highest-priority one is returned. Exact per-repo canonical scoping
-    /// would require expanding ResolverCandidate to carry per-repo variants.
-    fn lookup_repo_name(&self, canonical_id: i64, distro_name: &str) -> Option<String> {
-        self.conn
-            .query_row(
-                "SELECT r.name FROM repository_packages rp
+    /// Look up every enabled repository that carries an exact canonical
+    /// implementation. Repository-scoped requests select from these concrete
+    /// variants rather than treating a distro name as a repository alias.
+    fn lookup_repo_names(&self, canonical_id: i64, distro_name: &str) -> Result<Vec<String>> {
+        let mut statement = self.conn.prepare(
+            "SELECT DISTINCT r.name FROM repository_packages rp
                  JOIN repositories r ON rp.repository_id = r.id
                  WHERE rp.canonical_id = ?1 AND rp.name = ?2 AND r.enabled = 1
-                 ORDER BY r.priority DESC, r.id ASC
-                 LIMIT 1",
-                rusqlite::params![canonical_id, distro_name],
-                |row| row.get(0),
-            )
-            .ok()
+                 ORDER BY r.priority DESC, r.id ASC",
+        )?;
+        let rows = statement.query_map(rusqlite::params![canonical_id, distro_name], |row| {
+            row.get(0)
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    fn expand_implementations(
+        &self,
+        implementations: Vec<PackageImplementation>,
+    ) -> Result<Vec<ResolverCandidate>> {
+        let mut candidates = Vec::new();
+        for implementation in implementations {
+            let repository_names =
+                self.lookup_repo_names(implementation.canonical_id, &implementation.distro_name)?;
+            if repository_names.is_empty() {
+                candidates.push(ResolverCandidate {
+                    distro_name: implementation.distro_name,
+                    distro: implementation.distro,
+                    canonical_id: implementation.canonical_id,
+                    repository_name: None,
+                });
+                continue;
+            }
+            for repository_name in repository_names {
+                candidates.push(ResolverCandidate {
+                    distro_name: implementation.distro_name.clone(),
+                    distro: implementation.distro.clone(),
+                    canonical_id: implementation.canonical_id,
+                    repository_name: Some(repository_name),
+                });
+            }
+        }
+        Ok(candidates)
     }
 
     /// Expand a package name into all known implementation candidates.
@@ -85,36 +108,14 @@ impl<'db> CanonicalResolver<'db> {
                 return Ok(vec![]);
             };
             let impls = PackageImplementation::find_by_canonical(self.conn, canonical_id)?;
-            return Ok(impls
-                .into_iter()
-                .map(|i| {
-                    let repo_name = self.lookup_repo_name(i.canonical_id, &i.distro_name);
-                    ResolverCandidate {
-                        distro_name: i.distro_name,
-                        distro: i.distro,
-                        canonical_id: i.canonical_id,
-                        repository_name: repo_name,
-                    }
-                })
-                .collect());
+            return self.expand_implementations(impls);
         }
 
         // Try as distro-specific name
         if let Some(impl_entry) = PackageImplementation::find_by_any_distro_name(self.conn, name)? {
             let canonical_id = impl_entry.canonical_id;
             let impls = PackageImplementation::find_by_canonical(self.conn, canonical_id)?;
-            return Ok(impls
-                .into_iter()
-                .map(|i| {
-                    let repo_name = self.lookup_repo_name(i.canonical_id, &i.distro_name);
-                    ResolverCandidate {
-                        distro_name: i.distro_name,
-                        distro: i.distro,
-                        canonical_id: i.canonical_id,
-                        repository_name: repo_name,
-                    }
-                })
-                .collect());
+            return self.expand_implementations(impls);
         }
 
         Ok(Vec::new())
@@ -216,6 +217,9 @@ impl<'db> CanonicalResolver<'db> {
         let mut ranked = candidates.to_vec();
 
         ranked.retain(|candidate| candidate_allowed_by_policy(candidate, policy));
+        if let RequestScope::Repository(repository) = &policy.request_scope {
+            ranked.retain(|candidate| candidate.repository_name.as_deref() == Some(repository));
+        }
 
         let pin = DistroPin::get_current(self.conn)?;
         let affinities = SystemAffinity::list(self.conn)?;
@@ -234,16 +238,8 @@ impl<'db> CanonicalResolver<'db> {
             // 0. Explicit request scope first (root requests only)
             match &policy.request_scope {
                 RequestScope::Repository(repo) => {
-                    // Use repository_name when available for exact repo scoping,
-                    // fall back to distro identity when repo name isn't known.
-                    let a_match = a
-                        .repository_name
-                        .as_deref()
-                        .map_or(a.distro == repo.as_str(), |rn| rn == repo.as_str());
-                    let b_match = b
-                        .repository_name
-                        .as_deref()
-                        .map_or(b.distro == repo.as_str(), |rn| rn == repo.as_str());
+                    let a_match = a.repository_name.as_deref() == Some(repo.as_str());
+                    let b_match = b.repository_name.as_deref() == Some(repo.as_str());
                     if a_match != b_match {
                         return b_match.cmp(&a_match);
                     }
@@ -560,25 +556,34 @@ mod tests {
     #[test]
     fn test_rank_with_policy_scope_repo() {
         let (_t, conn) = create_test_db();
-
-        let mut pkg = CanonicalPackage::new("curl".into(), "package".into());
-        let cid = pkg.insert(&conn).unwrap();
-        let mut i1 =
-            PackageImplementation::new(cid, "fedora-44".into(), "curl".into(), "auto".into());
-        i1.insert_or_ignore(&conn).unwrap();
-        let mut i2 =
-            PackageImplementation::new(cid, "ubuntu-26.04".into(), "curl".into(), "auto".into());
-        i2.insert_or_ignore(&conn).unwrap();
-
         let resolver = CanonicalResolver::new(&conn);
-        let candidates = resolver.expand("curl").unwrap();
+        let candidates = vec![
+            ResolverCandidate {
+                distro_name: "curl".into(),
+                distro: "fedora-44".into(),
+                canonical_id: 1,
+                repository_name: Some("fedora-base".into()),
+            },
+            ResolverCandidate {
+                distro_name: "curl".into(),
+                distro: "ubuntu-26.04".into(),
+                canonical_id: 1,
+                repository_name: Some("ubuntu-main".into()),
+            },
+            ResolverCandidate {
+                distro_name: "curl".into(),
+                distro: "ubuntu-main".into(),
+                canonical_id: 1,
+                repository_name: None,
+            },
+        ];
 
-        // Policy scope: prefer ubuntu-26.04
         let policy =
-            ResolutionPolicy::new().with_scope(RequestScope::Repository("ubuntu-26.04".into()));
+            ResolutionPolicy::new().with_scope(RequestScope::Repository("ubuntu-main".into()));
         let ranked = resolver
             .rank_candidates_with_policy(&candidates, &policy)
             .unwrap();
+        assert_eq!(ranked.len(), 1);
         assert_eq!(ranked[0].distro, "ubuntu-26.04");
     }
 
@@ -756,7 +761,7 @@ mod tests {
     }
 
     #[test]
-    fn test_lookup_repo_name_picks_highest_priority() {
+    fn expansion_preserves_exact_repository_variants() {
         let (_t, conn) = create_test_db();
 
         let mut pkg = CanonicalPackage::new("httpd-web".into(), "package".into());
@@ -781,14 +786,14 @@ mod tests {
 
         // Same package in both repos, both linked to same canonical
         conn.execute(
-            "INSERT INTO repository_packages (repository_id, name, version, checksum, size, download_url, canonical_id)
-             VALUES (?1, 'httpd', '2.4.58', 'sha256:a', 100, 'https://base.com/httpd', ?2)",
+            "INSERT INTO repository_packages (repository_id, name, version, checksum, size, download_url, version_scheme, canonical_id)
+             VALUES (?1, 'httpd', '2.4.58', 'sha256:a', 100, 'https://base.com/httpd', 'rpm', ?2)",
             rusqlite::params![base_repo, cid],
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO repository_packages (repository_id, name, version, checksum, size, download_url, canonical_id)
-             VALUES (?1, 'httpd', '2.4.59', 'sha256:b', 100, 'https://updates.com/httpd', ?2)",
+            "INSERT INTO repository_packages (repository_id, name, version, checksum, size, download_url, version_scheme, canonical_id)
+             VALUES (?1, 'httpd', '2.4.59', 'sha256:b', 100, 'https://updates.com/httpd', 'rpm', ?2)",
             rusqlite::params![updates_repo, cid],
         )
         .unwrap();
@@ -800,11 +805,22 @@ mod tests {
 
         let resolver = CanonicalResolver::new(&conn);
         let candidates = resolver.expand("httpd").unwrap();
-        assert_eq!(candidates.len(), 1);
-        // Should pick fedora-updates (priority 20 > 10)
+        assert_eq!(candidates.len(), 2);
         assert_eq!(
             candidates[0].repository_name.as_deref(),
             Some("fedora-updates")
         );
+        assert_eq!(
+            candidates[1].repository_name.as_deref(),
+            Some("fedora-base")
+        );
+
+        let policy =
+            ResolutionPolicy::new().with_scope(RequestScope::Repository("fedora-base".into()));
+        let ranked = resolver
+            .rank_candidates_with_policy(&candidates, &policy)
+            .unwrap();
+        assert_eq!(ranked.len(), 1);
+        assert_eq!(ranked[0].repository_name.as_deref(), Some("fedora-base"));
     }
 }

@@ -1,28 +1,25 @@
 // src/commands/install/restore.rs
 //! Shared install preparation/execution helpers for state restore.
 
-use super::dependencies::extract_runtime_deps;
-use super::inner::install_inner;
+use super::acquire::install_provenance_from_resolved;
+use super::ccs_removal_hooks::CcsRemovalHookPlan;
+use super::native_events::PreparedNativeTransaction;
 use super::prepare::{UpgradeCheck, check_upgrade_status, parse_package};
 use super::resolve::{
     PolicyOptions, ResolutionOutcome, ResolvedSourceType, resolve_package_path_with_policy,
 };
 use super::{
-    CcsTransactionInstallOptions, ComponentSelection, ExtractionResult, InstallOptions,
-    InstallPhase, InstallProgress, InstallSemantics, LegacyReplayInstallState,
-    PackageExecutionPath, PreScriptletState, ScriptletContext, TransactionContext,
-    build_resolution_policy, extract_and_classify_files, resolve_canonical_name,
-    run_pre_install_phase,
+    ExtractionResult, InstallOptions, InstallPhase, InstallProgress, InstallSemantics,
+    NativeLifecycleInstallState, TransactionContext, build_resolution_policy,
+    extract_and_classify_files, resolve_canonical_name, verify_ccs_package_authority,
 };
 use anyhow::{Context, Result};
 use conary_core::ccs::CcsPackage;
-use conary_core::ccs::legacy_replay::{LegacyReplayPlan, LegacyReplayRefusalKind};
 use conary_core::db::models::{ProvideEntry, StateMember, Trove, TroveType};
 use conary_core::packages::PackageFormat;
-use conary_core::scriptlet::SandboxMode;
-use conary_core::transaction::TransactionEngine;
-use rusqlite::{Connection, Transaction};
-use std::collections::HashSet;
+use conary_core::repository::dependency_model::RepositoryRequirementKind;
+use conary_core::resolver::identity::{PackageIdentity, ProvidedCapability};
+use rusqlite::Connection;
 use tempfile::TempDir;
 
 pub(crate) struct PreparedInstall {
@@ -32,76 +29,107 @@ pub(crate) struct PreparedInstall {
     old_trove_to_upgrade: Option<Trove>,
     semantics: InstallSemantics,
     _temp_dir: Option<TempDir>,
-    legacy_replay: super::LegacyReplayOptions,
-    #[allow(dead_code)]
-    legacy_replay_state: LegacyReplayInstallState,
-}
-
-pub(crate) struct PreparedInstallExecution {
-    prepared: PreparedInstall,
-    pre_state: PreScriptletState,
-    progress: InstallProgress,
-    root: String,
-    no_scripts: bool,
-    sandbox_mode: SandboxMode,
-    legacy_replay: super::LegacyReplayOptions,
+    native_lifecycle_state: NativeLifecycleInstallState,
+    native_transaction: PreparedNativeTransaction,
+    ccs_removal_hook_plan: CcsRemovalHookPlan,
 }
 
 #[derive(Debug, Default)]
 pub(crate) struct TargetStateView {
-    members: HashSet<(String, Option<String>)>,
-    provides: TargetProvidesView,
-}
-
-#[derive(Debug, Default)]
-struct TargetProvidesView {
-    raw: HashSet<String>,
-}
-
-impl TargetProvidesView {
-    fn insert(&mut self, capability: impl Into<String>) {
-        self.raw.insert(capability.into());
-    }
-
-    fn satisfies(&self, capability: &str) -> bool {
-        self.raw.contains(capability)
-    }
+    packages: Vec<PackageIdentity>,
 }
 
 impl TargetStateView {
-    fn contains_member(&self, name: &str, architecture: Option<&str>) -> bool {
-        self.members
-            .contains(&(name.to_string(), architecture.map(str::to_string)))
-    }
-
-    fn add_member(&mut self, name: impl Into<String>, architecture: Option<&str>) {
-        self.members
-            .insert((name.into(), architecture.map(str::to_string)));
-    }
-
     fn add_installed_trove(&mut self, conn: &Connection, trove: &Trove) -> Result<()> {
-        self.add_member(&trove.name, trove.architecture.as_deref());
-        self.provides.insert(trove.name.clone());
+        let version_scheme = trove.version_scheme;
+        let mut provided_capabilities = Vec::new();
         if let Some(trove_id) = trove.id {
             for provide in ProvideEntry::find_by_trove(conn, trove_id)? {
-                self.provides.insert(provide.capability.clone());
-                self.provides.insert(provide.to_typed_string());
+                provided_capabilities.push(ProvidedCapability {
+                    name: provide.capability.clone(),
+                    version: provide.version.clone(),
+                    version_scheme,
+                });
+                let typed = provide.to_typed_string();
+                if typed != provide.capability {
+                    provided_capabilities.push(ProvidedCapability {
+                        name: typed,
+                        version: provide.version,
+                        version_scheme,
+                    });
+                }
             }
         }
+        self.packages.push(package_identity(
+            trove.name.clone(),
+            trove.version.clone(),
+            trove.architecture.clone(),
+            version_scheme,
+            provided_capabilities,
+            trove.id,
+        ));
         Ok(())
     }
 
     fn add_prepared_install(&mut self, prepared: &PreparedInstall) {
-        self.add_member(prepared.pkg.name(), prepared.pkg.architecture());
-        self.provides.insert(prepared.pkg.name().to_string());
+        let version_scheme = prepared.pkg.version_scheme();
+        let mut provided_capabilities = prepared
+            .pkg
+            .provides()
+            .iter()
+            .map(|provide| ProvidedCapability {
+                name: provide.name.clone(),
+                version: provide.version.clone(),
+                version_scheme,
+            })
+            .collect::<Vec<_>>();
         for provide in &prepared.extraction.language_provides {
-            self.provides.insert(provide.to_dep_string());
-            self.provides.insert(provide.name.clone());
+            provided_capabilities.push(ProvidedCapability {
+                name: provide.to_dep_string(),
+                version: None,
+                version_scheme,
+            });
+            provided_capabilities.push(ProvidedCapability {
+                name: provide.name.clone(),
+                version: None,
+                version_scheme,
+            });
         }
+        self.packages.push(package_identity(
+            prepared.pkg.name().to_string(),
+            prepared.pkg.version().to_string(),
+            prepared.pkg.architecture().map(str::to_string),
+            version_scheme,
+            provided_capabilities,
+            None,
+        ));
     }
+}
 
-    fn dependency_satisfied(&self, dependency: &str) -> bool {
-        self.provides.satisfies(dependency)
+fn package_identity(
+    name: String,
+    version: String,
+    architecture: Option<String>,
+    version_scheme: conary_core::repository::versioning::VersionScheme,
+    provided_capabilities: Vec<ProvidedCapability>,
+    installed_trove_id: Option<i64>,
+) -> PackageIdentity {
+    PackageIdentity {
+        repo_package_id: None,
+        name,
+        version,
+        package_release: None,
+        architecture,
+        version_scheme,
+        repository_id: None,
+        repository_name: String::new(),
+        repository_distro: None,
+        repository_priority: 0,
+        canonical_id: None,
+        canonical_name: None,
+        installed_trove_id,
+        installed_pinned: false,
+        provided_capabilities,
     }
 }
 
@@ -140,14 +168,26 @@ pub(crate) fn validate_prepared_install_dependencies(
     prepared: &PreparedInstall,
     target_state: &TargetStateView,
 ) -> Result<()> {
-    let unsatisfied: Vec<_> = extract_runtime_deps(prepared.pkg.as_ref())
-        .into_iter()
-        .filter(|dep| !should_skip_restore_dependency(dep.name.as_str()))
-        .filter(|dep| {
-            !target_state.contains_member(&dep.name, None)
-                && !target_state.dependency_satisfied(dep.name.as_str())
-        })
-        .collect();
+    let mut unsatisfied = Vec::new();
+    for requirement in prepared.pkg.requirements().iter().filter(|requirement| {
+        matches!(
+            requirement.kind,
+            RepositoryRequirementKind::Depends | RepositoryRequirementKind::PreDepends
+        )
+    }) {
+        conary_core::repository::requirement::validate_requirement_group(
+            requirement,
+            prepared.pkg.version_scheme(),
+        )
+        .map_err(anyhow::Error::msg)?;
+        if !conary_core::resolver::requirement_expression_satisfied(
+            &requirement.expression,
+            prepared.pkg.version_scheme(),
+            &target_state.packages,
+        )? {
+            unsatisfied.push(requirement);
+        }
+    }
 
     if unsatisfied.is_empty() {
         return Ok(());
@@ -155,7 +195,12 @@ pub(crate) fn validate_prepared_install_dependencies(
 
     let summary = unsatisfied
         .iter()
-        .map(|dep| format!("{} {}", dep.name, dep.constraint))
+        .map(|requirement| {
+            requirement.native_text.clone().unwrap_or_else(|| {
+                serde_json::to_string(&requirement.expression)
+                    .unwrap_or_else(|_| "<invalid typed requirement>".to_string())
+            })
+        })
         .collect::<Vec<_>>()
         .join(", ");
 
@@ -173,16 +218,14 @@ pub(crate) async fn prepare_install_for_restore(
 ) -> Result<PreparedInstall> {
     let InstallOptions {
         db_path,
-        root,
+        root: _,
         version,
         repo,
         architecture,
         selection_reason,
         allow_downgrade,
         from_distro,
-        no_scripts,
-        sandbox_mode,
-        legacy_replay,
+        sandbox_mode: _,
         ..
     } = opts;
 
@@ -194,7 +237,7 @@ pub(crate) async fn prepare_install_for_restore(
         effective_source_policy.resolution,
         from_distro.as_deref(),
         repo.as_deref(),
-    );
+    )?;
     let primary_flavor = effective_source_policy.primary_flavor;
     let resolved_name = resolve_canonical_name(conn, package, from_distro.as_deref(), &policy)?;
     let package_name = resolved_name.unwrap_or_else(|| package.to_string());
@@ -234,70 +277,83 @@ pub(crate) async fn prepare_install_for_restore(
         .to_str()
         .ok_or_else(|| anyhow::anyhow!("Invalid package path (non-UTF8)"))?;
 
-    let (pkg, semantics, legacy_bundle) =
-        if resolved.source_type == ResolvedSourceType::Remi || path_str.ends_with(".ccs") {
-            let ccs_pkg = CcsPackage::parse(path_str).context("Failed to parse CCS package")?;
-            let legacy_bundle = ccs_pkg.manifest().legacy_scriptlets.clone();
-            (
-                Box::new(ccs_pkg) as Box<dyn PackageFormat>,
-                InstallSemantics::ccs(),
-                legacy_bundle,
-            )
-        } else {
-            let format = super::detect_package_format(path_str)
-                .with_context(|| format!("Failed to detect package format for '{}'", path_str))?;
-            (
-                parse_package(&resolved.path, format)?,
-                InstallSemantics::legacy(format),
-                None,
-            )
-        };
+    let has_ccs_contract =
+        conary_core::ccs::archive_reader::has_current_ccs_archive_contract(&resolved.path)
+            .context("Failed to inspect package archive contract")?;
+    let (pkg, semantics, native_lifecycle_bundle, ccs_remove_hook) = if resolved.source_type
+        == ResolvedSourceType::Remi
+        || has_ccs_contract
+    {
+        let repository_provenance = install_provenance_from_resolved(&resolved);
+        let verified =
+            verify_ccs_package_authority(db_path, &resolved.path, repository_provenance.as_ref())?;
+        let ccs_pkg = CcsPackage::from_verified_archive(path_str, &verified)
+            .context("Failed to construct verified CCS package")?;
+        let native_lifecycle_bundle = ccs_pkg.manifest().native_lifecycle.clone();
+        let ccs_remove_hook = ccs_pkg.manifest().hooks.pre_remove.clone();
+        let version_scheme = ccs_pkg.manifest().package.version_scheme;
+        (
+            Box::new(ccs_pkg) as Box<dyn PackageFormat>,
+            InstallSemantics::ccs(version_scheme),
+            native_lifecycle_bundle,
+            ccs_remove_hook,
+        )
+    } else {
+        let format = super::detect_package_format(path_str)
+            .with_context(|| format!("Failed to detect package format for '{}'", path_str))?;
+        (
+            parse_package(&resolved.path, format)?,
+            InstallSemantics::native_package(format),
+            None,
+            None,
+        )
+    };
 
     progress.set_phase(package, InstallPhase::Parsing);
-    let extraction = extract_and_classify_files(
+    let mut extraction = extract_and_classify_files(
         pkg.as_ref(),
         &super::ComponentSelection::Defaults,
         &progress,
     )?;
+    extraction.ccs_remove_hook = ccs_remove_hook;
 
-    let old_trove_to_upgrade =
-        match check_upgrade_status(conn, pkg.as_ref(), &semantics, allow_downgrade)? {
-            UpgradeCheck::FreshInstall => None,
-            UpgradeCheck::Upgrade(trove) | UpgradeCheck::Downgrade(trove) => Some(*trove),
-        };
-    let legacy_replay_state = if legacy_bundle.is_some() || old_trove_to_upgrade.is_some() {
-        let ccs_opts = CcsTransactionInstallOptions {
-            db_path,
-            root,
-            dry_run: false,
-            defer_generation: false,
-            quiet: false,
-            no_scripts,
-            sandbox_mode,
-            allow_downgrade,
-            reinstall: false,
-            selection_reason,
-            component_selection: ComponentSelection::Defaults,
-            selected_manifest_components: None,
-            repository_provenance: None,
-            legacy_replay,
-        };
-        let mut state = super::plan_ccs_fresh_install_legacy_replay(
-            conn,
-            legacy_bundle.as_ref(),
-            &ccs_opts,
-            old_trove_to_upgrade.is_some(),
-        )?;
-        let old_state = super::plan_ccs_old_installed_upgrade_legacy_replay(
-            conn,
-            old_trove_to_upgrade.as_ref(),
-            &ccs_opts,
-        )?;
-        super::merge_old_upgrade_legacy_replay_state(&mut state, old_state);
-        state
-    } else {
-        LegacyReplayInstallState::default()
+    let old_trove_to_upgrade = match check_upgrade_status(
+        conn,
+        pkg.as_ref(),
+        &semantics,
+        allow_downgrade,
+    )? {
+        UpgradeCheck::FreshInstall => None,
+        UpgradeCheck::AlreadyInstalled(trove) => {
+            anyhow::bail!(
+                "Restore preflight expected '{}' to be absent/pending, but resolver reported {} {} already installed",
+                package,
+                trove.name,
+                trove.version
+            )
+        }
+        UpgradeCheck::Upgrade(trove) | UpgradeCheck::Downgrade(trove) => Some(*trove),
     };
+    let native_lifecycle_state =
+        NativeLifecycleInstallState::from_bundle(native_lifecycle_bundle.as_ref())?;
+    let native_transaction = PreparedNativeTransaction::prepare_install(
+        conn,
+        pkg.name(),
+        pkg.version(),
+        pkg.architecture(),
+        semantics.version_scheme,
+        pkg.provides(),
+        native_lifecycle_bundle.as_ref(),
+        old_trove_to_upgrade.as_ref(),
+        &[],
+        &[],
+        &extraction,
+    )?;
+    let ccs_removal_hook_plan = CcsRemovalHookPlan::prepare(
+        conn,
+        old_trove_to_upgrade.as_ref().into_iter(),
+        std::iter::empty(),
+    )?;
 
     Ok(PreparedInstall {
         pkg,
@@ -306,214 +362,80 @@ pub(crate) async fn prepare_install_for_restore(
         old_trove_to_upgrade,
         semantics,
         _temp_dir: resolved._temp_dir,
-        legacy_replay,
-        legacy_replay_state,
+        native_lifecycle_state,
+        native_transaction,
+        ccs_removal_hook_plan,
     })
 }
 
-pub(crate) fn run_pre_install_for_prepared(
-    conn: &Connection,
+pub(crate) fn execute_prepared_install_graph(
+    conn: &mut Connection,
     db_path: &str,
     root: &str,
-    no_scripts: bool,
-    sandbox_mode: SandboxMode,
     prepared: PreparedInstall,
-) -> Result<PreparedInstallExecution> {
-    let progress = InstallProgress::single("Restoring");
-    let execution_path = super::prepare_install_environment_before_scriptlets(conn, db_path, root)?;
-    if execution_path == PackageExecutionPath::MutableLiveRoot {
-        anyhow::bail!(
-            "state restore installs require an active Conary generation; no-generation live-root package install/remove are supported through `conary install` and `conary remove`"
-        );
-    }
-    preflight_prepared_legacy_replay(&prepared, no_scripts)?;
-    let scriptlet_ctx = ScriptletContext {
-        root,
-        no_scripts,
-        sandbox_mode,
-        semantics: prepared.semantics,
-        old_trove: prepared.old_trove_to_upgrade.as_ref(),
-    };
-    let pre_state = run_pre_install_phase(
-        conn,
-        prepared.pkg.as_ref(),
-        &prepared.extraction.installed_component_types,
-        &scriptlet_ctx,
-        &progress,
-    )?;
-    let legacy_replay = prepared.legacy_replay;
-
-    Ok(PreparedInstallExecution {
-        prepared,
-        pre_state,
-        progress,
-        root: root.to_string(),
-        no_scripts,
-        sandbox_mode,
-        legacy_replay,
-    })
-}
-
-pub(crate) fn install_prepared_inner(
-    tx: &Transaction<'_>,
-    engine: &mut TransactionEngine,
-    changeset_id: i64,
-    db_path: &str,
-    execution: &PreparedInstallExecution,
 ) -> Result<()> {
+    let progress = InstallProgress::single("Restoring");
+    let native_execution_mode = super::build_execution_mode(
+        prepared
+            .old_trove_to_upgrade
+            .as_ref()
+            .map(|trove| trove.version.as_str()),
+    );
+    let mut selected_root = crate::commands::generation::selected_root::SelectedRootSession::begin(
+        conn,
+        db_path,
+        format!("Restore {}-{}", prepared.pkg.name(), prepared.pkg.version()),
+    )?;
+    let transaction_root = selected_root.selected_root().to_string_lossy().into_owned();
+    prepared.native_transaction.preflight(
+        std::path::Path::new(&transaction_root),
+        &native_execution_mode,
+    )?;
+    let preflighted_ccs_removal_hooks = prepared.ccs_removal_hook_plan.preflight(
+        std::path::Path::new(&transaction_root),
+        conary_core::scriptlet::SandboxMode::Always,
+    )?;
+    preflighted_ccs_removal_hooks.execute()?;
+
     let tx_ctx = TransactionContext {
         db_path,
-        root: &execution.root,
-        semantics: execution.prepared.semantics,
-        selection_reason: execution.prepared.selection_reason.as_deref(),
-        old_trove_to_upgrade: execution.prepared.old_trove_to_upgrade.as_ref(),
+        root: &transaction_root,
+        semantics: prepared.semantics,
+        selection_reason: prepared.selection_reason.as_deref(),
+        old_trove_to_upgrade: prepared.old_trove_to_upgrade.as_ref(),
         ccs_manifest_provides: None,
         ccs_capabilities: None,
         ccs_file_capabilities: None,
-        execution_path: PackageExecutionPath::GenerationAware,
         defer_generation: false,
         repository_provenance: None,
-        legacy_replay: execution.legacy_replay,
-        accepted_legacy_bundle: None,
+        native_lifecycle_bundle: prepared.native_lifecycle_state.bundle_to_persist.as_ref(),
+        relation_removals: &[],
+        relation_deconfigurations: &[],
+        retain_replaced_payload_until_lifecycle: prepared
+            .native_transaction
+            .requires_upgrade_payload_boundary(),
     };
-    install_inner(
-        tx,
-        engine,
-        changeset_id,
-        execution.prepared.pkg.as_ref(),
-        &execution.prepared.extraction,
+    let tx_result = super::execute_install_transaction_in_selected_root(
+        conn,
+        prepared.pkg.as_ref(),
+        &prepared.extraction,
         &tx_ctx,
-        &execution.progress,
+        &progress,
+        conary_core::transaction::TransactionConfig::from_paths(
+            selected_root.selected_root().to_path_buf(),
+            std::path::PathBuf::from(db_path),
+        ),
+        &mut selected_root,
+        &prepared.native_transaction,
+        &native_execution_mode,
     )?;
-    Ok(())
-}
-
-pub(crate) fn finalize_prepared_install_without_snapshot(
-    conn: &Connection,
-    changeset_id: i64,
-    execution: &PreparedInstallExecution,
-) -> Result<()> {
-    let scriptlet_ctx = ScriptletContext {
-        root: &execution.root,
-        no_scripts: execution.no_scripts,
-        sandbox_mode: execution.sandbox_mode,
-        semantics: execution.prepared.semantics,
-        old_trove: execution.prepared.old_trove_to_upgrade.as_ref(),
-    };
-    let tx_result = super::InstallTransactionResult { changeset_id };
     super::finalize_install_without_snapshot(
         conn,
-        execution.prepared.pkg.as_ref(),
-        &execution.prepared.extraction,
-        &scriptlet_ctx,
-        &execution.pre_state,
+        prepared.pkg.as_ref(),
+        &prepared.extraction,
+        root,
         &tx_result,
-        super::FinalizeInstallOutput::new(&execution.progress, false),
-    )
-}
-
-fn should_skip_restore_dependency(name: &str) -> bool {
-    name.starts_with("rpmlib(")
-        || name.starts_with('/')
-        || name.contains(" if ")
-        || name.contains(" unless ")
-        || name.starts_with("((")
-}
-
-fn preflight_prepared_legacy_replay(prepared: &PreparedInstall, no_scripts: bool) -> Result<()> {
-    for (phase, plan) in prepared_legacy_replay_plans(prepared) {
-        let Some(plan) = plan else {
-            continue;
-        };
-        if !plan.raw_replay_required || plan.lifecycle_entries.is_empty() {
-            continue;
-        }
-
-        let entry_id = plan
-            .lifecycle_entries
-            .first()
-            .map(|entry| entry.entry_id.as_str())
-            .unwrap_or("unknown");
-        if no_scripts {
-            return Err(restore_legacy_replay_refusal_error(
-                prepared,
-                phase,
-                LegacyReplayRefusalKind::NoScriptsWouldSkipRequiredReplay,
-                entry_id,
-                "--no-scripts would skip required raw legacy replay",
-            ));
-        }
-        if !prepared.legacy_replay.allow_legacy_replay {
-            return Err(restore_legacy_replay_refusal_error(
-                prepared,
-                phase,
-                LegacyReplayRefusalKind::LegacyReplayFeatureDisabled,
-                entry_id,
-                "raw legacy replay requires an explicit operator opt-in",
-            ));
-        }
-        if plan.target_id != plan.source_target_id
-            && !prepared.legacy_replay.allow_foreign_legacy_replay
-        {
-            return Err(restore_legacy_replay_refusal_error(
-                prepared,
-                phase,
-                LegacyReplayRefusalKind::ForeignReplayOverrideRequired,
-                entry_id,
-                "foreign legacy replay requires --allow-foreign-legacy-replay",
-            ));
-        }
-        return Err(restore_legacy_replay_refusal_error(
-            prepared,
-            phase,
-            LegacyReplayRefusalKind::ReplayExecutionUnavailable,
-            entry_id,
-            "restore raw legacy replay execution is not wired yet",
-        ));
-    }
-
-    Ok(())
-}
-
-fn prepared_legacy_replay_plans(
-    prepared: &PreparedInstall,
-) -> [(&'static str, Option<&LegacyReplayPlan>); 4] {
-    [
-        (
-            "new-pre",
-            prepared.legacy_replay_state.new_bundle_pre_plan.as_ref(),
-        ),
-        (
-            "new-post",
-            prepared.legacy_replay_state.new_bundle_post_plan.as_ref(),
-        ),
-        (
-            "old-pre-remove",
-            prepared
-                .legacy_replay_state
-                .old_bundle_pre_remove_plan
-                .as_ref(),
-        ),
-        (
-            "old-post-remove",
-            prepared
-                .legacy_replay_state
-                .old_bundle_post_remove_plan
-                .as_ref(),
-        ),
-    ]
-}
-
-fn restore_legacy_replay_refusal_error(
-    prepared: &PreparedInstall,
-    phase: &str,
-    kind: LegacyReplayRefusalKind,
-    entry_id: &str,
-    message: &str,
-) -> anyhow::Error {
-    anyhow::anyhow!(
-        "legacy scriptlet replay refused ({kind:?} package={} phase={phase} entry={entry_id}): {message}",
-        prepared.pkg.name()
+        super::FinalizeInstallOutput::new(&progress, false),
     )
 }
 
@@ -521,16 +443,12 @@ fn restore_legacy_replay_refusal_error(
 mod tests {
     use super::*;
     use crate::commands::install::{InstallSemantics, PackageFormatType};
-    use conary_core::ccs::legacy_replay::{LegacyReplayPlan, PlannedLegacyEntry};
-    use conary_core::ccs::legacy_scriptlets::LifecyclePath;
     use conary_core::components::ComponentType;
     use conary_core::db::models::{Trove, TroveType};
-    use conary_core::packages::traits::{
-        Dependency, ExtractedFile, PackageFile, PackageFormat, Scriptlet,
-    };
+    use conary_core::packages::traits::{ExtractedFile, PackageFile, PackageFormat};
 
     struct FakePackage {
-        scriptlets: Vec<Scriptlet>,
+        requirements: Vec<conary_core::repository::dependency_model::RepositoryRequirementGroup>,
     }
 
     impl PackageFormat for FakePackage {
@@ -546,6 +464,10 @@ mod tests {
             "1.0.0"
         }
 
+        fn version_scheme(&self) -> conary_core::repository::versioning::VersionScheme {
+            conary_core::repository::versioning::VersionScheme::Rpm
+        }
+
         fn architecture(&self) -> Option<&str> {
             Some("x86_64")
         }
@@ -558,16 +480,14 @@ mod tests {
             &[]
         }
 
-        fn dependencies(&self) -> &[Dependency] {
-            &[]
+        fn requirements(
+            &self,
+        ) -> &[conary_core::repository::dependency_model::RepositoryRequirementGroup] {
+            &self.requirements
         }
 
         fn extract_file_contents(&self) -> conary_core::Result<Vec<ExtractedFile>> {
             Ok(vec![])
-        }
-
-        fn scriptlets(&self) -> &[Scriptlet] {
-            &self.scriptlets
         }
 
         fn to_trove(&self) -> Trove {
@@ -575,187 +495,134 @@ mod tests {
                 "restore-fixture".to_string(),
                 "1.0.0".to_string(),
                 TroveType::Package,
+                conary_core::repository::versioning::VersionScheme::Conary,
             )
         }
     }
 
-    fn prepared_restore_fixture(scriptlets: Vec<Scriptlet>) -> PreparedInstall {
+    fn prepared_restore_fixture() -> PreparedInstall {
+        prepared_restore_fixture_with_requirements(Vec::new())
+    }
+
+    fn prepared_restore_fixture_with_requirements(
+        requirements: Vec<conary_core::repository::dependency_model::RepositoryRequirementGroup>,
+    ) -> PreparedInstall {
         PreparedInstall {
-            pkg: Box::new(FakePackage { scriptlets }),
+            pkg: Box::new(FakePackage { requirements }),
             extraction: ExtractionResult {
                 extracted_files: Vec::new(),
                 classified: std::collections::HashMap::new(),
                 component_names_by_path: None,
                 installed_component_names: None,
-                ccs_pre_remove_script: None,
+                ccs_remove_hook: None,
                 installed_component_types: vec![ComponentType::Runtime],
                 skipped_components: Vec::new(),
                 language_provides: Vec::new(),
             },
             selection_reason: None,
             old_trove_to_upgrade: None,
-            semantics: InstallSemantics::legacy(PackageFormatType::Rpm),
+            semantics: InstallSemantics::native_package(PackageFormatType::Rpm),
             _temp_dir: None,
-            legacy_replay: crate::commands::LegacyReplayOptions::default(),
-            legacy_replay_state: super::super::LegacyReplayInstallState::default(),
-        }
-    }
-
-    fn test_legacy_plan(entry_id: &str, phase: LifecyclePath) -> LegacyReplayPlan {
-        LegacyReplayPlan {
-            target_id: "rpm/fedora/44/x86_64".to_string(),
-            source_target_id: "rpm/fedora/44/x86_64".to_string(),
-            bundle_evidence_digest: Some(conary_core::hash::sha256_prefixed(b"restore-evidence")),
-            lifecycle_entries: vec![PlannedLegacyEntry {
-                entry_id: entry_id.to_string(),
-                native_slot: "%pre".to_string(),
-                phase,
-                timeout_ms: 30_000,
-            }],
-            sandbox_floor: SandboxMode::None,
-            ccs_hooks_allowed: true,
-            raw_replay_required: true,
-            compatibility_decision: accepted_compatibility_decision(),
-        }
-    }
-
-    fn accepted_compatibility_decision()
-    -> conary_core::ccs::legacy_replay::LegacyReplayCompatibilityDecision {
-        conary_core::ccs::legacy_replay::LegacyReplayCompatibilityDecision {
-            decision: "accepted".to_string(),
-            reason_code: "compatibility-source-native".to_string(),
-            matrix_entry_id: None,
-            matrix_digest: None,
-            preflight_checks: Vec::new(),
-            override_required: false,
-            override_used: false,
+            native_lifecycle_state: super::super::NativeLifecycleInstallState::default(),
+            native_transaction: PreparedNativeTransaction::default(),
+            ccs_removal_hook_plan: CcsRemovalHookPlan::default(),
         }
     }
 
     #[test]
-    fn prepared_restore_carries_legacy_replay_state() {
-        let prepared = prepared_restore_fixture(Vec::new());
+    fn prepared_restore_carries_native_lifecycle_state() {
+        let prepared = prepared_restore_fixture();
 
-        assert!(prepared.legacy_replay_state.new_bundle_pre_plan.is_none());
-        assert!(prepared.legacy_replay_state.new_bundle_post_plan.is_none());
-        assert!(
-            prepared
-                .legacy_replay_state
-                .accepted_bundle_to_persist
-                .is_none()
-        );
+        assert!(prepared.native_lifecycle_state.bundle_to_persist.is_none());
     }
 
     #[test]
-    fn restore_pre_install_refuses_prepared_legacy_plan_before_scriptlets() {
-        let _mount_skip = crate::commands::composefs_ops::test_mount_skip_guard();
-        let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().join("root");
-        let db_path = temp.path().join("conary.db");
-        std::fs::create_dir_all(&root).unwrap();
-        conary_core::db::init(&db_path).unwrap();
-        let conn = conary_core::db::open(&db_path).unwrap();
-        let marker = root.join("restore-legacy-pre-scriptlet-ran");
-        let mut prepared = prepared_restore_fixture(vec![Scriptlet {
-            phase: conary_core::packages::traits::ScriptletPhase::PreInstall,
-            interpreter: "/bin/sh".to_string(),
-            content: format!("touch {}", marker.display()),
-            flags: None,
-        }]);
-        prepared.legacy_replay_state.new_bundle_pre_plan =
-            Some(test_legacy_plan("rpm:%pre", LifecyclePath::PreInstall));
-        let db_path_string = db_path.to_string_lossy().into_owned();
-        let root_string = root.to_string_lossy().into_owned();
-
-        let result = run_pre_install_for_prepared(
-            &conn,
-            &db_path_string,
-            &root_string,
-            false,
-            SandboxMode::None,
-            prepared,
-        );
-        let error = match result {
-            Ok(_) => panic!("restore pre-install should refuse required legacy replay"),
-            Err(error) => error,
+    fn restore_dependency_validation_preserves_same_provider_semantics() {
+        let requirement = conary_core::repository::requirement::parse_native_requirement(
+            RepositoryRequirementKind::Depends,
+            conary_core::repository::versioning::VersionScheme::Rpm,
+            "(feature-a with feature-b)",
+        )
+        .unwrap();
+        let prepared = prepared_restore_fixture_with_requirements(vec![requirement]);
+        let capability = |name: &str| ProvidedCapability {
+            name: name.to_string(),
+            version: None,
+            version_scheme: conary_core::repository::versioning::VersionScheme::Rpm,
         };
+        let split = TargetStateView {
+            packages: vec![
+                package_identity(
+                    "provider-a".to_string(),
+                    "1".to_string(),
+                    None,
+                    conary_core::repository::versioning::VersionScheme::Rpm,
+                    vec![capability("feature-a")],
+                    None,
+                ),
+                package_identity(
+                    "provider-b".to_string(),
+                    "1".to_string(),
+                    None,
+                    conary_core::repository::versioning::VersionScheme::Rpm,
+                    vec![capability("feature-b")],
+                    None,
+                ),
+            ],
+        };
+        assert!(validate_prepared_install_dependencies(&prepared, &split).is_err());
 
-        assert!(
-            error.to_string().contains("LegacyReplayFeatureDisabled"),
-            "{error:#}"
-        );
-        assert!(
-            !marker.exists(),
-            "restore pre-install scriptlet must not run when prepared legacy replay is refused"
-        );
+        let combined = TargetStateView {
+            packages: vec![package_identity(
+                "provider-both".to_string(),
+                "1".to_string(),
+                None,
+                conary_core::repository::versioning::VersionScheme::Rpm,
+                vec![capability("feature-a"), capability("feature-b")],
+                None,
+            )],
+        };
+        validate_prepared_install_dependencies(&prepared, &combined).unwrap();
     }
 
     #[test]
-    fn restore_pre_install_fails_closed_on_dangling_current_before_scriptlets() {
+    fn restore_pre_install_fails_closed_on_dangling_current_before_lifecycle() {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("root");
         let db_path = temp.path().join("conary.db");
         std::fs::create_dir_all(&root).unwrap();
         std::os::unix::fs::symlink("generations/7", temp.path().join("current")).unwrap();
         conary_core::db::init(&db_path).unwrap();
-        let conn = conary_core::db::open(&db_path).unwrap();
-        let marker = root.join("restore-pre-scriptlet-ran");
-        let prepared = prepared_restore_fixture(vec![Scriptlet {
-            phase: conary_core::packages::traits::ScriptletPhase::PreInstall,
-            interpreter: "/bin/sh".to_string(),
-            content: format!("touch {}", marker.display()),
-            flags: None,
-        }]);
+        let mut conn = conary_core::db::open(&db_path).unwrap();
+        let prepared = prepared_restore_fixture();
         let db_path_string = db_path.to_string_lossy().into_owned();
         let root_string = root.to_string_lossy().into_owned();
 
-        let result = run_pre_install_for_prepared(
-            &conn,
-            &db_path_string,
-            &root_string,
-            false,
-            SandboxMode::Always,
-            prepared,
-        );
+        let result =
+            execute_prepared_install_graph(&mut conn, &db_path_string, &root_string, prepared);
         let error = match result {
             Ok(_) => panic!("restore pre-install should fail on dangling current"),
             Err(error) => error,
         };
 
         assert!(error.to_string().contains("dangling"), "{error:#}");
-        assert!(
-            !marker.exists(),
-            "restore pre-install scriptlet must not run when generation state is malformed"
-        );
     }
 
     #[test]
-    fn restore_pre_install_refuses_no_generation_before_scriptlets() {
+    fn restore_pre_install_refuses_no_generation_before_lifecycle() {
         let _mount_skip = crate::commands::composefs_ops::test_mount_skip_clear_guard();
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("root");
         let db_path = temp.path().join("conary.db");
         std::fs::create_dir_all(&root).unwrap();
         conary_core::db::init(&db_path).unwrap();
-        let conn = conary_core::db::open(&db_path).unwrap();
-        let marker = root.join("restore-pre-scriptlet-ran");
-        let prepared = prepared_restore_fixture(vec![Scriptlet {
-            phase: conary_core::packages::traits::ScriptletPhase::PreInstall,
-            interpreter: "/bin/sh".to_string(),
-            content: format!("touch {}", marker.display()),
-            flags: None,
-        }]);
+        let mut conn = conary_core::db::open(&db_path).unwrap();
+        let prepared = prepared_restore_fixture();
         let db_path_string = db_path.to_string_lossy().into_owned();
         let root_string = root.to_string_lossy().into_owned();
 
-        let result = run_pre_install_for_prepared(
-            &conn,
-            &db_path_string,
-            &root_string,
-            false,
-            SandboxMode::Always,
-            prepared,
-        );
+        let result =
+            execute_prepared_install_graph(&mut conn, &db_path_string, &root_string, prepared);
         let error = match result {
             Ok(_) => panic!("restore pre-install should refuse no-generation install"),
             Err(error) => error,
@@ -766,34 +633,6 @@ mod tests {
                 .to_string()
                 .contains("state restore installs require an active Conary generation"),
             "{error:#}"
-        );
-        assert!(
-            !marker.exists(),
-            "restore pre-install scriptlet must not run on no-generation hosts"
-        );
-    }
-
-    #[test]
-    fn restore_pre_install_preflight_stays_before_scriptlets() {
-        let source = include_str!("restore.rs");
-        let helper_start = source
-            .find("pub(crate) fn run_pre_install_for_prepared")
-            .expect("restore pre-install helper should exist");
-        let helper_end = source[helper_start..]
-            .find("pub(crate) fn install_prepared_inner")
-            .expect("next restore helper should exist");
-        let helper_source = &source[helper_start..helper_start + helper_end];
-
-        let preflight_pos = helper_source
-            .find("prepare_install_environment_before_scriptlets")
-            .expect("restore pre-install helper should fail-closed before scriptlets");
-        let scriptlet_pos = helper_source
-            .find("run_pre_install_phase")
-            .expect("restore pre-install helper should run scriptlet phase");
-
-        assert!(
-            preflight_pos < scriptlet_pos,
-            "restore must fail closed on generation state before pre-install scriptlets"
         );
     }
 }

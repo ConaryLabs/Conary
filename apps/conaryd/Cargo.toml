@@ -7,10 +7,6 @@ authors = ["Conary Contributors"]
 description = "Conary system daemon"
 license = "MIT"
 
-[features]
-default = []
-polkit = ["dep:zbus"]
-
 [dependencies]
 conary = { path = "../conary" }
 conary-core = { path = "../../crates/conary-core" }
@@ -26,9 +22,6 @@ sd-notify = "0.5"
 hyper = { version = "1.4", features = ["server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio", "server", "server-auto", "service"] }
 http-body-util = "0.1"
-
-# PolicyKit (optional)
-zbus = { version = "5.0", optional = true }
 
 # CLI parsing (for binary entry points)
 clap.workspace = true

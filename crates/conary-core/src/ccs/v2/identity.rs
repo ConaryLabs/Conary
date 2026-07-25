@@ -1,6 +1,7 @@
 // conary-core/src/ccs/v2/identity.rs
 
 use super::schema::*;
+use crate::repository::dependency_model::RepositoryRequirementGroup;
 use anyhow::Result;
 use serde::Serialize;
 
@@ -9,21 +10,23 @@ pub struct ContentIdentityProjectionV2<'a> {
     pub identity: &'a PackageIdentityV2,
     pub kind: &'a PackageKindV2,
     pub provides: &'a [DependencyEntryV2],
-    pub requires: &'a [DependencyEntryV2],
+    pub requirements: &'a [RepositoryRequirementGroup],
     pub components: &'a std::collections::BTreeMap<String, ComponentAuthorityV2>,
     pub lifecycle: &'a LifecycleAuthorityV2,
-    pub provenance: &'a ProvenanceAuthorityV2,
+    pub provenance: ProvenanceAuthorityV2,
 }
 
 pub fn compute_v2_content_identity(authority: &AuthorityDocumentV2) -> Result<String> {
+    let mut provenance = authority.provenance.clone();
+    provenance.foreign_conversion_boundary_hash = None;
     let projection = ContentIdentityProjectionV2 {
         identity: &authority.identity,
         kind: &authority.kind,
         provides: &authority.provides,
-        requires: &authority.requires,
+        requirements: &authority.requirements,
         components: &authority.components,
         lifecycle: &authority.lifecycle,
-        provenance: &authority.provenance,
+        provenance,
     };
     let bytes = crate::ccs::attestation::canonical_json_bytes(&projection)?;
     Ok(crate::hash::sha256_prefixed(&bytes))
@@ -56,11 +59,14 @@ mod tests {
     fn authority_changes_change_identity() {
         let mut authority = crate::ccs::v2::test_support::package_authority_with_one_file("id");
         let first = compute_v2_content_identity(&authority).unwrap();
-        authority
-            .requires
-            .push(crate::ccs::v2::schema::DependencyEntryV2::package(
-                "openssl",
-            ));
+        authority.requirements.push(
+            crate::repository::dependency_model::RepositoryRequirementGroup::simple(
+                crate::repository::dependency_model::RepositoryRequirementKind::Depends,
+                crate::repository::dependency_model::RepositoryRequirementClause::name_only(
+                    "openssl".to_string(),
+                ),
+            ),
+        );
         let second = compute_v2_content_identity(&authority).unwrap();
         assert_ne!(first, second);
     }

@@ -270,7 +270,12 @@ mod tests {
         name: &str,
         comp_name: &str,
     ) -> (i64, i64) {
-        let mut trove = Trove::new(name.to_string(), "1.0.0".to_string(), TroveType::Package);
+        let mut trove = Trove::new(
+            name.to_string(),
+            "1.0.0".to_string(),
+            TroveType::Package,
+            crate::repository::versioning::VersionScheme::Conary,
+        );
         let trove_id = trove.insert(conn).unwrap();
 
         let mut comp = Component::new(trove_id, comp_name.to_string());

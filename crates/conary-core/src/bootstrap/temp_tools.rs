@@ -19,7 +19,7 @@ use super::config::BootstrapConfig;
 use super::stages::{BootstrapStage, StageManager};
 use super::toolchain::Toolchain;
 use crate::recipe::parser::parse_recipe_file;
-use crate::recipe::{Kitchen, KitchenConfig, SourceChecksumPolicy};
+use crate::recipe::{Kitchen, KitchenConfig};
 
 /// Cross-compiled packages (LFS Chapter 6).
 ///
@@ -155,7 +155,7 @@ impl TempToolsBuilder {
         let sources_dir = work_dir.join("sources");
         std::fs::create_dir_all(&sources_dir)?;
 
-        let runner = PackageBuildRunner::new(&sources_dir, &config);
+        let runner = PackageBuildRunner::new(&sources_dir);
 
         Ok(Self {
             work_dir: work_dir.to_path_buf(),
@@ -235,7 +235,6 @@ impl TempToolsBuilder {
                 source_cache: self.work_dir.join("sources"),
                 jobs: self.config.jobs as u32,
                 use_isolation: false,
-                checksum_policy: SourceChecksumPolicy::BootstrapLegacy,
                 extra_env: bootstrap_env.clone(),
                 ..Default::default()
             };

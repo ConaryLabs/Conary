@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 
 use super::profile::resolve_recipe_root_for_manifest;
-use conary_core::bootstrap::{BootstrapConfig, PackageBuildRunner};
+use conary_core::bootstrap::PackageBuildRunner;
 use conary_core::derivation::{BuildProfile, load_recipes};
 
 #[derive(Debug, Default)]
@@ -54,7 +54,7 @@ fn prefetch_profile_sources(profile: &BuildProfile, db_path: &str) -> Result<Sou
     std::fs::create_dir_all(&sources_dir)
         .with_context(|| format!("Failed to create source cache: {}", sources_dir.display()))?;
 
-    let runner = PackageBuildRunner::new(&sources_dir, &BootstrapConfig::new());
+    let runner = PackageBuildRunner::new(&sources_dir);
     let mut seen_packages = HashSet::new();
     let mut stats = SourcePrefetchStats::default();
 

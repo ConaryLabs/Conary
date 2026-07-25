@@ -8,7 +8,7 @@ assignees: ''
 
 ## Preview Lane
 
-- [ ] First external tester loop (install -> adopt -> list/search -> update --dry-run -> unadopt)
+- [ ] First external tester loop (foreign install -> list/query -> update --dry-run -> remove)
 - [ ] Adoption/unadoption
 - [ ] Conary-owned install/remove/update
 - [ ] Selected-generation native handoff
@@ -20,8 +20,11 @@ assignees: ''
 
 Fill this in if you ran the tester loop from the preview post.
 
-- **Completed the full loop (install -> adopt -> list/search -> update --dry-run -> unadopt)**: yes / no / partial
+- **Completed the full loop (foreign install -> list/query -> update --dry-run -> remove)**: yes / no / partial
 - **If partial or no -- where did it stop, and what did you see?**:
+- **Source profile and package format**: (for example, `ubuntu-26.04`, DEB)
+- **Host native package format**: (RPM, DEB, or Arch; it must differ from the source format for a qualifying run)
+- **Test package and selected version**:
 
 ## Environment
 

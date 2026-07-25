@@ -1,19 +1,22 @@
 // conary-core/src/scriptlet/executor.rs
 
 use super::ScriptletFailureKind;
+use super::lifecycle_bridge::LifecycleBridgeConfig;
+use super::process::ScriptletProcess;
 use super::{ExecutionMode, PackageFormat, SandboxMode, ScriptletOutcome};
-use crate::container::{ScriptRisk, analyze_script};
-use crate::db::models::ScriptletEntry;
+use crate::container::analyze_script;
+use crate::db::models::InstalledCcsRemoveHook;
 use crate::error::{Error, Result};
-use crate::packages::traits::Scriptlet;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tracing::{info, warn};
+use tracing::info;
 
 /// Default timeout for scriptlet execution (60 seconds)
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Scriptlet executor with cross-distro support
+#[derive(Clone)]
 pub struct ScriptletExecutor {
     pub(super) root: PathBuf,
     pub(super) package_name: String,
@@ -21,6 +24,11 @@ pub struct ScriptletExecutor {
     pub(super) package_format: PackageFormat,
     pub(super) timeout: Duration,
     pub(super) sandbox_mode: SandboxMode,
+    pub(super) activation_invocations:
+        Arc<Mutex<Vec<crate::activation::RuntimeActivationInvocation>>>,
+    pub(super) boot_runtime_invocations:
+        Arc<Mutex<Vec<crate::boot_runtime::BootRuntimeInvocation>>>,
+    pub(super) lifecycle_bridge: Option<LifecycleBridgeConfig>,
 }
 
 impl ScriptletExecutor {
@@ -33,6 +41,9 @@ impl ScriptletExecutor {
             package_format: format,
             timeout: DEFAULT_TIMEOUT,
             sandbox_mode: SandboxMode::default(),
+            activation_invocations: Arc::new(Mutex::new(Vec::new())),
+            boot_runtime_invocations: Arc::new(Mutex::new(Vec::new())),
+            lifecycle_bridge: None,
         }
     }
 
@@ -48,64 +59,52 @@ impl ScriptletExecutor {
         self
     }
 
-    /// Execute a scriptlet from package parsing
-    pub fn execute(&self, scriptlet: &Scriptlet, mode: &ExecutionMode) -> Result<()> {
-        self.execute_with_outcome(scriptlet, mode).into_result()
+    /// Install a private lifecycle command transport for this executor.
+    pub fn with_lifecycle_bridge(mut self, bridge: LifecycleBridgeConfig) -> Self {
+        self.lifecycle_bridge = Some(bridge);
+        self
     }
 
-    /// Execute a scriptlet and return typed outcome metadata.
-    pub fn execute_with_outcome(
+    /// Execute the exact CCS pre-remove hook persisted for an installed trove.
+    pub fn execute_ccs_remove_hook(&self, hook: &InstalledCcsRemoveHook) -> Result<()> {
+        self.execute_ccs_remove_hook_with_outcome(hook)
+            .into_result()
+    }
+
+    /// Execute a CCS pre-remove hook and return typed outcome metadata.
+    pub fn execute_ccs_remove_hook_with_outcome(
         &self,
-        scriptlet: &Scriptlet,
-        mode: &ExecutionMode,
+        hook: &InstalledCcsRemoveHook,
     ) -> ScriptletOutcome {
         self.execute_impl_with_outcome(
-            &scriptlet.phase.to_string(),
-            &scriptlet.interpreter,
-            &scriptlet.content,
-            scriptlet.flags.as_deref(),
-            mode,
+            "pre-remove",
+            "/bin/sh",
+            &hook.script,
+            None,
+            &ExecutionMode::Remove,
         )
     }
 
-    /// Execute a scriptlet from database entry
-    pub fn execute_entry(&self, entry: &ScriptletEntry, mode: &ExecutionMode) -> Result<()> {
-        self.execute_entry_with_outcome(entry, mode).into_result()
-    }
-
-    /// Execute a database scriptlet entry and return typed outcome metadata.
-    pub fn execute_entry_with_outcome(
-        &self,
-        entry: &ScriptletEntry,
-        mode: &ExecutionMode,
-    ) -> ScriptletOutcome {
+    /// Execute an exact signed CCS post-install hook in the selected root.
+    pub(crate) fn execute_ccs_install_hook(&self, script: &str) -> Result<()> {
         self.execute_impl_with_outcome(
-            &entry.phase,
-            &entry.interpreter,
-            &entry.content,
-            entry.flags.as_deref(),
-            mode,
+            "post-install",
+            "/bin/sh",
+            script,
+            None,
+            &ExecutionMode::Install,
         )
+        .into_result()
     }
 
-    /// Preflight a package-parsed scriptlet before any file/DB mutation.
-    pub fn preflight(&self, scriptlet: &Scriptlet, mode: &ExecutionMode) -> Result<()> {
+    /// Preflight a CCS pre-remove hook before any file/DB mutation.
+    pub fn preflight_ccs_remove_hook(&self, hook: &InstalledCcsRemoveHook) -> Result<()> {
         self.preflight_impl(
-            &scriptlet.phase.to_string(),
-            &scriptlet.interpreter,
-            &scriptlet.content,
-            mode,
+            "pre-remove",
+            "/bin/sh",
+            &hook.script,
+            &ExecutionMode::Remove,
         )
-    }
-
-    /// Preflight a database scriptlet entry before any file/DB mutation.
-    pub fn preflight_entry(&self, entry: &ScriptletEntry, mode: &ExecutionMode) -> Result<()> {
-        self.preflight_impl(&entry.phase, &entry.interpreter, &entry.content, mode)
-    }
-
-    /// Check if we're operating on the live root
-    pub(super) fn is_live_root(&self) -> bool {
-        self.root == Path::new("/")
     }
 
     pub(super) fn clone_with_timeout(&self, timeout: Duration) -> Self {
@@ -116,7 +115,34 @@ impl ScriptletExecutor {
             package_format: self.package_format,
             timeout,
             sandbox_mode: self.sandbox_mode,
+            activation_invocations: Arc::clone(&self.activation_invocations),
+            boot_runtime_invocations: Arc::clone(&self.boot_runtime_invocations),
+            lifecycle_bridge: self.lifecycle_bridge.clone(),
         }
+    }
+
+    /// Drain exact runtime service operations captured by successful
+    /// selected-root lifecycle programs.
+    pub fn take_activation_invocations(
+        &self,
+    ) -> Vec<crate::activation::RuntimeActivationInvocation> {
+        std::mem::take(
+            &mut *self
+                .activation_invocations
+                .lock()
+                .expect("activation invocation collector poisoned"),
+        )
+    }
+
+    /// Drain exact boot and kernel maintenance invocations captured at the
+    /// selected-root execution boundary.
+    pub fn take_boot_runtime_invocations(&self) -> Vec<crate::boot_runtime::BootRuntimeInvocation> {
+        std::mem::take(
+            &mut *self
+                .boot_runtime_invocations
+                .lock()
+                .expect("boot runtime invocation collector poisoned"),
+        )
     }
 
     /// Core execution implementation
@@ -141,27 +167,38 @@ impl ScriptletExecutor {
         _flags: Option<&str>,
         mode: &ExecutionMode,
     ) -> ScriptletOutcome {
+        // Resolve the typed execution boundary before preparing format-specific
+        // execution, because malformed lifecycle contracts fail here too.
+        let effective_sandbox = self.effective_sandbox();
+        let requested_sandbox_mode = self.sandbox_mode;
+        if let Err(error) = self.require_target_root() {
+            return self.failure_from_error(
+                phase,
+                requested_sandbox_mode,
+                effective_sandbox,
+                error,
+            );
+        }
+
         // Prepare script content (Arch needs wrapper generation)
         let script_content = if self.package_format == PackageFormat::Arch {
-            self.prepare_arch_wrapper(content, phase)
+            match self.prepare_arch_wrapper(content, phase) {
+                Ok(wrapper) => wrapper,
+                Err(error) => {
+                    return self.failure_from_error(
+                        phase,
+                        requested_sandbox_mode,
+                        effective_sandbox,
+                        error,
+                    );
+                }
+            }
         } else {
             content.to_string()
         };
 
         // Analyze the formal shell command evidence.
         let analysis = analyze_script(&script_content);
-
-        // Determine if we should sandbox based on mode and risk
-        let use_sandbox = match self.sandbox_mode {
-            SandboxMode::None => false,
-            SandboxMode::Always => true,
-            SandboxMode::Auto => {
-                // Sandbox if risk is Medium or higher
-                analysis.risk >= ScriptRisk::Medium
-            }
-        };
-        let effective_sandbox = self.effective_sandbox(use_sandbox);
-        let requested_sandbox_mode = self.sandbox_mode;
 
         if !analysis.patterns.is_empty() {
             info!(
@@ -179,45 +216,35 @@ impl ScriptletExecutor {
             interpreter.to_string()
         };
 
-        // For target root installs, validate interpreter exists IN TARGET
-        // For live root, validate it exists on the host
-        let interpreter_check_path = if self.is_live_root() {
-            PathBuf::from(&interpreter_path)
-        } else {
-            self.root.join(interpreter_path.trim_start_matches('/'))
-        };
+        let interpreter_check_path = self.root.join(interpreter_path.trim_start_matches('/'));
 
         if !interpreter_check_path.exists() {
-            if self.is_live_root() {
-                return self.failure_outcome(
-                    phase,
-                    ScriptletFailureKind::SandboxSetupUnavailable,
-                    requested_sandbox_mode,
-                    effective_sandbox,
-                    format!(
-                        "Interpreter not found: {}. Cannot execute {} scriptlet.",
-                        interpreter_path, phase
-                    ),
-                );
-            } else {
-                // For target root, warn but don't fail - the scriptlet might not be needed
-                // or the target might be in early bootstrap (no shell yet)
-                warn!(
-                    "Interpreter {} not found in target root {}, skipping {} scriptlet",
+            return self.failure_outcome(
+                phase,
+                ScriptletFailureKind::ProgramUnavailable,
+                requested_sandbox_mode,
+                effective_sandbox,
+                format!(
+                    "Interpreter {} not found in target root {}; cannot execute {} scriptlet",
                     interpreter_path,
                     self.root.display(),
                     phase
-                );
-                return ScriptletOutcome::Skipped {
-                    phase: phase.to_string(),
-                    requested_sandbox_mode,
-                    effective_sandbox,
-                };
-            }
+                ),
+            );
         }
 
         // Prepare arguments based on distro, mode, and phase
-        let args = self.get_args(mode, phase);
+        let args = match self.get_args(mode, phase) {
+            Ok(args) => args,
+            Err(error) => {
+                return self.failure_from_error(
+                    phase,
+                    requested_sandbox_mode,
+                    effective_sandbox,
+                    error,
+                );
+            }
+        };
 
         // Build environment variables
         let env = [
@@ -233,28 +260,20 @@ impl ScriptletExecutor {
             self.package_name,
             self.package_version,
             self.root.display(),
-            use_sandbox
+            effective_sandbox.as_str()
         );
 
-        let result = if self.is_live_root() {
-            // Live root execution
-            if use_sandbox {
-                if let Err(error) = self.preflight_protected_live_sandbox() {
-                    return self.failure_from_error(
-                        phase,
-                        requested_sandbox_mode,
-                        effective_sandbox,
-                        error,
-                    );
-                }
-                self.execute_sandbox_live(phase, &interpreter_path, &script_content, &args, &env)
-            } else {
-                self.execute_direct(phase, &interpreter_path, &script_content, &args, &env)
-            }
-        } else {
-            // Target root execution - always use chroot/container
-            self.execute_in_target(phase, &interpreter_path, &[], &script_content, &args, &env)
-        };
+        let result = self.execute_in_target(
+            ScriptletProcess {
+                phase,
+                interpreter: &interpreter_path,
+                interpreter_args: &[],
+                args: &args,
+                env: &env,
+                stdin: &[],
+            },
+            script_content.as_bytes(),
+        );
 
         match result {
             Ok(()) => ScriptletOutcome::Success {
@@ -272,38 +291,36 @@ impl ScriptletExecutor {
         &self,
         phase: &str,
         interpreter: &str,
-        content: &str,
+        _content: &str,
         _mode: &ExecutionMode,
     ) -> Result<()> {
-        let script_content = if self.package_format == PackageFormat::Arch {
-            self.prepare_arch_wrapper(content, phase)
-        } else {
-            content.to_string()
-        };
-        let use_sandbox = self.should_use_sandbox(&script_content);
+        self.require_target_root()?;
         let interpreter_path = if self.package_format == PackageFormat::Arch {
             "/bin/bash".to_string()
         } else {
             interpreter.to_string()
         };
-        let interpreter_check_path = if self.is_live_root() {
-            PathBuf::from(&interpreter_path)
-        } else {
-            self.root.join(interpreter_path.trim_start_matches('/'))
-        };
+        let interpreter_check_path = self.root.join(interpreter_path.trim_start_matches('/'));
 
         if !interpreter_check_path.exists() {
-            if self.is_live_root() {
-                return Err(Error::ScriptletError(format!(
-                    "Interpreter not found: {}. Cannot execute {} scriptlet.",
-                    interpreter_path, phase
-                )));
-            }
-            return Ok(());
+            return Err(Error::scriptlet(
+                ScriptletFailureKind::ProgramUnavailable,
+                format!(
+                    "Interpreter {} not found in target root {}; cannot execute {} scriptlet",
+                    interpreter_path,
+                    self.root.display(),
+                    phase
+                ),
+            ));
         }
-
-        if self.is_live_root() && use_sandbox {
-            self.preflight_protected_live_sandbox()?;
+        if !nix::unistd::geteuid().is_root() {
+            return Err(Error::scriptlet(
+                ScriptletFailureKind::SandboxSetupUnavailable,
+                format!(
+                    "Target-root lifecycle execution in {} requires root privileges",
+                    self.root.display()
+                ),
+            ));
         }
 
         Ok(())
@@ -317,7 +334,6 @@ mod tests {
         ScriptletOutcome,
     };
     use super::ScriptletExecutor;
-    use crate::packages::traits::{Scriptlet, ScriptletPhase};
     use std::path::Path;
 
     #[test]
@@ -328,33 +344,33 @@ mod tests {
     }
 
     #[test]
-    fn test_execute_with_outcome_records_requested_and_effective_sandbox() {
+    fn test_execute_with_outcome_rejects_the_host_root() {
         let executor =
-            ScriptletExecutor::new(Path::new("/"), "test-pkg", "1.0.0", PackageFormat::Rpm)
-                .with_sandbox_mode(SandboxMode::None);
-        let scriptlet = Scriptlet {
-            phase: ScriptletPhase::PostInstall,
-            interpreter: "/bin/sh".to_string(),
-            content: "exit 42".to_string(),
-            flags: None,
-        };
-
-        let outcome = executor.execute_with_outcome(&scriptlet, &ExecutionMode::Install);
+            ScriptletExecutor::new(Path::new("/"), "test-pkg", "1.0.0", PackageFormat::Conary);
+        let outcome = executor.execute_impl_with_outcome(
+            "post-install",
+            "/definitely/missing/conary-interpreter",
+            "exit 42",
+            None,
+            &ExecutionMode::Install,
+        );
 
         let ScriptletOutcome::Failure(failure) = outcome else {
             panic!("expected scriptlet failure outcome");
         };
-        assert_eq!(failure.failure_kind, ScriptletFailureKind::ScriptExited);
-        assert_eq!(failure.requested_sandbox_mode, SandboxMode::None);
-        assert_eq!(failure.effective_sandbox, EffectiveSandbox::Direct);
-        assert!(failure.message.contains("failed with exit code 42"));
+        assert_eq!(
+            failure.failure_kind,
+            ScriptletFailureKind::ContractViolation
+        );
+        assert_eq!(failure.requested_sandbox_mode, SandboxMode::Always);
+        assert_eq!(failure.effective_sandbox, EffectiveSandbox::TargetRoot);
+        assert!(failure.message.contains("host root '/'"));
     }
 
     #[test]
     fn test_execute_impl_missing_interpreter() {
-        let executor =
-            ScriptletExecutor::new(Path::new("/"), "test-pkg", "1.0.0", PackageFormat::Rpm)
-                .with_sandbox_mode(SandboxMode::None);
+        let root = tempfile::tempdir().unwrap();
+        let executor = ScriptletExecutor::new(root.path(), "test-pkg", "1.0.0", PackageFormat::Rpm);
 
         let result = executor.execute_impl(
             "post-install",
@@ -366,7 +382,7 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(
-            err.contains("Interpreter not found"),
+            err.contains("not found in target root"),
             "unexpected error: {}",
             err
         );

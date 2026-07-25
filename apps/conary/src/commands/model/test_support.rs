@@ -1,15 +1,14 @@
 // src/commands/model/test_support.rs
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 
-use conary_core::ccs::legacy_scriptlets::{
-    DecisionCounts, ForeignReplayPolicy, LEGACY_SCRIPTLET_SCHEMA_V1, LegacyScriptletBundle,
-    LegacyScriptletEntry, LifecyclePath, NativeInvocation, PublicationPolicy, PublicationStatus,
-    ScriptletDecision, ScriptletFidelity, SourceFormat, TargetCompatibility, TransactionOrder,
-    VersionScheme,
+use conary_core::ccs::native_lifecycle::{
+    LifecyclePath, NATIVE_LIFECYCLE_SCHEMA_V1, NativeInvocation, NativeLifecycleBundle,
+    NativeLifecycleEntry, NativeLifecycleEntryKind, RpmCriticality, RpmProgram, RpmRuntimeMetadata,
+    ScriptletFidelity, SourceFormat, TransactionOrder, VersionScheme,
 };
 
 pub(super) fn build_test_ccs_package(dir: &Path, name: &str, version: &str) -> PathBuf {
@@ -20,12 +19,13 @@ pub(super) fn build_test_ccs_package_with_bundle(
     dir: &Path,
     name: &str,
     version: &str,
-    legacy_scriptlets: Option<LegacyScriptletBundle>,
+    native_lifecycle: Option<NativeLifecycleBundle>,
 ) -> PathBuf {
-    use conary_core::ccs::builder::write_ccs_package;
+    use conary_core::ccs::builder::write_signed_current_ccs_package;
     use conary_core::ccs::manifest::Platform;
-    use conary_core::ccs::{BuildResult, CcsManifest, ComponentData, FileEntry, FileType};
+    use conary_core::ccs::{BuildResult, CcsManifest, ComponentData, FileEntry};
     use conary_core::hash;
+    use conary_core::payload::{PayloadContentAuthority, PayloadNode};
 
     let binary_content = format!("#!/bin/sh\necho {name} {version}\n").into_bytes();
     let binary_hash = hash::sha256(&binary_content);
@@ -34,35 +34,38 @@ pub(super) fn build_test_ccs_package_with_bundle(
     let files = vec![
         FileEntry {
             path: format!("/usr/bin/{name}"),
-            hash: binary_hash.clone(),
-            size: binary_content.len() as u64,
-            mode: 0o100755,
+            node: PayloadNode::regular(0o755),
+            content: Some(PayloadContentAuthority {
+                sha256: binary_hash.clone(),
+                size: binary_content.len() as u64,
+            }),
             component: "runtime".to_string(),
-            file_type: FileType::Regular,
-            target: None,
             chunks: None,
         },
         FileEntry {
             path: "/usr/sbin/init".to_string(),
-            hash: init_hash.clone(),
-            size: init_content.len() as u64,
-            mode: 0o100755,
+            node: PayloadNode::regular(0o755),
+            content: Some(PayloadContentAuthority {
+                sha256: init_hash.clone(),
+                size: init_content.len() as u64,
+            }),
             component: "runtime".to_string(),
-            file_type: FileType::Regular,
-            target: None,
             chunks: None,
         },
     ];
-    let component_size = files.iter().map(|file| file.size).sum();
+    let component_size = (binary_content.len() + init_content.len()) as u64;
     let package_path = dir.join(format!("{name}-{version}.ccs"));
     let mut manifest = CcsManifest::new_minimal(name, version);
+    if native_lifecycle.is_some() {
+        manifest.package.version_scheme = conary_core::repository::versioning::VersionScheme::Rpm;
+    }
     manifest.package.platform = Some(Platform {
         os: "linux".to_string(),
         arch: Some("x86_64".to_string()),
         libc: "gnu".to_string(),
         abi: None,
     });
-    manifest.legacy_scriptlets = legacy_scriptlets;
+    manifest.native_lifecycle = native_lifecycle;
     let result = BuildResult {
         manifest,
         components: HashMap::from([(
@@ -80,18 +83,19 @@ pub(super) fn build_test_ccs_package_with_bundle(
         chunked: false,
         chunk_stats: None,
     };
-    write_ccs_package(&result, &package_path).unwrap();
+    let signing_key = crate::commands::ccs::load_or_create_local_dev_key().unwrap();
+    write_signed_current_ccs_package(&result, &package_path, &signing_key, true).unwrap();
     package_path
 }
 
-pub(super) fn legacy_replatform_upgrade_bundle(
+pub(super) fn typed_rpm_replatform_upgrade_bundle(
     package: &str,
     version: &str,
-) -> LegacyScriptletBundle {
-    let entry = legacy_replatform_upgrade_entry();
-    LegacyScriptletBundle {
-        schema: LEGACY_SCRIPTLET_SCHEMA_V1.to_string(),
-        schema_revision: 2,
+) -> NativeLifecycleBundle {
+    let entry = typed_rpm_replatform_upgrade_entry();
+    NativeLifecycleBundle {
+        schema: NATIVE_LIFECYCLE_SCHEMA_V1.to_string(),
+        schema_revision: conary_core::ccs::native_lifecycle::NATIVE_LIFECYCLE_SCHEMA_REVISION,
         source_format: SourceFormat::Rpm,
         source_family: "fedora-rhel".to_string(),
         source_distro: Some("fedora".to_string()),
@@ -104,39 +108,23 @@ pub(super) fn legacy_replatform_upgrade_bundle(
         conversion_tool: "remi".to_string(),
         conversion_tool_version: "0.8.0".to_string(),
         conversion_policy: "goal6-model-test".to_string(),
-        adapter_registry_digest: None,
-        target_policy_digest: None,
         evidence_digest: Some(conary_core::hash::sha256_prefixed(
-            format!("{package}-{version}-legacy-replatform").as_bytes(),
+            format!("{package}-{version}-typed-rpm-replatform").as_bytes(),
         )),
-        target_compatibility: TargetCompatibility::SourceNative,
-        allowed_targets: vec!["rpm/fedora/44/x86_64".to_string()],
-        foreign_replay_policy: ForeignReplayPolicy::Deny,
-        publication_policy: PublicationPolicy::LocalOnly,
-        publication_status: PublicationStatus::Public,
-        scriptlet_fidelity: ScriptletFidelity::LegacyReplay,
-        decision_counts: DecisionCounts {
-            replaced: 0,
-            legacy: 1,
-            blocked: 0,
-            review: 0,
-            extra: BTreeMap::new(),
-        },
-        unsupported_class_counts: BTreeMap::new(),
-        security_policy_intents: Vec::new(),
+        scriptlet_fidelity: ScriptletFidelity::NativeLifecycle,
         entries: vec![entry],
-        extra: BTreeMap::new(),
     }
 }
 
-fn legacy_replatform_upgrade_entry() -> LegacyScriptletEntry {
-    let body = "echo replay-replatform-upgrade\n";
-    LegacyScriptletEntry {
+fn typed_rpm_replatform_upgrade_entry() -> NativeLifecycleEntry {
+    let body = "print('replatform-upgrade-new-pre')\n";
+    NativeLifecycleEntry {
         id: "rpm:%pre".to_string(),
         native_slot: "%pre".to_string(),
+        kind: NativeLifecycleEntryKind::Executable,
         phase: LifecyclePath::PreUpgrade,
         lifecycle_paths: vec!["upgrade:new-pre".to_string()],
-        interpreter: "/bin/sh".to_string(),
+        interpreter: "<lua>".to_string(),
         interpreter_args: Vec::new(),
         body_sha256: conary_core::hash::sha256_prefixed(body.as_bytes()),
         body: body.to_string(),
@@ -146,28 +134,32 @@ fn legacy_replatform_upgrade_entry() -> LegacyScriptletEntry {
             position: "before-payload".to_string(),
             before: Vec::new(),
             after: Vec::new(),
-            extra: BTreeMap::new(),
         },
         timeout_ms: 30_000,
         sandbox: None,
         capabilities: Vec::new(),
-        decision: ScriptletDecision::Legacy,
-        reason_code: "legacy-replay-required".to_string(),
-        human_reason: Some("test fixture".to_string()),
         evidence_digest: Some(conary_core::hash::sha256_prefixed(
-            b"rpm:%pre:echo replay-replatform-upgrade",
+            b"rpm:%pre:print replatform-upgrade-new-pre",
         )),
         source_evidence_refs: vec!["capture:rpm:%pre".to_string()],
-        effects: Vec::new(),
-        unknown_command_evidence: Vec::new(),
-        blocked_classes: Vec::new(),
-        boot_security_intents: Vec::new(),
-        security_policy_intents: Vec::new(),
         rpm_trigger: None,
+        rpm_runtime: Some(RpmRuntimeMetadata {
+            program: RpmProgram::EmbeddedLua,
+            body_transforms: Vec::new(),
+            critical: true,
+            criticality: RpmCriticality::Header,
+            raw_flags: 0,
+            unknown_flags: 0,
+            install_prefixes: Vec::new(),
+            macro_context: Default::default(),
+            header_context: Default::default(),
+            package_rpm_version: None,
+        }),
+        rpm_sysusers: None,
         deb_maintainer: None,
         arch_install: None,
-        residual_replay: None,
-        extra: BTreeMap::new(),
+        arch_hook: None,
+        residual_lifecycle: None,
     }
 }
 

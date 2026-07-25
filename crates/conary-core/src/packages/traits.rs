@@ -4,6 +4,9 @@
 
 use crate::db::models::Trove;
 use crate::error::Result;
+use crate::payload::{PayloadContentAuthority, PayloadNode};
+use crate::repository::dependency_model::RepositoryRequirementGroup;
+use crate::repository::versioning::VersionScheme;
 
 pub use crate::packages::native_abi::*;
 
@@ -11,24 +14,17 @@ pub use crate::packages::native_abi::*;
 #[derive(Debug, Clone)]
 pub struct PackageFile {
     pub path: String,
-    pub size: i64,
-    pub mode: i32,
-    pub sha256: Option<String>,
-    /// Symlink target (None for regular files, Some for symlinks)
-    pub symlink_target: Option<String>,
+    pub node: PayloadNode,
+    pub content: Option<PayloadContentAuthority>,
 }
 
 /// A file extracted from a package with its content
 #[derive(Debug, Clone)]
 pub struct ExtractedFile {
     pub path: String,
+    pub node: PayloadNode,
     pub content: Vec<u8>,
-    pub size: i64,
-    pub mode: i32,
-    pub sha256: Option<String>,
-    /// Symlink target (None for regular files, Some for symlinks).
-    /// For symlinks, `content` is empty and this field holds the target.
-    pub symlink_target: Option<String>,
+    pub content_authority: Option<PayloadContentAuthority>,
 }
 
 /// Dependency information
@@ -57,9 +53,12 @@ impl DependencyType {
     }
 }
 
-/// When a scriptlet runs during the package lifecycle
+/// Non-authoritative lifecycle label attached to flattened diagnostic evidence.
+///
+/// Exact native lifecycle authority uses [`NativeLifecyclePath`] and
+/// [`NativeScriptletEntry`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ScriptletPhase {
+pub enum DiagnosticScriptletPhase {
     /// Before package installation
     PreInstall,
     /// After package installation
@@ -80,7 +79,7 @@ pub enum ScriptletPhase {
     Trigger,
 }
 
-impl std::fmt::Display for ScriptletPhase {
+impl std::fmt::Display for DiagnosticScriptletPhase {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::PreInstall => write!(f, "pre-install"),
@@ -96,16 +95,15 @@ impl std::fmt::Display for ScriptletPhase {
     }
 }
 
-/// A scriptlet (install/remove hook) from a package
+/// Non-authoritative flattened script text retained only for conversion diagnostics.
+///
+/// Install, remove, publication, and lifecycle planning must use
+/// [`NativeScriptletEntry`] instead.
 #[derive(Debug, Clone)]
-pub struct Scriptlet {
-    /// When this scriptlet runs
-    pub phase: ScriptletPhase,
-    /// The interpreter to use (e.g., "/bin/sh", "/bin/bash", "/usr/bin/lua")
+pub struct DiagnosticScriptletEvidence {
+    pub phase: DiagnosticScriptletPhase,
     pub interpreter: String,
-    /// The script content
     pub content: String,
-    /// Optional flags/arguments for the interpreter
     pub flags: Option<String>,
 }
 
@@ -118,6 +116,9 @@ pub struct ConfigFileInfo {
     pub noreplace: bool,
     /// If true, this is a ghost config (not in payload, just tracked)
     pub ghost: bool,
+    /// Debian control declaration: remove the old conffile on the next
+    /// upgrade, preserving a locally modified copy as `.dpkg-old`.
+    pub remove_on_upgrade: bool,
 }
 
 /// Common interface for all package formats (RPM, DEB, Arch, etc.)
@@ -133,6 +134,9 @@ pub trait PackageFormat {
     /// Get the package version
     fn version(&self) -> &str;
 
+    /// Native version algebra for package requirements and provides.
+    fn version_scheme(&self) -> VersionScheme;
+
     /// Get the package architecture (e.g., "x86_64", "aarch64")
     fn architecture(&self) -> Option<&str>;
 
@@ -142,8 +146,11 @@ pub trait PackageFormat {
     /// Get the list of files in the package
     fn files(&self) -> &[PackageFile];
 
-    /// Get the list of dependencies
-    fn dependencies(&self) -> &[Dependency];
+    /// Get exact positive package requirements.
+    ///
+    /// This is the sole install and resolution authority; Boolean structure
+    /// must remain intact through conversion and persistence.
+    fn requirements(&self) -> &[RepositoryRequirementGroup];
 
     /// Get the list of native capabilities this package provides.
     ///
@@ -153,19 +160,19 @@ pub trait PackageFormat {
         &[]
     }
 
+    /// Get source-native conflict, break, replacement, and obsolete relations.
+    ///
+    /// These are persisted in the same typed requirement-group authority as
+    /// positive requirements.
+    fn relations(&self) -> &[RepositoryRequirementGroup] {
+        &[]
+    }
+
     /// Extract all file contents from the package
     ///
     /// Returns a vector of ExtractedFile containing file metadata and content.
     /// This is used during package installation to get the actual file data.
     fn extract_file_contents(&self) -> Result<Vec<ExtractedFile>>;
-
-    /// Get the scriptlets (install/remove hooks) from the package
-    ///
-    /// Returns a slice of Scriptlet containing phase, interpreter, and content.
-    /// Default implementation returns empty slice for formats that don't support scriptlets.
-    fn scriptlets(&self) -> &[Scriptlet] {
-        &[]
-    }
 
     /// Get byte-preserving native package-manager scriptlet ABI entries.
     ///

@@ -7,8 +7,10 @@
 
 use crate::db::models::{Trove, TroveType};
 use crate::packages::traits::{
-    ConfigFileInfo, Dependency, NativeScriptletEntry, PackageFile, Scriptlet,
+    ConfigFileInfo, Dependency, DiagnosticScriptletEvidence, NativeScriptletEntry, PackageFile,
 };
+use crate::repository::dependency_model::RepositoryRequirementGroup;
+use crate::repository::versioning::VersionScheme;
 use std::path::{Path, PathBuf};
 
 /// Maximum size for a single file during package extraction (512 MB).
@@ -38,18 +40,22 @@ pub struct PackageMetadata {
     pub name: String,
     /// Package version
     pub version: String,
+    /// Native version algebra for requirements and provides.
+    pub version_scheme: VersionScheme,
     /// Target architecture (e.g., "x86_64", "aarch64", "noarch")
     pub architecture: Option<String>,
     /// Package description/summary
     pub description: Option<String>,
     /// Files contained in the package
     pub files: Vec<PackageFile>,
-    /// Package dependencies
-    pub dependencies: Vec<Dependency>,
+    /// Exact positive package requirements and sole dependency authority.
+    pub requirements: Vec<RepositoryRequirementGroup>,
     /// Native package-provided capabilities.
     pub provides: Vec<Dependency>,
-    /// Install/remove scriptlets
-    pub scriptlets: Vec<Scriptlet>,
+    /// Exact source-native conflict and replacement relations.
+    pub relations: Vec<RepositoryRequirementGroup>,
+    /// Non-authoritative flattened script text for conversion diagnostics only.
+    pub diagnostic_scriptlet_evidence: Vec<DiagnosticScriptletEvidence>,
     /// Byte-preserving native package-manager scriptlet ABI entries.
     pub native_scriptlet_abi: Vec<NativeScriptletEntry>,
     /// Configuration files with special handling
@@ -58,17 +64,24 @@ pub struct PackageMetadata {
 
 impl PackageMetadata {
     /// Create new metadata with required fields
-    pub fn new(package_path: PathBuf, name: String, version: String) -> Self {
+    pub fn new(
+        package_path: PathBuf,
+        name: String,
+        version: String,
+        version_scheme: VersionScheme,
+    ) -> Self {
         Self {
             package_path,
             name,
             version,
+            version_scheme,
             architecture: None,
             description: None,
             files: Vec::new(),
-            dependencies: Vec::new(),
+            requirements: Vec::new(),
             provides: Vec::new(),
-            scriptlets: Vec::new(),
+            relations: Vec::new(),
+            diagnostic_scriptlet_evidence: Vec::new(),
             native_scriptlet_abi: Vec::new(),
             config_files: Vec::new(),
         }
@@ -82,6 +95,11 @@ impl PackageMetadata {
     /// Get the package version
     pub fn version(&self) -> &str {
         &self.version
+    }
+
+    /// Get the native version algebra.
+    pub fn version_scheme(&self) -> VersionScheme {
+        self.version_scheme
     }
 
     /// Get the package architecture
@@ -99,9 +117,9 @@ impl PackageMetadata {
         &self.files
     }
 
-    /// Get the list of dependencies
-    pub fn dependencies(&self) -> &[Dependency] {
-        &self.dependencies
+    /// Get the exact positive package requirements and sole dependency authority.
+    pub fn requirements(&self) -> &[RepositoryRequirementGroup] {
+        &self.requirements
     }
 
     /// Get the list of native provides
@@ -109,9 +127,14 @@ impl PackageMetadata {
         &self.provides
     }
 
-    /// Get the scriptlets
-    pub fn scriptlets(&self) -> &[Scriptlet] {
-        &self.scriptlets
+    /// Get exact source-native conflict and replacement relations.
+    pub fn relations(&self) -> &[RepositoryRequirementGroup] {
+        &self.relations
+    }
+
+    /// Get non-authoritative flattened script text for diagnostics.
+    pub fn diagnostic_scriptlet_evidence(&self) -> &[DiagnosticScriptletEvidence] {
+        &self.diagnostic_scriptlet_evidence
     }
 
     /// Get byte-preserving native package-manager scriptlet ABI entries.
@@ -128,7 +151,12 @@ impl PackageMetadata {
     ///
     /// This is the standard conversion used by all package formats.
     pub fn to_trove(&self) -> Trove {
-        let mut trove = Trove::new(self.name.clone(), self.version.clone(), TroveType::Package);
+        let mut trove = Trove::new(
+            self.name.clone(),
+            self.version.clone(),
+            TroveType::Package,
+            self.version_scheme,
+        );
 
         trove.architecture = self.architecture.clone();
         trove.description = self.description.clone();
@@ -152,6 +180,7 @@ mod tests {
             PathBuf::from("/tmp/test.pkg"),
             "test-package".to_string(),
             "1.0.0".to_string(),
+            VersionScheme::Conary,
         );
 
         assert_eq!(meta.name(), "test-package");
@@ -168,6 +197,7 @@ mod tests {
             PathBuf::from("/tmp/test.rpm"),
             "my-package".to_string(),
             "2.0.0".to_string(),
+            VersionScheme::Rpm,
         );
         meta.architecture = Some("x86_64".to_string());
         meta.description = Some("A test package".to_string());
@@ -184,6 +214,7 @@ mod tests {
             PathBuf::from("/tmp/test.deb"),
             "example".to_string(),
             "1.2.3".to_string(),
+            VersionScheme::Debian,
         );
         meta.architecture = Some("aarch64".to_string());
         meta.description = Some("Example package".to_string());
@@ -192,6 +223,7 @@ mod tests {
 
         assert_eq!(trove.name, "example");
         assert_eq!(trove.version, "1.2.3");
+        assert_eq!(trove.version_scheme, VersionScheme::Debian);
         assert_eq!(trove.architecture, Some("aarch64".to_string()));
         assert_eq!(trove.description, Some("Example package".to_string()));
     }

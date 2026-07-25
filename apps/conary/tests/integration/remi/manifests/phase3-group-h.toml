@@ -32,7 +32,7 @@ retries = 3
 
 [[test.step]]
 [test.step.kill_after_log]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/large/10k-files.ccs --allow-unsigned --sandbox never --yes"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/large/10k-files.ccs --policy ${FIXTURE_CCS_POLICY} --sandbox always --yes"
 pattern = "Deploying files"
 timeout_seconds = 30
 
@@ -67,7 +67,7 @@ memory_limit_mb = 512
 network_isolated = false
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/large/large-package.ccs --allow-unsigned --sandbox never --yes"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/large/large-package.ccs --policy ${FIXTURE_CCS_POLICY} --sandbox always --yes"
 
 [test.step.assert]
 exit_code_not = 0
@@ -121,7 +121,7 @@ requires = ["composefs_runtime"]
 
 # Step 1: Install a package (populates CAS + DB)
 [[test.step]]
-run = "${CONARY_BIN} ccs install --yes /opt/remi-tests/fixtures/adversarial/large/10k-files.ccs --allow-unsigned --sandbox never --db-path ${DB_PATH}"
+run = "${CONARY_BIN} ccs install --yes /opt/remi-tests/fixtures/adversarial/large/10k-files.ccs --policy ${FIXTURE_CCS_POLICY} --sandbox always --db-path ${DB_PATH}"
 
 [test.step.assert]
 exit_code = 0
@@ -170,7 +170,7 @@ retries = 3
 
 [[test.step]]
 [test.step.kill_after_log]
-conary = "env CONARY_TEST_HOLD_AFTER_DB_UPDATE_MS=1500 ccs install /opt/remi-tests/fixtures/conary-test-fixture/v2/output/conary-test-fixture-2.0.0.ccs --allow-unsigned --sandbox never --yes"
+conary = "env CONARY_TEST_HOLD_AFTER_DB_UPDATE_MS=1500 ccs install /opt/remi-tests/fixtures/conary-test-fixture/v2/output/conary-test-fixture-2.0.0-1.ccs --policy ${FIXTURE_CCS_POLICY} --sandbox always --yes"
 pattern = "Updating database..."
 timeout_seconds = 30
 
@@ -205,7 +205,7 @@ conary = "repo sync ${REPO_NAME} --force"
 exit_code = 0
 
 [[test.step]]
-run = "${CONARY_BIN} repo add flaky-500 http://127.0.0.1:18081/metadata --db-path ${DB_PATH} --no-gpg-check >/dev/null 2>&1 || true; ${CONARY_BIN} repo sync flaky-500 --db-path ${DB_PATH} 2>&1"
+run = "${CONARY_BIN} repo add flaky-500 http://127.0.0.1:18081/metadata --package-format json --db-path ${DB_PATH} >/dev/null 2>&1 || true; ${CONARY_BIN} repo sync flaky-500 --db-path ${DB_PATH} 2>&1"
 
 [test.step.assert]
 exit_code_not = 0
@@ -218,32 +218,32 @@ conary = "search ${REPO_NAME}"
 stdout_not_contains = "panic"
 
 # --------------------------------------------------------------------------
-# T93: Post-install scriptlet degraded success
+# T93: Post-install scriptlet rollback
 # --------------------------------------------------------------------------
 
 [[test]]
 id = "T93"
-name = "scriptlet_post_commit_warning"
-description = "A failing post-install scriptlet should leave the package installed and mark the changeset degraded"
+name = "scriptlet_failure_rolls_back"
+description = "A failing post-install scriptlet should return nonzero and leave package state and payload absent"
 timeout = 60
 group = "H"
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/failing-scriptlet/output/failing-scriptlet-1.0.0.ccs --allow-unsigned --sandbox never --yes"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/failing-scriptlet/output/failing-scriptlet-1.0.0-1.ccs --policy ${FIXTURE_CCS_POLICY} --sandbox always --yes"
+
+[test.step.assert]
+exit_code_not = 0
+stderr_contains = "post-install hooks failed"
+
+[[test.step]]
+run = "sqlite3 ${DB_PATH} \"SELECT CASE WHEN COUNT(*) = 0 THEN 'state-absent' ELSE 'state-present' END FROM troves WHERE name = 'failing-scriptlet'\""
 
 [test.step.assert]
 exit_code = 0
-stderr_contains = "Post-install script failed"
+stdout_contains = "state-absent"
 
 [[test.step]]
-run = "sqlite3 ${DB_PATH} \"SELECT status FROM changesets ORDER BY id DESC LIMIT 1\""
-
-[test.step.assert]
-exit_code = 0
-stdout_contains = "post_hooks_failed"
-
-[[test.step]]
-file_exists = "/usr/bin/failing-scriptlet"
+file_not_exists = "/usr/bin/failing-scriptlet"
 
 # --------------------------------------------------------------------------
 # T94: Concurrent install contention
@@ -259,7 +259,7 @@ flaky = true
 retries = 3
 
 [[test.step]]
-run = "${CONARY_BIN} ccs install --yes /opt/remi-tests/fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0.ccs --allow-unsigned --sandbox never --db-path ${DB_PATH} >/tmp/t94-a.log 2>&1 & PID1=$!; ${CONARY_BIN} ccs install --yes /opt/remi-tests/fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0.ccs --allow-unsigned --sandbox never --db-path ${DB_PATH} >/tmp/t94-b.log 2>&1 & PID2=$!; wait $PID1 $PID2 || true; cat /tmp/t94-a.log /tmp/t94-b.log"
+run = "${CONARY_BIN} ccs install --yes /opt/remi-tests/fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0-1.ccs --policy ${FIXTURE_CCS_POLICY} --sandbox always --db-path ${DB_PATH} >/tmp/t94-a.log 2>&1 & PID1=$!; ${CONARY_BIN} ccs install --yes /opt/remi-tests/fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0-1.ccs --policy ${FIXTURE_CCS_POLICY} --sandbox always --db-path ${DB_PATH} >/tmp/t94-b.log 2>&1 & PID2=$!; wait $PID1 $PID2 || true; cat /tmp/t94-a.log /tmp/t94-b.log"
 
 [test.step.assert]
 stdout_contains_any = ["already installed", "database is locked", "installed"]
@@ -314,14 +314,14 @@ memory_limit_mb = 512
 network_isolated = false
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0.ccs --allow-unsigned --sandbox never --yes"
+conary = "ccs install /opt/remi-tests/fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0-1.ccs --policy ${FIXTURE_CCS_POLICY} --sandbox always --yes"
 
 [test.step.assert]
 exit_code = 0
 
 [[test.step]]
 [test.step.kill_after_log]
-conary = "env CONARY_TEST_HOLD_DURING_REMOVE_MS=1500 remove conary-test-fixture --no-scripts --yes"
+conary = "env CONARY_TEST_HOLD_DURING_REMOVE_MS=1500 remove conary-test-fixture --sandbox always --yes"
 pattern = "Removing package"
 timeout_seconds = 30
 

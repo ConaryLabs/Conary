@@ -7,7 +7,7 @@
 //!
 //! 1. **Documentation**: Clear declaration of package requirements
 //! 2. **Audit Mode**: Compare declared capabilities vs observed behavior
-//! 3. **Enforcement** (future): Apply restrictions via landlock/seccomp
+//! 3. **Enforcement**: Apply restrictions via landlock/seccomp
 //!
 //! # Example
 //!
@@ -17,35 +17,31 @@
 //! rationale = "Web server requiring network listeners and cache access"
 //!
 //! [capabilities.network]
-//! outbound = ["443", "80"]
-//! listen = ["80", "443"]
+//! connect_tcp = [443, 80]
+//! bind_tcp = [80, 443]
 //!
 //! [capabilities.filesystem]
 //! read = ["/etc/nginx", "/etc/ssl/certs"]
 //! write = ["/var/cache/nginx", "/var/log/nginx"]
 //!
 //! [capabilities.syscalls]
-//! profile = "network-server"
+//! allow = ["read", "write", "epoll_ctl"]
+//!
+//! [capabilities.linux]
+//! required = ["cap-net-bind-service"]
 //! ```
 
 mod declaration;
 pub mod enforcement;
-pub mod policy;
-pub mod resolver;
 
+pub(crate) use declaration::resolve_native_syscall_number;
 pub use declaration::{
-    CapabilityDeclaration, CapabilityValidationError, FilesystemCapabilities, NetworkCapabilities,
-    SyscallCapabilities, SyscallProfile,
-};
-pub use policy::{CapabilityPolicy, PolicyDecision, infer_linux_capabilities};
-pub use resolver::{
-    CapabilityProvider, CapabilityRequirement, CapabilityResolver, CapabilitySpec,
-    FilesystemCapType, FilesystemCapabilitySpec, NetworkCapType, NetworkCapabilitySpec,
-    ResolvedCapability, ResolverPreferences, parse_capability_spec,
+    CAPABILITY_SCHEMA_VERSION, CapabilityDeclaration, CapabilityValidationError,
+    FilesystemCapabilities, LinuxCapabilities, NetworkCapabilities, SyscallCapabilities,
 };
 
 use crate::ccs::manifest::CcsManifest;
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use thiserror::Error;
 
 /// Errors related to capability operations
@@ -82,6 +78,7 @@ pub fn store_capabilities(
     trove_id: i64,
     capabilities: &CapabilityDeclaration,
 ) -> CapabilityResult<()> {
+    capabilities.validate()?;
     let declaration_json = serde_json::to_string(capabilities)
         .map_err(|e| CapabilityError::Other(format!("Failed to serialize capabilities: {}", e)))?;
 
@@ -105,12 +102,16 @@ pub fn load_capabilities(
             [trove_id],
             |row| row.get(0),
         )
-        .ok();
+        .optional()?;
 
     result
         .map(|json| {
-            serde_json::from_str(&json)
-                .map_err(|e| CapabilityError::Other(format!("Failed to parse capabilities: {}", e)))
+            let declaration: CapabilityDeclaration =
+                serde_json::from_str(&json).map_err(|error| {
+                    CapabilityError::Other(format!("Failed to parse capabilities: {error}"))
+                })?;
+            declaration.validate()?;
+            Ok(declaration)
         })
         .transpose()
 }
@@ -127,7 +128,7 @@ pub fn load_capabilities_by_name(
             [package_name],
             |row| row.get(0),
         )
-        .ok();
+        .optional()?;
 
     match trove_id {
         Some(id) => load_capabilities(conn, id),
@@ -276,14 +277,14 @@ mod tests {
 
         // Create and store capabilities
         let mut caps = CapabilityDeclaration::default();
-        caps.network.listen.push("80".to_string());
+        caps.network.bind_tcp.push(80);
         caps.filesystem.read.push("/etc".to_string());
 
         store_capabilities(&conn, 1, &caps).unwrap();
 
         // Load and verify
         let loaded = load_capabilities(&conn, 1).unwrap().unwrap();
-        assert_eq!(loaded.network.listen, vec!["80".to_string()]);
+        assert_eq!(loaded.network.bind_tcp, vec![80]);
         assert_eq!(loaded.filesystem.read, vec!["/etc".to_string()]);
     }
 
@@ -306,6 +307,41 @@ mod tests {
 
         let not_found = load_capabilities_by_name(&conn, "nonexistent");
         assert!(not_found.is_err());
+    }
+
+    #[test]
+    fn database_errors_are_not_rewritten_as_missing_packages_or_declarations() {
+        let conn = Connection::open_in_memory().unwrap();
+
+        assert!(matches!(
+            load_capabilities(&conn, 1),
+            Err(CapabilityError::Database(_))
+        ));
+        assert!(matches!(
+            load_capabilities_by_name(&conn, "nginx"),
+            Err(CapabilityError::Database(_))
+        ));
+    }
+
+    #[test]
+    fn invalid_declarations_are_not_persisted() {
+        let conn = setup_test_db();
+        conn.execute(
+            "INSERT INTO troves (id, name, version, type) VALUES (1, 'invalid', '1', 'package')",
+            [],
+        )
+        .unwrap();
+        let mut capabilities = CapabilityDeclaration::default();
+        capabilities.network.bind_tcp = vec![443, 443];
+
+        assert!(matches!(
+            store_capabilities(&conn, 1, &capabilities),
+            Err(CapabilityError::Validation(_))
+        ));
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM capabilities", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
     }
 
     #[test]

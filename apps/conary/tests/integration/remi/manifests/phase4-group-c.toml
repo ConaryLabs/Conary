@@ -28,21 +28,21 @@ fatal = true
 
 # Setup: init DB
 [[test.step]]
-conary = "system init --profile ${REMI_DISTRO}"
+conary = "system init"
 
 [test.step.assert]
 exit_code = 0
 
 # Setup: remove default repos to avoid slow syncs
 [[test.step]]
-run = "${CONARY_BIN} repo remove remi --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove ${REPO_NAME} --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove arch-core --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove arch-extra --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove arch-multilib --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove fedora-44 --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove ubuntu-26.04 --db-path ${DB_PATH} 2>/dev/null; true"
+run = "${CONARY_BIN} repo remove ${REPO_NAME} --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove ${REPO_NAME} --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove arch-core --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove arch-extra --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove arch-multilib --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove fedora-44 --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove ubuntu-26.04 --db-path ${DB_PATH} 2>/dev/null; true"
 
 # Setup: add Remi repo (needed for repo enable/disable tests)
 [[test.step]]
 run = "${CONARY_BIN} repo remove ${REPO_NAME} --db-path ${DB_PATH} 2>/dev/null || true"
 
 [[test.step]]
-conary = "repo add ${REPO_NAME} ${REMI_ENDPOINT} --default-strategy remi --remi-endpoint ${REMI_ENDPOINT} --remi-distro ${REMI_DISTRO} --no-gpg-check"
+conary = "repo add ${REPO_NAME} ${REMI_ENDPOINT} --package-format json --default-strategy remi --remi-endpoint ${REMI_ENDPOINT} --remi-distro ${REMI_DISTRO}"
 
 [test.step.assert]
 exit_code = 0
@@ -55,20 +55,20 @@ exit_code = 0
 
 # Setup: install fixture CCS (always available, no distro repo needed)
 [[test.step]]
-conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never --reinstall --yes"
+conary = "ccs install ${FIXTURE_V1_CCS} --policy ${FIXTURE_CCS_POLICY} --sandbox always --reinstall --yes"
 
 [test.step.assert]
 exit_code = 0
 
 # Setup: build and install the local phase-4 runtime fixture for shell/run coverage
 [[test.step]]
-run = "rm -rf /tmp/phase4-runtime-fixture-output && mkdir -p /tmp/phase4-runtime-fixture-output && ${CONARY_BIN} ccs build /opt/remi-tests/fixtures/phase4-runtime-fixture --output /tmp/phase4-runtime-fixture-output --source /opt/remi-tests/fixtures/phase4-runtime-fixture/stage"
+run = "rm -rf /tmp/phase4-runtime-fixture-output && mkdir -p /tmp/phase4-runtime-fixture-output && ${CONARY_BIN} ccs build /opt/remi-tests/fixtures/phase4-runtime-fixture --output /tmp/phase4-runtime-fixture-output --source /opt/remi-tests/fixtures/phase4-runtime-fixture/stage --key ${FIXTURE_CCS_KEY}"
 
 [test.step.assert]
 exit_code = 0
 
 [[test.step]]
-run = "CCS_FILE=$(ls /tmp/phase4-runtime-fixture-output/*.ccs | head -1) && ${CONARY_BIN} ccs install --yes \"$CCS_FILE\" --allow-unsigned --sandbox never --reinstall --db-path ${DB_PATH}"
+run = "CCS_FILE=$(ls /tmp/phase4-runtime-fixture-output/*.ccs | head -1) && ${CONARY_BIN} ccs install --yes \"$CCS_FILE\" --policy ${FIXTURE_CCS_POLICY} --sandbox always --reinstall --db-path ${DB_PATH}"
 
 [test.step.assert]
 exit_code = 0
@@ -105,7 +105,7 @@ depends_on = ["T196"]
 fatal = true
 
 [[test.step]]
-run = "mkdir -p /tmp/test-ccs-output && ${CONARY_BIN} ccs build /tmp/test-ccs --output /tmp/test-ccs-output --source /tmp/test-ccs/stage"
+run = "mkdir -p /tmp/test-ccs-output && ${CONARY_BIN} ccs build /tmp/test-ccs --output /tmp/test-ccs-output --source /tmp/test-ccs/stage --key ${FIXTURE_CCS_KEY}"
 
 [test.step.assert]
 exit_code = 0
@@ -176,19 +176,19 @@ exit_code = 0
 stdout_not_contains = "panic"
 
 # --------------------------------------------------------------------------
-# T201: CCS verify (unsigned)
+# T201: CCS verify (signed)
 # --------------------------------------------------------------------------
 
 [[test]]
 id = "T201"
-name = "ccs_verify_unsigned"
-description = "Verify an unsigned CCS package with --allow-unsigned"
+name = "ccs_verify_signed"
+description = "Verify a signed CCS package under the shared fixture trust policy"
 timeout = 30
 group = "C"
 depends_on = ["T197"]
 
 [[test.step]]
-run = "CCS_FILE=$(ls /tmp/test-ccs-output/*.ccs | head -1) && ${CONARY_BIN} ccs verify $CCS_FILE --allow-unsigned"
+run = "CCS_FILE=$(ls /tmp/test-ccs-output/*.ccs | head -1) && ${CONARY_BIN} ccs verify $CCS_FILE --policy ${FIXTURE_CCS_POLICY}"
 
 [test.step.assert]
 exit_code = 0
@@ -205,10 +205,17 @@ timeout = 30
 group = "C"
 
 [[test.step]]
-run = "rm -f /tmp/test-key /tmp/test-key.pub && ${CONARY_BIN} ccs keygen --output /tmp/test-key --force 2>&1; true"
+run = "rm -f /tmp/test-key.private /tmp/test-key.public && ${CONARY_BIN} ccs keygen --output /tmp/test-key --force"
 
 [test.step.assert]
+exit_code = 0
 stdout_not_contains = "panic"
+
+[[test.step]]
+file_exists = "/tmp/test-key.private"
+
+[[test.step]]
+file_exists = "/tmp/test-key.public"
 
 # --------------------------------------------------------------------------
 # T203: CCS sign
@@ -222,12 +229,15 @@ timeout = 30
 group = "C"
 depends_on = ["T197", "T202"]
 
-# Sign may fail if keygen didn't produce a valid key
 [[test.step]]
-run = "CCS_FILE=$(ls /tmp/test-ccs-output/*.ccs 2>/dev/null | head -1); [ -n \"$CCS_FILE\" ] && [ -f /tmp/test-key ] && ${CONARY_BIN} ccs sign $CCS_FILE --key /tmp/test-key --output /tmp/signed.ccs 2>&1 || echo 'skipped: prerequisites missing'"
+run = "CCS_FILE=$(ls /tmp/test-ccs-output/*.ccs | head -1) && ${CONARY_BIN} ccs sign \"$CCS_FILE\" --key /tmp/test-key.private --output /tmp/signed.ccs"
 
 [test.step.assert]
+exit_code = 0
 stdout_not_contains = "panic"
+
+[[test.step]]
+file_exists = "/tmp/signed.ccs"
 
 # --------------------------------------------------------------------------
 # T204: CCS export to OCI
@@ -647,68 +657,6 @@ conary = "repo list"
 [test.step.assert]
 exit_code = 0
 stdout_contains = "${REPO_NAME}"
-
-# --------------------------------------------------------------------------
-# T218: repo key-list
-# --------------------------------------------------------------------------
-
-[[test]]
-id = "T218"
-name = "repo_key_list"
-description = "List GPG keys (may be empty)"
-timeout = 30
-group = "C"
-
-[[test.step]]
-conary = "repo key-list"
-
-[test.step.assert]
-exit_code = 0
-stdout_not_contains = "panic"
-
-# --------------------------------------------------------------------------
-# T219: repo key-import (invalid key -- graceful error)
-# --------------------------------------------------------------------------
-
-[[test]]
-id = "T219"
-name = "repo_key_import"
-description = "Import an invalid GPG key and verify graceful error handling"
-timeout = 30
-group = "C"
-
-# Create a dummy key file that is NOT valid GPG/PGP format.
-# The import command should reject it with a meaningful error, not panic.
-[[test.step]]
-run = "echo 'mDMEZwAAAAEEALqK9tVBTWXzNzKmp5sF1RGjd7ve4y3N2K8+placeholder+test+key' > /tmp/test-gpg.key"
-
-[test.step.assert]
-exit_code = 0
-
-[[test.step]]
-run = "${CONARY_BIN} repo key-import ${REPO_NAME} /tmp/test-gpg.key --db-path ${DB_PATH} 2>&1; true"
-
-[test.step.assert]
-stdout_not_contains = "panicked"
-
-# --------------------------------------------------------------------------
-# T220: repo key-remove (no key present -- graceful error)
-# --------------------------------------------------------------------------
-
-[[test]]
-id = "T220"
-name = "repo_key_remove"
-description = "Remove GPG keys when none exist and verify graceful error"
-timeout = 30
-group = "C"
-
-# No key was successfully imported (T219 used an invalid key), so this
-# should fail gracefully with a "no key" error.
-[[test.step]]
-run = "${CONARY_BIN} repo key-remove ${REPO_NAME} --db-path ${DB_PATH} 2>&1; true"
-
-[test.step.assert]
-stdout_not_contains = "panicked"
 
 # ==========================================================================
 #  CLEANUP

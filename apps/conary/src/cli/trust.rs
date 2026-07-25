@@ -44,19 +44,6 @@ pub enum TrustCommands {
         db: DbArgs,
     },
 
-    /// Disable TUF verification for a repository (unsafe)
-    Disable {
-        /// Repository name
-        repo: String,
-
-        /// Confirm the unsafe operation
-        #[arg(long)]
-        force: bool,
-
-        #[command(flatten)]
-        db: DbArgs,
-    },
-
     /// Show TUF metadata versions and expiry for a repository
     Status {
         /// Repository name

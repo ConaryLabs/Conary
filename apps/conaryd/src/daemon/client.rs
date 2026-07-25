@@ -29,8 +29,8 @@
 //! ```
 //!
 //! Package mutation helpers queue daemon jobs. Non-dry-run package requests
-//! must explicitly set `allow_live_system_mutation`, matching the CLI's
-//! live-host acknowledgement boundary.
+//! must explicitly set `apply_intent`, matching the CLI's live-host
+//! acknowledgement boundary.
 
 use crate::daemon::{DaemonConfig, DaemonError, DaemonEvent};
 use conary_core::Result;
@@ -79,10 +79,8 @@ pub struct InstallOptions {
     pub allow_downgrade: bool,
     pub skip_deps: bool,
     pub dry_run: bool,
-    pub no_scripts: bool,
     pub yes: bool,
     pub apply_intent: bool,
-    pub allow_live_system_mutation: bool,
 }
 
 /// Options for package removal
@@ -90,10 +88,8 @@ pub struct InstallOptions {
 pub struct RemoveOptions {
     pub cascade: bool,
     pub remove_orphans: bool,
-    pub no_scripts: bool,
-    pub purge_files: bool,
+    pub purge: bool,
     pub apply_intent: bool,
-    pub allow_live_system_mutation: bool,
 }
 
 /// Options for package updates
@@ -103,7 +99,6 @@ pub struct UpdateOptions {
     pub dry_run: bool,
     pub yes: bool,
     pub apply_intent: bool,
-    pub allow_live_system_mutation: bool,
 }
 
 /// HTTP response from daemon

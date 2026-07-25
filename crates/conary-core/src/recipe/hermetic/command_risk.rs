@@ -1,9 +1,8 @@
 // conary-core/src/recipe/hermetic/command_risk.rs
 
 use crate::recipe::format::Recipe;
-use crate::recipe::hermetic::evidence::{
-    BuildCommandRiskEntry, BuildCommandRiskReport, PolicyStatus,
-};
+use crate::recipe::hermetic::evidence::{BuildCommandRiskEntry, BuildCommandRiskReport};
+use crate::security::command_risk::CommandRiskSeverity;
 
 #[derive(Debug, Clone)]
 pub struct BuildCommandText {
@@ -87,29 +86,25 @@ pub fn classify_build_commands(commands: &[BuildCommandText]) -> BuildCommandRis
                     phase: command_text.phase.clone(),
                     command: entry.command,
                     reason_code: entry.reason_code,
-                    severity: map_shared_status(entry.severity),
+                    severity: entry.severity,
                     evidence: entry.evidence,
                 }),
         );
     }
 
     if entries.is_empty() {
-        BuildCommandRiskReport::clean()
+        BuildCommandRiskReport::no_findings()
     } else {
         BuildCommandRiskReport {
-            status: PolicyStatus::Blocked,
+            highest_severity: entries
+                .iter()
+                .map(|entry| entry.severity)
+                .max()
+                .unwrap_or(CommandRiskSeverity::None),
             classifier_version: crate::security::command_risk::COMMAND_RISK_CLASSIFIER_VERSION
                 .to_string(),
             entries,
         }
-    }
-}
-
-fn map_shared_status(status: crate::security::command_risk::CommandRiskStatus) -> PolicyStatus {
-    match status {
-        crate::security::command_risk::CommandRiskStatus::Clean => PolicyStatus::Clean,
-        crate::security::command_risk::CommandRiskStatus::Review => PolicyStatus::Review,
-        crate::security::command_risk::CommandRiskStatus::Blocked => PolicyStatus::Blocked,
     }
 }
 
@@ -120,8 +115,9 @@ mod tests {
         BuildSection, PackageSection, Recipe, RemoteSourceSection, SourceSection,
     };
     use crate::recipe::hermetic::evidence::{
-        BuildCommandRiskEntry, COMMAND_RISK_CLASSIFIER_VERSION, PolicyStatus,
+        BuildCommandRiskEntry, COMMAND_RISK_CLASSIFIER_VERSION,
     };
+    use crate::security::command_risk::CommandRiskSeverity;
     use std::collections::HashMap;
 
     fn recipe_with_build(build: BuildSection) -> Recipe {
@@ -175,20 +171,23 @@ mod tests {
             .collect()
     }
 
-    fn assert_reason(report: &BuildCommandRiskReport, reason_code: &str) {
+    fn assert_reason(
+        report: &BuildCommandRiskReport,
+        reason_code: &str,
+        severity: CommandRiskSeverity,
+    ) {
         assert!(
             report
                 .entries
                 .iter()
-                .any(|entry| entry.reason_code == reason_code
-                    && entry.severity == PolicyStatus::Blocked),
+                .any(|entry| entry.reason_code == reason_code && entry.severity == severity),
             "expected {reason_code} in {:#?}",
             report.entries
         );
     }
 
     #[test]
-    fn package_manager_fetches_are_blocked_without_evidence() {
+    fn package_manager_fetches_are_diagnostic_notices() {
         let mut build = build_section();
         build.setup = Some("   \n".to_string());
         build.configure = Some("npm install atomic-lockfile".to_string());
@@ -205,9 +204,13 @@ mod tests {
 
         let report = classify_build_commands(&commands);
 
-        assert_eq!(report.status, PolicyStatus::Blocked);
+        assert_eq!(report.highest_severity, CommandRiskSeverity::Notice);
         assert_eq!(report.classifier_version, COMMAND_RISK_CLASSIFIER_VERSION);
-        assert_reason(&report, "package-manager-fetch");
+        assert_reason(
+            &report,
+            "package-manager-fetch",
+            CommandRiskSeverity::Notice,
+        );
     }
 
     #[test]
@@ -217,9 +220,13 @@ mod tests {
             "python -c 'print(1)'\nbpftool prog list",
         )]);
 
-        assert_eq!(report.status, PolicyStatus::Blocked);
-        assert_reason(&report, "dynamic-language-exec");
-        assert_reason(&report, "bpf-or-ebpf");
+        assert_eq!(report.highest_severity, CommandRiskSeverity::Notice);
+        assert_reason(
+            &report,
+            "dynamic-language-exec",
+            CommandRiskSeverity::Notice,
+        );
+        assert_reason(&report, "bpf-or-ebpf", CommandRiskSeverity::Notice);
     }
 
     #[test]
@@ -230,13 +237,13 @@ mod tests {
             BuildCommandText::new("install", "install -Dm755 demo %(destdir)s/usr/bin/demo"),
         ]);
 
-        assert_eq!(report.status, PolicyStatus::Clean);
+        assert_eq!(report.highest_severity, CommandRiskSeverity::None);
         assert_eq!(report.classifier_version, COMMAND_RISK_CLASSIFIER_VERSION);
         assert!(report.entries.is_empty());
     }
 
     #[test]
-    fn command_risk_detects_wrappers_and_every_block_family() {
+    fn command_risk_detects_wrappers_and_diagnostic_families() {
         let cases = [
             (
                 "env -i npm install atomic-lockfile",
@@ -263,10 +270,10 @@ mod tests {
 
         for (content, reason_code) in cases {
             let report = classify_build_commands(&[BuildCommandText::new("make", content)]);
-            assert_eq!(
-                report.status,
-                PolicyStatus::Blocked,
-                "{content} should be blocked"
+            assert_ne!(
+                report.highest_severity,
+                CommandRiskSeverity::None,
+                "{content} should produce diagnostic evidence"
             );
             assert_eq!(
                 reason_codes(&report.entries),
@@ -291,7 +298,7 @@ mod tests {
             .collect();
         package_manager_commands.sort_unstable();
 
-        assert_eq!(report.status, PolicyStatus::Blocked);
+        assert_eq!(report.highest_severity, CommandRiskSeverity::Notice);
         assert_eq!(package_manager_commands, vec!["bun", "npm"]);
     }
 
@@ -302,7 +309,7 @@ mod tests {
             "go env && make install\ngit status & make clone\npython script.py && echo -c\ngo env&make install",
         )]);
 
-        assert_eq!(report.status, PolicyStatus::Clean);
+        assert_eq!(report.highest_severity, CommandRiskSeverity::None);
         assert!(report.entries.is_empty());
 
         let report = classify_build_commands(&[
@@ -311,10 +318,18 @@ mod tests {
             BuildCommandText::new("check", "/usr/bin/python3 -c 'print(1)'"),
         ]);
 
-        assert_eq!(report.status, PolicyStatus::Blocked);
-        assert_reason(&report, "package-manager-fetch");
-        assert_reason(&report, "network-fetch");
-        assert_reason(&report, "dynamic-language-exec");
+        assert_eq!(report.highest_severity, CommandRiskSeverity::Notice);
+        assert_reason(
+            &report,
+            "package-manager-fetch",
+            CommandRiskSeverity::Notice,
+        );
+        assert_reason(&report, "network-fetch", CommandRiskSeverity::Notice);
+        assert_reason(
+            &report,
+            "dynamic-language-exec",
+            CommandRiskSeverity::Notice,
+        );
     }
 
     #[test]
@@ -339,16 +354,16 @@ mod tests {
         for (content, reason_code) in cases {
             let report = classify_build_commands(&[BuildCommandText::new("make", content)]);
             assert_eq!(
-                report.status,
-                PolicyStatus::Blocked,
-                "{content} should be blocked"
+                report.highest_severity,
+                CommandRiskSeverity::Notice,
+                "{content} should produce a diagnostic notice"
             );
-            assert_reason(&report, reason_code);
+            assert_reason(&report, reason_code, CommandRiskSeverity::Notice);
         }
     }
 
     #[test]
-    fn formal_wrapper_contracts_fail_closed_without_guessing_nested_programs() {
+    fn formal_wrapper_contracts_report_unresolved_forms_without_guessing() {
         let unresolved = [
             "env -S 'npm install foo'",
             "bash -c \"$BUILD_PROGRAM\"",
@@ -356,15 +371,23 @@ mod tests {
         ];
         for content in unresolved {
             let report = classify_build_commands(&[BuildCommandText::new("make", content)]);
-            assert_eq!(report.status, PolicyStatus::Blocked, "{content}");
-            assert_reason(&report, "command-form-unresolved");
+            assert_eq!(
+                report.highest_severity,
+                CommandRiskSeverity::Notice,
+                "{content}"
+            );
+            assert_reason(
+                &report,
+                "command-form-unresolved",
+                CommandRiskSeverity::Notice,
+            );
         }
 
         let literal_mention = classify_build_commands(&[BuildCommandText::new(
             "make",
             "printf '%s\\n' 'npm install is documentation, not an invocation'",
         )]);
-        assert_eq!(literal_mention.status, PolicyStatus::Clean);
+        assert_eq!(literal_mention.highest_severity, CommandRiskSeverity::None);
         assert!(literal_mention.entries.is_empty());
     }
 }

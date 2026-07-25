@@ -1,12 +1,12 @@
 // src/commands/install/semantics.rs
 
-use super::{PackageFormatType, prepare, scriptlets::to_scriptlet_format};
+use super::{PackageFormatType, prepare};
 use conary_core::repository::versioning::VersionScheme;
-use conary_core::scriptlet::PackageFormat as ScriptletPackageFormat;
+use conary_core::scriptlet::ExecutionMode;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum PreparedSourceKind {
-    Legacy { format: PackageFormatType },
+    NativePackage { format: PackageFormatType },
     Ccs,
 }
 
@@ -14,35 +14,45 @@ pub(super) enum PreparedSourceKind {
 pub(super) struct InstallSemantics {
     pub(super) source: PreparedSourceKind,
     pub(super) version_scheme: VersionScheme,
-    pub(super) scriptlet_format: ScriptletPackageFormat,
 }
 
 impl InstallSemantics {
-    pub(super) fn legacy(format: PackageFormatType) -> Self {
+    pub(super) fn native_package(format: PackageFormatType) -> Self {
         Self {
-            source: PreparedSourceKind::Legacy { format },
+            source: PreparedSourceKind::NativePackage { format },
             version_scheme: prepare::version_scheme_for_format(format),
-            scriptlet_format: to_scriptlet_format(format),
         }
     }
 
-    pub(super) fn ccs() -> Self {
+    pub(super) fn ccs(version_scheme: VersionScheme) -> Self {
         Self {
             source: PreparedSourceKind::Ccs,
-            // CCS is the native artifact shape, but the current install/rollback
-            // metadata still expects a version-scheme and scriptlet-family.
-            // Until CCS carries an explicit scheme, keep the existing RPM
-            // fallback for mixed-version comparisons and upgrade scriptlets.
-            version_scheme: VersionScheme::Rpm,
-            scriptlet_format: ScriptletPackageFormat::Rpm,
+            version_scheme,
         }
     }
 }
 
-pub(super) fn scheme_to_string(scheme: VersionScheme) -> String {
-    match scheme {
-        VersionScheme::Rpm => "rpm".to_string(),
-        VersionScheme::Debian => "debian".to_string(),
-        VersionScheme::Arch => "arch".to_string(),
+pub(super) fn build_execution_mode(old_version: Option<&str>) -> ExecutionMode {
+    match old_version {
+        Some(version) => ExecutionMode::Upgrade {
+            old_version: version.to_string(),
+        },
+        None => ExecutionMode::Install,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn execution_mode_reflects_upgrade_identity() {
+        assert_eq!(build_execution_mode(None), ExecutionMode::Install);
+        assert_eq!(
+            build_execution_mode(Some("1.0.0")),
+            ExecutionMode::Upgrade {
+                old_version: "1.0.0".to_string()
+            }
+        );
     }
 }

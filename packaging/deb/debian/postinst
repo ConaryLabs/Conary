@@ -8,5 +8,5 @@ set -e
 if [ "$1" = "configure" ]; then
     # Initialize the Conary database and seed default repos (including Remi CCS proxy).
     # Safe to re-run: init reconciles managed defaults without replacing user-managed endpoints.
-    /usr/bin/conary system init --profile ubuntu-26.04
+    /usr/bin/conary system init
 fi

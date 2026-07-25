@@ -2,26 +2,52 @@
 
 //! Converted package tracking model
 //!
-//! Tracks packages converted from legacy formats (RPM/DEB/Arch) to CCS format.
+//! Tracks packages converted from native formats (RPM/DEB/Arch) to CCS.
 //! This enables:
 //! - Skip re-conversion of same package artifact (checksum-based dedup)
-//! - Persist typed lifecycle evidence and publication state
+//! - Persist typed lifecycle evidence
 //! - Re-convert when conversion algorithm is upgraded
 
 use crate::ccs::convert::ScriptletBundleSummary;
 use crate::error::Result;
 use rusqlite::{Connection, OptionalExtension, Row, params};
+use strum_macros::{AsRefStr, Display, EnumString};
 
 /// Current conversion algorithm version
 /// Bump this when making changes that require re-conversion of existing packages.
 ///
-/// Revision 8 removes the retired regex fidelity and detected-hook contract.
-pub const CONVERSION_VERSION: i32 = 8;
+/// Revision 11 removes the scriptlet publication projection: current conversion
+/// and artifact integrity are the only converted-artifact serving authority.
+pub const CONVERSION_VERSION: i32 = 11;
+
+/// Storage and ownership boundary for a converted package.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, AsRefStr, Display, EnumString)]
+#[strum(serialize_all = "kebab-case")]
+pub enum ConvertedArtifactKind {
+    /// A conversion attached to an installed Conary trove.
+    Installed,
+    /// A Remi repository artifact with complete serving identity and storage.
+    Repository,
+}
+
+/// Validated repository-serving view of a converted package.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepositoryConvertedArtifact<'a> {
+    pub package_name: &'a str,
+    pub package_version: &'a str,
+    pub distro: &'a str,
+    pub package_architecture: Option<&'a str>,
+    pub chunk_hashes: Vec<String>,
+    pub total_size: u64,
+    pub content_hash: &'a str,
+    pub ccs_path: &'a str,
+}
 
 /// A converted package record
 #[derive(Debug, Clone)]
 pub struct ConvertedPackage {
     pub id: Option<i64>,
+    pub artifact_kind: ConvertedArtifactKind,
     /// Reference to the converted trove (CCS package that was installed)
     pub trove_id: Option<i64>,
     /// Original package format (rpm, deb, arch)
@@ -62,55 +88,42 @@ pub struct ConvertedPackage {
     /// Path to the CCS package file
     pub ccs_path: Option<String>,
 
-    // Foreign-package scriptlet evidence and publication fields.
+    // Foreign-package scriptlet evidence fields.
     /// Aggregate scriptlet fidelity from passive bundle construction.
     pub scriptlet_fidelity: String,
-    /// Aggregate target compatibility from passive bundle construction.
-    pub target_compatibility: String,
-    /// Passive publication status. Goal 4 stores this only; it is not enforced.
-    pub publication_status: String,
     /// Digest of normalized scriptlet evidence.
     pub evidence_digest: Option<String>,
-    /// Digest of curated review evidence, when available.
-    pub curation_evidence_digest: Option<String>,
-    /// JSON array of blocked scriptlet reason codes for cheap filtering.
-    pub blocked_reason_codes_json: String,
-    /// JSON-encoded internal scriptlet summary for API/index projection.
+    /// JSON-encoded typed scriptlet summary for API/index projection.
     pub scriptlet_summary_json: String,
-    /// Local review artifact path, never exposed directly by public APIs.
-    pub review_artifact_path: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ScriptletSummaryForPublication {
-    pub summary: ScriptletBundleSummary,
-    pub valid: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ChunkPublicationState {
+pub enum ChunkConversionState {
     NoConvertedReference,
-    PublicReady,
-    NonPublicOnly,
+    CurrentConversion,
+    StaleConversionOnly,
 }
 
 impl ConvertedPackage {
     /// Column list for SELECT queries.
-    const COLUMNS: &'static str = "id, trove_id, original_format, original_checksum, \
+    const COLUMNS: &'static str = "id, artifact_kind, trove_id, original_format, original_checksum, \
          conversion_version, converted_at, \
          enhancement_version, extracted_provenance_json, \
          enhancement_status, enhancement_error, enhancement_attempted_at, \
          package_name, package_version, distro, chunk_hashes_json, total_size, \
          content_hash, ccs_path, package_architecture, scriptlet_fidelity, \
-         target_compatibility, publication_status, evidence_digest, \
-         curation_evidence_digest, blocked_reason_codes_json, \
-         scriptlet_summary_json, review_artifact_path";
+         evidence_digest, scriptlet_summary_json";
 
-    /// Create a new converted package record
-    pub fn new(original_format: String, original_checksum: String) -> Self {
+    /// Create a conversion attached to an installed trove.
+    pub fn new_installed(
+        trove_id: i64,
+        original_format: String,
+        original_checksum: String,
+    ) -> Self {
         Self {
             id: None,
-            trove_id: None,
+            artifact_kind: ConvertedArtifactKind::Installed,
+            trove_id: Some(trove_id),
             original_format,
             original_checksum,
             conversion_version: CONVERSION_VERSION,
@@ -130,20 +143,15 @@ impl ConvertedPackage {
             total_size: None,
             content_hash: None,
             ccs_path: None,
-            scriptlet_fidelity: "unknown".to_string(),
-            target_compatibility: "unknown".to_string(),
-            publication_status: "public".to_string(),
+            scriptlet_fidelity: "native-free".to_string(),
             evidence_digest: None,
-            curation_evidence_digest: None,
-            blocked_reason_codes_json: "[]".to_string(),
-            scriptlet_summary_json: "{}".to_string(),
-            review_artifact_path: None,
+            scriptlet_summary_json: default_scriptlet_summary_json(),
         }
     }
 
-    /// Create a new server-side converted package record (for Remi)
+    /// Create a repository-serving converted package record.
     #[allow(clippy::too_many_arguments)]
-    pub fn new_server(
+    pub fn new_repository(
         distro: String,
         package_name: String,
         package_version: String,
@@ -154,8 +162,11 @@ impl ConvertedPackage {
         content_hash: String,
         ccs_path: String,
     ) -> Self {
+        let chunk_hashes_json =
+            serde_json::to_string(chunk_hashes).expect("a string list always serializes to JSON");
         Self {
             id: None,
+            artifact_kind: ConvertedArtifactKind::Repository,
             trove_id: None,
             original_format,
             original_checksum,
@@ -170,20 +181,13 @@ impl ConvertedPackage {
             package_version: Some(package_version),
             distro: Some(distro),
             package_architecture: None,
-            chunk_hashes_json: Some(
-                serde_json::to_string(chunk_hashes).unwrap_or_else(|_| "[]".to_string()),
-            ),
+            chunk_hashes_json: Some(chunk_hashes_json),
             total_size: Some(total_size),
             content_hash: Some(content_hash),
             ccs_path: Some(ccs_path),
-            scriptlet_fidelity: "unknown".to_string(),
-            target_compatibility: "unknown".to_string(),
-            publication_status: "public".to_string(),
+            scriptlet_fidelity: "native-free".to_string(),
             evidence_digest: None,
-            curation_evidence_digest: None,
-            blocked_reason_codes_json: "[]".to_string(),
-            scriptlet_summary_json: "{}".to_string(),
-            review_artifact_path: None,
+            scriptlet_summary_json: default_scriptlet_summary_json(),
         }
     }
 
@@ -191,47 +195,58 @@ impl ConvertedPackage {
     ///
     /// The current schema epoch guarantees all columns exist.
     fn from_row(row: &Row) -> rusqlite::Result<Self> {
+        let artifact_kind_raw: String = row.get(1)?;
+        let artifact_kind =
+            artifact_kind_raw
+                .parse::<ConvertedArtifactKind>()
+                .map_err(|error| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        1,
+                        rusqlite::types::Type::Text,
+                        Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, error)),
+                    )
+                })?;
+
         Ok(Self {
             id: row.get(0)?,
-            trove_id: row.get(1)?,
-            original_format: row.get(2)?,
-            original_checksum: row.get(3)?,
-            conversion_version: row.get(4)?,
-            converted_at: row.get(5)?,
-            enhancement_version: row.get(6)?,
-            extracted_provenance_json: row.get(7)?,
-            enhancement_status: row.get(8)?,
-            enhancement_error: row.get(9)?,
-            enhancement_attempted_at: row.get(10)?,
-            package_name: row.get(11)?,
-            package_version: row.get(12)?,
-            distro: row.get(13)?,
-            chunk_hashes_json: row.get(14)?,
-            total_size: row.get(15)?,
-            content_hash: row.get(16)?,
-            ccs_path: row.get(17)?,
-            package_architecture: row.get(18)?,
-            scriptlet_fidelity: row.get(19)?,
-            target_compatibility: row.get(20)?,
-            publication_status: row.get(21)?,
-            evidence_digest: row.get(22)?,
-            curation_evidence_digest: row.get(23)?,
-            blocked_reason_codes_json: row.get(24)?,
-            scriptlet_summary_json: row.get(25)?,
-            review_artifact_path: row.get(26)?,
+            artifact_kind,
+            trove_id: row.get(2)?,
+            original_format: row.get(3)?,
+            original_checksum: row.get(4)?,
+            conversion_version: row.get(5)?,
+            converted_at: row.get(6)?,
+            enhancement_version: row.get(7)?,
+            extracted_provenance_json: row.get(8)?,
+            enhancement_status: row.get(9)?,
+            enhancement_error: row.get(10)?,
+            enhancement_attempted_at: row.get(11)?,
+            package_name: row.get(12)?,
+            package_version: row.get(13)?,
+            distro: row.get(14)?,
+            chunk_hashes_json: row.get(15)?,
+            total_size: row.get(16)?,
+            content_hash: row.get(17)?,
+            ccs_path: row.get(18)?,
+            package_architecture: row.get(19)?,
+            scriptlet_fidelity: row.get(20)?,
+            evidence_digest: row.get(21)?,
+            scriptlet_summary_json: row.get(22)?,
         })
     }
 
     /// Insert this converted package into the database
     pub fn insert(&mut self, conn: &Connection) -> Result<i64> {
+        self.validate_artifact_contract()?;
+        self.scriptlet_summary()?;
         conn.execute(
-            "INSERT INTO converted_packages (trove_id, original_format, original_checksum, conversion_version,
+            "INSERT INTO converted_packages (artifact_kind, trove_id, original_format, original_checksum, conversion_version,
                 enhancement_version, extracted_provenance_json, enhancement_status,
                 package_name, package_version, distro, chunk_hashes_json, total_size, content_hash, ccs_path, package_architecture,
-                scriptlet_fidelity, target_compatibility, publication_status, evidence_digest, curation_evidence_digest,
-                blocked_reason_codes_json, scriptlet_summary_json, review_artifact_path)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)",
+                scriptlet_fidelity, evidence_digest,
+                scriptlet_summary_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
             params![
+                self.artifact_kind.as_ref(),
                 self.trove_id,
                 &self.original_format,
                 &self.original_checksum,
@@ -248,34 +263,14 @@ impl ConvertedPackage {
                 &self.ccs_path,
                 &self.package_architecture,
                 &self.scriptlet_fidelity,
-                &self.target_compatibility,
-                &self.publication_status,
                 &self.evidence_digest,
-                &self.curation_evidence_digest,
-                &self.blocked_reason_codes_json,
                 &self.scriptlet_summary_json,
-                &self.review_artifact_path,
             ],
         )?;
 
         let id = conn.last_insert_rowid();
         self.id = Some(id);
         Ok(id)
-    }
-
-    /// Update the trove_id after the converted package is installed
-    pub fn set_trove_id(&mut self, conn: &Connection, trove_id: i64) -> Result<()> {
-        let id = self.id.ok_or_else(|| {
-            crate::Error::NotFound("Cannot update trove_id on unconverted package".to_string())
-        })?;
-
-        conn.execute(
-            "UPDATE converted_packages SET trove_id = ?1 WHERE id = ?2",
-            params![trove_id, id],
-        )?;
-
-        self.trove_id = Some(trove_id);
-        Ok(())
     }
 
     /// Find a converted package by its original checksum
@@ -304,99 +299,166 @@ impl ConvertedPackage {
 
     /// Check if a package needs re-conversion (algorithm upgraded)
     pub fn needs_reconversion(&self) -> bool {
-        self.conversion_version < CONVERSION_VERSION
+        self.conversion_version != CONVERSION_VERSION
+    }
+
+    /// Return the exact installed trove identity for an installed conversion.
+    pub fn installed_trove_id(&self) -> Result<i64> {
+        if self.artifact_kind != ConvertedArtifactKind::Installed {
+            return Err(crate::Error::InternalError(format!(
+                "converted package {} is a repository artifact, not an installed conversion",
+                self.record_identity()
+            )));
+        }
+        self.trove_id.ok_or_else(|| {
+            crate::Error::InternalError(format!(
+                "installed converted package {} has no trove identity",
+                self.record_identity()
+            ))
+        })
+    }
+
+    /// Return a validated repository-serving artifact.
+    ///
+    /// Missing identity or storage fields and malformed chunk JSON are
+    /// persisted-state corruption. Serving callers must propagate this error;
+    /// they must not synthesize names, versions, sizes, hashes, or paths.
+    pub fn repository_artifact(&self) -> Result<RepositoryConvertedArtifact<'_>> {
+        if self.artifact_kind != ConvertedArtifactKind::Repository {
+            return Err(crate::Error::InternalError(format!(
+                "converted package {} is an installed conversion, not a repository artifact",
+                self.record_identity()
+            )));
+        }
+
+        let package_name = self.required_repository_text("package_name", &self.package_name)?;
+        let package_version =
+            self.required_repository_text("package_version", &self.package_version)?;
+        let distro = self.required_repository_text("distro", &self.distro)?;
+        let content_hash = self.required_repository_text("content_hash", &self.content_hash)?;
+        let ccs_path = self.required_repository_text("ccs_path", &self.ccs_path)?;
+        let chunk_hashes_json =
+            self.required_repository_text("chunk_hashes_json", &self.chunk_hashes_json)?;
+        let chunk_hashes =
+            serde_json::from_str::<Vec<String>>(chunk_hashes_json).map_err(|error| {
+                crate::Error::InternalError(format!(
+                    "repository converted package {} has malformed chunk_hashes_json: {error}",
+                    self.record_identity()
+                ))
+            })?;
+        if chunk_hashes.iter().any(|hash| hash.is_empty()) {
+            return Err(crate::Error::InternalError(format!(
+                "repository converted package {} has an empty chunk identity",
+                self.record_identity()
+            )));
+        }
+        let total_size = self.total_size.ok_or_else(|| {
+            crate::Error::InternalError(format!(
+                "repository converted package {} is missing total_size",
+                self.record_identity()
+            ))
+        })?;
+        let total_size = u64::try_from(total_size).map_err(|_| {
+            crate::Error::InternalError(format!(
+                "repository converted package {} has negative total_size {total_size}",
+                self.record_identity()
+            ))
+        })?;
+
+        Ok(RepositoryConvertedArtifact {
+            package_name,
+            package_version,
+            distro,
+            package_architecture: self.package_architecture.as_deref(),
+            chunk_hashes,
+            total_size,
+            content_hash,
+            ccs_path,
+        })
+    }
+
+    fn required_repository_text<'a>(
+        &self,
+        field: &str,
+        value: &'a Option<String>,
+    ) -> Result<&'a str> {
+        value
+            .as_deref()
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                crate::Error::InternalError(format!(
+                    "repository converted package {} is missing {field}",
+                    self.record_identity()
+                ))
+            })
+    }
+
+    fn validate_artifact_contract(&self) -> Result<()> {
+        match self.artifact_kind {
+            ConvertedArtifactKind::Installed => {
+                self.installed_trove_id()?;
+                if self.package_name.is_some()
+                    || self.package_version.is_some()
+                    || self.distro.is_some()
+                    || self.package_architecture.is_some()
+                    || self.chunk_hashes_json.is_some()
+                    || self.total_size.is_some()
+                    || self.content_hash.is_some()
+                    || self.ccs_path.is_some()
+                {
+                    return Err(crate::Error::InternalError(format!(
+                        "installed converted package {} carries repository-serving fields",
+                        self.record_identity()
+                    )));
+                }
+                Ok(())
+            }
+            ConvertedArtifactKind::Repository => {
+                if self.trove_id.is_some() {
+                    return Err(crate::Error::InternalError(format!(
+                        "repository converted package {} carries an installed trove identity",
+                        self.record_identity()
+                    )));
+                }
+                self.repository_artifact().map(|_| ())
+            }
+        }
     }
 
     /// Store passive scriptlet metadata generated during conversion.
-    pub fn set_scriptlet_metadata(
-        &mut self,
-        summary: &ScriptletBundleSummary,
-    ) -> serde_json::Result<()> {
+    pub fn set_scriptlet_metadata(&mut self, summary: &ScriptletBundleSummary) -> Result<()> {
+        validate_current_scriptlet_summary(summary)?;
         self.scriptlet_fidelity = summary.scriptlet_fidelity.clone();
-        self.target_compatibility = summary.target_compatibility.clone();
-        self.publication_status = summary.publication_status.clone();
         self.evidence_digest = summary.evidence_digest.clone();
-        self.curation_evidence_digest = summary.curation_evidence_digest.clone();
-        self.blocked_reason_codes_json = serde_json::to_string(&summary.blocked_reason_codes)?;
         self.scriptlet_summary_json = serde_json::to_string(summary)?;
-        self.review_artifact_path = summary.review_artifact_path.clone();
         Ok(())
     }
 
-    /// Recover the passive scriptlet summary, using scalar columns when the
-    /// JSON blob is missing or malformed.
-    pub fn scriptlet_summary(&self) -> ScriptletBundleSummary {
-        match serde_json::from_str::<ScriptletBundleSummary>(&self.scriptlet_summary_json) {
-            Ok(mut summary) => {
-                summary.scriptlet_fidelity = self.scriptlet_fidelity.clone();
-                summary.target_compatibility = self.target_compatibility.clone();
-                summary.publication_status = self.publication_status.clone();
-                summary.evidence_digest = self.evidence_digest.clone();
-                summary.curation_evidence_digest = self.curation_evidence_digest.clone();
-                summary.review_artifact_path = self.review_artifact_path.clone();
-                summary
-            }
-            Err(error) => {
-                tracing::warn!(
-                    "failed to parse converted package scriptlet summary JSON: {}",
-                    error
-                );
-                let mut summary = ScriptletBundleSummary {
-                    scriptlet_fidelity: self.scriptlet_fidelity.clone(),
-                    target_compatibility: self.target_compatibility.clone(),
-                    publication_status: self.publication_status.clone(),
-                    evidence_digest: self.evidence_digest.clone(),
-                    curation_evidence_digest: self.curation_evidence_digest.clone(),
-                    review_artifact_path: self.review_artifact_path.clone(),
-                    ..ScriptletBundleSummary::default()
-                };
-                summary.blocked_reason_codes =
-                    serde_json::from_str(&self.blocked_reason_codes_json).unwrap_or_default();
-                summary
-            }
-        }
+    /// Parse and validate the persisted current-epoch lifecycle summary.
+    ///
+    /// Malformed or internally inconsistent rows are database corruption, not
+    /// a publication state and not an operator-review workflow.
+    pub fn scriptlet_summary(&self) -> Result<ScriptletBundleSummary> {
+        let summary = serde_json::from_str::<ScriptletBundleSummary>(&self.scriptlet_summary_json)
+            .map_err(|error| {
+                crate::Error::InternalError(format!(
+                    "converted package {} has malformed lifecycle summary JSON: {error}",
+                    self.record_identity()
+                ))
+            })?;
+        validate_current_scriptlet_summary(&summary)?;
+        self.validate_summary_projection(&summary)?;
+        Ok(summary)
     }
 
-    pub fn scriptlet_publication_status(&self) -> &str {
-        self.publication_status.as_str()
+    pub fn parsed_chunk_hashes(&self) -> Result<Vec<String>> {
+        self.repository_artifact()
+            .map(|artifact| artifact.chunk_hashes)
     }
 
-    pub fn scriptlet_summary_for_publication(&self) -> ScriptletSummaryForPublication {
-        let value = match serde_json::from_str::<serde_json::Value>(&self.scriptlet_summary_json) {
-            Ok(value) => value,
-            Err(_) => {
-                return ScriptletSummaryForPublication {
-                    summary: self.scriptlet_summary(),
-                    valid: false,
-                };
-            }
-        };
-
-        let columns = self.publication_columns();
-        let valid = columns.summary_json_valid_for_publication(&value);
-        let summary = self.scriptlet_summary();
-
-        ScriptletSummaryForPublication { summary, valid }
-    }
-
-    pub fn is_scriptlet_public_ready(&self) -> bool {
-        if self.needs_reconversion() {
-            return false;
-        }
-        let publication = self.scriptlet_summary_for_publication();
-        publication.valid && publication.summary.publication_status == "public"
-    }
-
-    pub fn parsed_chunk_hashes(&self) -> Vec<String> {
-        self.chunk_hashes_json
-            .as_deref()
-            .and_then(|json| serde_json::from_str::<Vec<String>>(json).ok())
-            .unwrap_or_default()
-    }
-
-    /// Classify whether a CAS chunk is reachable from current public-ready
-    /// conversions, stale/non-public conversions only, or no conversions.
-    pub fn chunk_publication_state(conn: &Connection, hash: &str) -> Result<ChunkPublicationState> {
+    /// Classify whether a CAS chunk is reachable from a current conversion,
+    /// stale conversions only, or no conversions.
+    pub fn chunk_conversion_state(conn: &Connection, hash: &str) -> Result<ChunkConversionState> {
         let bare_hash = hash.strip_prefix("sha256:").unwrap_or(hash);
         let prefixed_hash = format!("sha256:{bare_hash}");
         let bare_pattern = format!("%\"{bare_hash}\"%");
@@ -404,55 +466,76 @@ impl ConvertedPackage {
 
         let mut stmt = conn.prepare(
             "SELECT chunk_hashes_json, conversion_version,
-                    scriptlet_fidelity, target_compatibility, publication_status,
-                    evidence_digest, curation_evidence_digest, blocked_reason_codes_json,
-                    scriptlet_summary_json, review_artifact_path
+                    scriptlet_fidelity, evidence_digest, scriptlet_summary_json
              FROM converted_packages
-             WHERE chunk_hashes_json IS NOT NULL
+             WHERE artifact_kind = 'repository'
+               AND chunk_hashes_json IS NOT NULL
                AND (chunk_hashes_json LIKE ?1 OR chunk_hashes_json LIKE ?2)",
         )?;
         let rows = stmt
             .query_map(
                 params![bare_pattern, prefixed_pattern],
-                ChunkPublicationCandidate::from_row,
+                ChunkConversionCandidate::from_row,
             )?
             .collect::<rusqlite::Result<Vec<_>>>()?;
 
         let mut saw_converted_reference = false;
         for candidate in rows {
-            if !candidate.references_hash(hash) {
+            if !candidate.references_hash(hash)? {
                 continue;
             }
 
             saw_converted_reference = true;
-            if candidate.is_scriptlet_public_ready() {
-                return Ok(ChunkPublicationState::PublicReady);
+            if candidate.is_current_conversion()? {
+                return Ok(ChunkConversionState::CurrentConversion);
             }
         }
 
         Ok(if saw_converted_reference {
-            ChunkPublicationState::NonPublicOnly
+            ChunkConversionState::StaleConversionOnly
         } else {
-            ChunkPublicationState::NoConvertedReference
+            ChunkConversionState::NoConvertedReference
         })
     }
 
-    fn publication_columns(&self) -> ScriptletPublicationColumns<'_> {
-        ScriptletPublicationColumns {
-            scriptlet_fidelity: &self.scriptlet_fidelity,
-            target_compatibility: &self.target_compatibility,
-            publication_status: &self.publication_status,
-            evidence_digest: self.evidence_digest.as_deref(),
-            curation_evidence_digest: self.curation_evidence_digest.as_deref(),
-            blocked_reason_codes_json: &self.blocked_reason_codes_json,
-            review_artifact_path: self.review_artifact_path.as_deref(),
+    fn validate_summary_projection(&self, summary: &ScriptletBundleSummary) -> Result<()> {
+        let projections_match = self.scriptlet_fidelity == summary.scriptlet_fidelity
+            && self.evidence_digest == summary.evidence_digest;
+        if projections_match {
+            return Ok(());
         }
+
+        Err(crate::Error::InternalError(format!(
+            "converted package {} lifecycle summary disagrees with indexed projection columns",
+            self.record_identity()
+        )))
+    }
+
+    fn record_identity(&self) -> String {
+        self.id
+            .map(|id| id.to_string())
+            .unwrap_or_else(|| self.original_checksum.clone())
     }
 
     /// List all converted packages
     pub fn list_all(conn: &Connection) -> Result<Vec<Self>> {
         let sql = format!(
             "SELECT {} FROM converted_packages ORDER BY converted_at DESC",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let results = stmt
+            .query_map([], Self::from_row)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(results)
+    }
+
+    /// List repository-serving conversions only.
+    pub fn list_repository_conversions(conn: &Connection) -> Result<Vec<Self>> {
+        let sql = format!(
+            "SELECT {} FROM converted_packages
+             WHERE artifact_kind = 'repository'
+             ORDER BY converted_at DESC",
             Self::COLUMNS
         );
         let mut stmt = conn.prepare(&sql)?;
@@ -479,12 +562,11 @@ impl ConvertedPackage {
         Ok(results)
     }
 
-    /// Find current converted package candidates for publication filtering.
+    /// Find current converted packages for a distribution and optional name.
     ///
-    /// This intentionally returns full rows so callers can apply the
-    /// health-aware scriptlet publication predicate instead of relying on the
-    /// scalar `publication_status` column alone.
-    pub fn find_publication_candidates(
+    /// Callers that expose lifecycle metadata must parse `scriptlet_summary()`
+    /// so malformed current rows surface as data corruption.
+    pub fn find_current_conversions(
         conn: &Connection,
         distro: &str,
         package_name: Option<&str>,
@@ -492,14 +574,16 @@ impl ConvertedPackage {
         let sql = if package_name.is_some() {
             format!(
                 "SELECT {} FROM converted_packages
-                 WHERE distro = ?1 AND package_name = ?2
-                   AND conversion_version >= ?3",
+                 WHERE artifact_kind = 'repository'
+                   AND distro = ?1 AND package_name = ?2
+                   AND conversion_version = ?3",
                 Self::COLUMNS
             )
         } else {
             format!(
                 "SELECT {} FROM converted_packages
-                 WHERE distro = ?1 AND conversion_version >= ?2",
+                 WHERE artifact_kind = 'repository'
+                   AND distro = ?1 AND conversion_version = ?2",
                 Self::COLUMNS
             )
         };
@@ -542,7 +626,8 @@ impl ConvertedPackage {
             if let Some(arch) = architecture {
                 let sql = format!(
                     "SELECT {} FROM converted_packages \
-                     WHERE distro = ?1 AND package_name = ?2 AND package_version = ?3 \
+                     WHERE artifact_kind = 'repository' \
+                     AND distro = ?1 AND package_name = ?2 AND package_version = ?3 \
                      AND package_architecture = ?4 \
                      ORDER BY converted_at DESC LIMIT 1",
                     Self::COLUMNS
@@ -552,7 +637,8 @@ impl ConvertedPackage {
             } else {
                 let sql = format!(
                     "SELECT {} FROM converted_packages \
-                     WHERE distro = ?1 AND package_name = ?2 AND package_version = ?3 \
+                     WHERE artifact_kind = 'repository' \
+                     AND distro = ?1 AND package_name = ?2 AND package_version = ?3 \
                      ORDER BY converted_at DESC LIMIT 1",
                     Self::COLUMNS
                 );
@@ -563,7 +649,8 @@ impl ConvertedPackage {
             if let Some(arch) = architecture {
                 let sql = format!(
                     "SELECT {} FROM converted_packages \
-                     WHERE distro = ?1 AND package_name = ?2 AND package_architecture = ?3 \
+                     WHERE artifact_kind = 'repository' \
+                     AND distro = ?1 AND package_name = ?2 AND package_architecture = ?3 \
                      ORDER BY converted_at DESC LIMIT 1",
                     Self::COLUMNS
                 );
@@ -572,7 +659,8 @@ impl ConvertedPackage {
             } else {
                 let sql = format!(
                     "SELECT {} FROM converted_packages \
-                     WHERE distro = ?1 AND package_name = ?2 \
+                     WHERE artifact_kind = 'repository' \
+                     AND distro = ?1 AND package_name = ?2 \
                      ORDER BY converted_at DESC LIMIT 1",
                     Self::COLUMNS
                 );
@@ -595,7 +683,8 @@ impl ConvertedPackage {
         let prefixed_hash = format!("sha256:{normalized_hash}");
         let sql = format!(
             "SELECT {} FROM converted_packages \
-             WHERE distro = ?1 AND package_name = ?2 \
+             WHERE artifact_kind = 'repository' \
+             AND distro = ?1 AND package_name = ?2 \
              AND (content_hash = ?3 OR content_hash = ?4) \
              ORDER BY converted_at DESC LIMIT 1",
             Self::COLUMNS
@@ -700,141 +789,73 @@ impl ConvertedPackage {
     }
 }
 
-struct ChunkPublicationCandidate {
-    chunk_hashes_json: Option<String>,
+struct ChunkConversionCandidate {
+    chunk_hashes_json: String,
     conversion_version: i32,
     scriptlet_fidelity: String,
-    target_compatibility: String,
-    publication_status: String,
     evidence_digest: Option<String>,
-    curation_evidence_digest: Option<String>,
-    blocked_reason_codes_json: String,
     scriptlet_summary_json: String,
-    review_artifact_path: Option<String>,
 }
 
-impl ChunkPublicationCandidate {
+impl ChunkConversionCandidate {
     fn from_row(row: &Row) -> rusqlite::Result<Self> {
         Ok(Self {
             chunk_hashes_json: row.get(0)?,
             conversion_version: row.get(1)?,
             scriptlet_fidelity: row.get(2)?,
-            target_compatibility: row.get(3)?,
-            publication_status: row.get(4)?,
-            evidence_digest: row.get(5)?,
-            curation_evidence_digest: row.get(6)?,
-            blocked_reason_codes_json: row.get(7)?,
-            scriptlet_summary_json: row.get(8)?,
-            review_artifact_path: row.get(9)?,
+            evidence_digest: row.get(3)?,
+            scriptlet_summary_json: row.get(4)?,
         })
     }
 
-    fn references_hash(&self, hash: &str) -> bool {
+    fn references_hash(&self, hash: &str) -> Result<bool> {
         let bare_hash = hash.strip_prefix("sha256:").unwrap_or(hash);
         let prefixed_hash = format!("sha256:{bare_hash}");
-        self.chunk_hashes_json
-            .as_deref()
-            .and_then(|json| serde_json::from_str::<Vec<String>>(json).ok())
-            .unwrap_or_default()
+        let hashes = serde_json::from_str::<Vec<String>>(&self.chunk_hashes_json)?;
+        Ok(hashes
             .into_iter()
-            .any(|chunk_hash| chunk_hash == bare_hash || chunk_hash == prefixed_hash)
+            .any(|chunk_hash| chunk_hash == bare_hash || chunk_hash == prefixed_hash))
     }
 
-    fn is_scriptlet_public_ready(&self) -> bool {
-        if self.conversion_version < CONVERSION_VERSION {
-            return false;
+    fn is_current_conversion(&self) -> Result<bool> {
+        if self.conversion_version != CONVERSION_VERSION {
+            return Ok(false);
         }
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(&self.scriptlet_summary_json)
-        else {
-            return false;
-        };
-        self.publication_columns()
-            .summary_json_valid_for_publication(&value)
-            && self.publication_status == "public"
-    }
-
-    fn publication_columns(&self) -> ScriptletPublicationColumns<'_> {
-        ScriptletPublicationColumns {
-            scriptlet_fidelity: &self.scriptlet_fidelity,
-            target_compatibility: &self.target_compatibility,
-            publication_status: &self.publication_status,
-            evidence_digest: self.evidence_digest.as_deref(),
-            curation_evidence_digest: self.curation_evidence_digest.as_deref(),
-            blocked_reason_codes_json: &self.blocked_reason_codes_json,
-            review_artifact_path: self.review_artifact_path.as_deref(),
+        let summary = serde_json::from_str::<ScriptletBundleSummary>(&self.scriptlet_summary_json)
+            .map_err(|error| {
+                crate::Error::InternalError(format!(
+                    "converted chunk reference has malformed lifecycle summary JSON: {error}"
+                ))
+            })?;
+        validate_current_scriptlet_summary(&summary)?;
+        if self.scriptlet_fidelity != summary.scriptlet_fidelity
+            || self.evidence_digest != summary.evidence_digest
+        {
+            return Err(crate::Error::InternalError(
+                "converted chunk reference lifecycle summary disagrees with indexed projection columns"
+                    .to_string(),
+            ));
         }
+        Ok(true)
     }
 }
 
-struct ScriptletPublicationColumns<'a> {
-    scriptlet_fidelity: &'a str,
-    target_compatibility: &'a str,
-    publication_status: &'a str,
-    evidence_digest: Option<&'a str>,
-    curation_evidence_digest: Option<&'a str>,
-    blocked_reason_codes_json: &'a str,
-    review_artifact_path: Option<&'a str>,
+fn default_scriptlet_summary_json() -> String {
+    serde_json::to_string(&ScriptletBundleSummary::default())
+        .expect("default lifecycle summary must serialize")
 }
 
-impl ScriptletPublicationColumns<'_> {
-    fn summary_json_valid_for_publication(&self, value: &serde_json::Value) -> bool {
-        if self.is_default_scriptlet_publication_shape(value) {
-            return true;
-        }
-
-        if !self.summary_json_shape_valid_for_publication(value) {
-            return false;
-        }
-
-        let Ok(summary) = serde_json::from_value::<ScriptletBundleSummary>(value.clone()) else {
-            return false;
-        };
-
-        summary.publication_status == self.publication_status
+fn validate_current_scriptlet_summary(summary: &ScriptletBundleSummary) -> Result<()> {
+    if !matches!(
+        summary.scriptlet_fidelity.as_str(),
+        "native-free" | "native-lifecycle"
+    ) {
+        return Err(crate::Error::InternalError(format!(
+            "unsupported current lifecycle fidelity {:?}",
+            summary.scriptlet_fidelity
+        )));
     }
-
-    fn summary_json_shape_valid_for_publication(&self, value: &serde_json::Value) -> bool {
-        if self.is_default_scriptlet_publication_shape(value) {
-            return true;
-        }
-
-        let Some(object) = value.as_object() else {
-            return false;
-        };
-
-        [
-            "scriptlet_fidelity",
-            "target_compatibility",
-            "publication_status",
-            "decision_counts",
-            "blocked_reason_codes",
-            "review_reason_codes",
-            "unknown_command_evidence",
-            "blocked_classes",
-            "boot_security_intents",
-            "security_policy_intents",
-        ]
-        .iter()
-        .all(|key| object.contains_key(*key))
-    }
-
-    fn is_default_scriptlet_publication_shape(&self, value: &serde_json::Value) -> bool {
-        value.as_object().is_some_and(|object| object.is_empty())
-            && self.scriptlet_fidelity == "unknown"
-            && self.target_compatibility == "unknown"
-            && self.publication_status == "public"
-            && self.evidence_digest.is_none()
-            && self.curation_evidence_digest.is_none()
-            && json_string_array_is_empty(self.blocked_reason_codes_json)
-            && self.review_artifact_path.is_none()
-    }
-}
-
-fn json_string_array_is_empty(value: &str) -> bool {
-    match serde_json::from_str::<Vec<String>>(value) {
-        Ok(values) => values.is_empty(),
-        Err(_) => false,
-    }
+    Ok(())
 }
 
 #[cfg(test)]

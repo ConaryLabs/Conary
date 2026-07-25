@@ -221,7 +221,7 @@ This project uses [Conventional Commits](https://www.conventionalcommits.org/). 
 | `security:` | Security fix | Patch |
 | `perf:` | Performance improvement | Patch |
 
-Add `!` after the type for breaking changes: `feat!: remove legacy API`.
+Add `!` after the type for breaking changes: `feat!: remove superseded API`.
 
 Scopes are optional but encouraged: `feat(resolver): add SAT backtracking`.
 
@@ -245,7 +245,7 @@ and four shared crates.
 
 | Module | Purpose |
 |--------|---------|
-| `crates/conary-core/src/db/` | SQLite schema, models, and migrations |
+| `crates/conary-core/src/db/` | SQLite current-schema definition, validation, and models |
 | `crates/conary-core/src/packages/` | RPM/DEB/Arch package parsers unified through `PackageMetadata` |
 | `crates/conary-core/src/compression/` | Unified decompression (Gzip, Xz, Zstd) with format detection |
 | `crates/conary-core/src/repository/` | Remote repository metadata sync, mirror logic, and Remi client |
@@ -472,9 +472,11 @@ Before proposing significant architectural changes, please open an issue to disc
 ## Documentation Hygiene
 
 - Treat active docs as current-state references, not historical logs.
-- Keep detailed roadmap state under `docs/roadmaps/`, active decisions under
-  `docs/designs/`, active multi-step plans under `docs/plans/`, and stable
-  public or persisted contracts under `docs/specs/`.
+- Keep detailed roadmap state under `docs/roadmaps/`. Record durable design
+  decisions in the architecture, module, or `docs/specs/` document that owns
+  the affected surface. Track bounded multi-step execution in the primary
+  issue and draft pull request; stable public or persisted contracts remain
+  under `docs/specs/`.
 - After canonical truth, proof, roadmap state, and resume facts are durable,
   delete completed, superseded, or abandoned planning. Use Git history for
   historical context; do not create a replacement planning archive.

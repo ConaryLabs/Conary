@@ -122,13 +122,13 @@ pub fn purge(conn: &Connection, before: &str) -> Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::schema::migrate;
+    use crate::db::schema::ensure_current;
 
     fn test_conn() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
             .unwrap();
-        migrate(&conn).unwrap();
+        ensure_current(&conn).unwrap();
         conn
     }
 

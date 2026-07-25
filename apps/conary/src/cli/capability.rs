@@ -55,49 +55,16 @@ pub enum CapabilityCommands {
         format: String,
     },
 
-    /// Generate capability declarations by observing a binary
+    /// Inspect the exact enforcement plan for a package
     ///
-    /// Runs a binary under strace to observe its actual system calls,
-    /// then generates a capability declaration matching the observed behavior.
-    /// NOTE: This is a Phase 2 feature, currently unimplemented.
-    #[command(hide = true)]
-    Generate {
-        /// Binary to observe
-        binary: String,
-
-        /// Arguments to pass to the binary
-        #[arg(last = true)]
-        args: Vec<String>,
-
-        /// Output file for generated capabilities (default: stdout)
-        #[arg(short, long)]
-        output: Option<String>,
-
-        /// Duration to observe in seconds
-        #[arg(long, default_value = "30")]
-        timeout: u32,
-    },
-
-    /// Audit a package against its declared capabilities
-    ///
-    /// Runs the package under observation and compares actual behavior
-    /// against declared capabilities. Reports any discrepancies.
-    /// NOTE: This is a Phase 2 feature, currently unimplemented.
-    #[command(hide = true)]
+    /// Shows target kernel support and the filesystem, TCP-port, and syscall
+    /// rules Conary would enforce without executing package code.
     Audit {
         /// Package name
         package: String,
 
         #[command(flatten)]
         db: DbArgs,
-
-        /// Command to run for auditing
-        #[arg(long)]
-        command: Option<String>,
-
-        /// Duration to observe in seconds
-        #[arg(long, default_value = "30")]
-        timeout: u32,
     },
 
     /// Run a command with capability enforcement

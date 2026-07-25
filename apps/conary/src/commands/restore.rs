@@ -98,7 +98,7 @@ pub async fn cmd_restore(
     let mut not_in_cas = Vec::new();
 
     for file in &files {
-        if cas.exists(&file.sha256_hash) {
+        if file_content_available(&cas, file) {
             in_cas_count += 1;
         } else {
             not_in_cas.push(file);
@@ -116,7 +116,7 @@ pub async fn cmd_restore(
     // "Restore" means rebuild the image from DB state.
     let files_to_restore: Vec<&FileEntry> = files
         .iter()
-        .filter(|f| cas.exists(&f.sha256_hash))
+        .filter(|file| file_content_available(&cas, file))
         .collect();
 
     if files_to_restore.is_empty() {
@@ -129,7 +129,7 @@ pub async fn cmd_restore(
     if dry_run {
         println!("\nDry run - would restore:");
         for file in &files_to_restore {
-            println!("  {} (mode: {:o})", file.path, file.permissions);
+            println!("  {} (mode: {:o})", file.path, file.node.source.mode);
         }
         return Ok(());
     }
@@ -137,11 +137,10 @@ pub async fn cmd_restore(
     // Composefs-native: rebuild EROFS image from DB state and remount.
     // This restores all files atomically via the new generation.
     let restored = files_to_restore.len();
-    let gen_num = crate::commands::composefs_ops::rebuild_and_mount(
+    let gen_num = crate::commands::composefs_ops::rebuild_and_mount_from_installed_state(
         &conn,
         db_path,
         &format!("Restore {}", package_name),
-        None,
     )?;
 
     println!("\nRestore complete (generation {}):", gen_num);
@@ -201,7 +200,7 @@ pub async fn cmd_restore_all(db_path: &str, _root: &str, dry_run: bool) -> Resul
         // Find files missing from CAS
         let missing: Vec<&FileEntry> = files
             .iter()
-            .filter(|f| !cas.exists(&f.sha256_hash))
+            .filter(|file| !file_content_available(&cas, file))
             .collect();
 
         if missing.is_empty() {
@@ -236,11 +235,10 @@ pub async fn cmd_restore_all(db_path: &str, _root: &str, dry_run: bool) -> Resul
         );
     } else {
         // Composefs-native: rebuild EROFS from DB state
-        let gen_num = crate::commands::composefs_ops::rebuild_and_mount(
+        let gen_num = crate::commands::composefs_ops::rebuild_and_mount_from_installed_state(
             &conn,
             db_path,
             "Restore all packages",
-            None,
         )?;
         println!("\nComposefs-native restore (generation {}):", gen_num);
         println!("  Packages checked: {}", packages_checked);
@@ -249,4 +247,10 @@ pub async fn cmd_restore_all(db_path: &str, _root: &str, dry_run: bool) -> Resul
     }
 
     Ok(())
+}
+
+fn file_content_available(cas: &CasStore, file: &FileEntry) -> bool {
+    file.content
+        .as_ref()
+        .is_none_or(|content| cas.exists(&content.sha256))
 }

@@ -3,11 +3,8 @@
 //! Verification command handlers.
 
 use anyhow::Result;
-use conary_core::derivation::executor::ExecutorConfig;
 use conary_core::derivation::index::{self, DerivationIndex};
 use conary_core::derivation::profile::BuildProfile;
-use conary_core::derivation::{DerivationExecutor, ExecutionResult};
-use conary_core::filesystem::CasStore;
 
 /// Trace all derivations in a profile back to the seed.
 ///
@@ -115,121 +112,6 @@ pub async fn cmd_verify_chain(
     Ok(())
 }
 
-/// Rebuild a derivation and compare output hash against the original.
-pub async fn cmd_verify_rebuild(derivation: &str, work_dir: &str, db_path: &str) -> Result<()> {
-    let conn = super::open_db(db_path)?;
-    let index = DerivationIndex::new(&conn);
-
-    // Resolve derivation ID (could be a package name)
-    let record = if derivation.len() == 64 && derivation.chars().all(|c| c.is_ascii_hexdigit()) {
-        index
-            .lookup(derivation)?
-            .ok_or_else(|| anyhow::anyhow!("derivation {derivation} not found"))?
-    } else {
-        // Treat as package name
-        let records = index.by_package(derivation)?;
-        records
-            .into_iter()
-            .next()
-            .ok_or_else(|| anyhow::anyhow!("no derivation found for package '{derivation}'"))?
-    };
-
-    println!(
-        "Rebuilding {}-{} (derivation {}...)",
-        record.package_name,
-        record.package_version,
-        &record.derivation_id[..16.min(record.derivation_id.len())]
-    );
-
-    // Resolve recipe from recipes/ directory
-    let recipe_path = find_recipe(&record.package_name)?;
-    let recipe = conary_core::recipe::parse_recipe_file(&recipe_path)?;
-
-    // Create fresh in-memory DB for the rebuild (bypasses cache)
-    let rebuild_conn = rusqlite::Connection::open_in_memory()?;
-    conary_core::db::schema::migrate(&rebuild_conn)?;
-
-    // Set up executor with fresh DB
-    let cas_dir = std::path::PathBuf::from(work_dir).join("cas");
-    std::fs::create_dir_all(&cas_dir)?;
-    let cas = CasStore::new(&cas_dir)?;
-    let exec_config = ExecutorConfig::default();
-    let executor = DerivationExecutor::new(cas, cas_dir.clone(), exec_config);
-
-    let build_env_hash = record.build_env_hash.as_deref().unwrap_or("unknown");
-    let sysroot = std::path::PathBuf::from(work_dir).join("sysroot");
-    std::fs::create_dir_all(&sysroot)?;
-
-    // The original dependency IDs and target triple are encoded in the
-    // derivation ID but not stored separately in the record.  Until the
-    // full original build inputs are persisted and can be reloaded, we
-    // rebuild with simplified inputs.  This means a hash match is only a
-    // *weak* signal -- we can mark reproducible but must NOT promote trust
-    // to level 3 (independently verified) because we cannot guarantee the
-    // same build environment.
-    let dep_ids = std::collections::BTreeMap::new();
-    let target = "x86_64-unknown-linux-gnu";
-    let inputs_complete = false; // TODO: set to true once we persist + reload original inputs
-
-    match executor.execute(
-        &recipe,
-        build_env_hash,
-        &dep_ids,
-        target,
-        &sysroot,
-        &rebuild_conn,
-    ) {
-        Ok(ExecutionResult::Built { output, .. }) => {
-            let new_hash = &output.manifest.output_hash;
-            let original_hash = &record.output_hash;
-
-            if new_hash == original_hash {
-                let display_len = 16.min(original_hash.len());
-                println!("  Original output: {}...", &original_hash[..display_len]);
-                println!("  Rebuild output:  {}...  MATCH", &new_hash[..display_len]);
-                println!();
-                index.set_reproducible(&record.derivation_id, true)?;
-                println!("  Reproducible: true");
-
-                if inputs_complete {
-                    index.set_trust_level(&record.derivation_id, 3)?;
-                    println!(
-                        "  Trust level: {} -> 3 (independently verified)",
-                        record.trust_level
-                    );
-                } else {
-                    println!(
-                        "  Trust level: {} (unchanged -- rebuild used simplified inputs; \
-                         full trust promotion requires persisted original dependency IDs \
-                         and target triple)",
-                        record.trust_level
-                    );
-                }
-            } else {
-                let orig_display = 16.min(original_hash.len());
-                let new_display = 16.min(new_hash.len());
-                println!("  Original output: {}...", &original_hash[..orig_display]);
-                println!(
-                    "  Rebuild output:  {}...  MISMATCH",
-                    &new_hash[..new_display]
-                );
-                println!();
-                index.set_reproducible(&record.derivation_id, false)?;
-                println!("  Reproducible: false");
-            }
-        }
-        Ok(ExecutionResult::CacheHit { .. }) => {
-            anyhow::bail!("unexpected cache hit on fresh DB -- this should not happen");
-        }
-        Err(e) => {
-            println!("  Rebuild failed: {e}");
-            println!("  Cannot verify reproducibility.");
-        }
-    }
-
-    Ok(())
-}
-
 /// Compare builds from two different seeds for diverse verification.
 pub async fn cmd_verify_diverse(
     profile_a_path: &str,
@@ -332,20 +214,4 @@ pub async fn cmd_verify_diverse(
     }
 
     Ok(())
-}
-
-/// Find a recipe file by package name in the recipes/ directory.
-fn find_recipe(package_name: &str) -> Result<std::path::PathBuf> {
-    for dir in &[
-        "recipes/system",
-        "recipes/cross-tools",
-        "recipes/tier2",
-        "recipes",
-    ] {
-        let path = std::path::PathBuf::from(dir).join(format!("{package_name}.toml"));
-        if path.exists() {
-            return Ok(path);
-        }
-    }
-    anyhow::bail!("recipe for '{package_name}' not found in recipes/ directory")
 }

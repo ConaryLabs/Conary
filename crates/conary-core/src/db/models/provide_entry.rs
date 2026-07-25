@@ -7,7 +7,10 @@
 //! resolution without querying the host package manager.
 
 use crate::error::Result;
+use crate::repository::versioning::VersionScheme;
 use rusqlite::{Connection, OptionalExtension, Row, params};
+
+use super::repository::version_scheme_from_row;
 
 /// A capability that a package provides
 #[derive(Debug, Clone)]
@@ -20,6 +23,14 @@ pub struct ProvideEntry {
     pub version: Option<String>,
     /// The kind of capability (package, python, soname, pkgconfig, etc.)
     pub kind: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstalledProvideContract {
+    pub package_name: String,
+    pub package_version: String,
+    pub capability_version: Option<String>,
+    pub version_scheme: VersionScheme,
 }
 
 impl ProvideEntry {
@@ -213,40 +224,59 @@ impl ProvideEntry {
         conn: &Connection,
         capability: &str,
     ) -> Result<Option<(String, String)>> {
-        let exact = conn
-            .query_row(
-                "SELECT t.name, t.version
-                 FROM provides p
-                 JOIN troves t ON p.trove_id = t.id
-                 WHERE p.capability = ?1
-                 ORDER BY t.id ASC
-                 LIMIT 1",
-                [capability],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
-            )
-            .optional()?;
+        Ok(Self::find_declared_provider_contracts(conn, capability)?
+            .into_iter()
+            .next()
+            .map(|provider| (provider.package_name, provider.package_version)))
+    }
 
-        if exact.is_some() {
+    /// Find every installed provider with its declared capability version and
+    /// package comparison scheme.
+    pub fn find_declared_provider_contracts(
+        conn: &Connection,
+        capability: &str,
+    ) -> Result<Vec<InstalledProvideContract>> {
+        let mut exact_stmt = conn.prepare(
+            "SELECT t.name, t.version, p.version, t.version_scheme
+             FROM provides p
+             JOIN troves t ON p.trove_id = t.id
+             WHERE p.capability = ?1
+             ORDER BY t.id ASC, p.id ASC",
+        )?;
+        let exact = exact_stmt
+            .query_map([capability], |row| {
+                Ok(InstalledProvideContract {
+                    package_name: row.get(0)?,
+                    package_version: row.get(1)?,
+                    capability_version: row.get(2)?,
+                    version_scheme: version_scheme_from_row(row, 3)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        if !exact.is_empty() {
             return Ok(exact);
         }
 
         let Some((kind, name)) = parse_typed_capability_query(capability) else {
-            return Ok(None);
+            return Ok(Vec::new());
         };
-
-        let typed = conn
-            .query_row(
-                "SELECT t.name, t.version
-                 FROM provides p
-                 JOIN troves t ON p.trove_id = t.id
-                 WHERE p.kind = ?1 AND p.capability = ?2
-                 ORDER BY t.id ASC
-                 LIMIT 1",
-                params![kind, name],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
-            )
-            .optional()?;
-
+        let mut typed_stmt = conn.prepare(
+            "SELECT t.name, t.version, p.version, t.version_scheme
+             FROM provides p
+             JOIN troves t ON p.trove_id = t.id
+             WHERE p.kind = ?1 AND p.capability = ?2
+             ORDER BY t.id ASC, p.id ASC",
+        )?;
+        let typed = typed_stmt
+            .query_map(params![kind, name], |row| {
+                Ok(InstalledProvideContract {
+                    package_name: row.get(0)?,
+                    package_version: row.get(1)?,
+                    capability_version: row.get(2)?,
+                    version_scheme: version_scheme_from_row(row, 3)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(typed)
     }
 
@@ -307,21 +337,6 @@ impl ProvideEntry {
             format!("{}({})", self.kind, self.capability)
         }
     }
-
-    /// Check if a name looks like a virtual provide (capability) rather than a package name
-    ///
-    /// Virtual provides have patterns like:
-    /// - perl(Cwd) - Perl module
-    /// - python3dist(setuptools) - Python package
-    /// - config(package) - Configuration capability
-    /// - pkgconfig(foo) - pkg-config module
-    /// - lib*.so.* - Shared library
-    /// - /usr/bin/foo - File path
-    pub fn is_virtual_provide(name: &str) -> bool {
-        name.contains('(')  // perl(Foo), python3dist(bar), etc.
-            || name.starts_with("lib") && name.contains(".so")  // libfoo.so.1
-            || name.starts_with('/') // File path dependencies
-    }
 }
 
 fn parse_typed_capability_query(capability: &str) -> Option<(&str, &str)> {
@@ -351,7 +366,8 @@ mod tests {
             CREATE TABLE troves (
                 id INTEGER PRIMARY KEY,
                 name TEXT NOT NULL,
-                version TEXT NOT NULL
+                version TEXT NOT NULL,
+                version_scheme TEXT NOT NULL
             );
             CREATE TABLE provides (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -364,7 +380,8 @@ mod tests {
             CREATE INDEX idx_provides_capability ON provides(capability);
             CREATE INDEX idx_provides_kind ON provides(kind);
 
-            INSERT INTO troves (id, name, version) VALUES (1, 'perl-Text-CharWidth', '0.04');
+            INSERT INTO troves (id, name, version, version_scheme)
+            VALUES (1, 'perl-Text-CharWidth', '0.04', 'rpm');
             ",
         )
         .unwrap();
@@ -451,7 +468,8 @@ mod tests {
         let conn = setup_test_db();
 
         conn.execute(
-            "INSERT INTO troves (id, name, version) VALUES (2, 'glibc', '2.42')",
+            "INSERT INTO troves (id, name, version, version_scheme)
+             VALUES (2, 'glibc', '2.42', 'rpm')",
             [],
         )
         .unwrap();
@@ -468,7 +486,8 @@ mod tests {
         let conn = setup_test_db();
 
         conn.execute(
-            "INSERT INTO troves (id, name, version) VALUES (2, 'glibc', '2.42')",
+            "INSERT INTO troves (id, name, version, version_scheme)
+             VALUES (2, 'glibc', '2.42', 'rpm')",
             [],
         )
         .unwrap();
@@ -482,11 +501,41 @@ mod tests {
     }
 
     #[test]
+    fn declared_provider_contract_requires_exact_installed_version_scheme() {
+        let conn = setup_test_db();
+        let mut provide = ProvideEntry::new_typed(
+            1,
+            "package",
+            "virtual-abi".to_string(),
+            Some("2".to_string()),
+        );
+        provide.insert(&conn).unwrap();
+
+        let contracts =
+            ProvideEntry::find_declared_provider_contracts(&conn, "virtual-abi").unwrap();
+        assert_eq!(contracts[0].version_scheme, VersionScheme::Rpm);
+
+        conn.execute(
+            "UPDATE troves SET version_scheme = 'unknown' WHERE id = 1",
+            [],
+        )
+        .unwrap();
+        let error = ProvideEntry::find_declared_provider_contracts(&conn, "virtual-abi")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("unsupported persisted native version scheme 'unknown'"),
+            "{error}"
+        );
+    }
+
+    #[test]
     fn find_satisfying_provider_does_not_guess_versioned_soname_to_base_provider() {
         let conn = setup_test_db();
 
         conn.execute(
-            "INSERT INTO troves (id, name, version) VALUES (2, 'glibc', '2.42')",
+            "INSERT INTO troves (id, name, version, version_scheme)
+             VALUES (2, 'glibc', '2.42', 'rpm')",
             [],
         )
         .unwrap();

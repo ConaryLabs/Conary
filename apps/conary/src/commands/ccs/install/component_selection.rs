@@ -2,36 +2,11 @@
 
 use anyhow::Result;
 use conary_core::ccs::CcsPackage;
-use conary_core::components::ComponentType;
 use conary_core::packages::traits::PackageFormat;
-
-use crate::commands::install::ComponentSelection;
 
 #[derive(Debug, Clone)]
 pub(super) struct SelectedCcsComponents {
     pub(super) names: Vec<String>,
-    recognized_types: Vec<ComponentType>,
-}
-
-impl SelectedCcsComponents {
-    pub(super) fn to_install_component_selection(
-        &self,
-        available_names: &[String],
-    ) -> ComponentSelection {
-        if self.names.len() == available_names.len()
-            && available_names
-                .iter()
-                .all(|available| self.names.iter().any(|name| name == available))
-        {
-            return ComponentSelection::All;
-        }
-
-        if self.recognized_types.is_empty() {
-            return ComponentSelection::All;
-        }
-
-        ComponentSelection::Specific(self.recognized_types.clone())
-    }
 }
 
 pub(super) fn sorted_available_component_names(ccs_pkg: &CcsPackage) -> Vec<String> {
@@ -47,10 +22,7 @@ pub(super) fn select_ccs_components(
     let available = sorted_available_component_names(ccs_pkg);
     if available.is_empty() {
         if ccs_pkg.file_entries().is_empty() {
-            return Ok(SelectedCcsComponents {
-                names: Vec::new(),
-                recognized_types: Vec::new(),
-            });
+            return Ok(SelectedCcsComponents { names: Vec::new() });
         }
         anyhow::bail!(
             "Package {} does not contain any installable components",
@@ -119,13 +91,5 @@ pub(super) fn select_ccs_components(
         }
     };
 
-    let recognized_types = names
-        .iter()
-        .filter_map(|name| ComponentType::parse(name))
-        .collect();
-
-    Ok(SelectedCcsComponents {
-        names,
-        recognized_types,
-    })
+    Ok(SelectedCcsComponents { names })
 }

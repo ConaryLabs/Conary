@@ -18,21 +18,19 @@ pub async fn cmd_ccs_export(
     packages: &[String],
     output: &str,
     format: &str,
-    db_path: &str,
+    policy_path: &str,
 ) -> Result<()> {
     use conary_core::ccs::export::{ExportFormat, export};
+    use conary_core::ccs::verify::TrustPolicy;
 
     let export_format = ExportFormat::parse(format)
         .ok_or_else(|| anyhow::anyhow!("Unknown export format: {}. Supported: oci", format))?;
 
     let output_path = Path::new(output);
-    let db_path_opt = if Path::new(db_path).exists() {
-        Some(Path::new(db_path))
-    } else {
-        None
-    };
+    let trust_policy = TrustPolicy::from_file(Path::new(policy_path))
+        .with_context(|| format!("Failed to load CCS trust policy: {policy_path}"))?;
 
-    export(export_format, packages, output_path, db_path_opt)
+    export(export_format, packages, output_path, &trust_policy)
 }
 
 /// Spawn a shell with packages available in a temporary environment
@@ -90,40 +88,7 @@ pub async fn cmd_ccs_shell(
                         std::fs::create_dir_all(parent)?;
                     }
 
-                    // Handle symlinks: recreate as symlinks instead of writing content
-                    if let Some(ref target) = file.symlink_target {
-                        #[cfg(unix)]
-                        std::os::unix::fs::symlink(target, &dest_path)
-                            .with_context(|| format!("Failed to create symlink {}", file.path))?;
-                        deployed_count += 1;
-                        continue;
-                    }
-
-                    // Copy from CAS to temp dir — fail on missing objects
-                    let content = cas.retrieve(&file.sha256_hash).with_context(|| {
-                        format!(
-                            "Missing CAS object for '{}' (hash: {})",
-                            file.path, file.sha256_hash
-                        )
-                    })?;
-                    std::fs::write(&dest_path, &content)?;
-
-                    // Restore stored permissions from the file entry
-                    #[cfg(unix)]
-                    {
-                        use std::os::unix::fs::PermissionsExt;
-                        let mode = if file.permissions > 0 {
-                            file.permissions as u32
-                        } else if file.path.contains("/bin/") || file.path.contains("/sbin/") {
-                            0o755
-                        } else {
-                            0o644
-                        };
-                        let _ = std::fs::set_permissions(
-                            &dest_path,
-                            std::fs::Permissions::from_mode(mode),
-                        );
-                    }
+                    deploy_runtime_file(&temp_path, &dest_path, &cas, file)?;
                     deployed_count += 1;
                 }
             }
@@ -251,37 +216,7 @@ pub async fn cmd_ccs_run(
                     std::fs::create_dir_all(parent)?;
                 }
 
-                // Handle symlinks
-                if let Some(ref target) = file.symlink_target {
-                    #[cfg(unix)]
-                    std::os::unix::fs::symlink(target, &dest_path)
-                        .with_context(|| format!("Failed to create symlink {}", file.path))?;
-                    continue;
-                }
-
-                // Fail on missing CAS objects
-                let content = cas.retrieve(&file.sha256_hash).with_context(|| {
-                    format!(
-                        "Missing CAS object for '{}' (hash: {})",
-                        file.path, file.sha256_hash
-                    )
-                })?;
-                std::fs::write(&dest_path, &content)?;
-
-                // Restore stored permissions
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    let mode = if file.permissions > 0 {
-                        file.permissions as u32
-                    } else if file.path.contains("/bin/") || file.path.contains("/sbin/") {
-                        0o755
-                    } else {
-                        0o644
-                    };
-                    let _ =
-                        std::fs::set_permissions(&dest_path, std::fs::Permissions::from_mode(mode));
-                }
+                deploy_runtime_file(&temp_path, &dest_path, &cas, file)?;
             }
         }
     }
@@ -332,4 +267,71 @@ pub async fn cmd_ccs_run(
             status.code().unwrap_or(1)
         ))
     }
+}
+
+fn deploy_runtime_file(
+    runtime_root: &std::path::Path,
+    destination: &std::path::Path,
+    cas: &conary_core::filesystem::CasStore,
+    file: &conary_core::db::models::FileEntry,
+) -> Result<()> {
+    use conary_core::payload::PayloadNodeKind;
+
+    match &file.node.source.kind {
+        PayloadNodeKind::Regular { .. } => {
+            let content = file.content.as_ref().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Regular runtime payload {} has no content authority",
+                    file.path
+                )
+            })?;
+            let bytes = cas.retrieve(&content.sha256).with_context(|| {
+                format!(
+                    "Missing CAS object for '{}' (hash: {})",
+                    file.path, content.sha256
+                )
+            })?;
+            if bytes.len() as u64 != content.size {
+                anyhow::bail!(
+                    "CAS object size mismatch for '{}': expected {}, got {}",
+                    file.path,
+                    content.size,
+                    bytes.len()
+                );
+            }
+            std::fs::write(destination, bytes)?;
+        }
+        PayloadNodeKind::Directory => {
+            std::fs::create_dir(destination)?;
+        }
+        PayloadNodeKind::Symlink { target } => {
+            std::os::unix::fs::symlink(target, destination)
+                .with_context(|| format!("Failed to create symlink {}", file.path))?;
+        }
+        PayloadNodeKind::Hardlink { target, .. } => {
+            let relative = sanitize_package_relative_path(target)?;
+            let target = runtime_root.join(relative);
+            std::fs::hard_link(&target, destination).with_context(|| {
+                format!(
+                    "Failed to create runtime hardlink {} to {}",
+                    destination.display(),
+                    target.display()
+                )
+            })?;
+        }
+        PayloadNodeKind::BlockDevice { .. }
+        | PayloadNodeKind::CharacterDevice { .. }
+        | PayloadNodeKind::Fifo
+        | PayloadNodeKind::Socket => {
+            anyhow::bail!(
+                "Temporary CCS runtime does not materialize special payload node {}",
+                file.path
+            );
+        }
+    }
+    conary_core::generation::root_manifest::apply_resolved_payload_metadata(
+        destination,
+        &file.node,
+    )?;
+    Ok(())
 }

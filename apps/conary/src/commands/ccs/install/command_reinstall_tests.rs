@@ -6,7 +6,6 @@ use super::command::cmd_ccs_install;
 
 #[tokio::test]
 async fn ccs_install_reinstall_dry_run_does_not_mutate_db() {
-    use conary_core::ccs::builder::write_ccs_package;
     use conary_core::ccs::{BuildResult, CcsManifest};
 
     let temp_dir = tempfile::tempdir().unwrap();
@@ -22,6 +21,7 @@ async fn ccs_install_reinstall_dry_run_does_not_mutate_db() {
         "reinstall-dry-run".to_string(),
         "1.0.0".to_string(),
         conary_core::db::models::TroveType::Package,
+        conary_core::repository::versioning::VersionScheme::Conary,
     );
     let existing_id = existing.insert(&conn).unwrap();
     drop(conn);
@@ -35,21 +35,18 @@ async fn ccs_install_reinstall_dry_run_does_not_mutate_db() {
         chunked: false,
         chunk_stats: None,
     };
-    write_ccs_package(&result, &package_path).unwrap();
+    let trust_policy_path = super::test_support::write_signed_test_package(&result, &package_path);
 
     cmd_ccs_install(
         package_path.to_str().unwrap(),
         db_path_str,
         install_root.to_str().unwrap(),
         true,
-        true,
+        Some(trust_policy_path.to_string_lossy().into_owned()),
         None,
-        None,
-        crate::commands::SandboxMode::None,
+        crate::commands::SandboxMode::Always,
         true,
         true,
-        false,
-        None,
     )
     .await
     .unwrap();

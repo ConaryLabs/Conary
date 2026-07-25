@@ -13,25 +13,67 @@ use std::collections::BTreeMap;
 const CANONICAL_MAP_SHA256_HEADER: &str = "x-conary-canonical-sha256";
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CanonicalMapResponse {
-    #[allow(dead_code)]
-    version: u32,
-    #[allow(dead_code)]
+    #[serde(rename = "version")]
+    _version: u32,
     generated_at: String,
     entries: Vec<CanonicalMapEntry>,
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CanonicalMapEntry {
     canonical: String,
     implementations: BTreeMap<String, String>,
+}
+
+fn validate_contract_text(field: &str, value: &str) -> Result<()> {
+    if value.is_empty() {
+        return Err(Error::ParseError(format!(
+            "canonical map field '{field}' must not be empty"
+        )));
+    }
+    if value != value.trim() || value.chars().any(char::is_control) {
+        return Err(Error::ParseError(format!(
+            "canonical map field '{field}' contains invalid whitespace or control characters"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_canonical_map(map: &CanonicalMapResponse) -> Result<()> {
+    validate_contract_text("generated_at", &map.generated_at)?;
+    let mut canonical_names = std::collections::BTreeSet::new();
+
+    for entry in &map.entries {
+        validate_contract_text("canonical", &entry.canonical)?;
+        if !canonical_names.insert(entry.canonical.as_str()) {
+            return Err(Error::ParseError(format!(
+                "canonical map contains duplicate entry '{}'",
+                entry.canonical
+            )));
+        }
+        if entry.implementations.is_empty() {
+            return Err(Error::ParseError(format!(
+                "canonical map entry '{}' has no implementations",
+                entry.canonical
+            )));
+        }
+        for (distro, distro_name) in &entry.implementations {
+            validate_contract_text("implementations.distro", distro)?;
+            validate_contract_text("implementations.package", distro_name)?;
+        }
+    }
+
+    Ok(())
 }
 
 /// Fetch the canonical map from a Remi endpoint.
 /// Returns Ok(Some(count)) if new data was fetched, Ok(None) if 304, Err on failure.
 pub async fn fetch_canonical_map(conn: &Connection, endpoint: &str) -> Result<Option<usize>> {
     let url = format!("{}/v1/canonical/map", endpoint.trim_end_matches('/'));
-    let etag = get_metadata(conn, MetadataTable::Client, "canonical_etag").unwrap_or(None);
+    let etag = get_metadata(conn, MetadataTable::Client, "canonical_etag")?;
 
     let client = reqwest::Client::builder()
         .user_agent(concat!(
@@ -108,6 +150,7 @@ fn extract_expected_checksum(headers: &reqwest::header::HeaderMap) -> Result<Str
 pub fn ingest_canonical_map_json(conn: &Connection, json: &str) -> Result<usize> {
     let map: CanonicalMapResponse =
         serde_json::from_str(json).map_err(|e| Error::ParseError(e.to_string()))?;
+    validate_canonical_map(&map)?;
 
     let tx = conn.unchecked_transaction()?;
 
@@ -117,11 +160,6 @@ pub fn ingest_canonical_map_json(conn: &Connection, json: &str) -> Result<usize>
 
     let mut count = 0;
     for entry in &map.entries {
-        super::sync::validate_canonical_mapping(
-            &entry.canonical,
-            entry.implementations.values().map(String::as_str),
-        )?;
-
         let mut canonical = CanonicalPackage::new(entry.canonical.clone(), "package".to_string());
         let id = canonical.insert_or_ignore(&tx)?;
         let canonical_id = match id {
@@ -152,7 +190,7 @@ mod tests {
     #[test]
     fn test_ingest_canonical_map_response() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        crate::db::schema::migrate(&conn).unwrap();
+        crate::db::schema::ensure_current(&conn).unwrap();
 
         let json = r#"{
             "version": 5,
@@ -185,7 +223,7 @@ mod tests {
     #[test]
     fn test_ingest_replaces_existing_data() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        crate::db::schema::migrate(&conn).unwrap();
+        crate::db::schema::ensure_current(&conn).unwrap();
 
         let json1 = r#"{"version": 1, "generated_at": "2026-03-19", "entries": [{"canonical": "old-pkg", "implementations": {"fedora": "old"}}]}"#;
         let json2 = r#"{"version": 2, "generated_at": "2026-03-19", "entries": [{"canonical": "new-pkg", "implementations": {"arch": "new"}}]}"#;
@@ -206,7 +244,7 @@ mod tests {
     #[test]
     fn test_ingest_empty_map() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        crate::db::schema::migrate(&conn).unwrap();
+        crate::db::schema::ensure_current(&conn).unwrap();
 
         let json = r#"{"version": 1, "generated_at": "2026-03-19", "entries": []}"#;
         let count = ingest_canonical_map_json(&conn, json).unwrap();
@@ -216,16 +254,16 @@ mod tests {
     #[test]
     fn test_ingest_invalid_json() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        crate::db::schema::migrate(&conn).unwrap();
+        crate::db::schema::ensure_current(&conn).unwrap();
 
         let result = ingest_canonical_map_json(&conn, "not json");
         assert!(result.is_err());
     }
 
     #[test]
-    fn test_ingest_rejects_suspicious_remote_mapping() {
+    fn explicit_remote_contract_does_not_use_name_similarity_as_authority() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        crate::db::schema::migrate(&conn).unwrap();
+        crate::db::schema::ensure_current(&conn).unwrap();
 
         let json = r#"{
             "version": 1,
@@ -238,11 +276,33 @@ mod tests {
             ]
         }"#;
 
+        assert_eq!(ingest_canonical_map_json(&conn, json).unwrap(), 1);
+        let canonical = CanonicalPackage::find_by_name(&conn, "openssl")
+            .unwrap()
+            .unwrap();
+        let implementations =
+            PackageImplementation::find_by_canonical(&conn, canonical.id.unwrap()).unwrap();
+        assert_eq!(implementations[0].distro_name, "totally-malicious-package");
+    }
+
+    #[test]
+    fn test_ingest_rejects_structurally_invalid_remote_mapping() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::schema::ensure_current(&conn).unwrap();
+
+        let json = r#"{
+            "version": 1,
+            "generated_at": "2026-03-19",
+            "entries": [
+                {
+                    "canonical": "openssl",
+                    "implementations": {"": "libssl3"}
+                }
+            ]
+        }"#;
+
         let err = ingest_canonical_map_json(&conn, json).unwrap_err();
-        assert!(
-            err.to_string().contains("Suspicious canonical mapping"),
-            "unexpected error: {err}"
-        );
+        assert!(err.to_string().contains("must not be empty"));
     }
 
     #[test]

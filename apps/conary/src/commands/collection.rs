@@ -56,6 +56,7 @@ pub async fn cmd_collection_create(
             name.to_string(),
             "1.0".to_string(),
             conary_core::db::models::TroveType::Collection,
+            conary_core::repository::versioning::VersionScheme::Conary,
         );
         trove.description = description.map(|s| s.to_string());
         let collection_id = trove.insert(tx)?;
@@ -245,8 +246,6 @@ pub async fn cmd_collection_install(
     dry_run: bool,
     skip_optional: bool,
     sandbox_mode: SandboxMode,
-    no_scripts: bool,
-    legacy_replay: super::LegacyReplayOptions,
 ) -> Result<()> {
     info!("Installing collection: {}", name);
     let conn = open_db(db_path)?;
@@ -315,10 +314,8 @@ pub async fn cmd_collection_install(
                 db_path,
                 root,
                 version: member.member_version.clone(),
-                no_scripts,
                 selection_reason: Some(&reason),
                 sandbox_mode,
-                legacy_replay,
                 ..Default::default()
             },
         )

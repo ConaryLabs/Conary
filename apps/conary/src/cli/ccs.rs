@@ -5,12 +5,6 @@ use super::{CommonArgs, DbArgs};
 use clap::Subcommand;
 
 #[derive(Clone, Copy, Debug, clap::ValueEnum, PartialEq, Eq)]
-pub enum CcsBuildFormat {
-    V1,
-    V2,
-}
-
-#[derive(Clone, Copy, Debug, clap::ValueEnum, PartialEq, Eq)]
 pub enum CcsOutputFormat {
     Text,
     Json,
@@ -59,10 +53,6 @@ pub enum CcsCommands {
         #[arg(long)]
         source: Option<String>,
 
-        /// Don't auto-classify files into components
-        #[arg(long)]
-        no_classify: bool,
-
         /// Disable CDC chunking (chunking is enabled by default)
         /// When disabled, files are stored as whole blobs instead of
         /// content-defined chunks.
@@ -73,21 +63,13 @@ pub enum CcsCommands {
         #[arg(long)]
         dry_run: bool,
 
-        /// CCS archive contract version
-        #[arg(long, value_enum, default_value_t = CcsBuildFormat::V1)]
-        format: CcsBuildFormat,
-
-        /// Sign v2 output with the user-local development key
+        /// Sign CCS output with the user-local development key
         #[arg(long, conflicts_with = "key")]
         local_dev: bool,
 
-        /// Private signing key for v2 output
+        /// Private signing key for CCS output
         #[arg(long)]
         key: Option<String>,
-
-        /// Public supported target profile for lifecycle validation
-        #[arg(long)]
-        target_profile: Option<String>,
     },
 
     /// Lint a CCS authoring manifest
@@ -99,10 +81,6 @@ pub enum CcsCommands {
         /// Output format
         #[arg(long, value_enum, default_value_t = CcsOutputFormat::Text)]
         format: CcsOutputFormat,
-
-        /// Public supported target profile for lifecycle validation
-        #[arg(long)]
-        target_profile: Option<String>,
     },
 
     /// Inspect a CCS package file
@@ -135,10 +113,6 @@ pub enum CcsCommands {
         /// Trust policy file (optional)
         #[arg(long)]
         policy: Option<String>,
-
-        /// Allow packages without signatures
-        #[arg(long)]
-        allow_unsigned: bool,
     },
 
     /// Verify and dry-run-test a CCS package in an isolated workspace
@@ -157,10 +131,6 @@ pub enum CcsCommands {
         /// Keep the isolated test workspace after completion
         #[arg(long)]
         keep_workspace: bool,
-
-        /// Public supported target profile for lifecycle validation
-        #[arg(long)]
-        target_profile: Option<String>,
     },
 
     /// Sign a CCS package with an Ed25519 key
@@ -208,10 +178,6 @@ pub enum CcsCommands {
         #[arg(short = 'y', long)]
         yes: bool,
 
-        /// Allow installation of unsigned packages
-        #[arg(long)]
-        allow_unsigned: bool,
-
         /// Trust policy file for signature verification
         #[arg(long)]
         policy: Option<String>,
@@ -220,7 +186,7 @@ pub enum CcsCommands {
         #[arg(long, value_delimiter = ',')]
         components: Option<Vec<String>>,
 
-        /// Sandbox mode for hooks: auto, always, never (default: always)
+        /// Sandbox mode for hooks: always or never (default: always)
         #[arg(long, value_enum, default_value_t = crate::cli::CliSandboxMode::Always)]
         sandbox: crate::cli::CliSandboxMode,
 
@@ -228,29 +194,9 @@ pub enum CcsCommands {
         #[arg(long)]
         no_deps: bool,
 
-        /// Suppress hooks where safe; does not bypass required legacy replay
-        #[arg(long)]
-        no_scripts: bool,
-
-        /// Allow same-source raw legacy scriptlet replay when the bundle, target, sandbox, and local policy all pass
-        #[arg(long)]
-        allow_legacy_replay: bool,
-
-        /// Additionally allow explicitly compatible foreign raw replay only under permissive host policy
-        #[arg(long)]
-        allow_foreign_legacy_replay: bool,
-
         /// Allow reinstalling an already-installed package at the same version
         #[arg(long)]
         reinstall: bool,
-
-        /// Allow packages with capabilities that would normally require confirmation
-        #[arg(long)]
-        allow_capabilities: bool,
-
-        /// Path to capability policy TOML file (default: /etc/conary/capability-policy.toml)
-        #[arg(long)]
-        capability_policy: Option<String>,
     },
 
     /// Export CCS packages to container image format
@@ -267,8 +213,9 @@ pub enum CcsCommands {
         #[arg(short, long, default_value = "oci")]
         format: String,
 
-        #[command(flatten)]
-        db: DbArgs,
+        /// Trust policy file for CCS authority verification
+        #[arg(long, value_name = "PATH")]
+        policy: String,
     },
 
     /// Spawn a shell with packages available temporarily
@@ -319,7 +266,7 @@ pub enum CcsCommands {
 
     /// Enhance converted packages with CCS features
     ///
-    /// Records exact conversion provenance for packages converted from legacy formats.
+    /// Records exact conversion provenance for packages converted from native formats.
     Enhance {
         #[command(flatten)]
         db: DbArgs,

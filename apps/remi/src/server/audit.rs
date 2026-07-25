@@ -51,8 +51,6 @@ pub fn derive_action(method: &str, path: &str) -> String {
         "test.fixture"
     } else if rest.starts_with("test-artifacts") {
         "test.artifact"
-    } else if rest.starts_with("scriptlet-evidence") {
-        "scriptlet.evidence"
     } else if rest.starts_with("packages") || rest.starts_with("convert") {
         "package"
     } else if rest.starts_with("openapi") {
@@ -310,18 +308,6 @@ mod tests {
     fn test_derive_action_audit() {
         assert_eq!(derive_action("GET", "/v1/admin/audit"), "audit.read");
         assert_eq!(derive_action("DELETE", "/v1/admin/audit"), "audit.delete");
-    }
-
-    #[test]
-    fn test_derive_action_scriptlet_evidence() {
-        assert_eq!(
-            derive_action("GET", "/v1/admin/scriptlet-evidence/clusters"),
-            "scriptlet.evidence.read"
-        );
-        assert_eq!(
-            derive_action("POST", "/v1/admin/scriptlet-evidence/backfill"),
-            "scriptlet.evidence.create"
-        );
     }
 
     #[test]

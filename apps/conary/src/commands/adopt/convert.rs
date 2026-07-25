@@ -10,17 +10,20 @@ use super::super::create_state_snapshot;
 use super::super::open_db;
 use super::super::progress::AdoptProgress;
 use super::checkpoint::write_db_checkpoint;
-use anyhow::Result;
-use conary_core::ccs::builder::{CcsBuilder, write_ccs_package};
-use conary_core::ccs::manifest::{Capability, CcsManifest, PackageDep, Platform};
+use anyhow::{Context, Result};
+use conary_core::ccs::builder::{CcsBuilder, write_signed_current_ccs_package};
+use conary_core::ccs::manifest::{CcsManifest, Platform};
+use conary_core::ccs::signing::SigningKeyPair;
+use conary_core::ccs::verify::{TrustPolicy, verify_package};
 use conary_core::db::backup::CheckpointReason;
 use conary_core::db::models::{
-    Changeset, ChangesetStatus, ConvertedPackage, DependencyEntry, FileEntry, ProvideEntry, Trove,
+    Changeset, ChangesetStatus, ConvertedPackage, FileEntry, InstalledRequirementGroup,
+    ProvideEntry, Trove,
 };
 use rayon::prelude::*;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::{debug, warn};
@@ -29,7 +32,7 @@ use tracing::{debug, warn};
 struct AdoptedTroveBundle {
     trove: Trove,
     files: Vec<FileEntry>,
-    deps: Vec<DependencyEntry>,
+    requirements: Vec<InstalledRequirementGroup>,
     provides: Vec<ProvideEntry>,
 }
 
@@ -37,7 +40,6 @@ struct AdoptedTroveBundle {
 struct ConversionSuccess {
     trove_id: i64,
     converted: ConvertedPackage,
-    ccs_path: PathBuf,
 }
 
 /// Per-package conversion result returned from parallel workers
@@ -74,21 +76,6 @@ fn query_unconverted_adopted(conn: &rusqlite::Connection) -> Result<Vec<Trove>> 
     Ok(troves)
 }
 
-fn backfill_adopted_source_identity(
-    conn: &rusqlite::Connection,
-    source_distro: Option<&str>,
-    version_scheme: Option<&str>,
-) -> Result<()> {
-    conn.execute(
-        "UPDATE troves
-         SET source_distro = COALESCE(source_distro, ?1),
-             version_scheme = COALESCE(version_scheme, ?2)
-         WHERE install_source IN ('adopted-track', 'adopted-full', 'taken')",
-        rusqlite::params![source_distro, version_scheme],
-    )?;
-    Ok(())
-}
-
 /// Convert all unconverted adopted packages to CCS format.
 ///
 /// This command:
@@ -102,10 +89,9 @@ pub async fn cmd_adopt_convert(
     jobs: Option<usize>,
     no_chunking: bool,
     dry_run: bool,
+    signing_key_path: Option<&Path>,
 ) -> Result<()> {
     let mut conn = open_db(db_path)?;
-    let source_identity =
-        conary_core::packages::SystemPackageManager::detect().detect_source_identity();
 
     // 1. Query unconverted adopted troves
     let troves = query_unconverted_adopted(&conn)?;
@@ -128,12 +114,19 @@ pub async fn cmd_adopt_convert(
         return Ok(());
     }
 
-    write_db_checkpoint(db_path, CheckpointReason::PreMutation)?;
-    backfill_adopted_source_identity(
-        &conn,
-        source_identity.source_distro.as_deref(),
-        source_identity.version_scheme.as_deref(),
+    let signing_key_path = signing_key_path.context(
+        "adopted-package CCS conversion requires --key <private-key>; no default signing authority exists",
     )?;
+    let signing_key = Arc::new(
+        SigningKeyPair::load_from_file(signing_key_path).with_context(|| {
+            format!(
+                "load adopted-package CCS signing key {}",
+                signing_key_path.display()
+            )
+        })?,
+    );
+
+    write_db_checkpoint(db_path, CheckpointReason::PreMutation)?;
 
     // 2. Collect DB data sequentially (SQLite is single-threaded)
     let bundles: Vec<AdoptedTroveBundle> = troves
@@ -143,12 +136,12 @@ pub async fn cmd_adopt_convert(
                 anyhow::anyhow!("Adopted trove '{}' has no database id", trove.name)
             })?;
             let files = FileEntry::find_by_trove(&conn, trove_id)?;
-            let deps = DependencyEntry::find_by_trove(&conn, trove_id)?;
+            let requirements = InstalledRequirementGroup::find_by_trove(&conn, trove_id)?;
             let provides = ProvideEntry::find_by_trove(&conn, trove_id)?;
             Ok(AdoptedTroveBundle {
                 trove,
                 files,
-                deps,
+                requirements,
                 provides,
             })
         })
@@ -177,11 +170,17 @@ pub async fn cmd_adopt_convert(
     // 6. Parallel conversion via rayon
     let enable_chunking = !no_chunking;
     let completed_ref = Arc::clone(&completed);
+    let signing_key_ref = Arc::clone(&signing_key);
     let bundle_count = bundles.len() as u64;
     let results: Vec<PackageConversionResult> = bundles
         .par_iter()
         .map(|bundle| {
-            let result = convert_single_package(bundle, &output_dir, enable_chunking);
+            let result = convert_single_package(
+                bundle,
+                &output_dir,
+                enable_chunking,
+                signing_key_ref.as_ref(),
+            );
             let done = completed_ref.fetch_add(1, Ordering::Relaxed) + 1;
             debug!("Converted {}/{}: {}", done, bundle_count, bundle.trove.name);
             result
@@ -205,10 +204,7 @@ pub async fn cmd_adopt_convert(
                     let ConversionSuccess {
                         trove_id,
                         mut converted,
-                        ccs_path,
                     } = *success;
-                    converted.trove_id = Some(trove_id);
-                    converted.ccs_path = Some(ccs_path.to_string_lossy().to_string());
                     if let Err(e) = converted.insert(tx) {
                         warn!(
                             "Failed to insert ConvertedPackage for trove {}: {}",
@@ -261,23 +257,21 @@ fn convert_single_package(
     bundle: &AdoptedTroveBundle,
     output_dir: &Path,
     enable_chunking: bool,
+    signing_key: &SigningKeyPair,
 ) -> PackageConversionResult {
-    match convert_single_package_inner(bundle, output_dir, enable_chunking) {
-        Ok((converted, ccs_path)) => {
-            PackageConversionResult::Success(Box::new(ConversionSuccess {
-                trove_id: match bundle.trove.id {
-                    Some(id) => id,
-                    None => {
-                        return PackageConversionResult::Failed {
-                            name: bundle.trove.name.clone(),
-                            error: "Trove has no database id".to_string(),
-                        };
-                    }
-                },
-                converted,
-                ccs_path,
-            }))
-        }
+    match convert_single_package_inner(bundle, output_dir, enable_chunking, signing_key) {
+        Ok(converted) => PackageConversionResult::Success(Box::new(ConversionSuccess {
+            trove_id: match bundle.trove.id {
+                Some(id) => id,
+                None => {
+                    return PackageConversionResult::Failed {
+                        name: bundle.trove.name.clone(),
+                        error: "Trove has no database id".to_string(),
+                    };
+                }
+            },
+            converted,
+        })),
         Err(e) => PackageConversionResult::Failed {
             name: bundle.trove.name.clone(),
             error: e.to_string(),
@@ -293,7 +287,8 @@ fn convert_single_package_inner(
     bundle: &AdoptedTroveBundle,
     output_dir: &Path,
     enable_chunking: bool,
-) -> Result<(ConvertedPackage, PathBuf)> {
+    signing_key: &SigningKeyPair,
+) -> Result<ConvertedPackage> {
     let trove = &bundle.trove;
 
     // Build manifest from trove metadata + deps + provides
@@ -314,7 +309,17 @@ fn convert_single_package_inner(
     let arch_suffix = trove.architecture.as_deref().unwrap_or("noarch");
     let output_filename = format!("{}-{}-{}.ccs", trove.name, trove.version, arch_suffix);
     let ccs_path = output_dir.join(&output_filename);
-    write_ccs_package(&build_result, &ccs_path)?;
+    write_signed_current_ccs_package(&build_result, &ccs_path, signing_key, false)?;
+    verify_package(
+        &ccs_path,
+        &TrustPolicy::strict(vec![signing_key.public_key_base64()]),
+    )
+    .with_context(|| {
+        format!(
+            "verify newly converted adopted CCS package {}",
+            ccs_path.display()
+        )
+    })?;
 
     // Build ConvertedPackage record (include arch in dedup key)
     let format_str = if trove.install_source.is_adopted() {
@@ -327,17 +332,18 @@ fn convert_single_package_inner(
         format_str, trove.name, trove.version, arch_suffix
     );
 
-    let mut converted = ConvertedPackage::new(format_str.to_string(), original_checksum);
-    converted.package_name = Some(trove.name.clone());
-    converted.package_version = Some(trove.version.clone());
-    converted.total_size = Some(build_result.total_size as i64);
+    let trove_id = trove
+        .id
+        .ok_or_else(|| anyhow::anyhow!("Trove has no database id"))?;
+    let converted =
+        ConvertedPackage::new_installed(trove_id, format_str.to_string(), original_checksum);
 
-    Ok((converted, ccs_path))
+    Ok(converted)
 }
 
 /// Build a CCS manifest from an adopted trove's metadata.
 ///
-/// Populates description, platform, requires, and provides sections
+/// Populates description, platform, exact requirements, and provides sections
 /// from the database records collected for this trove.
 fn build_manifest_from_adopted(bundle: &AdoptedTroveBundle) -> Result<CcsManifest> {
     let trove = &bundle.trove;
@@ -358,26 +364,13 @@ fn build_manifest_from_adopted(bundle: &AdoptedTroveBundle) -> Result<CcsManifes
         });
     }
 
-    // Convert dependencies to CCS format
-    let mut capabilities = Vec::new();
-    let mut packages = Vec::new();
-    for dep in &bundle.deps {
-        if dep.dependency_type == "runtime" {
-            if let Some(ref ver) = dep.depends_on_version {
-                capabilities.push(Capability::Versioned {
-                    name: dep.depends_on_name.clone(),
-                    version: ver.clone(),
-                });
-            } else {
-                packages.push(PackageDep {
-                    name: dep.depends_on_name.clone(),
-                    version: None,
-                });
-            }
+    for stored in &bundle.requirements {
+        if stored.kind.is_negative_relation() {
+            manifest.relations.push(stored.requirement.clone());
+        } else {
+            manifest.requirements.push(stored.requirement.clone());
         }
     }
-    manifest.requires.capabilities = capabilities;
-    manifest.requires.packages = packages;
 
     // Convert provides to CCS format
     manifest.provides.capabilities = bundle
@@ -419,7 +412,7 @@ fn copy_files_to_temp(files: &[FileEntry], temp_dir: &Path) -> Result<()> {
         } else if source.is_file() {
             fs::copy(source, &dest)?;
             // Preserve permissions from the DB record
-            let perms = fs::Permissions::from_mode(file.permissions as u32);
+            let perms = fs::Permissions::from_mode(file.node.source.mode & 0o7777);
             fs::set_permissions(&dest, perms)?;
         }
         // Skip files that no longer exist on disk (may have been removed)
@@ -431,7 +424,8 @@ fn copy_files_to_temp(files: &[FileEntry], temp_dir: &Path) -> Result<()> {
 mod tests {
     use super::*;
     use conary_core::db::models::{InstallSource, TroveType};
-    use rusqlite::Connection;
+    use conary_core::packages::InstalledPackageIdentity;
+    use conary_core::repository::dependency_model::RepositoryRequirementKind;
 
     /// Helper to create a minimal trove for testing
     fn make_test_trove(name: &str, version: &str) -> Trove {
@@ -440,28 +434,42 @@ mod tests {
             version.to_string(),
             TroveType::Package,
             InstallSource::AdoptedTrack,
+            conary_core::repository::versioning::VersionScheme::Conary,
         );
         t.id = Some(42);
         t.architecture = Some("x86_64".to_string());
         t.description = Some("A test package".to_string());
+        t.native_package_identity =
+            Some(InstalledPackageIdentity::pacman(name, name, version, "x86_64").unwrap());
         t
+    }
+
+    fn stored_requirement(
+        kind: RepositoryRequirementKind,
+        native: &str,
+    ) -> InstalledRequirementGroup {
+        let requirement = conary_core::repository::requirement::parse_native_requirement(
+            kind,
+            conary_core::repository::versioning::VersionScheme::Conary,
+            native,
+        )
+        .unwrap();
+        InstalledRequirementGroup::from_group(
+            42,
+            conary_core::repository::versioning::VersionScheme::Conary,
+            requirement,
+        )
+        .unwrap()
     }
 
     #[test]
     fn test_build_manifest_from_adopted() {
         let trove = make_test_trove("nginx", "1.24.0");
 
-        let deps = vec![
-            DependencyEntry::new(
-                42,
-                "openssl".to_string(),
-                Some("3.1.0".to_string()),
-                "runtime".to_string(),
-                None,
-            ),
-            DependencyEntry::new(42, "pcre2".to_string(), None, "runtime".to_string(), None),
-            // Non-runtime dep should be excluded
-            DependencyEntry::new(42, "gcc".to_string(), None, "build".to_string(), None),
+        let requirements = vec![
+            stored_requirement(RepositoryRequirementKind::Depends, "openssl >= 3.1.0"),
+            stored_requirement(RepositoryRequirementKind::Depends, "pcre2"),
+            stored_requirement(RepositoryRequirementKind::Build, "gcc"),
         ];
 
         let provides = vec![
@@ -472,7 +480,7 @@ mod tests {
         let bundle = AdoptedTroveBundle {
             trove,
             files: Vec::new(),
-            deps,
+            requirements,
             provides,
         };
 
@@ -488,12 +496,20 @@ mod tests {
         assert_eq!(platform.arch, Some("x86_64".to_string()));
         assert_eq!(platform.os, "linux");
 
-        // Requires: one versioned capability (openssl) + one package dep (pcre2)
-        assert_eq!(manifest.requires.capabilities.len(), 1);
-        assert_eq!(manifest.requires.capabilities[0].name(), "openssl");
-        assert_eq!(manifest.requires.capabilities[0].version(), Some("3.1.0"));
-        assert_eq!(manifest.requires.packages.len(), 1);
-        assert_eq!(manifest.requires.packages[0].name, "pcre2");
+        // Exact requirements retain runtime constraints and build ownership.
+        assert_eq!(manifest.requirements.len(), 3);
+        assert_eq!(manifest.requirements[0].alternatives[0].name, "openssl");
+        assert_eq!(
+            manifest.requirements[0].alternatives[0]
+                .version_constraint
+                .as_deref(),
+            Some(">= 3.1.0")
+        );
+        assert_eq!(manifest.requirements[1].alternatives[0].name, "pcre2");
+        assert_eq!(
+            manifest.requirements[2].kind,
+            RepositoryRequirementKind::Build
+        );
 
         // Provides
         assert_eq!(manifest.provides.capabilities.len(), 2);
@@ -518,7 +534,7 @@ mod tests {
         let bundle = AdoptedTroveBundle {
             trove,
             files: Vec::new(),
-            deps: Vec::new(),
+            requirements: Vec::new(),
             provides: Vec::new(),
         };
 
@@ -526,8 +542,7 @@ mod tests {
 
         assert_eq!(manifest.package.name, "simple-pkg");
         assert_eq!(manifest.package.version, "0.1.0");
-        assert!(manifest.requires.capabilities.is_empty());
-        assert!(manifest.requires.packages.is_empty());
+        assert!(manifest.requirements.is_empty());
         assert!(manifest.provides.capabilities.is_empty());
     }
 
@@ -550,7 +565,12 @@ mod tests {
         assert_eq!(key, "adopted:adopted:bash:5.2.21:x86_64");
 
         // Non-adopted source should produce "unknown"
-        let mut non_adopted = Trove::new("foo".to_string(), "1.0".to_string(), TroveType::Package);
+        let mut non_adopted = Trove::new(
+            "foo".to_string(),
+            "1.0".to_string(),
+            TroveType::Package,
+            conary_core::repository::versioning::VersionScheme::Conary,
+        );
         non_adopted.id = Some(99);
         let format_str2 = if non_adopted.install_source.is_adopted() {
             "adopted"
@@ -566,55 +586,29 @@ mod tests {
     }
 
     #[test]
-    fn test_backfill_adopted_source_identity_only_fills_missing_fields() {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
-            "
-            CREATE TABLE troves (
-                id INTEGER PRIMARY KEY,
-                install_source TEXT NOT NULL,
-                source_distro TEXT,
-                version_scheme TEXT
-            );
-            INSERT INTO troves (id, install_source, source_distro, version_scheme)
-            VALUES
-                (1, 'adopted-track', NULL, NULL),
-                (2, 'adopted-full', 'ubuntu-24.04', NULL),
-                (3, 'repository', NULL, NULL);
-            ",
+    fn adopted_conversion_emits_verified_signed_v2() {
+        let temp = tempfile::tempdir().unwrap();
+        let bundle = AdoptedTroveBundle {
+            trove: make_test_trove("signed-adopted", "1.0.0"),
+            files: Vec::new(),
+            requirements: Vec::new(),
+            provides: Vec::new(),
+        };
+        let signer = SigningKeyPair::generate().with_key_id("adopt-test");
+
+        convert_single_package_inner(&bundle, temp.path(), false, &signer).unwrap();
+
+        let package_path = temp.path().join("signed-adopted-1.0.0-x86_64.ccs");
+        let verified = verify_package(
+            &package_path,
+            &TrustPolicy::strict(vec![signer.public_key_base64()]),
         )
         .unwrap();
-
-        backfill_adopted_source_identity(&conn, Some("fedora-44"), Some("rpm")).unwrap();
-
-        let row1: (Option<String>, Option<String>) = conn
-            .query_row(
-                "SELECT source_distro, version_scheme FROM troves WHERE id = 1",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .unwrap();
-        assert_eq!(row1.0.as_deref(), Some("fedora-44"));
-        assert_eq!(row1.1.as_deref(), Some("rpm"));
-
-        let row2: (Option<String>, Option<String>) = conn
-            .query_row(
-                "SELECT source_distro, version_scheme FROM troves WHERE id = 2",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .unwrap();
-        assert_eq!(row2.0.as_deref(), Some("ubuntu-24.04"));
-        assert_eq!(row2.1.as_deref(), Some("rpm"));
-
-        let row3: (Option<String>, Option<String>) = conn
-            .query_row(
-                "SELECT source_distro, version_scheme FROM troves WHERE id = 3",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .unwrap();
-        assert_eq!(row3.0, None);
-        assert_eq!(row3.1, None);
+        let package = conary_core::ccs::CcsPackage::from_verified_archive(
+            &package_path.to_string_lossy(),
+            &verified,
+        )
+        .unwrap();
+        assert_eq!(package.manifest().package.name, "signed-adopted");
     }
 }

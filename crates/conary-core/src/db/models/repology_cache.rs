@@ -109,12 +109,12 @@ impl RepologyCacheEntry {
 mod tests {
     use super::*;
     use crate::db::models::CanonicalPackage;
-    use crate::db::schema::migrate;
+    use crate::db::schema::ensure_current;
 
     #[test]
     fn test_repology_cache_roundtrip() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        ensure_current(&conn).unwrap();
 
         let entry = RepologyCacheEntry {
             project_name: "python".into(),
@@ -135,7 +135,7 @@ mod tests {
     #[test]
     fn test_find_for_canonical_and_distros() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        ensure_current(&conn).unwrap();
 
         let mut canonical = CanonicalPackage::new("python".into(), "package".into());
         let canonical_id = canonical.insert(&conn).unwrap();

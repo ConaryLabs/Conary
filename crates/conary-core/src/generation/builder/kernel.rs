@@ -2,56 +2,81 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::db::models::Trove;
-
 pub(super) fn collect_boot_kernel_releases(
     boot_root: &Path,
-    requested_version: &str,
     releases: &mut Vec<String>,
-) {
-    let Ok(entries) = std::fs::read_dir(boot_root) else {
-        return;
+) -> crate::Result<()> {
+    let entries = match std::fs::read_dir(boot_root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
     };
     let mut found = Vec::new();
-    for entry in entries.flatten() {
-        let Some(name) = entry.file_name().to_str().map(ToOwned::to_owned) else {
-            continue;
-        };
+    for entry in entries {
+        let entry = entry?;
+        let name = entry.file_name().into_string().map_err(|_| {
+            crate::Error::InvalidPath(format!(
+                "boot artifact name under {} is not UTF-8",
+                boot_root.display()
+            ))
+        })?;
         let Some(release) = name.strip_prefix("vmlinuz-") else {
             continue;
         };
-        if kernel_release_matches(requested_version, release) {
-            found.push(release.to_string());
-        }
+        validate_kernel_release(release)?;
+        found.push(release.to_string());
+    }
+    let entries = std::fs::read_dir(boot_root)?;
+    for entry in entries {
+        let entry = entry?;
+        let name = entry.file_name().into_string().map_err(|_| {
+            crate::Error::InvalidPath(format!(
+                "boot artifact name under {} is not UTF-8",
+                boot_root.display()
+            ))
+        })?;
+        let Some(release) = name
+            .strip_prefix("initramfs-")
+            .and_then(|name| name.strip_suffix(".img"))
+        else {
+            continue;
+        };
+        validate_kernel_release(release)?;
+        found.push(release.to_string());
     }
     found.sort();
     for release in found {
         push_unique_release(releases, release);
     }
+    Ok(())
 }
 
 pub(super) fn collect_module_kernel_releases(
     system_root: &Path,
-    requested_version: &str,
     releases: &mut Vec<String>,
-) {
+) -> crate::Result<()> {
     let mut found = Vec::new();
     for modules_root in [
         system_root.join("lib/modules"),
         system_root.join("usr/lib/modules"),
     ] {
-        let Ok(entries) = std::fs::read_dir(modules_root) else {
-            continue;
+        let entries = match std::fs::read_dir(&modules_root) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.into()),
         };
-        for entry in entries.flatten() {
+        for entry in entries {
+            let entry = entry?;
             let path = entry.path();
-            let Some(release) = path.file_name().and_then(|name| name.to_str()) else {
-                continue;
-            };
-            if kernel_release_matches(requested_version, release)
-                && regular_file_exists(&path.join("vmlinuz"))
-            {
-                found.push(release.to_string());
+            let release = entry.file_name().into_string().map_err(|_| {
+                crate::Error::InvalidPath(format!(
+                    "kernel module release under {} is not UTF-8",
+                    modules_root.display()
+                ))
+            })?;
+            validate_kernel_release(&release)?;
+            if regular_file_exists(&path.join("vmlinuz")) {
+                found.push(release);
             }
         }
     }
@@ -59,19 +84,22 @@ pub(super) fn collect_module_kernel_releases(
     for release in found {
         push_unique_release(releases, release);
     }
+    Ok(())
+}
+
+fn validate_kernel_release(release: &str) -> crate::Result<()> {
+    if release.is_empty() || release.contains(['/', '\\', '\0']) {
+        return Err(crate::Error::InvalidPath(format!(
+            "kernel release {release:?} is invalid"
+        )));
+    }
+    Ok(())
 }
 
 pub(super) fn push_unique_release(releases: &mut Vec<String>, release: String) {
     if !releases.iter().any(|existing| existing == &release) {
         releases.push(release);
     }
-}
-
-fn kernel_release_matches(requested_version: &str, release: &str) -> bool {
-    release == requested_version
-        || release
-            .strip_prefix(requested_version)
-            .is_some_and(|suffix| suffix.starts_with('.'))
 }
 
 pub(super) fn module_kernel_path(system_root: &Path, release: &str) -> Option<PathBuf> {
@@ -113,56 +141,21 @@ pub(super) fn system_root_for_boot_root(boot_root: &Path) -> PathBuf {
     PathBuf::from("/")
 }
 
-pub fn detect_kernel_version_from_troves(troves: &[Trove]) -> Option<String> {
-    for trove in troves {
-        if matches!(
-            trove.name.as_str(),
-            "kernel-core" | "kernel-modules-core" | "kernel-modules"
-        ) || trove.name.starts_with("linux-image")
-        {
-            return Some(trove.version.clone());
-        }
-    }
-
-    for trove in troves {
-        if trove.name.starts_with("kernel") || trove.name.starts_with("linux-image") {
-            return Some(trove.version.clone());
-        }
-    }
-    // Fall back to running kernel version from /proc/sys/kernel/osrelease
-    crate::generation::metadata::running_kernel_version()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn detect_kernel_version_does_not_panic() {
-        let result = detect_kernel_version_from_troves(&[]);
-        assert!(result.is_some() || result.is_none());
-    }
+    fn release_candidates_come_only_from_exact_artifact_paths() {
+        let root = tempfile::tempdir().unwrap();
+        let boot = root.path().join("boot");
+        std::fs::create_dir_all(&boot).unwrap();
+        std::fs::write(boot.join("vmlinuz-6.19.10"), b"kernel").unwrap();
+        std::fs::write(boot.join("initramfs-6.20.0.img"), b"initramfs").unwrap();
 
-    #[test]
-    fn detect_kernel_version_prefers_payload_kernel_over_meta_package() {
-        use crate::db::models::TroveType;
+        let mut releases = Vec::new();
+        collect_boot_kernel_releases(&boot, &mut releases).unwrap();
 
-        let troves = vec![
-            Trove::new(
-                "kernel".to_string(),
-                "6.17.1-300.fc44".to_string(),
-                TroveType::Package,
-            ),
-            Trove::new(
-                "kernel-core".to_string(),
-                "6.19.10-300.fc44".to_string(),
-                TroveType::Package,
-            ),
-        ];
-
-        assert_eq!(
-            detect_kernel_version_from_troves(&troves).as_deref(),
-            Some("6.19.10-300.fc44")
-        );
+        assert_eq!(releases, ["6.19.10", "6.20.0"]);
     }
 }

@@ -1,12 +1,12 @@
 // apps/conary/src/commands/generation/publication.rs
 
 use anyhow::{Result, anyhow};
+use conary_core::config_transaction::GenerationConfigTransaction;
 use conary_core::db::models::{
     GenerationPublication, GenerationPublicationPhase, GenerationPublicationStatus,
 };
 use conary_core::runtime_root::ConaryRuntimeRoot;
 use rusqlite::Connection;
-use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub(crate) struct PublicationRequest<'a> {
@@ -14,7 +14,7 @@ pub(crate) struct PublicationRequest<'a> {
     pub summary: &'a str,
     pub trigger_changeset_id: Option<i64>,
     pub tx_uuid: Option<&'a str>,
-    pub prev_etc_snapshot: Option<HashMap<String, String>>,
+    pub config_transaction: GenerationConfigTransaction,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,21 +52,60 @@ pub(crate) fn warn_if_publication_pending(changeset_id: i64, outcome: &Publicati
     );
 }
 
-pub(crate) fn publish_current_db_state(
+/// Persist exact selected-root publication authority in the caller's
+/// transaction.
+pub(crate) fn record_selected_root_state(
     conn: &Connection,
-    request: PublicationRequest<'_>,
-) -> Result<PublicationOutcome> {
+    request: &PublicationRequest<'_>,
+) -> Result<GenerationPublication> {
     let runtime_root = ConaryRuntimeRoot::from_db_path(request.db_path);
     let runtime_root_display = runtime_root.root().display().to_string();
-    let debt = GenerationPublication::create_pending(
+    GenerationPublication::create_pending(
         conn,
         request.trigger_changeset_id,
         request.tx_uuid,
         request.db_path,
         &runtime_root_display,
         request.summary,
-    )?;
+        &request.config_transaction,
+    )
+    .map_err(Into::into)
+}
+
+pub(crate) fn publish_recorded_selected_root(
+    conn: &Connection,
+    db_path: &str,
+    summary: &str,
+    debt: GenerationPublication,
+) -> Result<PublicationOutcome> {
+    publish_pending_debt(conn, db_path, summary, debt)
+}
+
+pub(crate) fn retry_pending_publication(
+    conn: &Connection,
+    db_path: &str,
+    summary: &str,
+) -> Result<PublicationOutcome> {
+    let debt = GenerationPublication::pending_recoverable(conn)?
+        .into_iter()
+        .last()
+        .ok_or_else(|| anyhow!("no pending generation publication debt"))?;
+    publish_pending_debt(conn, db_path, summary, debt)
+}
+
+fn publish_pending_debt(
+    conn: &Connection,
+    db_path: &str,
+    summary: &str,
+    debt: GenerationPublication,
+) -> Result<PublicationOutcome> {
+    let runtime_root = ConaryRuntimeRoot::from_db_path(db_path);
     let high_water = GenerationPublication::applied_high_water_changeset_id(conn)?;
+    let recoverable_before = GenerationPublication::pending_recoverable(conn)?;
+    let config_transactions = recoverable_before
+        .iter()
+        .map(|publication| publication.config_transaction.clone())
+        .collect::<Vec<_>>();
 
     let publish_result = (|| -> Result<BuiltForPublication> {
         debt.set_phase(
@@ -76,11 +115,13 @@ pub(crate) fn publish_current_db_state(
             None,
             None,
         )?;
-        let built = crate::commands::composefs_ops::build_generation_for_publication(
+        let captured = super::selected_root::load_publication_candidate(&runtime_root, &debt)?;
+        let built = crate::commands::composefs_ops::build_captured_generation_for_publication(
             conn,
-            request.db_path,
-            request.summary,
-            request.prev_etc_snapshot,
+            db_path,
+            summary,
+            &config_transactions,
+            captured,
         )?;
         if built.state_number != built.generation_number {
             return Err(anyhow!(
@@ -96,10 +137,7 @@ pub(crate) fn publish_current_db_state(
             Some(built.state_number),
             Some(built.generation_number),
         )?;
-        crate::commands::composefs_ops::publish_generation_link(
-            request.db_path,
-            built.generation_number,
-        )?;
+        crate::commands::composefs_ops::publish_generation_link(db_path, built.generation_number)?;
         debt.set_phase(
             conn,
             GenerationPublicationPhase::CurrentPublished,
@@ -107,12 +145,16 @@ pub(crate) fn publish_current_db_state(
             Some(built.state_number),
             Some(built.generation_number),
         )?;
+        crate::commands::generation::config_transaction::project_persisted_statuses(
+            conn,
+            &config_transactions,
+        )?;
         crate::commands::composefs_ops::mark_generation_state_active(
             conn,
             built.generation_number,
         )?;
         conary_core::db::backup::create_generation_db_backup(
-            request.db_path,
+            db_path,
             runtime_root.generation_path(built.generation_number),
             built.generation_number,
             built.state_number,
@@ -131,6 +173,11 @@ pub(crate) fn publish_current_db_state(
                 high_water,
                 built.state_number,
                 built.generation_number,
+            )?;
+            super::selected_root::remove_terminal_publication_candidates(
+                conn,
+                &runtime_root,
+                &recoverable_before,
             )?;
             Ok(PublicationOutcome {
                 generation_number: Some(built.generation_number),
@@ -196,6 +243,7 @@ mod tests {
             "/tmp/conary.db",
             "/tmp/conary",
             "A",
+            &Default::default(),
         )
         .unwrap();
         first.mark_failed(&conn, "forced").unwrap();
@@ -206,6 +254,7 @@ mod tests {
             "/tmp/conary.db",
             "/tmp/conary",
             "B",
+            &Default::default(),
         )
         .unwrap();
 
@@ -216,54 +265,6 @@ mod tests {
             GenerationPublication::pending_recoverable(&conn)
                 .unwrap()
                 .is_empty()
-        );
-    }
-
-    #[test]
-    fn forced_publication_failure_returns_pending_outcome_and_failed_debt() {
-        let temp = tempfile::NamedTempFile::new().unwrap();
-        conary_core::db::init(temp.path()).unwrap();
-        let conn = conary_core::db::open(temp.path()).unwrap();
-        conn.execute(
-            "INSERT INTO changesets (description, status) VALUES ('Install fixture', 'applied')",
-            [],
-        )
-        .unwrap();
-        let changeset_id = conn.last_insert_rowid();
-        let _guard = crate::commands::composefs_ops::test_forced_generation_rebuild_failure_guard(
-            "forced publication failure",
-        );
-
-        let outcome = publish_current_db_state(
-            &conn,
-            PublicationRequest {
-                db_path: "/tmp/conary.db",
-                summary: "Install fixture",
-                trigger_changeset_id: Some(changeset_id),
-                tx_uuid: None,
-                prev_etc_snapshot: None,
-            },
-        )
-        .unwrap();
-
-        assert!(outcome.needs_publication);
-        assert_eq!(
-            outcome.retry_command.as_deref(),
-            Some(DEFAULT_PUBLICATION_RETRY_COMMAND)
-        );
-        let debts =
-            conary_core::db::models::GenerationPublication::pending_recoverable(&conn).unwrap();
-        assert_eq!(debts.len(), 1);
-        assert_eq!(
-            debts[0].status,
-            conary_core::db::models::GenerationPublicationStatus::Failed
-        );
-        assert!(
-            debts[0]
-                .last_error
-                .as_deref()
-                .unwrap()
-                .contains("forced publication failure")
         );
     }
 }

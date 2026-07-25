@@ -2,7 +2,7 @@
 //! Shared request and response types for daemon routes.
 
 use crate::daemon::{DaemonError, DaemonJob, DaemonState};
-use conary_core::db::models::{Changeset, DependencyEntry, GenerationPublication, Trove};
+use conary_core::db::models::{Changeset, GenerationPublication, InstalledRequirementAtom, Trove};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -87,8 +87,8 @@ pub struct DependencyInfo {
     pub version_constraint: Option<String>,
 }
 
-impl From<&DependencyEntry> for DependencyInfo {
-    fn from(dep: &DependencyEntry) -> Self {
+impl From<&InstalledRequirementAtom> for DependencyInfo {
+    fn from(dep: &InstalledRequirementAtom) -> Self {
         Self {
             name: dep.depends_on_name.clone(),
             kind: dep.kind.clone(),
@@ -234,7 +234,7 @@ fn is_false(value: &bool) -> bool {
 
 /// A single operation in a transaction
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TransactionOperation {
     /// Install packages
     Install {
@@ -249,18 +249,12 @@ pub enum TransactionOperation {
         /// Preview without installing
         #[serde(default, skip_serializing_if = "is_false")]
         dry_run: bool,
-        /// Skip package scriptlets
-        #[serde(default, skip_serializing_if = "is_false")]
-        no_scripts: bool,
         /// Assume yes to confirmation prompts
         #[serde(default, skip_serializing_if = "is_false")]
         yes: bool,
         /// Confirm applying this package operation
         #[serde(default, skip_serializing_if = "is_false")]
         apply_intent: bool,
-        /// Explicitly acknowledge live-host mutation risk
-        #[serde(default, skip_serializing_if = "is_false")]
-        allow_live_system_mutation: bool,
     },
     /// Remove packages
     Remove {
@@ -272,18 +266,12 @@ pub enum TransactionOperation {
         /// Also remove orphaned dependencies
         #[serde(default)]
         remove_orphans: bool,
-        /// Skip package scriptlets
+        /// Purge residual config state and delete adopted package files
         #[serde(default, skip_serializing_if = "is_false")]
-        no_scripts: bool,
-        /// Delete adopted package files from disk
-        #[serde(default, skip_serializing_if = "is_false")]
-        purge_files: bool,
+        purge: bool,
         /// Confirm applying this package operation
         #[serde(default, skip_serializing_if = "is_false")]
         apply_intent: bool,
-        /// Explicitly acknowledge live-host mutation risk
-        #[serde(default, skip_serializing_if = "is_false")]
-        allow_live_system_mutation: bool,
     },
     /// Update packages
     Update {
@@ -301,9 +289,6 @@ pub enum TransactionOperation {
         /// Confirm applying this package operation
         #[serde(default, skip_serializing_if = "is_false")]
         apply_intent: bool,
-        /// Explicitly acknowledge live-host mutation risk
-        #[serde(default, skip_serializing_if = "is_false")]
-        allow_live_system_mutation: bool,
     },
 }
 
@@ -316,6 +301,7 @@ pub struct CreateTransactionRequest {
 
 /// Convenience request for package operations
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PackageOperationRequest {
     /// Package names to operate on
     pub packages: Vec<String>,
@@ -326,6 +312,7 @@ pub struct PackageOperationRequest {
 
 /// Options for package operations
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PackageOperationOptions {
     /// For install: allow downgrades
     #[serde(default)]
@@ -345,21 +332,15 @@ pub struct PackageOperationOptions {
     /// Preview without making changes
     #[serde(default)]
     pub dry_run: bool,
-    /// Skip package scriptlets where the operation supports it
-    #[serde(default)]
-    pub no_scripts: bool,
     /// Assume yes to prompts where the operation supports it
     #[serde(default)]
     pub yes: bool,
     /// Confirm applying this package operation
     #[serde(default)]
     pub apply_intent: bool,
-    /// Delete adopted package files from disk during remove
+    /// Purge residual config state and delete adopted package files
     #[serde(default)]
-    pub purge_files: bool,
-    /// Explicitly acknowledge live-host mutation risk
-    #[serde(default)]
-    pub allow_live_system_mutation: bool,
+    pub purge: bool,
 }
 
 /// Response body for transaction creation
@@ -433,6 +414,23 @@ mod tests {
     }
 
     #[test]
+    fn package_request_rejects_removed_live_mutation_alias() {
+        let err = serde_json::from_value::<PackageOperationRequest>(serde_json::json!({
+            "packages": ["fixture"],
+            "options": {
+                "allow_live_system_mutation": true
+            }
+        }))
+        .expect_err("removed acknowledgement field must fail");
+
+        assert!(
+            err.to_string()
+                .contains("unknown field `allow_live_system_mutation`"),
+            "{err}"
+        );
+    }
+
+    #[test]
     fn history_publication_status_matches_changeset_debt() {
         let publications = vec![GenerationPublication {
             id: Some(1),
@@ -446,6 +444,7 @@ mod tests {
             state_number: None,
             generation_number: None,
             summary: "fixture".to_string(),
+            config_transaction: Default::default(),
             last_error: Some("forced".to_string()),
             retry_count: 1,
             recoverable: true,

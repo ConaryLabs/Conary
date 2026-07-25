@@ -10,7 +10,7 @@ use conary_core::db::models::ConvertedPackage;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 /// A pre-computed delta between two versions of a package
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -75,51 +75,41 @@ fn get_version_chunks(
     package_name: &str,
     version: &str,
 ) -> Result<(Vec<String>, u64)> {
-    match find_public_ready_conversion(conn, distro, package_name, version)? {
+    match find_current_conversion(conn, distro, package_name, version)? {
         Some(converted) => {
-            let json = converted
-                .chunk_hashes_json
-                .unwrap_or_else(|| "[]".to_string());
-            let hashes: Vec<String> = serde_json::from_str(&json).with_context(|| {
-                format!(
-                    "Failed to parse chunk_hashes_json for {}/{}/{}",
-                    distro, package_name, version
-                )
-            })?;
-            Ok((hashes, converted.total_size.unwrap_or(0).max(0) as u64))
+            let artifact = converted.repository_artifact()?;
+            Ok((artifact.chunk_hashes, artifact.total_size))
         }
         None => Ok((Vec::new(), 0)),
     }
 }
 
-fn find_public_ready_conversion(
+fn find_current_conversion(
     conn: &Connection,
     distro: &str,
     package_name: &str,
     version: &str,
 ) -> Result<Option<ConvertedPackage>> {
-    Ok(
-        ConvertedPackage::find_publication_candidates(conn, distro, Some(package_name))?
-            .into_iter()
-            .find(|converted| {
-                converted.package_version.as_deref() == Some(version)
-                    && converted.is_scriptlet_public_ready()
-            }),
-    )
+    for converted in ConvertedPackage::find_current_conversions(conn, distro, Some(package_name))? {
+        if converted.repository_artifact()?.package_version == version {
+            converted.scriptlet_summary()?;
+            return Ok(Some(converted));
+        }
+    }
+    Ok(None)
 }
 
-fn public_ready_versions(
+fn current_conversion_versions(
     conn: &Connection,
     distro: &str,
     package_name: &str,
 ) -> Result<HashSet<String>> {
-    Ok(
-        ConvertedPackage::find_publication_candidates(conn, distro, Some(package_name))?
-            .into_iter()
-            .filter(|converted| converted.is_scriptlet_public_ready())
-            .filter_map(|converted| converted.package_version)
-            .collect(),
-    )
+    let mut versions = HashSet::new();
+    for converted in ConvertedPackage::find_current_conversions(conn, distro, Some(package_name))? {
+        converted.scriptlet_summary()?;
+        versions.insert(converted.repository_artifact()?.package_version.to_string());
+    }
+    Ok(versions)
 }
 
 /// Look up chunk sizes from the chunk_access table.
@@ -138,7 +128,11 @@ fn get_chunk_sizes(conn: &Connection, hashes: &[String]) -> Result<HashMap<Strin
             .query_row([hash], |row| row.get::<_, i64>(1))
             .optional()?
         {
-            sizes.insert(hash.clone(), size as u64);
+            sizes.insert(
+                hash.clone(),
+                u64::try_from(size)
+                    .with_context(|| format!("chunk {hash} has negative size_bytes {size}"))?,
+            );
         }
     }
 
@@ -184,10 +178,16 @@ pub fn compute_delta(
 
     // Calculate download size from new chunk sizes
     let chunk_sizes = get_chunk_sizes(conn, &new_chunks)?;
-    let download_size: u64 = new_chunks
+    let download_size = new_chunks
         .iter()
-        .map(|h| chunk_sizes.get(h).copied().unwrap_or(0))
-        .sum();
+        .map(|hash| {
+            chunk_sizes.get(hash).copied().with_context(|| {
+                format!(
+                    "delta {distro}/{package_name} {from_version} -> {to_version} references chunk {hash} without persisted size authority"
+                )
+            })
+        })
+        .sum::<Result<u64>>()?;
 
     let new_chunks_json = serde_json::to_string(&new_chunks)?;
     let removed_chunks_json = serde_json::to_string(&removed_chunks)?;
@@ -248,25 +248,25 @@ pub fn compute_deltas_for_package(
     package_name: &str,
 ) -> Result<Vec<DeltaManifest>> {
     use conary_core::repository::distro::version_scheme_from_distro_name;
-    use conary_core::repository::versioning::{VersionScheme, compare_repo_versions};
+    use conary_core::repository::versioning::{compare_repo_versions, validate_repo_version};
 
     // Determine the version comparison scheme from the distro.
-    let scheme = version_scheme_from_distro_name(distro).unwrap_or_else(|| {
-        warn!(
-            "Unknown distro '{}' for delta computation, using RPM ordering",
-            distro
-        );
-        VersionScheme::Rpm
-    });
+    let scheme = version_scheme_from_distro_name(distro)
+        .ok_or_else(|| anyhow::anyhow!("unknown distro '{distro}' for delta computation"))?;
 
-    // Get all public-ready converted versions for this package.
-    let mut versions: Vec<String> = public_ready_versions(conn, distro, package_name)?
+    // Get all current converted versions for this package.
+    let mut versions: Vec<String> = current_conversion_versions(conn, distro, package_name)?
         .into_iter()
         .collect();
 
-    // Sort with scheme-aware comparison instead of lexicographic ordering.
-    versions
-        .sort_by(|a, b| compare_repo_versions(scheme, a, b).unwrap_or(std::cmp::Ordering::Equal));
+    // Validate before entering Rust's infallible sort callback. The callback
+    // cannot observe an invalid version after this boundary.
+    for version in &versions {
+        validate_repo_version(scheme, version)?;
+    }
+    versions.sort_by(|a, b| {
+        compare_repo_versions(scheme, a, b).expect("delta versions were validated before sorting")
+    });
 
     if versions.len() < 2 {
         debug!(
@@ -283,15 +283,15 @@ pub fn compute_deltas_for_package(
         let from_version = &pair[0];
         let to_version = &pair[1];
 
-        match compute_delta(conn, distro, package_name, from_version, to_version) {
-            Ok(delta) => deltas.push(delta),
-            Err(e) => {
-                warn!(
-                    "Failed to compute delta {}/{}: {} -> {}: {}",
-                    distro, package_name, from_version, to_version, e
-                );
-            }
-        }
+        deltas.push(
+            compute_delta(conn, distro, package_name, from_version, to_version).with_context(
+                || {
+                    format!(
+                        "compute adjacent delta {distro}/{package_name} {from_version} -> {to_version}"
+                    )
+                },
+            )?,
+        );
     }
 
     info!(
@@ -310,7 +310,7 @@ fn versions_have_current_conversions(
     from_version: &str,
     to_version: &str,
 ) -> Result<bool> {
-    let versions = public_ready_versions(conn, distro, package_name)?;
+    let versions = current_conversion_versions(conn, distro, package_name)?;
     Ok(versions.contains(from_version) && versions.contains(to_version))
 }
 
@@ -356,8 +356,23 @@ pub fn get_delta(
                 return Ok(None);
             }
 
-            let new_chunks: Vec<String> = serde_json::from_str(&new_json).unwrap_or_default();
-            let removed_chunks: Vec<String> = serde_json::from_str(&rem_json).unwrap_or_default();
+            let new_chunks: Vec<String> = serde_json::from_str(&new_json).with_context(|| {
+                format!(
+                    "delta manifest {id} for {distro}/{pkg} {from_v} -> {to_v} has corrupt new_chunks"
+                )
+            })?;
+            let removed_chunks: Vec<String> =
+                serde_json::from_str(&rem_json).with_context(|| {
+                    format!(
+                        "delta manifest {id} for {distro}/{pkg} {from_v} -> {to_v} has corrupt removed_chunks"
+                    )
+                })?;
+            let download_size = u64::try_from(dl_size).with_context(|| {
+                format!("delta manifest {id} has negative download_size {dl_size}")
+            })?;
+            let full_size = u64::try_from(full_size).with_context(|| {
+                format!("delta manifest {id} has negative full_size {full_size}")
+            })?;
 
             Ok(Some(DeltaManifest {
                 id: Some(id),
@@ -367,8 +382,8 @@ pub fn get_delta(
                 to_version: to_v,
                 new_chunks,
                 removed_chunks,
-                download_size: dl_size as u64,
-                full_size: full_size as u64,
+                download_size,
+                full_size,
                 computed_at: computed,
             }))
         }
@@ -379,7 +394,6 @@ pub fn get_delta(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use conary_core::ccs::convert::ScriptletBundleSummary;
     use conary_core::db::models::{CONVERSION_VERSION, ConvertedPackage};
     use conary_core::db::schema;
     use tempfile::NamedTempFile;
@@ -388,7 +402,7 @@ mod tests {
         let temp_file = NamedTempFile::new().unwrap();
         let conn = Connection::open(temp_file.path()).unwrap();
         conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
-        schema::migrate(&conn).unwrap();
+        schema::ensure_current(&conn).unwrap();
         (temp_file, conn)
     }
 
@@ -421,7 +435,7 @@ mod tests {
         conversion_version: i32,
     ) {
         let chunk_strings: Vec<String> = chunks.iter().map(|s| (*s).to_string()).collect();
-        let mut pkg = ConvertedPackage::new_server(
+        let mut pkg = ConvertedPackage::new_repository(
             distro.to_string(),
             name.to_string(),
             version.to_string(),
@@ -436,7 +450,7 @@ mod tests {
         pkg.insert(conn).unwrap();
     }
 
-    fn insert_private_review_conversion(
+    fn insert_stale_conversion(
         conn: &Connection,
         distro: &str,
         name: &str,
@@ -445,7 +459,7 @@ mod tests {
         total_size: i64,
     ) {
         let chunk_strings: Vec<String> = chunks.iter().map(|s| (*s).to_string()).collect();
-        let mut pkg = ConvertedPackage::new_server(
+        let mut pkg = ConvertedPackage::new_repository(
             distro.to_string(),
             name.to_string(),
             version.to_string(),
@@ -456,14 +470,7 @@ mod tests {
             format!("sha256:content-{name}-{version}"),
             format!("/data/{name}-{version}.ccs"),
         );
-        pkg.set_scriptlet_metadata(&ScriptletBundleSummary {
-            publication_status: "private-review".to_string(),
-            scriptlet_fidelity: "review-required".to_string(),
-            target_compatibility: "review-required".to_string(),
-            review_reason_codes: vec!["review-class-debconf".to_string()],
-            ..Default::default()
-        })
-        .unwrap();
+        pkg.conversion_version = CONVERSION_VERSION - 1;
         pkg.insert(conn).unwrap();
     }
 
@@ -560,6 +567,7 @@ mod tests {
 
         insert_converted(&conn, "fedora", "nginx", "1.0", &["chunkA", "chunkB"], 2000);
         insert_converted(&conn, "fedora", "nginx", "2.0", &["chunkB", "chunkC"], 2500);
+        insert_chunk(&conn, "chunkC", 1500);
 
         compute_delta(&conn, "fedora", "nginx", "1.0", "2.0").unwrap();
 
@@ -571,6 +579,26 @@ mod tests {
         assert_eq!(cached.to_version, "2.0");
         assert!(cached.new_chunks.contains(&"chunkC".to_string()));
         assert!(cached.removed_chunks.contains(&"chunkA".to_string()));
+    }
+
+    #[test]
+    fn get_delta_rejects_corrupt_persisted_chunk_sets() {
+        let (_temp, conn) = create_test_db();
+        insert_converted(&conn, "fedora", "nginx", "1.0", &["chunkA"], 1000);
+        insert_converted(&conn, "fedora", "nginx", "2.0", &["chunkB"], 1000);
+        insert_chunk(&conn, "chunkB", 1000);
+        compute_delta(&conn, "fedora", "nginx", "1.0", "2.0").unwrap();
+        conn.execute(
+            "UPDATE delta_manifests SET new_chunks = 'not-json'
+             WHERE distro = 'fedora' AND package_name = 'nginx'
+               AND from_version = '1.0' AND to_version = '2.0'",
+            [],
+        )
+        .unwrap();
+
+        let error = get_delta(&conn, "fedora", "nginx", "1.0", "2.0")
+            .expect_err("corrupt delta metadata must not become an empty chunk set");
+        assert!(error.to_string().contains("corrupt new_chunks"));
     }
 
     #[test]
@@ -615,6 +643,8 @@ mod tests {
         insert_converted(&conn, "fedora", "nginx", "1.0", &["chunkA"], 1000);
         insert_converted(&conn, "fedora", "nginx", "2.0", &["chunkA", "chunkB"], 2000);
         insert_converted(&conn, "fedora", "nginx", "3.0", &["chunkB", "chunkC"], 2500);
+        insert_chunk(&conn, "chunkB", 1000);
+        insert_chunk(&conn, "chunkC", 1500);
 
         let deltas = compute_deltas_for_package(&conn, "fedora", "nginx").unwrap();
 
@@ -659,6 +689,7 @@ mod tests {
         );
         insert_converted(&conn, "fedora", "nginx", "2.0", &["chunkA"], 1000);
         insert_converted(&conn, "fedora", "nginx", "3.0", &["chunkA", "chunkB"], 2000);
+        insert_chunk(&conn, "chunkB", 1000);
 
         let deltas = compute_deltas_for_package(&conn, "fedora", "nginx").unwrap();
 
@@ -668,11 +699,12 @@ mod tests {
     }
 
     #[test]
-    fn delta_manifests_ignore_non_public_conversions() {
+    fn delta_manifests_ignore_stale_conversions() {
         let (_temp, conn) = create_test_db();
-        insert_private_review_conversion(&conn, "fedora", "nginx", "1.0", &["privateA"], 1000);
+        insert_stale_conversion(&conn, "fedora", "nginx", "1.0", &["staleA"], 1000);
         insert_converted(&conn, "fedora", "nginx", "2.0", &["chunkA"], 1000);
         insert_converted(&conn, "fedora", "nginx", "3.0", &["chunkA", "chunkB"], 2000);
+        insert_chunk(&conn, "chunkB", 1000);
 
         let (chunks, size) = get_version_chunks(&conn, "fedora", "nginx", "1.0").unwrap();
         let deltas = compute_deltas_for_package(&conn, "fedora", "nginx").unwrap();
@@ -744,6 +776,7 @@ mod tests {
 
         // Only one version exists
         insert_converted(&conn, "fedora", "nginx", "1.0", &["chunkA"], 1000);
+        insert_chunk(&conn, "chunkA", 1000);
 
         // Compute delta with nonexistent from_version - should succeed with empty from set
         let delta = compute_delta(&conn, "fedora", "nginx", "0.9", "1.0").unwrap();
@@ -751,5 +784,20 @@ mod tests {
         assert_eq!(delta.new_chunks.len(), 1);
         assert!(delta.new_chunks.contains(&"chunkA".to_string()));
         assert!(delta.removed_chunks.is_empty());
+    }
+
+    #[test]
+    fn compute_delta_rejects_missing_chunk_size_authority() {
+        let (_temp, conn) = create_test_db();
+        insert_converted(&conn, "fedora", "nginx", "1.0", &["chunkA"], 1000);
+
+        let error = compute_delta(&conn, "fedora", "nginx", "0.9", "1.0")
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            error.contains("without persisted size authority"),
+            "{error}"
+        );
     }
 }

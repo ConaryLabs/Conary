@@ -32,7 +32,17 @@ pub async fn cmd_list_components(package_name: &str, db_path: &str) -> Result<()
         let components = conary_core::db::models::Component::find_by_trove(&conn, trove_id)?;
 
         if components.is_empty() {
-            println!("  Components: (none - legacy install)");
+            let files = conary_core::db::models::FileEntry::find_by_trove(&conn, trove_id)?;
+            if files.is_empty() {
+                println!("  Components: (none; metadata-only package)");
+            } else {
+                anyhow::bail!(
+                    "Installed package '{}' {} has {} files but no persisted component authority",
+                    trove.name,
+                    trove.version,
+                    files.len()
+                );
+            }
         } else {
             println!("  Components:");
             for comp in &components {
@@ -120,15 +130,23 @@ pub async fn cmd_query_component(component_spec: &str, db_path: &str) -> Result<
                 }
             }
             None => {
-                // Check if any components exist
                 let components =
                     conary_core::db::models::Component::find_by_trove(&conn, trove_id)?;
                 if components.is_empty() {
-                    println!(
-                        "Package '{}' was installed without component tracking (legacy install)",
+                    let files = conary_core::db::models::FileEntry::find_by_trove(&conn, trove_id)?;
+                    if !files.is_empty() {
+                        anyhow::bail!(
+                            "Installed package '{}' {} has {} files but no persisted component authority",
+                            trove.name,
+                            trove.version,
+                            files.len()
+                        );
+                    }
+                    return Err(anyhow::anyhow!(
+                        "Component '{}' not found in metadata-only package '{}'; the package declares no components",
+                        component_name,
                         package_name
-                    );
-                    println!("All files belong to the implicit :runtime component.");
+                    ));
                 } else {
                     let available: Vec<String> =
                         components.iter().map(|c| format!(":{}", c.name)).collect();
@@ -144,4 +162,81 @@ pub async fn cmd_query_component(component_spec: &str, db_path: &str) -> Result<
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use conary_core::db::models::{FileEntry, Trove, TroveType};
+    use conary_core::payload::{
+        PayloadIdentity, PayloadNode, PayloadNodeKind, PayloadTimestamp, ResolvedPayloadNode,
+    };
+
+    fn test_database() -> (tempfile::NamedTempFile, String) {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let path = file.path().to_string_lossy().into_owned();
+        conary_core::db::init(&path).unwrap();
+        (file, path)
+    }
+
+    #[tokio::test]
+    async fn payload_without_component_authority_is_an_invariant_error() {
+        let (_file, db_path) = test_database();
+        let conn = conary_core::db::open(&db_path).unwrap();
+        let mut trove = Trove::new(
+            "broken-components".to_string(),
+            "1".to_string(),
+            TroveType::Package,
+            conary_core::repository::versioning::VersionScheme::Conary,
+        );
+        let trove_id = trove.insert(&conn).unwrap();
+        let directory = PayloadNode {
+            kind: PayloadNodeKind::Directory,
+            mode: libc::S_IFDIR | 0o755,
+            user: PayloadIdentity::Numeric { id: 0 },
+            group: PayloadIdentity::Numeric { id: 0 },
+            mtime: PayloadTimestamp::UNIX_EPOCH,
+            xattrs: Default::default(),
+        };
+        FileEntry::new(
+            "/opt/broken-components".to_string(),
+            ResolvedPayloadNode::from_numeric_source(directory).unwrap(),
+            None,
+            trove_id,
+        )
+        .insert(&conn)
+        .unwrap();
+
+        let error = cmd_list_components("broken-components", &db_path)
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("files but no persisted component authority"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn metadata_only_package_has_no_implicit_runtime_component() {
+        let (_file, db_path) = test_database();
+        let conn = conary_core::db::open(&db_path).unwrap();
+        Trove::new(
+            "metadata-only".to_string(),
+            "1".to_string(),
+            TroveType::Package,
+            conary_core::repository::versioning::VersionScheme::Conary,
+        )
+        .insert(&conn)
+        .unwrap();
+
+        let error = cmd_query_component("metadata-only:runtime", &db_path)
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("package declares no components"),
+            "unexpected error: {error}"
+        );
+    }
 }

@@ -12,13 +12,9 @@ use conary_core::diagnostics::{
 };
 use conary_core::recipe::CookResult;
 use conary_core::recipe::hermetic::{DivergenceStatus, HermeticBuildInput, detect_ci_mode};
-use conary_core::recipe::inference::{
-    CookTarget, ResolvedSourceTree, SourceTargetKind, SourceTargetProvenance,
-    infer_recipe_from_path, resolve_cook_target,
-};
 use conary_core::recipe::{
-    InferenceOptions, InferenceTrace, Kitchen, KitchenConfig, Recipe, SourceDownloadPolicy,
-    SourceSection, parse_recipe_file, validate_recipe,
+    CcsPackageSigningAuthority, Kitchen, KitchenConfig, Recipe, SourceDownloadPolicy,
+    parse_recipe_file, validate_recipe,
 };
 use std::fs::File;
 use std::io::{self, Write};
@@ -43,13 +39,8 @@ pub(crate) fn recipe_source_base_dir(recipe_path: &Path) -> PathBuf {
 #[derive(Debug)]
 struct ResolvedCookInput {
     recipe: Recipe,
-    recipe_path: Option<PathBuf>,
+    recipe_path: PathBuf,
     recipe_source_base_dir: PathBuf,
-    origin_class_override: Option<String>,
-    source_provenance_override: Option<SourceTargetProvenance>,
-    inference_trace: Option<InferenceTrace>,
-    source_kind: Option<SourceTargetKind>,
-    _source_tree: Option<ResolvedSourceTree>,
 }
 
 struct CookRunOptions<'a> {
@@ -61,14 +52,12 @@ struct CookRunOptions<'a> {
     keep_builddir: bool,
     validate_only: bool,
     fetch_only: bool,
-    explain: bool,
     isolated: bool,
-    no_isolation: bool,
-    hermetic: bool,
     json: bool,
     operation_id: String,
     source_download_policy_override: Option<SourceDownloadPolicy>,
     origin_class_override: Option<String>,
+    signing_key_path: Option<&'a Path>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -85,10 +74,9 @@ pub(crate) struct CookForTryWatchOptions<'a> {
     pub(crate) jobs: Option<u32>,
     pub(crate) keep_builddir: bool,
     pub(crate) isolated: bool,
-    pub(crate) no_isolation: bool,
-    pub(crate) hermetic: bool,
     pub(crate) source_policy: WatchCookSourcePolicy,
     pub(crate) operation_id: String,
+    pub(crate) signing_key_path: Option<&'a Path>,
 }
 
 pub(crate) fn run_cook_for_try_watch(
@@ -106,14 +94,12 @@ pub(crate) fn run_cook_for_try_watch(
             keep_builddir: options.keep_builddir,
             validate_only: false,
             fetch_only: false,
-            explain: false,
             isolated: options.isolated,
-            no_isolation: options.no_isolation,
-            hermetic: options.hermetic,
             json: true,
             operation_id: options.operation_id,
             source_download_policy_override,
             origin_class_override: None,
+            signing_key_path: options.signing_key_path,
         },
         &mut sink,
     )
@@ -122,8 +108,7 @@ pub(crate) fn run_cook_for_try_watch(
 fn watch_source_download_policy_override(
     options: &CookForTryWatchOptions<'_>,
 ) -> Option<SourceDownloadPolicy> {
-    let hermetic_requested = options.hermetic || options.isolated;
-    if hermetic_requested && options.source_policy == WatchCookSourcePolicy::Refresh {
+    if options.isolated && options.source_policy == WatchCookSourcePolicy::Refresh {
         Some(SourceDownloadPolicy::OfflineCacheOnly)
     } else {
         None
@@ -148,6 +133,7 @@ pub(crate) struct CookRecordedDraftOptions {
     pub(crate) output_dir: PathBuf,
     pub(crate) source_cache: PathBuf,
     pub(crate) operation_id: String,
+    pub(crate) signing_key_path: Option<PathBuf>,
 }
 
 fn recorded_draft_run_options<'a>(
@@ -165,14 +151,12 @@ fn recorded_draft_run_options<'a>(
         keep_builddir: false,
         validate_only: false,
         fetch_only: false,
-        explain: false,
         isolated: true,
-        no_isolation: false,
-        hermetic: false,
         json: true,
         operation_id: options.operation_id.clone(),
         source_download_policy_override: None,
         origin_class_override: Some("recorded-draft".to_string()),
+        signing_key_path: options.signing_key_path.as_deref(),
     }
 }
 
@@ -190,68 +174,53 @@ pub(crate) fn run_cook_for_recorded_draft(
 }
 
 pub(crate) fn resolve_recipe_path(target: Option<&str>, recipe: Option<&str>) -> Result<PathBuf> {
-    match resolve_cook_target(target, recipe)? {
-        CookTarget::RecipeFile(recipe_path) => Ok(recipe_path),
-        CookTarget::SourceTree(_) => {
+    resolve_recipe_path_from(target, recipe, &std::env::current_dir()?)
+}
+
+fn resolve_recipe_path_from(
+    target: Option<&str>,
+    recipe: Option<&str>,
+    default_dir: &Path,
+) -> Result<PathBuf> {
+    let selected = recipe.or(target);
+    let path = match selected {
+        Some(selected) => PathBuf::from(selected),
+        None => default_dir.join("recipe.toml"),
+    };
+
+    if path.is_dir() {
+        let recipe_path = path.join("recipe.toml");
+        if !recipe_path.is_file() {
             anyhow::bail!(
-                "Expected a recipe file path, but the cook target resolved to a source tree"
-            )
+                "cook target directory {} does not contain recipe.toml",
+                path.display()
+            );
         }
+        return recipe_path
+            .canonicalize()
+            .with_context(|| format!("Failed to canonicalize recipe: {}", recipe_path.display()));
     }
+
+    if !path.is_file() {
+        anyhow::bail!(
+            "cook requires an explicit recipe file or a directory containing recipe.toml; {} is not one",
+            path.display()
+        );
+    }
+
+    path.canonicalize()
+        .with_context(|| format!("Failed to canonicalize recipe: {}", path.display()))
 }
 
 fn resolve_cook_input(target: Option<&str>, recipe: Option<&str>) -> Result<ResolvedCookInput> {
-    match resolve_cook_target(target, recipe)? {
-        CookTarget::RecipeFile(recipe_path) => {
-            let parsed = parse_recipe_file(&recipe_path)
-                .with_context(|| format!("Failed to parse recipe: {}", recipe_path.display()))?;
-            Ok(ResolvedCookInput {
-                recipe: parsed,
-                recipe_source_base_dir: recipe_source_base_dir(&recipe_path),
-                recipe_path: Some(recipe_path),
-                origin_class_override: None,
-                source_provenance_override: None,
-                inference_trace: None,
-                source_kind: None,
-                _source_tree: None,
-            })
-        }
-        CookTarget::SourceTree(source_tree) => {
-            let inference = infer_recipe_from_path(
-                &source_tree.root,
-                InferenceOptions::for_source_root(source_tree.root.clone()),
-            )
-            .with_context(|| {
-                format!(
-                    "Failed to infer recipe from source tree: {}",
-                    source_tree.root.display()
-                )
-            })?;
-            Ok(ResolvedCookInput {
-                recipe: inference.recipe,
-                recipe_path: None,
-                recipe_source_base_dir: source_tree.root.clone(),
-                origin_class_override: Some("inferred-source".to_string()),
-                source_provenance_override: Some(source_tree.provenance.clone()),
-                inference_trace: Some(inference.trace),
-                source_kind: Some(source_tree.kind),
-                _source_tree: Some(source_tree),
-            })
-        }
-    }
-}
-
-fn write_inference_trace(output: &mut impl Write, trace: &InferenceTrace) -> Result<()> {
-    writeln!(output, "Inference trace:")?;
-    let rendered = trace.render_human();
-    if rendered.is_empty() {
-        writeln!(output, "  (empty)")?;
-    } else {
-        for line in rendered.lines() {
-            writeln!(output, "  {line}")?;
-        }
-    }
-    Ok(())
+    let recipe_path = resolve_recipe_path(target, recipe)?;
+    let parsed = parse_recipe_file(&recipe_path)
+        .with_context(|| format!("Failed to parse recipe: {}", recipe_path.display()))?;
+    Ok(ResolvedCookInput {
+        recipe: parsed,
+        recipe_source_base_dir: recipe_source_base_dir(&recipe_path),
+        recipe_path,
+    })
 }
 
 fn cook_operation_id() -> String {
@@ -342,24 +311,12 @@ fn sha256_prefixed_file(path: &Path) -> Result<String> {
 
 fn hermetic_build_input(
     resolved: &ResolvedCookInput,
-    recipe: &Recipe,
+    _recipe: &Recipe,
 ) -> Result<HermeticBuildInput> {
-    if let Some(recipe_path) = &resolved.recipe_path {
-        return Ok(HermeticBuildInput::explicit_recipe(
-            &resolved.recipe_source_base_dir,
-            recipe_path,
-            sha256_prefixed_file(recipe_path)?,
-        ));
-    }
-
-    let trace = resolved.inference_trace.as_ref().with_context(
-        || "Hermetic cook requires an explicit recipe or an inference trace for generated recipes",
-    )?;
-    let inference_trace_hash = conary_core::hash::sha256_prefixed(trace.render_human().as_bytes());
-    Ok(HermeticBuildInput::generated_recipe(
+    Ok(HermeticBuildInput::explicit_recipe(
         &resolved.recipe_source_base_dir,
-        recipe.clone(),
-        inference_trace_hash,
+        &resolved.recipe_path,
+        sha256_prefixed_file(&resolved.recipe_path)?,
     ))
 }
 
@@ -374,10 +331,7 @@ fn hermetic_build_input(
 /// * `keep_builddir` - Keep build directory after completion
 /// * `validate_only` - Only validate the recipe, don't cook
 /// * `fetch_only` - Only fetch sources, don't build
-/// * `explain` - Print inference trace for inferred source trees
 /// * `isolated` - Use the hermetic sandboxed isolation path
-/// * `no_isolation` - Hidden compatibility no-op for the M1a host default
-/// * `hermetic` - Hidden compatibility flag for the M2a hermetic build path
 /// * `json` - Emit structured packaging JSON output
 #[allow(clippy::too_many_arguments)]
 pub async fn cmd_cook(
@@ -389,11 +343,9 @@ pub async fn cmd_cook(
     keep_builddir: bool,
     validate_only: bool,
     fetch_only: bool,
-    explain: bool,
     isolated: bool,
-    no_isolation: bool,
-    hermetic: bool,
     json: bool,
+    signing_key_path: Option<&Path>,
 ) -> Result<()> {
     let mut output = io::stdout();
     cmd_cook_with_output(
@@ -405,11 +357,9 @@ pub async fn cmd_cook(
         keep_builddir,
         validate_only,
         fetch_only,
-        explain,
         isolated,
-        no_isolation,
-        hermetic,
         json,
+        signing_key_path,
         &mut output,
     )
     .await
@@ -425,11 +375,9 @@ async fn cmd_cook_with_output(
     keep_builddir: bool,
     validate_only: bool,
     fetch_only: bool,
-    explain: bool,
     isolated: bool,
-    no_isolation: bool,
-    hermetic: bool,
     json: bool,
+    signing_key_path: Option<&Path>,
     output: &mut impl Write,
 ) -> Result<()> {
     let operation_id = cook_operation_id();
@@ -442,14 +390,12 @@ async fn cmd_cook_with_output(
         keep_builddir,
         validate_only,
         fetch_only,
-        explain,
         isolated,
-        no_isolation,
-        hermetic,
         json,
         operation_id: operation_id.clone(),
         source_download_policy_override: None,
         origin_class_override: None,
+        signing_key_path,
     };
     match run_cook_operation(options, output) {
         Ok(mut report) => {
@@ -475,10 +421,7 @@ fn run_cook_operation(
     options: CookRunOptions<'_>,
     output: &mut impl Write,
 ) -> Result<PackagingCommandOutput> {
-    let hermetic_requested = options.hermetic || options.isolated;
-    if hermetic_requested && options.no_isolation {
-        anyhow::bail!("--no-isolation conflicts with --isolated/--hermetic");
-    }
+    let hermetic_requested = options.isolated;
 
     if options.recipe.is_none()
         && let Some(target) = options.target
@@ -503,27 +446,13 @@ fn run_cook_operation(
     let recipe = resolved.recipe.clone();
 
     if !options.json {
-        if let Some(recipe_path) = &resolved.recipe_path {
-            writeln!(output, "Reading recipe: {}", recipe_path.display())?;
-        } else {
-            writeln!(
-                output,
-                "Inferring recipe from: {}",
-                resolved.recipe_source_base_dir.display()
-            )?;
-        }
+        writeln!(output, "Reading recipe: {}", resolved.recipe_path.display())?;
 
         writeln!(
             output,
             "Recipe: {} version {}",
             recipe.package.name, recipe.package.version
         )?;
-
-        if options.explain
-            && let Some(trace) = &resolved.inference_trace
-        {
-            write_inference_trace(output, trace)?;
-        }
     }
 
     // Validate the recipe
@@ -600,16 +529,12 @@ fn run_cook_operation(
         return Ok(report);
     }
 
-    // Configure the kitchen. Host builds remain the compatibility default;
-    // --isolated and --hermetic route through the M2a hermetic planner.
+    // Configure the kitchen. Host builds remain the default;
+    // --isolated routes through the M2a hermetic planner.
     let mut config = KitchenConfig {
         source_cache: PathBuf::from(options.source_cache),
         recipe_source_base_dir: Some(resolved.recipe_source_base_dir.clone()),
-        origin_class_override: options
-            .origin_class_override
-            .clone()
-            .or_else(|| resolved.origin_class_override.clone()),
-        source_provenance_override: resolved.source_provenance_override.clone(),
+        origin_class_override: options.origin_class_override.clone(),
         keep_builddir: options.keep_builddir,
         use_isolation: false,
         pristine_mode: false,
@@ -629,49 +554,6 @@ fn run_cook_operation(
     // Fetch-only mode: just download sources and exit
     if options.fetch_only {
         let kitchen = Kitchen::new(config.clone());
-        if matches!(resolved.source_kind, Some(SourceTargetKind::Directory))
-            && matches!(recipe.source, SourceSection::Local(_))
-        {
-            if !options.json {
-                writeln!(
-                    output,
-                    "No remote source fetch is required for inferred local source tree."
-                )?;
-            }
-            let mut report =
-                cook_success_output(&options.operation_id, "No remote source fetch is required");
-            let mut sequence = 0;
-            push_cook_event(
-                &mut report,
-                &mut sequence,
-                PackagingPhase::SourceFetch,
-                PackagingEventKind::OperationStarted,
-                "Cook operation started",
-            );
-            push_cook_event(
-                &mut report,
-                &mut sequence,
-                PackagingPhase::SourceFetch,
-                PackagingEventKind::PhaseStarted,
-                "Source fetch started",
-            );
-            push_cook_event(
-                &mut report,
-                &mut sequence,
-                PackagingPhase::SourceFetch,
-                PackagingEventKind::PhaseFinished,
-                "Source fetch finished",
-            );
-            push_cook_event(
-                &mut report,
-                &mut sequence,
-                PackagingPhase::SourceFetch,
-                PackagingEventKind::OperationFinished,
-                "Cook operation finished",
-            );
-            return Ok(report);
-        }
-
         if !options.json {
             writeln!(output, "Fetching sources (fetch-only mode)...")?;
         }
@@ -734,14 +616,24 @@ fn run_cook_operation(
         return Ok(report);
     }
 
+    let signing_key_path = options.signing_key_path.context(
+        "CCS package cooking requires --key <private-key>; no default signing authority exists",
+    )?;
+    let signing_key = conary_core::ccs::SigningKeyPair::load_from_file(signing_key_path)
+        .with_context(|| {
+            format!(
+                "Failed to load CCS package signing key {}",
+                signing_key_path.display()
+            )
+        })?;
+    config.ccs_signing_authority = Some(CcsPackageSigningAuthority::new(signing_key));
+
     let hermetic_builder = if hermetic_requested {
         let builder = load_default_hermetic_builder()?;
         ensure_no_build_dependencies_for_m2a(&recipe)?;
         config.use_isolation = true;
         config.pristine_mode = true;
         config.sysroot = Some(builder.sysroot_path.clone());
-        config.auto_makedepends = false;
-        config.cleanup_makedepends = false;
         configure_host_record_for_hermetic(&mut config, &recipe);
         Some(builder)
     } else {

@@ -8,23 +8,21 @@ use tracing::{info, warn};
 
 /// Overlay install-specific request scope from CLI flags onto the effective policy.
 ///
-/// The `--from-distro` flag constrains the root request to a specific distro
+/// The `--from` flag constrains the root request to a specific distro
 /// flavor; `--repo` constrains to a specific repository.  Both apply to the
 /// root request only (transitive deps are governed by the mixing policy).
 pub(super) fn build_resolution_policy(
     mut policy: ResolutionPolicy,
     from_distro: Option<&str>,
     repo: Option<&str>,
-) -> ResolutionPolicy {
+) -> Result<ResolutionPolicy> {
     let scope = if let Some(target_distro) = from_distro {
-        // Map distro name to the correct flavor for request-scope filtering
-        let flavor = distro_name_to_flavor(target_distro);
-        if let Some(f) = flavor {
-            RequestScope::DistroFlavor(f)
-        } else {
-            // Unknown flavor -- use repo scope as a fallback
-            RequestScope::Repository(target_distro.to_string())
-        }
+        let flavor = distro_name_to_flavor(target_distro).ok_or_else(|| {
+            anyhow::anyhow!(
+                "unsupported distro profile '{target_distro}'; --from requires an exact supported profile ID or route slug"
+            )
+        })?;
+        RequestScope::DistroFlavor(flavor)
     } else if let Some(r) = repo {
         RequestScope::Repository(r.to_string())
     } else {
@@ -32,7 +30,7 @@ pub(super) fn build_resolution_policy(
     };
 
     policy.request_scope = scope;
-    policy
+    Ok(policy)
 }
 
 /// Resolve the canonical name for a package.
@@ -71,7 +69,7 @@ pub(super) fn resolve_canonical_name(
         }
         Ok(None)
     } else {
-        // No explicit --from-distro: use canonical resolver to expand and rank
+        // No explicit --from: use canonical resolver to expand and rank
         // implementations by pin/affinity/override.  This only applies to root
         // requests -- deps are never canonically expanded.
         use conary_core::resolver::canonical::CanonicalResolver;

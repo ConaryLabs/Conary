@@ -140,48 +140,6 @@ fn runtime_generation_artifact_write_reuses_preverified_cas_inputs() {
 }
 
 #[test]
-fn recursive_ccs_dependency_installs_defer_generation_publication_until_root_package() {
-    let conversion_rs = fs::read_to_string(app_source("commands/install/conversion.rs"))
-        .expect("failed to read commands/install/conversion.rs");
-    let ccs_transaction_rs = fs::read_to_string(app_source("commands/install/ccs_transaction.rs"))
-        .expect("failed to read commands/install/ccs_transaction.rs");
-    let transaction_rs = fs::read_to_string(app_source("commands/install/transaction.rs"))
-        .expect("failed to read commands/install/transaction.rs");
-
-    assert!(
-        conversion_rs.contains("install_converted_ccs_with_pending(opts, Vec::new(), false)"),
-        "root converted CCS installs must retain responsibility for publishing the generation"
-    );
-    assert!(
-        conversion_rs
-            .contains("child_pending_providers,\n                                    true,"),
-        "recursive CCS dependency installs must defer generation publication until the root dependency closure is installed"
-    );
-    assert!(
-        ccs_transaction_rs.contains("pub defer_generation: bool")
-            && ccs_transaction_rs.contains("defer_generation: opts.defer_generation"),
-        "CCS transaction options must carry the generation-publication boundary into transaction execution"
-    );
-
-    let transaction_body = transaction_rs
-        .split("fn execute_install_transaction_inner")
-        .nth(1)
-        .expect("failed to isolate execute_install_transaction_inner body");
-    let deferred_branch = transaction_body
-        .find(
-            "if ctx.defer_generation && ctx.execution_path == PackageExecutionPath::GenerationAware {\n        engine.release_lock();\n        return Ok(InstallTransactionResult { changeset_id });",
-        )
-        .expect("deferred CCS dependencies must skip generation rebuild");
-    let publish_generation = transaction_body
-        .find("generation::publication::publish_current_db_state")
-        .expect("root installs must still publish a composefs generation");
-    assert!(
-        deferred_branch < publish_generation,
-        "deferred dependency commits must return before rebuilding and selecting a generation"
-    );
-}
-
-#[test]
 fn runtime_generation_paths_are_routed_through_runtime_root_contract() {
     let transaction_rs = fs::read_to_string(core_source("transaction/mod.rs"))
         .expect("failed to read transaction/mod.rs");
@@ -427,67 +385,6 @@ fn release_generation_commands_do_not_expose_live_switch_as_normal_activation() 
     assert!(
         !cli_rs.contains("Switch to a specific generation"),
         "generation switch CLI help must not preserve live activation wording"
-    );
-}
-
-#[test]
-fn composefs_apply_publishes_next_boot_generation_without_live_mounting() {
-    let composefs_ops_rs = fs::read_to_string(app_source("commands/composefs_ops.rs"))
-        .expect("failed to read commands/composefs_ops.rs");
-    let build_body = composefs_ops_rs
-        .split("pub(crate) fn build_generation_for_publication")
-        .nth(1)
-        .and_then(|rest| rest.split("pub(crate) fn publish_generation_link").next())
-        .expect("failed to isolate build_generation_for_publication body");
-    let publish_body = composefs_ops_rs
-        .split("pub(crate) fn publish_generation_link")
-        .nth(1)
-        .and_then(|rest| {
-            rest.split("pub(crate) fn mark_generation_state_active")
-                .next()
-        })
-        .expect("failed to isolate publish_generation_link body");
-    let rebuild_body = composefs_ops_rs
-        .split("pub fn rebuild_and_mount")
-        .nth(1)
-        .and_then(|rest| rest.split("fn forced_generation_rebuild_failure").next())
-        .expect("failed to isolate rebuild_and_mount body");
-
-    assert!(
-        build_body.contains("enable_generation_rootfs_verity(&gen_dir, &build_result.image_path)"),
-        "runtime package mutation must preserve the fs-verity enablement step before generation selection"
-    );
-    assert!(
-        publish_body.contains("update_current_symlink(runtime_root.root(), gen_num)"),
-        "runtime package mutation must publish the generated artifact by updating /conary/current"
-    );
-    let build_step = rebuild_body
-        .find("build_generation_for_publication(conn, db_path, summary, prev_etc_snapshot)?")
-        .expect("rebuild_and_mount must build the inactive generation artifact first");
-    let publish_step = rebuild_body
-        .find("publish_generation_link(db_path, built.generation_number)?")
-        .expect("rebuild_and_mount must publish the selected generation link");
-    let active_step = rebuild_body
-        .find("mark_generation_state_active(conn, built.generation_number)?")
-        .expect("rebuild_and_mount must mark the generation state active after publication");
-    assert!(
-        build_step < publish_step && publish_step < active_step,
-        "runtime package mutation must build, publish, then mark active in order"
-    );
-    assert!(
-        !build_body.contains("mount_generation(")
-            && !publish_body.contains("mount_generation(")
-            && !rebuild_body.contains("mount_generation("),
-        "runtime package mutation must not attempt live composefs remounts; activation is atomic next-boot selection"
-    );
-    assert!(
-        !build_body.contains("mount_etc_overlay(")
-            && !publish_body.contains("mount_etc_overlay(")
-            && !rebuild_body.contains("mount_etc_overlay(")
-            && !build_body.contains("Path::new(\"/etc\")")
-            && !publish_body.contains("Path::new(\"/etc\")")
-            && !rebuild_body.contains("Path::new(\"/etc\")"),
-        "runtime package mutation must not remount the live /etc overlay during package installs or removes"
     );
 }
 

@@ -104,14 +104,6 @@ pub fn packaging_tools() -> Vec<CatalogItem> {
             cache: CachePolicy::private_short(),
         },
         CatalogItem {
-            name: "conary.packaging.explain_inference".to_string(),
-            description: "Explain recipe inference for a local source tree".to_string(),
-            when_to_use: "Use when a source tree has no explicit recipe or inference is surprising"
-                .to_string(),
-            risk: RiskLevel::ReadOnly,
-            cache: CachePolicy::private_short(),
-        },
-        CatalogItem {
             name: "conary.packaging.diagnose_latest_failure".to_string(),
             description: "Diagnose the newest failed packaging operation record".to_string(),
             when_to_use: "Use after a cook or publish command failed".to_string(),
@@ -258,7 +250,6 @@ mod tests {
             .map(|item| item.name.as_str())
             .collect::<std::collections::BTreeSet<_>>();
         assert!(names.contains("conary.packaging.inspect_project"));
-        assert!(names.contains("conary.packaging.explain_inference"));
         assert!(names.contains("conary.packaging.diagnose_latest_failure"));
         assert!(names.contains("conary.packaging.operation_records.list"));
         assert!(names.contains("conary.packaging.operation_records.read"));

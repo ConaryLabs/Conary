@@ -4,9 +4,7 @@
 use crate::daemon::routes::TransactionOperation;
 use crate::daemon::{DaemonEvent, DaemonState, JobKind};
 use anyhow::{Context, Result, bail};
-use conary::commands::{
-    InstallOptions, LegacyReplayOptions, SandboxMode, cmd_install, cmd_remove, cmd_update,
-};
+use conary::commands::{InstallOptions, SandboxMode, cmd_install, cmd_remove, cmd_update};
 use conary::live_host_safety::{
     LiveMutationClass, LiveMutationRequest, MutationIntent, require_mutation_intent,
 };
@@ -35,19 +33,15 @@ enum PackageCommand {
         allow_downgrade: bool,
         skip_deps: bool,
         dry_run: bool,
-        no_scripts: bool,
         yes: bool,
         apply_intent: bool,
-        allow_live_system_mutation: bool,
     },
     Remove {
         packages: Vec<String>,
         cascade: bool,
         remove_orphans: bool,
-        no_scripts: bool,
-        purge_files: bool,
+        purge: bool,
         apply_intent: bool,
-        allow_live_system_mutation: bool,
     },
     Update {
         packages: Vec<String>,
@@ -55,7 +49,6 @@ enum PackageCommand {
         dry_run: bool,
         yes: bool,
         apply_intent: bool,
-        allow_live_system_mutation: bool,
     },
 }
 
@@ -161,36 +154,28 @@ impl From<&TransactionOperation> for PackageCommand {
                 allow_downgrade,
                 skip_deps,
                 dry_run,
-                no_scripts,
                 yes,
                 apply_intent,
-                allow_live_system_mutation,
             } => Self::Install {
                 packages: packages.clone(),
                 allow_downgrade: *allow_downgrade,
                 skip_deps: *skip_deps,
                 dry_run: *dry_run,
-                no_scripts: *no_scripts,
                 yes: *yes,
                 apply_intent: *apply_intent,
-                allow_live_system_mutation: *allow_live_system_mutation,
             },
             TransactionOperation::Remove {
                 packages,
                 cascade,
                 remove_orphans,
-                no_scripts,
-                purge_files,
+                purge,
                 apply_intent,
-                allow_live_system_mutation,
             } => Self::Remove {
                 packages: packages.clone(),
                 cascade: *cascade,
                 remove_orphans: *remove_orphans,
-                no_scripts: *no_scripts,
-                purge_files: *purge_files,
+                purge: *purge,
                 apply_intent: *apply_intent,
-                allow_live_system_mutation: *allow_live_system_mutation,
             },
             TransactionOperation::Update {
                 packages,
@@ -198,14 +183,12 @@ impl From<&TransactionOperation> for PackageCommand {
                 dry_run,
                 yes,
                 apply_intent,
-                allow_live_system_mutation,
             } => Self::Update {
                 packages: packages.clone(),
                 security_only: *security_only,
                 dry_run: *dry_run,
                 yes: *yes,
                 apply_intent: *apply_intent,
-                allow_live_system_mutation: *allow_live_system_mutation,
             },
         }
     }
@@ -218,15 +201,13 @@ async fn run_cli_command(command: PackageCommand, db_path: String, root: String)
             allow_downgrade,
             skip_deps,
             dry_run,
-            no_scripts,
             yes,
             apply_intent,
-            allow_live_system_mutation,
         } => {
             require_live_ack(
                 "conaryd install",
                 dry_run,
-                MutationIntent::from_apply_intent(apply_intent, allow_live_system_mutation),
+                MutationIntent::from_apply_intent(apply_intent),
             )?;
             for package in packages {
                 let mut opts = InstallOptions::default();
@@ -234,7 +215,6 @@ async fn run_cli_command(command: PackageCommand, db_path: String, root: String)
                 opts.root = &root;
                 opts.dry_run = dry_run;
                 opts.no_deps = skip_deps;
-                opts.no_scripts = no_scripts;
                 opts.sandbox_mode = SandboxMode::Always;
                 opts.allow_downgrade = allow_downgrade;
                 opts.yes = yes;
@@ -245,10 +225,8 @@ async fn run_cli_command(command: PackageCommand, db_path: String, root: String)
             packages,
             cascade,
             remove_orphans,
-            no_scripts,
-            purge_files,
+            purge,
             apply_intent,
-            allow_live_system_mutation,
         } => {
             if cascade || remove_orphans {
                 bail!(
@@ -258,21 +236,10 @@ async fn run_cli_command(command: PackageCommand, db_path: String, root: String)
             require_live_ack(
                 "conaryd remove",
                 false,
-                MutationIntent::from_apply_intent(apply_intent, allow_live_system_mutation),
+                MutationIntent::from_apply_intent(apply_intent),
             )?;
             for package in packages {
-                cmd_remove(
-                    &package,
-                    &db_path,
-                    &root,
-                    None,
-                    None,
-                    no_scripts,
-                    SandboxMode::Always,
-                    purge_files,
-                    LegacyReplayOptions::default(),
-                )
-                .await?;
+                cmd_remove(&package, &db_path, None, None, SandboxMode::Always, purge).await?;
             }
         }
         PackageCommand::Update {
@@ -281,12 +248,11 @@ async fn run_cli_command(command: PackageCommand, db_path: String, root: String)
             dry_run,
             yes,
             apply_intent,
-            allow_live_system_mutation,
         } => {
             require_live_ack(
                 "conaryd update",
                 dry_run,
-                MutationIntent::from_apply_intent(apply_intent, allow_live_system_mutation),
+                MutationIntent::from_apply_intent(apply_intent),
             )?;
             if packages.is_empty() {
                 cmd_update(
@@ -295,13 +261,11 @@ async fn run_cli_command(command: PackageCommand, db_path: String, root: String)
                     &root,
                     security_only,
                     dry_run,
-                    false,
                     SandboxMode::Always,
                     None,
                     yes,
                     None,
                     None,
-                    LegacyReplayOptions::default(),
                 )
                 .await?;
             } else {
@@ -312,13 +276,11 @@ async fn run_cli_command(command: PackageCommand, db_path: String, root: String)
                         &root,
                         security_only,
                         dry_run,
-                        false,
                         SandboxMode::Always,
                         None,
                         yes,
                         None,
                         None,
-                        LegacyReplayOptions::default(),
                     )
                     .await?;
                 }
@@ -394,8 +356,26 @@ mod tests {
     use super::*;
     use crate::daemon::{DaemonConfig, SystemLock};
     use conary_core::db::models::{FileEntry, InstallSource, Trove, TroveType};
+    use conary_core::payload::{PayloadContentAuthority, PayloadNode, ResolvedPayloadNode};
     use std::sync::atomic::AtomicBool;
     use tempfile::TempDir;
+
+    fn regular_file_entry(
+        path: &str,
+        content: &[u8],
+        permissions: u32,
+        trove_id: i64,
+    ) -> FileEntry {
+        FileEntry::new(
+            path.to_string(),
+            ResolvedPayloadNode::from_numeric_source(PayloadNode::regular(permissions)).unwrap(),
+            Some(PayloadContentAuthority {
+                sha256: conary_core::hash::sha256(content),
+                size: content.len() as u64,
+            }),
+            trove_id,
+        )
+    }
 
     fn create_test_state() -> (Arc<DaemonState>, TempDir) {
         let temp_dir = TempDir::new().unwrap();
@@ -414,7 +394,10 @@ mod tests {
         let system_lock = SystemLock::try_acquire(&lock_path)
             .unwrap()
             .expect("test daemon lock should be acquirable");
-        (Arc::new(DaemonState::new(config, system_lock)), temp_dir)
+        (
+            Arc::new(DaemonState::new(config, system_lock).unwrap()),
+            temp_dir,
+        )
     }
 
     #[tokio::test]
@@ -455,14 +438,59 @@ mod tests {
     }
 
     #[test]
-    fn package_executor_accepts_old_ack_as_compatibility_alias() {
+    fn package_executor_rejects_removed_ack_field() {
+        let spec = serde_json::json!([
+            {
+                "type": "install",
+                "packages": ["fixture"],
+                "allow_live_system_mutation": true
+            }
+        ]);
+
+        let err = parse_operations(spec).expect_err("removed acknowledgement field must fail");
         assert!(
-            require_live_ack(
-                "conaryd install",
-                false,
-                MutationIntent::DeprecatedLiveSystemMutationFlag,
-            )
-            .is_ok()
+            format!("{err:#}").contains("unknown field `allow_live_system_mutation`"),
+            "{err:#}"
+        );
+    }
+
+    #[test]
+    fn package_executor_rejects_removed_lifecycle_bypass_field() {
+        for spec in [
+            serde_json::json!([
+                {
+                    "type": "install",
+                    "packages": ["fixture"],
+                    "no_scripts": true
+                }
+            ]),
+            serde_json::json!([
+                {
+                    "type": "remove",
+                    "packages": ["fixture"],
+                    "no_scripts": true
+                }
+            ]),
+        ] {
+            let err = parse_operations(spec).expect_err("removed lifecycle bypass field must fail");
+            assert!(
+                format!("{err:#}").contains("unknown field `no_scripts`"),
+                "{err:#}"
+            );
+        }
+
+        let err = serde_json::from_value::<crate::daemon::routes::PackageOperationRequest>(
+            serde_json::json!({
+                "packages": ["fixture"],
+                "options": {
+                    "no_scripts": true
+                }
+            }),
+        )
+        .expect_err("convenience package request must reject the lifecycle bypass field");
+        assert!(
+            err.to_string().contains("unknown field `no_scripts`"),
+            "{err}"
         );
     }
 
@@ -480,15 +508,10 @@ mod tests {
                 "1.0.0".to_string(),
                 TroveType::Package,
                 InstallSource::Repository,
+                conary_core::repository::versioning::VersionScheme::Conary,
             );
             let trove_id = trove.insert(&conn).unwrap();
-            let mut file = FileEntry::new(
-                "/usr/bin/fixture".to_string(),
-                "0".repeat(64),
-                "fixture".len() as i64,
-                0o100755,
-                trove_id,
-            );
+            let mut file = regular_file_entry("/usr/bin/fixture", b"fixture", 0o755, trove_id);
             file.insert(&conn).unwrap();
         }
 
@@ -498,8 +521,7 @@ mod tests {
                 "packages": ["fixture"],
                 "cascade": false,
                 "remove_orphans": false,
-                "no_scripts": true,
-                "allow_live_system_mutation": true
+                "apply_intent": true
             }
         ]);
 

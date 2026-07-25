@@ -3,8 +3,10 @@
 //! Repository and RepositoryPackage models - remote package sources
 
 use crate::error::{Error, Result};
-use crate::version::VersionConstraint;
+use crate::repository::versioning::VersionScheme;
+use crate::repository::{RepositoryFormat, RepositoryParserConfig, RepositoryTrustPolicy};
 use rusqlite::{Connection, OptionalExtension, Row, params};
+use std::io;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SecurityAdvisorySupport {
@@ -35,6 +37,30 @@ impl SecurityAdvisorySupport {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum RepositoryOwnership {
+    #[default]
+    Operator,
+    RemiConfig,
+}
+
+impl RepositoryOwnership {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Operator => "operator",
+            Self::RemiConfig => "remi-config",
+        }
+    }
+
+    fn from_db(value: &str) -> std::result::Result<Self, String> {
+        match value {
+            "operator" => Ok(Self::Operator),
+            "remi-config" => Ok(Self::RemiConfig),
+            other => Err(format!("unknown persisted repository ownership '{other}'")),
+        }
+    }
+}
+
 /// Repository represents a remote package source
 #[derive(Debug, Clone)]
 pub struct Repository {
@@ -47,15 +73,14 @@ pub struct Repository {
     pub content_url: Option<String>,
     pub enabled: bool,
     pub priority: i32,
-    pub gpg_check: bool,
-    /// When true, packages MUST have valid GPG signatures - missing signatures are errors
-    pub gpg_strict: bool,
-    pub gpg_key_url: Option<String>,
+    /// Exact ecosystem-native authority used to authenticate metadata and
+    /// package payloads. Native repositories require a matching policy.
+    pub trust_policy: Option<RepositoryTrustPolicy>,
     pub metadata_expire: i32,
     pub last_sync: Option<String>,
     pub created_at: Option<String>,
     /// Default resolution strategy for packages without explicit routing entries
-    /// Values: "binary", "remi", "recipe", "delegate", "legacy", or None
+    /// Values: "binary", "remi", or None
     pub default_strategy: Option<String>,
     /// For "remi" strategy: the Remi server endpoint URL
     pub default_strategy_endpoint: Option<String>,
@@ -69,14 +94,21 @@ pub struct Repository {
     pub tuf_root_url: Option<String>,
     /// Whether this source publishes security-advisory metadata Conary can trust.
     pub security_advisory_support: SecurityAdvisorySupport,
+    /// Exact package-manager metadata grammar used by this source.
+    pub package_format: RepositoryFormat,
+    /// Exact typed construction data for the package-manager metadata parser.
+    pub parser_config: Option<RepositoryParserConfig>,
+    /// Authority that owns the repository definition.
+    pub managed_by: RepositoryOwnership,
 }
 
 impl Repository {
     /// Column list for SELECT queries.
-    const COLUMNS: &'static str = "id, name, url, content_url, enabled, priority, gpg_check, \
-         gpg_strict, gpg_key_url, metadata_expire, last_sync, created_at, \
+    const COLUMNS: &'static str = "id, name, url, content_url, enabled, priority, \
+         trust_policy_json, metadata_expire, last_sync, created_at, \
          default_strategy, default_strategy_endpoint, default_strategy_distro, \
-         tuf_enabled, tuf_root_version, tuf_root_url, security_advisory_support";
+         tuf_enabled, tuf_root_version, tuf_root_url, security_advisory_support, \
+         package_format, parser_config_json, managed_by";
 
     /// Create a new Repository
     pub fn new(name: String, url: String) -> Self {
@@ -87,9 +119,7 @@ impl Repository {
             content_url: None,
             enabled: true,
             priority: 0,
-            gpg_check: true,
-            gpg_strict: true,
-            gpg_key_url: None,
+            trust_policy: None,
             metadata_expire: 3600, // Default: 1 hour
             last_sync: None,
             created_at: None,
@@ -100,6 +130,9 @@ impl Repository {
             tuf_root_version: None,
             tuf_root_url: None,
             security_advisory_support: SecurityAdvisorySupport::Unknown,
+            package_format: RepositoryFormat::Unspecified,
+            parser_config: None,
+            managed_by: RepositoryOwnership::Operator,
         }
     }
 
@@ -116,20 +149,159 @@ impl Repository {
         self.content_url.as_deref().unwrap_or(&self.url)
     }
 
+    pub fn set_parser_config(&mut self, config: RepositoryParserConfig) -> Result<()> {
+        config.validate()?;
+        self.package_format = config.format();
+        self.parser_config = Some(config);
+        Ok(())
+    }
+
+    pub fn set_trust_policy(&mut self, policy: RepositoryTrustPolicy) -> Result<()> {
+        policy.validate()?;
+        if self.package_format != RepositoryFormat::Unspecified
+            && policy.format() != self.package_format
+        {
+            return Err(Error::ConfigError(format!(
+                "repository '{}' parser format '{}' cannot use '{}' trust policy",
+                self.name,
+                self.package_format.as_str(),
+                policy.format().as_str()
+            )));
+        }
+        self.trust_policy = Some(policy);
+        Ok(())
+    }
+
+    pub fn require_trust_policy(&self) -> Result<&RepositoryTrustPolicy> {
+        let policy = self.trust_policy.as_ref().ok_or_else(|| {
+            Error::ConfigError(format!(
+                "repository '{}' has no ecosystem-native trust policy",
+                self.name
+            ))
+        })?;
+        policy.validate()?;
+        if policy.format() != self.package_format {
+            return Err(Error::ConfigError(format!(
+                "repository '{}' trust policy is '{}' but its parser format is '{}'",
+                self.name,
+                policy.format().as_str(),
+                self.package_format.as_str()
+            )));
+        }
+        Ok(policy)
+    }
+
+    pub fn require_parser_config(&self) -> Result<&RepositoryParserConfig> {
+        let config = self.parser_config.as_ref().ok_or_else(|| {
+            Error::InitError(format!(
+                "repository '{}' has no typed parser configuration",
+                self.name
+            ))
+        })?;
+        config.validate()?;
+        if config.format() != self.package_format {
+            return Err(Error::InitError(format!(
+                "repository '{}' parser configuration is '{}' but its format projection is '{}'",
+                self.name,
+                config.format().as_str(),
+                self.package_format.as_str()
+            )));
+        }
+        Ok(config)
+    }
+
+    fn parser_config_json(&self) -> Result<Option<String>> {
+        self.parser_config
+            .as_ref()
+            .map(RepositoryParserConfig::to_json)
+            .transpose()
+    }
+
+    fn trust_policy_json(&self) -> Result<Option<String>> {
+        self.trust_policy
+            .as_ref()
+            .map(RepositoryTrustPolicy::to_json)
+            .transpose()
+    }
+
+    fn validate_parser_contract(&self) -> Result<()> {
+        match self.default_strategy.as_deref() {
+            None | Some("binary") | Some("static") => {}
+            Some("remi") => {
+                if self.default_strategy_endpoint.is_none() {
+                    return Err(Error::ConfigError(format!(
+                        "repository '{}' declares Remi resolution without an endpoint",
+                        self.name
+                    )));
+                }
+                let profile = self.default_strategy_distro.as_deref().ok_or_else(|| {
+                    Error::ConfigError(format!(
+                        "repository '{}' declares Remi resolution without a public profile",
+                        self.name
+                    ))
+                })?;
+                if crate::repository::supported_profiles::profile_by_public_id(profile).is_none() {
+                    return Err(Error::ConfigError(format!(
+                        "repository '{}' declares unsupported Remi profile '{}'",
+                        self.name, profile
+                    )));
+                }
+            }
+            Some(other) => {
+                return Err(Error::ConfigError(format!(
+                    "repository '{}' declares unsupported default strategy '{}'",
+                    self.name, other
+                )));
+            }
+        }
+
+        match (&self.parser_config, self.package_format) {
+            (None, RepositoryFormat::Unspecified) => Ok(()),
+            (None, format) => Err(Error::InitError(format!(
+                "repository '{}' declares format '{}' without typed parser configuration",
+                self.name,
+                format.as_str()
+            ))),
+            (
+                Some(_),
+                RepositoryFormat::Arch | RepositoryFormat::Debian | RepositoryFormat::Fedora,
+            ) => {
+                self.require_parser_config()?;
+                self.require_trust_policy().map(|_| ())
+            }
+            (Some(_), RepositoryFormat::Json) => {
+                self.require_parser_config()?;
+                if self.trust_policy.is_some() {
+                    return Err(Error::ConfigError(format!(
+                        "repository '{}' uses Conary JSON metadata; native package trust policy is \
+                         not applicable",
+                        self.name
+                    )));
+                }
+                Ok(())
+            }
+            (Some(_), RepositoryFormat::Unspecified) => {
+                unreachable!("typed parser configuration cannot project to unspecified format")
+            }
+        }
+    }
+
     /// Insert this repository into the database
     pub fn insert(&mut self, conn: &Connection) -> Result<i64> {
-        conn.execute(
-            "INSERT INTO repositories (name, url, content_url, enabled, priority, gpg_check, gpg_strict, gpg_key_url, metadata_expire, default_strategy, default_strategy_endpoint, default_strategy_distro, tuf_enabled, tuf_root_version, tuf_root_url, security_advisory_support)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+        self.validate_parser_contract()?;
+        let parser_config_json = self.parser_config_json()?;
+        let trust_policy_json = self.trust_policy_json()?;
+        let inserted = conn.execute(
+            "INSERT INTO repositories (name, url, content_url, enabled, priority, trust_policy_json, metadata_expire, default_strategy, default_strategy_endpoint, default_strategy_distro, tuf_enabled, tuf_root_version, tuf_root_url, security_advisory_support, package_format, parser_config_json, managed_by)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
+             ON CONFLICT(name) DO NOTHING",
             params![
                 &self.name,
                 &self.url,
                 &self.content_url,
                 self.enabled as i32,
                 &self.priority,
-                self.gpg_check as i32,
-                self.gpg_strict as i32,
-                &self.gpg_key_url,
+                trust_policy_json,
                 &self.metadata_expire,
                 &self.default_strategy,
                 &self.default_strategy_endpoint,
@@ -138,8 +310,17 @@ impl Repository {
                 &self.tuf_root_version,
                 &self.tuf_root_url,
                 self.security_advisory_support.as_str(),
+                self.package_format.as_str(),
+                parser_config_json,
+                self.managed_by.as_str(),
             ],
         )?;
+        if inserted == 0 {
+            return Err(Error::ConflictError(format!(
+                "repository '{}' already exists",
+                self.name
+            )));
+        }
 
         let id = conn.last_insert_rowid();
         self.id = Some(id);
@@ -193,23 +374,25 @@ impl Repository {
         let id = self.id.ok_or_else(|| {
             crate::error::Error::MissingId("Cannot update repository without ID".to_string())
         })?;
+        self.validate_parser_contract()?;
+        let parser_config_json = self.parser_config_json()?;
+        let trust_policy_json = self.trust_policy_json()?;
 
         conn.execute(
             "UPDATE repositories SET name = ?1, url = ?2, content_url = ?3, enabled = ?4, priority = ?5,
-             gpg_check = ?6, gpg_strict = ?7, gpg_key_url = ?8, metadata_expire = ?9, last_sync = ?10,
-             default_strategy = ?11, default_strategy_endpoint = ?12, default_strategy_distro = ?13,
-             tuf_enabled = ?14, tuf_root_version = ?15, tuf_root_url = ?16,
-             security_advisory_support = ?17
-             WHERE id = ?18",
+             trust_policy_json = ?6, metadata_expire = ?7, last_sync = ?8,
+             default_strategy = ?9, default_strategy_endpoint = ?10, default_strategy_distro = ?11,
+             tuf_enabled = ?12, tuf_root_version = ?13, tuf_root_url = ?14,
+             security_advisory_support = ?15, package_format = ?16, parser_config_json = ?17,
+             managed_by = ?18
+             WHERE id = ?19",
             params![
                 &self.name,
                 &self.url,
                 &self.content_url,
                 self.enabled as i32,
                 &self.priority,
-                self.gpg_check as i32,
-                self.gpg_strict as i32,
-                &self.gpg_key_url,
+                trust_policy_json,
                 &self.metadata_expire,
                 &self.last_sync,
                 &self.default_strategy,
@@ -219,6 +402,9 @@ impl Repository {
                 &self.tuf_root_version,
                 &self.tuf_root_url,
                 self.security_advisory_support.as_str(),
+                self.package_format.as_str(),
+                parser_config_json,
+                self.managed_by.as_str(),
                 id,
             ],
         )?;
@@ -234,6 +420,53 @@ impl Repository {
 
     /// Convert a database row to a Repository
     fn from_row(row: &Row) -> rusqlite::Result<Self> {
+        let package_format_value = row.get::<_, String>(17)?;
+        let package_format = RepositoryFormat::from_db(&package_format_value).map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(
+                17,
+                rusqlite::types::Type::Text,
+                Box::new(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    error.to_string(),
+                )),
+            )
+        })?;
+        let parser_config = row
+            .get::<_, Option<String>>(18)?
+            .map(|value| RepositoryParserConfig::from_json(&value))
+            .transpose()
+            .map_err(|error| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    18,
+                    rusqlite::types::Type::Text,
+                    Box::new(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        error.to_string(),
+                    )),
+                )
+            })?;
+        let trust_policy = row
+            .get::<_, Option<String>>(6)?
+            .map(|value| RepositoryTrustPolicy::from_json(&value))
+            .transpose()
+            .map_err(|error| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    6,
+                    rusqlite::types::Type::Text,
+                    Box::new(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        error.to_string(),
+                    )),
+                )
+            })?;
+        let ownership_value = row.get::<_, String>(19)?;
+        let managed_by = RepositoryOwnership::from_db(&ownership_value).map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(
+                19,
+                rusqlite::types::Type::Text,
+                Box::new(io::Error::new(io::ErrorKind::InvalidData, error)),
+            )
+        })?;
         Ok(Self {
             id: Some(row.get(0)?),
             name: row.get(1)?,
@@ -241,21 +474,22 @@ impl Repository {
             content_url: row.get(3)?,
             enabled: row.get::<_, i32>(4)? != 0,
             priority: row.get(5)?,
-            gpg_check: row.get::<_, i32>(6)? != 0,
-            gpg_strict: row.get::<_, i32>(7)? != 0,
-            gpg_key_url: row.get(8)?,
-            metadata_expire: row.get(9)?,
-            last_sync: row.get(10)?,
-            created_at: row.get(11)?,
-            default_strategy: row.get(12)?,
-            default_strategy_endpoint: row.get(13)?,
-            default_strategy_distro: row.get(14)?,
-            tuf_enabled: row.get::<_, i32>(15)? != 0,
-            tuf_root_version: row.get(16)?,
-            tuf_root_url: row.get(17)?,
+            trust_policy,
+            metadata_expire: row.get(7)?,
+            last_sync: row.get(8)?,
+            created_at: row.get(9)?,
+            default_strategy: row.get(10)?,
+            default_strategy_endpoint: row.get(11)?,
+            default_strategy_distro: row.get(12)?,
+            tuf_enabled: row.get::<_, i32>(13)? != 0,
+            tuf_root_version: row.get(14)?,
+            tuf_root_url: row.get(15)?,
             security_advisory_support: SecurityAdvisorySupport::from_db(
-                row.get::<_, String>(18)?.as_str(),
+                row.get::<_, String>(16)?.as_str(),
             ),
+            package_format,
+            parser_config,
+            managed_by,
         })
     }
 }
@@ -273,7 +507,6 @@ pub struct RepositoryPackage {
     pub checksum: String,
     pub size: i64,
     pub download_url: String,
-    pub dependencies: Option<String>,
     pub metadata: Option<String>,
     pub synced_at: Option<String>,
     /// Whether this update is a security update
@@ -288,23 +521,23 @@ pub struct RepositoryPackage {
     pub advisory_url: Option<String>,
     /// Distro identity this package came from (e.g. "fedora", "debian", "arch").
     pub distro: Option<String>,
-    /// Native version comparison scheme (rpm, debian, arch).
-    pub version_scheme: Option<String>,
+    /// Exact native version grammar and comparison authority.
+    pub version_scheme: VersionScheme,
     /// Cross-distro canonical identity for this package.
     pub canonical_id: Option<i64>,
 }
 
 impl RepositoryPackage {
     /// Column list for SELECT queries.
-    const COLUMNS: &'static str = "id, repository_id, name, version, package_release, architecture, description, \
-         checksum, size, download_url, dependencies, metadata, synced_at, \
+    pub const COLUMNS: &'static str = "id, repository_id, name, version, package_release, architecture, description, \
+         checksum, size, download_url, metadata, synced_at, \
          is_security_update, severity, cve_ids, advisory_id, advisory_url, \
          distro, version_scheme, canonical_id";
 
     /// Column list for SELECT queries with table alias prefix (rp.).
-    const COLUMNS_PREFIXED: &'static str = "rp.id, rp.repository_id, rp.name, rp.version, \
+    pub const COLUMNS_PREFIXED: &'static str = "rp.id, rp.repository_id, rp.name, rp.version, \
          rp.package_release, rp.architecture, rp.description, rp.checksum, rp.size, rp.download_url, \
-         rp.dependencies, rp.metadata, rp.synced_at, rp.is_security_update, \
+         rp.metadata, rp.synced_at, rp.is_security_update, \
          rp.severity, rp.cve_ids, rp.advisory_id, rp.advisory_url, rp.distro, \
          rp.version_scheme, rp.canonical_id";
 
@@ -312,15 +545,16 @@ impl RepositoryPackage {
     const BATCH_INSERT_SQL: &'static str = "\
          INSERT INTO repository_packages \
          (repository_id, name, version, package_release, architecture, description, checksum, size, \
-          download_url, dependencies, metadata, is_security_update, severity, cve_ids, \
+          download_url, metadata, is_security_update, severity, cve_ids, \
           advisory_id, advisory_url, distro, version_scheme, canonical_id) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)";
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)";
 
     /// Create a new RepositoryPackage
     pub fn new(
         repository_id: i64,
         name: String,
         version: String,
+        version_scheme: VersionScheme,
         checksum: String,
         size: i64,
         download_url: String,
@@ -336,7 +570,6 @@ impl RepositoryPackage {
             checksum,
             size,
             download_url,
-            dependencies: None,
             metadata: None,
             synced_at: None,
             is_security_update: false,
@@ -345,7 +578,7 @@ impl RepositoryPackage {
             advisory_id: None,
             advisory_url: None,
             distro: None,
-            version_scheme: None,
+            version_scheme,
             canonical_id: None,
         }
     }
@@ -354,9 +587,9 @@ impl RepositoryPackage {
     pub fn insert(&mut self, conn: &Connection) -> Result<i64> {
         conn.execute(
             "INSERT INTO repository_packages
-             (repository_id, name, version, package_release, architecture, description, checksum, size, download_url, dependencies, metadata,
+             (repository_id, name, version, package_release, architecture, description, checksum, size, download_url, metadata,
               is_security_update, severity, cve_ids, advisory_id, advisory_url, distro, version_scheme, canonical_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
             params![
                 &self.repository_id,
                 &self.name,
@@ -367,7 +600,6 @@ impl RepositoryPackage {
                 &self.checksum,
                 &self.size,
                 &self.download_url,
-                &self.dependencies,
                 &self.metadata,
                 self.is_security_update as i32,
                 &self.severity,
@@ -375,7 +607,7 @@ impl RepositoryPackage {
                 &self.advisory_id,
                 &self.advisory_url,
                 &self.distro,
-                &self.version_scheme,
+                self.version_scheme.as_str(),
                 &self.canonical_id,
             ],
         )?;
@@ -461,40 +693,6 @@ impl RepositoryPackage {
         Ok(())
     }
 
-    /// Parse dependencies from JSON field
-    ///
-    /// Returns a list of dependency package names. Filters out rpmlib() and file path dependencies.
-    pub fn parse_dependencies(&self) -> Result<Vec<String>> {
-        Ok(self
-            .parse_dependency_requests()?
-            .into_iter()
-            .map(|(name, _constraint)| name)
-            .collect())
-    }
-
-    /// Parse dependencies from JSON field, preserving version constraints.
-    ///
-    /// Returns `(dependency_name, version_constraint)` pairs suitable for SAT solving.
-    /// Filters out rpmlib() and file path dependencies.
-    pub fn parse_dependency_requests(&self) -> Result<Vec<(String, VersionConstraint)>> {
-        if let Some(deps_json) = &self.dependencies {
-            let deps: Vec<String> = serde_json::from_str(deps_json)
-                .map_err(|e| Error::ParseError(format!("Failed to parse dependencies: {e}")))?;
-
-            // Filter out rpmlib() and file path dependencies (same as resolve_dependencies)
-            let filtered: Vec<(String, VersionConstraint)> = deps
-                .into_iter()
-                .filter(|dep| !dep.starts_with("rpmlib(") && !dep.starts_with('/'))
-                .filter(|dep| !is_conditional_rpm_dependency(dep))
-                .map(|dep| parse_dependency_request(&dep))
-                .collect();
-
-            Ok(filtered)
-        } else {
-            Ok(Vec::new())
-        }
-    }
-
     /// List all packages in all enabled repositories
     pub fn list_all(conn: &Connection) -> Result<Vec<Self>> {
         let sql = format!(
@@ -564,7 +762,7 @@ impl RepositoryPackage {
     }
 
     /// Convert a database row to a RepositoryPackage
-    fn from_row(row: &Row) -> rusqlite::Result<Self> {
+    pub fn from_row(row: &Row) -> rusqlite::Result<Self> {
         Ok(Self {
             id: Some(row.get(0)?),
             repository_id: row.get(1)?,
@@ -576,17 +774,16 @@ impl RepositoryPackage {
             checksum: row.get(7)?,
             size: row.get(8)?,
             download_url: row.get(9)?,
-            dependencies: row.get(10)?,
-            metadata: row.get(11)?,
-            synced_at: row.get(12)?,
-            is_security_update: row.get::<_, i32>(13)? != 0,
-            severity: row.get(14)?,
-            cve_ids: row.get(15)?,
-            advisory_id: row.get(16)?,
-            advisory_url: row.get(17)?,
-            distro: row.get(18)?,
-            version_scheme: row.get(19)?,
-            canonical_id: row.get(20)?,
+            metadata: row.get(10)?,
+            synced_at: row.get(11)?,
+            is_security_update: row.get::<_, i32>(12)? != 0,
+            severity: row.get(13)?,
+            cve_ids: row.get(14)?,
+            advisory_id: row.get(15)?,
+            advisory_url: row.get(16)?,
+            distro: row.get(17)?,
+            version_scheme: version_scheme_from_row(row, 18)?,
+            canonical_id: row.get(19)?,
         })
     }
 
@@ -661,7 +858,6 @@ impl RepositoryPackage {
             &pkg.checksum,
             &pkg.size,
             &pkg.download_url,
-            &pkg.dependencies,
             &pkg.metadata,
             pkg.is_security_update as i32,
             &pkg.severity,
@@ -669,151 +865,27 @@ impl RepositoryPackage {
             &pkg.advisory_id,
             &pkg.advisory_url,
             &pkg.distro,
-            &pkg.version_scheme,
+            pkg.version_scheme.as_str(),
             &pkg.canonical_id,
         ])?;
         Ok(())
     }
 }
 
-fn parse_dependency_request(dep: &str) -> (String, VersionConstraint) {
-    const OPS: [&str; 5] = ["<=", ">=", "=", "<", ">"];
-
-    for op in OPS {
-        if let Some((name, version)) = dep.split_once(op) {
-            let name = name.trim();
-            let version = version.trim();
-            if name.is_empty() || version.is_empty() {
-                continue;
-            }
-
-            let raw_constraint = format!("{op} {version}");
-            let constraint =
-                VersionConstraint::parse(&raw_constraint).unwrap_or(VersionConstraint::Any);
-            return (name.to_string(), constraint);
-        }
-    }
-
-    (dep.trim().to_string(), VersionConstraint::Any)
-}
-
-fn is_conditional_rpm_dependency(dep: &str) -> bool {
-    dep.contains(" if ")
-        || dep.contains(" unless ")
-        || dep.contains(" with ")
-        || dep.contains(" without ")
-        || dep.starts_with("((")
+pub(crate) fn version_scheme_from_row(
+    row: &Row<'_>,
+    index: usize,
+) -> rusqlite::Result<VersionScheme> {
+    let raw = row.get::<_, String>(index)?;
+    raw.parse().map_err(|error: String| {
+        rusqlite::Error::FromSqlConversionFailure(
+            index,
+            rusqlite::types::Type::Text,
+            Box::new(io::Error::new(io::ErrorKind::InvalidData, error)),
+        )
+    })
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use rusqlite::Connection;
-
-    #[test]
-    fn repository_security_advisory_support_defaults_to_unknown() {
-        let conn = Connection::open_in_memory().unwrap();
-        crate::db::schema::migrate(&conn).unwrap();
-
-        let mut repo = Repository::new(
-            "security-default".to_string(),
-            "https://example.test".to_string(),
-        );
-        let id = repo.insert(&conn).unwrap();
-
-        let loaded = Repository::find_by_id(&conn, id).unwrap().unwrap();
-        assert_eq!(
-            loaded.security_advisory_support,
-            SecurityAdvisorySupport::Unknown
-        );
-    }
-
-    #[test]
-    fn repository_security_advisory_support_round_trips() {
-        let conn = Connection::open_in_memory().unwrap();
-        crate::db::schema::migrate(&conn).unwrap();
-
-        let mut repo = Repository::new(
-            "security-supported".to_string(),
-            "https://example.test".to_string(),
-        );
-        repo.security_advisory_support = SecurityAdvisorySupport::Supported;
-        let id = repo.insert(&conn).unwrap();
-
-        let loaded = Repository::find_by_id(&conn, id).unwrap().unwrap();
-        assert_eq!(
-            loaded.security_advisory_support,
-            SecurityAdvisorySupport::Supported
-        );
-    }
-
-    #[test]
-    fn repository_package_round_trips_package_release() {
-        let conn = Connection::open_in_memory().unwrap();
-        crate::db::schema::migrate(&conn).unwrap();
-
-        let mut repo = Repository::new(
-            "release-test".to_string(),
-            "https://example.test".to_string(),
-        );
-        let repo_id = repo.insert(&conn).unwrap();
-        let mut package = RepositoryPackage::new(
-            repo_id,
-            "hello".to_string(),
-            "1.0.0".to_string(),
-            "sha256:hello".to_string(),
-            42,
-            "/v1/chunks/hello".to_string(),
-        );
-        package.package_release = "2".to_string();
-        let id = package.insert(&conn).unwrap();
-        let loaded = RepositoryPackage::find_by_id(&conn, id).unwrap().unwrap();
-        assert_eq!(loaded.package_release, "2");
-    }
-
-    #[test]
-    fn parse_dependency_requests_preserves_version_constraints() {
-        let pkg = RepositoryPackage {
-            id: None,
-            repository_id: 1,
-            name: "kernel".to_string(),
-            version: "6.19.6-200.fc44".to_string(),
-            package_release: String::new(),
-            architecture: Some("x86_64".to_string()),
-            description: None,
-            checksum: "sha256:deadbeef".to_string(),
-            size: 1,
-            download_url: "https://example.invalid/kernel.rpm".to_string(),
-            dependencies: Some(
-                serde_json::to_string(&vec![
-                    "kernel-core-uname-r = 6.19.6-200.fc44.x86_64".to_string(),
-                    "coreutils >= 9.7".to_string(),
-                    "((linux-firmware >= 20150904-56.git6ebf5d57) if linux-firmware)".to_string(),
-                    "rpmlib(PayloadIsZstd) <= 5.4.18-1".to_string(),
-                    "/bin/sh".to_string(),
-                ])
-                .unwrap(),
-            ),
-            metadata: None,
-            synced_at: None,
-            is_security_update: false,
-            severity: None,
-            cve_ids: None,
-            advisory_id: None,
-            advisory_url: None,
-            distro: None,
-            version_scheme: None,
-            canonical_id: None,
-        };
-
-        let deps = pkg.parse_dependency_requests().unwrap();
-        assert_eq!(deps.len(), 2);
-        assert_eq!(deps[0].0, "kernel-core-uname-r");
-        assert_eq!(
-            deps[0].1,
-            VersionConstraint::parse("= 6.19.6-200.fc44.x86_64").unwrap()
-        );
-        assert_eq!(deps[1].0, "coreutils");
-        assert_eq!(deps[1].1, VersionConstraint::parse(">= 9.7").unwrap());
-    }
-}
+#[path = "repository/tests.rs"]
+mod tests;

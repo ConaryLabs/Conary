@@ -344,7 +344,8 @@ impl ResolutionPolicy {
 fn scheme_matches_flavor(scheme: VersionScheme, flavor: RepositoryDependencyFlavor) -> bool {
     matches!(
         (scheme, flavor),
-        (VersionScheme::Rpm, RepositoryDependencyFlavor::Rpm)
+        (VersionScheme::Conary, RepositoryDependencyFlavor::Conary)
+            | (VersionScheme::Rpm, RepositoryDependencyFlavor::Rpm)
             | (VersionScheme::Debian, RepositoryDependencyFlavor::Deb)
             | (VersionScheme::Arch, RepositoryDependencyFlavor::Arch)
     )
@@ -356,6 +357,7 @@ fn scheme_matches_flavor(scheme: VersionScheme, flavor: RepositoryDependencyFlav
 /// on flavor.
 fn scheme_to_flavor(scheme: VersionScheme) -> RepositoryDependencyFlavor {
     match scheme {
+        VersionScheme::Conary => RepositoryDependencyFlavor::Conary,
         VersionScheme::Rpm => RepositoryDependencyFlavor::Rpm,
         VersionScheme::Debian => RepositoryDependencyFlavor::Deb,
         VersionScheme::Arch => RepositoryDependencyFlavor::Arch,

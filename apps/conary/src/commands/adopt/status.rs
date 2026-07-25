@@ -13,7 +13,10 @@ use std::path::PathBuf;
 use crate::commands::format_bytes;
 
 /// Show adoption status
-pub async fn cmd_adopt_status(db_path: &str) -> Result<()> {
+pub async fn cmd_adopt_status(
+    db_path: &str,
+    requested_manager: Option<SystemPackageManager>,
+) -> Result<()> {
     let conn = open_db(db_path)?;
 
     let troves = Trove::list_all(&conn)?;
@@ -21,6 +24,7 @@ pub async fn cmd_adopt_status(db_path: &str) -> Result<()> {
     let mut adopted_track = 0;
     let mut adopted_full = 0;
     let mut taken = 0;
+    let mut captured_root = 0;
     let mut installed_file = 0;
     let mut installed_repo = 0;
     let mut explicit_count = 0;
@@ -31,6 +35,7 @@ pub async fn cmd_adopt_status(db_path: &str) -> Result<()> {
             InstallSource::AdoptedTrack => adopted_track += 1,
             InstallSource::AdoptedFull => adopted_full += 1,
             InstallSource::Taken => taken += 1,
+            InstallSource::CapturedRoot => captured_root += 1,
             InstallSource::File => installed_file += 1,
             InstallSource::Repository => installed_repo += 1,
         }
@@ -60,23 +65,17 @@ pub async fn cmd_adopt_status(db_path: &str) -> Result<()> {
     };
 
     // Get system package count using detected package manager
-    let pkg_mgr = SystemPackageManager::detect();
+    let pkg_mgr = SystemPackageManager::resolve(requested_manager)?;
     let (system_count, mgr_name) = if pkg_mgr.is_available() {
         let count = match pkg_mgr {
             SystemPackageManager::Rpm => {
-                conary_core::packages::rpm_query::list_installed_packages()
-                    .map(|p| p.len())
-                    .unwrap_or(0)
+                conary_core::packages::rpm_query::query_all_packages()?.len()
             }
             SystemPackageManager::Dpkg => {
-                conary_core::packages::dpkg_query::list_installed_packages()
-                    .map(|p| p.len())
-                    .unwrap_or(0)
+                conary_core::packages::dpkg_query::query_all_packages()?.len()
             }
             SystemPackageManager::Pacman => {
-                conary_core::packages::pacman_query::list_installed_packages()
-                    .map(|p| p.len())
-                    .unwrap_or(0)
+                conary_core::packages::pacman_query::query_all_packages()?.len()
             }
             _ => 0,
         };
@@ -98,6 +97,7 @@ pub async fn cmd_adopt_status(db_path: &str) -> Result<()> {
     println!("  Adopted (track): {}", adopted_track);
     println!("  Adopted (full):  {}", adopted_full);
     println!("  Taken over:      {}", taken);
+    println!("  Captured root:   {}", captured_root);
     println!("  Installed (file): {}", installed_file);
     println!("  Installed (repo): {}", installed_repo);
     println!();

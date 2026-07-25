@@ -97,15 +97,14 @@ fn status_summary(status: OperationStatus) -> &'static str {
 
 fn diagnostic_code_to_error_kind(code: PackagingDiagnosticCode) -> AgentErrorKind {
     match code {
-        PackagingDiagnosticCode::InferenceTrace
-        | PackagingDiagnosticCode::RecipeValidationWarning => AgentErrorKind::PartialFailure,
+        PackagingDiagnosticCode::RecipeValidationWarning => AgentErrorKind::PartialFailure,
         PackagingDiagnosticCode::RecipeValidationFailed
         | PackagingDiagnosticCode::BuildNetworkAccess
         | PackagingDiagnosticCode::UnpinnedDependency
         | PackagingDiagnosticCode::CommandRiskEvidence
         | PackagingDiagnosticCode::PublishGateFailed
         | PackagingDiagnosticCode::CcsV2ValidationFailed
-        | PackagingDiagnosticCode::CcsV2LegacyRejected
+        | PackagingDiagnosticCode::CcsFormatVersionRejected
         | PackagingDiagnosticCode::ProjectPublishPreflightFailed => {
             AgentErrorKind::ValidationFailed
         }

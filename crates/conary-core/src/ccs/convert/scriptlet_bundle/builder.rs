@@ -2,89 +2,55 @@
 
 use super::digest::evidence_digest;
 use super::entries::build_entries;
-use super::summary::{aggregate_status, decision_counts, summary_from_bundle};
+use super::summary::summary_from_bundle;
 use super::types::{ScriptletBundleBuild, ScriptletBundleInput};
-use crate::ccs::legacy_scriptlets::{
-    ForeignReplayPolicy, LEGACY_SCRIPTLET_SCHEMA_REVISION, LEGACY_SCRIPTLET_SCHEMA_V1,
-    LegacyScriptletBundle, SourceFormat, VersionScheme,
+use crate::ccs::native_lifecycle::{
+    NATIVE_LIFECYCLE_SCHEMA_REVISION, NATIVE_LIFECYCLE_SCHEMA_V1, NativeLifecycleBundle,
+    ScriptletFidelity, SourceFormat, VersionScheme,
 };
-use std::collections::BTreeMap;
+use crate::packages::common::PackageMetadata;
+use crate::packages::traits::{ExtractedFile, PackageFormat};
+use std::path::PathBuf;
 
-pub fn build_legacy_scriptlet_bundle(
+pub fn build_native_lifecycle_bundle(
     input: ScriptletBundleInput<'_>,
 ) -> anyhow::Result<ScriptletBundleBuild> {
-    let format = source_format(input.source_format)?;
-    let source_distro = input.source_distro.unwrap_or("unknown").to_string();
-    let source_release = input.source_release.unwrap_or("unknown").to_string();
-    let source_arch = input
-        .source_arch
-        .or(input.source_metadata.architecture.as_deref())
-        .unwrap_or("unknown")
-        .to_string();
+    let source_format = source_format(input.source_format)?;
+    let entries = build_entries(&input)?;
+    let scriptlet_fidelity = if entries.is_empty() {
+        ScriptletFidelity::NativeFree
+    } else {
+        ScriptletFidelity::NativeLifecycle
+    };
     let source_checksum = input
         .source_checksum
-        .filter(|checksum| valid_prefixed_sha256(checksum))
+        .map(validate_source_checksum)
+        .transpose()?
         .map(str::to_string);
-    let target_profile_id = input
-        .target_profile_id
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-
-    let entries = build_entries(&input)?;
-    let security_policy_intents = entries
-        .iter()
-        .flat_map(|entry| entry.security_policy_intents.iter().cloned())
-        .collect::<Vec<_>>();
-    let decision_counts = decision_counts(&entries);
-    let target_profile =
-        target_profile_id.and_then(crate::repository::supported_profiles::profile_by_public_id);
-    let (scriptlet_fidelity, target_compatibility, publication_policy, publication_status) =
-        aggregate_status(
-            &entries,
-            &decision_counts,
-            target_profile
-                .map(|profile| profile as &dyn crate::ccs::v2::validation::TargetProfileQuery),
-        );
-
-    let mut bundle = LegacyScriptletBundle {
-        schema: LEGACY_SCRIPTLET_SCHEMA_V1.to_string(),
-        schema_revision: LEGACY_SCRIPTLET_SCHEMA_REVISION,
-        source_format: format.clone(),
-        source_family: source_family(&format).to_string(),
-        source_distro: Some(source_distro),
-        source_release: Some(source_release),
-        source_arch: Some(source_arch),
+    let mut bundle = NativeLifecycleBundle {
+        schema: NATIVE_LIFECYCLE_SCHEMA_V1.to_string(),
+        schema_revision: NATIVE_LIFECYCLE_SCHEMA_REVISION,
+        source_format,
+        source_family: source_family(source_format).to_string(),
+        source_distro: input.source_distro.map(str::to_string),
+        source_release: input.source_release.map(str::to_string),
+        source_arch: input
+            .source_arch
+            .or(input.source_metadata.architecture.as_deref())
+            .map(str::to_string),
         source_package: input.source_metadata.name.clone(),
         source_version: input.source_metadata.version.clone(),
         source_checksum,
-        version_scheme: version_scheme(&format),
+        version_scheme: version_scheme(source_format),
         conversion_tool: input.conversion_tool.to_string(),
         conversion_tool_version: input.conversion_tool_version.to_string(),
-        conversion_policy: "passive-scriptlet-bundle-goal4".to_string(),
-        adapter_registry_digest: None,
-        target_policy_digest: None,
+        conversion_policy: "typed-source-lifecycle-v1".to_string(),
         evidence_digest: None,
-        target_compatibility,
-        allowed_targets: Vec::new(),
-        foreign_replay_policy: ForeignReplayPolicy::Deny,
-        publication_policy,
-        publication_status,
         scriptlet_fidelity,
-        decision_counts,
-        unsupported_class_counts: input.classification.unsupported_class_counts.clone(),
-        security_policy_intents,
         entries,
-        extra: BTreeMap::new(),
     };
 
-    if let Some(profile_id) = target_profile_id {
-        bundle.extra.insert(
-            "public_policy_target_profile_id".to_string(),
-            toml::Value::String(profile_id.to_string()),
-        );
-    }
-
-    let digest = evidence_digest(&bundle, &input)?;
+    let digest = evidence_digest(&bundle)?;
     bundle.evidence_digest = Some(digest.clone());
     for entry in &mut bundle.entries {
         entry.evidence_digest = Some(digest.clone());
@@ -92,9 +58,54 @@ pub fn build_legacy_scriptlet_bundle(
     bundle.validate()?;
 
     Ok(ScriptletBundleBuild {
-        summary: summary_from_bundle(&bundle, Some(digest)),
+        summary: summary_from_bundle(&bundle),
         bundle,
     })
+}
+
+/// Build the exact lifecycle authority used by direct native-package installs.
+///
+/// Native parsers must expose byte-preserving ABI entries for every script or
+/// hook they report. There is deliberately no flattened-scriptlet fallback.
+pub fn build_direct_native_lifecycle_bundle(
+    package: &dyn PackageFormat,
+    files: &[ExtractedFile],
+    source_format: &str,
+) -> anyhow::Result<Option<NativeLifecycleBundle>> {
+    let native_entries = package.native_scriptlet_abi();
+    if native_entries.is_empty() {
+        return Ok(None);
+    }
+
+    let metadata = PackageMetadata {
+        package_path: PathBuf::new(),
+        name: package.name().to_string(),
+        version: package.version().to_string(),
+        version_scheme: package.version_scheme(),
+        architecture: package.architecture().map(str::to_string),
+        description: package.description().map(str::to_string),
+        files: package.files().to_vec(),
+        requirements: package.requirements().to_vec(),
+        provides: package.provides().to_vec(),
+        relations: package.relations().to_vec(),
+        diagnostic_scriptlet_evidence: Vec::new(),
+        native_scriptlet_abi: native_entries.to_vec(),
+        config_files: package.config_files().to_vec(),
+    };
+    let build = build_native_lifecycle_bundle(ScriptletBundleInput {
+        source_metadata: &metadata,
+        final_metadata: &metadata,
+        source_files: files,
+        final_files: files,
+        source_format,
+        source_distro: None,
+        source_release: None,
+        source_arch: package.architecture(),
+        source_checksum: None,
+        conversion_tool: "conary-native-install",
+        conversion_tool_version: env!("CARGO_PKG_VERSION"),
+    })?;
+    Ok(Some(build.bundle))
 }
 
 fn source_format(value: &str) -> anyhow::Result<SourceFormat> {
@@ -106,202 +117,46 @@ fn source_format(value: &str) -> anyhow::Result<SourceFormat> {
     }
 }
 
-fn source_family(format: &SourceFormat) -> &'static str {
+fn source_family(format: SourceFormat) -> &'static str {
     match format {
         SourceFormat::Rpm => "rpm",
         SourceFormat::Deb => "deb",
         SourceFormat::Arch => "arch",
-        SourceFormat::Unknown(_) => "unknown",
     }
 }
 
-fn version_scheme(format: &SourceFormat) -> VersionScheme {
+fn version_scheme(format: SourceFormat) -> VersionScheme {
     match format {
         SourceFormat::Rpm => VersionScheme::Rpm,
         SourceFormat::Deb => VersionScheme::Deb,
         SourceFormat::Arch => VersionScheme::Arch,
-        SourceFormat::Unknown(_) => VersionScheme::Semver,
     }
 }
 
-fn valid_prefixed_sha256(value: &str) -> bool {
-    let Some(hex) = value.strip_prefix("sha256:") else {
-        return false;
-    };
-    hex.len() == 64 && hex.bytes().all(|byte| byte.is_ascii_hexdigit())
+fn validate_source_checksum(value: &str) -> anyhow::Result<&str> {
+    let hex = value
+        .strip_prefix("sha256:")
+        .ok_or_else(|| anyhow::anyhow!("source checksum is not prefixed SHA-256"))?;
+    anyhow::ensure!(
+        hex.len() == 64 && hex.bytes().all(|byte| byte.is_ascii_hexdigit()),
+        "source checksum is not prefixed SHA-256"
+    );
+    Ok(value)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::ScriptletBundleInput;
-    use super::super::test_support::{
-        bundle_for_metadata, known_report_with_effect, package_metadata, sysctl_effect,
-    };
-    use crate::ccs::convert::effects::ScriptletClassificationReport;
-    use crate::packages::traits::{Scriptlet, ScriptletPhase};
+    use super::*;
 
     #[test]
-    fn native_free_input_builds_zero_entry_bundle() {
-        let metadata = package_metadata("native-free", "1.0");
-        let files = Vec::new();
-        let classification = ScriptletClassificationReport::default();
-
-        let build = super::build_legacy_scriptlet_bundle(ScriptletBundleInput {
-            source_metadata: &metadata,
-            final_metadata: &metadata,
-            source_files: &files,
-            final_files: &files,
-            source_format: "rpm",
-            source_distro: Some("fedora-44"),
-            source_release: Some("44"),
-            source_arch: Some("x86_64"),
-            source_checksum: Some(
-                "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            ),
-            classification: &classification,
-            target_profile_id: None,
-            conversion_tool: "remi",
-            conversion_tool_version: "0.1.0",
-        })
-        .unwrap();
-
-        assert!(build.bundle.entries.is_empty());
-        assert_eq!(build.bundle.scriptlet_fidelity.as_str(), "native-free");
+    fn source_checksum_is_explicit_or_rejected() {
+        assert!(validate_source_checksum("sha256:not-a-digest").is_err());
         assert_eq!(
-            build.bundle.target_compatibility.as_str(),
-            "conary-portable"
+            validate_source_checksum(
+                "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            )
+            .unwrap(),
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         );
-        assert_eq!(
-            build.bundle.publication_policy.as_str(),
-            "public-if-no-blocked"
-        );
-        assert_eq!(build.bundle.publication_status.as_str(), "public");
-        assert_eq!(build.bundle.decision_counts.total(), 0);
-        assert_eq!(build.summary.scriptlet_fidelity, "native-free");
-        assert_eq!(build.summary.target_compatibility, "conary-portable");
-        assert_eq!(build.summary.publication_status, "public");
-        assert!(
-            build
-                .summary
-                .evidence_digest
-                .as_deref()
-                .unwrap()
-                .starts_with("sha256:")
-        );
-        build.bundle.validate().unwrap();
-    }
-
-    #[test]
-    fn tampered_body_after_build_fails_strict_bundle_validation() {
-        let mut metadata = package_metadata("tamper", "1.0");
-        metadata.scriptlets.push(Scriptlet {
-            phase: ScriptletPhase::PreInstall,
-            interpreter: "/bin/sh".to_string(),
-            content: "echo ok\n".to_string(),
-            flags: None,
-        });
-        let files = Vec::new();
-        let classification = ScriptletClassificationReport::default();
-        let mut build = bundle_for_metadata(&metadata, &files, &classification).unwrap();
-
-        build.bundle.entries[0].body.push_str("tampered\n");
-
-        assert!(build.bundle.validate().is_err());
-    }
-
-    #[test]
-    fn bundle_extra_records_public_policy_target_profile_id() {
-        let metadata = package_metadata("profiled", "1.0");
-        let files = Vec::new();
-        let classification = ScriptletClassificationReport::default();
-
-        let build = super::build_legacy_scriptlet_bundle(ScriptletBundleInput {
-            source_metadata: &metadata,
-            final_metadata: &metadata,
-            source_files: &files,
-            final_files: &files,
-            source_format: "rpm",
-            source_distro: Some("fedora-44"),
-            source_release: Some("44"),
-            source_arch: Some("x86_64"),
-            source_checksum: None,
-            classification: &classification,
-            target_profile_id: Some("fedora-44"),
-            conversion_tool: "remi",
-            conversion_tool_version: "0.1.0",
-        })
-        .unwrap();
-
-        assert_eq!(
-            build
-                .bundle
-                .extra
-                .get("public_policy_target_profile_id")
-                .and_then(toml::Value::as_str),
-            Some("fedora-44")
-        );
-    }
-
-    #[test]
-    fn bundle_extra_omits_public_policy_target_profile_id_when_absent() {
-        let metadata = package_metadata("profiled", "1.0");
-        let files = Vec::new();
-        let classification = ScriptletClassificationReport::default();
-
-        let build = super::build_legacy_scriptlet_bundle(ScriptletBundleInput {
-            source_metadata: &metadata,
-            final_metadata: &metadata,
-            source_files: &files,
-            final_files: &files,
-            source_format: "rpm",
-            source_distro: Some("fedora-44"),
-            source_release: Some("44"),
-            source_arch: Some("x86_64"),
-            source_checksum: None,
-            classification: &classification,
-            target_profile_id: None,
-            conversion_tool: "remi",
-            conversion_tool_version: "0.1.0",
-        })
-        .unwrap();
-
-        assert!(
-            !build
-                .bundle
-                .extra
-                .contains_key("public_policy_target_profile_id")
-        );
-    }
-
-    #[test]
-    fn missing_target_profile_keeps_sysctl_bundle_private_review() {
-        let mut metadata = package_metadata("profiled-sysctl", "1.0");
-        metadata.scriptlets.push(Scriptlet {
-            phase: ScriptletPhase::PostInstall,
-            interpreter: "/bin/sh".to_string(),
-            content: "sysctl -w kernel.example=1\n".to_string(),
-            flags: None,
-        });
-        let classification = known_report_with_effect(sysctl_effect("kernel.example"));
-
-        let build = super::build_legacy_scriptlet_bundle(ScriptletBundleInput {
-            source_metadata: &metadata,
-            final_metadata: &metadata,
-            source_files: &[],
-            final_files: &[],
-            source_format: "rpm",
-            source_distro: Some("fedora-44"),
-            source_release: Some("44"),
-            source_arch: Some("x86_64"),
-            source_checksum: None,
-            classification: &classification,
-            target_profile_id: None,
-            conversion_tool: "remi",
-            conversion_tool_version: "0.1.0",
-        })
-        .unwrap();
-
-        assert_eq!(build.bundle.publication_status.as_str(), "private-review");
-        assert_eq!(build.summary.publication_status, "private-review");
     }
 }

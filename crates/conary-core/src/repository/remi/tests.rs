@@ -31,143 +31,15 @@ fn test_job_status_parsing() {
 }
 
 #[test]
-fn job_status_parses_publication_refusal_report() {
-    let json = r#"{
-        "job_id": "35",
-        "status": "blocked",
-        "distro": "fedora",
-        "package": "kernel-core",
-        "version": "6.19.10-300.fc44",
-        "architecture": "x86_64",
-        "progress": null,
-        "error": null,
-        "manifest": null,
-        "publication": {
-            "publication_status": "blocked",
-            "scriptlet_fidelity": "blocked",
-            "target_compatibility": "blocked",
-            "summary_valid": true,
-            "message": "Converted package is blocked by legacy scriptlet policy",
-            "reason_codes": ["blocked-class-selinux", "unknown-command:kernel-install", "selinux"],
-            "blocked_reason_codes": ["blocked-class-selinux"],
-            "review_reason_codes": [],
-            "unknown_command_evidence": [{
-                "command": "kernel-install",
-                "command_provenance": "literal",
-                "argv": ["add", "<kver>", "<path>"],
-                "argument_provenance": ["literal", "literal", "literal"],
-                "execution_context": "unconditional",
-                "phase": "post-install",
-                "lifecycle_paths": ["post-install"],
-                "source": "shell-ast",
-                "environment": []
-            }],
-            "blocked_classes": ["selinux"],
-            "evidence_digest": "sha256:abc",
-            "curation_evidence_digest": null,
-            "review_artifact_available": true
-        }
-    }"#;
-
-    let status: JobStatus = serde_json::from_str(json).unwrap();
-
-    let publication = status.publication.expect("publication report");
-    assert_eq!(publication.blocked_classes, vec!["selinux"]);
-    assert_eq!(
-        publication.blocked_reason_codes,
-        vec!["blocked-class-selinux"]
-    );
-}
-
-#[test]
-fn terminal_publication_status_becomes_actionable_error() {
-    let status = JobStatus {
-        job_id: "35".to_string(),
-        status: "blocked".to_string(),
-        distro: "fedora".to_string(),
-        package: "kernel-core".to_string(),
-        version: Some("6.19.10-300.fc44".to_string()),
-        architecture: Some("x86_64".to_string()),
-        progress: None,
-        error: None,
-        manifest: None,
-        publication: Some(PublicationGateReport {
-            publication_status: "blocked".to_string(),
-            scriptlet_fidelity: "blocked".to_string(),
-            target_compatibility: "blocked".to_string(),
-            summary_valid: true,
-            message: "Converted package is blocked by legacy scriptlet policy".to_string(),
-            reason_codes: vec![
-                "blocked-class-initramfs".to_string(),
-                "blocked-class-kernel-module".to_string(),
-                "kernel-module".to_string(),
-                "initramfs".to_string(),
-            ],
-            blocked_reason_codes: vec![
-                "blocked-class-initramfs".to_string(),
-                "blocked-class-kernel-module".to_string(),
-            ],
-            review_reason_codes: vec![],
-            unknown_command_evidence: vec![crate::ccs::legacy_scriptlets::UnknownCommandEvidence {
-                command: "dracut".to_string(),
-                argv: vec!["--force".to_string()],
-                phase: Some("post-install".to_string()),
-                lifecycle_paths: vec!["post-install".to_string()],
-                source: crate::ccs::legacy_scriptlets::CommandEvidenceSource::ShellAst,
-                environment: Vec::new(),
-                ..crate::ccs::legacy_scriptlets::UnknownCommandEvidence::default()
-            }],
-            blocked_classes: vec!["initramfs".to_string(), "kernel-module".to_string()],
-            boot_security_intents: Vec::new(),
-            evidence_digest: Some("sha256:def".to_string()),
-            curation_evidence_digest: None,
-            review_artifact_available: true,
-        }),
-    };
-
-    let err = terminal_publication_status_error(&status).expect("terminal error");
-    let message = err.to_string();
-
-    assert!(message.contains("Remi refused to serve fedora/kernel-core"));
-    assert!(message.contains("blocked classes: initramfs, kernel-module"));
-    assert!(message.contains("kernel/initramfs/SELinux scriptlets"));
-    assert!(message.contains("public preview"));
-    assert!(!message.contains("\"publication_status\""));
-}
-
-#[test]
-fn direct_publication_refusal_http_error_is_pretty_printed() {
+fn unexpected_http_error_remains_a_protocol_error() {
     let core = RemiClientCore::new("https://remi.example.test").unwrap();
-    let body = r#"{
-        "status": "blocked",
-        "message": "Converted package is blocked by legacy scriptlet policy",
-        "distro": "fedora",
-        "package": "kernel-core",
-        "version": "6.19.10-300.fc44",
-        "scriptlets": {
-            "publication_status": "blocked",
-            "scriptlet_fidelity": "blocked",
-            "target_compatibility": "blocked",
-            "summary_valid": true,
-            "message": "Converted package is blocked by legacy scriptlet policy",
-            "reason_codes": ["blocked-class-selinux", "selinux"],
-            "blocked_reason_codes": ["blocked-class-selinux"],
-            "review_reason_codes": [],
-            "unknown_command_evidence": [],
-            "blocked_classes": ["selinux"],
-            "evidence_digest": "sha256:abc",
-            "curation_evidence_digest": null,
-            "review_artifact_available": true
-        }
-    }"#;
+    let body = r#"{"status":"unsupported-server-contract"}"#;
 
     let err = core.map_http_error(403, body.to_string(), "kernel-core", "fedora");
     let message = err.to_string();
 
-    assert!(message.contains("Remi refused to serve fedora/kernel-core"));
-    assert!(message.contains("blocked classes: selinux"));
-    assert!(message.contains("kernel/initramfs/SELinux scriptlets"));
-    assert!(!message.contains("\"scriptlets\""));
+    assert!(message.contains("HTTP 403"));
+    assert!(message.contains("unsupported-server-contract"));
 }
 
 #[test]
@@ -384,7 +256,7 @@ async fn fetch_package_requests_identity_encoding() {
 }
 
 #[tokio::test]
-async fn get_package_stops_on_blocked_job_status() {
+async fn get_package_rejects_retired_job_status() {
     use tokio::net::TcpListener;
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -395,7 +267,7 @@ async fn get_package_stops_on_blocked_job_status() {
             r#"{"status":"queued","job_id":"35","poll_url":"/v1/jobs/35","eta_seconds":1}"#;
         write_json_response(&listener, "202 Accepted", accepted).await;
 
-        let blocked = r#"{
+        let unsupported = r#"{
             "job_id": "35",
             "status": "blocked",
             "distro": "fedora",
@@ -404,24 +276,9 @@ async fn get_package_stops_on_blocked_job_status() {
             "architecture": "x86_64",
             "progress": null,
             "error": null,
-            "manifest": null,
-            "publication": {
-                "publication_status": "blocked",
-                "scriptlet_fidelity": "blocked",
-                "target_compatibility": "blocked",
-                "summary_valid": true,
-                "message": "Converted package uses unsupported legacy scriptlet classes for the Remi public preview: selinux",
-                "reason_codes": ["blocked-class-selinux", "selinux"],
-                "blocked_reason_codes": ["blocked-class-selinux"],
-                "review_reason_codes": [],
-                "unknown_command_evidence": [],
-                "blocked_classes": ["selinux"],
-                "evidence_digest": "sha256:abc",
-                "curation_evidence_digest": null,
-                "review_artifact_available": true
-            }
+            "manifest": null
         }"#;
-        write_json_response(&listener, "200 OK", blocked).await;
+        write_json_response(&listener, "200 OK", unsupported).await;
     });
 
     let client = RemiClient::new(&base_url).unwrap();
@@ -431,9 +288,7 @@ async fn get_package_stops_on_blocked_job_status() {
         .unwrap_err();
     let message = err.to_string();
 
-    assert!(message.contains("Remi refused to serve fedora/kernel-core"));
-    assert!(message.contains("blocked classes: selinux"));
-    assert!(!message.contains("Unknown job status"));
+    assert!(message.contains("unsupported conversion status blocked"));
 }
 
 async fn write_json_response(listener: &tokio::net::TcpListener, status: &str, body: &str) {

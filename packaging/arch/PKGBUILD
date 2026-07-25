@@ -10,7 +10,7 @@ pkgdesc='Early-preview Linux package manager with native-package adoption'
 arch=('x86_64')
 url='https://github.com/ConaryLabs/Conary'
 license=('MIT')
-depends=('openssl' 'xz')
+depends=('openssl' 'xz' 'libseccomp')
 makedepends=('cargo' 'pkg-config' 'cmake' 'perl')
 options=(!lto)
 install=conary.install
@@ -48,6 +48,13 @@ package() {
 
     # Man page
     install -Dm644 apps/conary/man/$pkgname.1 "$pkgdir/usr/share/man/man1/$pkgname.1"
+
+    # Booted-generation activation
+    install -Dm644 packaging/systemd/$pkgname-generation-activation.service \
+        "$pkgdir/usr/lib/systemd/system/$pkgname-generation-activation.service"
+    install -d "$pkgdir/usr/lib/systemd/system/multi-user.target.wants"
+    ln -s ../$pkgname-generation-activation.service \
+        "$pkgdir/usr/lib/systemd/system/multi-user.target.wants/$pkgname-generation-activation.service"
 
     # Shell completions
     install -d "$pkgdir/usr/share/bash-completion/completions"

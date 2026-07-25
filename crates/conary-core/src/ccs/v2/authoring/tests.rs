@@ -1,0 +1,511 @@
+// conary-core/src/ccs/v2/authoring/tests.rs
+
+use super::*;
+use crate::ccs::builder::test_support;
+use crate::repository::dependency_model::{
+    RepositoryCapabilityKind, RepositoryRequirementClause, RepositoryRequirementGroup,
+    RepositoryRequirementKind,
+};
+
+#[test]
+fn projection_requires_release_for_v2_package_authoring() {
+    let mut build = test_support::minimal_file_build_result("hello", "0.1.0", b"hello\n");
+    build.manifest.package.release.clear();
+
+    let error = project_build_result_to_v2(V2AuthoringInput {
+        build: &build,
+        local_dev: true,
+        debug_toml: None,
+    })
+    .unwrap_err();
+
+    assert!(
+        error.to_string().contains("release"),
+        "expected release diagnostic, got {error}"
+    );
+}
+
+#[test]
+fn projection_builds_complete_local_dev_package_authority() {
+    let mut build = test_support::minimal_file_build_result("hello", "0.1.0", b"hello\n");
+    build.manifest.package.release = "1".to_string();
+    build.manifest.package.kind = crate::ccs::v2::PackageKindTagV2::Package;
+
+    let projected = project_build_result_to_v2(V2AuthoringInput {
+        build: &build,
+        local_dev: true,
+        debug_toml: Some(build.manifest.to_toml().unwrap()),
+    })
+    .unwrap();
+
+    assert_eq!(projected.authority.identity.name, "hello");
+    assert_eq!(projected.authority.identity.release, "1");
+    assert_eq!(
+        projected.authority.provenance.hardening_level.as_deref(),
+        Some("host")
+    );
+    assert!(projected.authority.components["runtime"].default);
+    assert!(projected.payloads_by_path.contains_key("/hello"));
+}
+
+#[test]
+fn projection_gives_payloadless_packages_an_explicit_empty_default_component() {
+    let mut build = test_support::minimal_file_build_result("empty", "0.1.0", b"discarded");
+    build.files.clear();
+    build.components.clear();
+    build.blobs.clear();
+    build.total_size = 0;
+
+    let projected = project_build_result_to_v2(V2AuthoringInput {
+        build: &build,
+        local_dev: true,
+        debug_toml: None,
+    })
+    .unwrap();
+
+    let runtime = &projected.authority.components["runtime"];
+    assert!(runtime.default);
+    assert_eq!(runtime.file_count, 0);
+    assert_eq!(runtime.total_size, 0);
+    assert!(projected.payloads_by_path.is_empty());
+}
+
+#[test]
+fn projection_rejects_ambiguous_or_missing_default_component_authority() {
+    let mut build = test_support::minimal_file_build_result("hello", "0.1.0", b"hello\n");
+    build.manifest.components.default = vec!["runtime".to_string(), "lib".to_string()];
+    let ambiguous = project_build_result_to_v2(V2AuthoringInput {
+        build: &build,
+        local_dev: true,
+        debug_toml: None,
+    })
+    .unwrap_err();
+    assert!(ambiguous.to_string().contains("exactly one"));
+
+    build.manifest.components.default = vec!["lib".to_string()];
+    let missing = project_build_result_to_v2(V2AuthoringInput {
+        build: &build,
+        local_dev: true,
+        debug_toml: None,
+    })
+    .unwrap_err();
+    assert!(missing.to_string().contains("not present"));
+}
+
+#[test]
+fn projection_reconstructs_payload_from_chunk_blobs() {
+    let mut build = test_support::minimal_file_build_result("hello", "0.1.0", b"hello\n");
+    build.manifest.package.release = "1".to_string();
+    build.manifest.package.kind = crate::ccs::v2::PackageKindTagV2::Package;
+
+    let chunks = [b"hel".to_vec(), b"lo\n".to_vec()];
+    let chunk_hashes = chunks
+        .iter()
+        .map(|chunk| crate::hash::sha256(chunk))
+        .collect::<Vec<_>>();
+    build.blobs.clear();
+    for (hash, bytes) in chunk_hashes.iter().zip(chunks) {
+        build.blobs.insert(hash.clone(), bytes);
+    }
+    build.files[0].chunks = Some(chunk_hashes.clone());
+    build.components.get_mut("runtime").unwrap().files[0].chunks = Some(chunk_hashes);
+    build.chunked = true;
+
+    let projected = project_build_result_to_v2(V2AuthoringInput {
+        build: &build,
+        local_dev: true,
+        debug_toml: Some(build.manifest.to_toml().unwrap()),
+    })
+    .unwrap();
+
+    assert_eq!(projected.payloads_by_path["/hello"], b"hello\n");
+}
+
+#[test]
+fn projection_keeps_host_hardening_for_release_key_signing_path() {
+    let mut build = test_support::minimal_file_build_result("hello", "0.1.0", b"hello\n");
+    build.manifest.package.release = "1".to_string();
+    build.manifest.package.kind = crate::ccs::v2::PackageKindTagV2::Package;
+
+    let projected = project_build_result_to_v2(V2AuthoringInput {
+        build: &build,
+        local_dev: false,
+        debug_toml: Some(build.manifest.to_toml().unwrap()),
+    })
+    .unwrap();
+
+    assert_eq!(
+        projected.authority.provenance.hardening_level.as_deref(),
+        Some("host")
+    );
+}
+
+#[test]
+fn projection_marks_noreplace_config_files() {
+    let mut build = test_support::single_file_build_result_at(
+        "demo",
+        "0.1.0",
+        "/etc/conary-example/config.toml",
+        b"message = \"hello\"\n",
+    );
+    build.manifest.package.release = "1".to_string();
+    build.manifest.package.kind = crate::ccs::v2::PackageKindTagV2::Package;
+    build.manifest.config.files = vec!["/etc/conary-example/config.toml".to_string()];
+    build.manifest.config.noreplace = true;
+
+    let projected = project_build_result_to_v2(V2AuthoringInput {
+        build: &build,
+        local_dev: true,
+        debug_toml: Some(build.manifest.to_toml().unwrap()),
+    })
+    .unwrap();
+
+    let package = match &projected.authority.kind {
+        PackageKindV2::Package(package) => package,
+        other => panic!("expected package authority, got {other:?}"),
+    };
+    assert_eq!(package.files[0].config, Some(ConfigPolicyV2::NoReplace));
+    assert_eq!(package.config[0].path, "/etc/conary-example/config.toml");
+    assert_eq!(package.config[0].policy, ConfigPolicyV2::NoReplace);
+}
+
+#[test]
+fn projection_marks_replace_config_when_noreplace_is_false() {
+    let mut build = test_support::single_file_build_result_at(
+        "demo",
+        "0.1.0",
+        "/etc/conary-example/config.toml",
+        b"message = \"hello\"\n",
+    );
+    build.manifest.package.release = "1".to_string();
+    build.manifest.package.kind = crate::ccs::v2::PackageKindTagV2::Package;
+    build.manifest.config.files = vec!["/etc/conary-example/config.toml".to_string()];
+    build.manifest.config.noreplace = false;
+
+    let projected = project_build_result_to_v2(V2AuthoringInput {
+        build: &build,
+        local_dev: true,
+        debug_toml: Some(build.manifest.to_toml().unwrap()),
+    })
+    .unwrap();
+
+    let package = match &projected.authority.kind {
+        PackageKindV2::Package(package) => package,
+        other => panic!("expected package authority, got {other:?}"),
+    };
+    assert_eq!(package.files[0].config, Some(ConfigPolicyV2::Replace));
+    assert_eq!(package.config[0].policy, ConfigPolicyV2::Replace);
+}
+
+#[test]
+fn projection_rejects_config_path_absent_from_payload() {
+    let mut build = test_support::minimal_file_build_result("demo", "0.1.0", b"hello\n");
+    build.manifest.package.release = "1".to_string();
+    build.manifest.package.kind = crate::ccs::v2::PackageKindTagV2::Package;
+    build.manifest.config.files = vec!["/etc/conary-example/config.toml".to_string()];
+
+    let error = project_build_result_to_v2(V2AuthoringInput {
+        build: &build,
+        local_dev: true,
+        debug_toml: Some(build.manifest.to_toml().unwrap()),
+    })
+    .unwrap_err();
+
+    assert!(error.to_string().contains("config path"));
+}
+
+#[test]
+fn projection_rejects_relative_config_paths() {
+    let mut build = test_support::single_file_build_result_at(
+        "demo",
+        "0.1.0",
+        "etc/conary-example/config.toml",
+        b"message = \"hello\"\n",
+    );
+    build.manifest.package.release = "1".to_string();
+    build.manifest.package.kind = crate::ccs::v2::PackageKindTagV2::Package;
+    build.manifest.config.files = vec!["etc/conary-example/config.toml".to_string()];
+
+    let error = project_build_result_to_v2(V2AuthoringInput {
+        build: &build,
+        local_dev: true,
+        debug_toml: Some(build.manifest.to_toml().unwrap()),
+    })
+    .unwrap_err();
+
+    assert!(error.to_string().contains("config path"));
+    assert!(error.to_string().contains("absolute"));
+}
+
+#[test]
+fn lint_manifest_reports_empty_release() {
+    let mut manifest = crate::ccs::manifest::CcsManifest::new_minimal("hello", "0.1.0");
+    manifest.package.release.clear();
+    let findings = lint_manifest_for_v2_authoring(&manifest);
+
+    assert!(findings.iter().any(|f| f.field == Some("package.release")));
+    assert!(findings.iter().all(|f| f.blocks_build));
+}
+
+#[test]
+fn lint_manifest_allows_declarative_lifecycle_without_distro_gate() {
+    let mut manifest = crate::ccs::manifest::CcsManifest::new_minimal("hello", "0.1.0");
+    manifest.package.release = "1".to_string();
+    manifest.package.kind = crate::ccs::v2::PackageKindTagV2::Package;
+    manifest.hooks.services.push(crate::ccs::manifest::Service {
+        name: "hello.service".to_string(),
+        action: crate::ccs::manifest::ServiceAction::Restart,
+        reversible: None,
+    });
+
+    let findings = lint_manifest_for_v2_authoring(&manifest);
+    assert!(findings.iter().all(|finding| !finding.blocks_build));
+}
+
+#[test]
+fn lint_manifest_allows_script_lifecycle_with_signed_execution_contract() {
+    let mut manifest = crate::ccs::manifest::CcsManifest::new_minimal("hello", "0.1.0");
+    manifest.package.release = "1".to_string();
+    manifest.package.kind = crate::ccs::v2::PackageKindTagV2::Package;
+    manifest.hooks.post_install = Some(crate::ccs::manifest::ScriptHook {
+        script: "echo configured".to_string(),
+        reversible: None,
+    });
+
+    let findings = lint_manifest_for_v2_authoring(&manifest);
+    assert!(findings.iter().all(|finding| !finding.blocks_build));
+}
+
+#[test]
+fn projection_maps_declarative_lifecycle_hooks_to_signed_authority() {
+    let mut build = test_support::single_file_build_result_at(
+        "conary-example",
+        "0.1.0",
+        "/usr/bin/conary-example",
+        b"#!/bin/sh\necho conary-example\n",
+    );
+    build.manifest.package.release = "1".to_string();
+    build.manifest.package.kind = crate::ccs::v2::PackageKindTagV2::Package;
+    build
+        .manifest
+        .hooks
+        .services
+        .push(crate::ccs::manifest::Service {
+            name: "conary-example.service".to_string(),
+            action: crate::ccs::manifest::ServiceAction::Restart,
+            reversible: None,
+        });
+    build
+        .manifest
+        .hooks
+        .systemd
+        .push(crate::ccs::manifest::SystemdHook {
+            unit: "conary-example.service".to_string(),
+            enable: true,
+            reversible: Some(true),
+        });
+    build
+        .manifest
+        .hooks
+        .sysctl
+        .push(crate::ccs::manifest::SysctlHook {
+            key: "net.ipv4.ip_forward".to_string(),
+            value: "1".to_string(),
+            reversible: Some(false),
+        });
+    build
+        .manifest
+        .hooks
+        .alternatives
+        .push(crate::ccs::manifest::AlternativeHook {
+            link: "/usr/bin/conary-example".to_string(),
+            name: "conary-example".to_string(),
+            path: "/usr/bin/conary-example".to_string(),
+            priority: 70,
+            reversible: Some(true),
+        });
+    build.manifest.scriptlets.capabilities.push(
+        crate::ccs::manifest::ScriptletCapabilityDeclaration {
+            name: "systemd-service-registration".to_string(),
+            paths: vec!["/etc/systemd/system".to_string()],
+        },
+    );
+    build.manifest.hooks.post_install = Some(crate::ccs::manifest::ScriptHook {
+        script: "printf configured".to_string(),
+        reversible: Some(false),
+    });
+    build
+        .manifest
+        .hooks
+        .tmpfiles
+        .push(crate::ccs::manifest::TmpfilesHook {
+            entry_type: "L+!$".to_string(),
+            path: "/var/lib/conary-example".to_string(),
+            mode: "-".to_string(),
+            user: "-".to_string(),
+            group: "-".to_string(),
+            age: "30d".to_string(),
+            argument: "/srv/example target".to_string(),
+            reversible: None,
+        });
+    build
+        .manifest
+        .hooks
+        .users
+        .push(crate::ccs::manifest::UserHook {
+            name: "conary-example".to_string(),
+            system: true,
+            home: None,
+            shell: None,
+            group: Some("conary-example".to_string()),
+            reversible: None,
+        });
+    build
+        .manifest
+        .hooks
+        .groups
+        .push(crate::ccs::manifest::GroupHook {
+            name: "conary-example".to_string(),
+            system: true,
+            reversible: None,
+        });
+    build
+        .manifest
+        .hooks
+        .directories
+        .push(crate::ccs::manifest::DirectoryHook {
+            path: "/var/lib/conary-example".to_string(),
+            mode: "0755".to_string(),
+            owner: "conary-example".to_string(),
+            group: "conary-example".to_string(),
+            cleanup: None,
+            reversible: None,
+        });
+    let projected = project_build_result_to_v2(V2AuthoringInput {
+        build: &build,
+        local_dev: true,
+        debug_toml: Some(build.manifest.to_toml().unwrap()),
+    })
+    .unwrap();
+
+    assert_eq!(
+        projected.authority.lifecycle.services[0].action,
+        LifecycleServiceActionV2::Restart
+    );
+    let tmpfiles = &projected.authority.lifecycle.tmpfiles[0];
+    assert_eq!(tmpfiles.entry_type, "L+!$");
+    assert_eq!(tmpfiles.mode, "-");
+    assert_eq!(tmpfiles.user, "-");
+    assert_eq!(tmpfiles.group, "-");
+    assert_eq!(tmpfiles.age, "30d");
+    assert_eq!(tmpfiles.argument, "/srv/example target");
+    assert!(projected.authority.lifecycle.users[0].system);
+    assert_eq!(
+        projected.authority.lifecycle.users[0].group.as_deref(),
+        Some("conary-example")
+    );
+    assert!(projected.authority.lifecycle.groups[0].system);
+    assert_eq!(
+        projected.authority.lifecycle.directories[0].owner,
+        "conary-example"
+    );
+    assert!(projected.authority.lifecycle.systemd[0].enable);
+    assert_eq!(projected.authority.lifecycle.sysctl[0].value, "1");
+    assert_eq!(
+        projected.authority.lifecycle.alternatives[0].link,
+        "/usr/bin/conary-example"
+    );
+    assert_eq!(projected.authority.lifecycle.alternatives[0].priority, 70);
+    let script = projected.authority.lifecycle.post_install.as_ref().unwrap();
+    assert_eq!(script.interpreter, "/bin/sh");
+    assert_eq!(script.body, "printf configured");
+    assert_eq!(
+        script.execution,
+        LifecycleScriptExecutionV2::SandboxedTargetRoot
+    );
+    assert_eq!(script.capabilities[0].paths, vec!["/etc/systemd/system"]);
+    assert_eq!(
+        projected.authority.lifecycle.script_capabilities,
+        script.capabilities
+    );
+}
+
+#[test]
+fn projection_carries_typed_requires_and_provides_without_distro_gates() {
+    let mut build = test_support::minimal_file_build_result("hello", "0.1.0", b"hello\n");
+    build.manifest.package.release = "1".to_string();
+    build.manifest.package.kind = crate::ccs::v2::PackageKindTagV2::Package;
+    build.manifest.requirements.extend([
+        RepositoryRequirementGroup::simple(
+            RepositoryRequirementKind::Depends,
+            RepositoryRequirementClause {
+                name: "openssl".to_string(),
+                capability_kind: Some(RepositoryCapabilityKind::PackageName),
+                version_constraint: Some(">=3.0.0".to_string()),
+                native_text: None,
+            },
+        ),
+        RepositoryRequirementGroup::simple(
+            RepositoryRequirementKind::Depends,
+            RepositoryRequirementClause {
+                name: "tls".to_string(),
+                capability_kind: Some(RepositoryCapabilityKind::Virtual),
+                version_constraint: Some(">=1.3.0".to_string()),
+                native_text: None,
+            },
+        ),
+    ]);
+    build
+        .manifest
+        .provides
+        .capabilities
+        .push("web-server".to_string());
+    build
+        .manifest
+        .provides
+        .sonames
+        .push("libhello.so.1".to_string());
+    build.manifest.provides.binaries.push("hello".to_string());
+    build.manifest.provides.pkgconfig.push("hello".to_string());
+
+    assert!(
+        lint_manifest_for_v2_authoring(&build.manifest)
+            .iter()
+            .all(|finding| !finding.blocks_build)
+    );
+    let projected = project_build_result_to_v2(V2AuthoringInput {
+        build: &build,
+        local_dev: true,
+        debug_toml: Some(build.manifest.to_toml().unwrap()),
+    })
+    .unwrap();
+
+    assert!(projected.authority.requirements.iter().any(|group| {
+        group.alternatives.iter().any(|entry| {
+            entry.capability_kind == Some(RepositoryCapabilityKind::PackageName)
+                && entry.name == "openssl"
+                && entry.version_constraint.as_deref() == Some(">=3.0.0")
+        })
+    }));
+    assert!(projected.authority.requirements.iter().any(|group| {
+        group.alternatives.iter().any(|entry| {
+            entry.capability_kind == Some(RepositoryCapabilityKind::Virtual)
+                && entry.name == "tls"
+                && entry.version_constraint.as_deref() == Some(">=1.3.0")
+        })
+    }));
+    for (kind, name) in [
+        (DependencyKindV2::Capability, "web-server"),
+        (DependencyKindV2::Soname, "libhello.so.1"),
+        (DependencyKindV2::Binary, "hello"),
+        (DependencyKindV2::PkgConfig, "hello"),
+    ] {
+        assert!(
+            projected
+                .authority
+                .provides
+                .iter()
+                .any(|entry| entry.kind == kind && entry.name == name)
+        );
+    }
+}

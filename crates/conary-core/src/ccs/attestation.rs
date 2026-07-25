@@ -172,100 +172,36 @@ pub fn compute_v2_file_merkle_root(
 pub fn compute_build_output_identity(
     package: &crate::ccs::package::CcsPackage,
 ) -> Result<BuildOutputIdentity> {
-    if let Some(authority) = package.v2_authority() {
-        let provenance = &authority.provenance;
-        return Ok(BuildOutputIdentity {
-            file_merkle_root: compute_v2_file_merkle_root(authority)?,
-            package_name: authority.identity.name.clone(),
-            package_version: authority.identity.version.clone(),
-            package_release: authority.identity.release.clone(),
-            architecture: authority.identity.architecture.clone(),
-            origin_class: provenance
-                .origin_class
-                .clone()
-                .context("v2 build output identity requires origin_class")?,
-            hardening_level: provenance
-                .hardening_level
-                .clone()
-                .context("v2 build output identity requires hardening_level")?,
-            hermetic_evidence_hash: provenance
-                .hermetic_evidence_hash
-                .clone()
-                .context("v2 build output identity requires hermetic_evidence_hash")?,
-            canonical_content_identity: compute_v2_content_identity(authority)?,
-        });
-    }
-
-    let manifest = package.manifest();
-    let provenance = manifest
-        .provenance
-        .as_ref()
-        .context("build output identity requires manifest provenance")?;
-    let hardening_level = provenance
-        .hardening_level
-        .clone()
-        .context("build output identity requires hardening_level")?;
-    let origin_class = provenance
-        .origin_class
-        .clone()
-        .context("build output identity requires origin_class")?;
-    let hermetic_evidence_hash = provenance
-        .hermetic_evidence
-        .as_ref()
-        .map(canonical_json_hash)
-        .transpose()?
-        .context("build output identity requires hermetic evidence")?;
-    let file_merkle_root = provenance
-        .merkle_root
-        .clone()
-        .or_else(|| {
-            package
-                .binary_manifest()
-                .map(|manifest| manifest.content_root.value.clone())
-        })
-        .context("build output identity requires file Merkle root")?;
-    let canonical_content_identity = compute_content_identity_excluding_signatures(package)?;
-
-    Ok(BuildOutputIdentity {
-        file_merkle_root,
-        package_name: manifest.package.name.clone(),
-        package_version: manifest.package.version.clone(),
-        package_release: "1".to_string(),
-        architecture: manifest
-            .package
-            .platform
-            .as_ref()
-            .and_then(|platform| platform.arch.clone()),
-        origin_class,
-        hardening_level,
-        hermetic_evidence_hash,
-        canonical_content_identity,
-    })
+    let authority = package
+        .v2_authority()
+        .context("build output identity requires verified CCS v2 authority")?;
+    compute_build_output_identity_from_v2(authority)
 }
 
-pub fn compute_content_identity_excluding_signatures(
-    package: &crate::ccs::package::CcsPackage,
-) -> Result<String> {
-    let mut manifest = package.manifest().clone();
-    if let Some(provenance) = manifest.provenance.as_mut() {
-        provenance.build_attestation = None;
-        provenance.foreign_conversion_boundary = None;
-        provenance.signatures.clear();
-        provenance.dna_hash = None;
-    }
-
-    let manifest_bytes = canonical_json_bytes(&manifest)
-        .context("serialize content identity manifest projection")?;
-    let components_bytes = canonical_json_bytes(package.components())
-        .context("serialize content identity components")?;
-    let files_bytes = canonical_json_bytes(&package.file_entries())
-        .context("serialize content identity files")?;
-    let mut bytes = Vec::new();
-    bytes.extend_from_slice(&manifest_bytes);
-    bytes.extend_from_slice(&components_bytes);
-    bytes.extend_from_slice(&files_bytes);
-
-    Ok(crate::hash::sha256_prefixed(&bytes))
+pub fn compute_build_output_identity_from_v2(
+    authority: &crate::ccs::v2::AuthorityDocumentV2,
+) -> Result<BuildOutputIdentity> {
+    let provenance = &authority.provenance;
+    Ok(BuildOutputIdentity {
+        file_merkle_root: compute_v2_file_merkle_root(authority)?,
+        package_name: authority.identity.name.clone(),
+        package_version: authority.identity.version.clone(),
+        package_release: authority.identity.release.clone(),
+        architecture: authority.identity.architecture.clone(),
+        origin_class: provenance
+            .origin_class
+            .clone()
+            .context("v2 build output identity requires origin_class")?,
+        hardening_level: provenance
+            .hardening_level
+            .clone()
+            .context("v2 build output identity requires hardening_level")?,
+        hermetic_evidence_hash: provenance
+            .hermetic_evidence_hash
+            .clone()
+            .context("v2 build output identity requires hermetic_evidence_hash")?,
+        canonical_content_identity: compute_v2_content_identity(authority)?,
+    })
 }
 
 #[cfg(test)]
@@ -323,7 +259,6 @@ pub(crate) mod test_support {
             additional_sources: Vec::new(),
             patches: Vec::new(),
             local_tree: None,
-            ecosystem_dependencies: Vec::new(),
             builder_environment: crate::recipe::hermetic::BuilderEnvironmentIdentity {
                 kind: crate::recipe::hermetic::BuilderEnvironmentKind::Pristine,
                 sysroot_hash: Some("sha256:sysroot".to_string()),
@@ -368,11 +303,10 @@ pub(crate) mod test_support {
     pub(crate) fn sample_hermetic_evidence_for_tests()
     -> crate::recipe::hermetic::HermeticBuildEvidence {
         crate::recipe::hermetic::HermeticBuildEvidence {
-            schema_version: crate::recipe::hermetic::HERMETIC_EVIDENCE_SCHEMA_V1,
+            schema_version: crate::recipe::hermetic::HERMETIC_EVIDENCE_SCHEMA,
             build_input: sample_build_input_for_tests(),
             dependency_lock: crate::recipe::hermetic::DependencyLock::default(),
-            ecosystem_policy: crate::recipe::hermetic::EcosystemPolicyReport::clean("test"),
-            command_risk: crate::recipe::hermetic::BuildCommandRiskReport::clean(),
+            command_risk: crate::recipe::hermetic::BuildCommandRiskReport::no_findings(),
             reproducibility: crate::recipe::hermetic::ReproducibilityRecord {
                 source_date_epoch: Some(1),
                 path_remap_count: 1,
@@ -388,7 +322,6 @@ pub(crate) mod test_support {
 mod tests {
     use super::test_support::*;
     use super::*;
-    use crate::packages::traits::PackageFormat;
 
     #[test]
     fn canonical_payload_hash_is_stable_across_key_ordering() {
@@ -476,7 +409,11 @@ mod tests {
     ) -> (tempfile::TempDir, crate::ccs::package::CcsPackage) {
         let temp = tempfile::tempdir().unwrap();
         let package_path = temp.path().join("identity.ccs");
-        let mut result = crate::ccs::builder::test_support::minimal_build_result("identity", "1.0");
+        let mut result = crate::ccs::builder::test_support::minimal_file_build_result(
+            "identity",
+            "1.0.0",
+            b"identity payload",
+        );
         let mut payload = crate::ccs::attestation::test_support::sample_payload_for_tests();
         payload.publish_policy_digest = policy_digest.to_string();
         result
@@ -485,9 +422,18 @@ mod tests {
             .get_or_insert_with(Default::default)
             .build_attestation =
             Some(crate::ccs::attestation::sign_build_attestation(payload, key).unwrap());
-        crate::ccs::builder::write_signed_ccs_package(&result, &package_path, key).unwrap();
-        let package =
-            crate::ccs::package::CcsPackage::parse(package_path.to_str().unwrap()).unwrap();
+        crate::ccs::builder::write_signed_current_ccs_package(&result, &package_path, key, false)
+            .unwrap();
+        let verified = crate::ccs::verify::verify_package(
+            &package_path,
+            &crate::ccs::verify::TrustPolicy::strict(vec![key.public_key_base64()]),
+        )
+        .unwrap();
+        let package = crate::ccs::package::CcsPackage::from_verified_archive(
+            package_path.to_str().unwrap(),
+            &verified,
+        )
+        .unwrap();
         (temp, package)
     }
 }

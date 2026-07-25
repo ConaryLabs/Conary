@@ -17,9 +17,10 @@ usage() {
     cat >&2 <<'USAGE'
 usage:
   conary-remi-deploy deploy-conary <version> <staging-dir>
-  conary-remi-deploy deploy-remi <version> <bundle.tar.gz>
+  conary-remi-deploy deploy-remi <version> <bundle.tar.gz> <repositories.toml> <max-concurrent>
   conary-remi-deploy deploy-site <site|web> <staging-dir>
-  conary-remi-deploy configure-concurrency <max-concurrent> [--skip-restart]
+  conary-remi-deploy install-helper <sha256> <helper>
+  conary-remi-deploy inspect-remi [--require-repopulated]
   conary-remi-deploy verify-access
 USAGE
     exit 2
@@ -49,6 +50,11 @@ validate_positive_int() {
     local value="$1"
     [[ "$value" =~ ^[0-9]+$ ]] || die "expected positive integer, got: $value"
     (( value >= 1 && value <= 128 )) || die "value out of allowed range 1..128: $value"
+}
+
+validate_sha256() {
+    local value="$1"
+    [[ "$value" =~ ^[0-9a-f]{64}$ ]] || die "invalid SHA-256 digest"
 }
 
 validate_site_target() {
@@ -155,11 +161,17 @@ deploy_conary() {
 deploy_remi() {
     local version="$1"
     local bundle
+    local repositories
+    local max_concurrent="$4"
     validate_version "$version"
+    validate_positive_int "$max_concurrent"
     bundle="$(real_tmp_path "$2")"
+    repositories="$(real_tmp_path "$3")"
     [[ -f "$bundle" && ! -L "$bundle" ]] || die "bundle path is not a plain file: $bundle"
+    [[ -f "$repositories" && ! -L "$repositories" ]] ||
+        die "repository manifest is not a plain file: $repositories"
 
-    local tmpdir bin candidate backup had_previous
+    local tmpdir bin candidate backup had_previous transition_manifest
     tmpdir="$(mktemp -d /tmp/remi-install.XXXXXX)"
     backup="${tmpdir}/remi.previous"
     bin="$(root_path /usr/local/bin/remi)"
@@ -169,6 +181,8 @@ deploy_remi() {
     tar xzf "$bundle" -C "$tmpdir"
     candidate="${tmpdir}/remi-${version}-linux-x64"
     [[ -f "$candidate" && ! -L "$candidate" ]] || die "bundle did not contain remi-${version}-linux-x64"
+    [[ "$("$candidate" --version)" == "remi ${version}" ]] ||
+        die "candidate binary version does not match ${version}"
 
     if [[ -f "$bin" ]]; then
         cp "$bin" "$backup"
@@ -179,18 +193,51 @@ deploy_remi() {
         systemctl stop remi
     fi
 
-    if ! install -m 0755 "$candidate" "$bin"; then
+    if ! transition_manifest="$(
+        "$candidate" deployment prepare \
+            --config "$(root_path /etc/conary/remi.toml)" \
+            --repository-manifest "$repositories" \
+            --repository-manifest-target "$(root_path /etc/conary/remi-repositories.toml)" \
+            --deployment-id "remi-${version}" \
+            --max-concurrent "$max_concurrent"
+    )"; then
         [[ "$SKIP_RESTART" == "1" ]] || systemctl start remi || true
+        die "failed to prepare Remi deployment transition"
+    fi
+    [[ "$transition_manifest" == /* && -f "$transition_manifest" && ! -L "$transition_manifest" ]] || {
+        die "candidate returned an invalid transition manifest; Remi remains stopped because rollback authority is unavailable"
+    }
+
+    if ! install -m 0755 "$candidate" "$bin"; then
+        local rollback_status=0
+        "$candidate" deployment rollback --manifest "$transition_manifest" || rollback_status=$?
+        if [[ "$had_previous" == true && "$SKIP_RESTART" != "1" ]]; then
+            systemctl start remi || true
+        fi
+        (( rollback_status == 0 )) ||
+            die "failed to install Remi binary and rollback failed with status ${rollback_status}"
         die "failed to install Remi binary"
     fi
 
     if ! restart_remi; then
+        local rollback_status=0
+        [[ "$SKIP_RESTART" == "1" ]] || systemctl stop remi || true
+        "$candidate" deployment rollback --manifest "$transition_manifest" || rollback_status=$?
         if [[ "$had_previous" == true ]]; then
             install -m 0755 "$backup" "$bin" || true
+        else
+            rm -f "$bin"
+        fi
+        if [[ "$had_previous" == true ]]; then
             restart_remi || true
         fi
+        (( rollback_status == 0 )) ||
+            die "Remi health check failed and rollback failed with status ${rollback_status}"
         die "Remi health check failed after deployment"
     fi
+
+    rm -f "$bundle" "$repositories"
+    echo "Remi deployment transition: ${transition_manifest}"
 }
 
 deploy_site() {
@@ -243,48 +290,37 @@ deploy_site() {
     rmdir "$parent" 2>/dev/null || true
 }
 
-configure_concurrency() {
-    local value="$1"
-    validate_positive_int "$value"
+install_helper() {
+    local expected_sha="$1"
+    local source
+    validate_sha256 "$expected_sha"
+    source="$(real_tmp_path "$2")"
+    [[ -f "$source" && ! -L "$source" ]] || die "helper source is not a plain file: $source"
 
-    local config tmp
-    config="$(root_path /etc/conary/remi.toml)"
-    [[ -f "$config" && ! -L "$config" ]] || die "missing plain Remi config: $config"
-    tmp="$(mktemp)"
-    awk -v value="$value" '
-        BEGIN { in_conversion = 0; wrote = 0; saw_conversion = 0 }
-        /^\[[^]]+\][[:space:]]*$/ {
-            if (in_conversion && !wrote) {
-                print "max_concurrent = " value
-                wrote = 1
-            }
-            in_conversion = ($0 == "[conversion]")
-            if (in_conversion) {
-                saw_conversion = 1
-                wrote = 0
-            }
-            print
-            next
-        }
-        in_conversion && /^[[:space:]]*max_concurrent[[:space:]]*=/ {
-            print "max_concurrent = " value
-            wrote = 1
-            next
-        }
-        { print }
-        END {
-            if (in_conversion && !wrote) {
-                print "max_concurrent = " value
-            } else if (!saw_conversion) {
-                print ""
-                print "[conversion]"
-                print "max_concurrent = " value
-            }
-        }
-    ' "$config" > "$tmp"
-    install -m 0644 "$tmp" "$config"
-    rm -f "$tmp"
-    restart_remi
+    local actual_sha target next
+    actual_sha="$(sha256sum "$source" | cut -d ' ' -f 1)"
+    [[ "$actual_sha" == "$expected_sha" ]] || die "helper SHA-256 mismatch"
+    bash -n "$source" || die "helper shell validation failed"
+
+    target="$(root_path /usr/local/sbin/conary-remi-deploy)"
+    next="${target}.next.$$"
+    install -m 0755 "$source" "$next"
+    mv "$next" "$target"
+    rm -f "$source"
+}
+
+inspect_remi() {
+    local requirement="${1:-}"
+    [[ -z "$requirement" || "$requirement" == "--require-repopulated" ]] ||
+        die "invalid inspect-remi option: $requirement"
+    local bin
+    bin="$(root_path /usr/local/bin/remi)"
+    [[ -f "$bin" && ! -L "$bin" ]] || die "Remi binary is not a plain file: $bin"
+    local args=(deployment inspect --config "$(root_path /etc/conary/remi.toml)")
+    if [[ -n "$requirement" ]]; then
+        args+=("$requirement")
+    fi
+    "$bin" "${args[@]}"
 }
 
 verify_access() {
@@ -299,19 +335,20 @@ case "${1:-}" in
         deploy_conary "$2" "$3"
         ;;
     deploy-remi)
-        [[ $# -eq 3 ]] || usage
-        deploy_remi "$2" "$3"
+        [[ $# -eq 5 ]] || usage
+        deploy_remi "$2" "$3" "$4" "$5"
         ;;
     deploy-site)
         [[ $# -eq 3 ]] || usage
         deploy_site "$2" "$3"
         ;;
-    configure-concurrency)
-        [[ $# -eq 2 || ( $# -eq 3 && "$3" == "--skip-restart" ) ]] || usage
-        if [[ $# -eq 3 ]]; then
-            SKIP_RESTART=1
-        fi
-        configure_concurrency "$2"
+    install-helper)
+        [[ $# -eq 3 ]] || usage
+        install_helper "$2" "$3"
+        ;;
+    inspect-remi)
+        [[ $# -le 2 ]] || usage
+        inspect_remi "${2:-}"
         ;;
     verify-access)
         [[ $# -eq 1 ]] || usage

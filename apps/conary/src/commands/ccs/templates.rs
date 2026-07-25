@@ -22,8 +22,8 @@ pub fn build_manifest(
 
 fn minimal_file_manifest(name: &str, version: &str) -> Result<CcsManifest> {
     let mut manifest = CcsManifest::new_minimal(name, version);
-    manifest.package.release = Some("1".to_string());
-    manifest.package.kind = Some(PackageKindTagV2::Package);
+    manifest.package.release = "1".to_string();
+    manifest.package.kind = PackageKindTagV2::Package;
     manifest.package.description = format!("{name} package");
     Ok(manifest)
 }
@@ -56,8 +56,8 @@ mod tests {
 
         assert_eq!(manifest.package.name, "hello");
         assert_eq!(manifest.package.version, "0.1.0");
-        assert_eq!(manifest.package.release.as_deref(), Some("1"));
-        assert_eq!(manifest.package.kind, Some(PackageKindTagV2::Package));
+        assert_eq!(manifest.package.release.as_str(), "1");
+        assert_eq!(manifest.package.kind, PackageKindTagV2::Package);
     }
 
     #[test]
@@ -65,8 +65,8 @@ mod tests {
         let manifest = build_manifest(Some(CcsInitTemplate::ConfigNoreplace), "demo", "0.1.0")
             .expect("template manifest");
 
-        assert_eq!(manifest.package.release.as_deref(), Some("1"));
-        assert_eq!(manifest.package.kind, Some(PackageKindTagV2::Package));
+        assert_eq!(manifest.package.release.as_str(), "1");
+        assert_eq!(manifest.package.kind, PackageKindTagV2::Package);
         assert_eq!(
             manifest.config.files,
             vec!["/etc/conary-example/config.toml".to_string()]
@@ -81,8 +81,8 @@ mod tests {
         let manifest = build_manifest(Some(CcsInitTemplate::Service), "demo", "0.1.0")
             .expect("template manifest");
 
-        assert_eq!(manifest.package.release.as_deref(), Some("1"));
-        assert_eq!(manifest.package.kind, Some(PackageKindTagV2::Package));
+        assert_eq!(manifest.package.release.as_str(), "1");
+        assert_eq!(manifest.package.kind, PackageKindTagV2::Package);
         assert_eq!(manifest.hooks.services.len(), 1);
         assert_eq!(manifest.hooks.services[0].name, "conary-example.service");
         assert!(matches!(

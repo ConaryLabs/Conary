@@ -480,12 +480,10 @@ impl<'a> StateEngine<'a> {
         // the mutable troves/files tables that may change during future upgrades.
         tx.execute(
             "INSERT OR IGNORE INTO state_cas_hashes (state_id, sha256_hash)
-             SELECT ?1, f.sha256_hash FROM files f
+             SELECT ?1, f.content_sha256 FROM files f
              JOIN troves t ON f.trove_id = t.id
              WHERE t.type = 'package'
-               AND f.sha256_hash IS NOT NULL
-               AND f.sha256_hash != ''
-               AND NOT f.sha256_hash LIKE 'adopted-%'",
+               AND f.content_sha256 IS NOT NULL",
             params![state_id],
         )?;
 
@@ -696,6 +694,7 @@ mod tests {
             "pkg-a".to_string(),
             "1.0".to_string(),
             crate::db::models::TroveType::Package,
+            crate::repository::versioning::VersionScheme::Conary,
         );
         trove.insert(&conn).unwrap();
 
@@ -737,8 +736,11 @@ mod tests {
         // Clear any initial state and add test packages
         conn.execute("DELETE FROM system_states", []).unwrap();
         conn.execute(
-            "INSERT INTO troves (name, version, type, architecture, install_reason)
-             VALUES ('test-pkg', '1.0', 'package', 'x86_64', 'explicit')",
+            "INSERT INTO troves (
+                 name, version, type, architecture, install_source, install_reason, version_scheme
+             ) VALUES (
+                 'test-pkg', '1.0', 'package', 'x86_64', 'file', 'explicit', 'conary'
+             )",
             [],
         )
         .unwrap();
@@ -765,8 +767,11 @@ mod tests {
         conn.execute("DELETE FROM system_states", []).unwrap();
         conn.execute("DELETE FROM troves", []).unwrap();
         conn.execute(
-            "INSERT INTO troves (name, version, type, architecture, install_reason)
-             VALUES ('pkg-a', '1.0', 'package', 'x86_64', 'explicit')",
+            "INSERT INTO troves (
+                 name, version, type, architecture, install_source, install_reason, version_scheme
+             ) VALUES (
+                 'pkg-a', '1.0', 'package', 'x86_64', 'file', 'explicit', 'conary'
+             )",
             [],
         )
         .unwrap();
@@ -786,8 +791,11 @@ mod tests {
         conn.execute("DELETE FROM system_states", []).unwrap();
         conn.execute("DELETE FROM troves", []).unwrap();
         conn.execute(
-            "INSERT INTO troves (name, version, type, architecture, install_reason)
-             VALUES ('pkg-a', '1.0', 'package', 'x86_64', 'explicit')",
+            "INSERT INTO troves (
+                 name, version, type, architecture, install_source, install_reason, version_scheme
+             ) VALUES (
+                 'pkg-a', '1.0', 'package', 'x86_64', 'file', 'explicit', 'conary'
+             )",
             [],
         )
         .unwrap();

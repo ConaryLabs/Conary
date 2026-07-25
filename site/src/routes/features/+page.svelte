@@ -5,14 +5,14 @@
 
 <PageMeta
 	title="Product vision and features — Conary"
-	description="Explore the Conary product direction, the features available today, and the evidence behind each package and system-management layer."
+	description="Explore Conary's cross-distro package model, current capabilities, and the evidence behind each package and system-management layer."
 	path="/features/"
 />
 
 <PageIntro
 	eyebrow="Product vision and capability map"
 	title="The package manager is only the beginning."
-	description="Conary is growing from reversible package adoption into a shared model for building, describing, moving, and recovering Linux systems. The direction is ambitious; the evidence labels show which parts you can rely on today."
+	description="Conary starts by making RPM, DEB, and Arch packages source-independent, then connects that package model to building, describing, moving, and recovering Linux systems. The evidence labels show which parts you can rely on today."
 />
 
 <nav class="category-index" aria-label="Feature maturity groups">
@@ -38,12 +38,12 @@
 			<div class="feature-list direction-list">
 				<article class="feature-card feature-lead">
 					<span class="feature-status preview">foundation available</span>
-					<h3>Shared package intent, distribution-aware resolution</h3>
+					<h3>Source-native semantics, distribution-independent execution</h3>
 					<p>
-						Express the package state you want through one set of concepts while target
-						profiles preserve each distribution's identities, versions, repositories,
-						formats, and policy. The goal is portability of intent—not pretending every
-						RPM, DEB, or Arch artifact is interchangeable.
+						Install RPM, DEB, and Arch artifacts through one engine while their source
+						format retains version comparison, dependency relations, lifecycle calls,
+						payload metadata, and configuration rules. Target capabilities are explicit
+						inputs; the host distro does not rewrite the package ABI.
 					</p>
 				</article>
 
@@ -108,24 +108,23 @@
 			<div class="category-heading">
 				<span class="category-status preview">preview-supported</span>
 				<h2 class="category-title">The bounded tester loop</h2>
-				<p>Published, host-matched packages with a documented reversible workflow.</p>
+				<p>Cross-distro packages with a documented, inspectable transaction workflow.</p>
 			</div>
 
 			<div class="feature-list">
 				<article class="feature-card feature-lead">
 					<span class="feature-status preview">supported path</span>
-					<h3>Host-matched package install</h3>
+					<h3>Cross-distro package install</h3>
 					<p>
-						Fedora 44, Ubuntu 26.04 LTS, and Arch use the same Conary concepts but
-						different packages and repositories for the exact host target. The bounded
-						package and adoption mutations pair dry-runs with explicit approval; native
-						installation and repository sync remain separately approved live steps.
+							Fedora 44, Ubuntu 26.04 LTS, and Arch can consume RPM, DEB, Arch, and
+							CCS inputs through the same Conary transaction path. Dry-run shows the
+							source ABI and typed target capabilities before automatic target preflight.
 					</p>
 					<!-- svelte-ignore a11y_no_noninteractive_tabindex (horizontal command list needs keyboard scrolling) -->
-					<div class="feature-code scroll-region" role="region" tabindex="0" aria-label="Host-matched package install commands">
-						<code>sudo conary install htop --dry-run --allow-capabilities</code>
-						<code>sudo conary install htop --yes --allow-capabilities</code>
-						<code>sudo conary update --dry-run</code>
+					<div class="feature-code scroll-region" role="region" tabindex="0" aria-label="Cross-distro package install commands">
+							<code>sudo conary install ./package.rpm --dry-run</code>
+							<code>sudo conary install ./package.deb --yes</code>
+							<code>sudo conary install ./package.pkg.tar.zst --yes</code>
 					</div>
 				</article>
 
@@ -168,12 +167,13 @@
 
 			<div class="feature-list">
 				<article class="feature-card">
-					<span class="feature-status limited">same-target only</span>
+					<span class="feature-status limited">cross-distro core</span>
 					<h3>RPM, DEB, Arch, and CCS inputs</h3>
 					<p>
-						Conary parses supported package formats and Remi can convert policy-approved
-						inputs into CCS for the matching target. Public cross-target portability is not
-						a current capability; unsupported package behavior fails closed.
+						Conary converts each supported source format into CCS without erasing its
+						native lifecycle ABI, then executes that transaction on any supported target
+						that supplies the declared capabilities. Missing capability models are
+						engineering gaps, not string-matching review policy.
 					</p>
 					<!-- svelte-ignore a11y_no_noninteractive_tabindex (horizontal command list needs keyboard scrolling) -->
 					<div class="feature-code scroll-region" role="region" tabindex="0" aria-label="Local package dry-run commands">
@@ -352,12 +352,12 @@
 				</article>
 
 				<article class="feature-card">
-					<span class="feature-status roadmap">not supported</span>
-					<h3>Foreign-target package portability</h3>
+					<span class="feature-status roadmap">proof expansion</span>
+					<h3>Broader distro certification</h3>
 					<p>
-						Identity mapping can find equivalent packages, but the production target matrix
-						has no public cross-distribution allowances. Different source and host targets
-						fail closed without later explicit evidence.
+						The source-independent package contract is not tied to three distro names,
+						but release claims still need installed-binary matrix proof on additional
+						mainstream targets and architectures before they join the supported list.
 					</p>
 				</article>
 

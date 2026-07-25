@@ -9,10 +9,7 @@ use crate::cli;
 use crate::commands;
 use crate::live_host_safety::{LiveMutationClass, MutationIntent};
 
-pub(super) async fn dispatch_model_command(
-    model_cmd: cli::ModelCommands,
-    allow_live_system_mutation: bool,
-) -> Result<()> {
+pub(super) async fn dispatch_model_command(model_cmd: cli::ModelCommands) -> Result<()> {
     match model_cmd {
         cli::ModelCommands::Diff { model, offline, db } => {
             commands::cmd_model_diff(&model, &db.db_path, offline).await
@@ -29,7 +26,7 @@ pub(super) async fn dispatch_model_command(
             offline,
         } => {
             require_live_mutation(
-                MutationIntent::from_apply_intent(yes, allow_live_system_mutation),
+                MutationIntent::from_apply_intent(yes),
                 Cow::Borrowed("conary model apply"),
                 LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
                 dry_run,

@@ -35,7 +35,7 @@ fn packaging_m4d_distro_set_rejects_unsupported_target() {
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("Unsupported distro"));
+    assert!(stderr.contains("Unsupported source feed"));
 }
 
 #[test]

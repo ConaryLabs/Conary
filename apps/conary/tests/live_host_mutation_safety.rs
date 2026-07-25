@@ -59,40 +59,6 @@ fn tree_snapshot(root: &Path, db_name: &str) -> Vec<(PathBuf, String, Vec<u8>)> 
     snapshot
 }
 
-fn seed_adopted_trove_without_source_identity(db_path: &str, name: &str) {
-    use conary_core::db;
-    use conary_core::db::models::{Changeset, ChangesetStatus, InstallSource, Trove, TroveType};
-
-    let mut conn = db::open(db_path).unwrap();
-    db::transaction(&mut conn, |tx| {
-        let mut changeset = Changeset::new(format!("Seed adopted {name}"));
-        let changeset_id = changeset.insert(tx)?;
-        let mut trove = Trove::new_with_source(
-            name.to_string(),
-            "1.0.0".to_string(),
-            TroveType::Package,
-            InstallSource::AdoptedTrack,
-        );
-        trove.installed_by_changeset_id = Some(changeset_id);
-        trove.source_distro = None;
-        trove.version_scheme = None;
-        trove.insert(tx)?;
-        changeset.update_status(tx, ChangesetStatus::Applied)?;
-        Ok(())
-    })
-    .unwrap();
-}
-
-fn source_identity_for(db_path: &str, name: &str) -> (Option<String>, Option<String>) {
-    let conn = conary_core::db::open(db_path).unwrap();
-    conn.query_row(
-        "SELECT source_distro, version_scheme FROM troves WHERE name = ?1",
-        [name],
-        |row| Ok((row.get(0)?, row.get(1)?)),
-    )
-    .unwrap()
-}
-
 #[test]
 fn install_refuses_without_live_mutation_flag() {
     let (_tmp, db_path) = common::setup_command_test_db();
@@ -106,7 +72,7 @@ fn install_refuses_without_live_mutation_flag() {
         "--root",
         root.path().to_str().unwrap(),
         "--sandbox",
-        "never",
+        "always",
         "--yes",
     ]);
 
@@ -129,7 +95,7 @@ fn install_refuses_without_apply_intent_and_mentions_yes() {
         "--root",
         root.path().to_str().unwrap(),
         "--sandbox",
-        "never",
+        "always",
     ]);
 
     assert!(!output.status.success());
@@ -153,7 +119,7 @@ fn install_with_yes_reaches_underlying_package_resolution() {
         "--root",
         root.path().to_str().unwrap(),
         "--sandbox",
-        "never",
+        "always",
         "--yes",
     ]);
 
@@ -164,7 +130,7 @@ fn install_with_yes_reaches_underlying_package_resolution() {
 }
 
 #[test]
-fn deprecated_global_flag_still_reaches_underlying_package_resolution() {
+fn removed_global_flag_is_rejected_before_package_resolution() {
     let (_tmp, db_path) = common::setup_command_test_db();
     let root = tempfile::tempdir().unwrap();
 
@@ -177,13 +143,12 @@ fn deprecated_global_flag_still_reaches_underlying_package_resolution() {
         "--root",
         root.path().to_str().unwrap(),
         "--sandbox",
-        "never",
+        "always",
     ]);
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(!stderr.contains("unrecognized option"));
-    assert!(!stderr.contains("may mutate"));
+    assert!(stderr.contains("unexpected argument '--allow-live-system-mutation'"));
 }
 
 #[test]
@@ -199,7 +164,7 @@ fn collection_install_refusal_uses_collection_label() {
         "--root",
         root.path().to_str().unwrap(),
         "--sandbox",
-        "never",
+        "always",
     ]);
 
     assert!(!output.status.success());
@@ -225,7 +190,7 @@ fn ccs_install_refuses_without_apply_intent_and_mentions_yes() {
         "--root",
         root.path().to_str().unwrap(),
         "--sandbox",
-        "never",
+        "always",
     ]);
 
     assert!(!output.status.success());
@@ -252,7 +217,7 @@ fn ccs_install_dry_run_bypasses_gate() {
         "--root",
         root.path().to_str().unwrap(),
         "--sandbox",
-        "never",
+        "always",
         "--dry-run",
     ]);
 
@@ -279,7 +244,7 @@ fn ccs_install_with_yes_reaches_underlying_package_read() {
         "--root",
         root.path().to_str().unwrap(),
         "--sandbox",
-        "never",
+        "always",
         "--yes",
     ]);
 
@@ -397,7 +362,7 @@ fn system_restore_dry_run_bypasses_gate() {
 }
 
 #[test]
-fn allow_flag_reaches_underlying_restore_error() {
+fn removed_global_flag_is_rejected_before_restore() {
     let (_tmp, db_path) = common::setup_command_test_db();
     let root = tempfile::tempdir().unwrap();
 
@@ -414,8 +379,7 @@ fn allow_flag_reaches_underlying_restore_error() {
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("not found"));
-    assert!(!stderr.contains("allow-live-system-mutation only if"));
+    assert!(stderr.contains("unexpected argument '--allow-live-system-mutation'"));
 }
 
 #[test]
@@ -483,7 +447,6 @@ fn system_adopt_refresh_refuses_without_live_mutation_flag() {
 #[test]
 fn system_adopt_convert_refuses_without_live_mutation_flag() {
     let (_tmp, db_path) = common::setup_command_test_db();
-    seed_adopted_trove_without_source_identity(&db_path, "curl");
 
     let output = run_conary(&["system", "adopt", "--convert", "--db-path", &db_path]);
 
@@ -605,22 +568,4 @@ exit 1
     assert_eq!(common::database_snapshot(&db_path), database_before);
     assert_eq!(tree_snapshot(tmp.path(), &db_name), tree_before);
     assert_eq!(fs::read(&live_file).unwrap(), live_file_before);
-}
-
-#[test]
-fn system_adopt_convert_dry_run_does_not_backfill_source_identity() {
-    let (_tmp, db_path) = common::setup_command_test_db();
-    seed_adopted_trove_without_source_identity(&db_path, "curl");
-
-    let output = run_conary(&[
-        "system",
-        "adopt",
-        "--convert",
-        "--dry-run",
-        "--db-path",
-        &db_path,
-    ]);
-
-    assert!(output.status.success());
-    assert_eq!(source_identity_for(&db_path, "curl"), (None, None));
 }

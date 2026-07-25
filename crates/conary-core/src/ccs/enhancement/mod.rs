@@ -4,7 +4,7 @@
 //! This module provides the infrastructure for enhancing converted packages
 //! with additional metadata that wasn't available in the original format:
 //!
-//! - **Provenance extraction**: Extract build/source metadata from legacy formats
+//! - **Provenance extraction**: Extract build/source metadata from native formats
 //!
 //! # Architecture
 //!
@@ -71,7 +71,7 @@ pub const ENHANCEMENT_VERSION: i32 = 1;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EnhancementType {
-    /// Extract provenance information from legacy metadata
+    /// Extract provenance information from native package metadata
     Provenance,
 }
 

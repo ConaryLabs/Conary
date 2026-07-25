@@ -1,14 +1,18 @@
 // conary-core/src/self_update/versioning.rs
 
 use crate::error::{Error, Result};
+use semver::Version;
 use serde::Deserialize;
 use url::Url;
 
 /// Maximum size of the `/latest` JSON response before deserialization (1 MiB).
 const MAX_SELF_UPDATE_METADATA_SIZE: usize = 1024 * 1024;
+/// Self-update artifacts are bounded independently of HTTP metadata.
+const MAX_SELF_UPDATE_PACKAGE_SIZE: u64 = 512 * 1024 * 1024;
 
 /// Response from the /latest endpoint
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LatestVersionInfo {
     pub version: String,
     pub download_url: String,
@@ -132,7 +136,7 @@ pub async fn check_for_update(
 ) -> Result<VersionCheckResult> {
     let info = fetch_latest_version_info(channel_url, &format!("conary/{current_version}")).await?;
 
-    if is_newer(current_version, &info.version) {
+    if is_newer(current_version, &info.version)? {
         Ok(VersionCheckResult::UpdateAvailable {
             current: current_version.to_string(),
             latest: info.version,
@@ -148,70 +152,22 @@ pub async fn check_for_update(
     }
 }
 
-/// Compare two semver version strings. Returns true if `remote` is newer than `current`.
+/// Compare two strict SemVer values using the upstream SemVer implementation.
 ///
-/// Handles pre-release versions per SemVer rules:
-/// - A pre-release version (e.g., `1.0.0-alpha.1`) is always older than its
-///   release counterpart (`1.0.0`).
-/// - Pre-release identifiers are compared left-to-right: numeric identifiers
-///   are compared as integers, alphanumeric identifiers are compared
-///   lexicographically, and numeric identifiers always sort before
-///   alphanumeric ones.
-pub fn is_newer(current: &str, remote: &str) -> bool {
-    let parse = |v: &str| -> ((u64, u64, u64), Option<Vec<String>>) {
-        let parts: Vec<&str> = v.split('.').collect();
-        let major = parts.first().and_then(|s| s.parse().ok()).unwrap_or(0);
-        let minor = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
-
-        let patch_str = parts.get(2).copied().unwrap_or("0");
-        let (patch_num, prerelease) = if let Some(dash_pos) = patch_str.find('-') {
-            let patch = patch_str[..dash_pos].parse().unwrap_or(0);
-            let mut pre_parts: Vec<String> = patch_str[dash_pos + 1..]
-                .split('.')
-                .map(String::from)
-                .collect();
-            for part in parts.iter().skip(3) {
-                pre_parts.push(part.to_string());
-            }
-            (patch, Some(pre_parts))
-        } else {
-            (patch_str.parse().unwrap_or(0), None)
-        };
-
-        ((major, minor, patch_num), prerelease)
-    };
-
-    let (remote_ver, remote_pre) = parse(remote);
-    let (current_ver, current_pre) = parse(current);
-
-    match remote_ver.cmp(&current_ver) {
-        std::cmp::Ordering::Greater => true,
-        std::cmp::Ordering::Less => false,
-        std::cmp::Ordering::Equal => match (&current_pre, &remote_pre) {
-            (None, None) => false,
-            (Some(_), None) => true,
-            (None, Some(_)) => false,
-            (Some(cur), Some(rem)) => compare_prerelease(rem, cur) == std::cmp::Ordering::Greater,
-        },
-    }
-}
-
-fn compare_prerelease(a: &[String], b: &[String]) -> std::cmp::Ordering {
-    for (ai, bi) in a.iter().zip(b.iter()) {
-        let a_num = ai.parse::<u64>();
-        let b_num = bi.parse::<u64>();
-        let ord = match (a_num, b_num) {
-            (Ok(an), Ok(bn)) => an.cmp(&bn),
-            (Ok(_), Err(_)) => std::cmp::Ordering::Less,
-            (Err(_), Ok(_)) => std::cmp::Ordering::Greater,
-            (Err(_), Err(_)) => ai.cmp(bi),
-        };
-        if ord != std::cmp::Ordering::Equal {
-            return ord;
-        }
-    }
-
-    a.len().cmp(&b.len())
+/// Invalid local or remote release metadata is an error. Self-update must not
+/// reinterpret malformed versions as zeroes or accept abbreviated versions.
+pub fn is_newer(current: &str, remote: &str) -> Result<bool> {
+    let current = Version::parse(current).map_err(|error| {
+        Error::ParseError(format!(
+            "Invalid current self-update version {current:?}: {error}"
+        ))
+    })?;
+    let remote = Version::parse(remote).map_err(|error| {
+        Error::ParseError(format!(
+            "Invalid remote self-update version {remote:?}: {error}"
+        ))
+    })?;
+    Ok(remote > current)
 }
 
 fn parse_latest_version_info_bytes(bytes: &[u8]) -> Result<LatestVersionInfo> {
@@ -223,8 +179,46 @@ fn parse_latest_version_info_bytes(bytes: &[u8]) -> Result<LatestVersionInfo> {
         )));
     }
 
-    serde_json::from_slice(bytes)
-        .map_err(|e| Error::ParseError(format!("Invalid update response: {e}")))
+    let info: LatestVersionInfo = serde_json::from_slice(bytes)
+        .map_err(|e| Error::ParseError(format!("Invalid update response: {e}")))?;
+    Version::parse(&info.version).map_err(|error| {
+        Error::ParseError(format!(
+            "Invalid self-update metadata version {:?}: {error}",
+            info.version
+        ))
+    })?;
+    if info.sha256.len() != 64 || !info.sha256.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(Error::ParseError(
+            "Invalid self-update metadata SHA-256: expected exactly 64 hexadecimal characters"
+                .to_string(),
+        ));
+    }
+    if info.size == 0 {
+        return Err(Error::ParseError(
+            "Invalid self-update metadata size: update artifact must not be empty".to_string(),
+        ));
+    }
+    if info.size > MAX_SELF_UPDATE_PACKAGE_SIZE {
+        return Err(Error::ParseError(format!(
+            "Invalid self-update metadata size: {} bytes exceeds {} byte limit",
+            info.size, MAX_SELF_UPDATE_PACKAGE_SIZE
+        )));
+    }
+    if info.download_url.trim().is_empty() {
+        return Err(Error::ParseError(
+            "Invalid self-update metadata download URL: value must not be empty".to_string(),
+        ));
+    }
+    if info
+        .signature
+        .as_ref()
+        .is_some_and(|signature| signature.trim().is_empty())
+    {
+        return Err(Error::ParseError(
+            "Invalid self-update metadata signature: value must not be empty".to_string(),
+        ));
+    }
+    Ok(info)
 }
 
 async fn read_limited_response_bytes(
@@ -299,30 +293,30 @@ mod tests {
 
     #[test]
     fn test_is_newer() {
-        assert!(is_newer("0.1.0", "0.2.0"));
-        assert!(is_newer("0.1.0", "0.1.1"));
-        assert!(is_newer("0.1.0", "1.0.0"));
-        assert!(!is_newer("0.2.0", "0.1.0"));
-        assert!(!is_newer("0.1.0", "0.1.0"));
-        assert!(!is_newer("1.0.0", "0.9.9"));
+        assert!(is_newer("0.1.0", "0.2.0").unwrap());
+        assert!(is_newer("0.1.0", "0.1.1").unwrap());
+        assert!(is_newer("0.1.0", "1.0.0").unwrap());
+        assert!(!is_newer("0.2.0", "0.1.0").unwrap());
+        assert!(!is_newer("0.1.0", "0.1.0").unwrap());
+        assert!(!is_newer("1.0.0", "0.9.9").unwrap());
     }
 
     #[test]
     fn test_is_newer_edge_cases() {
-        assert!(!is_newer("1.0.0", "1.0.0"));
-        assert!(is_newer("0.99.99", "1.0.0"));
-        assert!(is_newer("1", "2"));
-        assert!(is_newer("1.0", "1.1"));
+        assert!(!is_newer("1.0.0", "1.0.0").unwrap());
+        assert!(is_newer("0.99.99", "1.0.0").unwrap());
+        assert!(is_newer("1", "2.0.0").is_err());
+        assert!(is_newer("1.0.0", "1.1").is_err());
     }
 
     #[test]
     fn test_is_newer_prerelease() {
-        assert!(!is_newer("1.0.0", "1.0.0-alpha.1"));
-        assert!(is_newer("1.0.0-alpha.1", "1.0.0"));
-        assert!(is_newer("1.0.0-alpha.1", "1.0.0-alpha.2"));
-        assert!(is_newer("1.0.0-alpha.1", "1.0.0-beta.1"));
-        assert!(!is_newer("1.0.0-beta.1", "1.0.0-alpha.1"));
-        assert!(!is_newer("1.0.0-alpha.1", "1.0.0-alpha.1"));
+        assert!(!is_newer("1.0.0", "1.0.0-alpha.1").unwrap());
+        assert!(is_newer("1.0.0-alpha.1", "1.0.0").unwrap());
+        assert!(is_newer("1.0.0-alpha.1", "1.0.0-alpha.2").unwrap());
+        assert!(is_newer("1.0.0-alpha.1", "1.0.0-beta.1").unwrap());
+        assert!(!is_newer("1.0.0-beta.1", "1.0.0-alpha.1").unwrap());
+        assert!(!is_newer("1.0.0-alpha.1", "1.0.0-alpha.1").unwrap());
     }
 
     #[test]
@@ -362,6 +356,49 @@ mod tests {
     }
 
     #[test]
+    fn parse_latest_version_info_rejects_inexact_authority_fields() {
+        let valid = r#"{
+            "version":"1.2.3",
+            "download_url":"/v1/ccs/conary/1.2.3/download",
+            "sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "size":12345
+        }"#;
+        parse_latest_version_info_bytes(valid.as_bytes()).unwrap();
+
+        for (label, invalid) in [
+            ("version", valid.replace("\"1.2.3\"", "\"latest\"")),
+            (
+                "SHA-256",
+                valid.replace(
+                    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                    "missing",
+                ),
+            ),
+            (
+                "artifact must not be empty",
+                valid.replace("\"size\":12345", "\"size\":0"),
+            ),
+            (
+                "exceeds",
+                valid.replace(
+                    "\"size\":12345",
+                    &format!("\"size\":{}", MAX_SELF_UPDATE_PACKAGE_SIZE + 1),
+                ),
+            ),
+            (
+                "unknown field",
+                valid.replace("\"size\":12345", "\"size\":12345,\"legacy\":true"),
+            ),
+        ] {
+            let error = parse_latest_version_info_bytes(invalid.as_bytes()).unwrap_err();
+            assert!(
+                error.to_string().contains(label),
+                "expected {label:?} in {error}"
+            );
+        }
+    }
+
+    #[test]
     fn test_version_check_result_variants() {
         let up_to_date = VersionCheckResult::UpToDate {
             version: "0.1.0".to_string(),
@@ -394,10 +431,10 @@ mod tests {
 
     #[test]
     fn test_is_newer_major_minor_patch() {
-        assert!(is_newer("1.9.9", "2.0.0"));
-        assert!(!is_newer("2.0.0", "1.9.9"));
-        assert!(is_newer("1.0.9", "1.1.0"));
-        assert!(!is_newer("1.1.0", "1.0.9"));
+        assert!(is_newer("1.9.9", "2.0.0").unwrap());
+        assert!(!is_newer("2.0.0", "1.9.9").unwrap());
+        assert!(is_newer("1.0.9", "1.1.0").unwrap());
+        assert!(!is_newer("1.1.0", "1.0.9").unwrap());
     }
 
     #[tokio::test]

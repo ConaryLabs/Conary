@@ -5,9 +5,9 @@
 post_install() {
     # Initialize the Conary database and seed default repos (including Remi CCS proxy).
     # Safe to re-run: init reconciles managed defaults without replacing user-managed endpoints.
-    /usr/bin/conary system init --profile arch
+    /usr/bin/conary system init
 }
 
 post_upgrade() {
-    /usr/bin/conary system init --profile arch
+    /usr/bin/conary system init
 }

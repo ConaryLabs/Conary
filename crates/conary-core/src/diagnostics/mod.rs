@@ -18,7 +18,6 @@ pub enum PackagingCommandStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum PackagingPhase {
-    Inference,
     RecipeValidation,
     SourceFetch,
     Build,
@@ -39,7 +38,6 @@ pub enum PackagingSeverity {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum PackagingDiagnosticCode {
-    InferenceTrace,
     RecipeValidationWarning,
     RecipeValidationFailed,
     SourceCacheMiss,
@@ -49,7 +47,7 @@ pub enum PackagingDiagnosticCode {
     CookFailed,
     PublishGateFailed,
     CcsV2ValidationFailed,
-    CcsV2LegacyRejected,
+    CcsFormatVersionRejected,
     ProjectPublishPreflightFailed,
     PublishJsonUnsupported,
     OperationRecordWriteFailed,
@@ -388,9 +386,9 @@ mod tests {
             "cook-1",
             7,
             PackagingDiagnostic::warning(
-                PackagingPhase::Inference,
-                PackagingDiagnosticCode::InferenceTrace,
-                "Inference used Cargo metadata",
+                PackagingPhase::RecipeValidation,
+                PackagingDiagnosticCode::RecipeValidationWarning,
+                "Recipe uses a deprecated field",
             ),
         );
 
@@ -399,7 +397,7 @@ mod tests {
         assert_eq!(value["operation_id"], "cook-1");
         assert_eq!(value["sequence"], 7);
         assert_eq!(value["kind"], "diagnostic-emitted");
-        assert_eq!(value["diagnostic"]["code"], "inference-trace");
+        assert_eq!(value["diagnostic"]["code"], "recipe-validation-warning");
     }
 
     #[test]

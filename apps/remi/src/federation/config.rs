@@ -175,6 +175,7 @@ fn extract_port_with_default(url: &str) -> Option<String> {
 /// region_hubs = ["https://*.conary.io:*"]  # Allow any port for conary.io subdomains
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FederationConfig {
     /// Enable federation (default: false)
     #[serde(default)]
@@ -274,11 +275,6 @@ pub struct FederationConfig {
     /// Trusted public keys for manifest verification (base64-encoded Ed25519)
     #[serde(default)]
     pub manifest_trusted_keys: Vec<String>,
-
-    /// Allow fetching resources with unsigned manifests (default: false)
-    /// Set to true only in development/testing environments
-    #[serde(default = "default_manifest_allow_unsigned")]
-    pub manifest_allow_unsigned: bool,
 }
 
 fn default_rendezvous_k() -> usize {
@@ -317,10 +313,6 @@ fn default_max_cell_size() -> usize {
     50
 }
 
-fn default_manifest_allow_unsigned() -> bool {
-    false // Secure by default: require signed manifests
-}
-
 impl Default for FederationConfig {
     fn default() -> Self {
         Self {
@@ -348,7 +340,6 @@ impl Default for FederationConfig {
             max_cell_size: default_max_cell_size(),
             upstream: None,
             manifest_trusted_keys: Vec::new(),
-            manifest_allow_unsigned: default_manifest_allow_unsigned(),
         }
     }
 }

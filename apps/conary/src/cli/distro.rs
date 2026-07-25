@@ -1,5 +1,5 @@
 // src/cli/distro.rs
-//! Legacy distro pinning compatibility commands
+//! Source-feed pinning and selection policy commands
 
 use super::DbArgs;
 use clap::Subcommand;
@@ -11,14 +11,14 @@ pub enum DistroCommands {
         /// Distro name (e.g., "ubuntu-26.04", "fedora-44")
         distro: String,
 
-        /// Compatibility mixing policy: strict, guarded, permissive
+        /// Source mixing policy: strict, guarded, permissive
         #[arg(long, default_value = "guarded")]
         mixing: String,
 
         #[command(flatten)]
         db: DbArgs,
     },
-    /// Remove the current compatibility distro pin
+    /// Remove the current source-feed pin
     Remove {
         #[command(flatten)]
         db: DbArgs,
@@ -28,12 +28,12 @@ pub enum DistroCommands {
         #[command(flatten)]
         db: DbArgs,
     },
-    /// Show current compatibility pin and affinity stats
+    /// Show the current source-feed pin and affinity stats
     Info {
         #[command(flatten)]
         db: DbArgs,
     },
-    /// Change mixing policy on the current compatibility pin
+    /// Change mixing policy on the current source-feed pin
     Mixing {
         /// New policy: strict, guarded, permissive
         policy: String,

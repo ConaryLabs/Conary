@@ -241,14 +241,15 @@ mod tests {
         );
         let db_path_string = fixture.db_path_string.clone();
         let package_for_thread = package.clone();
+        let trust_policy = fixture.trust_policy.clone();
 
         let handle = std::thread::spawn(move || {
             let command = ["/bin/true"];
             begin_try_session(TryStartRequest {
                 db_path: &db_path_string,
                 package_path: package_for_thread.as_path(),
+                trust_policy: &trust_policy,
                 activate: false,
-                allow_irreversible: false,
                 command: Some(&command),
                 watch_marker: None,
             })

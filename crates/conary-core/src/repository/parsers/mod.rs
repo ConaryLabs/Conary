@@ -58,63 +58,24 @@ pub struct PackageMetadata {
     /// Full URL to download the package file
     pub download_url: String,
 
-    /// Package dependencies (legacy flat list, kept for transition compatibility).
-    pub dependencies: Vec<Dependency>,
-
     /// Additional format-specific metadata (stored as JSON)
     pub extra_metadata: serde_json::Value,
 
-    // -- Normalized native semantics (Step 4) ----------------------------------
     /// Which distro ecosystem this metadata came from.
-    ///
-    /// `None` for legacy parsers that have not been updated yet.
-    pub source_distro: Option<RepositoryDependencyFlavor>,
+    pub source_distro: RepositoryDependencyFlavor,
 
     /// The version comparison scheme that applies to `version`.
-    ///
-    /// `None` for legacy parsers that have not been updated yet.
-    pub version_scheme: Option<VersionScheme>,
+    pub version_scheme: VersionScheme,
 
     /// Normalized requirement groups (alternatives, conditional markers).
     ///
-    /// Empty until the parser populates them; the legacy `dependencies` field
-    /// remains as the flat dependency projection for older parser outputs.
+    /// Native parsers populate these as solver authority.
     pub requirements: Vec<RepositoryRequirementGroup>,
 
     /// Normalized provides (package name, virtual caps, sonames, files).
     ///
-    /// Empty until the parser populates them.
+    /// Native parsers populate these as solver authority.
     pub provides: Vec<RepositoryProvide>,
-}
-
-/// Package dependency information
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Dependency {
-    /// Dependency package name
-    pub name: String,
-
-    /// Version constraint (e.g., ">= 1.0.0", "= 2.3.4-1")
-    pub constraint: Option<String>,
-
-    /// Type of dependency
-    pub dep_type: DependencyType,
-
-    /// Optional description (for optional dependencies)
-    pub description: Option<String>,
-}
-
-/// Type of package dependency
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum DependencyType {
-    /// Required runtime dependency
-    Runtime,
-
-    /// Optional/recommended dependency
-    Optional,
-
-    /// Build-time only dependency
-    Build,
 }
 
 /// Checksum algorithm type
@@ -127,19 +88,21 @@ pub enum ChecksumType {
     /// SHA-512 (also acceptable)
     Sha512,
 
-    /// MD5 (legacy, not for security)
+    /// MD5 (upstream metadata compatibility only, not for security)
     #[serde(rename = "md5")]
     Md5,
 }
 
 impl PackageMetadata {
-    /// Create minimal package metadata for testing
+    /// Create minimal, explicitly typed package metadata for testing.
     pub fn new(
         name: String,
         version: String,
         checksum: String,
         size: u64,
         download_url: String,
+        source_distro: RepositoryDependencyFlavor,
+        version_scheme: VersionScheme,
     ) -> Self {
         Self {
             name,
@@ -150,44 +113,11 @@ impl PackageMetadata {
             checksum_type: ChecksumType::Sha256,
             size,
             download_url,
-            dependencies: Vec::new(),
             extra_metadata: serde_json::Value::Null,
-            source_distro: None,
-            version_scheme: None,
+            source_distro,
+            version_scheme,
             requirements: Vec::new(),
             provides: Vec::new(),
-        }
-    }
-}
-
-impl Dependency {
-    /// Create a runtime dependency with no version constraint
-    pub fn runtime(name: String) -> Self {
-        Self {
-            name,
-            constraint: None,
-            dep_type: DependencyType::Runtime,
-            description: None,
-        }
-    }
-
-    /// Create a runtime dependency with a version constraint
-    pub fn runtime_versioned(name: String, constraint: String) -> Self {
-        Self {
-            name,
-            constraint: Some(constraint),
-            dep_type: DependencyType::Runtime,
-            description: None,
-        }
-    }
-
-    /// Create an optional dependency
-    pub fn optional(name: String, description: Option<String>) -> Self {
-        Self {
-            name,
-            constraint: None,
-            dep_type: DependencyType::Optional,
-            description,
         }
     }
 }
@@ -204,22 +134,13 @@ mod tests {
             "abc123".to_string(),
             1024,
             "https://example.com/package.tar.gz".to_string(),
+            RepositoryDependencyFlavor::Conary,
+            VersionScheme::Conary,
         );
 
         assert_eq!(pkg.name, "test-package");
         assert_eq!(pkg.version, "1.0.0");
         assert_eq!(pkg.size, 1024);
         assert_eq!(pkg.checksum_type, ChecksumType::Sha256);
-    }
-
-    #[test]
-    fn test_dependency_creation() {
-        let dep = Dependency::runtime("glibc".to_string());
-        assert_eq!(dep.name, "glibc");
-        assert_eq!(dep.dep_type, DependencyType::Runtime);
-        assert!(dep.constraint.is_none());
-
-        let versioned = Dependency::runtime_versioned("libc".to_string(), ">= 2.34".to_string());
-        assert_eq!(versioned.constraint, Some(">= 2.34".to_string()));
     }
 }

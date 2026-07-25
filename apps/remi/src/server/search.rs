@@ -27,7 +27,8 @@ pub struct PackageSearchDoc {
     pub distro: String,
     pub architecture: Option<String>,
     pub description: Option<String>,
-    pub dependencies: Option<String>,
+    /// Search-only projection of exact persisted requirement atoms.
+    pub requirement_terms: Option<String>,
     pub size: u64,
     pub converted: bool,
     pub source_kind: Option<String>,
@@ -60,7 +61,7 @@ pub struct SearchEngine {
     distro_field: Field,
     source_kind_field: Field,
     description_field: Field,
-    dependencies_field: Field,
+    requirement_terms_field: Field,
     size_field: Field,
     converted_field: Field,
 }
@@ -78,7 +79,7 @@ impl SearchEngine {
         let distro_field = schema.get_field("distro").unwrap();
         let source_kind_field = schema.get_field("source_kind").unwrap();
         let description_field = schema.get_field("description").unwrap();
-        let dependencies_field = schema.get_field("dependencies").unwrap();
+        let requirement_terms_field = schema.get_field("requirement_terms").unwrap();
         let size_field = schema.get_field("size").unwrap();
         let converted_field = schema.get_field("converted").unwrap();
 
@@ -95,7 +96,12 @@ impl SearchEngine {
                     tracing::warn!("Recreating search index due to: {}", e);
                     for entry in std::fs::read_dir(index_dir)? {
                         let entry = entry?;
-                        std::fs::remove_file(entry.path()).ok();
+                        let path = entry.path();
+                        if entry.file_type()?.is_dir() {
+                            std::fs::remove_dir_all(&path)?;
+                        } else {
+                            std::fs::remove_file(&path)?;
+                        }
                     }
                     Index::create_in_dir(index_dir, schema).with_context(|| {
                         format!("Failed to create index at {}", index_dir.display())
@@ -124,7 +130,7 @@ impl SearchEngine {
             distro_field,
             source_kind_field,
             description_field,
-            dependencies_field,
+            requirement_terms_field,
             size_field,
             converted_field,
         })
@@ -167,12 +173,12 @@ impl SearchEngine {
             .set_stored();
         schema_builder.add_text_field("description", desc_options);
 
-        // Dependencies: searchable but not individually stored
+        // Exact requirement atoms: searchable but not individually stored.
         let deps_indexing = TextFieldIndexing::default()
             .set_tokenizer("default")
             .set_index_option(schema::IndexRecordOption::WithFreqs);
         let deps_options = TextOptions::default().set_indexing_options(deps_indexing);
-        schema_builder.add_text_field("dependencies", deps_options);
+        schema_builder.add_text_field("requirement_terms", deps_options);
 
         // Size: numeric, stored and fast for sorting
         schema_builder.add_u64_field("size", NumericOptions::default().set_stored().set_fast());
@@ -212,7 +218,7 @@ impl SearchEngine {
         let delete_term = Term::from_field_text(self.name_distro_field, &composite_key);
         writer.delete_term(delete_term);
 
-        let distro_facet = Facet::from(&format!("/{}", pkg.distro));
+        let distro_facet = Facet::from_path([pkg.distro.as_str()]);
         let converted_val: u64 = if pkg.converted { 1 } else { 0 };
 
         let mut doc = doc!(
@@ -231,8 +237,8 @@ impl SearchEngine {
             doc.add_text(self.description_field, desc);
         }
 
-        if let Some(ref deps) = pkg.dependencies {
-            doc.add_text(self.dependencies_field, deps);
+        if let Some(ref terms) = pkg.requirement_terms {
+            doc.add_text(self.requirement_terms_field, terms);
         }
 
         writer.add_document(doc)?;
@@ -251,19 +257,31 @@ impl SearchEngine {
         // Clear existing index
         writer.delete_all_documents()?;
 
-        // Query latest version of each package per distro. Conversion status is
-        // derived from full converted rows so scriptlet publication summary
-        // health participates in the public-ready decision.
+        // Query the latest version of each package per distro. Conversion
+        // status comes only from current, structurally valid conversion rows.
         // Uses a subquery to find the most recently synced row per (name, repo).
-        // COALESCE(r.default_strategy_distro, r.name) matches the distro slug
-        // stored in converted_packages (which may differ from the repo name).
-        let public_ready = public_ready_search_keys(&conn)?;
+        // Persisted repositories carry an exact public profile ID. The public
+        // search document uses that profile's declared Remi route; repository
+        // names never become serving identity.
+        let current_conversions = current_conversion_search_keys(&conn)?;
         let mut stmt = conn.prepare(
             "SELECT rp.name, rp.version, rp.package_release,
-                    COALESCE(r.default_strategy_distro, r.name) as distro,
-                    rp.description, rp.dependencies, rp.size, rp.architecture, rp.metadata
+                    r.default_strategy_distro as profile_id,
+                    rp.description,
+                    GROUP_CONCAT(
+                        rr.capability || ' ' || COALESCE(rr.version_constraint, ''),
+                        ' '
+                    ) AS requirement_terms,
+                    rp.size, rp.architecture,
+                    EXISTS(
+                        SELECT 1
+                        FROM native_package_publications npp
+                        WHERE npp.repository_package_id = rp.id
+                          AND npp.status = 'public'
+                    ) AS is_public_native
              FROM repository_packages rp
              JOIN repositories r ON rp.repository_id = r.id
+             LEFT JOIN repository_requirements rr ON rr.repository_package_id = rp.id
              WHERE r.enabled = 1
                AND rp.size > 0
                AND rp.id = (
@@ -272,6 +290,7 @@ impl SearchEngine {
                     AND rp2.size > 0
                    ORDER BY rp2.synced_at DESC LIMIT 1
                )
+             GROUP BY rp.id
              ORDER BY rp.name",
         )?;
 
@@ -280,18 +299,34 @@ impl SearchEngine {
             let name: String = row.get(0)?;
             let version: String = row.get(1)?;
             let package_release: String = row.get(2)?;
-            let distro: String = row.get(3)?;
-            let metadata: Option<String> = row.get(8)?;
-            if metadata_source_kind(metadata.as_deref()) == Some("native-ccs") {
+            let profile_id: String = row.get(3)?;
+            let profile = conary_core::repository::supported_profiles::profile_by_public_id(
+                &profile_id,
+            )
+            .ok_or_else(|| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    3,
+                    rusqlite::types::Type::Text,
+                    Box::new(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!(
+                            "repository package has unsupported persisted profile '{profile_id}'"
+                        ),
+                    )),
+                )
+            })?;
+            let distro = profile.remi_route_slug().to_string();
+            let is_public_native: bool = row.get(8)?;
+            if is_public_native {
                 return Ok(None);
             }
             let architecture: Option<String> = row.get(7)?;
-            let converted = public_ready.contains(&SearchConversionKey {
+            let converted = current_conversions.contains(&SearchConversionKey {
                 distro: distro.clone(),
                 name: name.clone(),
                 version: version.clone(),
                 architecture: architecture.clone(),
-            }) || public_ready.contains(&SearchConversionKey {
+            }) || current_conversions.contains(&SearchConversionKey {
                 distro: distro.clone(),
                 name: name.clone(),
                 version: version.clone(),
@@ -304,7 +339,7 @@ impl SearchEngine {
                 distro,
                 architecture,
                 description: row.get(4)?,
-                dependencies: row.get(5)?,
+                requirement_terms: row.get(5)?,
                 size: row.get::<_, i64>(6).map(|s| s as u64)?,
                 converted,
                 source_kind: None,
@@ -332,7 +367,7 @@ impl SearchEngine {
                 release: Some(row.get(3)?),
                 architecture: Some(row.get(4)?),
                 description: Some("Native CCS release artifact".to_string()),
-                dependencies: None,
+                requirement_terms: None,
                 size: row.get::<_, i64>(5).map(|size| size as u64)?,
                 converted: false,
                 source_kind: Some("native-ccs".to_string()),
@@ -372,7 +407,7 @@ impl SearchEngine {
 
         // If distro filter is specified, wrap in a boolean query with facet filter
         let final_query: Box<dyn tantivy::query::Query> = if let Some(distro_name) = distro {
-            let facet = Facet::from(&format!("/{}", distro_name));
+            let facet = Facet::from_path([distro_name]);
             let facet_term = Term::from_facet(self.distro_field, &facet);
             let facet_query = TermQuery::new(facet_term, schema::IndexRecordOption::Basic);
 
@@ -395,13 +430,13 @@ impl SearchEngine {
             let name = doc
                 .get_first(self.name_exact_field)
                 .and_then(|v| v.as_str())
-                .unwrap_or("")
+                .context("search index document has no exact package name")?
                 .to_string();
 
             let version = doc
                 .get_first(self.version_field)
                 .and_then(|v| v.as_str())
-                .unwrap_or("")
+                .context("search index document has no package version")?
                 .to_string();
 
             let release = doc
@@ -410,11 +445,19 @@ impl SearchEngine {
                 .filter(|value| !value.is_empty())
                 .map(String::from);
 
-            let distro_val = doc
+            let stored_distro_facet = doc
                 .get_first(self.distro_field)
                 .and_then(|v| v.as_facet())
-                .map(|path| path.strip_prefix('/').unwrap_or(path).to_string())
-                .unwrap_or_default();
+                .context("search index document has no distro facet")?;
+            let distro_facet = Facet::from_encoded(stored_distro_facet.as_bytes().to_vec())
+                .context("search index document has an invalid encoded distro facet")?;
+            let distro_path = distro_facet.to_path();
+            let distro_val = match distro_path.as_slice() {
+                [distro] if !distro.is_empty() => (*distro).to_string(),
+                _ => anyhow::bail!(
+                    "search index distro facet must contain exactly one non-empty path segment"
+                ),
+            };
 
             let description = doc
                 .get_first(self.description_field)
@@ -424,13 +467,19 @@ impl SearchEngine {
             let size = doc
                 .get_first(self.size_field)
                 .and_then(|v| v.as_u64())
-                .unwrap_or(0);
+                .context("search index document has no package size")?;
 
-            let converted = doc
+            let converted_value = doc
                 .get_first(self.converted_field)
                 .and_then(|v| v.as_u64())
-                .unwrap_or(0)
-                != 0;
+                .context("search index document has no conversion status")?;
+            let converted = match converted_value {
+                0 => false,
+                1 => true,
+                value => anyhow::bail!(
+                    "search index document has invalid conversion status {value}; expected 0 or 1"
+                ),
+            };
 
             let source_kind = doc
                 .get_first(self.source_kind_field)
@@ -500,21 +549,23 @@ struct SearchConversionKey {
     architecture: Option<String>,
 }
 
-fn public_ready_search_keys(conn: &rusqlite::Connection) -> Result<HashSet<SearchConversionKey>> {
-    Ok(ConvertedPackage::list_all(conn)?
-        .into_iter()
-        .filter(|converted| {
-            !converted.needs_reconversion() && converted.is_scriptlet_public_ready()
-        })
-        .filter_map(|converted| {
-            Some(SearchConversionKey {
-                distro: converted.distro?,
-                name: converted.package_name?,
-                version: converted.package_version?,
-                architecture: converted.package_architecture,
-            })
-        })
-        .collect())
+fn current_conversion_search_keys(
+    conn: &rusqlite::Connection,
+) -> Result<HashSet<SearchConversionKey>> {
+    let mut keys = HashSet::new();
+    for converted in ConvertedPackage::list_repository_conversions(conn)? {
+        if !converted.needs_reconversion() {
+            let artifact = converted.repository_artifact()?;
+            converted.scriptlet_summary()?;
+            keys.insert(SearchConversionKey {
+                distro: artifact.distro.to_string(),
+                name: artifact.package_name.to_string(),
+                version: artifact.package_version.to_string(),
+                architecture: artifact.package_architecture.map(str::to_string),
+            });
+        }
+    }
+    Ok(keys)
 }
 
 fn search_document_key(
@@ -532,21 +583,6 @@ fn search_document_key(
         release.unwrap_or(""),
         architecture.unwrap_or("")
     )
-}
-
-fn metadata_source_kind(metadata: Option<&str>) -> Option<&str> {
-    let metadata = metadata?;
-    let value = serde_json::from_str::<serde_json::Value>(metadata).ok()?;
-    value
-        .get("source_kind")
-        .and_then(|source_kind| source_kind.as_str())
-        .map(|source_kind| {
-            if source_kind == "native-ccs" {
-                "native-ccs"
-            } else {
-                "other"
-            }
-        })
 }
 
 /// Escape regex special characters in a string
@@ -568,8 +604,9 @@ fn regex_escape(s: &str) -> String {
 mod tests {
     use super::*;
     use crate::server::native_publish::test_support::seed_native_publication;
-    use conary_core::ccs::convert::ScriptletBundleSummary;
-    use conary_core::db::models::{ConvertedPackage, Repository, RepositoryPackage};
+    use conary_core::db::models::{
+        CONVERSION_VERSION, ConvertedPackage, Repository, RepositoryPackage,
+    };
     use tempfile::TempDir;
 
     fn create_test_engine() -> (TempDir, SearchEngine) {
@@ -582,19 +619,22 @@ mod tests {
         let temp_file = tempfile::NamedTempFile::new().unwrap();
         let conn = rusqlite::Connection::open(temp_file.path()).unwrap();
         conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
-        conary_core::db::schema::migrate(&conn).unwrap();
+        conary_core::db::schema::ensure_current(&conn).unwrap();
         (temp_file, conn)
     }
 
     fn insert_repo_package(conn: &rusqlite::Connection, distro: &str, name: &str, version: &str) {
+        let profile = conary_core::repository::supported_profiles::profile_for_remi_route(distro)
+            .unwrap_or_else(|| panic!("test route '{distro}' must name a supported Remi profile"));
         let mut repo = Repository::new(format!("{distro}-base"), "https://example.com".to_string());
-        repo.default_strategy_distro = Some(distro.to_string());
+        repo.default_strategy_distro = Some(profile.id().to_string());
         let repo_id = repo.insert(conn).unwrap();
 
         let mut pkg = RepositoryPackage::new(
             repo_id,
             name.to_string(),
             version.to_string(),
+            profile.version_scheme(),
             format!("sha256:{name}-{version}"),
             1024,
             format!("https://example.com/{name}-{version}.rpm"),
@@ -604,13 +644,13 @@ mod tests {
         pkg.insert(conn).unwrap();
     }
 
-    fn insert_private_review_conversion(
+    fn insert_stale_conversion(
         conn: &rusqlite::Connection,
         distro: &str,
         package: &str,
         version: &str,
     ) {
-        let mut converted = ConvertedPackage::new_server(
+        let mut converted = ConvertedPackage::new_repository(
             distro.to_string(),
             package.to_string(),
             version.to_string(),
@@ -622,15 +662,7 @@ mod tests {
             format!("/tmp/{package}-{version}.ccs"),
         );
         converted.package_architecture = Some("x86_64".to_string());
-        converted
-            .set_scriptlet_metadata(&ScriptletBundleSummary {
-                publication_status: "private-review".to_string(),
-                scriptlet_fidelity: "review-required".to_string(),
-                target_compatibility: "review-required".to_string(),
-                review_reason_codes: vec!["review-class-debconf".to_string()],
-                ..Default::default()
-            })
-            .unwrap();
+        converted.conversion_version = CONVERSION_VERSION - 1;
         converted.insert(conn).unwrap();
     }
 
@@ -645,7 +677,7 @@ mod tests {
             distro: "fedora".to_string(),
             architecture: Some("x86_64".to_string()),
             description: Some("High performance HTTP server and reverse proxy".to_string()),
-            dependencies: Some("openssl pcre2 zlib".to_string()),
+            requirement_terms: Some("openssl pcre2 zlib".to_string()),
             size: 1_200_000,
             converted: true,
             source_kind: None,
@@ -659,7 +691,7 @@ mod tests {
             distro: "fedora".to_string(),
             architecture: Some("x86_64".to_string()),
             description: Some("Command line tool for transferring data".to_string()),
-            dependencies: Some("openssl nghttp2 zlib".to_string()),
+            requirement_terms: Some("openssl nghttp2 zlib".to_string()),
             size: 500_000,
             converted: false,
             source_kind: None,
@@ -734,7 +766,7 @@ mod tests {
                 distro: "fedora".to_string(),
                 architecture: Some("x86_64".to_string()),
                 description: None,
-                dependencies: None,
+                requirement_terms: None,
                 size: 0,
                 converted: false,
                 source_kind: None,
@@ -767,7 +799,7 @@ mod tests {
             distro: "arch".to_string(),
             architecture: Some("x86_64".to_string()),
             description: Some("Vi Improved".to_string()),
-            dependencies: None,
+            requirement_terms: None,
             size: 2_000_000,
             converted: false,
             source_kind: None,
@@ -782,7 +814,7 @@ mod tests {
             distro: "arch".to_string(),
             architecture: Some("x86_64".to_string()),
             description: Some("Vi Improved - text editor".to_string()),
-            dependencies: None,
+            requirement_terms: None,
             size: 2_100_000,
             converted: true,
             source_kind: None,
@@ -796,11 +828,11 @@ mod tests {
     }
 
     #[test]
-    fn search_rebuild_marks_non_public_rows_unconverted() {
+    fn search_rebuild_marks_stale_rows_unconverted() {
         let (db_file, _) = create_test_db();
         let conn = rusqlite::Connection::open(db_file.path()).unwrap();
         insert_repo_package(&conn, "fedora", "gtk3", "3.24.0");
-        insert_private_review_conversion(&conn, "fedora", "gtk3", "3.24.0");
+        insert_stale_conversion(&conn, "fedora", "gtk3", "3.24.0");
         drop(conn);
 
         let (_dir, engine) = create_test_engine();

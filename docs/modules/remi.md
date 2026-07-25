@@ -1,16 +1,59 @@
+---
+last_updated: 2026-07-25
+revision: 4
+summary: Document Remi source and repository trust authority, conversion, publication, and serving
+---
+
 # Remi
 
 Remi is Conary's on-demand conversion and package-serving service. For the
-limited public preview, its supported public source targets are Fedora 44,
+limited public preview, its configured public repository feeds are Fedora 44,
 Ubuntu 26.04, and Arch. It converts upstream RPM, DEB, and Arch packages into
 CCS artifacts, stores converted content in the local content-addressed store,
 and can write chunks through to R2 when configured.
 
-M4d routes every `{distro}` path parameter through supported profile route
+M4d routes every `{distro}` path parameter through repository-feed profile
 validation before DB queries, cache/key filesystem paths, or release-upload
 trust gates. Public Remi route slugs remain `fedora`, `ubuntu`, and `arch`;
 they are backed by profile route metadata rather than a local hard-coded
 `SUPPORTED_DISTROS` list.
+
+## Package Source Authority
+
+Hosted package sources are declared in `deploy/remi-repositories.toml` and
+loaded by `apps/remi/src/server/repository_manifest.rs`. Every source names one
+exact public profile and carries typed parser construction data: RPM declares
+architecture; Debian declares distribution, component, and architecture; Arch
+declares the repository database name; JSON is explicit when a source actually
+serves Conary JSON metadata.
+
+Every native source also carries the matching `RepositoryTrustPolicy`. Fedora
+uses its official metalink to authenticate the exact `repomd.xml` and a
+separate pinned Fedora package key for embedded RPM signatures. Ubuntu pins the
+archive Release certificate that authenticates `InRelease` through Packages to
+the `.deb`. Each Arch source consumes the exact `archlinux-keyring` ALPM
+package, pins all five current master fingerprints, requires three distinct
+master certifications for packager keys, requires package signatures, and
+checks database signatures when present. Startup refuses a missing or
+format-mismatched trust contract; repository reconciliation cannot install an
+authority bypass.
+
+`repositories.parser_config_json` persists that typed configuration;
+`package_format` is its validated query projection, while
+`trust_policy_json` persists the role-separated trust contract. Repository
+names, URL substrings, file extensions, route-family aliases, and SQL `LIKE`
+expressions are not source, parser, or trust authority. A configured native
+parser or trust failure is an error for that source; it does not silently retry
+the URL as another metadata format or continue unsigned.
+
+`apps/remi/src/deployment.rs` owns recoverable config/schema transitions and
+read-only deployment inspection. It snapshots a current database or retires an
+old schema epoch before replacement, so health failure can restore config,
+source authority, and SQLite state together. Startup reconciles the installed
+manifest before opening listeners, then immediately refreshes metadata and
+runs prewarm jobs. The release deployment gate requires exact source
+reconciliation, all sources populated, and at least one conversion and
+validated converted artifact for every configured public profile.
 
 ## Release Uploads
 
@@ -21,13 +64,11 @@ projected into `repository_packages`; they are not synthetic
 `converted_packages` rows. Native uploads stage privately, run the shared static
 publish gate against `release_publish.trusted_build_attestation_signers`.
 After structural parsing, signature/trust verification, and the shared static
-publish gate pass, Remi derives the supported target profile from the release
-route slug and validates any signed CCS v2 lifecycle authority against that
-profile. Unsupported route slugs fail before storage or artifact verification;
-supported routes with unsupported lifecycle entries fail with
-`LIFECYCLE_UNSUPPORTED` before public rows, chunks, or TUF targets are written.
-Package rows, native rows, chunks, and TUF targets are published only after the
-gate, route-derived lifecycle validation, and metadata commit pass.
+publish gate pass, Remi validates signed CCS v2 lifecycle authority
+structurally. The route selects a repository feed, never a destination
+compatibility policy. Unsupported route slugs fail before storage or artifact
+verification. Package rows, native rows, chunks, and TUF targets are published
+only after the gate, structural lifecycle validation, and metadata commit pass.
 
 The route/staging wrapper lives in `apps/remi/src/server/release_publish.rs`.
 Native CCS verification, artifact promotion, metadata persistence, supersede
@@ -42,128 +83,61 @@ clients should request `version`, `release`, and `arch` when selecting a native
 package. If a version-only request matches multiple native releases, Remi
 returns a conflict with the available releases instead of guessing.
 
-## Passive Scriptlet Metadata
+## Native Lifecycle Metadata
 
-Goal 4 conversions embed a passive `legacy_scriptlets` bundle in the generated
-CCS manifest and store aggregate scriptlet metadata on `converted_packages`.
-Those database fields record fidelity, target compatibility, publication
-status, evidence digests, blocked/review reason codes, and sanitized summary
-counts for converted artifacts.
+RPM, Debian, and Arch conversions embed the current `native_lifecycle` bundle
+in the generated CCS manifest and persist its aggregate summary on
+`converted_packages`. The row records lifecycle fidelity, evidence digest,
+formal unknown-command evidence, and diagnostic classes. Entry presence in the
+validated bundle is lifecycle authority; the summary carries no duplicated
+entry-decision count. There is no scriptlet publication-status projection.
+The current schema separates installed conversions from repository-serving
+artifacts with a required discriminator. Installed rows require an exact trove
+identity and cannot carry serving fields. Repository rows require their exact
+distro/name/version identity, chunk list, total size, content hash, and CCS
+path; public and OCI handlers validate that typed artifact instead of filling
+missing fields with guesses or empty values. Local conversion tracking is
+written only after the CCS install transaction commits.
 
-Public package detail, metadata, and generated-index responses expose public
-rows through a sanitized `scriptlets` object. Local `review_artifact_path`
-values remain private server state and are represented publicly only as
-`review_artifact_available`.
+Ready conversion means the artifact carries a source-independent Conary
+lifecycle contract. A client may install it on any target whose typed
+capability inventory satisfies that contract, without consulting or mutating
+RPM, dpkg, or ALPM state. Missing source-format semantics are required
+parser/planner/executor defects; Remi does not turn them into a review workflow
+or make a source package manager part of the runtime.
 
-Publication refusal responses and the default-off admin non-public test-serving
-manifest share the same sanitized `PublicationGateReport`: boot-security and
-generic LSM security-policy intent metadata is normalized before serialization,
-private paths and secret-bearing tokens are redacted, and local
-`review_artifact_path` values remain private. Private review artifact files use
-the raw report helper so operators can still inspect exact blocked paths during
-triage. Approved system policy paths are preserved only when absolute and free
-of `..` traversal components. The bounded admin backfill resumes after its
-stored converted-package high-water mark and does not rebuild existing
-samples.
+The summary is validated when conversion is persisted and when a current row is
+read. Malformed JSON, scalar/summary disagreement, an unknown schema revision,
+or a missing CCS object is data corruption or stale conversion state and
+returns an error or triggers reconversion. It is not converted into a human
+review outcome.
 
-### Scriptlet Evidence Queue
+Package detail, metadata, generated indexes, sparse indexes, search, OCI, delta,
+and download routes expose the same sanitized `scriptlets` projection. Program
+bodies and local filesystem paths are not part of that response.
 
-Remi maintains an admin/operator-only scriptlet evidence queue for adapter
-engineering. The current schema stores `scriptlet_evidence_*` queue samples with
-one privacy-normalized typed evidence record per observation plus sanitized
-boot/security and generic LSM intent evidence. The typed record retains command
-and argument provenance, execution context, lifecycle, source, environment
-names, and pipeline identity. Stable command shape, blocked class, distro,
-target profile, and lifecycle phase remain discovery indexes rather than
-semantic authority. Conary-core owns the current-only database schema and model
-helpers; Remi owns privacy
-normalization, aggregation, backfill, admin routes, and packet export under
-`apps/remi/src/server/scriptlet_evidence_queue/` and
-`apps/remi/src/server/handlers/admin/scriptlet_evidence.rs`.
+### Current Converted Artifact Serving
 
-Incremental conversion persistence records queue samples best-effort after a
-converted row is stored. Existing rows can be materialized with
-`POST /v1/admin/scriptlet-evidence/backfill`, which processes a bounded batch
-without startup backfill. Admins can list clusters, inspect detail, update
-triage state, add private maintainer notes, and export private or
-`public-sanitized` packets through the `/v1/admin/scriptlet-evidence/*` route
-family. Queue samples include sanitized generic LSM `security_policy_intents`
-when conversion can type SELinux or AppArmor helper behavior, and the queue
-uses those records for adapter planning and public/private packet export.
-Supported SELinux and AppArmor adapter evidence can stay dormant on targets
-without the matching provider. Unsupported AppArmor forms still stay
-review-only and record `block-on-enforcing-target` fallback.
-Detail responses expose review-artifact availability and staleness, never raw
-local review artifact paths. Private packets include sanitized artifact
-references for maintainer follow-up; `public-sanitized` packets omit review
-artifacts and private notes.
+Server conversion has two terminal outcomes: ready or failed. A ready
+conversion is advertised and served when its conversion version and lifecycle
+summary are current and its CCS/CAS objects exist. Lifecycle program content,
+diagnostic classes, package names, provides, and command-name matches do not
+create a second serving decision.
 
-Unknown-command samples come directly from the formal shell parser's typed
-command nodes. Remi does not re-tokenize bodies or use string classification to
-drop shell-looking values. Command-shape normalization is privacy and discovery
-metadata only; it cannot rewrite CCS summaries, adapter decisions,
-support-matrix outcomes, legacy replay, or publication state.
+Every route resolves the public route slug to one exact persisted source
+profile and uses the same current-row validation. A stale row is reconverted;
+malformed current state is surfaced as a server data error. Conversion has no
+operator promotion state or alternate serving lane.
 
-There is no queue normalization migration or reconciliation API. Schema,
-conversion-contract, or sanitizer changes rebuild the pre-alpha database and
-reconvert authoritative package inputs. The retired normalization-version,
-supersession, source-to-target link, and reconciliation-route machinery is not
-part of the current contract.
+Local chunk visibility in `server/publication.rs` is a reachability check:
+native publication references are authoritative directly, and converted chunks
+are hidden only when every referring conversion is stale. It does not classify
+lifecycle program text.
 
-The queue is not publication authority. Moving a cluster to
-`covered-public-ready` records maintainer workflow state only; it does not
-rewrite `converted_packages.publication_status`, make blocked rows public, call
-LLM services, create a public issue tracker, or otherwise make a package
-public.
-
-### Legacy Scriptlet Publication Gate
-
-Remi treats legacy scriptlet metadata embedded during conversion as an active
-serving gate. Converted rows whose scriptlet summary is valid and has
-`publication_status = "public"` may be advertised, indexed, and served only
-when the core conversion outcome is public-ready: native-free or fully replaced
-by adapter/support-matrix evidence. Rows with `private-review`, `blocked`,
-`local-only`, malformed summary JSON, or non-default scriptlet evidence without
-an explicit summary are terminal review/blocked conversion outcomes and are not
-public-ready.
-For sysctl, public-ready means the converter produced complete `sysctl/v1`
-evidence, projected it into native `hooks.sysctl`, and the target profile
-derived from the public route slug allows that exact sysctl key. Missing
-profile context or unsupported keys stay `private-review`, not public. The
-current public proof key is `kernel.example`; `net.ipv4.ip_forward` remains
-valid private-review evidence and reports
-`public-policy-sysctl-target-profile-unsupported` unless a future target
-profile allows it. Broad or denied sysctl forms remain blocked/private.
-For setuid, public-ready means the converter produced complete
-`setuid-mode/v1` evidence for a payload executable and projected it into native
-file mode plus `policy.allow_setuid_paths`.
-Fully replaced scriptlets are public only when their projected authority also
-passes public policy. For `file-capability/v1`, `cap_net_bind_service` may be
-public-ready; high-risk known capabilities produce valid replacement evidence
-and valid CCS manifest authority but Remi treats the converted row as
-private-review. Setcap removal, inheritable/process/ambient capability forms,
-setpriv, setgid, broad chmod, unknown capability names, and non-payload
-privilege forms remain blocked/private.
-For AppArmor, public-ready means the converter produced complete
-`apparmor-policy/v1` evidence for a payload-backed
-`apparmor_parser -r|--replace /etc/apparmor.d/<profile>` reload. Mode changes,
-profile disable/status helpers, broad reloads, and non-payload profile paths
-remain blocked/private.
-Remi treats those broader LSM forms as non-public until a later target-provider
-policy model proves the provider behavior and fallback semantics.
-
-This gate is publication-only. It does not replay scriptlets, promote reviewed
-packages, or change client install/update/remove behavior.
-
-PAM helper conversions are blocked/non-public under the same gate. The
-default-off admin test lane may expose sanitized blocked metadata to maintainers,
-but public package, detail, index, sparse, OCI, and chunk routes continue to
-require public-ready status.
-
-Sparse-index and search responses use `converted=true` only for rows that do
-not need reconversion and pass the same public-ready scriptlet gate. A completed
-conversion row that requires legacy replay, review, or blocking remains private
-server state and is not advertised as a normal converted artifact.
+Sparse-index and search responses use `converted=true` only for current,
+validated conversions. Lifecycle execution remains the client's typed
+transaction responsibility; serving a lifecycle-bearing CCS does not bypass
+client preflight.
 
 Public package lookup and download orchestration remain in
 `apps/remi/src/server/handlers/packages.rs`; delta lookup is owned by
@@ -173,24 +147,11 @@ Bloom rebuild, and chunk-directory scanning are owned by
 `handlers/chunks/admin.rs`. Focused handler tests live beside those modules
 under `handlers/{packages,chunks,index,oci}/tests.rs`.
 
-### Non-Public Test Serving
-
-Remi also has a default-off admin/test lane for valid non-public converted
-artifacts, including rows classified as `blocked`, `private-review`, or
-`local-only`. When `non_public_test_serving.enabled = true`, an admin can
-request `/v1/admin/packages/{distro}/{package}/test-manifest` or
-`/v1/admin/packages/{distro}/{package}/test-download` with an exact version and
-optional architecture (`arch`, or `architecture` as an alias). This does not
-change public publication status, public indexes, OCI tags, sparse indexes,
-search results, or public chunk serving. Malformed or stale rows are not
-test-served; they need reconversion or metadata repair first.
-
 ### Fixture Ownership
 
 The first Remi fixture ownership map lives in `docs/modules/test-fixtures.md`.
-Start there before changing scriptlet publication gates, converted package
-public-ready filtering, public index metadata, review artifacts, static test
-fixture uploads, or `conary-test` manifest behavior.
+Start there before changing conversion validation, public index metadata,
+static test fixture uploads, or `conary-test` manifest behavior.
 
 Fast proof for native release-publication edits:
 
@@ -199,10 +160,10 @@ cargo test -p remi release_upload_
 cargo test -p conary --test packaging_m4c
 ```
 
-Fast proof for converted publication-gate edits:
+Fast proof for conversion edits:
 
 ```bash
-cargo test -p remi publication
+cargo test -p remi conversion
 ```
 
 Medium proof when public serving, conversion state, or generated metadata
@@ -230,13 +191,10 @@ Implementation ownership lives in child modules:
 - `conversion/metadata.rs`: safe CCS filenames, profile-backed parser dispatch,
   metadata construction, repository identity application, and
   repository-provide merging.
-- `conversion/safety.rs`: critical package and runtime capability refusal
-  guards.
 - `conversion/storage.rs`: local CAS writes, optional R2 write-through, and
   checksum helpers.
 - `conversion/persistence.rs`: converted-package rows, cache-hit
-  reconstruction, review artifact persistence, and publication outcome
-  wrapping.
+  reconstruction, current-summary validation, and ready-result construction.
 - `conversion/recipe.rs`: recipe URL fetch, DNS/IP validation, SSRF refusal,
   and server-side recipe builds.
 - `conversion/test_support.rs`: conversion-owned test DB, repository package,
@@ -245,8 +203,7 @@ Implementation ownership lives in child modules:
 
 For conversion behavior changes, start with the owner module and run the
 focused module tests plus `cargo test -p remi --lib conversion`. For public
-listing, review artifact, or scriptlet-publication behavior changes, also run
-`cargo test -p remi publication`.
+listing or lifecycle-summary behavior changes, also run `cargo test -p remi`.
 
 ## Conversion Benchmark Evidence
 

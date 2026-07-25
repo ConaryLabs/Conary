@@ -5,7 +5,7 @@
 //! Parses Arch Linux .db.tar.gz files which contain package metadata
 //! in a custom text format with %FIELD% markers.
 
-use super::{ChecksumType, Dependency, PackageMetadata, RepositoryParser};
+use super::{ChecksumType, PackageMetadata, RepositoryParser};
 use crate::compression::decompress_auto;
 use crate::error::{Error, Result};
 use crate::repository::client::RepositoryClient;
@@ -13,12 +13,14 @@ use crate::repository::dependency_model::{
     RepositoryCapabilityKind, RepositoryDependencyFlavor, RepositoryProvide,
     RepositoryRequirementClause, RepositoryRequirementGroup, RepositoryRequirementKind,
 };
-use crate::repository::gpg::MetadataSignatureVerifier;
+use crate::repository::package_relation::parse_native_relation;
+use crate::repository::trust::openpgp::PreparedOpenPgpTrust;
+use crate::repository::trust::{ArchSignatureRequirement, RepositoryTrustPolicy, TrustRole};
 use crate::repository::versioning::VersionScheme;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use tar::Archive;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 use super::common::{self, MAX_PACKAGE_SIZE};
 
@@ -26,24 +28,18 @@ use super::common::{self, MAX_PACKAGE_SIZE};
 pub struct ArchParser {
     /// Repository name (e.g., "core", "extra", "community")
     repo_name: String,
-    metadata_signature_verifier: Option<MetadataSignatureVerifier>,
+    trust: PreparedOpenPgpTrust,
 }
 
 impl ArchParser {
     /// Create a new Arch Linux parser for a specific repository
-    pub fn new(repo_name: String) -> Self {
-        Self {
-            repo_name,
-            metadata_signature_verifier: None,
+    pub fn new(repo_name: String, trust: PreparedOpenPgpTrust) -> Result<Self> {
+        if !matches!(trust.policy(), RepositoryTrustPolicy::Arch { .. }) {
+            return Err(Error::ConfigError(
+                "Arch parser requires an Arch repository trust policy".to_string(),
+            ));
         }
-    }
-
-    pub fn with_metadata_signature_verifier(
-        mut self,
-        metadata_signature_verifier: Option<MetadataSignatureVerifier>,
-    ) -> Self {
-        self.metadata_signature_verifier = metadata_signature_verifier;
-        self
+        Ok(Self { repo_name, trust })
     }
 
     /// Download and decompress the repository database
@@ -55,10 +51,27 @@ impl ArchParser {
 
         let client = RepositoryClient::new()?;
         let raw_bytes = client.download_to_bytes(&db_url).await?;
-        if let Some(verifier) = &self.metadata_signature_verifier {
-            verifier
-                .verify_metadata_bytes(&db_url, &raw_bytes, "arch database")
-                .await?;
+        let signature_url = format!("{db_url}.sig");
+        let requirement = match self.trust.policy() {
+            RepositoryTrustPolicy::Arch { sig_level, .. } => sig_level.database,
+            _ => unreachable!("constructor validates Arch trust"),
+        };
+        match client.download_to_bytes(&signature_url).await {
+            Ok(signature) => {
+                self.trust
+                    .verify_detached(TrustRole::ArchDatabase, &raw_bytes, &signature)?;
+            }
+            Err(Error::HttpStatus {
+                status: 403 | 404, ..
+            }) if requirement == ArchSignatureRequirement::Optional => {}
+            Err(Error::HttpStatus {
+                status: 403 | 404, ..
+            }) => {
+                return Err(Error::GpgVerificationFailed(format!(
+                    "Arch SigLevel requires repository database signature {signature_url}"
+                )));
+            }
+            Err(error) => return Err(error),
         }
         decompress_auto(&raw_bytes).map_err(|error| {
             Error::ParseError(format!("Failed to decompress {}: {}", db_url, error))
@@ -66,7 +79,7 @@ impl ArchParser {
     }
 
     /// Parse a desc file from the tarball
-    fn parse_desc_file(&self, content: &str) -> HashMap<String, Vec<String>> {
+    fn parse_desc_file(&self, content: &str) -> Result<HashMap<String, Vec<String>>> {
         let mut fields = HashMap::new();
         let mut current_field: Option<String> = None;
         let mut values: Vec<String> = Vec::new();
@@ -76,69 +89,44 @@ impl ArchParser {
 
             if trimmed.starts_with('%') && trimmed.ends_with('%') {
                 // Save previous field
-                if let Some(field) = current_field.take() {
-                    fields.insert(field, values.clone());
-                    values.clear();
+                if let Some(field) = current_field.take()
+                    && fields
+                        .insert(field.clone(), std::mem::take(&mut values))
+                        .is_some()
+                {
+                    return Err(Error::ParseError(format!(
+                        "Arch repository metadata repeats %{field}%"
+                    )));
                 }
 
                 // Start new field
                 current_field = Some(trimmed[1..trimmed.len() - 1].to_string());
             } else if !trimmed.is_empty() {
+                if current_field.is_none() {
+                    return Err(Error::ParseError(format!(
+                        "Arch repository metadata has value {trimmed:?} outside a %FIELD% block"
+                    )));
+                }
                 // Add value to current field
                 values.push(trimmed.to_string());
             }
         }
 
         // Save last field
-        if let Some(field) = current_field {
-            fields.insert(field, values);
+        if let Some(field) = current_field
+            && fields.insert(field.clone(), values).is_some()
+        {
+            return Err(Error::ParseError(format!(
+                "Arch repository metadata repeats %{field}%"
+            )));
         }
 
-        fields
-    }
-
-    /// Parse dependencies from depends file
-    fn parse_depends_file(&self, content: &str) -> Vec<Dependency> {
-        let fields = self.parse_desc_file(content);
-        let mut dependencies = Vec::new();
-
-        // Runtime dependencies
-        if let Some(deps) = fields.get("DEPENDS") {
-            for dep in deps {
-                let (name, constraint) = self.parse_dependency_string(dep);
-                dependencies.push(Dependency::runtime_versioned(name, constraint));
-            }
-        }
-
-        // Optional dependencies
-        if let Some(opts) = fields.get("OPTDEPENDS") {
-            for opt in opts {
-                // Format: "package: description" or just "package"
-                if let Some((pkg, desc)) = opt.split_once(':') {
-                    let (name, _) = self.parse_dependency_string(pkg.trim());
-                    dependencies.push(Dependency::optional(name, Some(desc.trim().to_string())));
-                } else {
-                    let (name, _) = self.parse_dependency_string(opt);
-                    dependencies.push(Dependency::optional(name, None));
-                }
-            }
-        }
-
-        dependencies
-    }
-
-    /// Classify an Arch provide entry.
-    fn classify_arch_provide(name: &str) -> RepositoryCapabilityKind {
-        if name.contains(".so") {
-            RepositoryCapabilityKind::Soname
-        } else {
-            RepositoryCapabilityKind::Virtual
-        }
+        Ok(fields)
     }
 
     /// Build structured requirement groups from a depends file.
-    fn parse_structured_depends(&self, content: &str) -> Vec<RepositoryRequirementGroup> {
-        let fields = self.parse_desc_file(content);
+    fn parse_structured_depends(&self, content: &str) -> Result<Vec<RepositoryRequirementGroup>> {
+        let fields = self.parse_desc_file(content)?;
         let mut groups = Vec::new();
 
         if let Some(deps) = fields.get("DEPENDS") {
@@ -172,7 +160,39 @@ impl ArchParser {
             }
         }
 
-        groups
+        Ok(groups)
+    }
+
+    fn parse_relation_fields(
+        &self,
+        field_sets: &[&HashMap<String, Vec<String>>],
+    ) -> Result<Vec<RepositoryRequirementGroup>> {
+        let mut seen = HashSet::new();
+        let mut relations = Vec::new();
+        for fields in field_sets {
+            for (field, kind) in [
+                ("CONFLICTS", RepositoryRequirementKind::Conflict),
+                ("REPLACES", RepositoryRequirementKind::Replace),
+            ] {
+                if let Some(entries) = fields.get(field) {
+                    for entry in entries {
+                        if !seen.insert((kind, entry.clone())) {
+                            continue;
+                        }
+                        relations.push(
+                            parse_native_relation(kind, VersionScheme::Arch, entry).map_err(
+                                |error| {
+                                    Error::ParseError(format!(
+                                        "invalid Arch %{field}% relation '{entry}': {error}"
+                                    ))
+                                },
+                            )?,
+                        );
+                    }
+                }
+            }
+        }
+        Ok(relations)
     }
 
     /// Build structured provides from desc fields.
@@ -193,7 +213,10 @@ impl ArchParser {
                 let kind = if prov_name == name {
                     RepositoryCapabilityKind::PackageName
                 } else {
-                    Self::classify_arch_provide(&prov_name)
+                    // ALPM's PROVIDES field declares a capability but does not
+                    // carry a distinct soname/path type. Do not derive one
+                    // from the capability spelling.
+                    RepositoryCapabilityKind::Virtual
                 };
 
                 let prov_version = common::extract_version_from_constraint(&prov_constraint);
@@ -304,13 +327,17 @@ impl ArchParser {
             serde_json::Value::String("arch".to_string()),
         );
 
-        let dependencies = depends_content
-            .map(|content| self.parse_depends_file(content))
-            .unwrap_or_default();
-
-        let requirements = depends_content
+        let mut requirements = depends_content
             .map(|content| self.parse_structured_depends(content))
+            .transpose()?
             .unwrap_or_default();
+        let depends_fields = depends_content
+            .map(|content| self.parse_desc_file(content))
+            .transpose()?;
+        let relation_field_sets = depends_fields
+            .as_ref()
+            .map_or_else(|| vec![desc_fields], |fields| vec![desc_fields, fields]);
+        requirements.extend(self.parse_relation_fields(&relation_field_sets)?);
 
         let structured_provides = self.build_structured_provides(&name, &version, desc_fields);
 
@@ -323,10 +350,9 @@ impl ArchParser {
             checksum_type: ChecksumType::Sha256,
             size,
             download_url,
-            dependencies,
             extra_metadata: serde_json::Value::Object(extra),
-            source_distro: Some(RepositoryDependencyFlavor::Arch),
-            version_scheme: Some(VersionScheme::Arch),
+            source_distro: RepositoryDependencyFlavor::Arch,
+            version_scheme: VersionScheme::Arch,
             requirements,
             provides: structured_provides,
         })
@@ -360,9 +386,11 @@ impl RepositoryParser for ArchParser {
                 .path()
                 .map_err(|e| Error::ParseError(format!("Invalid path in tarball: {}", e)))?;
 
-            let path_str = path.to_string_lossy().to_string();
+            let path_str = path.to_str().ok_or_else(|| {
+                Error::ParseError("Arch repository entry path is not valid UTF-8".to_string())
+            })?;
 
-            if let Some(dir) = path_str.split('/').next() {
+            if let Some(dir) = path_str.split('/').next().filter(|dir| !dir.is_empty()) {
                 let dir_key = dir.to_string();
 
                 if path_str.ends_with("/desc") {
@@ -370,31 +398,43 @@ impl RepositoryParser for ArchParser {
                     entry.read_to_string(&mut content).map_err(|e| {
                         Error::ParseError(format!("Failed to read desc file: {}", e))
                     })?;
-                    desc_data.insert(dir_key, content);
+                    if desc_data.insert(dir_key.clone(), content).is_some() {
+                        return Err(Error::ParseError(format!(
+                            "Arch repository repeats desc metadata for {dir_key}"
+                        )));
+                    }
                 } else if path_str.ends_with("/depends") {
                     let mut content = String::new();
                     entry.read_to_string(&mut content).map_err(|e| {
                         Error::ParseError(format!("Failed to read depends file: {}", e))
                     })?;
-                    depends_data.insert(dir_key, content);
+                    if depends_data.insert(dir_key.clone(), content).is_some() {
+                        return Err(Error::ParseError(format!(
+                            "Arch repository repeats depends metadata for {dir_key}"
+                        )));
+                    }
                 }
             }
+        }
+
+        if let Some(orphan) = depends_data
+            .keys()
+            .find(|directory| !desc_data.contains_key(*directory))
+        {
+            return Err(Error::ParseError(format!(
+                "Arch repository has depends metadata without desc metadata for {orphan}"
+            )));
         }
 
         // Build packages from collected data
         let mut packages = Vec::new();
         for (dir_key, desc_content) in &desc_data {
-            let desc_fields = self.parse_desc_file(desc_content);
-
-            match self.package_from_fields(repo_url, &desc_fields, depends_data.get(dir_key)) {
-                Ok(package) => packages.push(package),
-                Err(Error::ParseError(message))
-                    if message.contains("exceeds maximum allowed (5GB)") =>
-                {
-                    warn!("{}", message);
-                }
-                Err(err) => return Err(err),
-            }
+            let desc_fields = self.parse_desc_file(desc_content)?;
+            packages.push(self.package_from_fields(
+                repo_url,
+                &desc_fields,
+                depends_data.get(dir_key),
+            )?);
         }
 
         info!("Parsed {} packages from Arch repository", packages.len());
@@ -406,13 +446,26 @@ impl RepositoryParser for ArchParser {
 mod tests {
     use super::*;
 
+    fn parser() -> ArchParser {
+        let trust = PreparedOpenPgpTrust::for_test(RepositoryTrustPolicy::Arch {
+            keyring: crate::repository::ArchKeyringTrust {
+                url: "https://keys.example.test/arch.gpg".to_string(),
+                format: crate::repository::ArchKeyringFormat::OpenPgp,
+                master_fingerprints: vec!["A".repeat(40)],
+                packager_key_threshold: 1,
+            },
+            sig_level: crate::repository::ArchSigLevel::distribution_default(),
+        });
+        ArchParser::new("core".to_string(), trust).unwrap()
+    }
+
     #[test]
     fn test_parse_desc_file() {
-        let parser = ArchParser::new("core".to_string());
+        let parser = parser();
         let content =
             "%NAME%\nbash\n\n%VERSION%\n5.2.037-1\n\n%DESC%\nThe GNU Bourne Again shell\n";
 
-        let fields = parser.parse_desc_file(content);
+        let fields = parser.parse_desc_file(content).unwrap();
 
         assert_eq!(fields.get("NAME"), Some(&vec!["bash".to_string()]));
         assert_eq!(fields.get("VERSION"), Some(&vec!["5.2.037-1".to_string()]));
@@ -423,8 +476,20 @@ mod tests {
     }
 
     #[test]
+    fn desc_parser_rejects_duplicate_fields_and_unscoped_values() {
+        let parser = parser();
+
+        assert!(
+            parser
+                .parse_desc_file("%NAME%\nfirst\n\n%NAME%\nsecond\n")
+                .is_err()
+        );
+        assert!(parser.parse_desc_file("orphan\n%NAME%\nfixture\n").is_err());
+    }
+
+    #[test]
     fn test_parse_dependency_string() {
-        let parser = ArchParser::new("core".to_string());
+        let parser = parser();
 
         let (name, constraint) = parser.parse_dependency_string("glibc>=2.17");
         assert_eq!(name, "glibc");
@@ -437,7 +502,7 @@ mod tests {
 
     #[test]
     fn test_parse_desc_file_provides_persisted_in_extra_metadata() {
-        let parser = ArchParser::new("core".to_string());
+        let parser = parser();
         let desc = "\
 %NAME%
 mailer
@@ -462,7 +527,7 @@ mail-transport-agent
 smtp-server=1.0
 ";
 
-        let fields = parser.parse_desc_file(desc);
+        let fields = parser.parse_desc_file(desc).unwrap();
         let package = parser
             .package_from_fields("https://example.test", &fields, None)
             .unwrap();
@@ -479,7 +544,7 @@ smtp-server=1.0
 
     #[test]
     fn test_source_distro_and_version_scheme() {
-        let parser = ArchParser::new("core".to_string());
+        let parser = parser();
         let desc = "\
 %NAME%
 bash
@@ -499,18 +564,18 @@ deadbeef
 %ARCH%
 x86_64
 ";
-        let fields = parser.parse_desc_file(desc);
+        let fields = parser.parse_desc_file(desc).unwrap();
         let pkg = parser
             .package_from_fields("https://example.test", &fields, None)
             .unwrap();
 
-        assert_eq!(pkg.source_distro, Some(RepositoryDependencyFlavor::Arch));
-        assert_eq!(pkg.version_scheme, Some(VersionScheme::Arch));
+        assert_eq!(pkg.source_distro, RepositoryDependencyFlavor::Arch);
+        assert_eq!(pkg.version_scheme, VersionScheme::Arch);
     }
 
     #[test]
     fn test_structured_versioned_depends() {
-        let parser = ArchParser::new("core".to_string());
+        let parser = parser();
         let desc = "\
 %NAME%
 bash
@@ -536,7 +601,7 @@ glibc>=2.36
 readline
 ncurses
 ";
-        let fields = parser.parse_desc_file(desc);
+        let fields = parser.parse_desc_file(desc).unwrap();
         let pkg = parser
             .package_from_fields("https://example.test", &fields, Some(&depends.to_string()))
             .unwrap();
@@ -557,8 +622,97 @@ ncurses
     }
 
     #[test]
+    fn repository_metadata_preserves_arch_negative_relations() {
+        let parser = parser();
+        let desc = "\
+%NAME%
+newpkg
+
+%VERSION%
+2-1
+
+%FILENAME%
+newpkg-2-1-x86_64.pkg.tar.zst
+
+%SHA256SUM%
+deadbeef
+
+%CSIZE%
+123
+
+%ARCH%
+x86_64
+
+%CONFLICTS%
+old-conflict<2
+
+%REPLACES%
+old-owner=1
+";
+        let fields = parser.parse_desc_file(desc).unwrap();
+
+        let package = parser
+            .package_from_fields("https://example.test", &fields, None)
+            .unwrap();
+
+        assert_eq!(
+            package
+                .requirements
+                .iter()
+                .map(|relation| relation.kind)
+                .collect::<Vec<_>>(),
+            vec![
+                RepositoryRequirementKind::Conflict,
+                RepositoryRequirementKind::Replace,
+            ]
+        );
+        assert_eq!(
+            package
+                .requirements
+                .iter()
+                .map(|relation| relation.native_text.as_deref())
+                .collect::<Vec<_>>(),
+            vec![Some("old-conflict<2"), Some("old-owner=1")]
+        );
+    }
+
+    #[test]
+    fn repository_metadata_rejects_malformed_arch_relation() {
+        let parser = parser();
+        let desc = "\
+%NAME%
+newpkg
+
+%VERSION%
+2-1
+
+%FILENAME%
+newpkg-2-1-x86_64.pkg.tar.zst
+
+%SHA256SUM%
+deadbeef
+
+%CSIZE%
+123
+
+%ARCH%
+x86_64
+
+%CONFLICTS%
+oldpkg>=
+";
+        let fields = parser.parse_desc_file(desc).unwrap();
+
+        let error = parser
+            .package_from_fields("https://example.test", &fields, None)
+            .unwrap_err();
+
+        assert!(error.to_string().contains("empty version"));
+    }
+
+    #[test]
     fn test_structured_versioned_provides() {
-        let parser = ArchParser::new("core".to_string());
+        let parser = parser();
         let desc = "\
 %NAME%
 glibc
@@ -583,7 +737,7 @@ libm.so=6-64
 libpthread.so
 ";
 
-        let fields = parser.parse_desc_file(desc);
+        let fields = parser.parse_desc_file(desc).unwrap();
         let pkg = parser
             .package_from_fields("https://example.test", &fields, None)
             .unwrap();
@@ -603,7 +757,7 @@ libpthread.so
             .iter()
             .find(|p| p.name == "libm.so")
             .expect("libm.so provide missing");
-        assert_eq!(libm.kind, RepositoryCapabilityKind::Soname);
+        assert_eq!(libm.kind, RepositoryCapabilityKind::Virtual);
         assert_eq!(libm.version.as_deref(), Some("6-64"));
 
         let libpthread = pkg
@@ -611,13 +765,13 @@ libpthread.so
             .iter()
             .find(|p| p.name == "libpthread.so")
             .expect("libpthread.so provide missing");
-        assert_eq!(libpthread.kind, RepositoryCapabilityKind::Soname);
+        assert_eq!(libpthread.kind, RepositoryCapabilityKind::Virtual);
         assert!(libpthread.version.is_none());
     }
 
     #[test]
     fn test_implicit_self_provide_always_present() {
-        let parser = ArchParser::new("core".to_string());
+        let parser = parser();
         let desc = "\
 %NAME%
 coreutils
@@ -637,7 +791,7 @@ deadbeef
 %ARCH%
 x86_64
 ";
-        let fields = parser.parse_desc_file(desc);
+        let fields = parser.parse_desc_file(desc).unwrap();
         let pkg = parser
             .package_from_fields("https://example.test", &fields, None)
             .unwrap();
@@ -651,7 +805,7 @@ x86_64
 
     #[test]
     fn test_dependency_string_with_operator() {
-        let parser = ArchParser::new("core".to_string());
+        let parser = parser();
 
         let (name, constraint) = parser.parse_dependency_string("openssl>=3.0");
         assert_eq!(name, "openssl");

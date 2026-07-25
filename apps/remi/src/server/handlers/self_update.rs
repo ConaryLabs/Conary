@@ -56,18 +56,16 @@ pub struct VersionsResponse {
     pub latest: String,
 }
 
-/// Parse a semver string into (major, minor, patch) for comparison
-fn parse_semver(v: &str) -> (u64, u64, u64) {
-    let parts: Vec<&str> = v.split('.').collect();
-    let major = parts.first().and_then(|s| s.parse().ok()).unwrap_or(0);
-    let minor = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
-    let patch = parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
-    (major, minor, patch)
-}
-
-fn is_valid_semver_triple(version: &str) -> bool {
-    let parts: Vec<&str> = version.split('.').collect();
-    parts.len() == 3 && parts.iter().all(|p| p.parse::<u64>().is_ok())
+/// Parse the exact release-version grammar used by self-update artifacts.
+fn parse_semver(version: &str) -> Option<(u64, u64, u64)> {
+    let mut parts = version.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    let patch = parts.next()?.parse().ok()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some((major, minor, patch))
 }
 
 /// Derive the self-update directory from server config.
@@ -163,27 +161,44 @@ fn scan_versions_and_hash(dir: &std::path::Path) -> Result<(Vec<String>, LatestH
         }
     };
 
-    let mut versions: Vec<String> = entries
-        .filter_map(|entry| {
-            let entry = entry.ok()?;
-            let name = entry.file_name().to_str()?.to_string();
-            // Match pattern: conary-{version}.ccs
-            let version = name.strip_prefix("conary-")?.strip_suffix(".ccs")?;
-            // Basic validation: must look like a semver triple
-            let parts: Vec<&str> = version.split('.').collect();
-            if parts.len() == 3 && parts.iter().all(|p| p.parse::<u64>().is_ok()) {
-                Some(version.to_string())
-            } else {
-                None
-            }
-        })
-        .collect();
+    let mut parsed_versions = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            tracing::error!(
+                "Failed to read an entry in self-update directory {}: {}",
+                dir.display(),
+                error
+            );
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to read package directory",
+            )
+                .into_response()
+        })?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        let Some(version) = name
+            .strip_prefix("conary-")
+            .and_then(|name| name.strip_suffix(".ccs"))
+        else {
+            continue;
+        };
+        if let Some(parsed) = parse_semver(version) {
+            parsed_versions.push((parsed, version.to_string()));
+        }
+    }
 
-    if versions.is_empty() {
+    if parsed_versions.is_empty() {
         return Err((StatusCode::NOT_FOUND, "No self-update packages available").into_response());
     }
 
-    versions.sort_by_key(|v| parse_semver(v));
+    parsed_versions.sort_by_key(|(version, _)| *version);
+    let versions = parsed_versions
+        .into_iter()
+        .map(|(_, version)| version)
+        .collect::<Vec<_>>();
 
     // Compute SHA-256, size, and optional signature for the latest version during the scan
     let latest_hash = if let Some(latest) = versions.last() {
@@ -298,7 +313,7 @@ pub async fn get_version_info(
         return e;
     }
 
-    if !is_valid_semver_triple(&version) {
+    if parse_semver(&version).is_none() {
         return (StatusCode::BAD_REQUEST, "Invalid version format").into_response();
     }
 
@@ -374,7 +389,7 @@ pub async fn download(
     }
 
     // Additional validation: must be a valid semver triple
-    if !is_valid_semver_triple(&version) {
+    if parse_semver(&version).is_none() {
         return (StatusCode::BAD_REQUEST, "Invalid version format").into_response();
     }
 
@@ -454,17 +469,19 @@ mod tests {
 
     #[test]
     fn test_parse_semver() {
-        assert_eq!(parse_semver("0.1.0"), (0, 1, 0));
-        assert_eq!(parse_semver("1.2.3"), (1, 2, 3));
-        assert_eq!(parse_semver("10.20.30"), (10, 20, 30));
-        assert_eq!(parse_semver("invalid"), (0, 0, 0));
+        assert_eq!(parse_semver("0.1.0"), Some((0, 1, 0)));
+        assert_eq!(parse_semver("1.2.3"), Some((1, 2, 3)));
+        assert_eq!(parse_semver("10.20.30"), Some((10, 20, 30)));
+        assert_eq!(parse_semver("invalid"), None);
+        assert_eq!(parse_semver("1.2"), None);
+        assert_eq!(parse_semver("1.2.3.4"), None);
     }
 
     #[test]
     fn test_parse_semver_ordering() {
-        assert!(parse_semver("0.2.0") > parse_semver("0.1.9"));
-        assert!(parse_semver("1.0.0") > parse_semver("0.99.99"));
-        assert!(parse_semver("0.1.1") > parse_semver("0.1.0"));
+        assert!(parse_semver("0.2.0").unwrap() > parse_semver("0.1.9").unwrap());
+        assert!(parse_semver("1.0.0").unwrap() > parse_semver("0.99.99").unwrap());
+        assert!(parse_semver("0.1.1").unwrap() > parse_semver("0.1.0").unwrap());
     }
 
     #[test]

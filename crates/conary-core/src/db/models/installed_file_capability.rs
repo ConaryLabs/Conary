@@ -193,6 +193,7 @@ mod tests {
             "capability-fixture".to_string(),
             "1.0-1".to_string(),
             TroveType::Package,
+            crate::repository::versioning::VersionScheme::Conary,
         );
         trove.insert(conn).expect("insert trove")
     }

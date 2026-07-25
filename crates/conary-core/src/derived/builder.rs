@@ -10,6 +10,7 @@ use crate::db::models::{
 use crate::error::{Error, Result};
 use crate::filesystem::CasStore;
 use crate::hash;
+use crate::payload::{PayloadContentAuthority, PayloadNode, PayloadNodeKind};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -107,9 +108,8 @@ pub struct DerivedResult {
 #[derive(Debug, Clone)]
 pub struct DerivedFile {
     pub path: String,
-    pub hash: String,
-    pub size: u64,
-    pub permissions: u32,
+    pub node: PayloadNode,
+    pub content: Option<PayloadContentAuthority>,
     /// Whether this file was modified from the parent
     pub modified: bool,
 }
@@ -137,9 +137,8 @@ struct DerivedArtifactManifest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct DerivedArtifactFile {
-    hash: String,
-    size: u64,
-    permissions: u32,
+    node: PayloadNode,
+    content: Option<PayloadContentAuthority>,
     modified: bool,
 }
 
@@ -197,19 +196,17 @@ impl<'a> DerivedBuilder<'a> {
 
         for file in &parent_files {
             // Get file content from CAS if available
-            let content = if let Some(cas) = self.cas {
-                cas.retrieve(&file.sha256_hash).ok()
-            } else {
-                None
+            let content = match (self.cas, file.content.as_ref()) {
+                (Some(cas), Some(authority)) => cas.retrieve(&authority.sha256).ok(),
+                _ => None,
             };
 
             files.insert(
                 file.path.clone(),
                 DerivedFile {
                     path: file.path.clone(),
-                    hash: file.sha256_hash.clone(),
-                    size: file.size as u64,
-                    permissions: file.permissions as u32,
+                    node: file.node.source.clone(),
+                    content: file.content.clone(),
                     modified: false,
                 },
             );
@@ -225,7 +222,11 @@ impl<'a> DerivedBuilder<'a> {
                 std::fs::write(&work_path, &content)
                     .map_err(|e| Error::InitError(e.to_string()))?;
 
-                blobs.insert(file.sha256_hash.clone(), content);
+                let authority = file
+                    .content
+                    .as_ref()
+                    .expect("CAS content is retrieved only for regular nodes");
+                blobs.insert(authority.sha256.clone(), content);
             }
         }
 
@@ -248,14 +249,22 @@ impl<'a> DerivedBuilder<'a> {
             validate_override_target(target_path)?;
             debug!("Overriding file: {}", target_path);
             let new_hash = hash::sha256(content);
+            let new_content = PayloadContentAuthority {
+                sha256: new_hash.clone(),
+                size: content.len() as u64,
+            };
 
             // Update file entry
             if let Some(file) = files.get_mut(target_path) {
-                file.hash = new_hash.clone();
-                file.size = content.len() as u64;
+                file.node.kind = PayloadNodeKind::Regular {
+                    hardlink_identity: None,
+                };
                 if let Some(p) = perms {
-                    file.permissions = *p;
+                    file.node.mode = libc::S_IFREG | (*p & 0o7777);
+                } else {
+                    file.node.mode = libc::S_IFREG | (file.node.mode & 0o7777);
                 }
+                file.content = Some(new_content);
                 file.modified = true;
             } else {
                 // New file
@@ -263,9 +272,8 @@ impl<'a> DerivedBuilder<'a> {
                     target_path.clone(),
                     DerivedFile {
                         path: target_path.clone(),
-                        hash: new_hash.clone(),
-                        size: content.len() as u64,
-                        permissions: perms.unwrap_or(0o644),
+                        node: PayloadNode::regular(perms.unwrap_or(0o644)),
+                        content: Some(new_content),
                         modified: true,
                     },
                 );
@@ -287,7 +295,10 @@ impl<'a> DerivedBuilder<'a> {
         }
 
         // Calculate total size
-        let total_size: u64 = files.values().map(|f| f.size).sum();
+        let total_size: u64 = files
+            .values()
+            .filter_map(|file| file.content.as_ref().map(|content| content.size))
+            .sum();
 
         info!(
             "Derived package built: {} files, {} patches applied, {} overrides, {} removals",
@@ -444,16 +455,25 @@ impl<'a> DerivedBuilder<'a> {
         blobs: &mut HashMap<String, Vec<u8>>,
     ) -> Result<()> {
         for file in files.values_mut() {
+            if !file.node.kind.is_regular() {
+                continue;
+            }
             let work_path = work_dir.join(file.path.trim_start_matches('/'));
             if work_path.exists() {
                 let content = std::fs::read(&work_path)
                     .map_err(|e| Error::InitError(format!("Failed to read patched file: {}", e)))?;
 
                 let new_hash = hash::sha256(&content);
-                if new_hash != file.hash {
+                let old_hash = file
+                    .content
+                    .as_ref()
+                    .map(|authority| authority.sha256.as_str());
+                if Some(new_hash.as_str()) != old_hash {
                     debug!("File modified by patch: {}", file.path);
-                    file.hash = new_hash.clone();
-                    file.size = content.len() as u64;
+                    file.content = Some(PayloadContentAuthority {
+                        sha256: new_hash.clone(),
+                        size: content.len() as u64,
+                    });
                     file.modified = true;
                     blobs.insert(new_hash, content);
                 }
@@ -577,7 +597,7 @@ pub fn persist_build_artifact(
     store_in_cas(result, cas)?;
 
     let artifact = DerivedArtifactManifest {
-        format: "conary-derived-v1".to_string(),
+        format: "conary-derived-v2".to_string(),
         name: result.name.clone(),
         version: result.version.clone(),
         parent_name: result.parent_name.clone(),
@@ -590,9 +610,8 @@ pub fn persist_build_artifact(
                 (
                     path.clone(),
                     DerivedArtifactFile {
-                        hash: file.hash.clone(),
-                        size: file.size,
-                        permissions: file.permissions,
+                        node: file.node.clone(),
+                        content: file.content.clone(),
                         modified: file.modified,
                     },
                 )

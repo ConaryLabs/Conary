@@ -10,7 +10,7 @@ User=root
 Group=root
 RuntimeDirectory=conary
 StateDirectory=conary
-ExecStart=/usr/local/bin/conaryd --db /var/lib/conary/conary.db --socket /run/conary/conaryd.sock
+ExecStart=/usr/local/bin/conaryd --db /var/lib/conary/conary.db --socket /run/conary/conaryd.sock --socket-group conary
 Restart=on-failure
 
 [Install]

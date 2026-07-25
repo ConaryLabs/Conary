@@ -20,13 +20,17 @@ pub(super) const DEFAULT_DB_PATH: &str = "/var/lib/conary/conary.db";
 pub(super) struct TryWatchDispatch {
     pub(super) target: String,
     pub(super) recipe: Option<String>,
+    pub(super) signing_key_path: std::path::PathBuf,
     pub(super) isolated: bool,
     pub(super) json: bool,
 }
 
 #[derive(Debug)]
 pub(super) enum TryDispatchAction {
-    Package(String),
+    Package {
+        package: String,
+        trust_policy_path: std::path::PathBuf,
+    },
     Watch(TryWatchDispatch),
     Status,
     Rollback,
@@ -36,11 +40,12 @@ pub(super) enum TryDispatchAction {
 pub(super) struct TryDispatchInput<'a> {
     pub(super) target: Option<String>,
     pub(super) activate: bool,
-    pub(super) allow_irreversible: bool,
+    pub(super) policy: Option<String>,
     pub(super) isolated: bool,
     pub(super) run: &'a [String],
     pub(super) watch: bool,
     pub(super) recipe: Option<String>,
+    pub(super) key: Option<String>,
     pub(super) json: bool,
 }
 
@@ -49,22 +54,29 @@ pub(super) fn try_dispatch_action(input: TryDispatchInput<'_>) -> Result<TryDisp
         if input.activate {
             bail!("conary try --watch cannot be combined with --activate");
         }
-        if input.allow_irreversible {
-            bail!("conary try --watch cannot be combined with --allow-irreversible");
-        }
         if !input.run.is_empty() {
             bail!("conary try --watch cannot run a command");
         }
-        let target = input.target.unwrap_or_else(|| ".".to_string());
+        if input.policy.is_some() {
+            bail!("conary try --watch derives trust from --key and cannot use --policy");
+        }
+        let target = input
+            .target
+            .or_else(|| input.recipe.clone())
+            .context(
+                "conary try --watch requires an explicit recipe file or project directory containing recipe.toml",
+            )?;
         if is_reserved_try_action(&target) {
             bail!("conary try --watch cannot be combined with try action '{target}'");
         }
-        if target.ends_with(".ccs") {
-            bail!("conary try --watch does not accept prebuilt .ccs artifacts");
-        }
+        let signing_key_path = input
+            .key
+            .map(std::path::PathBuf::from)
+            .context("conary try --watch requires --key <private-key>")?;
         return Ok(TryDispatchAction::Watch(TryWatchDispatch {
             target,
             recipe: input.recipe,
+            signing_key_path,
             isolated: input.isolated,
             json: input.json,
         }));
@@ -78,7 +90,7 @@ pub(super) fn try_dispatch_action(input: TryDispatchInput<'_>) -> Result<TryDisp
         Some(target)
             if is_reserved_try_action(&target)
                 && !input.activate
-                && !input.allow_irreversible
+                && input.policy.is_none()
                 && input.run.is_empty() =>
         {
             Ok(match target.as_str() {
@@ -88,7 +100,16 @@ pub(super) fn try_dispatch_action(input: TryDispatchInput<'_>) -> Result<TryDisp
                 _ => unreachable!("reserved try action checked above"),
             })
         }
-        Some(target) => Ok(TryDispatchAction::Package(target)),
+        Some(target) => {
+            let trust_policy_path = input
+                .policy
+                .map(std::path::PathBuf::from)
+                .context("conary try <package> requires --policy <PATH>")?;
+            Ok(TryDispatchAction::Package {
+                package: target,
+                trust_policy_path,
+            })
+        }
         None => bail!("conary try requires a package artifact or one of: status, rollback, keep"),
     }
 }
@@ -103,7 +124,7 @@ fn is_try_management_action(command: &Commands) -> bool {
         Commands::Try {
             target: Some(target),
             activate: false,
-            allow_irreversible: false,
+            policy: None,
             run,
             ..
         } if run.is_empty() && is_reserved_try_action(target)
@@ -131,9 +152,7 @@ pub(super) fn command_uses_try_session_preflight_db(command: &Commands) -> bool 
             | cli::CcsCommands::Sign { .. }
             | cli::CcsCommands::Keygen { .. },
         )
-        | Commands::Capability(
-            cli::CapabilityCommands::Validate { .. } | cli::CapabilityCommands::Generate { .. },
-        )
+        | Commands::Capability(cli::CapabilityCommands::Validate { .. })
         | Commands::Trust(cli::TrustCommands::KeyGen { .. }) => false,
         Commands::Query(cli::QueryCommands::Scripts { package_path, .. }) => {
             !query_scripts_target_uses_package_file(package_path)
@@ -143,12 +162,7 @@ pub(super) fn command_uses_try_session_preflight_db(command: &Commands) -> bool 
 }
 
 fn query_scripts_target_uses_package_file(package_path: &str) -> bool {
-    let lower = package_path.to_ascii_lowercase();
-    Path::new(package_path).exists()
-        || lower.ends_with(".ccs")
-        || lower.ends_with(".rpm")
-        || lower.ends_with(".deb")
-        || lower.contains(".pkg.tar")
+    Path::new(package_path).is_file()
 }
 
 pub(in crate::dispatch) fn run_try_session_preflight(cli: &crate::cli::Cli) -> Result<()> {
@@ -285,10 +299,7 @@ fn selected_repo_db_path(command: &cli::RepoCommands) -> &str {
         | cli::RepoCommands::ResetTrust { db, .. }
         | cli::RepoCommands::Enable { db, .. }
         | cli::RepoCommands::Disable { db, .. }
-        | cli::RepoCommands::Sync { db, .. }
-        | cli::RepoCommands::KeyImport { db, .. }
-        | cli::RepoCommands::KeyList { db, .. }
-        | cli::RepoCommands::KeyRemove { db, .. } => &db.db_path,
+        | cli::RepoCommands::Sync { db, .. } => &db.db_path,
     }
 }
 
@@ -372,8 +383,7 @@ fn selected_label_db_path(command: &cli::LabelCommands) -> &str {
 fn selected_ccs_db_path(command: &cli::CcsCommands) -> &str {
     match command {
         cli::CcsCommands::Install { common, .. } => &common.db.db_path,
-        cli::CcsCommands::Export { db, .. }
-        | cli::CcsCommands::Shell { db, .. }
+        cli::CcsCommands::Shell { db, .. }
         | cli::CcsCommands::Run { db, .. }
         | cli::CcsCommands::Enhance { db, .. } => &db.db_path,
         cli::CcsCommands::Init { .. }
@@ -383,6 +393,7 @@ fn selected_ccs_db_path(command: &cli::CcsCommands) -> &str {
         | cli::CcsCommands::Verify { .. }
         | cli::CcsCommands::Test { .. }
         | cli::CcsCommands::Sign { .. }
+        | cli::CcsCommands::Export { .. }
         | cli::CcsCommands::Keygen { .. } => DEFAULT_DB_PATH,
     }
 }
@@ -461,9 +472,7 @@ fn selected_capability_db_path(command: &cli::CapabilityCommands) -> &str {
         | cli::CapabilityCommands::List { db, .. }
         | cli::CapabilityCommands::Audit { db, .. }
         | cli::CapabilityCommands::Run { db, .. } => &db.db_path,
-        cli::CapabilityCommands::Validate { .. } | cli::CapabilityCommands::Generate { .. } => {
-            DEFAULT_DB_PATH
-        }
+        cli::CapabilityCommands::Validate { .. } => DEFAULT_DB_PATH,
     }
 }
 
@@ -471,7 +480,6 @@ fn selected_trust_db_path(command: &cli::TrustCommands) -> &str {
     match command {
         cli::TrustCommands::Init { db, .. }
         | cli::TrustCommands::Enable { db, .. }
-        | cli::TrustCommands::Disable { db, .. }
         | cli::TrustCommands::Status { db, .. }
         | cli::TrustCommands::Verify { db, .. } => &db.db_path,
         cli::TrustCommands::KeyGen { .. } => DEFAULT_DB_PATH,
@@ -494,9 +502,9 @@ fn selected_federation_db_path(command: &cli::FederationCommands) -> &str {
 
 fn selected_verify_db_path(command: &cli::VerifyCommands) -> &str {
     match command {
-        cli::VerifyCommands::Chain { db, .. }
-        | cli::VerifyCommands::Rebuild { db, .. }
-        | cli::VerifyCommands::Diverse { db, .. } => &db.db_path,
+        cli::VerifyCommands::Chain { db, .. } | cli::VerifyCommands::Diverse { db, .. } => {
+            &db.db_path
+        }
     }
 }
 
@@ -547,6 +555,7 @@ fn selected_generation_db_path(command: &cli::GenerationCommands) -> &str {
         cli::GenerationCommands::Build { db, .. }
         | cli::GenerationCommands::Publish { db, .. }
         | cli::GenerationCommands::Pending { db, .. }
+        | cli::GenerationCommands::Activate { db, .. }
         | cli::GenerationCommands::VerifyDbBackup { db, .. }
         | cli::GenerationCommands::RecoverDb { db, .. }
         | cli::GenerationCommands::Gc { db, .. }

@@ -1,7 +1,7 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-Conary is a virtual Rust workspace. The package-manager CLI lives in `apps/conary/src/` (`commands/`, `cli/`, `main.rs`). Core package-management logic is in `crates/conary-core/src/`. Remi lives in `apps/remi/src/` (`server/`, `federation/`, `bin/remi.rs`), and conaryd lives in `apps/conaryd/src/` (`daemon/`, `bin/conaryd.rs`). Test helpers and integration coverage live in `apps/conary/tests/`, `crates/conary-core/tests/`, and `apps/conary-test/src/`. Packaging assets are under `packaging/` and `deploy/`; current roadmap state, active designs, and active plans are under `docs/roadmaps/`, `docs/designs/`, and `docs/plans/`.
+Conary is a virtual Rust workspace. The package-manager CLI lives in `apps/conary/src/` (`commands/`, `cli/`, `main.rs`). Core package-management logic is in `crates/conary-core/src/`. Remi lives in `apps/remi/src/` (`server/`, `federation/`, `bin/remi.rs`), and conaryd lives in `apps/conaryd/src/` (`daemon/`, `bin/conaryd.rs`). Test helpers and integration coverage live in `apps/conary/tests/`, `crates/conary-core/tests/`, and `apps/conary-test/src/`. Packaging assets are under `packaging/` and `deploy/`; current roadmap state lives under `docs/roadmaps/`, while durable design decisions and contracts live in the architecture, module, and specification docs that own the affected surface.
 
 ## Build, Test, and Verification Commands
 - `cargo build -p conary`: build the package-manager CLI.
@@ -36,9 +36,10 @@ to `main`. Every PR links its primary issue. Use `Closes #...` only when the PR
 satisfies the issue's acceptance criteria; use `Refs #...` when it advances a
 larger issue that must remain open. Open substantial work as a draft PR early,
 keep decisions and verification current there, and merge only through GitHub
-after the required checks and review conversations are complete. Roadmaps,
-designs, plans, and specs remain the durable owners described below; link them
-from the issue rather than replacing durable repo truth with issue comments.
+after the required checks and review conversations are complete. Roadmaps and
+canonical architecture, module, and specification docs remain the durable
+truth owners described below; link them from the issue rather than replacing
+durable repo truth with issue comments.
 See `CONTRIBUTING.md` for the full lifecycle and the narrow trivial-change and
 urgent-bypass rules.
 
@@ -47,21 +48,36 @@ Use standard Rust formatting (`cargo fmt`) and keep Clippy clean. Indentation is
 
 Recent history uses conventional-style prefixes such as `fix:`, `security:`, and `docs:`. Keep commit subjects short and imperative, e.g. `security(federation): pin https peer identity`. PRs should explain the problem, summarize the fix, list verification commands run, and link the relevant issue/plan entry. Include logs or API examples when behavior changes are not obvious from the diff.
 
-## Maintainability & Refactor Discipline
-Correctness authority must not come from heuristics, regexes, substring
-matching, or manually curated token lists. Those mechanisms may produce
-diagnostics, privacy redaction, discovery evidence, or work prioritization
-only. Compatibility, publication, mutation, and security decisions require a
-parsed typed contract, an exact documented grammar, and validation against the
-relevant payload or persisted state. When that proof is missing, preserve a
-typed unsupported semantic class and engineer the missing model; do not build
-an operator reconciliation loop around the guess.
+## Pre-Alpha Product And Engineering Contract
+Until a durable roadmap milestone explicitly establishes an external
+compatibility promise, Conary is pre-alpha: do not maintain backward
+compatibility. Make issue-backed hard cuts, replace the current schema and
+rebuild disposable state, and delete superseded migrations, adapters, routes,
+bypass flags, and compatibility paths in the same slice. When a better
+architecture wins, finish the switch and remove the old authority instead of
+running both.
 
-Until Conary has external users, prefer a clean current contract over
-backward-compatibility machinery. Breaking schema or persisted-format changes
-must still be issue-backed and explicit about rebuild/reset impact, but may
-replace and delete superseded migrations, adapters, routes, and compatibility
-paths instead of carrying them forward.
+Cross-distribution package installation is the primary product path. The source
+package format owns its lifecycle ABI, dependency, version, payload, and
+configuration semantics; Conary owns install, update, remove, rollback, and
+generation publication; the target exposes typed capabilities. Runtime
+conversion and installation must not invoke or depend on the source package
+manager or its database. Adoption/takeover is the only migration-continuity
+exception. The canonical contract is
+`docs/specs/foreign-package-lifecycle-contracts.md`.
+
+Derive supported package behavior from pinned upstream documentation and source
+code, then encode it as typed grammars, state machines, and conformance tests.
+Correctness authority must not come from heuristics, regexes, substring
+matching, manually curated token lists, distro-name gates, or silent defaults.
+Those mechanisms may produce diagnostics, privacy redaction, discovery
+evidence, or work prioritization only; they cannot block publication or
+establish compatibility, mutation, security, or event authority. A typed
+preflight failure may stop mutation while an exact semantic is missing, but it
+is a required implementation defect to engineer, not a permanent unsupported
+class, human-review queue, blocklist, or operator reconciliation workflow.
+
+## Maintainability & Refactor Discipline
 
 Treat large files as review signals, not automatic failures. Planning has a
 hard gate: when a proposed slice would add behavior to a source file that is
@@ -109,9 +125,10 @@ Assistant doc model:
   own subsystem routing and interaction proof; focused tests own behavior.
   Rerun all three layers named by the touched feature card when a public claim,
   command help, route, or agent-facing surface changes.
-- Detailed roadmap state lives in `docs/roadmaps/`, active decision records in
-  `docs/designs/`, active multi-step implementation plans in `docs/plans/`,
-  and stable public or persisted contracts in `docs/specs/`.
+- Detailed roadmap state lives in `docs/roadmaps/`. Record durable design
+  decisions in the owning architecture, module, or `docs/specs/` document.
+  Track bounded multi-step execution in the primary issue and draft pull
+  request; stable public or persisted contracts live in `docs/specs/`.
 - After canonical truth, proof, roadmap state, and resume facts are durable,
   delete completed, superseded, or abandoned planning from the current tree.
   Git history is the planning-history source; do not create a replacement
@@ -139,7 +156,11 @@ overrides both. Command-local `--verbose`/`--quiet` flags keep their
 command-specific meanings. Internal `tracing` logs are not primary user output.
 
 ## Security & Contributor Notes
-Do not weaken trust defaults casually. HTTPS federation peers should use pinned fingerprints, and service changes should be verified with `cargo test -p remi` and `cargo test -p conaryd`. Avoid destructive Git commands in shared worktrees, and do not add schema migrations unless the task explicitly calls for one.
+Do not weaken trust defaults casually. HTTPS federation peers should use pinned
+fingerprints, and service changes should be verified with `cargo test -p remi`
+and `cargo test -p conaryd`. Avoid destructive Git commands in shared
+worktrees. Pre-alpha schema changes replace the current schema definition and
+state their rebuild impact; do not introduce a compatibility chain.
 Historical review prompts and finished planning do not remain in the active
 documentation tree. Preserve durable truth first, then delete them and use Git
 history when historical context is needed.

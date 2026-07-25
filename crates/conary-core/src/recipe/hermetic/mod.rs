@@ -2,7 +2,6 @@
 
 pub mod command_risk;
 pub mod divergence;
-pub mod ecosystem;
 pub mod evidence;
 pub mod plan;
 pub mod reproducibility;
@@ -10,13 +9,12 @@ pub mod source_identity;
 
 pub use command_risk::{BuildCommandText, classify_build_commands, collect_recipe_command_text};
 pub use divergence::{DivergenceReport, DivergenceStatus, HostBuildRecord, compare_host_record};
-pub use ecosystem::evaluate_ecosystem_policy;
 pub use evidence::{
     BuildCommandRiskEntry, BuildCommandRiskReport, BuildInputIdentity, BuilderEnvironmentIdentity,
     BuilderEnvironmentKind, COMMAND_RISK_CLASSIFIER_VERSION, DependencyLock,
-    EcosystemDependencyIdentity, EcosystemPolicyReport, HERMETIC_EVIDENCE_SCHEMA_V1,
-    HermeticBuildEvidence, InputFileIdentity, LocalTreeIdentity, LocalTreeMode, PolicyStatus,
-    RecipeIdentity, ReproducibilityRecord, SourceArchiveIdentity, SourceIdentity,
+    HERMETIC_EVIDENCE_SCHEMA, HermeticBuildEvidence, HermeticEvidenceSchema, InputFileIdentity,
+    LocalTreeIdentity, LocalTreeMode, RecipeIdentity, ReproducibilityRecord, SourceArchiveIdentity,
+    SourceIdentity,
 };
 pub use plan::{HermeticBuildInput, HermeticBuildPlan};
 pub use reproducibility::ReproducibilityConfig;

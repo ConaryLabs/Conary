@@ -61,7 +61,7 @@ pub use bootstrap::BootstrapCommands;
 pub use cache::CacheCommands;
 pub use canonical::CanonicalCommands;
 pub use capability::CapabilityCommands;
-pub use ccs::{CcsBuildFormat, CcsCommands, CcsOutputFormat};
+pub use ccs::{CcsCommands, CcsOutputFormat};
 pub use collection::CollectionCommands;
 pub use config::ConfigCommands;
 pub use derivation::DerivationCommands;
@@ -77,9 +77,13 @@ pub use provenance::ProvenanceCommands;
 pub use query::QueryCommands;
 pub use redirect::RedirectCommands;
 pub use registry::RegistryCommands;
-pub use repo::{CliSecurityAdvisorySupport, RepoCommands};
+pub use repo::{
+    CliArchDatabaseSignature, CliArchKeyringFormat, CliSecurityAdvisorySupport, RepoCommands,
+};
 pub use state::StateCommands;
-pub use system::{DbBackupCommands, SystemCommands, TakeoverLevel, UpdateChannelAction};
+pub use system::{
+    DbBackupCommands, NativePackageManager, SystemCommands, TakeoverLevel, UpdateChannelAction,
+};
 pub use trigger::TriggerCommands;
 pub use trust::TrustCommands;
 pub use verify::VerifyCommands;
@@ -91,19 +95,13 @@ pub use verify::VerifyCommands;
 /// conversion trivial.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum CliSandboxMode {
-    /// No sandboxing - direct execution
-    Never,
-    /// Automatic - sandbox based on script risk analysis
-    Auto,
-    /// Always sandbox all scripts
+    /// Require protected lifecycle execution
     Always,
 }
 
 impl From<CliSandboxMode> for SandboxMode {
     fn from(cli: CliSandboxMode) -> Self {
         match cli {
-            CliSandboxMode::Never => SandboxMode::None,
-            CliSandboxMode::Auto => SandboxMode::Auto,
             CliSandboxMode::Always => SandboxMode::Always,
         }
     }
@@ -137,17 +135,9 @@ pub struct CommonArgs {
     after_help = "Daily workflow examples:\n  sudo conary install nginx --dry-run\n  sudo conary install nginx --yes\n  sudo conary update --dry-run\n  sudo conary system adopt --refresh\n  conary system completions bash > /tmp/conary-completion.bash\n  sudo conary system generation export --path /conary/generations/1 --format qcow2 --output gen1.qcow2\n  conaryd handles durable package jobs with the same apply-intent boundary\n\nAdvanced packaging and platform commands: run 'conary --help-advanced'"
 )]
 pub struct Cli {
-    /// Use seccomp warn mode for scriptlets instead of enforcing blocked syscalls
-    #[arg(long, global = true)]
-    pub seccomp_warn: bool,
-
     /// List advanced packaging and platform commands
     #[arg(long = "help-advanced")]
     pub help_advanced: bool,
-
-    /// Deprecated compatibility alias for old persisted retry commands.
-    #[arg(long, global = true, hide = true)]
-    pub allow_live_system_mutation: bool,
 
     /// Increase log verbosity (repeat for more: info, debug, trace)
     #[arg(long = "verbose", action = clap::ArgAction::Count)]
@@ -190,21 +180,9 @@ pub enum Commands {
         #[arg(long)]
         no_deps: bool,
 
-        /// Suppress hooks where safe; does not bypass required legacy replay
-        #[arg(long)]
-        no_scripts: bool,
-
-        /// Allow same-source raw legacy scriptlet replay when the bundle, target, sandbox, and local policy all pass
-        #[arg(long)]
-        allow_legacy_replay: bool,
-
-        /// Additionally allow explicitly compatible foreign raw replay only under permissive host policy
-        #[arg(long)]
-        allow_foreign_legacy_replay: bool,
-
-        /// Scriptlet isolation: auto, always, never (default: always).
-        /// Protected modes isolate PID/network/mounts and give live-root
-        /// scriptlets private writable /etc and /var layers
+        /// Scriptlet isolation (always protected).
+        /// Live-root execution isolates PID/network/mounts and gives
+        /// scriptlets private writable /etc and /var layers.
         #[arg(long, value_enum, default_value_t = CliSandboxMode::Always)]
         sandbox: CliSandboxMode,
 
@@ -212,11 +190,7 @@ pub enum Commands {
         #[arg(long)]
         allow_downgrade: bool,
 
-        /// Allow packages with capabilities that would normally require confirmation
-        #[arg(long)]
-        allow_capabilities: bool,
-
-        /// Convert legacy packages (RPM/DEB/Arch) to CCS format during install
+        /// Convert native-format packages (RPM/DEB/Arch) to CCS during install
         #[arg(long)]
         convert_to_ccs: bool,
 
@@ -224,20 +198,18 @@ pub enum Commands {
         #[arg(long)]
         skip_optional: bool,
 
-        /// Force install even if the package is adopted from the system package manager
-        #[arg(long)]
-        force: bool,
-
-        /// How to handle dependencies: satisfy, adopt, takeover
+        /// How to handle an installed package with recorded external ownership
         ///
-        /// satisfy:  dependencies on disk satisfy requirements without changes
-        /// adopt:    auto-adopt system dependencies into Conary tracking
-        /// takeover: download CCS versions from Remi and fully own dependencies
+        /// preserve: retain its recorded external owner
+        /// takeover: explicitly transfer the selected package to Conary
+        ///
+        /// Dependencies are always satisfied from Conary's installed provider
+        /// graph and configured repositories.
         ///
         /// When omitted, the system model's convergence intent supplies the
         /// default; if no model exists, uses the preview cas-backed default.
         #[arg(long, value_enum)]
-        dep_mode: Option<crate::commands::DepMode>,
+        ownership: Option<crate::commands::OwnershipMode>,
 
         /// Install from a specific distro (cross-distro override)
         #[arg(long)]
@@ -264,31 +236,19 @@ pub enum Commands {
         #[arg(long = "arch")]
         architecture: Option<String>,
 
-        /// Suppress hooks where safe; does not bypass required legacy replay
-        #[arg(long)]
-        no_scripts: bool,
-
         /// Confirm applying this command's active-system changes
         #[arg(short = 'y', long)]
         yes: bool,
 
-        /// Allow same-source raw legacy scriptlet replay when the bundle, target, sandbox, and local policy all pass
-        #[arg(long)]
-        allow_legacy_replay: bool,
-
-        /// Additionally allow explicitly compatible foreign raw replay only under permissive host policy
-        #[arg(long)]
-        allow_foreign_legacy_replay: bool,
-
-        /// Scriptlet isolation: auto, always, never (default: always).
-        /// Protected modes isolate PID/network/mounts and give live-root
-        /// scriptlets private writable /etc and /var layers
+        /// Scriptlet isolation (always protected).
+        /// Live-root execution isolates PID/network/mounts and gives
+        /// scriptlets private writable /etc and /var layers.
         #[arg(long, value_enum, default_value_t = CliSandboxMode::Always)]
         sandbox: CliSandboxMode,
 
-        /// Delete adopted package files from disk (default: DB-only removal)
+        /// Purge preserved config state and delete adopted package files
         #[arg(long)]
-        purge_files: bool,
+        purge: bool,
     },
 
     /// Check for and apply package updates
@@ -315,34 +275,24 @@ pub enum Commands {
         #[arg(long)]
         dry_run: bool,
 
-        /// Suppress hooks where safe; does not bypass required legacy replay
-        #[arg(long)]
-        no_scripts: bool,
-
-        /// Allow same-source raw legacy scriptlet replay when the bundle, target, sandbox, and local policy all pass
-        #[arg(long)]
-        allow_legacy_replay: bool,
-
-        /// Additionally allow explicitly compatible foreign raw replay only under permissive host policy
-        #[arg(long)]
-        allow_foreign_legacy_replay: bool,
-
-        /// Scriptlet isolation: auto, always, never (default: always).
-        /// Protected modes isolate PID/network/mounts and give live-root
-        /// scriptlets private writable /etc and /var layers
+        /// Scriptlet isolation (always protected).
+        /// Live-root execution isolates PID/network/mounts and gives
+        /// scriptlets private writable /etc and /var layers.
         #[arg(long, value_enum, default_value_t = CliSandboxMode::Always)]
         sandbox: CliSandboxMode,
 
-        /// How to handle dependencies: satisfy, adopt, takeover
+        /// How to handle an installed package with recorded external ownership
         ///
-        /// satisfy:  dependencies on disk satisfy requirements without changes
-        /// adopt:    auto-adopt system dependencies into Conary tracking
-        /// takeover: download CCS versions from Remi and fully own dependencies
+        /// preserve: retain its recorded external owner
+        /// takeover: explicitly transfer the selected package to Conary
+        ///
+        /// Dependencies are always satisfied from Conary's installed provider
+        /// graph and configured repositories.
         ///
         /// When omitted, the system model's convergence intent supplies the
         /// default; if no model exists, uses the preview cas-backed default.
         #[arg(long, value_enum)]
-        dep_mode: Option<crate::commands::DepMode>,
+        ownership: Option<crate::commands::OwnershipMode>,
 
         /// Assume yes to all prompts
         #[arg(short = 'y', long)]
@@ -404,25 +354,13 @@ pub enum Commands {
         #[arg(long)]
         dry_run: bool,
 
-        /// Suppress hooks where safe; does not bypass required legacy replay
-        #[arg(long)]
-        no_scripts: bool,
-
         /// Confirm applying this command's active-system changes
         #[arg(short = 'y', long)]
         yes: bool,
 
-        /// Allow same-source raw legacy scriptlet replay when the bundle, target, sandbox, and local policy all pass
-        #[arg(long)]
-        allow_legacy_replay: bool,
-
-        /// Additionally allow explicitly compatible foreign raw replay only under permissive host policy
-        #[arg(long)]
-        allow_foreign_legacy_replay: bool,
-
-        /// Scriptlet isolation: auto, always, never (default: always).
-        /// Protected modes isolate PID/network/mounts and give live-root
-        /// scriptlets private writable /etc and /var layers
+        /// Scriptlet isolation (always protected).
+        /// Live-root execution isolates PID/network/mounts and gives
+        /// scriptlets private writable /etc and /var layers.
         #[arg(long, value_enum, default_value_t = CliSandboxMode::Always)]
         sandbox: CliSandboxMode,
     },
@@ -498,27 +436,17 @@ pub enum Commands {
         #[arg(long)]
         fetch_only: bool,
 
-        /// Print recipe inference trace
-        #[arg(long)]
-        explain: bool,
-
         /// Build inside the sandboxed isolation path
         #[arg(long)]
         isolated: bool,
 
-        /// Compatibility alias for the M1a host-build default
-        #[arg(long)]
-        #[arg(hide = true)]
-        no_isolation: bool,
-
-        /// Compatibility flag reserved for M2 hermetic cook/publish
-        #[arg(long)]
-        #[arg(hide = true)]
-        hermetic: bool,
-
         /// Emit structured M3a JSON output
         #[arg(long)]
         json: bool,
+
+        /// Private CCS authority key used to sign cooked package output
+        #[arg(long, value_name = "PATH")]
+        key: Option<String>,
 
         /// Run hidden experimental record-mode recipe drafting
         #[arg(long)]
@@ -545,43 +473,25 @@ pub enum Commands {
         #[arg(hide = true)]
         keep_raw_trace: bool,
 
-        /// Run record command on the host without sandbox containment
-        #[arg(long)]
-        #[arg(hide = true)]
-        record_unsafe_host: bool,
-
-        /// Reserved hidden flag; M3d fails closed when this is set
-        #[arg(long)]
-        #[arg(hide = true)]
-        record_allow_network: bool,
-
         /// Command to record, passed after `--`
         #[arg(last = true)]
         #[arg(hide = true)]
         record_command: Vec<String>,
     },
 
-    /// Create or infer a package recipe
+    /// Create a named package recipe scaffold
     #[command(hide = true)]
     New {
-        /// Package project name for scaffold mode
-        name: Option<String>,
+        /// Package project name
+        name: String,
 
-        /// Infer a recipe from an existing source tree, archive, or git URL
-        #[arg(long = "from")]
-        from: Option<String>,
-
-        /// Output directory for scaffold mode, or recipe path for --from mode
+        /// Output directory
         #[arg(short, long)]
         output: Option<String>,
 
         /// Overwrite an existing recipe.toml
         #[arg(long)]
         force: bool,
-
-        /// Print inference decisions
-        #[arg(long)]
-        explain: bool,
     },
 
     /// Try a package artifact with explicit keep or rollback
@@ -593,11 +503,11 @@ pub enum Commands {
         #[arg(long)]
         activate: bool,
 
-        /// Allow packages with irreversible hooks in activated mode
-        #[arg(long)]
-        allow_irreversible: bool,
+        /// CCS trust-policy file for a direct package try
+        #[arg(long, value_name = "PATH")]
+        policy: Option<String>,
 
-        /// Watch a recipe project or inferable source tree and refresh a namespace try session
+        /// Watch an explicit recipe project and refresh a namespace try session
         #[arg(long)]
         watch: bool,
 
@@ -608,6 +518,10 @@ pub enum Commands {
         /// Recipe file to use for watch mode
         #[arg(long)]
         recipe: Option<String>,
+
+        /// Private CCS authority key used for each watch-mode cook
+        #[arg(long, value_name = "PATH", requires = "watch")]
+        key: Option<String>,
 
         /// Stream watch events as newline-delimited JSON
         #[arg(long)]
@@ -646,14 +560,6 @@ pub enum Commands {
         #[arg(long)]
         refresh: bool,
 
-        /// Reinitialize repository identity at the destination
-        #[arg(long)]
-        force_reinit: bool,
-
-        /// Accept destination state below the local publish watermark
-        #[arg(long)]
-        accept_destination_state: bool,
-
         /// Rotate the active publish key
         #[arg(long)]
         rotate_publish_key: bool,
@@ -669,19 +575,6 @@ pub enum Commands {
         /// Emit structured M3a JSON output
         #[arg(long)]
         json: bool,
-    },
-
-    /// Convert an Arch Linux PKGBUILD to a Conary recipe
-    ///
-    /// Reads a PKGBUILD file and outputs the equivalent recipe in TOML format.
-    #[command(hide = true)]
-    ConvertPkgbuild {
-        /// Path to PKGBUILD file
-        pkgbuild: String,
-
-        /// Output file for the recipe (default: stdout)
-        #[arg(short, long)]
-        output: Option<String>,
     },
 
     /// Audit a recipe for missing build dependencies
@@ -809,10 +702,6 @@ pub enum Commands {
         /// Install a specific version
         #[arg(long)]
         version: Option<String>,
-
-        /// Skip signature verification (NOT RECOMMENDED)
-        #[arg(long)]
-        no_verify: bool,
 
         /// Verify a detached signature over a SHA-256 digest without downloading an update
         #[arg(long)]

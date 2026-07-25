@@ -258,14 +258,15 @@ mod tests {
     use conary_core::ccs::signing::SigningKeyPair;
     use conary_core::ccs::v2::schema::{
         AuthorityDocumentV2, ComponentAuthorityV2, ConflictPolicyV2, FORMAT_VERSION_V2,
-        FileAuthorityV2, FileTypeV2, LifecycleAuthorityV2, PackageDataV2, PackageIdentityV2,
-        PackageKindTagV2, PackageKindV2, PackagePolicyV2, ProvenanceAuthorityV2,
+        FileAuthorityV2, LifecycleAuthorityV2, PackageDataV2, PackageIdentityV2, PackageKindTagV2,
+        PackageKindV2, PackagePolicyV2, ProvenanceAuthorityV2,
     };
     use conary_core::db::schema;
+    use conary_core::payload::{PayloadContentAuthority, PayloadNode};
     use conary_core::recipe::hermetic::{
         BuildInputIdentity, BuilderEnvironmentIdentity, BuilderEnvironmentKind, DependencyLock,
-        DivergenceReport, EcosystemPolicyReport, HERMETIC_EVIDENCE_SCHEMA_V1,
-        HermeticBuildEvidence, RecipeIdentity, ReproducibilityRecord, SourceIdentity,
+        DivergenceReport, HERMETIC_EVIDENCE_SCHEMA, HermeticBuildEvidence, RecipeIdentity,
+        ReproducibilityRecord, SourceIdentity,
     };
     use rusqlite::params;
     use std::collections::BTreeMap;
@@ -303,7 +304,7 @@ mod tests {
             let conn = rusqlite::Connection::open(&db_path).unwrap();
             conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
                 .unwrap();
-            schema::migrate(&conn).unwrap();
+            schema::ensure_current(&conn).unwrap();
             drop(conn);
 
             let release_publish = crate::server::config::ReleasePublishSection {
@@ -511,7 +512,11 @@ mod tests {
             "1",
             b"service payload",
             LifecycleAuthorityV2 {
-                services: vec!["conary-example.service".to_string()],
+                services: vec![conary_core::ccs::v2::schema::LifecycleServiceV2 {
+                    name: "conary-example.service".to_string(),
+                    action: conary_core::ccs::v2::schema::LifecycleServiceActionV2::Restart,
+                    reversible: None,
+                }],
                 ..Default::default()
             },
         );
@@ -531,27 +536,36 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn release_upload_rejects_unsupported_lifecycle_before_public_state() {
+    async fn release_upload_accepts_source_independent_lifecycle_without_route_allowlist() {
         let signer = SigningKeyPair::generate().with_key_id("publisher");
         let artifact = attested_release_artifact_with_lifecycle(
             &signer,
-            "service-bad",
+            "service-arbitrary",
             "1.0.0",
             "1",
             b"service payload",
             LifecycleAuthorityV2 {
-                services: vec!["other.service".to_string()],
+                services: vec![conary_core::ccs::v2::schema::LifecycleServiceV2 {
+                    name: "other.service".to_string(),
+                    action: conary_core::ccs::v2::schema::LifecycleServiceActionV2::Restart,
+                    reversible: None,
+                }],
                 ..Default::default()
             },
         );
         let fixture = ReleaseFixture::new(vec![trusted_signer(&signer)]);
 
         let response = fixture.upload_release(artifact.bytes).await;
-        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
-        let body = response_text(response).await;
-        assert_json_code(&body, "LIFECYCLE_UNSUPPORTED");
-        assert!(body.contains("other.service"), "{body}");
-        assert_no_public_state(&fixture, "service-bad", &artifact.content_hash);
+        assert_eq!(
+            response.status(),
+            StatusCode::CREATED,
+            "{}",
+            response_text(response).await
+        );
+        assert!(fixture.native_publication_row_exists("service-arbitrary", "1"));
+        assert!(fixture.public_package_detail_exists("service-arbitrary"));
+        assert!(fixture.public_chunk_exists(&artifact.content_hash));
+        assert!(fixture.tuf_target_exists("service-arbitrary"));
     }
 
     #[tokio::test]
@@ -729,6 +743,7 @@ mod tests {
             identity: PackageIdentityV2 {
                 name: name.to_string(),
                 version: version.to_string(),
+                version_scheme: conary_core::repository::versioning::VersionScheme::Conary,
                 release: release.to_string(),
                 architecture: Some("x86_64".to_string()),
                 platform: Some("linux".to_string()),
@@ -737,14 +752,12 @@ mod tests {
             kind: PackageKindV2::Package(PackageDataV2 {
                 files: vec![FileAuthorityV2 {
                     path: payload_path,
-                    sha256: payload_hash,
-                    size: payload.len() as u64,
-                    file_type: FileTypeV2::Regular,
-                    mode: 0o644,
-                    owner: "root".to_string(),
-                    group: "root".to_string(),
+                    node: PayloadNode::regular(0o644),
+                    content: Some(PayloadContentAuthority {
+                        sha256: payload_hash,
+                        size: payload.len() as u64,
+                    }),
                     component: "main".to_string(),
-                    symlink_target: None,
                     config: None,
                     conflict: ConflictPolicyV2::Error,
                 }],
@@ -752,7 +765,8 @@ mod tests {
                 policy: PackagePolicyV2::default(),
             }),
             provides: Vec::new(),
-            requires: Vec::new(),
+            requirements: Vec::new(),
+            relations: Vec::new(),
             components: BTreeMap::from([(
                 "main".to_string(),
                 ComponentAuthorityV2 {
@@ -839,6 +853,7 @@ mod tests {
             identity: PackageIdentityV2 {
                 name: name.to_string(),
                 version: version.to_string(),
+                version_scheme: conary_core::repository::versioning::VersionScheme::Conary,
                 release: "1".to_string(),
                 architecture: Some("x86_64".to_string()),
                 platform: Some("linux".to_string()),
@@ -847,14 +862,12 @@ mod tests {
             kind: PackageKindV2::Package(PackageDataV2 {
                 files: vec![FileAuthorityV2 {
                     path: payload_path,
-                    sha256: payload_hash,
-                    size: payload.len() as u64,
-                    file_type: FileTypeV2::Regular,
-                    mode: 0o644,
-                    owner: "root".to_string(),
-                    group: "root".to_string(),
+                    node: PayloadNode::regular(0o644),
+                    content: Some(PayloadContentAuthority {
+                        sha256: payload_hash,
+                        size: payload.len() as u64,
+                    }),
                     component: "main".to_string(),
-                    symlink_target: None,
                     config: None,
                     conflict: ConflictPolicyV2::Error,
                 }],
@@ -862,7 +875,8 @@ mod tests {
                 policy: PackagePolicyV2::default(),
             }),
             provides: Vec::new(),
-            requires: Vec::new(),
+            requirements: Vec::new(),
+            relations: Vec::new(),
             components: BTreeMap::from([(
                 "main".to_string(),
                 ComponentAuthorityV2 {
@@ -903,14 +917,13 @@ mod tests {
 
     fn sample_hermetic_evidence_for_tests(name: &str, version: &str) -> HermeticBuildEvidence {
         HermeticBuildEvidence {
-            schema_version: HERMETIC_EVIDENCE_SCHEMA_V1,
+            schema_version: HERMETIC_EVIDENCE_SCHEMA,
             build_input: BuildInputIdentity {
-                recipe: RecipeIdentity::GeneratedRecipe {
-                    generator: "remi-release-test".to_string(),
-                    canonical_hash: conary_core::hash::sha256_prefixed(
+                recipe: RecipeIdentity::ExplicitRecipe {
+                    path: "recipe.toml".to_string(),
+                    hash: conary_core::hash::sha256_prefixed(
                         format!("{name}:{version}").as_bytes(),
                     ),
-                    inference_trace_hash: conary_core::hash::sha256_prefixed(b"test"),
                 },
                 source: SourceIdentity::Archive {
                     url: "https://example.invalid/source.tar.gz".to_string(),
@@ -919,7 +932,6 @@ mod tests {
                 additional_sources: Vec::new(),
                 patches: Vec::new(),
                 local_tree: None,
-                ecosystem_dependencies: Vec::new(),
                 builder_environment: BuilderEnvironmentIdentity {
                     kind: BuilderEnvironmentKind::Pristine,
                     sysroot_hash: Some("sha256:sysroot".to_string()),
@@ -928,8 +940,7 @@ mod tests {
                 },
             },
             dependency_lock: DependencyLock::default(),
-            ecosystem_policy: EcosystemPolicyReport::clean("test"),
-            command_risk: conary_core::recipe::hermetic::BuildCommandRiskReport::clean(),
+            command_risk: conary_core::recipe::hermetic::BuildCommandRiskReport::no_findings(),
             reproducibility: ReproducibilityRecord {
                 source_date_epoch: Some(1),
                 path_remap_count: 1,

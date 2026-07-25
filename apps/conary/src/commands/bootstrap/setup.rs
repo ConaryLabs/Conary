@@ -145,19 +145,15 @@ pub async fn cmd_bootstrap_resume(work_dir: &str, verbose: bool) -> Result<()> {
 
     match current {
         BootstrapStage::CrossTools => {
-            cmd_bootstrap_cross_tools(work_dir, None, verbose, false, None).await
+            cmd_bootstrap_cross_tools(work_dir, None, verbose, None).await
         }
-        BootstrapStage::TempTools => {
-            cmd_bootstrap_temp_tools(work_dir, None, verbose, false, None).await
-        }
-        BootstrapStage::FinalSystem => {
-            cmd_bootstrap_system(work_dir, None, verbose, false, None).await
-        }
+        BootstrapStage::TempTools => cmd_bootstrap_temp_tools(work_dir, None, verbose, None).await,
+        BootstrapStage::FinalSystem => cmd_bootstrap_system(work_dir, None, verbose, None).await,
         BootstrapStage::SystemConfig => cmd_bootstrap_config(work_dir, verbose, None).await,
         BootstrapStage::BootableImage => {
             cmd_bootstrap_image(work_dir, "conaryos-base.qcow2", "qcow2", "4G").await
         }
-        BootstrapStage::Tier2 => cmd_bootstrap_tier2(work_dir, None, verbose, false, None).await,
+        BootstrapStage::Tier2 => cmd_bootstrap_tier2(work_dir, None, verbose, None).await,
     }
 }
 /// Validate the full pipeline without building

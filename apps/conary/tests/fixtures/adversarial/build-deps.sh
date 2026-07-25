@@ -2,8 +2,11 @@
 # tests/fixtures/adversarial/build-deps.sh
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONARY_BIN="${1:-${CONARY_BIN:-$(pwd)/target/debug/conary}}"
+DEFAULT_CONARY_BIN="${CARGO_TARGET_DIR:-$(pwd)/target}/debug/conary"
+CONARY_BIN="${1:-${CONARY_BIN:-$DEFAULT_CONARY_BIN}}"
 DEPS_DIR="$SCRIPT_DIR/deps"
+source "$SCRIPT_DIR/../ccs-test-authority/env.sh"
+fixture_ccs_require_authority
 
 fixtures=(
     dep-base-v1
@@ -29,7 +32,8 @@ for fixture in "${fixtures[@]}"; do
     rm -f "$fixture_dir/output/"*.ccs
     "$CONARY_BIN" ccs build "$fixture_dir/ccs.toml" \
         --source "$fixture_dir/stage" \
-        --output "$fixture_dir/output/"
+        --output "$fixture_dir/output/" \
+        --key "$FIXTURE_CCS_KEY"
 done
 
 echo "Writing SHA256SUMS..."

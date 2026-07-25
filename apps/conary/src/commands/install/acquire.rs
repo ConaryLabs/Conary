@@ -10,8 +10,8 @@ use super::resolve::{
     resolve_package_path_with_policy,
 };
 use super::{
-    DepMode, InstallPhase, InstallProgress, LegacyReplayOptions, PackageFormatType,
-    RepositoryInstallProvenance, detect_package_format,
+    InstallPhase, InstallProgress, PackageFormatType, RepositoryInstallProvenance,
+    detect_package_format,
 };
 use anyhow::{Context, Result};
 use conary_core::packages::PackageFormat;
@@ -28,20 +28,16 @@ pub(super) struct CcsInstallParams<'a> {
     pub(super) dry_run: bool,
     pub(super) sandbox_mode: SandboxMode,
     pub(super) no_deps: bool,
-    pub(super) no_scripts: bool,
     pub(super) allow_downgrade: bool,
-    pub(super) allow_capabilities: bool,
-    pub(super) dep_mode: Option<DepMode>,
     pub(super) yes: bool,
     pub(super) repository_provenance: Option<RepositoryInstallProvenance>,
-    pub(super) legacy_replay: LegacyReplayOptions,
 }
 
 /// Resolve a package path, detect its format, and parse it.
 ///
 /// Handles early returns for CCS packages (from Remi, by extension, or via
 /// conversion).  Returns `None` if the package was already installed as CCS
-/// (no further processing needed), or `Some(...)` with the parsed legacy
+/// (no further processing needed), or `Some(...)` with the parsed native-format
 /// package and its format type.
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn resolve_and_parse_package(
@@ -97,12 +93,8 @@ pub(super) async fn resolve_and_parse_package(
             return Err(e);
         }
         Ok(ResolutionOutcome::AlreadyInstalled { name, version }) => {
-            // Use a specific error type that the caller handles as a clean exit
-            return Err(anyhow::anyhow!(
-                "ALREADY_INSTALLED:{} {} is already installed (skipping download)",
-                name,
-                version
-            ));
+            crate::ui::note(&format!("{name} {version} is already installed"));
+            return Ok(None);
         }
         Ok(ResolutionOutcome::Resolved(pkg)) => pkg,
     };
@@ -121,15 +113,11 @@ pub(super) async fn resolve_and_parse_package(
             dry_run: ccs_opts.dry_run,
             sandbox_mode: ccs_opts.sandbox_mode,
             no_deps: ccs_opts.no_deps,
-            no_scripts: ccs_opts.no_scripts,
             allow_downgrade: ccs_opts.allow_downgrade,
-            allow_capabilities: ccs_opts.allow_capabilities,
-            dep_mode: ccs_opts.dep_mode,
             yes: ccs_opts.yes,
             dependency_passes_remaining: DEFAULT_CCS_DEPENDENCY_PASSES,
             repository_provenance: install_provenance_from_resolved(&resolved)
                 .or_else(|| ccs_opts.repository_provenance.clone()),
-            legacy_replay: ccs_opts.legacy_replay,
         })
         .await?;
         return Ok(None);
@@ -140,9 +128,10 @@ pub(super) async fn resolve_and_parse_package(
         .to_str()
         .ok_or_else(|| anyhow::anyhow!("Invalid package path (non-UTF8)"))?;
 
-    // Check if it's a CCS package by extension (from update command or local file)
-    if path_str.ends_with(".ccs") {
-        info!("Detected CCS package from path extension, installing directly");
+    if conary_core::ccs::archive_reader::has_current_ccs_archive_contract(&resolved.path)
+        .context("Failed to inspect package archive contract")?
+    {
+        info!("Detected CCS package archive contract, installing directly");
         install_converted_ccs(ConvertedCcsInstallOptions {
             ccs_path: path_str,
             db_path: ccs_opts.db_path,
@@ -150,21 +139,17 @@ pub(super) async fn resolve_and_parse_package(
             dry_run: ccs_opts.dry_run,
             sandbox_mode: ccs_opts.sandbox_mode,
             no_deps: ccs_opts.no_deps,
-            no_scripts: ccs_opts.no_scripts,
             allow_downgrade: ccs_opts.allow_downgrade,
-            allow_capabilities: ccs_opts.allow_capabilities,
-            dep_mode: ccs_opts.dep_mode,
             yes: ccs_opts.yes,
             dependency_passes_remaining: DEFAULT_CCS_DEPENDENCY_PASSES,
             repository_provenance: install_provenance_from_resolved(&resolved)
                 .or_else(|| ccs_opts.repository_provenance.clone()),
-            legacy_replay: ccs_opts.legacy_replay,
         })
         .await?;
         return Ok(None);
     }
 
-    // Detect format and parse legacy packages
+    // Detect and parse native package formats.
     let format = detect_package_format(path_str)
         .with_context(|| format!("Failed to detect package format for '{}'", path_str))?;
     info!("Detected package format: {:?}", format);
@@ -175,42 +160,34 @@ pub(super) async fn resolve_and_parse_package(
     progress.set_phase(package, InstallPhase::Parsing);
     let pkg = parse_package(&resolved.path, format)?;
 
-    // Convert to CCS format if requested (only for legacy packages)
+    // Convert to CCS format if requested.
     if convert_to_ccs {
         progress.set_status(&format!("Converting {} to CCS format...", pkg.name()));
 
-        match try_convert_to_ccs(
-            pkg.as_ref(),
-            &resolved.path,
-            format,
-            db_path,
-            ccs_opts.allow_capabilities,
-        )
-        .await?
-        {
+        match try_convert_to_ccs(pkg.as_ref(), &resolved.path, format, db_path).await? {
             ConversionResult::Converted {
                 ccs_path,
                 temp_dir: _temp_dir,
+                pending_record,
             } => {
                 // Install via CCS path (temp_dir kept alive until install completes)
-                install_converted_ccs(ConvertedCcsInstallOptions {
+                let installed_trove_id = install_converted_ccs(ConvertedCcsInstallOptions {
                     ccs_path: &ccs_path,
                     db_path: ccs_opts.db_path,
                     root: ccs_opts.root,
                     dry_run: ccs_opts.dry_run,
                     sandbox_mode: ccs_opts.sandbox_mode,
                     no_deps: ccs_opts.no_deps,
-                    no_scripts: ccs_opts.no_scripts,
                     allow_downgrade: ccs_opts.allow_downgrade,
-                    allow_capabilities: ccs_opts.allow_capabilities,
-                    dep_mode: ccs_opts.dep_mode,
                     yes: ccs_opts.yes,
                     dependency_passes_remaining: DEFAULT_CCS_DEPENDENCY_PASSES,
                     repository_provenance: install_provenance_from_resolved(&resolved)
                         .or_else(|| ccs_opts.repository_provenance.clone()),
-                    legacy_replay: ccs_opts.legacy_replay,
                 })
                 .await?;
+                if let Some(trove_id) = installed_trove_id {
+                    pending_record.persist(db_path, trove_id)?;
+                }
                 return Ok(None);
             }
             ConversionResult::Skipped => {
@@ -222,7 +199,7 @@ pub(super) async fn resolve_and_parse_package(
     Ok(Some((pkg, format, repository_provenance)))
 }
 
-fn install_provenance_from_resolved(
+pub(super) fn install_provenance_from_resolved(
     resolved: &ResolvedPackage,
 ) -> Option<RepositoryInstallProvenance> {
     resolved
@@ -231,7 +208,7 @@ fn install_provenance_from_resolved(
         .map(|provenance| RepositoryInstallProvenance {
             repository_id: provenance.repository_id,
             source_distro: provenance.source_distro.clone(),
-            version_scheme: provenance.version_scheme.clone(),
+            version_scheme: provenance.version_scheme,
             source_kind: provenance.source_kind.clone(),
         })
 }
@@ -344,7 +321,7 @@ mod tests {
             repository_provenance: Some(RepositorySourceMetadata {
                 repository_id: 77,
                 source_distro: Some("fedora".to_string()),
-                version_scheme: Some("rpm".to_string()),
+                version_scheme: conary_core::repository::versioning::VersionScheme::Rpm,
                 source_kind: RepositorySourceKind::Static,
             }),
         };
@@ -354,7 +331,10 @@ mod tests {
 
         assert_eq!(provenance.repository_id, 77);
         assert_eq!(provenance.source_distro.as_deref(), Some("fedora"));
-        assert_eq!(provenance.version_scheme.as_deref(), Some("rpm"));
+        assert_eq!(
+            provenance.version_scheme,
+            conary_core::repository::versioning::VersionScheme::Rpm
+        );
         assert_eq!(provenance.source_kind, RepositorySourceKind::Static);
     }
 }

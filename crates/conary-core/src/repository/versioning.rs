@@ -1,64 +1,106 @@
 // conary-core/src/repository/versioning.rs
 
-//! Native repository version comparison.
+//! Parsed, ecosystem-native repository version comparison.
 //!
-//! This module is intentionally separate from `crate::version` so repository-native
-//! RPM, Debian, and Arch semantics do not bleed into Conary's older internal
-//! versioning substrate.
+//! Version strings are validated by the grammar that owns them before they
+//! reach an upstream comparator. Invalid values and cross-scheme comparisons
+//! are data errors; they never acquire an ordering through fallback logic.
 
-use crate::db::models::{Repository, RepositoryPackage};
-use crate::repository::distro::{version_scheme_from_db, version_scheme_from_repository};
+use crate::db::models::RepositoryPackage;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
+use std::str::FromStr;
+use thiserror::Error;
 
-/// Which native version comparison algorithm to use.
-///
-/// Each distro ecosystem has its own version string format and comparison
-/// rules.  This enum selects the correct algorithm so that versions are
-/// never compared across incompatible schemes.
+/// Which package ecosystem owns a version string's grammar and ordering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum VersionScheme {
-    /// RPM-based version ordering (epoch:version-release, segment-based).
+    /// Conary-authored CCS versions use Semantic Versioning 2.0.0.
+    Conary,
+    /// RPM epoch-version-release ordering.
     Rpm,
-    /// Debian dpkg version ordering (epoch:upstream-revision, tilde semantics).
+    /// Debian dpkg epoch-upstream-revision ordering.
     Debian,
-    /// Arch Linux / ALPM version ordering (epoch:pkgver-pkgrel).
+    /// Arch Linux ALPM epoch-pkgver-pkgrel ordering.
     Arch,
 }
 
-/// A version string paired with its comparison scheme.
-///
-/// Carrying the scheme alongside the string prevents accidental cross-scheme
-/// comparison and makes it explicit which algorithm governs ordering.
+impl VersionScheme {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Conary => "conary",
+            Self::Rpm => "rpm",
+            Self::Debian => "debian",
+            Self::Arch => "arch",
+        }
+    }
+}
+
+impl FromStr for VersionScheme {
+    type Err = String;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        match value {
+            "conary" => Ok(Self::Conary),
+            "rpm" => Ok(Self::Rpm),
+            "debian" => Ok(Self::Debian),
+            "arch" => Ok(Self::Arch),
+            other => Err(format!(
+                "unsupported persisted native version scheme '{other}'"
+            )),
+        }
+    }
+}
+
+/// A failure to parse or compare a package version under its declared scheme.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum VersionComparisonError {
+    #[error("invalid {scheme} version '{version}': {reason}")]
+    InvalidVersion {
+        scheme: &'static str,
+        version: String,
+        reason: String,
+    },
+    #[error("cannot compare {left} and {right} version schemes")]
+    SchemeMismatch {
+        left: &'static str,
+        right: &'static str,
+    },
+    #[error("invalid {scheme} version constraint '{constraint}': {reason}")]
+    InvalidConstraint {
+        scheme: &'static str,
+        constraint: String,
+        reason: String,
+    },
+}
+
+pub type VersionResult<T> = std::result::Result<T, VersionComparisonError>;
+
+/// A validated version string paired with its owning comparison scheme.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct RepositoryVersion {
-    /// The raw version string (e.g. `"1:1.2.3-2.fc44"`).
     pub raw: String,
-    /// Which comparison scheme applies to this version.
     pub scheme: VersionScheme,
 }
 
 impl RepositoryVersion {
-    /// Create a new repository version.
-    #[must_use]
-    pub fn new(raw: String, scheme: VersionScheme) -> Self {
-        Self { raw, scheme }
+    pub fn new(raw: String, scheme: VersionScheme) -> VersionResult<Self> {
+        validate_repo_version(scheme, &raw)?;
+        Ok(Self { raw, scheme })
     }
 
-    /// Compare with another version.  Returns `None` if the schemes differ.
-    #[must_use]
-    pub fn compare(&self, other: &Self) -> Option<Ordering> {
+    pub fn compare(&self, other: &Self) -> VersionResult<Ordering> {
         compare_mixed_repo_versions(self.scheme, &self.raw, other.scheme, &other.raw)
     }
 
-    /// Check whether this version satisfies a constraint.
-    #[must_use]
-    pub fn satisfies(&self, constraint: &RepoVersionConstraint) -> bool {
+    pub fn satisfies(&self, constraint: &RepoVersionConstraint) -> VersionResult<bool> {
         repo_version_satisfies(self.scheme, &self.raw, constraint)
     }
 }
 
-/// A version constraint in native repository format.
+/// A version constraint in its enclosing repository scheme.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum RepoVersionConstraint {
     Any,
@@ -70,12 +112,52 @@ pub enum RepoVersionConstraint {
     NotEqual(String),
 }
 
-pub fn compare_repo_versions(scheme: VersionScheme, a: &str, b: &str) -> Option<Ordering> {
-    Some(match scheme {
-        VersionScheme::Rpm => compare_rpm_like_versions(a, b),
-        VersionScheme::Debian => compare_debian_versions(a, b),
-        VersionScheme::Arch => compare_arch_versions(a, b),
-    })
+/// Validate one version against the exact grammar selected by `scheme`.
+pub fn validate_repo_version(scheme: VersionScheme, raw: &str) -> VersionResult<()> {
+    let invalid = |reason: String| VersionComparisonError::InvalidVersion {
+        scheme: scheme.as_str(),
+        version: raw.to_string(),
+        reason,
+    };
+
+    match scheme {
+        VersionScheme::Conary => semver::Version::parse(raw)
+            .map(|_| ())
+            .map_err(|error| invalid(error.to_string())),
+        VersionScheme::Rpm => validate_rpm_evr(raw).map_err(invalid),
+        VersionScheme::Debian => debversion::Version::from_str(raw)
+            .map(|_| ())
+            .map_err(|error| invalid(error.to_string())),
+        VersionScheme::Arch => alpm_types::Version::from_str(raw)
+            .map(|_| ())
+            .map_err(|error| invalid(error.to_string())),
+    }
+}
+
+/// Compare two versions using only the parser and comparator owned by `scheme`.
+pub fn compare_repo_versions(scheme: VersionScheme, a: &str, b: &str) -> VersionResult<Ordering> {
+    match scheme {
+        VersionScheme::Conary => {
+            let a = parse_semver(a)?;
+            let b = parse_semver(b)?;
+            Ok(a.cmp_precedence(&b))
+        }
+        VersionScheme::Rpm => {
+            validate_repo_version(scheme, a)?;
+            validate_repo_version(scheme, b)?;
+            Ok(rpm_version::rpm_evr_compare(a, b))
+        }
+        VersionScheme::Debian => {
+            let a = parse_debian(a)?;
+            let b = parse_debian(b)?;
+            Ok(a.cmp(&b))
+        }
+        VersionScheme::Arch => {
+            let a = parse_arch(a)?;
+            let b = parse_arch(b)?;
+            Ok(a.cmp(&b))
+        }
+    }
 }
 
 pub fn compare_mixed_repo_versions(
@@ -83,636 +165,320 @@ pub fn compare_mixed_repo_versions(
     a: &str,
     b_scheme: VersionScheme,
     b: &str,
-) -> Option<Ordering> {
-    (a_scheme == b_scheme)
-        .then(|| compare_repo_versions(a_scheme, a, b))
-        .flatten()
+) -> VersionResult<Ordering> {
+    if a_scheme != b_scheme {
+        return Err(VersionComparisonError::SchemeMismatch {
+            left: a_scheme.as_str(),
+            right: b_scheme.as_str(),
+        });
+    }
+    compare_repo_versions(a_scheme, a, b)
 }
 
-pub fn parse_repo_constraint(_scheme: VersionScheme, raw: &str) -> Option<RepoVersionConstraint> {
-    let raw = raw.trim();
-    if raw.is_empty() {
-        return Some(RepoVersionConstraint::Any);
+/// Parse and validate a version constraint under its declared scheme.
+pub fn parse_repo_constraint(
+    scheme: VersionScheme,
+    raw: &str,
+) -> VersionResult<RepoVersionConstraint> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(RepoVersionConstraint::Any);
     }
 
-    for (op, ctor) in [
-        (
-            ">=",
-            RepoVersionConstraint::GreaterOrEqual as fn(String) -> RepoVersionConstraint,
-        ),
-        ("<=", RepoVersionConstraint::LessOrEqual),
-        ("<<", RepoVersionConstraint::LessThan),
-        (">>", RepoVersionConstraint::GreaterThan),
-        ("!=", RepoVersionConstraint::NotEqual),
-        (">", RepoVersionConstraint::GreaterThan),
-        ("<", RepoVersionConstraint::LessThan),
-        ("=", RepoVersionConstraint::Exact),
-    ] {
-        if let Some(rest) = raw.strip_prefix(op) {
-            let version = rest.trim();
-            if version.is_empty() {
-                return None;
-            }
-            return Some(ctor(version.to_string()));
+    let operators = [
+        (">=", ConstraintOperator::GreaterOrEqual),
+        ("<=", ConstraintOperator::LessOrEqual),
+        ("<<", ConstraintOperator::LessThan),
+        (">>", ConstraintOperator::GreaterThan),
+        ("!=", ConstraintOperator::NotEqual),
+        (">", ConstraintOperator::GreaterThan),
+        ("<", ConstraintOperator::LessThan),
+        ("=", ConstraintOperator::Exact),
+    ];
+    let (operator, version) = operators
+        .iter()
+        .find_map(|(token, operator)| {
+            trimmed
+                .strip_prefix(token)
+                .map(|version| (*operator, version.trim()))
+        })
+        .unwrap_or((ConstraintOperator::Exact, trimmed));
+
+    if version.is_empty() {
+        return Err(VersionComparisonError::InvalidConstraint {
+            scheme: scheme.as_str(),
+            constraint: raw.to_string(),
+            reason: "missing version operand".to_string(),
+        });
+    }
+    validate_repo_version(scheme, version).map_err(|error| {
+        VersionComparisonError::InvalidConstraint {
+            scheme: scheme.as_str(),
+            constraint: raw.to_string(),
+            reason: error.to_string(),
         }
-    }
+    })?;
 
-    Some(RepoVersionConstraint::Exact(raw.to_string()))
+    Ok(operator.build(version.to_string()))
 }
 
 pub fn repo_version_satisfies(
     scheme: VersionScheme,
     version: &str,
     constraint: &RepoVersionConstraint,
-) -> bool {
-    match constraint {
-        RepoVersionConstraint::Any => true,
-        RepoVersionConstraint::Exact(expected) => {
-            compare_repo_versions(scheme, version, expected) == Some(Ordering::Equal)
+) -> VersionResult<bool> {
+    let expected = match constraint {
+        RepoVersionConstraint::Any => {
+            validate_repo_version(scheme, version)?;
+            return Ok(true);
         }
-        RepoVersionConstraint::GreaterThan(expected) => {
-            compare_repo_versions(scheme, version, expected) == Some(Ordering::Greater)
-        }
-        RepoVersionConstraint::GreaterOrEqual(expected) => matches!(
-            compare_repo_versions(scheme, version, expected),
-            Some(Ordering::Greater | Ordering::Equal)
-        ),
-        RepoVersionConstraint::LessThan(expected) => {
-            compare_repo_versions(scheme, version, expected) == Some(Ordering::Less)
-        }
-        RepoVersionConstraint::LessOrEqual(expected) => matches!(
-            compare_repo_versions(scheme, version, expected),
-            Some(Ordering::Less | Ordering::Equal)
-        ),
-        RepoVersionConstraint::NotEqual(expected) => {
-            compare_repo_versions(scheme, version, expected) != Some(Ordering::Equal)
-        }
-    }
+        RepoVersionConstraint::Exact(expected)
+        | RepoVersionConstraint::GreaterThan(expected)
+        | RepoVersionConstraint::GreaterOrEqual(expected)
+        | RepoVersionConstraint::LessThan(expected)
+        | RepoVersionConstraint::LessOrEqual(expected)
+        | RepoVersionConstraint::NotEqual(expected) => expected,
+    };
+    let ordering = compare_repo_versions(scheme, version, expected)?;
+    Ok(match constraint {
+        RepoVersionConstraint::Any => unreachable!("handled above"),
+        RepoVersionConstraint::Exact(_) => ordering == Ordering::Equal,
+        RepoVersionConstraint::GreaterThan(_) => ordering == Ordering::Greater,
+        RepoVersionConstraint::GreaterOrEqual(_) => ordering != Ordering::Less,
+        RepoVersionConstraint::LessThan(_) => ordering == Ordering::Less,
+        RepoVersionConstraint::LessOrEqual(_) => ordering != Ordering::Greater,
+        RepoVersionConstraint::NotEqual(_) => ordering != Ordering::Equal,
+    })
 }
 
-pub fn infer_version_scheme(repo: &Repository) -> Option<VersionScheme> {
-    version_scheme_from_repository(repo)
-}
-
-/// Resolve the `VersionScheme` for a `RepositoryPackage`.
-///
-/// Preference order:
-/// 1. Use the per-row `version_scheme` stored in the DB (populated during sync).
-/// 2. Fall back to name-based inference from the parent `Repository`.
-pub fn resolve_package_version_scheme(
-    pkg: &RepositoryPackage,
-    repo: &Repository,
-) -> Option<VersionScheme> {
-    version_scheme_from_db(pkg.version_scheme.as_deref()).or_else(|| infer_version_scheme(repo))
+/// Resolve the persisted scheme authority for a repository package.
+pub fn resolve_package_version_scheme(pkg: &RepositoryPackage) -> VersionScheme {
+    pkg.version_scheme
 }
 
 pub fn compare_repo_package_versions(
     a: &RepositoryPackage,
-    a_repo: &Repository,
     b: &RepositoryPackage,
-    b_repo: &Repository,
-) -> Option<Ordering> {
-    // Use the stored version_scheme from the DB when available (finding 3.3);
-    // fall back to name-based inference for packages that predate the column.
-    let a_scheme = resolve_package_version_scheme(a, a_repo)?;
-    let b_scheme = resolve_package_version_scheme(b, b_repo)?;
+) -> VersionResult<Ordering> {
+    let a_scheme = resolve_package_version_scheme(a);
+    let b_scheme = resolve_package_version_scheme(b);
     compare_mixed_repo_versions(a_scheme, &a.version, b_scheme, &b.version)
 }
 
-/// Split a version part (version or release) into tilde/caret components.
-///
-/// RPM and ALPM define two special separators:
-/// - `~` (tilde): sorts *before* the base version.  Used for pre-releases:
-///   `1.0~rc1 < 1.0`.
-/// - `^` (caret): sorts *after* the base version but before the next higher
-///   version.  Used for post-release snapshots: `1.0^git1 > 1.0` but
-///   `1.0^git1 < 1.1`.
-///
-/// The returned vector contains `(separator, text)` pairs.  The first element
-/// always has separator `None` (the base).  Subsequent elements carry the
-/// separator that preceded them.
-fn split_tilde_caret(version: &str) -> Vec<(Option<char>, &str)> {
-    let mut parts: Vec<(Option<char>, &str)> = Vec::new();
-    let mut start = 0;
-    let mut pending_sep: Option<char> = None;
-
-    for (i, ch) in version.char_indices() {
-        if ch == '~' || ch == '^' {
-            parts.push((pending_sep, &version[start..i]));
-            pending_sep = Some(ch);
-            start = i + 1;
-        }
-    }
-
-    // Add the final segment (or the whole string if no separators found)
-    parts.push((pending_sep, &version[start..]));
-
-    parts
-}
-
-/// Compare two tilde/caret-aware version part sequences segment by segment.
-///
-/// Ordering rules for special separators:
-/// - Tilde (`~`) sorts before everything, including end-of-string.
-/// - Caret (`^`) sorts after end-of-string but before any regular segment.
-fn compare_tilde_caret_parts(
-    a_parts: &[(Option<char>, &str)],
-    b_parts: &[(Option<char>, &str)],
-    flavor: SegmentFlavor,
-) -> Ordering {
-    let max_len = a_parts.len().max(b_parts.len());
-
-    for i in 0..max_len {
-        match (a_parts.get(i), b_parts.get(i)) {
-            (None, None) => return Ordering::Equal,
-            (None, Some((Some('~'), _))) => {
-                // b has a tilde part, a has nothing.  Tilde sorts before
-                // everything, so "nothing" (end) is greater than tilde.
-                return Ordering::Greater;
-            }
-            (None, Some((Some('^'), _))) => {
-                // b has a caret part, a has nothing.  Caret sorts after
-                // end-of-string? No: end-of-string means "this IS the
-                // version", caret means "version + snapshot".  So a (bare)
-                // is less than b (with caret).
-                // Wait -- RPM semantics: 1.0 < 1.0^git1.
-                // If a ran out and b has ^, a is Less.
-                return Ordering::Less;
-            }
-            (None, Some(_)) => {
-                // b has more regular segments, a ran out
-                return Ordering::Less;
-            }
-            (Some((Some('~'), _)), None) => {
-                // a has a tilde part, b has nothing.  Tilde sorts before everything.
-                return Ordering::Less;
-            }
-            (Some((Some('^'), _)), None) => {
-                // a has a caret part, b has nothing.  1.0^git1 > 1.0.
-                return Ordering::Greater;
-            }
-            (Some(_), None) => {
-                return Ordering::Greater;
-            }
-            (Some((a_sep, a_text)), Some((b_sep, b_text))) => {
-                // Compare separators first (for i > 0)
-                if i > 0 {
-                    let ord = match (a_sep, b_sep) {
-                        (Some('~'), Some('~')) => Ordering::Equal,
-                        (Some('~'), _) => Ordering::Less,
-                        (_, Some('~')) => Ordering::Greater,
-                        (Some('^'), Some('^')) => Ordering::Equal,
-                        (Some('^'), _) => Ordering::Less,
-                        (_, Some('^')) => Ordering::Greater,
-                        _ => Ordering::Equal,
-                    };
-                    if ord != Ordering::Equal {
-                        return ord;
-                    }
-                }
-
-                // Compare the text within this segment
-                let ord = compare_segmented(a_text, b_text, flavor);
-                if ord != Ordering::Equal {
-                    return ord;
-                }
-            }
-        }
-    }
-
-    Ordering::Equal
-}
-
-fn compare_rpm_like_versions(a: &str, b: &str) -> Ordering {
-    let (a_epoch, a_rest) = split_epoch(a);
-    let (b_epoch, b_rest) = split_epoch(b);
-    match a_epoch.cmp(&b_epoch) {
-        Ordering::Equal => {}
-        ord => return ord,
-    }
-
-    let (a_version, a_release) = split_release(a_rest);
-    let (b_version, b_release) = split_release(b_rest);
-
-    // Handle tilde/caret in the version part
-    let a_tc = split_tilde_caret(a_version);
-    let b_tc = split_tilde_caret(b_version);
-    match compare_tilde_caret_parts(&a_tc, &b_tc, SegmentFlavor::RpmLike) {
-        Ordering::Equal => {
-            // Also handle tilde/caret in the release part (e.g. 1.0-1~rc1)
-            match (a_release, b_release) {
-                (Some(a_rel), Some(b_rel)) => {
-                    let a_rel_tc = split_tilde_caret(a_rel);
-                    let b_rel_tc = split_tilde_caret(b_rel);
-                    compare_tilde_caret_parts(&a_rel_tc, &b_rel_tc, SegmentFlavor::RpmLike)
-                }
-                (Some(_), None) => Ordering::Greater,
-                (None, Some(_)) => Ordering::Less,
-                (None, None) => Ordering::Equal,
-            }
-        }
-        ord => ord,
-    }
-}
-
-fn compare_arch_versions(a: &str, b: &str) -> Ordering {
-    let (a_epoch, a_rest) = split_epoch(a);
-    let (b_epoch, b_rest) = split_epoch(b);
-    match a_epoch.cmp(&b_epoch) {
-        Ordering::Equal => {}
-        ord => return ord,
-    }
-
-    let (a_version, a_release) = split_release(a_rest);
-    let (b_version, b_release) = split_release(b_rest);
-
-    // Handle tilde/caret in the version part
-    let a_tc = split_tilde_caret(a_version);
-    let b_tc = split_tilde_caret(b_version);
-    match compare_tilde_caret_parts(&a_tc, &b_tc, SegmentFlavor::Arch) {
-        Ordering::Equal => {
-            // Also handle tilde/caret in the release/pkgrel part
-            match (a_release, b_release) {
-                (Some(a_rel), Some(b_rel)) => {
-                    let a_rel_tc = split_tilde_caret(a_rel);
-                    let b_rel_tc = split_tilde_caret(b_rel);
-                    compare_tilde_caret_parts(&a_rel_tc, &b_rel_tc, SegmentFlavor::Arch)
-                }
-                (Some(_), None) => Ordering::Greater,
-                (None, Some(_)) => Ordering::Less,
-                (None, None) => Ordering::Equal,
-            }
-        }
-        ord => ord,
-    }
-}
-
-fn compare_debian_versions(a: &str, b: &str) -> Ordering {
-    let (a_epoch, a_rest) = split_epoch(a);
-    let (b_epoch, b_rest) = split_epoch(b);
-    match a_epoch.cmp(&b_epoch) {
-        Ordering::Equal => {}
-        ord => return ord,
-    }
-
-    let (a_upstream, a_revision) = split_debian_revision(a_rest);
-    let (b_upstream, b_revision) = split_debian_revision(b_rest);
-    match compare_debian_part(a_upstream, b_upstream) {
-        Ordering::Equal => compare_debian_part(a_revision, b_revision),
-        ord => ord,
-    }
-}
-
-fn split_epoch(version: &str) -> (u64, &str) {
-    if let Some((epoch, rest)) = version.split_once(':') {
-        return (epoch.parse::<u64>().unwrap_or(0), rest);
-    }
-    (0, version)
-}
-
-fn split_release(version: &str) -> (&str, Option<&str>) {
-    if let Some((pkgver, release)) = version.rsplit_once('-') {
-        (pkgver, Some(release))
-    } else {
-        (version, None)
-    }
-}
-
-fn split_debian_revision(version: &str) -> (&str, &str) {
-    if let Some((upstream, revision)) = version.rsplit_once('-') {
-        (upstream, revision)
-    } else {
-        (version, "0")
-    }
-}
-
 #[derive(Clone, Copy)]
-enum SegmentFlavor {
-    RpmLike,
-    Arch,
+enum ConstraintOperator {
+    Exact,
+    GreaterThan,
+    GreaterOrEqual,
+    LessThan,
+    LessOrEqual,
+    NotEqual,
 }
 
-fn compare_segmented(a: &str, b: &str, flavor: SegmentFlavor) -> Ordering {
-    let a_segments = split_segments(a, flavor);
-    let b_segments = split_segments(b, flavor);
+impl ConstraintOperator {
+    fn build(self, version: String) -> RepoVersionConstraint {
+        match self {
+            Self::Exact => RepoVersionConstraint::Exact(version),
+            Self::GreaterThan => RepoVersionConstraint::GreaterThan(version),
+            Self::GreaterOrEqual => RepoVersionConstraint::GreaterOrEqual(version),
+            Self::LessThan => RepoVersionConstraint::LessThan(version),
+            Self::LessOrEqual => RepoVersionConstraint::LessOrEqual(version),
+            Self::NotEqual => RepoVersionConstraint::NotEqual(version),
+        }
+    }
+}
 
-    for i in 0..a_segments.len().max(b_segments.len()) {
-        match (a_segments.get(i), b_segments.get(i)) {
-            (None, None) => return Ordering::Equal,
-            (Some(_), None) => return Ordering::Greater,
-            (None, Some(_)) => return Ordering::Less,
-            (Some(sa), Some(sb)) => {
-                let a_is_num = sa.chars().all(|c| c.is_ascii_digit());
-                let b_is_num = sb.chars().all(|c| c.is_ascii_digit());
-                match (a_is_num, b_is_num) {
-                    (true, true) => {
-                        let ord = compare_numeric_strings(sa, sb);
-                        if ord != Ordering::Equal {
-                            return ord;
-                        }
-                    }
-                    (true, false) => return Ordering::Greater,
-                    (false, true) => return Ordering::Less,
-                    (false, false) => {
-                        let ord = sa.cmp(sb);
-                        if ord != Ordering::Equal {
-                            return ord;
-                        }
-                    }
-                }
+fn parse_semver(raw: &str) -> VersionResult<semver::Version> {
+    semver::Version::parse(raw).map_err(|error| VersionComparisonError::InvalidVersion {
+        scheme: VersionScheme::Conary.as_str(),
+        version: raw.to_string(),
+        reason: error.to_string(),
+    })
+}
+
+fn parse_debian(raw: &str) -> VersionResult<debversion::Version> {
+    debversion::Version::from_str(raw).map_err(|error| VersionComparisonError::InvalidVersion {
+        scheme: VersionScheme::Debian.as_str(),
+        version: raw.to_string(),
+        reason: error.to_string(),
+    })
+}
+
+fn parse_arch(raw: &str) -> VersionResult<alpm_types::Version> {
+    alpm_types::Version::from_str(raw).map_err(|error| VersionComparisonError::InvalidVersion {
+        scheme: VersionScheme::Arch.as_str(),
+        version: raw.to_string(),
+        reason: error.to_string(),
+    })
+}
+
+/// Validate RPM's documented `[epoch:]version[-release]` grammar before
+/// calling `rpm-version`, whose comparator intentionally accepts arbitrary
+/// strings.
+fn validate_rpm_evr(raw: &str) -> std::result::Result<(), String> {
+    if raw.is_empty() {
+        return Err("version is empty".to_string());
+    }
+    if raw.trim() != raw {
+        return Err("leading or trailing whitespace is not allowed".to_string());
+    }
+
+    let (epoch, version_release) = match raw.split_once(':') {
+        Some((epoch, rest)) => {
+            if epoch.is_empty() || !epoch.bytes().all(|byte| byte.is_ascii_digit()) {
+                return Err("epoch must be a non-empty decimal integer".to_string());
             }
+            epoch
+                .parse::<u64>()
+                .map_err(|_| "epoch exceeds the supported integer range".to_string())?;
+            (Some(epoch), rest)
         }
+        None => (None, raw),
+    };
+    let _ = epoch;
+
+    if version_release.contains(':') {
+        return Err("multiple epoch separators are not allowed".to_string());
     }
-
-    Ordering::Equal
-}
-
-fn split_segments(version: &str, flavor: SegmentFlavor) -> Vec<&str> {
-    let mut segments = Vec::new();
-    let mut i = 0;
-    let bytes = version.as_bytes();
-
-    while i < bytes.len() {
-        if is_segment_separator(bytes[i], flavor) {
-            i += 1;
-            continue;
-        }
-
-        let start = i;
-        if bytes[i].is_ascii_digit() {
-            while i < bytes.len() && bytes[i].is_ascii_digit() {
-                i += 1;
+    let (version, release) = match version_release.split_once('-') {
+        Some((version, release)) => {
+            if release.contains('-') {
+                return Err("release must not contain '-'".to_string());
             }
-        } else {
-            while i < bytes.len()
-                && !bytes[i].is_ascii_digit()
-                && !is_segment_separator(bytes[i], flavor)
-            {
-                i += 1;
-            }
+            (version, Some(release))
         }
-        segments.push(&version[start..i]);
+        None => (version_release, None),
+    };
+    validate_rpm_component(version, "version")?;
+    if let Some(release) = release {
+        validate_rpm_component(release, "release")?;
     }
-
-    segments
+    Ok(())
 }
 
-fn is_segment_separator(byte: u8, flavor: SegmentFlavor) -> bool {
-    match flavor {
-        SegmentFlavor::RpmLike => matches!(byte, b'.' | b'-' | b'_'),
-        SegmentFlavor::Arch => matches!(byte, b'.' | b'-' | b'_' | b'+'),
+fn validate_rpm_component(component: &str, name: &str) -> std::result::Result<(), String> {
+    if component.is_empty() {
+        return Err(format!("{name} component is empty"));
     }
-}
-
-fn compare_numeric_strings(a: &str, b: &str) -> Ordering {
-    let a = a.trim_start_matches('0');
-    let b = b.trim_start_matches('0');
-    match a.len().cmp(&b.len()) {
-        Ordering::Equal => a.cmp(b),
-        ord => ord,
+    if !component.bytes().all(|byte| {
+        byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'+' | b'~' | b'^')
+    }) {
+        return Err(format!(
+            "{name} contains characters outside RPM's version grammar"
+        ));
     }
-}
-
-fn compare_debian_part(a: &str, b: &str) -> Ordering {
-    let mut a = a;
-    let mut b = b;
-
-    while !a.is_empty() || !b.is_empty() {
-        let (a_non_digit, a_rest) = take_non_digits(a);
-        let (b_non_digit, b_rest) = take_non_digits(b);
-        let non_digit_ord = compare_debian_non_digits(a_non_digit, b_non_digit);
-        if non_digit_ord != Ordering::Equal {
-            return non_digit_ord;
-        }
-
-        let (a_digits, next_a) = take_digits(a_rest);
-        let (b_digits, next_b) = take_digits(b_rest);
-        let digit_ord = compare_numeric_strings(a_digits, b_digits);
-        if digit_ord != Ordering::Equal {
-            return digit_ord;
-        }
-
-        a = next_a;
-        b = next_b;
+    if !component.bytes().any(|byte| byte.is_ascii_alphanumeric()) {
+        return Err(format!("{name} must contain an alphanumeric character"));
     }
-
-    Ordering::Equal
-}
-
-fn take_non_digits(s: &str) -> (&str, &str) {
-    let idx = s
-        .char_indices()
-        .find(|(_, ch)| ch.is_ascii_digit())
-        .map(|(idx, _)| idx)
-        .unwrap_or(s.len());
-    s.split_at(idx)
-}
-
-fn take_digits(s: &str) -> (&str, &str) {
-    let idx = s
-        .char_indices()
-        .find(|(_, ch)| !ch.is_ascii_digit())
-        .map(|(idx, _)| idx)
-        .unwrap_or(s.len());
-    s.split_at(idx)
-}
-
-fn compare_debian_non_digits(a: &str, b: &str) -> Ordering {
-    let mut a_chars = a.chars();
-    let mut b_chars = b.chars();
-
-    loop {
-        let ord = debian_char_order(a_chars.next()).cmp(&debian_char_order(b_chars.next()));
-        if ord != Ordering::Equal {
-            return ord;
-        }
-
-        if a_chars.as_str().is_empty() && b_chars.as_str().is_empty() {
-            return Ordering::Equal;
-        }
-    }
-}
-
-fn debian_char_order(ch: Option<char>) -> i32 {
-    match ch {
-        Some('~') => -1,
-        None => 0,
-        Some(ch) if ch.is_ascii_alphabetic() => ch as i32,
-        Some(ch) => ch as i32 + 256,
-    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cmp::Ordering;
+
+    fn compare(scheme: VersionScheme, a: &str, b: &str) -> Ordering {
+        compare_repo_versions(scheme, a, b).expect("valid versions")
+    }
 
     #[test]
-    fn compares_rpm_versions_natively() {
+    fn upstream_comparators_preserve_native_ordering() {
         assert_eq!(
-            compare_repo_versions(VersionScheme::Rpm, "1.2.3-2.fc44", "1.2.3-1.fc44"),
-            Some(Ordering::Greater)
+            compare(VersionScheme::Rpm, "1.2.3-2.fc44", "1.2.3-1.fc44"),
+            Ordering::Greater
+        );
+        assert_eq!(
+            compare(VersionScheme::Debian, "1.0", "1.0~beta1"),
+            Ordering::Greater
+        );
+        assert_eq!(
+            compare(VersionScheme::Arch, "1:1.0-2", "1.0-3"),
+            Ordering::Greater
+        );
+        assert_eq!(
+            compare(VersionScheme::Conary, "1.0.0-alpha.1", "1.0.0"),
+            Ordering::Less
+        );
+        assert_eq!(
+            compare(VersionScheme::Conary, "1.0.0+build.1", "1.0.0+build.2"),
+            Ordering::Equal
         );
     }
 
     #[test]
-    fn compares_debian_versions_natively() {
+    fn rpm_upstream_tilde_caret_and_epoch_corpus() {
+        for (a, b, expected) in [
+            ("1.0~rc1", "1.0", Ordering::Less),
+            ("1.0^git1", "1.0", Ordering::Greater),
+            ("1.0^git1", "1.1", Ordering::Less),
+            ("2:1.0", "1:2.0", Ordering::Greater),
+            ("1.0~alpha", "1.0~beta", Ordering::Less),
+            ("1.0^git1", "1.0^git2", Ordering::Less),
+            ("1.0~rc1", "1.0^git1", Ordering::Less),
+        ] {
+            assert_eq!(compare(VersionScheme::Rpm, a, b), expected);
+        }
+    }
+
+    #[test]
+    fn arch_upstream_special_version_corpus() {
         assert_eq!(
-            compare_repo_versions(VersionScheme::Debian, "1.0", "1.0~beta1"),
-            Some(Ordering::Greater)
+            compare(VersionScheme::Arch, "1.0~rc1", "1.0"),
+            Ordering::Greater
+        );
+        assert_eq!(
+            compare(VersionScheme::Arch, "1.0^git1", "1.0"),
+            Ordering::Greater
         );
     }
 
     #[test]
-    fn compares_arch_versions_natively() {
-        assert_eq!(
-            compare_repo_versions(VersionScheme::Arch, "1:1.0-2", "1.0-3"),
-            Some(Ordering::Greater)
-        );
-    }
-
-    #[test]
-    fn rejects_cross_scheme_comparison() {
-        assert_eq!(
+    fn rejects_cross_scheme_comparison_with_typed_error() {
+        assert!(matches!(
             compare_mixed_repo_versions(VersionScheme::Debian, "1.0", VersionScheme::Arch, "1.0-1"),
-            None
-        );
+            Err(VersionComparisonError::SchemeMismatch { .. })
+        ));
     }
 
     #[test]
-    fn debian_constraints_use_native_ordering() {
-        let constraint =
+    fn rejects_invalid_versions_instead_of_assigning_fallback_order() {
+        for (scheme, raw) in [
+            (VersionScheme::Conary, "1.0"),
+            (VersionScheme::Rpm, "broken:1.0"),
+            (VersionScheme::Rpm, "1.0-"),
+            (VersionScheme::Debian, "1.0 bad"),
+            (VersionScheme::Arch, "1:"),
+        ] {
+            assert!(
+                validate_repo_version(scheme, raw).is_err(),
+                "{scheme:?} accepted {raw:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn constraints_are_validated_and_use_native_ordering() {
+        let debian =
             parse_repo_constraint(VersionScheme::Debian, ">= 1.0~beta1").expect("constraint");
-        assert!(repo_version_satisfies(
-            VersionScheme::Debian,
-            "1.0",
-            &constraint
-        ));
-        assert!(!repo_version_satisfies(
-            VersionScheme::Debian,
-            "0.9",
-            &constraint
-        ));
+        assert!(repo_version_satisfies(VersionScheme::Debian, "1.0", &debian).unwrap());
+        assert!(!repo_version_satisfies(VersionScheme::Debian, "0.9", &debian).unwrap());
+
+        let arch = parse_repo_constraint(VersionScheme::Arch, ">= 1:1.0-1").expect("constraint");
+        assert!(repo_version_satisfies(VersionScheme::Arch, "1:1.0-2", &arch).unwrap());
+        assert!(!repo_version_satisfies(VersionScheme::Arch, "1.0-9", &arch).unwrap());
+
+        assert!(parse_repo_constraint(VersionScheme::Rpm, ">= broken:1.0").is_err());
     }
 
     #[test]
-    fn arch_constraints_respect_epoch() {
-        let constraint =
-            parse_repo_constraint(VersionScheme::Arch, ">= 1:1.0-1").expect("constraint");
-        assert!(repo_version_satisfies(
-            VersionScheme::Arch,
-            "1:1.0-2",
-            &constraint
-        ));
-        assert!(!repo_version_satisfies(
-            VersionScheme::Arch,
-            "1.0-9",
-            &constraint
-        ));
-    }
+    fn validated_repository_version_compares_and_satisfies() {
+        let a = RepositoryVersion::new("1.2.3-2.fc44".to_string(), VersionScheme::Rpm).unwrap();
+        let b = RepositoryVersion::new("1.2.3-1.fc44".to_string(), VersionScheme::Rpm).unwrap();
+        assert_eq!(a.compare(&b).unwrap(), Ordering::Greater);
 
-    #[test]
-    fn repository_version_same_scheme_compare() {
-        let a = RepositoryVersion::new("1.2.3-2.fc44".to_string(), VersionScheme::Rpm);
-        let b = RepositoryVersion::new("1.2.3-1.fc44".to_string(), VersionScheme::Rpm);
-        assert_eq!(a.compare(&b), Some(Ordering::Greater));
-    }
-
-    #[test]
-    fn repository_version_cross_scheme_returns_none() {
-        let rpm = RepositoryVersion::new("1.0".to_string(), VersionScheme::Rpm);
-        let deb = RepositoryVersion::new("1.0".to_string(), VersionScheme::Debian);
-        assert_eq!(rpm.compare(&deb), None);
-    }
-
-    #[test]
-    fn repository_version_satisfies_constraint() {
-        let v = RepositoryVersion::new("1.0".to_string(), VersionScheme::Debian);
+        let version = RepositoryVersion::new("1.0".to_string(), VersionScheme::Debian).unwrap();
         let constraint =
             parse_repo_constraint(VersionScheme::Debian, ">= 0.9").expect("constraint");
-        assert!(v.satisfies(&constraint));
-    }
-
-    // -- RPM tilde/caret tests --
-
-    #[test]
-    fn rpm_tilde_sorts_before_release() {
-        // 1.0~rc1 < 1.0
-        assert_eq!(
-            compare_repo_versions(VersionScheme::Rpm, "1.0~rc1", "1.0"),
-            Some(Ordering::Less)
-        );
-    }
-
-    #[test]
-    fn rpm_caret_sorts_after_release() {
-        // 1.0^git1 > 1.0
-        assert_eq!(
-            compare_repo_versions(VersionScheme::Rpm, "1.0^git1", "1.0"),
-            Some(Ordering::Greater)
-        );
-    }
-
-    #[test]
-    fn rpm_caret_sorts_before_next_version() {
-        // 1.0^git1 < 1.1
-        assert_eq!(
-            compare_repo_versions(VersionScheme::Rpm, "1.0^git1", "1.1"),
-            Some(Ordering::Less)
-        );
-    }
-
-    #[test]
-    fn rpm_epoch_overrides_version() {
-        // 2:1.0 > 1:2.0
-        assert_eq!(
-            compare_repo_versions(VersionScheme::Rpm, "2:1.0", "1:2.0"),
-            Some(Ordering::Greater)
-        );
-    }
-
-    #[test]
-    fn rpm_tilde_earlier_than_tilde() {
-        // 1.0~alpha < 1.0~beta (alpha < beta lexically)
-        assert_eq!(
-            compare_repo_versions(VersionScheme::Rpm, "1.0~alpha", "1.0~beta"),
-            Some(Ordering::Less)
-        );
-    }
-
-    #[test]
-    fn rpm_caret_vs_caret() {
-        // 1.0^git1 < 1.0^git2
-        assert_eq!(
-            compare_repo_versions(VersionScheme::Rpm, "1.0^git1", "1.0^git2"),
-            Some(Ordering::Less)
-        );
-    }
-
-    #[test]
-    fn rpm_tilde_before_caret() {
-        // 1.0~rc1 < 1.0^git1 (tilde sorts before everything)
-        assert_eq!(
-            compare_repo_versions(VersionScheme::Rpm, "1.0~rc1", "1.0^git1"),
-            Some(Ordering::Less)
-        );
-    }
-
-    // -- ALPM tilde/caret tests (same semantics) --
-
-    #[test]
-    fn arch_tilde_sorts_before_release() {
-        assert_eq!(
-            compare_repo_versions(VersionScheme::Arch, "1.0~rc1", "1.0"),
-            Some(Ordering::Less)
-        );
-    }
-
-    #[test]
-    fn arch_caret_sorts_after_release() {
-        assert_eq!(
-            compare_repo_versions(VersionScheme::Arch, "1.0^git1", "1.0"),
-            Some(Ordering::Greater)
-        );
+        assert!(version.satisfies(&constraint).unwrap());
     }
 }

@@ -68,6 +68,7 @@ impl TryPreflightFixture {
                     .path()
                     .join(format!("{id}.ccs"))
                     .to_string_lossy(),
+                package_signing_key: "test-signing-key",
                 package_name: Some("demo"),
                 package_version: Some("1.0.0"),
                 previous_generation_id: Some(1),
@@ -156,27 +157,25 @@ fn assert_message_mentions_try_actions(message: &str) {
 }
 
 #[test]
-fn try_dispatch_watch_defaults_to_current_dir() {
-    match super::try_dispatch_action(super::TryDispatchInput {
+fn try_dispatch_watch_requires_explicit_recipe_or_project() {
+    let error = super::try_dispatch_action(super::TryDispatchInput {
         target: None,
         activate: false,
-        allow_irreversible: false,
+        policy: None,
         isolated: false,
         run: &[],
         watch: true,
         recipe: None,
+        key: Some("/tmp/test-key".to_string()),
         json: false,
     })
-    .unwrap()
-    {
-        super::TryDispatchAction::Watch(watch) => {
-            assert_eq!(watch.target, ".");
-            assert_eq!(watch.recipe, None);
-            assert!(!watch.json);
-            assert!(!watch.isolated);
-        }
-        other => panic!("unexpected try dispatch action: {other:?}"),
-    }
+    .expect_err("watch needs an explicit recipe boundary");
+    assert!(
+        error
+            .to_string()
+            .contains("requires an explicit recipe file or project directory"),
+        "{error:#}"
+    );
 }
 
 #[test]
@@ -184,11 +183,12 @@ fn try_dispatch_watch_accepts_isolated() {
     match super::try_dispatch_action(super::TryDispatchInput {
         target: Some(".".to_string()),
         activate: false,
-        allow_irreversible: false,
+        policy: None,
         isolated: true,
         run: &[],
         watch: true,
         recipe: None,
+        key: Some("/tmp/test-key".to_string()),
         json: true,
     })
     .unwrap()
@@ -207,11 +207,12 @@ fn try_dispatch_rejects_isolated_without_watch() {
     let err = super::try_dispatch_action(super::TryDispatchInput {
         target: Some("pkg.ccs".to_string()),
         activate: false,
-        allow_irreversible: false,
+        policy: Some("/tmp/policy.toml".to_string()),
         isolated: true,
         run: &[],
         watch: false,
         recipe: None,
+        key: None,
         json: false,
     })
     .expect_err("isolated without watch should fail");
@@ -222,18 +223,10 @@ fn try_dispatch_rejects_isolated_without_watch() {
 }
 
 #[test]
-fn try_dispatch_watch_rejects_artifacts_actions_activation_and_run_commands() {
-    for (target, activate, allow_irreversible, run, message) in [
-        (
-            Some("pkg.ccs".to_string()),
-            false,
-            false,
-            vec![],
-            "does not accept prebuilt .ccs artifacts",
-        ),
+fn try_dispatch_watch_rejects_actions_activation_and_run_commands() {
+    for (target, activate, run, message) in [
         (
             Some("status".to_string()),
-            false,
             false,
             vec![],
             "cannot be combined with try action",
@@ -241,34 +234,18 @@ fn try_dispatch_watch_rejects_artifacts_actions_activation_and_run_commands() {
         (
             Some("rollback".to_string()),
             false,
-            false,
             vec![],
             "cannot be combined with try action",
         ),
         (
             Some("keep".to_string()),
             false,
-            false,
             vec![],
             "cannot be combined with try action",
         ),
+        (None, true, vec![], "cannot be combined with --activate"),
         (
             None,
-            true,
-            false,
-            vec![],
-            "cannot be combined with --activate",
-        ),
-        (
-            None,
-            false,
-            true,
-            vec![],
-            "cannot be combined with --allow-irreversible",
-        ),
-        (
-            None,
-            false,
             false,
             vec!["/bin/true".to_string()],
             "cannot run a command",
@@ -277,16 +254,88 @@ fn try_dispatch_watch_rejects_artifacts_actions_activation_and_run_commands() {
         let err = super::try_dispatch_action(super::TryDispatchInput {
             target,
             activate,
-            allow_irreversible,
+            policy: None,
             isolated: false,
             run: &run,
             watch: true,
             recipe: None,
+            key: None,
             json: false,
         })
         .expect_err("watch conflict should fail");
         assert!(err.to_string().contains(message), "{err:#}");
     }
+}
+
+#[test]
+fn try_dispatch_requires_explicit_package_trust_policy() {
+    let err = super::try_dispatch_action(super::TryDispatchInput {
+        target: Some("pkg.ccs".to_string()),
+        activate: false,
+        policy: None,
+        isolated: false,
+        run: &[],
+        watch: false,
+        recipe: None,
+        key: None,
+        json: false,
+    })
+    .expect_err("direct package try without a trust policy should fail");
+    assert!(
+        err.to_string()
+            .contains("conary try <package> requires --policy <PATH>"),
+        "{err:#}"
+    );
+}
+
+#[test]
+fn try_dispatch_carries_explicit_package_trust_policy() {
+    let action = super::try_dispatch_action(super::TryDispatchInput {
+        target: Some("pkg.ccs".to_string()),
+        activate: false,
+        policy: Some("/tmp/policy.toml".to_string()),
+        isolated: false,
+        run: &[],
+        watch: false,
+        recipe: None,
+        key: None,
+        json: false,
+    })
+    .unwrap();
+    match action {
+        super::TryDispatchAction::Package {
+            package,
+            trust_policy_path,
+        } => {
+            assert_eq!(package, "pkg.ccs");
+            assert_eq!(
+                trust_policy_path,
+                std::path::PathBuf::from("/tmp/policy.toml")
+            );
+        }
+        other => panic!("unexpected try dispatch action: {other:?}"),
+    }
+}
+
+#[test]
+fn try_dispatch_watch_rejects_package_policy() {
+    let err = super::try_dispatch_action(super::TryDispatchInput {
+        target: Some(".".to_string()),
+        activate: false,
+        policy: Some("/tmp/policy.toml".to_string()),
+        isolated: false,
+        run: &[],
+        watch: true,
+        recipe: None,
+        key: Some("/tmp/test-key".to_string()),
+        json: false,
+    })
+    .expect_err("watch must derive trust from its signing key");
+    assert!(
+        err.to_string()
+            .contains("derives trust from --key and cannot use --policy"),
+        "{err:#}"
+    );
 }
 
 #[test]
@@ -473,7 +522,7 @@ fn orphaned_activated_interactive_preflight_marks_orphaned_and_blocks_command() 
 }
 
 #[test]
-fn orphaned_activated_env_forced_non_interactive_attempts_rollback() {
+fn orphaned_activated_env_forced_non_interactive_rolls_back() {
     let _env_lock = lock_env();
     let _boot_guard = EnvVarGuard::set("CONARY_TEST_BOOT_ID", "boot-a");
     let _non_interactive_guard = EnvVarGuard::set("CONARY_NON_INTERACTIVE", "1");
@@ -483,19 +532,16 @@ fn orphaned_activated_env_forced_non_interactive_attempts_rollback() {
     set_launcher(&session, &fixture, i64::from(std::process::id()), "boot-a");
     set_try_generation(&session, &fixture, 7);
 
-    let err = run_try_session_preflight_for_test(&read_only_cli(&fixture), true)
-        .expect_err("CONARY_NON_INTERACTIVE=1 should force automatic rollback");
-
-    let message = err.to_string();
-    assert!(message.contains("automatic rollback"), "{message}");
+    run_try_session_preflight_for_test(&read_only_cli(&fixture), true)
+        .expect("CONARY_NON_INTERACTIVE=1 should complete automatic rollback");
     assert_eq!(
         fixture.stored_session("try-orphan-activated").status,
-        TrySessionStatus::Orphaned
+        TrySessionStatus::RolledBack
     );
 }
 
 #[test]
-fn orphaned_activated_non_interactive_preflight_attempts_rollback() {
+fn orphaned_activated_non_interactive_preflight_rolls_back() {
     let _env_lock = lock_env();
     let _boot_guard = EnvVarGuard::set("CONARY_TEST_BOOT_ID", "boot-a");
     let fixture = TryPreflightFixture::new();
@@ -504,14 +550,11 @@ fn orphaned_activated_non_interactive_preflight_attempts_rollback() {
     set_launcher(&session, &fixture, i64::from(std::process::id()), "boot-a");
     set_try_generation(&session, &fixture, 7);
 
-    let err = run_try_session_preflight_for_test(&read_only_cli(&fixture), false)
-        .expect_err("rollback attempt should surface rollback error for invalid test package");
-
-    let message = err.to_string();
-    assert!(message.contains("automatic rollback"), "{message}");
+    run_try_session_preflight_for_test(&read_only_cli(&fixture), false)
+        .expect("non-interactive preflight should complete automatic rollback");
     assert_eq!(
         fixture.stored_session("try-orphan-activated").status,
-        TrySessionStatus::Orphaned
+        TrySessionStatus::RolledBack
     );
 }
 
@@ -559,16 +602,7 @@ fn commands_without_db_args_do_not_use_try_session_preflight_scope() {
         ]
         .as_slice(),
         ["conary", "ccs", "build", "/tmp/ccs-demo"].as_slice(),
-        [
-            "conary",
-            "ccs",
-            "build",
-            "/tmp/ccs-demo",
-            "--format",
-            "v2",
-            "--local-dev",
-        ]
-        .as_slice(),
+        ["conary", "ccs", "build", "/tmp/ccs-demo", "--local-dev"].as_slice(),
         ["conary", "ccs", "lint", "/tmp/ccs-demo"].as_slice(),
         ["conary", "ccs", "inspect", "/tmp/pkg.ccs"].as_slice(),
         ["conary", "ccs", "verify", "/tmp/pkg.ccs"].as_slice(),
@@ -577,12 +611,26 @@ fn commands_without_db_args_do_not_use_try_session_preflight_scope() {
         ["conary", "ccs", "keygen", "--output", "/tmp/key"].as_slice(),
         ["conary", "capability", "validate", "/tmp/ccs.toml"].as_slice(),
         ["conary", "trust", "key-gen", "root", "--output", "/tmp"].as_slice(),
-        ["conary", "query", "scripts", "/tmp/pkg.ccs"].as_slice(),
-        ["conary", "query", "scripts", "/tmp/pkg.rpm"].as_slice(),
     ] {
         let cli = parse_cli(args);
         let command = cli.command.as_ref().expect("parsed command");
-        assert!(!super::command_uses_try_session_preflight_db(command));
+        assert!(
+            !super::command_uses_try_session_preflight_db(command),
+            "unexpected try-session preflight for {args:?}"
+        );
+    }
+
+    let package_dir = tempfile::tempdir().unwrap();
+    for filename in ["pkg.ccs", "pkg.rpm"] {
+        let package_path = package_dir.path().join(filename);
+        std::fs::File::create(&package_path).unwrap();
+        let package_path = package_path.to_string_lossy().into_owned();
+        let cli = parse_cli(["conary", "query", "scripts", package_path.as_str()]);
+        let command = cli.command.as_ref().expect("parsed command");
+        assert!(
+            !super::command_uses_try_session_preflight_db(command),
+            "package-file query must not use try-session preflight: {package_path}"
+        );
     }
 
     let cli = parse_cli(["conary", "pin", "demo"]);
@@ -604,7 +652,8 @@ async fn artifact_form_publish_reaches_artifact_reader_without_preflight_db() {
 
     assert!(
         err.to_string()
-            .contains("Failed to open package: dist/pkg.ccs")
+            .contains("verify current CCS authority for static publication"),
+        "{err:#}"
     );
 }
 
@@ -678,6 +727,7 @@ fn activated_liveness_rejects_recorded_dead_pid_but_allows_absent_pid() {
     let session = TrySession {
         id: "try-liveness".to_string(),
         package_path: "/tmp/demo.ccs".to_string(),
+        package_signing_key: "test-signing-key".to_string(),
         package_name: None,
         package_version: None,
         previous_generation_id: Some(1),

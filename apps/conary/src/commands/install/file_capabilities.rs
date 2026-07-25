@@ -3,12 +3,10 @@
 use crate::commands::LiveRootFile;
 use anyhow::{Context, Result, bail};
 use conary_core::ccs::manifest::FileCapability;
+use conary_core::payload::PayloadNodeKind;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::Command;
-
-const S_IFMT: i32 = 0o170000;
-const S_IFREG: i32 = 0o100000;
 
 pub(crate) trait FileCapabilityApplier {
     fn apply_file_capability(&mut self, target: &Path, capability: &FileCapability) -> Result<()>;
@@ -66,10 +64,7 @@ pub(crate) fn apply_selected_file_capabilities_with<'a>(
                 capability.path
             );
         }
-        if !is_regular_file_capability_payload(
-            installed_file.mode,
-            installed_file.symlink_target.as_deref(),
-        ) {
+        if !is_regular_file_capability_payload(&installed_file.node.source.kind) {
             bail!(
                 "file capability target {} is not a regular installed file",
                 capability.path
@@ -89,10 +84,9 @@ pub(crate) fn apply_selected_file_capabilities_with<'a>(
 }
 
 pub(in crate::commands::install) fn is_regular_file_capability_payload(
-    mode: i32,
-    symlink_target: Option<&str>,
+    kind: &PayloadNodeKind,
 ) -> bool {
-    symlink_target.is_none() && matches!(mode & S_IFMT, 0 | S_IFREG)
+    matches!(kind, PayloadNodeKind::Regular { .. })
 }
 
 fn ensure_live_root_regular_file_target(package_path: &str, target: &Path) -> Result<()> {
@@ -109,6 +103,7 @@ fn ensure_live_root_regular_file_target(package_path: &str, target: &Path) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
+    use conary_core::payload::{PayloadNode, ResolvedPayloadNode};
     use std::path::PathBuf;
 
     #[derive(Default)]
@@ -142,17 +137,20 @@ mod tests {
         LiveRootFile {
             path: path.to_string(),
             content: Vec::new(),
-            mode: 0o100644,
-            symlink_target: None,
+            node: ResolvedPayloadNode::from_numeric_source(PayloadNode::regular(0o644)).unwrap(),
         }
     }
 
     fn live_root_symlink(path: &str, target: &str) -> LiveRootFile {
+        let mut node = PayloadNode::regular(0o777);
+        node.kind = PayloadNodeKind::Symlink {
+            target: target.to_string(),
+        };
+        node.mode = libc::S_IFLNK | 0o777;
         LiveRootFile {
             path: path.to_string(),
             content: Vec::new(),
-            mode: 0o120777,
-            symlink_target: Some(target.to_string()),
+            node: ResolvedPayloadNode::from_numeric_source(node).unwrap(),
         }
     }
 

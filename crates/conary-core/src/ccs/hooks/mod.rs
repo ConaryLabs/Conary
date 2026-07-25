@@ -6,38 +6,46 @@
 //! systemd units, directories, etc.) using native Rust calls to system
 //! utilities instead of shell scripts.
 //!
-//! ## Target Root Support
+//! ## Selected Root Boundary
 //!
-//! All hook operations support installing into a target root directory
-//! other than `/`. This is critical for:
+//! Hook operations require a materialized selected root other than `/`. This
+//! supports:
 //! - Bootstrap: Building a new system from scratch
 //! - Container image creation: Populating rootfs without affecting host
 //! - Offline installations: Installing packages into mounted filesystems
 //!
-//! When root != `/`:
+//! In that root:
 //! - Users/groups are created in target's /etc/passwd and /etc/group
 //! - Systemd units are enabled via symlinks, not `systemctl`
 //! - Directories are created under the target root
 //! - Host system is never modified
 
 mod alternatives;
+mod capabilities;
 mod directory;
 mod sysctl;
 mod systemd;
 mod tmpfiles;
 mod user_group;
 
+pub use capabilities::{
+    ExecutableInterface, HOST_CAPABILITY_INVENTORY_SCHEMA_VERSION,
+    HOST_CAPABILITY_INVENTORY_SETTING, HostCapabilityInventory, HostCapabilityInventoryError,
+    HostCapabilityPreflightError, HostCapabilityRequirement, HostExecutableContract,
+    HostExecutableImplementation, InitSystemCapability, SystemdInterface, SystemdOperation,
+    TmpfilesInterface,
+};
 // Re-export helper functions that may be useful externally
 pub(crate) use sysctl::{is_denied_sysctl_key, validate_sysctl_key, validate_sysctl_value};
-pub(crate) use systemd::is_safe_unit_name;
-pub use systemd::{compute_relative_unit_path, parse_systemd_install_section};
+pub(crate) use systemd::is_safe_declarative_unit_name;
 pub use tmpfiles::hash_string;
-pub(crate) use tmpfiles::validate_tmpfiles_entry_type;
+pub(crate) use tmpfiles::validate_tmpfiles_fields;
 pub(crate) use user_group::{validate_shell, validate_username};
 
 use crate::ccs::manifest::Hooks;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 use tracing::warn;
@@ -62,6 +70,8 @@ pub struct HookResult {
 /// Types of hooks that can be executed
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum HookType {
+    /// Structural host capability preflight
+    Capability,
     /// User creation
     User,
     /// Group creation
@@ -70,6 +80,8 @@ pub enum HookType {
     Directory,
     /// Systemd unit enable/disable
     Systemd,
+    /// Source-independent service manager action
+    Service,
     /// Tmpfiles.d entry
     Tmpfiles,
     /// Sysctl setting
@@ -83,10 +95,12 @@ pub enum HookType {
 impl std::fmt::Display for HookType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Capability => write!(f, "capability"),
             Self::User => write!(f, "user"),
             Self::Group => write!(f, "group"),
             Self::Directory => write!(f, "directory"),
             Self::Systemd => write!(f, "systemd"),
+            Self::Service => write!(f, "service"),
             Self::Tmpfiles => write!(f, "tmpfiles"),
             Self::Sysctl => write!(f, "sysctl"),
             Self::Alternatives => write!(f, "alternatives"),
@@ -175,6 +189,19 @@ pub enum AppliedHook {
     Directory(PathBuf, bool),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CcsActivationSource {
+    DeclarativeService,
+    CapturedRuntime,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CapturedCcsActivation {
+    pub source: CcsActivationSource,
+    pub source_entry: String,
+    pub invocation: crate::activation::RuntimeActivationInvocation,
+}
+
 /// Executor for CCS declarative hooks
 ///
 /// Handles pre-install hooks (users, groups, directories) and post-install
@@ -182,19 +209,59 @@ pub enum AppliedHook {
 /// for potential rollback on transaction failure.
 #[derive(Debug)]
 pub struct HookExecutor {
-    /// Root filesystem path (usually "/")
+    /// Materialized selected root. The host root is never valid here.
     root: PathBuf,
+    /// Persisted structural host interfaces selected independently of package
+    /// source format.
+    capabilities: HostCapabilityInventory,
     /// Hooks that were successfully applied (for rollback)
     applied_hooks: Vec<AppliedHook>,
+    /// Runtime manager operations captured without signaling the host.
+    activation_invocations: RefCell<Vec<CapturedCcsActivation>>,
 }
 
 impl HookExecutor {
     /// Create a new hook executor
-    pub fn new(root: &Path) -> Self {
+    pub fn new(root: &Path, capabilities: HostCapabilityInventory) -> Self {
         Self {
             root: root.to_path_buf(),
+            capabilities,
             applied_hooks: Vec::new(),
+            activation_invocations: RefCell::new(Vec::new()),
         }
+    }
+
+    /// Drain generation activation work emitted by successful hooks.
+    pub fn take_activation_invocations(&self) -> Vec<CapturedCcsActivation> {
+        std::mem::take(&mut *self.activation_invocations.borrow_mut())
+    }
+
+    fn require_selected_root(&self) -> Result<()> {
+        if self.root == Path::new("/") {
+            anyhow::bail!(
+                "CCS hook execution requires a materialized selected root; the host root '/' is not an execution target"
+            );
+        }
+        if !self.root.is_absolute() {
+            anyhow::bail!(
+                "CCS hook execution root must be absolute: {}",
+                self.root.display()
+            );
+        }
+        Ok(())
+    }
+
+    /// Resolve every external lifecycle interface before any hook mutates the
+    /// selected root.
+    pub fn preflight_hooks(&self, hooks: &Hooks) -> Result<()> {
+        self.require_selected_root()?;
+        self.capabilities
+            .preflight_hooks(&self.root, hooks)
+            .map_err(anyhow::Error::from)?;
+        for alternative in &hooks.alternatives {
+            self.preflight_alternative(&alternative.link, &alternative.name, &alternative.path)?;
+        }
+        Ok(())
     }
 
     /// Execute pre-install hooks (before transaction)
@@ -205,6 +272,7 @@ impl HookExecutor {
     ///
     /// Tracks applied hooks for potential rollback via `revert_pre_hooks()`.
     pub fn execute_pre_hooks(&mut self, hooks: &Hooks) -> Result<()> {
+        self.require_selected_root()?;
         // Groups first (users may depend on them)
         for group in &hooks.groups {
             if self.create_group(&group.name, group.system)? {
@@ -249,6 +317,7 @@ impl HookExecutor {
     ///
     /// Errors are logged but don't cause the rollback to fail.
     pub fn revert_pre_hooks(&mut self) -> Result<()> {
+        self.require_selected_root()?;
         // Revert in reverse order
         while let Some(hook) = self.applied_hooks.pop() {
             match hook {
@@ -273,7 +342,7 @@ impl HookExecutor {
         Ok(())
     }
 
-    /// Execute post-install hooks (after transaction, warn on failure)
+    /// Execute post-install hooks and fail the transaction on any failure.
     ///
     /// Handles:
     /// - systemd: daemon-reload + enable units
@@ -281,19 +350,22 @@ impl HookExecutor {
     /// - sysctl: apply settings
     /// - alternatives: update-alternatives
     ///
-    /// Failures are logged as warnings but don't fail installation.
     pub fn execute_post_hooks(&self, hooks: &Hooks) -> Result<()> {
         let results = self.execute_post_hooks_with_results(hooks);
-
-        for failure in results.failures() {
-            warn!(
-                "Post-hook {} '{}' failed: {}",
-                failure.hook_type,
-                failure.name,
-                failure.error.as_deref().unwrap_or("unknown error")
-            );
+        let failures = results
+            .failures()
+            .map(|failure| {
+                format!(
+                    "{} '{}': {}",
+                    failure.hook_type,
+                    failure.name,
+                    failure.error.as_deref().unwrap_or("unknown error")
+                )
+            })
+            .collect::<Vec<_>>();
+        if !failures.is_empty() {
+            anyhow::bail!("CCS post-install hooks failed: {}", failures.join("; "));
         }
-
         Ok(())
     }
 
@@ -304,6 +376,16 @@ impl HookExecutor {
     pub fn execute_pre_hooks_with_results(&mut self, hooks: &Hooks) -> HookExecutionResults {
         let start = Instant::now();
         let mut results = HookExecutionResults::new();
+        if let Err(error) = self.require_selected_root() {
+            results.add(HookResult::from_outcome(
+                HookType::Capability,
+                "selected-root".to_string(),
+                Err(error),
+                start.elapsed(),
+            ));
+            results.total_duration_ms = start.elapsed().as_millis() as u64;
+            return results;
+        }
 
         // Groups first (users may depend on them)
         for group in &hooks.groups {
@@ -380,75 +462,32 @@ impl HookExecutor {
         results
     }
 
-    /// Execute a script hook (post_install or pre_remove) as a shell command.
-    ///
-    /// The script is run via `/bin/sh -c` in the target root. If root != "/",
-    /// the command is run with `chroot` (best-effort -- requires root).
+    /// Execute an exact signed CCS post-install script in the selected root.
     pub fn execute_script(&self, label: &str, script: &str) -> Result<()> {
-        use crate::container::{BindMount, ContainerConfig, Sandbox, write_executable_script};
-        use tracing::info;
-
-        info!("Running {} script: {}", label, script);
-
-        let mut config = ContainerConfig::default().for_untrusted();
-        let mut env_vars = vec![("CONARY_HOOK_LABEL".to_string(), label.to_string())];
-        let mut target_script_path = None;
-
-        let script_content = if self.root == Path::new("/") {
-            script.to_string()
-        } else {
-            let script_dir = self.root.join("tmp/conary-hooks");
-            std::fs::create_dir_all(&script_dir)?;
-            let script_path = script_dir.join(format!(
-                "{}-{}-{}.sh",
-                label,
-                std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)?
-                    .as_nanos()
-            ));
-            write_executable_script(&script_path, script)?;
-
-            let script_in_chroot = script_path.strip_prefix(&self.root).unwrap_or(&script_path);
-            let script_in_chroot = format!("/{}", script_in_chroot.display());
-            config.add_bind_mount(BindMount::writable(&self.root, &self.root));
-            env_vars.push((
-                "CONARY_HOOK_ROOT".to_string(),
-                self.root.to_string_lossy().to_string(),
-            ));
-            env_vars.push(("CONARY_HOOK_SCRIPT".to_string(), script_in_chroot));
-            target_script_path = Some(script_path);
-
-            r#"exec chroot "$CONARY_HOOK_ROOT" /bin/sh "$CONARY_HOOK_SCRIPT""#.to_string()
-        };
-        let mut sandbox = Sandbox::new(config);
-        let env_refs = env_vars
-            .iter()
-            .map(|(key, value)| (key.as_str(), value.as_str()))
-            .collect::<Vec<_>>();
-        let result = sandbox.execute("/bin/sh", &script_content, &[], &env_refs);
-
-        if let Some(script_path) = target_script_path {
-            let _ = std::fs::remove_file(&script_path);
-            let _ = std::fs::remove_dir(script_path.parent().unwrap_or(&self.root));
+        self.require_selected_root()?;
+        if label != "post_install" {
+            anyhow::bail!("unsupported CCS install hook phase '{label}'");
         }
-
-        match result {
-            Ok((0, _, _)) => Ok(()),
-            Ok((code, _, stderr)) => {
-                let stderr = stderr.trim();
-                if stderr.is_empty() {
-                    anyhow::bail!("{} script failed with exit code {}", label, code);
-                }
-                anyhow::bail!(
-                    "{} script failed with exit code {}: {}",
-                    label,
-                    code,
-                    stderr
-                );
-            }
-            Err(e) => anyhow::bail!("{} script failed to execute in sandbox: {}", label, e),
-        }
+        let executor = crate::scriptlet::ScriptletExecutor::new(
+            &self.root,
+            "ccs-lifecycle",
+            "signed-v2",
+            crate::scriptlet::PackageFormat::Conary,
+        );
+        executor
+            .execute_ccs_install_hook(script)
+            .map_err(anyhow::Error::from)?;
+        self.activation_invocations.borrow_mut().extend(
+            executor
+                .take_activation_invocations()
+                .into_iter()
+                .map(|invocation| CapturedCcsActivation {
+                    source: CcsActivationSource::CapturedRuntime,
+                    source_entry: label.to_string(),
+                    invocation,
+                }),
+        );
+        Ok(())
     }
 
     /// Execute post-install hooks with detailed results for journaling
@@ -458,39 +497,55 @@ impl HookExecutor {
     pub fn execute_post_hooks_with_results(&self, hooks: &Hooks) -> HookExecutionResults {
         let start = Instant::now();
         let mut results = HookExecutionResults::new();
-        let mut had_systemd_hooks = false;
-
-        // Systemd units
-        for unit in &hooks.systemd {
-            had_systemd_hooks = true;
-            if unit.enable {
-                let hook_start = Instant::now();
-                let result = self.systemd_enable(&unit.unit);
-                if let Err(ref e) = result {
-                    warn!("Failed to enable systemd unit '{}': {}", unit.unit, e);
-                }
-                results.add(HookResult::from_outcome(
-                    HookType::Systemd,
-                    unit.unit.clone(),
-                    result,
-                    hook_start.elapsed(),
-                ));
-            }
+        if let Err(error) = self.preflight_hooks(hooks) {
+            results.add(HookResult::from_outcome(
+                HookType::Capability,
+                "host-integration".to_string(),
+                Err(error),
+                start.elapsed(),
+            ));
+            results.total_duration_ms = start.elapsed().as_millis() as u64;
+            return results;
         }
 
-        // Daemon reload if we touched any units
-        if had_systemd_hooks {
+        // A false `enable` declaration is an exact disable operation, not an
+        // omitted action.
+        for unit in &hooks.systemd {
             let hook_start = Instant::now();
-            let result = self.systemd_daemon_reload();
-            if let Err(ref e) = result {
-                warn!("Failed to reload systemd daemon: {}", e);
-                results.add(HookResult::from_outcome(
-                    HookType::Systemd,
-                    "daemon-reload".to_string(),
-                    result,
-                    hook_start.elapsed(),
-                ));
+            let result = self.systemd_set_enabled(&unit.unit, unit.enable);
+            if let Err(ref error) = result {
+                warn!(
+                    "Failed to {} systemd unit '{}': {}",
+                    if unit.enable { "enable" } else { "disable" },
+                    unit.unit,
+                    error
+                );
             }
+            results.add(HookResult::from_outcome(
+                HookType::Systemd,
+                unit.unit.clone(),
+                result,
+                hook_start.elapsed(),
+            ));
+        }
+
+        // Generic service declarations resolve through the typed init/service
+        // manager capability, never through a source distro or package format.
+        for service in &hooks.services {
+            let hook_start = Instant::now();
+            let result = self.execute_service_action(&service.name, &service.action);
+            if let Err(ref error) = result {
+                warn!(
+                    "Failed to apply service action to '{}': {}",
+                    service.name, error
+                );
+            }
+            results.add(HookResult::from_outcome(
+                HookType::Service,
+                service.name.clone(),
+                result,
+                hook_start.elapsed(),
+            ));
         }
 
         // Tmpfiles
@@ -511,7 +566,7 @@ impl HookExecutor {
         // Sysctl
         for sysctl in &hooks.sysctl {
             let hook_start = Instant::now();
-            let result = self.apply_sysctl(&sysctl.key, &sysctl.value, sysctl.only_if_lower);
+            let result = self.apply_sysctl(&sysctl.key, &sysctl.value);
             if let Err(ref e) = result {
                 warn!("Failed to apply sysctl '{}': {}", sysctl.key, e);
             }
@@ -526,7 +581,7 @@ impl HookExecutor {
         // Alternatives
         for alt in &hooks.alternatives {
             let hook_start = Instant::now();
-            let result = self.update_alternatives(&alt.name, &alt.path, alt.priority);
+            let result = self.update_alternatives(&alt.link, &alt.name, &alt.path, alt.priority);
             if let Err(ref e) = result {
                 warn!(
                     "Failed to update alternative '{}' -> '{}': {}",
@@ -567,8 +622,9 @@ mod tests {
 
     #[test]
     fn test_hook_executor_new() {
-        let executor = HookExecutor::new(Path::new("/"));
-        assert_eq!(executor.root, PathBuf::from("/"));
+        let root = tempfile::tempdir().unwrap();
+        let executor = HookExecutor::new(root.path(), Default::default());
+        assert_eq!(executor.root, root.path());
         assert!(executor.applied_hooks.is_empty());
     }
 
@@ -699,8 +755,8 @@ mod tests {
     }
 
     #[test]
-    fn test_execute_script_does_not_write_to_host_tmp() {
-        let executor = HookExecutor::new(Path::new("/"));
+    fn signed_script_execution_rejects_the_host_root() {
+        let executor = HookExecutor::new(Path::new("/"), Default::default());
         let marker = format!(
             "/tmp/conary-hook-sandbox-{}-{}",
             std::process::id(),
@@ -714,10 +770,9 @@ mod tests {
         let _ = std::fs::remove_file(&marker);
         let result = executor.execute_script("post_install", &script);
 
-        assert!(
-            result.is_err() || !Path::new(&marker).exists(),
-            "hook script wrote to host tmp without sandbox isolation"
-        );
+        let error = result.unwrap_err().to_string();
+        assert!(error.contains("host root '/' is not an execution target"));
+        assert!(!Path::new(&marker).exists());
 
         let _ = std::fs::remove_file(&marker);
     }

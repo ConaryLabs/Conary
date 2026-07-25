@@ -21,33 +21,30 @@ fixture_dir = "/opt/remi-tests/fixtures"
 # Distro-specific settings. Key = DISTRO env var value.
 [distros.fedora44]
 remi_distro = "fedora-44"
-repo_name = "remi"
-test_package = "which"
-test_binary = "/usr/bin/which"
-test_package_2 = "tree"
-test_binary_2 = "/usr/bin/tree"
-test_package_3 = "jq"
-test_binary_3 = "/usr/bin/jq"
+repo_name = "remi-fedora-44"
+test_packages = [
+    { package = "which", binary = "/usr/bin/which" },
+    { package = "tree", binary = "/usr/bin/tree" },
+    { package = "jq", binary = "/usr/bin/jq" },
+]
 
 [distros."ubuntu-26.04"]
 remi_distro = "ubuntu-26.04"
-repo_name = "remi"
-test_package = "patch"
-test_binary = "/usr/bin/patch"
-test_package_2 = "nano"
-test_binary_2 = "/usr/bin/nano"
-test_package_3 = "jq"
-test_binary_3 = "/usr/bin/jq"
+repo_name = "remi-ubuntu-26.04"
+test_packages = [
+    { package = "patch", binary = "/usr/bin/patch" },
+    { package = "nano", binary = "/usr/bin/nano" },
+    { package = "jq", binary = "/usr/bin/jq" },
+]
 
 [distros.arch]
 remi_distro = "arch"
-repo_name = "remi"
-test_package = "which"
-test_binary = "/usr/bin/which"
-test_package_2 = "tree"
-test_binary_2 = "/usr/bin/tree"
-test_package_3 = "jq"
-test_binary_3 = "/usr/bin/jq"
+repo_name = "remi-arch"
+test_packages = [
+    { package = "which", binary = "/usr/bin/which" },
+    { package = "tree", binary = "/usr/bin/tree" },
+    { package = "jq", binary = "/usr/bin/jq" },
+]
 
 # Default repos to remove after init (avoid slow syncs)
 [setup]
@@ -65,11 +62,11 @@ marker = "/var/lib/conary-test/installed"
 
 [fixtures.v1]
 version = "1.0.0"
-ccs_file = "conary-test-fixture-1.0.0.ccs"
+ccs_file = "conary-test-fixture-1.0.0-1.ccs"
 hello_sha256 = "18933c865fcf7230f8ea99b059747facc14285b7ed649758115f9c9a73f42a53"
 
 [fixtures.v2]
 version = "2.0.0"
-ccs_file = "conary-test-fixture-2.0.0.ccs"
+ccs_file = "conary-test-fixture-2.0.0-1.ccs"
 hello_sha256 = "bd80c5e8a7138bd13d0f10e1358bda6f9727c266b6909d4b6c9293ab141ec1db"
 added_sha256 = "9767b0b4d55db9aee6638c9875b5cefea50c952cc77fbc5703ebc866b0daba3c"

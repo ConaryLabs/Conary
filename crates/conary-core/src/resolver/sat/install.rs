@@ -9,7 +9,7 @@ use crate::error::Result;
 use crate::repository::resolution_policy::ResolutionPolicy;
 use crate::version::VersionConstraint;
 
-use super::super::provider::ConaryProvider;
+use super::super::provider::{ConaryConstraint, ConaryProvider, SolverExpression};
 use super::{SatPackage, SatSource, check_transitive_loading_limits};
 
 pub(super) fn build_provider_for_install<'conn>(
@@ -21,16 +21,32 @@ pub(super) fn build_provider_for_install<'conn>(
     provider.load_installed_packages()?;
     provider.build_provides_index()?;
     provider.load_canonical_index()?;
-    load_transitive_repo_packages(&mut provider, requests)?;
+    load_transitive_repo_packages(
+        &mut provider,
+        requests.iter().map(|(name, _)| name.clone()).collect(),
+    )?;
+    provider.intern_all_dependency_version_sets()?;
+    Ok(provider)
+}
+
+pub(super) fn build_provider_for_requirement_expressions<'conn>(
+    conn: &'conn Connection,
+    expressions: &[SolverExpression],
+    policy: &ResolutionPolicy,
+) -> Result<ConaryProvider<'conn>> {
+    let mut provider = ConaryProvider::new_with_policy(conn, policy.clone());
+    provider.load_installed_packages()?;
+    provider.build_provides_index()?;
+    provider.load_canonical_index()?;
+    load_transitive_repo_packages(&mut provider, requirement_names(expressions))?;
     provider.intern_all_dependency_version_sets()?;
     Ok(provider)
 }
 
 fn load_transitive_repo_packages(
     provider: &mut ConaryProvider<'_>,
-    requests: &[(String, VersionConstraint)],
+    mut loaded_names: HashSet<String>,
 ) -> Result<()> {
-    let mut loaded_names: HashSet<String> = requests.iter().map(|(name, _)| name.clone()).collect();
     let mut to_load: Vec<String> = loaded_names.iter().cloned().collect();
     let load_start = Instant::now();
 
@@ -58,6 +74,24 @@ fn load_transitive_repo_packages(
     Ok(())
 }
 
+fn requirement_names(expressions: &[SolverExpression]) -> HashSet<String> {
+    let known = HashSet::new();
+    let mut names = HashSet::new();
+    for expression in expressions {
+        for atom in expression.atoms() {
+            match &atom.constraint {
+                ConaryConstraint::ProviderExpression { expression } => {
+                    expression.collect_names(&known, &mut names);
+                }
+                ConaryConstraint::Requested(_) | ConaryConstraint::Repository { .. } => {
+                    names.insert(atom.name.clone());
+                }
+            }
+        }
+    }
+    names
+}
+
 pub(super) fn build_requirements(
     provider: &mut ConaryProvider<'_>,
     requests: &[(String, VersionConstraint)],
@@ -71,6 +105,13 @@ pub(super) fn build_requirements(
     }
 
     Ok(requirements)
+}
+
+pub(super) fn build_expression_requirements(
+    provider: &mut ConaryProvider<'_>,
+    expressions: &[SolverExpression],
+) -> Result<Vec<ConditionalRequirement>> {
+    provider.compile_root_requirements(expressions)
 }
 
 pub(super) fn collect_install_order(

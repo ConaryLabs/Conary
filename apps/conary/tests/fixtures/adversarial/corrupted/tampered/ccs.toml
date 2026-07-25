@@ -1,6 +1,9 @@
 [package]
 name = "adversarial-tampered"
 version = "1.0.0"
+version_scheme = "conary"
+release = "1"
+kind = "package"
 description = "Base fixture for tampered-content corruption tests"
 license = "MIT"
 
@@ -12,10 +15,6 @@ libc = "gnu"
 [provides]
 capabilities = ["adversarial-tampered"]
 binaries = ["/usr/bin/hello"]
-
-[requires]
-capabilities = []
-packages = []
 
 [components]
 default = ["runtime"]

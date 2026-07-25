@@ -3,7 +3,7 @@
 use std::path::Path;
 use std::process::{Command, Output};
 
-use conary_core::ccs::builder::write_signed_ccs_package;
+use conary_core::ccs::builder::write_signed_current_ccs_package;
 use conary_core::ccs::{CcsBuilder, CcsManifest, SigningKeyPair};
 
 fn output_text(output: &Output) -> String {
@@ -46,7 +46,7 @@ hardening_level = "hermetic"
     )
     .unwrap();
     let result = CcsBuilder::new(manifest, &source).build().unwrap();
-    write_signed_ccs_package(&result, &package_path, key).unwrap();
+    write_signed_current_ccs_package(&result, &package_path, key, false).unwrap();
     package_path
 }
 

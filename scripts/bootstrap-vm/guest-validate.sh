@@ -57,8 +57,8 @@ if [[ -z "$REPO_NAME" || -z "$REPO_URL" || -z "$REMI_ENDPOINT" || -z "$REMI_DIST
     usage >&2
     exit 1
 fi
-if [[ "$REPO_NAME" != "remi" ]]; then
-    echo "--repo-name must be 'remi' so clean-host validation exercises the packaged seed." >&2
+if [[ "$REPO_NAME" != "remi-$REMI_DISTRO" ]]; then
+    echo "--repo-name must be 'remi-$REMI_DISTRO' so clean-host validation exercises the packaged source feed." >&2
     exit 1
 fi
 
@@ -129,48 +129,48 @@ main() {
     unpack_workspace
     check_for_baked_private_key
 
-    conary system init --profile "$REMI_DISTRO"
+    conary system init
     if [[ "$REPO_URL" != "$PUBLIC_REMI_ENDPOINT" || "$REMI_ENDPOINT" != "$PUBLIC_REMI_ENDPOINT" ]]; then
-        conary repo remove remi
+        conary repo remove "$REPO_NAME"
         conary repo add \
-            remi \
+            "$REPO_NAME" \
             "$REPO_URL" \
+            --package-format json \
             --default-strategy remi \
             --remi-endpoint "$REMI_ENDPOINT" \
             --remi-distro "$REMI_DISTRO"
     fi
 
     repo_output="$(conary repo list --all)"
-    remi_count="$(printf '%s\n' "$repo_output" | grep -Ec '^[[:space:]]+\[[x ]\][[:space:]]+remi[[:space:]]')"
+    remi_count="$(printf '%s\n' "$repo_output" | grep -Ec "^[[:space:]]+\\[[x ]\\][[:space:]]+$REPO_NAME[[:space:]]")"
     if [[ "$remi_count" -ne 1 ]]; then
-        echo "Expected exactly one packaged Remi repository, found $remi_count" >&2
+        echo "Expected packaged source '$REPO_NAME', found $remi_count rows" >&2
         exit 1
     fi
 
     if [[ -f "$ROOT_JSON" ]]; then
-        conary trust init remi --root "$ROOT_JSON"
+        conary trust init "$REPO_NAME" --root "$ROOT_JSON"
     fi
 
-    conary repo sync remi --force
+    conary repo sync "$REPO_NAME" --force
     conary query label list
 
-    conary install tree --repo remi --yes --sandbox never
-    conary remove tree --sandbox never --yes
+    conary install tree --repo "$REPO_NAME" --yes --sandbox always
+    conary remove tree --sandbox always --yes
 
     rm -rf "$SMOKE_OUTPUT" "$SMOKE_CACHE"
     conary cook \
         "$SMOKE_RECIPE" \
         --output "$SMOKE_OUTPUT" \
-        --source-cache "$SMOKE_CACHE" \
-        --no-isolation
+        --source-cache "$SMOKE_CACHE"
 
     (
         cd "$WORKSPACE_DIR"
         cargo build --locked
         target/debug/conary --version
         target/debug/conary query label list
-        target/debug/conary install tree --repo "$REPO_NAME" --yes --sandbox never
-        target/debug/conary remove tree --sandbox never --yes
+        target/debug/conary install tree --repo "$REPO_NAME" --yes --sandbox always
+        target/debug/conary remove tree --sandbox always --yes
     )
 
     check_for_baked_private_key

@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use tracing::info;
 
-use super::build_runner::{ChecksumPolicy, PackageBuildRunner};
+use super::build_runner::{ChecksumContract, PackageBuildRunner};
 use super::chroot_env::ChrootEnv;
 use super::config::BootstrapConfig;
 use super::toolchain::Toolchain;
@@ -114,8 +114,8 @@ impl Tier2Builder {
         let sources_dir = work_dir.join("sources");
         std::fs::create_dir_all(&sources_dir)?;
 
-        let runner = PackageBuildRunner::new(&sources_dir, &config)
-            .with_checksum_policy(ChecksumPolicy::StrictSha256);
+        let runner = PackageBuildRunner::new(&sources_dir)
+            .with_checksum_contract(ChecksumContract::Sha256Only);
 
         Ok(Self {
             work_dir: work_dir.to_path_buf(),

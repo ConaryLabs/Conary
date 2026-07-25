@@ -3,6 +3,7 @@
 mod common;
 
 use conary_core::db::models::{InstallSource, Repository, RepositoryPackage, Trove, TroveType};
+use conary_core::packages::InstalledPackageIdentity;
 use std::process::{Command, Output};
 
 fn run_conary(args: &[&str]) -> Output {
@@ -31,9 +32,23 @@ fn seed_adopted_package(
         version.to_string(),
         TroveType::Package,
         source,
+        conary_core::repository::versioning::VersionScheme::Rpm,
     );
     trove.architecture = Some("x86_64".to_string());
-    trove.version_scheme = Some("rpm".to_string());
+    let (rpm_version, release) = version
+        .rsplit_once('-')
+        .expect("RPM fixture version must include a release");
+    trove.native_package_identity = Some(
+        InstalledPackageIdentity::rpm(
+            format!("{name}-{version}.x86_64"),
+            name,
+            None,
+            rpm_version,
+            release,
+            "x86_64",
+        )
+        .unwrap(),
+    );
     trove.insert(conn).unwrap()
 }
 
@@ -49,13 +64,13 @@ fn seed_update_candidate(conn: &rusqlite::Connection, name: &str, version: &str)
         repo_id,
         name.to_string(),
         version.to_string(),
+        conary_core::repository::versioning::VersionScheme::Rpm,
         format!("sha256:{name}-{version}"),
         123,
         format!("https://example.test/daily-ux/{name}-{version}.ccs"),
     );
     candidate.architecture = Some("x86_64".to_string());
     candidate.distro = Some("fedora-44".to_string());
-    candidate.version_scheme = Some("rpm".to_string());
     candidate.insert(conn).unwrap();
     repo_id
 }
@@ -107,7 +122,6 @@ fn preview_tiering_default_help_shows_only_daily_driver_commands() {
         "cook",
         "new",
         "publish",
-        "convert-pkgbuild",
         "recipe-audit",
         "canonical",
         "groups",
@@ -163,7 +177,6 @@ fn preview_tiering_help_advanced_lists_hidden_surface() {
         "cook",
         "new",
         "publish",
-        "convert-pkgbuild",
         "recipe-audit",
         "canonical",
         "groups",
@@ -257,7 +270,7 @@ fn live_mutation_refusal_routes_to_preview_ack_and_daemon_jobs() {
         "--root",
         root.path().to_str().unwrap(),
         "--sandbox",
-        "never",
+        "always",
         "--yes",
     ]);
 
@@ -283,7 +296,7 @@ fn adopted_install_refusal_routes_to_refresh_and_takeover() {
         "--root",
         root.path().to_str().unwrap(),
         "--sandbox",
-        "never",
+        "always",
         "--yes",
     ]);
 
@@ -291,7 +304,7 @@ fn adopted_install_refusal_routes_to_refresh_and_takeover() {
     let text = output_text(&output);
     assert!(text.contains("conary system adopt --refresh"), "{text}");
     assert!(
-        text.contains("conary install curl --dep-mode takeover"),
+        text.contains("conary install curl --ownership takeover"),
         "{text}"
     );
     assert!(text.contains("conary system takeover"), "{text}");
@@ -312,7 +325,7 @@ fn adopted_remove_refusal_routes_to_unadopt_or_purge() {
         "--root",
         root.path().to_str().unwrap(),
         "--sandbox",
-        "never",
+        "always",
         "--yes",
     ]);
 
@@ -320,7 +333,7 @@ fn adopted_remove_refusal_routes_to_unadopt_or_purge() {
     let text = output_text(&output);
     assert!(text.contains("native package manager authority"), "{text}");
     assert!(text.contains("conary system unadopt curl"), "{text}");
-    assert!(text.contains("--purge-files"), "{text}");
+    assert!(text.contains("--purge"), "{text}");
 }
 
 #[test]

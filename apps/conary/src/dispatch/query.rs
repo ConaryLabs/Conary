@@ -54,6 +54,7 @@ pub(super) async fn dispatch_query_command(query_cmd: cli::QueryCommands) -> Res
             verbose,
             entry,
             json,
+            policy,
         } => {
             commands::cmd_scripts_with_options(
                 &package_path,
@@ -64,6 +65,7 @@ pub(super) async fn dispatch_query_command(query_cmd: cli::QueryCommands) -> Res
                     verbose,
                     entry,
                     json,
+                    policy_path: policy,
                 },
             )
             .await

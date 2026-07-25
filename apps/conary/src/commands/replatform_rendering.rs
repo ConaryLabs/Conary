@@ -129,7 +129,7 @@ mod tests {
                     architecture: Some("x86_64".to_string()),
                     install_repository: Some("arch-core".to_string()),
                     install_repository_package_id: Some(11),
-                    install_route: Some("default:legacy".to_string()),
+                    install_route: Some("default:binary".to_string()),
                     unresolved_dependencies: Vec::new(),
                     remove_leg: ready_leg(),
                     install_leg: blocked_leg(),
@@ -148,7 +148,7 @@ mod tests {
                     architecture: Some("x86_64".to_string()),
                     install_repository: Some("arch-core".to_string()),
                     install_repository_package_id: Some(22),
-                    install_route: Some("default:legacy".to_string()),
+                    install_route: Some("default:binary".to_string()),
                     unresolved_dependencies: Vec::new(),
                     remove_leg: ready_leg(),
                     install_leg: blocked_leg(),
@@ -167,11 +167,11 @@ mod tests {
             rendered.contains("[blocked] remove bash 5.1.0 from fedora-44, install arch 5.2.0")
         );
         assert!(rendered.contains(
-            "via arch-core [repo-pkg:11] [route:default:legacy] [missing versioned install route]"
+            "via arch-core [repo-pkg:11] [route:default:binary] [missing versioned install route]"
         ));
         assert!(rendered.contains("[blocked] remove vim 9.0.1 from fedora-44, install arch 9.1.0"));
         assert!(rendered.contains(
-            "via arch-core [repo-pkg:22] [route:default:legacy] [missing versioned install route]"
+            "via arch-core [repo-pkg:22] [route:default:binary] [missing versioned install route]"
         ));
     }
 

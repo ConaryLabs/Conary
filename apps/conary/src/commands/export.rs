@@ -423,8 +423,8 @@ mod tests {
         fs::write(boot_assets_dir.join("initramfs.img"), b"initramfs").unwrap();
         fs::write(boot_assets_dir.join("EFI/BOOT/BOOTX64.EFI"), b"efi").unwrap();
 
-        let object_one = write_cas_object(&objects_dir, b"file-content-one");
-        let object_two = write_cas_object(&objects_dir, b"file-content-two");
+        let _object_one = write_cas_object(&objects_dir, b"file-content-one");
+        let _object_two = write_cas_object(&objects_dir, b"file-content-two");
 
         let boot_assets = BootAssetsManifest {
             version: 1,
@@ -446,7 +446,6 @@ mod tests {
             architecture: "x86_64",
             erofs_path: &gen_dir.join(EROFS_IMAGE_NAME),
             cas_base_rel: "../../objects",
-            cas_objects: vec![object_one, object_two],
             cas_verification: CasObjectVerification::Deep,
             boot_assets,
         })

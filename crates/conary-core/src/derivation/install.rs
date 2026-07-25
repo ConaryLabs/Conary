@@ -9,15 +9,13 @@
 //! recreated verbatim. The function uses a last-writer-wins strategy: any
 //! existing file or symlink at the destination is removed before writing.
 
-use std::collections::HashSet;
-use std::fs;
-use std::os::unix::fs as unix_fs;
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::Path;
 
-use tracing::{debug, warn};
+use tracing::debug;
 
 use super::output::OutputManifest;
+use crate::filesystem::CasStore;
+use crate::generation::root_manifest::overlay_payload_entries;
 
 // ---------------------------------------------------------------------------
 // Error type
@@ -26,20 +24,15 @@ use super::output::OutputManifest;
 /// Errors that can occur while installing derivation outputs into a sysroot.
 #[derive(Debug, thiserror::Error)]
 pub enum InstallError {
-    /// A filesystem I/O operation failed for a specific destination path.
-    #[error("I/O error installing {path}: {source}")]
-    Io {
-        /// The destination path that triggered the error.
-        path: String,
-        /// The underlying I/O error.
-        source: std::io::Error,
-    },
-    /// A required CAS object was not present on disk.
-    #[error("CAS object not found: {0}")]
-    MissingCasObject(String),
-    /// A manifest path attempted to escape the sysroot.
-    #[error("Path traversal attempt rejected: {0}")]
-    PathTraversal(String),
+    /// The exact output manifest failed validation.
+    #[error("invalid output manifest: {0}")]
+    InvalidManifest(String),
+    /// The CAS could not be opened.
+    #[error("CAS error: {0}")]
+    Cas(String),
+    /// Exact payload materialization failed.
+    #[error("payload materialization failed: {0}")]
+    Materialization(String),
 }
 
 // ---------------------------------------------------------------------------
@@ -76,209 +69,18 @@ pub fn install_to_sysroot(
     sysroot: &Path,
     cas_dir: &Path,
 ) -> Result<u64, InstallError> {
-    let mut installed: u64 = 0;
-    let mut created_dirs: HashSet<PathBuf> = HashSet::new();
-
-    for file in &manifest.files {
-        let dest = sysroot_path(sysroot, &file.path)?;
-
-        // Ensure parent directory exists (skip if already created).
-        if let Some(parent) = dest.parent()
-            && created_dirs.insert(parent.to_path_buf())
-        {
-            fs::create_dir_all(parent).map_err(|e| InstallError::Io {
-                path: parent.display().to_string(),
-                source: e,
-            })?;
-        }
-
-        // Remove any existing entry (last-writer-wins).
-        remove_if_exists(&dest)?;
-
-        // Locate the CAS object and link/copy it into the sysroot.
-        let cas_path = cas_object_path(cas_dir, &file.hash)?;
-
-        match fs::hard_link(&cas_path, &dest) {
-            Ok(()) => {}
-            Err(link_err) => {
-                fs::copy(&cas_path, &dest).map_err(|copy_err| {
-                    if copy_err.kind() == std::io::ErrorKind::NotFound
-                        && link_err.kind() == std::io::ErrorKind::NotFound
-                    {
-                        InstallError::MissingCasObject(file.hash.clone())
-                    } else {
-                        InstallError::Io {
-                            path: dest.display().to_string(),
-                            source: copy_err,
-                        }
-                    }
-                })?;
-            }
-        }
-
-        // Apply mode bits.
-        fs::set_permissions(
-            &dest,
-            std::os::unix::fs::PermissionsExt::from_mode(file.mode),
-        )
-        .map_err(|e| InstallError::Io {
-            path: dest.display().to_string(),
-            source: e,
-        })?;
-
-        debug!(path = %dest.display(), hash = %file.hash, "installed file");
-        installed += 1;
-    }
-
-    for symlink in &manifest.symlinks {
-        let dest = sysroot_path(sysroot, &symlink.path)?;
-
-        // Ensure parent directory exists (skip if already created).
-        if let Some(parent) = dest.parent()
-            && created_dirs.insert(parent.to_path_buf())
-        {
-            fs::create_dir_all(parent).map_err(|e| InstallError::Io {
-                path: parent.display().to_string(),
-                source: e,
-            })?;
-        }
-
-        // Remove any existing entry (last-writer-wins).
-        remove_if_exists(&dest)?;
-
-        unix_fs::symlink(&symlink.target, &dest).map_err(|e| InstallError::Io {
-            path: dest.display().to_string(),
-            source: e,
-        })?;
-
-        debug!(path = %dest.display(), target = %symlink.target, "installed symlink");
-        installed += 1;
-    }
-
+    manifest
+        .validate()
+        .map_err(|error| InstallError::InvalidManifest(error.to_string()))?;
+    let cas = CasStore::new(cas_dir).map_err(|error| InstallError::Cas(error.to_string()))?;
+    let installed = overlay_payload_entries(&manifest.entries, &cas, sysroot)
+        .map_err(|error| InstallError::Materialization(error.to_string()))?;
+    debug!(
+        root = %sysroot.display(),
+        entries = installed,
+        "installed exact derivation payload"
+    );
     Ok(installed)
-}
-
-/// Run `ldconfig` inside the sysroot if any shared libraries were installed.
-///
-/// Shared library detection: any file whose path ends with `.so` or contains
-/// `.so.` is considered a shared library.
-///
-/// On success or failure, the outcome is logged via `tracing` and the function
-/// returns without an error -- `ldconfig` is best-effort.
-pub fn run_ldconfig_if_needed(manifest: &OutputManifest, sysroot: &Path) {
-    let needs_ldconfig = manifest.files.iter().any(|f| {
-        let p = f.path.as_str();
-        p.ends_with(".so") || p.contains(".so.")
-    });
-
-    if !needs_ldconfig {
-        return;
-    }
-
-    // Try /sbin/ldconfig first, then /usr/sbin/ldconfig.
-    for ldconfig in &["/sbin/ldconfig", "/usr/sbin/ldconfig"] {
-        let status = Command::new("chroot").arg(sysroot).arg(ldconfig).status();
-
-        match status {
-            Ok(s) if s.success() => {
-                debug!(sysroot = %sysroot.display(), ldconfig, "ldconfig succeeded");
-                return;
-            }
-            Ok(s) => {
-                warn!(
-                    sysroot = %sysroot.display(),
-                    ldconfig,
-                    code = ?s.code(),
-                    "ldconfig exited with non-zero status"
-                );
-            }
-            Err(e) => {
-                warn!(
-                    sysroot = %sysroot.display(),
-                    ldconfig,
-                    error = %e,
-                    "ldconfig could not be run"
-                );
-            }
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Private helpers
-// ---------------------------------------------------------------------------
-
-/// Resolve a manifest-absolute path into a replacement path under `sysroot`.
-///
-/// The installer removes any existing final entry before writing, so the final
-/// component may be a dangling symlink. Existing symlink ancestors still must
-/// resolve inside `sysroot`, otherwise creating the replacement would write
-/// outside the installation root.
-fn sysroot_path(sysroot: &Path, manifest_path: &str) -> Result<PathBuf, InstallError> {
-    let sanitized = crate::filesystem::path::sanitize_path(manifest_path)
-        .map_err(|e| InstallError::PathTraversal(e.to_string()))?;
-    validate_existing_parent_path(sysroot, &sanitized)?;
-    Ok(sysroot.join(sanitized))
-}
-
-fn validate_existing_parent_path(sysroot: &Path, sanitized: &Path) -> Result<(), InstallError> {
-    let canonical_root = sysroot.canonicalize().map_err(|e| {
-        InstallError::PathTraversal(format!(
-            "Failed to canonicalize root {}: {}",
-            sysroot.display(),
-            e
-        ))
-    })?;
-
-    let Some(parent) = sanitized.parent() else {
-        return Ok(());
-    };
-
-    let mut check = sysroot.to_path_buf();
-    for component in parent.components() {
-        check.push(component);
-        match check.symlink_metadata() {
-            Ok(meta) if meta.is_symlink() => match check.canonicalize() {
-                Ok(resolved) if !resolved.starts_with(&canonical_root) => {
-                    return Err(InstallError::PathTraversal(format!(
-                        "Symlink at {} escapes root {}",
-                        check.display(),
-                        sysroot.display()
-                    )));
-                }
-                Ok(_) => {}
-                Err(_) => {
-                    return Err(InstallError::PathTraversal(format!(
-                        "Dangling symlink at {} under root {}",
-                        check.display(),
-                        sysroot.display()
-                    )));
-                }
-            },
-            Ok(_) => {}
-            Err(_) => break,
-        }
-    }
-
-    Ok(())
-}
-
-/// Return the CAS object path for `hash` under `cas_dir`.
-fn cas_object_path(cas_dir: &Path, hash: &str) -> Result<PathBuf, InstallError> {
-    crate::filesystem::object_path(cas_dir, hash)
-        .map_err(|_| InstallError::MissingCasObject(hash.to_string()))
-}
-
-/// Remove a file or symlink at `path` if it exists; succeed silently if absent.
-fn remove_if_exists(path: &Path) -> Result<(), InstallError> {
-    match fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(InstallError::Io {
-            path: path.display().to_string(),
-            source: e,
-        }),
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -287,67 +89,113 @@ fn remove_if_exists(path: &Path) -> Result<(), InstallError> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+    use std::fs;
+    use std::os::unix::fs as unix_fs;
+    use std::path::PathBuf;
+
     use super::*;
-    use crate::derivation::output::{OutputFile, OutputManifest, OutputSymlink};
-    use crate::hash;
+    use crate::generation::root_manifest::GenerationRootEntry;
+    use crate::payload::{
+        PayloadContentAuthority, PayloadIdentity, PayloadNode, PayloadNodeKind, PayloadTimestamp,
+        ResolvedPayloadNode,
+    };
     use tempfile::TempDir;
 
-    /// Build a minimal [`OutputManifest`] with the supplied files and symlinks.
-    fn make_manifest(files: Vec<OutputFile>, symlinks: Vec<OutputSymlink>) -> OutputManifest {
-        OutputManifest {
-            derivation_id: "test-derivation".to_owned(),
-            output_hash: OutputManifest::compute_output_hash(&files, &symlinks),
-            hash_version: 1,
-            files,
-            symlinks,
-            build_duration_secs: 0,
-            built_at: "2026-01-01T00:00:00Z".to_owned(),
+    fn node(kind: PayloadNodeKind, permissions: u32) -> ResolvedPayloadNode {
+        let mode_type = match kind {
+            PayloadNodeKind::Regular { .. } | PayloadNodeKind::Hardlink { .. } => libc::S_IFREG,
+            PayloadNodeKind::Directory => libc::S_IFDIR,
+            PayloadNodeKind::Symlink { .. } => libc::S_IFLNK,
+            PayloadNodeKind::BlockDevice { .. } => libc::S_IFBLK,
+            PayloadNodeKind::CharacterDevice { .. } => libc::S_IFCHR,
+            PayloadNodeKind::Fifo => libc::S_IFIFO,
+            PayloadNodeKind::Socket => libc::S_IFSOCK,
+        };
+        let uid = u64::from(unsafe { libc::geteuid() });
+        let gid = u64::from(unsafe { libc::getegid() });
+        ResolvedPayloadNode {
+            source: PayloadNode {
+                kind,
+                mode: mode_type | permissions,
+                user: PayloadIdentity::Numeric { id: uid },
+                group: PayloadIdentity::Numeric { id: gid },
+                mtime: PayloadTimestamp::UNIX_EPOCH,
+                xattrs: BTreeMap::new(),
+            },
+            uid,
+            gid,
         }
     }
 
-    /// Write `content` into the CAS under `cas_dir` using the SHA-256 layout.
-    /// Returns the hex hash string.
-    fn write_cas_object(cas_dir: &Path, content: &[u8]) -> String {
-        let h = hash::sha256(content);
-        let (prefix, rest) = h.split_at(2);
-        let dir = cas_dir.join(prefix);
-        fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join(rest), content).unwrap();
-        h
+    fn directory(path: &str) -> GenerationRootEntry {
+        GenerationRootEntry {
+            path: path.to_string(),
+            node: node(PayloadNodeKind::Directory, 0o755),
+            content: None,
+        }
     }
 
-    // ------------------------------------------------------------------
+    fn regular(path: &str, hash: String, size: u64, mode: u32) -> GenerationRootEntry {
+        GenerationRootEntry {
+            path: path.to_string(),
+            node: node(
+                PayloadNodeKind::Regular {
+                    hardlink_identity: None,
+                },
+                mode,
+            ),
+            content: Some(PayloadContentAuthority { sha256: hash, size }),
+        }
+    }
+
+    fn symlink(path: &str, target: &str) -> GenerationRootEntry {
+        GenerationRootEntry {
+            path: path.to_string(),
+            node: node(
+                PayloadNodeKind::Symlink {
+                    target: target.to_string(),
+                },
+                0o777,
+            ),
+            content: None,
+        }
+    }
+
+    fn make_manifest(entries: Vec<GenerationRootEntry>) -> OutputManifest {
+        OutputManifest::new(
+            "test-derivation",
+            "test-package",
+            "1.0",
+            node(PayloadNodeKind::Directory, 0o755),
+            entries,
+            0,
+            "2026-01-01T00:00:00Z".to_string(),
+        )
+        .unwrap()
+    }
 
     #[test]
     fn test_install_creates_files_and_symlinks() {
-        let cas = TempDir::new().unwrap();
+        let cas_dir = TempDir::new().unwrap();
         let sysroot = TempDir::new().unwrap();
+        let cas = CasStore::new(cas_dir.path()).unwrap();
 
         let content = b"hello world";
-        let file_hash = write_cas_object(cas.path(), content);
+        let file_hash = cas.store(content).unwrap();
+        let manifest = make_manifest(vec![
+            directory("/usr"),
+            directory("/usr/bin"),
+            regular("/usr/bin/hello", file_hash, content.len() as u64, 0o755),
+            symlink("/usr/bin/hi", "hello"),
+        ]);
 
-        let files = vec![OutputFile {
-            path: "/usr/bin/hello".to_owned(),
-            hash: file_hash,
-            size: content.len() as u64,
-            mode: 0o755,
-        }];
-        let symlinks = vec![OutputSymlink {
-            path: "/usr/bin/hi".to_owned(),
-            target: "hello".to_owned(),
-        }];
-        let manifest = make_manifest(files, symlinks);
-
-        let count = install_to_sysroot(&manifest, sysroot.path(), cas.path())
+        let count = install_to_sysroot(&manifest, sysroot.path(), cas_dir.path())
             .expect("install must succeed");
-        assert_eq!(count, 2, "one file + one symlink = 2");
+        assert_eq!(count, 4);
 
-        // Verify file content.
         let dest_file = sysroot.path().join("usr/bin/hello");
-        assert!(dest_file.exists(), "installed file must exist");
         assert_eq!(fs::read(&dest_file).unwrap(), content);
-
-        // Verify symlink target.
         let dest_link = sysroot.path().join("usr/bin/hi");
         let target = fs::read_link(&dest_link).expect("symlink must exist");
         assert_eq!(target.to_str().unwrap(), "hello");
@@ -355,26 +203,23 @@ mod tests {
 
     #[test]
     fn test_install_overwrites_existing_file() {
-        let cas = TempDir::new().unwrap();
+        let cas_dir = TempDir::new().unwrap();
         let sysroot = TempDir::new().unwrap();
+        let cas = CasStore::new(cas_dir.path()).unwrap();
 
-        // Pre-create a stale file at the destination.
         let dest_dir = sysroot.path().join("usr/bin");
         fs::create_dir_all(&dest_dir).unwrap();
         fs::write(dest_dir.join("hello"), b"stale content").unwrap();
 
         let new_content = b"new content";
-        let file_hash = write_cas_object(cas.path(), new_content);
+        let file_hash = cas.store(new_content).unwrap();
+        let manifest = make_manifest(vec![
+            directory("/usr"),
+            directory("/usr/bin"),
+            regular("/usr/bin/hello", file_hash, new_content.len() as u64, 0o644),
+        ]);
 
-        let files = vec![OutputFile {
-            path: "/usr/bin/hello".to_owned(),
-            hash: file_hash,
-            size: new_content.len() as u64,
-            mode: 0o644,
-        }];
-        let manifest = make_manifest(files, vec![]);
-
-        install_to_sysroot(&manifest, sysroot.path(), cas.path())
+        install_to_sysroot(&manifest, sysroot.path(), cas_dir.path())
             .expect("install over existing file must succeed");
 
         let installed = fs::read(sysroot.path().join("usr/bin/hello")).unwrap();
@@ -383,7 +228,7 @@ mod tests {
 
     #[test]
     fn test_install_replaces_existing_dangling_symlink_destination() {
-        let cas = TempDir::new().unwrap();
+        let cas_dir = TempDir::new().unwrap();
         let sysroot = TempDir::new().unwrap();
 
         let link_dir = sysroot.path().join("usr/lib/environment.d");
@@ -394,15 +239,19 @@ mod tests {
         )
         .unwrap();
 
-        let symlinks = vec![OutputSymlink {
-            path: "/usr/lib/environment.d/99-environment.conf".to_owned(),
-            target: "../../../etc/environment".to_owned(),
-        }];
-        let manifest = make_manifest(vec![], symlinks);
+        let manifest = make_manifest(vec![
+            directory("/usr"),
+            directory("/usr/lib"),
+            directory("/usr/lib/environment.d"),
+            symlink(
+                "/usr/lib/environment.d/99-environment.conf",
+                "../../../etc/environment",
+            ),
+        ]);
 
-        let count = install_to_sysroot(&manifest, sysroot.path(), cas.path())
+        let count = install_to_sysroot(&manifest, sysroot.path(), cas_dir.path())
             .expect("install must replace a final dangling symlink");
-        assert_eq!(count, 1);
+        assert_eq!(count, 4);
         assert_eq!(
             fs::read_link(link_dir.join("99-environment.conf")).unwrap(),
             PathBuf::from("../../../etc/environment")
@@ -410,54 +259,73 @@ mod tests {
     }
 
     #[test]
-    fn test_install_rejects_symlink_ancestor_escape() {
-        let cas = TempDir::new().unwrap();
+    fn test_install_replaces_symlink_ancestor_without_escaping() {
+        let cas_dir = TempDir::new().unwrap();
         let sysroot = TempDir::new().unwrap();
         let outside = TempDir::new().unwrap();
+        let cas = CasStore::new(cas_dir.path()).unwrap();
 
         unix_fs::symlink(outside.path(), sysroot.path().join("usr")).unwrap();
         let content = b"outside write must not happen";
-        let file_hash = write_cas_object(cas.path(), content);
-        let files = vec![OutputFile {
-            path: "/usr/bin/hello".to_owned(),
-            hash: file_hash,
-            size: content.len() as u64,
-            mode: 0o755,
-        }];
-        let manifest = make_manifest(files, vec![]);
+        let file_hash = cas.store(content).unwrap();
+        let manifest = make_manifest(vec![
+            directory("/usr"),
+            directory("/usr/bin"),
+            regular("/usr/bin/hello", file_hash, content.len() as u64, 0o755),
+        ]);
 
-        let err = install_to_sysroot(&manifest, sysroot.path(), cas.path())
-            .expect_err("symlink ancestors escaping sysroot must be rejected");
-        assert!(
-            matches!(err, InstallError::PathTraversal(_)),
-            "expected path traversal error, got {err:?}"
-        );
+        install_to_sysroot(&manifest, sysroot.path(), cas_dir.path()).unwrap();
         assert!(!outside.path().join("bin/hello").exists());
+        assert_eq!(
+            fs::read(sysroot.path().join("usr/bin/hello")).unwrap(),
+            content
+        );
     }
 
     #[test]
     fn test_install_errors_on_missing_cas_object() {
-        let cas = TempDir::new().unwrap();
+        let cas_dir = TempDir::new().unwrap();
         let sysroot = TempDir::new().unwrap();
 
-        // Reference a hash that was never written to CAS.
-        let missing_hash = "a".repeat(64);
-        let files = vec![OutputFile {
-            path: "/usr/bin/ghost".to_owned(),
-            hash: missing_hash.clone(),
-            size: 0,
-            mode: 0o755,
-        }];
-        let manifest = make_manifest(files, vec![]);
+        let manifest = make_manifest(vec![
+            directory("/usr"),
+            directory("/usr/bin"),
+            regular("/usr/bin/ghost", "a".repeat(64), 0, 0o755),
+        ]);
 
-        let err = install_to_sysroot(&manifest, sysroot.path(), cas.path())
+        let err = install_to_sysroot(&manifest, sysroot.path(), cas_dir.path())
             .expect_err("must fail with missing CAS object");
+        assert!(matches!(err, InstallError::Materialization(_)));
+    }
 
-        match err {
-            InstallError::MissingCasObject(h) => {
-                assert_eq!(h, missing_hash);
-            }
-            other => panic!("expected MissingCasObject, got: {other}"),
-        }
+    #[test]
+    fn shared_library_path_does_not_infer_ldconfig_mutation() {
+        let cas_dir = TempDir::new().unwrap();
+        let sysroot = TempDir::new().unwrap();
+        let cas = CasStore::new(cas_dir.path()).unwrap();
+        let content = b"not really a shared object";
+        let file_hash = cas.store(content).unwrap();
+        let manifest = make_manifest(vec![
+            directory("/usr"),
+            directory("/usr/lib"),
+            regular(
+                "/usr/lib/libexample.so",
+                file_hash,
+                content.len() as u64,
+                0o644,
+            ),
+        ]);
+
+        install_to_sysroot(&manifest, sysroot.path(), cas_dir.path())
+            .expect("exact payload materialization must succeed");
+
+        assert_eq!(
+            fs::read(sysroot.path().join("usr/lib/libexample.so")).unwrap(),
+            content
+        );
+        assert!(
+            !sysroot.path().join("etc/ld.so.cache").exists(),
+            "payload names alone must not schedule target-root lifecycle mutation"
+        );
     }
 }

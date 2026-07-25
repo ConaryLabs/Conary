@@ -44,6 +44,8 @@ sudo editor /etc/conary/remi.toml
 Minimal single-host config:
 
 ```toml
+repository_manifest = "/etc/conary/remi-repositories.toml"
+
 [server]
 bind = "0.0.0.0:8080"
 admin_bind = "127.0.0.1:8081"
@@ -58,27 +60,6 @@ eviction_min_age = "1h"
 negative_cache_ttl = "15m"
 max_cache_size = "50GB"
 
-[upstream.fedora]
-metalink = "https://mirrors.fedoraproject.org/metalink"
-releases = ["44"]
-arches = ["x86_64"]
-metadata_refresh = "6h"
-priority = 100
-
-[upstream.arch]
-base_url = "https://archive.archlinux.org"
-releases = ["latest"]
-arches = ["x86_64"]
-metadata_refresh = "6h"
-priority = 100
-
-[upstream.ubuntu]
-base_url = "https://archive.ubuntu.com/ubuntu"
-releases = ["resolute"]
-arches = ["amd64"]
-metadata_refresh = "6h"
-priority = 100
-
 [admin]
 enabled = true
 external_bind = "127.0.0.1:8082"
@@ -90,6 +71,14 @@ chunk_avg = 65536
 chunk_max = 262144
 strip_debug = false
 max_concurrent = 4
+```
+
+Install the typed source manifest. Each source declares its package-manager
+grammar and all parser construction data; Remi does not derive any of these
+values from a display name or URL.
+
+```bash
+sudo cp deploy/remi-repositories.toml /etc/conary/remi-repositories.toml
 ```
 
 Validate the config before enabling the service:
@@ -140,17 +129,17 @@ The `--full` health mode is intended for a production Remi with repository
 metadata and converted package indexes already populated. For a new self-host,
 seed one runtime repository through the admin API before conversion testing.
 Use a repository that matches the Tier 1 client you plan to test; this Fedora
-44 example is the path verified for this guide. It disables package metadata
-GPG checking for the first smoke conversion because the admin create route does
-not import a distro key; wire signature policy before using a repo for trusted
-package intake.
+44 example is the path verified for this guide. The trust contract keeps the
+two RPM authorities separate: Fedora's metalink authenticates the exact
+`repomd.xml`, while the official Fedora OpenPGP keyring authenticates each RPM
+package.
 
 ```bash
 ADMIN_TOKEN="$(sudo sed -n 's/^REMI_ADMIN_TOKEN=//p' /etc/conary/remi.env)"
 curl -fsS -X POST http://127.0.0.1:8082/v1/admin/repos \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H 'Content-Type: application/json' \
-  -d '{"name":"fedora","url":"https://download.fedoraproject.org/pub/fedora/linux/releases/44/Everything/x86_64/os","enabled":true,"priority":100,"gpg_check":false,"metadata_expire":3600}'
+  -d '{"name":"fedora","url":"https://download.fedoraproject.org/pub/fedora/linux/releases/44/Everything/x86_64/os","enabled":true,"priority":100,"metadata_expire":3600,"parser":{"package_format":"rpm","architecture":"x86_64"},"trust":{"ecosystem":"rpm","metadata":{"kind":"metalink","url":"https://mirrors.fedoraproject.org/metalink?repo=fedora-44&arch=x86_64"},"package_keys":[{"url":"https://fedoraproject.org/fedora.gpg","fingerprint":"36F612DCF27F7D1A48A835E4DBFCF71C6D9F90A6"}]}}'
 
 curl -fsS -X POST 'http://127.0.0.1:8082/v1/admin/repos/fedora/sync?force=true' \
   -H "Authorization: Bearer $ADMIN_TOKEN"
@@ -175,7 +164,11 @@ From a Fedora 44 client with the Conary CLI installed, point the client at the
 new server and run a dry-run install through the same seeded repository:
 
 ```bash
-conary repo add remi http://your-remi-host:8080
+conary repo add remi http://your-remi-host:8080 \
+    --package-format json \
+    --default-strategy remi \
+    --remi-endpoint http://your-remi-host:8080 \
+    --remi-distro fedora-44
 conary repo sync
 conary install curl --dry-run
 ```

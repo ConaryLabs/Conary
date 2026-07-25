@@ -7,6 +7,9 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::dependency_model::RepositoryRequirementGroup;
+use super::versioning::VersionScheme;
+
 /// Repository metadata format (simple JSON index)
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RepositoryMetadata {
@@ -40,12 +43,19 @@ pub struct DeltaInfo {
 pub struct PackageMetadata {
     pub name: String,
     pub version: String,
+    /// Exact native version ordering contract for this package.
+    pub version_scheme: VersionScheme,
     pub architecture: Option<String>,
     pub description: Option<String>,
     pub checksum: String,
     pub size: i64,
     pub download_url: String,
-    pub dependencies: Option<Vec<String>>,
+    /// Exact positive package requirements.
+    #[serde(default)]
+    pub requirements: Vec<RepositoryRequirementGroup>,
+    /// Exact negative package relations.
+    #[serde(default)]
+    pub relations: Vec<RepositoryRequirementGroup>,
     /// Available delta updates from previous versions
     pub delta_from: Option<Vec<DeltaInfo>>,
     /// Security advisory metadata proving that this package fixes vulnerabilities.

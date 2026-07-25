@@ -1,16 +1,16 @@
 // conary-core/src/canonical/mod.rs
 
-//! Canonical package mapping: cross-distro name resolution and auto-discovery.
+//! Canonical package mapping: cross-distro name resolution from explicit sources.
 //!
 //! This module provides:
 //! - A YAML-based rules engine for mapping distro package names to canonical names
 //!   (Repology-compatible format)
-//! - Multi-strategy auto-discovery that groups packages across distros by name,
-//!   provides, binary paths, sonames, and stem matching
+//! - Repology and AppStream contract ingestion
+//!
+//! Payload paths, package-name similarity, and inferred capabilities are not
+//! mapping authority.
 
 pub mod appstream;
 pub mod client;
-pub mod discovery;
 pub mod repology;
 pub mod rules;
-pub mod sync;

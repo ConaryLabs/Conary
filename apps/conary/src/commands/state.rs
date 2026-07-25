@@ -3,17 +3,14 @@
 
 use super::install::{
     InstallOptions, add_prepared_install_to_target_state, build_target_state_view,
-    finalize_prepared_install_without_snapshot, install_prepared_inner,
-    prepare_install_for_restore, run_pre_install_for_prepared,
+    execute_prepared_install_graph, prepare_install_for_restore,
     validate_prepared_install_dependencies,
 };
 use super::progress::RemoveProgress;
-use super::remove::{RemoveScriptletOptions, remove_inner};
-use super::{LegacyReplayOptions, RevertMetadata, SandboxMode, open_db};
+use super::remove::{RemoveLifecycleOptions, execute_installed_trove_remove_graph};
+use super::{SandboxMode, open_db};
 use anyhow::Result;
-use conary_core::db::models::{Changeset, StateDiff, StateEngine, StateMember, SystemState, Trove};
-use conary_core::transaction::{TransactionConfig, TransactionEngine};
-use std::path::PathBuf;
+use conary_core::db::models::{StateDiff, StateEngine, StateMember, SystemState, Trove};
 use tracing::info;
 
 /// List all system states
@@ -176,7 +173,7 @@ async fn execute_restore_plan_with_root(
 ) -> Result<()> {
     info!("Restoring to state {}...", state_number);
 
-    let conn = open_db(db_path)?;
+    let mut conn = open_db(db_path)?;
 
     let target = SystemState::find_by_number(&conn, state_number)?
         .ok_or_else(|| anyhow::anyhow!("State {} not found", state_number))?;
@@ -243,7 +240,6 @@ async fn execute_restore_plan_with_root(
                 root,
                 version: Some(member.trove_version.clone()),
                 architecture: member.architecture.clone(),
-                no_scripts: false,
                 sandbox_mode: SandboxMode::Always,
                 allow_downgrade: true,
                 selection_reason: Some("Restored by state revert"),
@@ -264,7 +260,6 @@ async fn execute_restore_plan_with_root(
                 root,
                 version: Some(member.trove_version.clone()),
                 architecture: member.architecture.clone(),
-                no_scripts: false,
                 sandbox_mode: SandboxMode::Always,
                 allow_downgrade: true,
                 selection_reason: Some("Restored by state revert"),
@@ -280,110 +275,31 @@ async fn execute_restore_plan_with_root(
         validate_prepared_install_dependencies(prepared, &target_state)?;
     }
 
-    let prev_etc = crate::commands::composefs_ops::collect_etc_files(&conn)?;
-    drop(conn);
-
-    let conn = open_db(db_path)?;
-    let tx_config = TransactionConfig::from_paths(PathBuf::from(root), PathBuf::from(db_path));
-    let mut engine = TransactionEngine::new(tx_config)
-        .map_err(|e| anyhow::anyhow!("Failed to create transaction engine: {e}"))?;
-    if std::env::var_os("CONARY_TEST_SKIP_GENERATION_MOUNT").is_none() {
-        engine
-            .recover(&conn)
-            .map_err(|e| anyhow::anyhow!("Failed to recover incomplete transactions: {e}"))?;
-    } else {
-        info!(
-            "Skipping transaction recovery mount because CONARY_TEST_SKIP_GENERATION_MOUNT is set"
-        );
+    let removal_troves = plan
+        .to_remove
+        .iter()
+        .map(|member| find_installed_trove_for_member(&conn, member))
+        .collect::<Result<Vec<_>>>()?;
+    for trove in &removal_troves {
+        let progress = RemoveProgress::new(&trove.name);
+        execute_installed_trove_remove_graph(
+            &conn,
+            trove,
+            db_path,
+            &trove.name,
+            RemoveLifecycleOptions::new(SandboxMode::Always),
+            &progress,
+        )?;
     }
-    engine
-        .begin()
-        .map_err(|e| anyhow::anyhow!("Failed to begin transaction: {e}"))?;
 
-    let mut prepared_executions = Vec::with_capacity(prepared_installs.len());
     for prepared in prepared_installs {
-        let execution = match run_pre_install_for_prepared(
-            &conn,
-            db_path,
-            root,
-            false,
-            SandboxMode::Always,
-            prepared,
-        ) {
-            Ok(execution) => execution,
-            Err(err) => {
-                engine.release_lock();
-                return Err(err);
-            }
-        };
-        prepared_executions.push(execution);
+        execute_prepared_install_graph(&mut conn, db_path, root, prepared)?;
     }
-
-    let mut changeset = Changeset::new(format!(
-        "Restore state {} -> {}",
-        plan.from_state.state_number, plan.to_state.state_number
-    ));
-
-    let restore_tx_result = (|| -> Result<i64> {
-        let tx = conn.unchecked_transaction()?;
-        let changeset_id = changeset.insert(&tx)?;
-
-        let mut removed_troves = Vec::with_capacity(plan.to_remove.len());
-        for member in &plan.to_remove {
-            let trove = find_installed_trove_for_member(&tx, member)?;
-            let progress = RemoveProgress::new(&trove.name);
-            let remove_result = remove_inner(
-                &tx,
-                changeset_id,
-                &trove,
-                root,
-                RemoveScriptletOptions::new(
-                    false,
-                    SandboxMode::Always,
-                    LegacyReplayOptions::default(),
-                ),
-                &progress,
-            )?;
-            removed_troves.push(remove_result.snapshot);
-        }
-        for execution in &prepared_executions {
-            install_prepared_inner(&tx, &mut engine, changeset_id, db_path, execution)?;
-        }
-
-        let metadata_json = serde_json::to_string(&RevertMetadata { removed_troves })?;
-        tx.execute(
-            "UPDATE changesets SET metadata = ?1 WHERE id = ?2",
-            rusqlite::params![metadata_json, changeset_id],
-        )?;
-        tx.commit()?;
-        Ok(changeset_id)
-    })();
-
-    let changeset_id = match restore_tx_result {
-        Ok(changeset_id) => changeset_id,
-        Err(err) => {
-            engine.release_lock();
-            return Err(err);
-        }
-    };
-
-    let post_commit_result = (|| -> Result<()> {
-        crate::commands::composefs_ops::rebuild_and_mount(
-            &conn,
-            db_path,
-            &format!("Restore state {}", state_number),
-            Some(prev_etc),
-        )?;
-        changeset.update_status(&conn, conary_core::db::models::ChangesetStatus::Applied)?;
-        for execution in &prepared_executions {
-            finalize_prepared_install_without_snapshot(&conn, changeset_id, execution)?;
-        }
-        info!("Restore changeset {} applied", changeset_id);
-        Ok(())
-    })();
-
-    engine.release_lock();
-    post_commit_result
+    info!(
+        "Restore state {} applied through typed transaction graphs",
+        state_number
+    );
+    Ok(())
 }
 
 fn find_installed_trove_for_member(

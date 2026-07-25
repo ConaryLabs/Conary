@@ -1,6 +1,9 @@
 [package]
 name = "dep-base"
 version = "2.0.0"
+version_scheme = "conary"
+release = "1"
+kind = "package"
 description = "Base dependency fixture version 2"
 license = "MIT"
 
@@ -12,10 +15,6 @@ libc = "gnu"
 [provides]
 capabilities = ["dep-base", "dep-base-api-v2"]
 binaries = ["/usr/bin/dep-base-v2"]
-
-[requires]
-capabilities = []
-packages = []
 
 [components]
 default = ["runtime"]

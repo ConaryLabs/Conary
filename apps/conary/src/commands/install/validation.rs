@@ -1,21 +1,20 @@
 // src/commands/install/validation.rs
 
-use super::{ComponentSelection, DepMode, blocklist};
+use super::{ComponentSelection, OwnershipMode};
 use anyhow::Result;
 use conary_core::components::{ComponentType, parse_component_spec};
 use conary_core::db::models::{InstallReason, Trove};
-use conary_core::packages::SystemPackageManager;
 use tracing::info;
 
 /// Parse a component spec from the package argument and run pre-install
-/// validation checks (blocklist, adoption).
+/// validation checks for persisted ownership state.
 ///
 /// Returns `(package_name, component_selection)`.
 pub(super) fn parse_component_and_validate(
     conn: &rusqlite::Connection,
     package: &str,
-    dep_mode: DepMode,
-    force: bool,
+    architecture: Option<&str>,
+    ownership: OwnershipMode,
 ) -> Result<(String, ComponentSelection)> {
     // Parse component spec from package argument (e.g., "nginx:devel" or "nginx:all")
     let (package_name, component_selection) = if let Some((pkg, comp)) =
@@ -43,37 +42,37 @@ pub(super) fn parse_component_and_validate(
         component_selection.display()
     );
 
-    // Block installation of critical system packages in takeover mode
-    if dep_mode == DepMode::Takeover && blocklist::is_blocked(&package_name) {
-        return Err(anyhow::anyhow!(
-            "Package '{}' is on the critical system blocklist and cannot be taken over. \
-             These packages (glibc, systemd, etc.) must remain managed by the system package manager.",
-            package_name
-        ));
-    }
-
-    // Check if the package is adopted from the system PM. `--force` alone must
-    // not silently convert native-manager ownership into Conary ownership.
-    if let Some(existing) = Trove::find_one_by_name(conn, &package_name)?
-        && existing.install_source.is_adopted()
-    {
-        if dep_mode == DepMode::Takeover {
+    // Check if the package is adopted from the system PM. Ownership transfer
+    // is one explicit operation; there is no second force-style override.
+    let installed_variants = Trove::find_by_name(conn, &package_name)?
+        .into_iter()
+        .filter(|trove| {
+            architecture.is_none_or(|requested| trove.architecture.as_deref() == Some(requested))
+        })
+        .collect::<Vec<_>>();
+    let has_adopted_variant = installed_variants
+        .iter()
+        .any(|trove| trove.install_source.is_adopted());
+    if has_adopted_variant {
+        if architecture.is_none()
+            && installed_variants
+                .iter()
+                .any(|trove| !trove.install_source.is_adopted())
+        {
+            anyhow::bail!(
+                "Package '{}' has both Conary-owned and adopted installed variants; select the exact variant with --arch before changing ownership",
+                package_name
+            );
+        }
+        if ownership == OwnershipMode::Takeover {
             crate::ui::note(&format!(
-                "Package '{package_name}' is adopted -- proceeding with explicit --dep-mode takeover"
+                "Package '{package_name}' is adopted -- proceeding with explicit --ownership takeover"
             ));
         } else {
-            let pkg_mgr = SystemPackageManager::detect();
-            let force_note = if force {
-                " --force does not override adopted package ownership."
-            } else {
-                ""
-            };
             return Err(anyhow::anyhow!(
-                "Package '{}' is adopted from {}.{} Run 'conary system adopt --refresh' after native package-manager changes. Use 'conary install {} --dep-mode takeover' \
+                "Package '{}' is adopted and its files are not Conary-owned. Run 'conary system adopt --refresh' after external package changes. Use 'conary install {} --ownership takeover' \
                  for explicit package takeover, or 'conary system takeover' for generation-level takeover.",
                 package_name,
-                pkg_mgr.display_name(),
-                force_note,
                 package_name
             ));
         }
@@ -88,33 +87,42 @@ pub(super) fn try_promote_existing_dep(
     conn: &rusqlite::Connection,
     package_name: &str,
     version: Option<&str>,
+    architecture: Option<&str>,
     selection_reason: Option<&str>,
 ) -> Result<bool> {
-    // Check if the package is already installed as a dependency - if so, promote it
-    // This must happen before we try to download, as we may not need to do anything else
-    if let Some(existing) = Trove::find_one_by_name(conn, package_name)?
-        && existing.install_reason == InstallReason::Dependency
-    {
-        // Check if we're requesting a specific version that differs
-        let needs_version_change = version.is_some_and(|v| v != existing.version);
+    let mut candidates = Trove::find_by_name(conn, package_name)?
+        .into_iter()
+        .filter(|trove| version.is_none_or(|requested| trove.version == requested))
+        .filter(|trove| {
+            architecture.is_none_or(|requested| trove.architecture.as_deref() == Some(requested))
+        })
+        .collect::<Vec<_>>();
 
-        // Promote to explicit
-        let reason = selection_reason.unwrap_or("Explicitly installed by user");
-        Trove::promote_to_explicit(conn, package_name, Some(reason))?;
-        println!("Promoted {} from dependency to explicit", package_name);
-
-        // If same version (or no version specified), we're done
-        if !needs_version_change {
-            println!("{} {} is already installed", package_name, existing.version);
-            return Ok(true);
-        }
-        // Otherwise continue with version upgrade
-        info!(
-            "Continuing with version change: {} -> {:?}",
-            existing.version, version
+    if candidates.len() > 1 {
+        anyhow::bail!(
+            "Package '{}' has multiple installed dependency variants; select the exact variant with --version and --arch",
+            package_name
         );
     }
-    Ok(false)
+    let Some(existing) = candidates.pop() else {
+        return Ok(false);
+    };
+    if existing.install_reason != InstallReason::Dependency {
+        return Ok(false);
+    }
+    let trove_id = existing.id.ok_or_else(|| {
+        anyhow::anyhow!(
+            "Installed package '{} {}' has no persisted identity",
+            existing.name,
+            existing.version
+        )
+    })?;
+
+    let reason = selection_reason.unwrap_or("Explicitly installed by user");
+    Trove::promote_to_explicit(conn, trove_id, Some(reason))?;
+    println!("Promoted {} from dependency to explicit", package_name);
+    println!("{} {} is already installed", package_name, existing.version);
+    Ok(true)
 }
 
 #[cfg(test)]
@@ -122,25 +130,40 @@ mod tests {
     use super::*;
 
     #[test]
-    fn force_install_over_adopted_package_is_not_silent_takeover() {
+    fn preserved_ownership_rejects_install_over_adopted_package() {
         use crate::commands::test_helpers::create_test_db;
         use conary_core::db::models::{InstallSource, Trove, TroveType};
+        use conary_core::packages::InstalledPackageIdentity;
 
         let (_tmp, db_path) = create_test_db();
         let conn = conary_core::db::open(&db_path).unwrap();
         let mut trove = Trove::new_with_source(
             "curl".to_string(),
-            "8.0.0".to_string(),
+            "8.0.0-1".to_string(),
             TroveType::Package,
             InstallSource::AdoptedFull,
+            conary_core::repository::versioning::VersionScheme::Conary,
+        );
+        trove.architecture = Some("x86_64".to_string());
+        trove.native_package_identity = Some(
+            InstalledPackageIdentity::rpm(
+                "curl-8.0.0-1.x86_64",
+                "curl",
+                None,
+                "8.0.0",
+                "1",
+                "x86_64",
+            )
+            .unwrap(),
         );
         trove.insert(&conn).unwrap();
 
-        let err = parse_component_and_validate(&conn, "curl", DepMode::Adopt, true).unwrap_err();
+        let err =
+            parse_component_and_validate(&conn, "curl", None, OwnershipMode::Preserve).unwrap_err();
         let message = err.to_string();
 
         assert!(message.contains("curl"));
-        assert!(message.contains("--dep-mode takeover"));
+        assert!(message.contains("--ownership takeover"));
         assert!(message.contains("conary system takeover"));
     }
 
@@ -148,19 +171,33 @@ mod tests {
     fn explicit_takeover_over_adopted_package_is_allowed() {
         use crate::commands::test_helpers::create_test_db;
         use conary_core::db::models::{InstallSource, Trove, TroveType};
+        use conary_core::packages::InstalledPackageIdentity;
 
         let (_tmp, db_path) = create_test_db();
         let conn = conary_core::db::open(&db_path).unwrap();
         let mut trove = Trove::new_with_source(
             "curl".to_string(),
-            "8.0.0".to_string(),
+            "8.0.0-1".to_string(),
             TroveType::Package,
             InstallSource::AdoptedFull,
+            conary_core::repository::versioning::VersionScheme::Conary,
+        );
+        trove.architecture = Some("x86_64".to_string());
+        trove.native_package_identity = Some(
+            InstalledPackageIdentity::rpm(
+                "curl-8.0.0-1.x86_64",
+                "curl",
+                None,
+                "8.0.0",
+                "1",
+                "x86_64",
+            )
+            .unwrap(),
         );
         trove.insert(&conn).unwrap();
 
         let (package_name, _component_selection) =
-            parse_component_and_validate(&conn, "curl", DepMode::Takeover, false).unwrap();
+            parse_component_and_validate(&conn, "curl", None, OwnershipMode::Takeover).unwrap();
 
         assert_eq!(package_name, "curl");
     }

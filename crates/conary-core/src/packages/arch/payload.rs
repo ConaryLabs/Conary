@@ -1,0 +1,722 @@
+// conary-core/src/packages/arch/payload.rs
+
+//! Exact ALPM tar payload parsing.
+
+use crate::error::{Error, Result};
+use crate::packages::archive_utils::normalize_path;
+use crate::packages::common::MAX_EXTRACTION_FILE_SIZE;
+use crate::packages::traits::ExtractedFile;
+use crate::payload::{
+    PayloadContentAuthority, PayloadIdentity, PayloadNode, PayloadNodeKind, PayloadTimestamp,
+};
+use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::io::Read;
+use tar::{Entry, EntryType};
+
+pub(super) struct ArchivePayloadEntry {
+    path: String,
+    node: PayloadNode,
+    content: Vec<u8>,
+    hardlink_content: Vec<u8>,
+}
+
+impl ArchivePayloadEntry {
+    pub(super) fn path(&self) -> &str {
+        &self.path
+    }
+
+    pub(super) fn regular_content(&self) -> Option<&[u8]> {
+        self.node.kind.is_regular().then_some(&self.content)
+    }
+}
+
+pub(super) fn parse_entry<R: Read>(entry: &mut Entry<'_, R>) -> Result<ArchivePayloadEntry> {
+    let path_bytes = entry.path_bytes().into_owned();
+    let raw_path = std::str::from_utf8(&path_bytes)
+        .map_err(|error| Error::ParseError(format!("ALPM payload path is not UTF-8: {error}")))?;
+    let path = normalize_path(raw_path)
+        .map_err(|error| Error::ParseError(format!("invalid ALPM payload path: {error}")))?;
+    let header = entry.header();
+    let entry_type = header.entry_type();
+    let permissions = header
+        .mode()
+        .map_err(|error| Error::ParseError(format!("invalid mode for {path}: {error}")))?
+        & 0o7777;
+    let uid = header
+        .uid()
+        .map_err(|error| Error::ParseError(format!("invalid uid for {path}: {error}")))?;
+    let gid = header
+        .gid()
+        .map_err(|error| Error::ParseError(format!("invalid gid for {path}: {error}")))?;
+    let header_mtime = header
+        .mtime()
+        .map_err(|error| Error::ParseError(format!("invalid mtime for {path}: {error}")))?;
+    let header_device = if matches!(entry_type, EntryType::Block | EntryType::Char) {
+        (
+            header
+                .device_major()
+                .map_err(|error| {
+                    Error::ParseError(format!("invalid device major for {path}: {error}"))
+                })?
+                .map(u64::from),
+            header
+                .device_minor()
+                .map_err(|error| {
+                    Error::ParseError(format!("invalid device minor for {path}: {error}"))
+                })?
+                .map(u64::from),
+        )
+    } else {
+        (None, None)
+    };
+    let link_target = entry
+        .link_name_bytes()
+        .map(|target| exact_utf8(target.as_ref(), "link target", &path))
+        .transpose()?;
+    let pax = read_pax(entry, &path)?;
+    let mtime = pax.mtime.unwrap_or(PayloadTimestamp {
+        seconds: i64::try_from(header_mtime).map_err(|_| {
+            Error::ParseError(format!("mtime for {path} exceeds signed timestamp range"))
+        })?,
+        nanoseconds: 0,
+    });
+    let device = (
+        pax.device_major.or(header_device.0),
+        pax.device_minor.or(header_device.1),
+    );
+    let (kind, content, hardlink_content) = match entry_type {
+        EntryType::Regular | EntryType::Continuous | EntryType::GNUSparse => {
+            let content = read_content(entry, &path)?;
+            (
+                PayloadNodeKind::Regular {
+                    hardlink_identity: None,
+                },
+                content,
+                Vec::new(),
+            )
+        }
+        EntryType::Directory => {
+            require_empty_entry(entry, &path)?;
+            (PayloadNodeKind::Directory, Vec::new(), Vec::new())
+        }
+        EntryType::Symlink => {
+            require_empty_entry(entry, &path)?;
+            let target = link_target
+                .ok_or_else(|| Error::ParseError(format!("ALPM symlink {path} has no target")))?;
+            (PayloadNodeKind::Symlink { target }, Vec::new(), Vec::new())
+        }
+        EntryType::Link => {
+            let target = link_target
+                .ok_or_else(|| Error::ParseError(format!("ALPM hardlink {path} has no target")))?;
+            let target = normalize_path(&target).map_err(|error| {
+                Error::ParseError(format!("invalid ALPM hardlink target for {path}: {error}"))
+            })?;
+            let hardlink_content = read_content(entry, &path)?;
+            (
+                PayloadNodeKind::Hardlink {
+                    identity: format!("path:{target}"),
+                    target,
+                },
+                Vec::new(),
+                hardlink_content,
+            )
+        }
+        EntryType::Block => {
+            require_empty_entry(entry, &path)?;
+            let (Some(major), Some(minor)) = device else {
+                return Err(Error::ParseError(format!(
+                    "ALPM block device {path} has no complete device identity"
+                )));
+            };
+            (
+                PayloadNodeKind::BlockDevice { major, minor },
+                Vec::new(),
+                Vec::new(),
+            )
+        }
+        EntryType::Char => {
+            require_empty_entry(entry, &path)?;
+            let (Some(major), Some(minor)) = device else {
+                return Err(Error::ParseError(format!(
+                    "ALPM character device {path} has no complete device identity"
+                )));
+            };
+            (
+                PayloadNodeKind::CharacterDevice { major, minor },
+                Vec::new(),
+                Vec::new(),
+            )
+        }
+        EntryType::Fifo => {
+            require_empty_entry(entry, &path)?;
+            (PayloadNodeKind::Fifo, Vec::new(), Vec::new())
+        }
+        other if other.as_byte() == b's' => {
+            require_empty_entry(entry, &path)?;
+            (PayloadNodeKind::Socket, Vec::new(), Vec::new())
+        }
+        other => {
+            return Err(Error::ParseError(format!(
+                "unsupported ALPM tar entry type {:?} for {path}",
+                other.as_byte()
+            )));
+        }
+    };
+    let mode = mode_type(&kind) | permissions;
+    let node = PayloadNode {
+        kind,
+        mode,
+        user: PayloadIdentity::Numeric { id: uid },
+        group: PayloadIdentity::Numeric { id: gid },
+        mtime,
+        xattrs: pax.xattrs,
+    };
+    node.validate()
+        .map_err(|error| Error::ParseError(format!("invalid ALPM node {path}: {error}")))?;
+    Ok(ArchivePayloadEntry {
+        path,
+        node,
+        content,
+        hardlink_content,
+    })
+}
+
+pub(super) fn resolve_hardlinks(
+    mut entries: Vec<ArchivePayloadEntry>,
+) -> Result<Vec<ExtractedFile>> {
+    let mut paths = HashMap::new();
+    for (index, entry) in entries.iter().enumerate() {
+        if paths.insert(entry.path.clone(), index).is_some() {
+            return Err(Error::ParseError(format!(
+                "duplicate ALPM payload path {}",
+                entry.path
+            )));
+        }
+    }
+
+    for index in 0..entries.len() {
+        if !matches!(entries[index].node.kind, PayloadNodeKind::Hardlink { .. }) {
+            continue;
+        }
+        let anchor = hardlink_anchor(index, &entries, &paths)?;
+        let anchor_path = entries[anchor].path.clone();
+        let identity = format!("path:{anchor_path}");
+        let anchor_content = entries[anchor].content.clone();
+        if !entries[index].hardlink_content.is_empty()
+            && entries[index].hardlink_content != anchor_content
+        {
+            return Err(Error::ParseError(format!(
+                "ALPM hardlink {} carries bytes different from anchor {anchor_path}",
+                entries[index].path
+            )));
+        }
+        match &mut entries[anchor].node.kind {
+            PayloadNodeKind::Regular { hardlink_identity } => {
+                if let Some(existing) = hardlink_identity
+                    && existing != &identity
+                {
+                    return Err(Error::ParseError(format!(
+                        "ALPM hardlink anchor {anchor_path} has conflicting identities"
+                    )));
+                }
+                *hardlink_identity = Some(identity.clone());
+            }
+            _ => unreachable!("hardlink_anchor returns a regular entry"),
+        }
+        let mut node = entries[anchor].node.clone();
+        node.kind = PayloadNodeKind::Hardlink {
+            target: anchor_path,
+            identity,
+        };
+        entries[index].node = node;
+    }
+
+    entries
+        .into_iter()
+        .map(|entry| {
+            let content_authority = entry
+                .node
+                .kind
+                .is_regular()
+                .then(|| PayloadContentAuthority {
+                    sha256: crate::hash::sha256(&entry.content),
+                    size: entry.content.len() as u64,
+                });
+            entry
+                .node
+                .validate_content(content_authority.as_ref())
+                .map_err(|error| {
+                    Error::ParseError(format!(
+                        "invalid ALPM content authority for {}: {error}",
+                        entry.path
+                    ))
+                })?;
+            Ok(ExtractedFile {
+                path: entry.path,
+                node: entry.node,
+                content: entry.content,
+                content_authority,
+            })
+        })
+        .collect()
+}
+
+fn hardlink_anchor(
+    start: usize,
+    entries: &[ArchivePayloadEntry],
+    paths: &HashMap<String, usize>,
+) -> Result<usize> {
+    let mut current = start;
+    let mut seen = HashSet::new();
+    loop {
+        if !seen.insert(current) {
+            return Err(Error::ParseError(format!(
+                "ALPM hardlink cycle starts at {}",
+                entries[start].path
+            )));
+        }
+        match &entries[current].node.kind {
+            PayloadNodeKind::Regular { .. } => return Ok(current),
+            PayloadNodeKind::Hardlink { target, .. } => {
+                current = *paths.get(target).ok_or_else(|| {
+                    Error::ParseError(format!(
+                        "ALPM hardlink {} targets missing payload node {target}",
+                        entries[current].path
+                    ))
+                })?;
+            }
+            _ => {
+                return Err(Error::ParseError(format!(
+                    "ALPM hardlink {} targets non-regular node {}",
+                    entries[start].path, entries[current].path
+                )));
+            }
+        }
+    }
+}
+
+#[derive(Default)]
+struct PaxAuthority {
+    mtime: Option<PayloadTimestamp>,
+    device_major: Option<u64>,
+    device_minor: Option<u64>,
+    xattrs: BTreeMap<String, Vec<u8>>,
+}
+
+fn read_pax<R: Read>(entry: &mut Entry<'_, R>, path: &str) -> Result<PaxAuthority> {
+    let mut authority = PaxAuthority::default();
+    let Some(extensions) = entry
+        .pax_extensions()
+        .map_err(|error| Error::ParseError(format!("invalid PAX data for {path}: {error}")))?
+    else {
+        return Ok(authority);
+    };
+    for extension in extensions {
+        let extension = extension.map_err(|error| {
+            Error::ParseError(format!("invalid PAX record for {path}: {error}"))
+        })?;
+        let key = extension
+            .key()
+            .map_err(|error| Error::ParseError(format!("non-UTF-8 PAX key for {path}: {error}")))?;
+        let value = extension.value_bytes();
+        match key {
+            "mtime" => authority.mtime = Some(parse_pax_timestamp(value, path)?),
+            "SCHILY.devmajor" => authority.device_major = Some(parse_decimal(value, key, path)?),
+            "SCHILY.devminor" => authority.device_minor = Some(parse_decimal(value, key, path)?),
+            "RHT.security.selinux" => {
+                insert_xattr(
+                    &mut authority.xattrs,
+                    "security.selinux".to_string(),
+                    value.to_vec(),
+                    path,
+                )?;
+            }
+            _ if key.starts_with("SCHILY.xattr.") => {
+                let name = key.strip_prefix("SCHILY.xattr.").expect("prefix checked");
+                insert_xattr(
+                    &mut authority.xattrs,
+                    name.to_string(),
+                    value.to_vec(),
+                    path,
+                )?;
+            }
+            _ if key.starts_with("LIBARCHIVE.xattr.") => {
+                let encoded_name = key
+                    .strip_prefix("LIBARCHIVE.xattr.")
+                    .expect("prefix checked");
+                let name_bytes = percent_decode(encoded_name.as_bytes(), path)?;
+                let name = String::from_utf8(name_bytes).map_err(|error| {
+                    Error::ParseError(format!(
+                        "LIBARCHIVE xattr name for {path} is not UTF-8: {error}"
+                    ))
+                })?;
+                let decoded = BASE64.decode(value).map_err(|error| {
+                    Error::ParseError(format!(
+                        "invalid LIBARCHIVE xattr value for {path}: {error}"
+                    ))
+                })?;
+                insert_xattr(&mut authority.xattrs, name, decoded, path)?;
+            }
+            _ => {}
+        }
+    }
+    Ok(authority)
+}
+
+fn insert_xattr(
+    xattrs: &mut BTreeMap<String, Vec<u8>>,
+    name: String,
+    value: Vec<u8>,
+    path: &str,
+) -> Result<()> {
+    if xattrs.insert(name.clone(), value).is_some() {
+        return Err(Error::ParseError(format!(
+            "duplicate xattr {name} for ALPM payload node {path}"
+        )));
+    }
+    Ok(())
+}
+
+fn parse_pax_timestamp(value: &[u8], path: &str) -> Result<PayloadTimestamp> {
+    let text = std::str::from_utf8(value)
+        .map_err(|error| Error::ParseError(format!("invalid PAX mtime for {path}: {error}")))?;
+    let negative = text.starts_with('-');
+    let unsigned = text.strip_prefix('-').unwrap_or(text);
+    let (whole, fractional) = unsigned.split_once('.').unwrap_or((unsigned, ""));
+    if whole.is_empty()
+        || !whole.bytes().all(|byte| byte.is_ascii_digit())
+        || !fractional.bytes().all(|byte| byte.is_ascii_digit())
+        || fractional.len() > 9
+    {
+        return Err(Error::ParseError(format!(
+            "PAX mtime for {path} is outside nanosecond decimal grammar"
+        )));
+    }
+    let whole = whole.parse::<u64>().map_err(|error| {
+        Error::ParseError(format!("PAX mtime for {path} is out of range: {error}"))
+    })?;
+    let mut nanos = if fractional.is_empty() {
+        0
+    } else {
+        fractional.parse::<u32>().map_err(|error| {
+            Error::ParseError(format!("PAX mtime fraction for {path} is invalid: {error}"))
+        })? * 10_u32.pow(u32::try_from(9 - fractional.len()).expect("fraction length bounded"))
+    };
+    let seconds = if negative {
+        if nanos == 0 {
+            -i64::try_from(whole).map_err(|_| {
+                Error::ParseError(format!("PAX mtime for {path} exceeds signed range"))
+            })?
+        } else {
+            nanos = 1_000_000_000 - nanos;
+            -i64::try_from(whole).map_err(|_| {
+                Error::ParseError(format!("PAX mtime for {path} exceeds signed range"))
+            })? - 1
+        }
+    } else {
+        i64::try_from(whole)
+            .map_err(|_| Error::ParseError(format!("PAX mtime for {path} exceeds signed range")))?
+    };
+    Ok(PayloadTimestamp {
+        seconds,
+        nanoseconds: nanos,
+    })
+}
+
+fn parse_decimal(value: &[u8], key: &str, path: &str) -> Result<u64> {
+    let text = std::str::from_utf8(value)
+        .map_err(|error| Error::ParseError(format!("invalid {key} value for {path}: {error}")))?;
+    text.parse::<u64>()
+        .map_err(|error| Error::ParseError(format!("invalid {key} value for {path}: {error}")))
+}
+
+fn percent_decode(value: &[u8], path: &str) -> Result<Vec<u8>> {
+    let mut decoded = Vec::with_capacity(value.len());
+    let mut index = 0;
+    while index < value.len() {
+        if value[index] != b'%' {
+            decoded.push(value[index]);
+            index += 1;
+            continue;
+        }
+        let digits = value.get(index + 1..index + 3).ok_or_else(|| {
+            Error::ParseError(format!("truncated LIBARCHIVE xattr name for {path}"))
+        })?;
+        let digits = std::str::from_utf8(digits).expect("hex digits are ASCII bytes");
+        decoded.push(u8::from_str_radix(digits, 16).map_err(|error| {
+            Error::ParseError(format!("invalid LIBARCHIVE xattr name for {path}: {error}"))
+        })?);
+        index += 3;
+    }
+    Ok(decoded)
+}
+
+fn read_content<R: Read>(entry: &mut Entry<'_, R>, path: &str) -> Result<Vec<u8>> {
+    let size = entry.size();
+    if size > MAX_EXTRACTION_FILE_SIZE {
+        return Err(Error::ParseError(format!(
+            "ALPM payload node {path} is {size} bytes; maximum is {MAX_EXTRACTION_FILE_SIZE}"
+        )));
+    }
+    let mut content = Vec::new();
+    entry
+        .read_to_end(&mut content)
+        .map_err(|error| Error::ParseError(format!("read ALPM payload node {path}: {error}")))?;
+    if content.len() as u64 != size {
+        return Err(Error::ParseError(format!(
+            "ALPM payload node {path} declares {size} bytes but yields {}",
+            content.len()
+        )));
+    }
+    Ok(content)
+}
+
+fn require_empty_entry<R: Read>(entry: &Entry<'_, R>, path: &str) -> Result<()> {
+    if entry.size() != 0 {
+        return Err(Error::ParseError(format!(
+            "non-regular ALPM payload node {path} carries {} bytes",
+            entry.size()
+        )));
+    }
+    Ok(())
+}
+
+fn exact_utf8(value: &[u8], field: &str, path: &str) -> Result<String> {
+    std::str::from_utf8(value)
+        .map(str::to_string)
+        .map_err(|error| {
+            Error::ParseError(format!("ALPM {field} for {path} is not UTF-8: {error}"))
+        })
+}
+
+fn mode_type(kind: &PayloadNodeKind) -> u32 {
+    match kind {
+        PayloadNodeKind::Regular { .. } | PayloadNodeKind::Hardlink { .. } => libc::S_IFREG,
+        PayloadNodeKind::Directory => libc::S_IFDIR,
+        PayloadNodeKind::Symlink { .. } => libc::S_IFLNK,
+        PayloadNodeKind::BlockDevice { .. } => libc::S_IFBLK,
+        PayloadNodeKind::CharacterDevice { .. } => libc::S_IFCHR,
+        PayloadNodeKind::Fifo => libc::S_IFIFO,
+        PayloadNodeKind::Socket => libc::S_IFSOCK,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+    use tar::{Archive, Builder, Header};
+
+    fn header(
+        path: &str,
+        entry_type: EntryType,
+        mode: u32,
+        uid: u64,
+        gid: u64,
+        mtime: u64,
+        size: u64,
+    ) -> Header {
+        let mut header = Header::new_gnu();
+        header.set_path(path).unwrap();
+        header.set_entry_type(entry_type);
+        header.set_mode(mode);
+        header.set_uid(uid);
+        header.set_gid(gid);
+        header.set_mtime(mtime);
+        header.set_size(size);
+        header
+    }
+
+    fn append(builder: &mut Builder<Vec<u8>>, mut header: Header, content: &[u8]) {
+        header.set_cksum();
+        builder.append(&header, content).unwrap();
+    }
+
+    fn parse_archive(bytes: Vec<u8>) -> Result<Vec<ExtractedFile>> {
+        let mut archive = Archive::new(Cursor::new(bytes));
+        let mut parsed = Vec::new();
+        for entry in archive
+            .entries()
+            .map_err(|error| Error::ParseError(error.to_string()))?
+        {
+            let mut entry = entry.map_err(|error| Error::ParseError(error.to_string()))?;
+            parsed.push(parse_entry(&mut entry)?);
+        }
+        resolve_hardlinks(parsed)
+    }
+
+    #[test]
+    fn parses_exact_posix_nodes_and_pax_authority() {
+        let mut builder = Builder::new(Vec::new());
+        builder
+            .append_pax_extensions([
+                ("mtime", b"-1.25".as_slice()),
+                ("SCHILY.xattr.user.conary", b"exact".as_slice()),
+                (
+                    "LIBARCHIVE.xattr.security%2Ecapability",
+                    b"AQIDBA==".as_slice(),
+                ),
+            ])
+            .unwrap();
+        append(
+            &mut builder,
+            header("usr/bin/tool", EntryType::Regular, 0o4750, 123, 456, 99, 5),
+            b"hello",
+        );
+
+        let mut symlink = header(
+            "usr/bin/tool-link",
+            EntryType::Symlink,
+            0o777,
+            321,
+            654,
+            43,
+            0,
+        );
+        symlink.set_link_name("tool").unwrap();
+        append(&mut builder, symlink, &[]);
+
+        let mut character = header("dev/example", EntryType::Char, 0o600, 0, 0, 44, 0);
+        character.set_device_major(10).unwrap();
+        character.set_device_minor(200).unwrap();
+        append(&mut builder, character, &[]);
+
+        append(
+            &mut builder,
+            header("run/example", EntryType::Fifo, 0o620, 20, 30, 45, 0),
+            &[],
+        );
+
+        let files = parse_archive(builder.into_inner().unwrap()).unwrap();
+        assert_eq!(files.len(), 4);
+
+        let regular = &files[0];
+        assert_eq!(regular.path, "/usr/bin/tool");
+        assert_eq!(
+            regular.node.kind,
+            PayloadNodeKind::Regular {
+                hardlink_identity: None
+            }
+        );
+        assert_eq!(regular.node.mode, libc::S_IFREG | 0o4750);
+        assert_eq!(regular.node.user, PayloadIdentity::Numeric { id: 123 });
+        assert_eq!(regular.node.group, PayloadIdentity::Numeric { id: 456 });
+        assert_eq!(
+            regular.node.mtime,
+            PayloadTimestamp {
+                seconds: -2,
+                nanoseconds: 750_000_000,
+            }
+        );
+        assert_eq!(
+            regular.node.xattrs.get("user.conary"),
+            Some(&b"exact".to_vec())
+        );
+        assert_eq!(
+            regular.node.xattrs.get("security.capability"),
+            Some(&vec![1, 2, 3, 4])
+        );
+        assert_eq!(regular.content, b"hello");
+        assert_eq!(
+            regular.content_authority,
+            Some(PayloadContentAuthority {
+                sha256: crate::hash::sha256(b"hello"),
+                size: 5,
+            })
+        );
+
+        assert_eq!(
+            files[1].node.kind,
+            PayloadNodeKind::Symlink {
+                target: "tool".to_string()
+            }
+        );
+        assert_eq!(files[1].node.mode, libc::S_IFLNK | 0o777);
+        assert!(files[1].content_authority.is_none());
+        assert_eq!(
+            files[2].node.kind,
+            PayloadNodeKind::CharacterDevice {
+                major: 10,
+                minor: 200
+            }
+        );
+        assert_eq!(files[2].node.mode, libc::S_IFCHR | 0o600);
+        assert_eq!(files[3].node.kind, PayloadNodeKind::Fifo);
+        assert_eq!(files[3].node.mode, libc::S_IFIFO | 0o620);
+    }
+
+    #[test]
+    fn resolves_forward_hardlink_chains_to_one_canonical_anchor() {
+        let mut builder = Builder::new(Vec::new());
+        let mut second = header("usr/bin/second", EntryType::Link, 0, 0, 0, 0, 0);
+        second.set_link_name("usr/bin/first").unwrap();
+        append(&mut builder, second, &[]);
+        let mut first = header("usr/bin/first", EntryType::Link, 0, 0, 0, 0, 0);
+        first.set_link_name("usr/bin/anchor").unwrap();
+        append(&mut builder, first, &[]);
+        append(
+            &mut builder,
+            header("usr/bin/anchor", EntryType::Regular, 0o755, 10, 20, 30, 7),
+            b"payload",
+        );
+
+        let files = parse_archive(builder.into_inner().unwrap()).unwrap();
+        let identity = "path:/usr/bin/anchor".to_string();
+        for file in &files[..2] {
+            assert_eq!(
+                file.node.kind,
+                PayloadNodeKind::Hardlink {
+                    target: "/usr/bin/anchor".to_string(),
+                    identity: identity.clone(),
+                }
+            );
+            assert!(file.content.is_empty());
+            assert!(file.content_authority.is_none());
+        }
+        assert_eq!(
+            files[2].node.kind,
+            PayloadNodeKind::Regular {
+                hardlink_identity: Some(identity),
+            }
+        );
+        assert_eq!(files[2].content, b"payload");
+    }
+
+    #[test]
+    fn rejects_hardlinks_whose_target_is_absent_from_the_archive() {
+        let mut builder = Builder::new(Vec::new());
+        let mut link = header("usr/bin/link", EntryType::Link, 0, 0, 0, 0, 0);
+        link.set_link_name("usr/bin/missing").unwrap();
+        append(&mut builder, link, &[]);
+
+        let error = parse_archive(builder.into_inner().unwrap())
+            .expect_err("missing hardlink targets must not be guessed");
+        assert!(
+            error
+                .to_string()
+                .contains("targets missing payload node /usr/bin/missing"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn rejects_hardlink_cycles_with_the_exact_cycle() {
+        let mut builder = Builder::new(Vec::new());
+        let mut first = header("usr/bin/a", EntryType::Link, 0, 0, 0, 0, 0);
+        first.set_link_name("usr/bin/b").unwrap();
+        append(&mut builder, first, &[]);
+        let mut second = header("usr/bin/b", EntryType::Link, 0, 0, 0, 0, 0);
+        second.set_link_name("usr/bin/a").unwrap();
+        append(&mut builder, second, &[]);
+
+        let error = parse_archive(builder.into_inner().unwrap())
+            .expect_err("hardlink cycles must not be flattened");
+        assert!(
+            error
+                .to_string()
+                .contains("hardlink cycle starts at /usr/bin/a"),
+            "{error}"
+        );
+    }
+}

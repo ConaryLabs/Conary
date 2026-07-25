@@ -9,10 +9,7 @@ use crate::cli;
 use crate::commands;
 use crate::live_host_safety::{LiveMutationClass, MutationIntent};
 
-pub(super) async fn dispatch_automation_command(
-    auto_cmd: cli::AutomationCommands,
-    allow_live_system_mutation: bool,
-) -> Result<()> {
+pub(super) async fn dispatch_automation_command(auto_cmd: cli::AutomationCommands) -> Result<()> {
     match auto_cmd {
         cli::AutomationCommands::Status {
             db,
@@ -34,10 +31,9 @@ pub(super) async fn dispatch_automation_command(
             yes,
             categories,
             dry_run,
-            no_scripts,
         } => {
             require_live_mutation(
-                MutationIntent::from_apply_intent(yes, allow_live_system_mutation),
+                MutationIntent::from_apply_intent(yes),
                 Cow::Borrowed("conary automation apply"),
                 LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
                 dry_run,
@@ -48,7 +44,6 @@ pub(super) async fn dispatch_automation_command(
                 yes,
                 categories,
                 dry_run,
-                no_scripts,
             )
             .await
         }

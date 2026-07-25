@@ -1,5 +1,5 @@
 // conary-core/src/ccs/convert/mod.rs
-//! Legacy Package to CCS Conversion
+//! Foreign package to CCS conversion.
 //!
 //! This module converts foreign packages (RPM/DEB/Arch) to CCS format during
 //! installation, enabling CAS deduplication, component selection, and atomic
@@ -15,33 +15,21 @@
 //! | Atomic transactions | Yes | Yes |
 //! | Unified verification | Yes | Yes |
 //!
-//! ## Scriptlet Handling: Typed Lifecycle Evidence
+//! ## Scriptlet Handling: Typed Lifecycle Authority
 //!
-//! 1. Parse shell scriptlets with a formal grammar.
-//! 2. Dispatch exact native and helper contracts to typed adapters.
-//! 3. Promote only complete adapter effects into declarative manifest hooks.
-//! 4. Preserve original scriptlets and unresolved evidence for replay policy.
+//! 1. Preserve the source package manager's typed lifecycle ABI and exact body.
+//! 2. Execute the preserved source ABI at transaction-planned boundaries.
+//! 3. Capture supported external lifecycle commands at the execution boundary.
 
-pub mod adapters;
-mod apparmor_adapters;
-pub mod blocked_classes;
 pub mod command_evidence;
 mod converter;
-mod debian_adapters;
-pub mod effects;
-#[cfg(test)]
-mod golden_fixtures;
-pub mod legacy_provenance;
+pub mod native_provenance;
 pub mod payload_hints;
-mod public_policy;
 pub mod scriptlet_bundle;
-mod security_policy;
-mod selinux_adapters;
-pub mod support_matrix;
 
-pub use converter::{ConversionOptions, ConversionResult, LegacyConverter};
-pub use legacy_provenance::LegacyProvenance;
+pub use converter::{ConversionOptions, ConversionResult, NativePackageConverter};
+pub use native_provenance::{NativeProvenance, NativeSignatureEvidence};
 pub use scriptlet_bundle::{
     ScriptletBundleBuild, ScriptletBundleInput, ScriptletBundleSummary,
-    ScriptletDecisionCountsSummary, build_legacy_scriptlet_bundle,
+    build_direct_native_lifecycle_bundle, build_native_lifecycle_bundle,
 };

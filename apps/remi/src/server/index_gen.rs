@@ -59,7 +59,7 @@ pub struct VersionEntry {
     pub converted_at: Option<String>,
     /// SHA-256 checksum of original package
     pub original_checksum: String,
-    /// Passive legacy scriptlet metadata for converted package versions.
+    /// Passive native lifecycle metadata for converted package versions.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scriptlets: Option<ScriptletPackageMetadata>,
 }
@@ -97,21 +97,18 @@ pub struct IndexGenResult {
 pub fn generate_indices(config: &IndexGenConfig) -> Result<Vec<IndexGenResult>> {
     let distros = match &config.distro {
         Some(d) => vec![d.clone()],
-        None => vec![
-            "arch".to_string(),
-            "fedora".to_string(),
-            "ubuntu".to_string(),
-        ],
+        None => conary_core::repository::supported_profiles::public_profiles()
+            .iter()
+            .map(|profile| profile.id().to_string())
+            .collect(),
     };
 
     let mut results = Vec::new();
     for distro in distros {
-        match generate_index_for_distro(config, &distro) {
-            Ok(result) => results.push(result),
-            Err(e) => {
-                tracing::warn!("Failed to generate index for {}: {}", distro, e);
-            }
-        }
+        results.push(
+            generate_index_for_distro(config, &distro)
+                .with_context(|| format!("generate repository index for {distro}"))?,
+        );
     }
 
     Ok(results)
@@ -125,12 +122,14 @@ fn generate_index_for_distro(config: &IndexGenConfig, distro: &str) -> Result<In
     let conn = conary_core::db::open(&config.db_path)?;
 
     // Get all converted packages
-    let converted = ConvertedPackage::list_all(&conn)?
-        .into_iter()
-        .filter(|converted| {
-            !converted.needs_reconversion() && converted.is_scriptlet_public_ready()
-        })
-        .collect::<Vec<_>>();
+    let mut converted = Vec::new();
+    for candidate in ConvertedPackage::list_repository_conversions(&conn)? {
+        if !candidate.needs_reconversion() {
+            candidate.repository_artifact()?;
+            candidate.scriptlet_summary()?;
+            converted.push(candidate);
+        }
+    }
     debug!("Found {} converted packages total", converted.len());
 
     // Get package metadata from repository_packages table
@@ -165,16 +164,10 @@ fn generate_index_for_distro(config: &IndexGenConfig, distro: &str) -> Result<In
 
     // Sign if key provided
     let signed = if let Some(key_path) = &config.sign_key {
-        match sign_index(&index_path, key_path) {
-            Ok(()) => {
-                info!("Signed index with key from {:?}", key_path);
-                true
-            }
-            Err(e) => {
-                tracing::warn!("Failed to sign index: {}", e);
-                false
-            }
-        }
+        sign_index(&index_path, key_path)
+            .with_context(|| format!("sign repository index {}", index_path.display()))?;
+        info!("Signed index with key from {:?}", key_path);
+        true
     } else {
         false
     };
@@ -194,25 +187,22 @@ fn get_packages_for_distro(
     distro: &str,
     converted: &[ConvertedPackage],
 ) -> Result<HashMap<String, PackageIndexEntry>> {
-    let public_ready = converted
+    let current_conversions = converted
         .iter()
-        .filter(|converted| {
-            !converted.needs_reconversion() && converted.is_scriptlet_public_ready()
-        })
+        .filter(|conversion| !conversion.needs_reconversion())
         .collect::<Vec<_>>();
 
     // Query repository_packages for this distribution
     let mut stmt = conn.prepare(
-        "SELECT rp.name, rp.version, r.name as repo_name, rp.checksum
+        "SELECT rp.name, rp.version, r.package_format, rp.checksum
          FROM repository_packages rp
          JOIN repositories r ON rp.repository_id = r.id
-         WHERE (r.name LIKE ?1 OR r.url LIKE ?2)
-         AND rp.size > 0
+         WHERE r.default_strategy_distro = ?1
+           AND rp.size > 0
          ORDER BY rp.name, rp.version DESC",
     )?;
 
-    let distro_pattern = format!("%{}%", distro);
-    let rows = stmt.query_map([&distro_pattern, &distro_pattern], |row| {
+    let rows = stmt.query_map([distro], |row| {
         Ok((
             row.get::<_, String>(0)?,
             row.get::<_, String>(1)?,
@@ -221,20 +211,10 @@ fn get_packages_for_distro(
         ))
     })?;
 
-    // Build checksum lookup for legacy converted packages that lack
-    // structured identity fields (package_name/package_version/distro).
-    let checksum_map: HashMap<&str, &ConvertedPackage> = converted
-        .iter()
-        .filter(|converted| {
-            !converted.needs_reconversion() && converted.is_scriptlet_public_ready()
-        })
-        .map(|c| (c.original_checksum.as_str(), c))
-        .collect();
-
     let mut packages: HashMap<String, PackageIndexEntry> = HashMap::new();
 
     for row_result in rows {
-        let (name, version, _repo_name, checksum) = row_result?;
+        let (name, version, package_format, _checksum) = row_result?;
 
         // For now, include all packages from the distro
         // In a full implementation, we'd match by checksum
@@ -245,33 +225,33 @@ fn get_packages_for_distro(
                 versions: Vec::new(),
             });
 
-        // Check if this version is converted. Try structured identity fields
-        // first (set for server-side conversions), then fall back to checksum
-        // matching for legacy converted rows that lack structured fields.
-        let converted_info = public_ready
-            .iter()
-            .copied()
-            .find(|c| {
-                c.package_name.as_deref() == Some(name.as_str())
-                    && c.package_version.as_deref() == Some(version.as_str())
-                    && c.distro.as_deref() == Some(distro)
-            })
-            .or_else(|| checksum_map.get(checksum.as_str()).copied());
+        let mut converted_info = None;
+        for candidate in &current_conversions {
+            let artifact = candidate.repository_artifact()?;
+            if artifact.package_name == name
+                && artifact.package_version == version
+                && artifact.distro == distro
+            {
+                converted_info = Some(candidate);
+                break;
+            }
+        }
 
         let version_entry = if let Some(conv) = converted_info {
+            let scriptlet_summary = conv.scriptlet_summary()?;
             VersionEntry {
                 version: version.clone(),
                 original_format: conv.original_format.clone(),
                 scriptlet_fidelity: conv.scriptlet_fidelity.clone(),
                 converted_at: conv.converted_at.clone(),
                 original_checksum: conv.original_checksum.clone(),
-                scriptlets: Some(ScriptletPackageMetadata::from(&conv.scriptlet_summary())),
+                scriptlets: Some(ScriptletPackageMetadata::from(&scriptlet_summary)),
             }
         } else {
             // Not yet converted - still include in index as "pending"
             VersionEntry {
                 version,
-                original_format: distro_to_format(distro),
+                original_format: package_format,
                 scriptlet_fidelity: "pending".to_string(),
                 converted_at: None,
                 original_checksum: String::new(),
@@ -282,20 +262,13 @@ fn get_packages_for_distro(
         entry.versions.push(version_entry);
     }
 
-    // Also add packages from converted_packages that match this distro,
-    // using the structured identity fields (package_name, package_version,
-    // distro).
-    for conv in public_ready {
-        // Match on the structured distro field first; fall back to format
-        // matching for legacy records that predate the identity fields.
-        let matches_distro = conv.distro.as_deref().map_or_else(
-            || format_matches_distro(&conv.original_format, distro),
-            |d| d == distro,
-        );
-
-        if matches_distro && let Some(ref name) = conv.package_name {
-            let version = conv.package_version.as_deref().unwrap_or("unknown");
-
+    // Converted rows are authoritative only when they carry exact package and
+    // public-profile identity.
+    for conv in current_conversions {
+        let artifact = conv.repository_artifact()?;
+        if artifact.distro == distro {
+            let name = artifact.package_name;
+            let version = artifact.package_version;
             let entry = packages
                 .entry(name.to_string())
                 .or_insert_with(|| PackageIndexEntry {
@@ -305,37 +278,20 @@ fn get_packages_for_distro(
 
             // Only add if not already present
             if !entry.versions.iter().any(|v| v.version == version) {
+                let scriptlet_summary = conv.scriptlet_summary()?;
                 entry.versions.push(VersionEntry {
                     version: version.to_string(),
                     original_format: conv.original_format.clone(),
                     scriptlet_fidelity: conv.scriptlet_fidelity.clone(),
                     converted_at: conv.converted_at.clone(),
                     original_checksum: conv.original_checksum.clone(),
-                    scriptlets: Some(ScriptletPackageMetadata::from(&conv.scriptlet_summary())),
+                    scriptlets: Some(ScriptletPackageMetadata::from(&scriptlet_summary)),
                 });
             }
         }
     }
 
     Ok(packages)
-}
-
-/// Map distribution name to package format
-fn distro_to_format(distro: &str) -> String {
-    match distro {
-        "arch" => "arch".to_string(),
-        "fedora" => "rpm".to_string(),
-        "ubuntu" => "deb".to_string(),
-        _ => "unknown".to_string(),
-    }
-}
-
-/// Check if a package format matches a distribution
-fn format_matches_distro(format: &str, distro: &str) -> bool {
-    matches!(
-        (format, distro),
-        ("arch", "arch") | ("rpm", "fedora") | ("deb", "ubuntu")
-    )
 }
 
 /// Scan chunk store directory for statistics
@@ -349,19 +305,23 @@ fn scan_chunk_store(chunk_dir: &str) -> Result<(usize, u64)> {
     let mut total_bytes = 0u64;
 
     // Walk the objects directory
-    for entry in walkdir::WalkDir::new(&objects_dir)
-        .into_iter()
-        .filter_map(|e| e.ok())
-    {
+    for entry in walkdir::WalkDir::new(&objects_dir) {
+        let entry = entry.with_context(|| {
+            format!(
+                "Failed to traverse chunk store directory {}",
+                objects_dir.display()
+            )
+        })?;
         if entry.file_type().is_file() {
             // Skip temp files
             if entry.path().extension().is_some_and(|ext| ext == "tmp") {
                 continue;
             }
-            if let Ok(metadata) = entry.metadata() {
-                count += 1;
-                total_bytes += metadata.len();
-            }
+            let metadata = entry
+                .metadata()
+                .with_context(|| format!("Failed to stat chunk {}", entry.path().display()))?;
+            count += 1;
+            total_bytes += metadata.len();
         }
     }
 
@@ -416,22 +376,14 @@ mod tests {
     use super::*;
     use conary_core::ccs::convert::ScriptletBundleSummary;
 
-    #[test]
-    fn test_distro_to_format() {
-        assert_eq!(distro_to_format("arch"), "arch");
-        assert_eq!(distro_to_format("fedora"), "rpm");
-        assert_eq!(distro_to_format("ubuntu"), "deb");
-        assert_eq!(distro_to_format("debian"), "unknown");
-    }
-
-    #[test]
-    fn test_format_matches_distro() {
-        assert!(format_matches_distro("arch", "arch"));
-        assert!(format_matches_distro("rpm", "fedora"));
-        assert!(format_matches_distro("deb", "ubuntu"));
-        assert!(!format_matches_distro("deb", "debian"));
-        assert!(!format_matches_distro("rpm", "arch"));
-        assert!(!format_matches_distro("deb", "fedora"));
+    fn test_config(root: &Path, db_path: &Path) -> IndexGenConfig {
+        IndexGenConfig {
+            db_path: db_path.display().to_string(),
+            chunk_dir: root.join("chunks").display().to_string(),
+            output_dir: root.join("index").display().to_string(),
+            distro: Some("fedora".to_string()),
+            sign_key: None,
+        }
     }
 
     #[test]
@@ -471,12 +423,12 @@ mod tests {
     }
 
     #[test]
-    fn generated_index_includes_public_scriptlets_without_private_path() {
+    fn generated_index_includes_typed_lifecycle_summary() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conary_core::db::schema::migrate(&conn).unwrap();
+        conary_core::db::schema::ensure_current(&conn).unwrap();
 
-        let mut converted = ConvertedPackage::new_server(
-            "fedora".to_string(),
+        let mut converted = ConvertedPackage::new_repository(
+            "fedora-44".to_string(),
             "pkg".to_string(),
             "1.0".to_string(),
             "rpm".to_string(),
@@ -488,25 +440,21 @@ mod tests {
         );
         converted
             .set_scriptlet_metadata(&ScriptletBundleSummary {
-                scriptlet_fidelity: "fully-replaced".to_string(),
-                target_compatibility: "fully-compatible".to_string(),
-                publication_status: "public".to_string(),
-                review_artifact_path: Some("/tmp/private-review-secret".to_string()),
+                scriptlet_fidelity: "native-lifecycle".to_string(),
                 ..ScriptletBundleSummary::default()
             })
             .unwrap();
         let converted = vec![converted];
 
-        let packages = get_packages_for_distro(&conn, "fedora", &converted).unwrap();
+        let packages = get_packages_for_distro(&conn, "fedora-44", &converted).unwrap();
         let version = packages.get("pkg").unwrap().versions.first().unwrap();
         let scriptlets = version.scriptlets.as_ref().unwrap();
 
-        assert_eq!(scriptlets.scriptlet_fidelity, "fully-replaced");
-        assert!(scriptlets.review_artifact_available);
+        assert_eq!(scriptlets.scriptlet_fidelity, "native-lifecycle");
 
         let index = RepositoryIndex {
             version: 1,
-            distro: "fedora".to_string(),
+            distro: "fedora-44".to_string(),
             generated_at: "2026-01-16T12:00:00Z".to_string(),
             package_count: packages.len(),
             chunk_count: 1,
@@ -517,42 +465,68 @@ mod tests {
         let json = serde_json::to_string(&index).unwrap();
 
         assert!(json.contains("\"scriptlets\""));
-        assert!(!json.contains("review_artifact_path"));
-        assert!(!json.contains("private-review-secret"));
     }
 
     #[test]
-    fn generated_index_omits_converted_only_non_public_rows() {
+    fn generated_index_omits_converted_only_stale_rows() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conary_core::db::schema::migrate(&conn).unwrap();
+        conary_core::db::schema::ensure_current(&conn).unwrap();
 
-        let mut converted = ConvertedPackage::new_server(
-            "fedora".to_string(),
-            "private-only".to_string(),
+        let mut converted = ConvertedPackage::new_repository(
+            "fedora-44".to_string(),
+            "stale-only".to_string(),
             "1.0".to_string(),
             "rpm".to_string(),
-            "sha256:private-only-source".to_string(),
-            &["sha256:private-only-chunk".to_string()],
+            "sha256:stale-only-source".to_string(),
+            &["sha256:stale-only-chunk".to_string()],
             42,
-            "sha256:private-only-content".to_string(),
-            "/tmp/private-only.ccs".to_string(),
+            "sha256:stale-only-content".to_string(),
+            "/tmp/stale-only.ccs".to_string(),
         );
-        converted
-            .set_scriptlet_metadata(&ScriptletBundleSummary {
-                publication_status: "blocked".to_string(),
-                scriptlet_fidelity: "blocked".to_string(),
-                target_compatibility: "blocked".to_string(),
-                blocked_reason_codes: vec!["blocked-class-network".to_string()],
-                ..Default::default()
-            })
-            .unwrap();
+        converted.conversion_version = conary_core::db::models::CONVERSION_VERSION - 1;
 
-        let packages = get_packages_for_distro(&conn, "fedora", &[converted]).unwrap();
+        let packages = get_packages_for_distro(&conn, "fedora-44", &[converted]).unwrap();
 
         assert!(
             packages
                 .values()
-                .all(|package| package.name != "private-only")
+                .all(|package| package.name != "stale-only")
         );
+    }
+
+    #[test]
+    fn index_generation_propagates_a_distro_failure() {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("corrupt.sqlite");
+        fs::write(&db_path, b"not a SQLite database").unwrap();
+        let config = test_config(temp.path(), &db_path);
+
+        let error = generate_indices(&config)
+            .expect_err("a failed distro index must fail the requested generation")
+            .to_string();
+
+        assert!(
+            error.contains("generate repository index for fedora"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn configured_index_signing_failure_is_not_downgraded_to_unsigned() {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("remi.sqlite");
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conary_core::db::schema::ensure_current(&conn).unwrap();
+        drop(conn);
+        let mut config = test_config(temp.path(), &db_path);
+        config.sign_key = Some(temp.path().join("missing.private").display().to_string());
+
+        let error = format!(
+            "{:#}",
+            generate_indices(&config).expect_err("configured signing must fail closed")
+        );
+
+        assert!(error.contains("sign repository index"), "{error}");
+        assert!(error.contains("Failed to read signing key"), "{error}");
     }
 }

@@ -4,8 +4,6 @@
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
-use conary_core::ccs::CcsPackage;
-use conary_core::packages::traits::PackageFormat;
 
 pub const REMI_ADMIN_TOKEN_ENV: &str = "REMI_ADMIN_TOKEN";
 pub const CONARY_REMI_ADMIN_TOKEN_ENV: &str = "CONARY_REMI_ADMIN_TOKEN";
@@ -14,6 +12,7 @@ pub struct RemiPublishOptions<'a> {
     pub artifact_path: &'a Path,
     pub target_url: &'a str,
     pub bearer_token: &'a str,
+    pub trust_policy: &'a conary_core::ccs::TrustPolicy,
 }
 
 pub fn resolve_remi_publish_bearer_token() -> Result<String> {
@@ -26,11 +25,11 @@ pub fn resolve_remi_publish_bearer_token() -> Result<String> {
         }
     }
 
-    bail!("Remi release publish requires {REMI_ADMIN_TOKEN_ENV} or {CONARY_REMI_ADMIN_TOKEN_ENV}")
+    bail!("Remi admin publication requires {REMI_ADMIN_TOKEN_ENV} or {CONARY_REMI_ADMIN_TOKEN_ENV}")
 }
 
 pub async fn publish_to_remi(options: RemiPublishOptions<'_>) -> Result<()> {
-    preflight_release_artifact(options.artifact_path)?;
+    preflight_release_artifact(options.artifact_path, options.trust_policy)?;
     let bytes = tokio::fs::read(options.artifact_path)
         .await
         .with_context(|| format!("read artifact {}", options.artifact_path.display()))?;
@@ -56,22 +55,18 @@ pub async fn publish_to_remi(options: RemiPublishOptions<'_>) -> Result<()> {
     Ok(())
 }
 
-fn preflight_release_artifact(artifact_path: &Path) -> Result<()> {
-    let file = std::fs::File::open(artifact_path)
-        .with_context(|| format!("open Remi release artifact {}", artifact_path.display()))?;
-    let contents = conary_core::ccs::archive_reader::read_ccs_archive(file)
-        .with_context(|| format!("preflight CCS artifact {}", artifact_path.display()))?;
-    if contents.v2_authority.is_some() {
-        return Ok(());
-    }
-
-    let path = artifact_path
-        .to_str()
-        .context("Remi release artifact path must be valid UTF-8")?;
-    CcsPackage::parse(path)
+fn preflight_release_artifact(
+    artifact_path: &Path,
+    trust_policy: &conary_core::ccs::TrustPolicy,
+) -> Result<()> {
+    conary_core::ccs::verify::verify_package(artifact_path, trust_policy)
         .map(|_| ())
-        .map_err(anyhow::Error::from)
-        .with_context(|| format!("preflight CCS artifact {}", artifact_path.display()))
+        .with_context(|| {
+            format!(
+                "verify signed current CCS authority before Remi publication {}",
+                artifact_path.display()
+            )
+        })
 }
 
 #[cfg(test)]
@@ -99,7 +94,8 @@ mod tests {
         )
         .unwrap();
 
-        preflight_release_artifact(&package_path).unwrap();
+        let policy = conary_core::ccs::TrustPolicy::strict(vec![signer.public_key_base64()]);
+        preflight_release_artifact(&package_path, &policy).unwrap();
     }
 
     #[test]
@@ -165,9 +161,10 @@ mod tests {
     ) -> conary_core::ccs::v2::schema::AuthorityDocumentV2 {
         use conary_core::ccs::v2::schema::{
             AuthorityDocumentV2, ComponentAuthorityV2, ConflictPolicyV2, FORMAT_VERSION_V2,
-            FileAuthorityV2, FileTypeV2, LifecycleAuthorityV2, PackageDataV2, PackageIdentityV2,
+            FileAuthorityV2, LifecycleAuthorityV2, PackageDataV2, PackageIdentityV2,
             PackageKindTagV2, PackageKindV2, PackagePolicyV2, ProvenanceAuthorityV2,
         };
+        use conary_core::payload::{PayloadContentAuthority, PayloadNode};
         use std::collections::BTreeMap;
 
         AuthorityDocumentV2 {
@@ -175,6 +172,7 @@ mod tests {
             identity: PackageIdentityV2 {
                 name: name.to_string(),
                 version: "1.0.0".to_string(),
+                version_scheme: conary_core::repository::versioning::VersionScheme::Conary,
                 release: "1".to_string(),
                 architecture: Some("noarch".to_string()),
                 platform: Some("linux".to_string()),
@@ -183,14 +181,12 @@ mod tests {
             kind: PackageKindV2::Package(PackageDataV2 {
                 files: vec![FileAuthorityV2 {
                     path: "/usr/bin/hello".to_string(),
-                    sha256: conary_core::hash::sha256(payload),
-                    size: payload.len() as u64,
-                    file_type: FileTypeV2::Regular,
-                    mode: 0o755,
-                    owner: "root".to_string(),
-                    group: "root".to_string(),
+                    node: PayloadNode::regular(0o755),
+                    content: Some(PayloadContentAuthority {
+                        sha256: conary_core::hash::sha256(payload),
+                        size: payload.len() as u64,
+                    }),
                     component: "main".to_string(),
-                    symlink_target: None,
                     config: None,
                     conflict: ConflictPolicyV2::Error,
                 }],
@@ -198,7 +194,8 @@ mod tests {
                 policy: PackagePolicyV2::default(),
             }),
             provides: Vec::new(),
-            requires: Vec::new(),
+            requirements: Vec::new(),
+            relations: Vec::new(),
             components: BTreeMap::from([(
                 "main".to_string(),
                 ComponentAuthorityV2 {

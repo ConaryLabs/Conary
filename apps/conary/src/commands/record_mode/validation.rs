@@ -9,20 +9,23 @@ use crate::commands::cook::{CookRecordedDraftOptions, run_cook_for_recorded_draf
 pub(crate) fn validation_request(
     output_dir: &Path,
     operation_id: &str,
+    signing_key_path: Option<&Path>,
 ) -> CookRecordedDraftOptions {
     CookRecordedDraftOptions {
         recipe: output_dir.join("recipe.toml"),
         output_dir: output_dir.join("dist"),
         source_cache: output_dir.join("sources"),
         operation_id: operation_id.to_string(),
+        signing_key_path: signing_key_path.map(Path::to_path_buf),
     }
 }
 
 pub(crate) fn validate_recorded_draft(
     output_dir: &Path,
     operation_id: &str,
+    signing_key_path: Option<&Path>,
 ) -> Result<conary_core::diagnostics::PackagingCommandOutput> {
-    let request = validation_request(output_dir, operation_id);
+    let request = validation_request(output_dir, operation_id, signing_key_path);
     run_cook_for_recorded_draft(request)
 }
 
@@ -33,7 +36,7 @@ mod tests {
     #[test]
     fn validation_request_uses_dist_and_sources_under_output() {
         let output = std::path::PathBuf::from("recorded/demo");
-        let request = validation_request(&output, "record-1");
+        let request = validation_request(&output, "record-1", None);
         assert_eq!(
             request.recipe,
             std::path::PathBuf::from("recorded/demo/recipe.toml")
@@ -51,7 +54,7 @@ mod tests {
     #[test]
     fn validation_wrapper_reports_missing_recipe_error() {
         let temp = tempfile::tempdir().unwrap();
-        let error = validate_recorded_draft(temp.path(), "record-1").unwrap_err();
+        let error = validate_recorded_draft(temp.path(), "record-1", None).unwrap_err();
 
         assert!(
             error.to_string().contains("Unsupported source target"),

@@ -1,0 +1,22 @@
+[Unit]
+Description=Apply Conary generation activation intents
+Documentation=https://conary.io
+After=local-fs.target
+ConditionPathExists=/var/lib/conary/conary.db
+
+[Service]
+Type=oneshot
+Environment=PATH=/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/usr/bin/conary system generation activate --db-path /var/lib/conary/conary.db
+RemainAfterExit=yes
+Restart=on-failure
+RestartSec=10s
+TimeoutStartSec=5min
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/conary
+
+[Install]
+WantedBy=multi-user.target

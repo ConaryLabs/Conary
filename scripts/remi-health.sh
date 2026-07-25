@@ -9,7 +9,7 @@
 #   --full    All endpoints + package metadata/conversion probe (~60s)
 set -euo pipefail
 
-ENDPOINT="${REMI_ENDPOINT:-https://packages.conary.io}"
+ENDPOINT="${REMI_ENDPOINT:-https://remi.conary.io}"
 MODE="smoke"
 EXPECTED_UBUNTU_RELEASE="${REMI_EXPECTED_UBUNTU_RELEASE:-resolute}"
 

@@ -4,6 +4,8 @@ mod common;
 
 use conary_core::db;
 use conary_core::db::models::{FileEntry, InstallReason, InstallSource, Trove, TroveType};
+use conary_core::packages::InstalledPackageIdentity;
+use conary_core::payload::{PayloadContentAuthority, PayloadNode, ResolvedPayloadNode};
 use std::fs;
 use std::process::{Command, Output};
 
@@ -22,6 +24,18 @@ fn output_text(output: &Output) -> String {
     )
 }
 
+fn regular_file_entry(path: String, content: &[u8], trove_id: i64) -> FileEntry {
+    FileEntry::new(
+        path,
+        ResolvedPayloadNode::from_numeric_source(PayloadNode::regular(0o644)).unwrap(),
+        Some(PayloadContentAuthority {
+            sha256: conary_core::hash::sha256(content),
+            size: content.len() as u64,
+        }),
+        trove_id,
+    )
+}
+
 fn seed_orphan(
     conn: &rusqlite::Connection,
     root: &std::path::Path,
@@ -32,20 +46,38 @@ fn seed_orphan(
     fs::create_dir_all(payload.parent().unwrap()).unwrap();
     fs::write(&payload, name).unwrap();
 
+    let version = if source.is_adopted() {
+        "1.0.0-1"
+    } else {
+        "1.0.0"
+    };
     let mut trove = Trove::new_with_source(
         name.to_string(),
-        "1.0.0".to_string(),
+        version.to_string(),
         TroveType::Package,
-        source,
+        source.clone(),
+        conary_core::repository::versioning::VersionScheme::Conary,
     );
+    if source.is_adopted() {
+        trove.architecture = Some("x86_64".to_string());
+        trove.native_package_identity = Some(
+            InstalledPackageIdentity::rpm(
+                format!("{name}-1.0.0-1.x86_64"),
+                name,
+                None,
+                "1.0.0",
+                "1",
+                "x86_64",
+            )
+            .unwrap(),
+        );
+    }
     trove.install_reason = InstallReason::Dependency;
     trove.selection_reason = Some("Required by removed-parent".to_string());
     let trove_id = trove.insert(conn).unwrap();
-    FileEntry::new(
+    regular_file_entry(
         format!("/usr/share/{name}/payload.txt"),
-        "0".repeat(64),
-        name.len() as i64,
-        0o100644,
+        name.as_bytes(),
         trove_id,
     )
     .insert(conn)
@@ -58,19 +90,14 @@ fn seed_broken_orphan(conn: &rusqlite::Connection, name: &str) {
         "1.0.0".to_string(),
         TroveType::Package,
         InstallSource::Repository,
+        conary_core::repository::versioning::VersionScheme::Conary,
     );
     trove.install_reason = InstallReason::Dependency;
     trove.selection_reason = Some("Required by removed-parent".to_string());
     let trove_id = trove.insert(conn).unwrap();
-    FileEntry::new(
-        "../escape".to_string(),
-        "0".repeat(64),
-        6,
-        0o100644,
-        trove_id,
-    )
-    .insert(conn)
-    .unwrap();
+    regular_file_entry("../escape".to_string(), b"escape", trove_id)
+        .insert(conn)
+        .unwrap();
 }
 
 #[test]
@@ -137,9 +164,8 @@ fn autoremove_apply_removes_owned_orphan_without_deleting_adopted_orphan() {
         db_path.to_str().unwrap(),
         "--root",
         root.path().to_str().unwrap(),
-        "--no-scripts",
         "--sandbox",
-        "never",
+        "always",
         "--yes",
     ]);
     assert!(output.status.success(), "{}", output_text(&output));
@@ -188,9 +214,8 @@ fn autoremove_reports_each_failed_orphan_once_across_replans() {
         db_path.to_str().unwrap(),
         "--root",
         root.path().to_str().unwrap(),
-        "--no-scripts",
         "--sandbox",
-        "never",
+        "always",
         "--yes",
     ]);
     assert!(!output.status.success(), "{}", output_text(&output));
@@ -272,9 +297,8 @@ fn pin_blocks_remove_and_unpin_allows_remove() {
         db_path.to_str().unwrap(),
         "--root",
         root.path().to_str().unwrap(),
-        "--no-scripts",
         "--sandbox",
-        "never",
+        "always",
         "--yes",
     ]);
     assert!(!blocked.status.success(), "{}", output_text(&blocked));
@@ -295,9 +319,8 @@ fn pin_blocks_remove_and_unpin_allows_remove() {
         db_path.to_str().unwrap(),
         "--root",
         root.path().to_str().unwrap(),
-        "--no-scripts",
         "--sandbox",
-        "never",
+        "always",
         "--yes",
     ]);
     assert!(removed.status.success(), "{}", output_text(&removed));

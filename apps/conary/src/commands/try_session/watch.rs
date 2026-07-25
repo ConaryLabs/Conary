@@ -3,10 +3,11 @@
 
 use std::fs;
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
+use conary_core::ccs::{SigningKeyPair, TrustPolicy};
 use conary_core::diagnostics::{
     DiagnosticEvidence, PACKAGING_JSON_SCHEMA_VERSION, PackagingCommandOutput,
     PackagingCommandStatus, PackagingDiagnostic, PackagingDiagnosticCode, PackagingEvent,
@@ -23,7 +24,15 @@ use super::watch_source::{
 };
 use super::{
     TryRefreshRequest, TryStartRequest, TryWatchMarkerRequest, begin_try_session,
-    refresh_try_session, rollback_active_try_session,
+    refresh_try_session,
+};
+
+mod reporting;
+
+use reporting::{
+    WatchFailure, emit_diagnostic, emit_non_destructive_failure, emit_push, fail_before_session,
+    finish_current_events, finish_watch, remove_dir_if_exists, rollback_or_fail, watch_error,
+    write_optional_file,
 };
 
 const WATCH_EVENT_RECORD_LIMIT: usize = 500;
@@ -35,6 +44,7 @@ pub(super) struct TryWatchOptions<'a> {
     pub(super) db_path: &'a str,
     pub(super) target: &'a str,
     pub(super) recipe: Option<&'a str>,
+    pub(super) signing_key_path: &'a std::path::Path,
     pub(super) isolated: bool,
     pub(super) json: bool,
 }
@@ -226,6 +236,7 @@ struct WatchCookRequest {
     recipe: Option<String>,
     output_dir: PathBuf,
     source_cache: PathBuf,
+    signing_key_path: PathBuf,
     isolated: bool,
     source_policy: WatchCookSourcePolicy,
     operation_id: String,
@@ -246,6 +257,14 @@ async fn cmd_try_watch_with_output(
     config: WatchLoopConfig,
     output: &mut impl Write,
 ) -> Result<()> {
+    let signing_key =
+        SigningKeyPair::load_from_file(options.signing_key_path).with_context(|| {
+            format!(
+                "failed to load try watch signing key {}",
+                options.signing_key_path.display()
+            )
+        })?;
+    let trust_policy = TrustPolicy::strict(vec![signing_key.public_key_base64()]);
     let operation_id = crate::commands::operation_records::new_operation_id("try-watch");
     let runtime_root = ConaryRuntimeRoot::from_db_path(PathBuf::from(options.db_path));
     let cook_base_dir = runtime_root
@@ -278,7 +297,7 @@ async fn cmd_try_watch_with_output(
         Err(error) => {
             return fail_before_session(
                 events,
-                PackagingPhase::Inference,
+                PackagingPhase::RecipeValidation,
                 PackagingDiagnosticCode::WatchSourceIdentityFailed,
                 "failed to resolve watched sources",
                 error,
@@ -292,7 +311,7 @@ async fn cmd_try_watch_with_output(
         Err(error) => {
             return fail_before_session(
                 events,
-                PackagingPhase::Inference,
+                PackagingPhase::RecipeValidation,
                 PackagingDiagnosticCode::WatchSourceIdentityFailed,
                 "failed to compute watched source identity",
                 error,
@@ -318,6 +337,7 @@ async fn cmd_try_watch_with_output(
                 recipe: options.recipe.map(ToOwned::to_owned),
                 output_dir: initial_output_dir.clone(),
                 source_cache: source_cache.clone(),
+                signing_key_path: options.signing_key_path.to_path_buf(),
                 isolated: options.isolated,
                 source_policy: WatchCookSourcePolicy::Initial,
                 operation_id: operation_id.clone(),
@@ -357,7 +377,7 @@ async fn cmd_try_watch_with_output(
             Err(error) => {
                 return fail_before_session(
                     events,
-                    PackagingPhase::Inference,
+                    PackagingPhase::RecipeValidation,
                     PackagingDiagnosticCode::WatchSourceIdentityFailed,
                     "failed to resolve watched sources after initial cook",
                     error,
@@ -371,7 +391,7 @@ async fn cmd_try_watch_with_output(
             Err(error) => {
                 return fail_before_session(
                     events,
-                    PackagingPhase::Inference,
+                    PackagingPhase::RecipeValidation,
                     PackagingDiagnosticCode::WatchSourceIdentityFailed,
                     "failed to compute watched source identity after initial cook",
                     error,
@@ -398,8 +418,8 @@ async fn cmd_try_watch_with_output(
             let started = match begin_try_session(TryStartRequest {
                 db_path: options.db_path,
                 package_path: &artifact_path,
+                trust_policy: &trust_policy,
                 activate: false,
-                allow_irreversible: false,
                 command: None,
                 watch_marker: Some(TryWatchMarkerRequest {
                     operation_id: &operation_id,
@@ -458,6 +478,7 @@ async fn cmd_try_watch_with_output(
                 cook_base_dir,
                 source_cache,
                 after_source_set,
+                &trust_policy,
                 &mut state,
                 &mut debounce,
                 &mut refresh_count,
@@ -488,6 +509,7 @@ async fn run_refresh_loop(
     cook_base_dir: PathBuf,
     source_cache: PathBuf,
     mut last_source_set: WatchSourceSet,
+    trust_policy: &TrustPolicy,
     state: &mut WatchRefreshState,
     debounce: &mut DebounceState,
     refresh_count: &mut usize,
@@ -551,7 +573,7 @@ async fn run_refresh_loop(
                     emit_diagnostic(
                         events,
                         watch_error(
-                            PackagingPhase::Inference,
+                            PackagingPhase::RecipeValidation,
                             PackagingDiagnosticCode::WatchSourceIdentityFailed,
                             "watched source root is no longer available",
                             &error,
@@ -579,7 +601,7 @@ async fn run_refresh_loop(
                     events,
                     &config,
                     WatchFailure {
-                        phase: PackagingPhase::Inference,
+                        phase: PackagingPhase::RecipeValidation,
                         code: PackagingDiagnosticCode::WatchSourceIdentityFailed,
                         message: "failed to resolve watched sources; keeping last successful generation",
                         error: &error,
@@ -597,7 +619,7 @@ async fn run_refresh_loop(
                     emit_diagnostic(
                         events,
                         watch_error(
-                            PackagingPhase::Inference,
+                            PackagingPhase::RecipeValidation,
                             PackagingDiagnosticCode::WatchSourceIdentityFailed,
                             "watched source root is no longer available",
                             &error,
@@ -625,7 +647,7 @@ async fn run_refresh_loop(
                     events,
                     &config,
                     WatchFailure {
-                        phase: PackagingPhase::Inference,
+                        phase: PackagingPhase::RecipeValidation,
                         code: PackagingDiagnosticCode::WatchSourceIdentityFailed,
                         message: "failed to compute watched source identity; keeping last successful generation",
                         error: &error,
@@ -689,6 +711,7 @@ async fn run_refresh_loop(
                 recipe: options.recipe.map(ToOwned::to_owned),
                 output_dir: output_dir.clone(),
                 source_cache: source_cache.clone(),
+                signing_key_path: options.signing_key_path.to_path_buf(),
                 isolated: options.isolated,
                 source_policy: WatchCookSourcePolicy::Refresh,
                 operation_id: operation_id.clone(),
@@ -743,7 +766,7 @@ async fn run_refresh_loop(
                     events,
                     &config,
                     WatchFailure {
-                        phase: PackagingPhase::Inference,
+                        phase: PackagingPhase::RecipeValidation,
                         code: PackagingDiagnosticCode::WatchSourceIdentityFailed,
                         message: "failed to resolve watched sources after cook; keeping last successful generation",
                         error: &error,
@@ -762,7 +785,7 @@ async fn run_refresh_loop(
                     events,
                     &config,
                     WatchFailure {
-                        phase: PackagingPhase::Inference,
+                        phase: PackagingPhase::RecipeValidation,
                         code: PackagingDiagnosticCode::WatchSourceIdentityFailed,
                         message: "failed to compute watched source identity after cook; keeping last successful generation",
                         error: &error,
@@ -810,6 +833,7 @@ async fn run_refresh_loop(
             session_id: &session_id,
             expected_try_generation_id: state.last_good_generation_id,
             package_path: &artifact_path,
+            trust_policy: &trust_policy,
         }) {
             Ok(refreshed) => refreshed,
             Err(error) => {
@@ -947,10 +971,9 @@ fn run_watch_cook(request: WatchCookRequest) -> Result<PackagingCommandOutput> {
         jobs: None,
         keep_builddir: false,
         isolated: request.isolated,
-        no_isolation: false,
-        hermetic: false,
         source_policy: request.source_policy,
         operation_id: request.operation_id,
+        signing_key_path: Some(&request.signing_key_path),
     })
 }
 
@@ -960,388 +983,9 @@ fn watch_source_cache() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(DEFAULT_WATCH_SOURCE_CACHE))
 }
 
-fn emit_push(
-    events: &mut WatchEvents,
-    phase: PackagingPhase,
-    kind: PackagingEventKind,
-    message: impl Into<String>,
-    json: bool,
-    output: &mut impl Write,
-) -> Result<()> {
-    let event = events.push(phase, kind, message);
-    write_event(&event, json, output)
-}
-
-fn emit_diagnostic(
-    events: &mut WatchEvents,
-    diagnostic: PackagingDiagnostic,
-    json: bool,
-    output: &mut impl Write,
-) -> Result<()> {
-    let event = events.diagnostic(diagnostic);
-    write_event(&event, json, output)
-}
-
-struct WatchFailure<'a> {
-    phase: PackagingPhase,
-    code: PackagingDiagnosticCode,
-    message: &'a str,
-    error: &'a anyhow::Error,
-}
-
-fn emit_non_destructive_failure(
-    events: &mut WatchEvents,
-    config: &WatchLoopConfig,
-    failure: WatchFailure<'_>,
-    json: bool,
-    output: &mut impl Write,
-) -> Result<()> {
-    emit_diagnostic(
-        events,
-        watch_error(failure.phase, failure.code, failure.message, failure.error),
-        json,
-        output,
-    )?;
-    emit_push(
-        events,
-        failure.phase,
-        PackagingEventKind::WatchRefreshFailed,
-        failure.message,
-        json,
-        output,
-    )?;
-    write_optional_file(&config.failure_file, &failure.error.to_string())
-}
-
-fn watch_error(
-    phase: PackagingPhase,
-    code: PackagingDiagnosticCode,
-    message: impl Into<String>,
-    error: &anyhow::Error,
-) -> PackagingDiagnostic {
-    PackagingDiagnostic::error(phase, code, message)
-        .with_evidence(DiagnosticEvidence::log("error", format!("{error:#}")))
-}
-
-fn fail_before_session(
-    mut events: WatchEvents,
-    phase: PackagingPhase,
-    code: PackagingDiagnosticCode,
-    message: &'static str,
-    error: anyhow::Error,
-    json: bool,
-    output: &mut impl Write,
-) -> Result<()> {
-    emit_diagnostic(
-        &mut events,
-        watch_error(phase, code, message, &error),
-        json,
-        output,
-    )?;
-    finish_watch(
-        events,
-        PackagingCommandStatus::Failed,
-        "try watch failed before startup completed",
-        json,
-        output,
-    )?;
-    Err(error)
-}
-
-fn rollback_or_fail(
-    db_path: &str,
-    events: &mut WatchEvents,
-    success_message: &str,
-    json: bool,
-    output: &mut impl Write,
-) -> Result<()> {
-    match rollback_active_try_session(db_path) {
-        Ok(()) => {
-            emit_push(
-                events,
-                PackagingPhase::TrySession,
-                PackagingEventKind::WatchCancelled,
-                success_message,
-                json,
-                output,
-            )?;
-            Ok(())
-        }
-        Err(error) => {
-            emit_diagnostic(
-                events,
-                PackagingDiagnostic::error(
-                    PackagingPhase::TrySession,
-                    PackagingDiagnosticCode::WatchCleanupFailed,
-                    "try watch rollback failed; run `conary try status` and `conary try rollback`",
-                )
-                .with_evidence(DiagnosticEvidence::log(
-                    "rollback error",
-                    format!("{error:#}"),
-                )),
-                json,
-                output,
-            )?;
-            Err(error)
-        }
-    }
-}
-
-fn finish_watch(
-    mut events: WatchEvents,
-    status: PackagingCommandStatus,
-    summary: impl Into<String>,
-    json: bool,
-    output: &mut impl Write,
-) -> Result<()> {
-    let summary = summary.into();
-    let event = events.operation_finished(summary.clone());
-    write_event(&event, json, output)?;
-    let record = events.into_command_output(status, summary);
-    crate::commands::diagnostics::write_packaging_record_if_possible(&record);
-    Ok(())
-}
-
-fn finish_current_events(
-    events: &mut WatchEvents,
-    status: PackagingCommandStatus,
-    summary: impl Into<String>,
-    json: bool,
-    output: &mut impl Write,
-) -> Result<()> {
-    let summary = summary.into();
-    let event = events.operation_finished(summary.clone());
-    write_event(&event, json, output)?;
-    let record = WatchEvents {
-        operation_id: events.operation_id.clone(),
-        next_sequence: events.next_sequence,
-        events: events.events.clone(),
-        diagnostics: events.diagnostics.clone(),
-    }
-    .into_command_output(status, summary);
-    crate::commands::diagnostics::write_packaging_record_if_possible(&record);
-    Ok(())
-}
-
-fn write_event(event: &PackagingEvent, json: bool, output: &mut impl Write) -> Result<()> {
-    if json {
-        output.write_all(
-            crate::commands::diagnostics::render_packaging_event_ndjson(event)?.as_bytes(),
-        )?;
-    } else if let Some(message) = &event.message {
-        writeln!(output, "{message}")?;
-    }
-    Ok(())
-}
-
-fn write_optional_file(path: &Option<PathBuf>, contents: &str) -> Result<()> {
-    if let Some(path) = path {
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("failed to create {}", parent.display()))?;
-        }
-        fs::write(path, contents).with_context(|| format!("failed to write {}", path.display()))?;
-    }
-    Ok(())
-}
-
-fn remove_dir_if_exists(path: &Path) -> Result<()> {
-    if path.exists() {
-        fs::remove_dir_all(path).with_context(|| format!("failed to remove {}", path.display()))?;
-    }
-    Ok(())
-}
-
 fn watched_sources_missing(source_set: &WatchSourceSet) -> bool {
     source_set.local_roots.iter().any(|path| !path.exists())
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use conary_core::diagnostics::{PackagingCommandStatus, PackagingEventKind, PackagingPhase};
-
-    #[test]
-    fn watch_event_builder_assigns_monotonic_sequences() {
-        let mut events = WatchEvents::new("watch-1");
-        let first = events.push(
-            PackagingPhase::TrySession,
-            PackagingEventKind::WatchStarted,
-            "Watching .",
-        );
-        let second = events.push(
-            PackagingPhase::Build,
-            PackagingEventKind::WatchRefreshStarted,
-            "cooking",
-        );
-
-        assert_eq!(first.sequence, 1);
-        assert_eq!(second.sequence, 2);
-        assert_eq!(events.all().len(), 2);
-    }
-
-    #[test]
-    fn watch_record_output_is_bounded_and_redacted() {
-        let mut events = WatchEvents::new("watch-1");
-        for index in 0..505 {
-            events.push(
-                PackagingPhase::Build,
-                PackagingEventKind::WatchRefreshFailed,
-                format!("API_TOKEN=secret event {index}"),
-            );
-        }
-
-        let output = events.into_command_output(PackagingCommandStatus::Failed, "done");
-        assert_eq!(output.events.len(), 500);
-        let rendered = serde_json::to_string(
-            &crate::commands::diagnostics::redacted_packaging_output(&output),
-        )
-        .unwrap();
-        assert!(!rendered.contains("API_TOKEN=secret"), "{rendered}");
-        assert!(
-            rendered.contains("older watch events were omitted"),
-            "{rendered}"
-        );
-    }
-
-    #[test]
-    fn watch_state_suppresses_duplicate_attempt_until_result() {
-        let first = WatchIdentity {
-            digest: "sha256:first".to_string(),
-            file_count: 1,
-        };
-        let mut state = WatchRefreshState::new(first.clone(), 41);
-
-        assert!(
-            !state.should_attempt(&first),
-            "initial successful source snapshot should not rebuild without a change"
-        );
-        let broken = WatchIdentity {
-            digest: "sha256:broken".to_string(),
-            file_count: 1,
-        };
-        assert!(state.should_attempt(&broken));
-        state.record_attempt(broken.clone());
-
-        assert!(
-            !state.should_attempt(&broken),
-            "same source snapshot should not start a duplicate in-flight rebuild"
-        );
-        state.record_failure();
-        assert!(state.should_attempt(&broken));
-        assert!(
-            !state.should_attempt(&first),
-            "returning to the last successful source snapshot is already active"
-        );
-        let changed = WatchIdentity {
-            digest: "sha256:changed".to_string(),
-            file_count: 1,
-        };
-        assert!(state.should_attempt(&changed));
-    }
-
-    #[test]
-    fn watch_state_retries_same_identity_after_failed_attempt() {
-        let first = WatchIdentity {
-            digest: "sha256:first".to_string(),
-            file_count: 1,
-        };
-        let mut state = WatchRefreshState::new(first, 41);
-        let broken = WatchIdentity {
-            digest: "sha256:broken".to_string(),
-            file_count: 1,
-        };
-
-        state.record_attempt(broken.clone());
-        state.record_failure();
-
-        assert!(
-            state.should_attempt(&broken),
-            "failed source snapshots should be retryable after the visible failure"
-        );
-    }
-
-    #[test]
-    fn watched_sources_missing_ignores_recipe_and_auxiliary_files() {
-        let temp = tempfile::tempdir().unwrap();
-        let source_root = temp.path().join("src");
-        std::fs::create_dir_all(&source_root).unwrap();
-        let source_set = WatchSourceSet {
-            mode: super::super::watch_source::WatchSourceMode::ExplicitRecipe,
-            recipe_path: Some(temp.path().join("missing-recipe.toml")),
-            local_roots: vec![source_root.clone()],
-            local_files: vec![temp.path().join("missing.patch")],
-        };
-
-        assert!(
-            !watched_sources_missing(&source_set),
-            "transient recipe, patch, or additional-file disappearance should be non-destructive"
-        );
-
-        std::fs::remove_dir_all(source_root).unwrap();
-        assert!(
-            watched_sources_missing(&source_set),
-            "source root disappearance should still stop the watch session"
-        );
-    }
-
-    #[test]
-    fn debounce_step_resets_deadline_when_identity_changes_before_ready() {
-        let start = Instant::now();
-        let mut debounce = DebounceState::new(Duration::from_millis(750));
-        let success = WatchIdentity {
-            digest: "sha256:success".to_string(),
-            file_count: 1,
-        };
-        let first_change = WatchIdentity {
-            digest: "sha256:first-change".to_string(),
-            file_count: 1,
-        };
-        let second_change = WatchIdentity {
-            digest: "sha256:second-change".to_string(),
-            file_count: 1,
-        };
-        let mut state = WatchRefreshState::new(success, 41);
-
-        assert_eq!(
-            debounce_refresh_identity(&mut state, &mut debounce, first_change, start),
-            DebouncedRefresh::Waiting
-        );
-        assert_eq!(
-            debounce.ready_at(),
-            Some(start + Duration::from_millis(750))
-        );
-
-        assert_eq!(
-            debounce_refresh_identity(
-                &mut state,
-                &mut debounce,
-                second_change.clone(),
-                start + Duration::from_millis(100)
-            ),
-            DebouncedRefresh::Waiting
-        );
-        assert_eq!(
-            debounce.ready_at(),
-            Some(start + Duration::from_millis(850))
-        );
-        assert_eq!(
-            debounce_refresh_identity(
-                &mut state,
-                &mut debounce,
-                second_change.clone(),
-                start + Duration::from_millis(849)
-            ),
-            DebouncedRefresh::Waiting
-        );
-        assert_eq!(
-            debounce_refresh_identity(
-                &mut state,
-                &mut debounce,
-                second_change,
-                start + Duration::from_millis(850)
-            ),
-            DebouncedRefresh::Ready
-        );
-    }
-}
+mod tests;

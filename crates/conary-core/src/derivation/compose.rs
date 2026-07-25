@@ -1,370 +1,333 @@
 // conary-core/src/derivation/compose.rs
 
-//! EROFS composition -- merge multiple package outputs into a single image.
-//!
-//! After derivation builds produce [`OutputManifest`]s, this module composes
-//! their file entries and symlinks into a unified set suitable for
-//! [`build_erofs_image`]. Path conflicts are resolved with last-writer-wins
-//! semantics (later manifests override earlier ones).
+//! Exact generation-root composition from derivation outputs.
 
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
 
-use tracing::warn;
-
 use crate::derivation::output::OutputManifest;
-use crate::generation::builder::{BuildResult, FileEntryRef, SymlinkEntryRef, build_erofs_image};
+use crate::generation::builder::BuildResult;
+use crate::generation::root_manifest::{
+    CapturedSelectedRoot, GENERATION_ROOT_MANIFEST_VERSION, GenerationRootEntry,
+    GenerationRootManifest, MutableStateManifest, RootPathDomain,
+    build_erofs_image_from_root_manifest, classify_root_path,
+};
 use crate::hash::{HashAlgorithm, hash_reader};
+use crate::payload::ResolvedPayloadNode;
 
-/// Errors that can occur during EROFS composition.
+/// Errors that can occur during exact root composition.
 #[derive(Debug, thiserror::Error)]
 pub enum ComposeError {
-    /// No package outputs were provided for composition.
     #[error("empty composition: no package outputs to compose")]
     EmptyComposition,
-
-    /// The EROFS builder returned an error.
+    #[error("invalid output manifest: {0}")]
+    InvalidManifest(String),
+    #[error("invalid composed root: {0}")]
+    InvalidComposition(String),
     #[error("EROFS build error: {0}")]
     Erofs(String),
-
-    /// An I/O operation failed.
     #[error("I/O error: {0}")]
     Io(String),
 }
 
-/// Merge files from multiple [`OutputManifest`]s into a single [`FileEntryRef`] list.
+/// Compose exact output entries with deterministic last-writer-wins semantics.
 ///
-/// Files are keyed by absolute path in a [`BTreeMap`] for deterministic
-/// iteration order. When multiple manifests contain the same path, the entry
-/// from the *last* manifest in the slice wins (last-writer-wins).
-///
-/// Relative paths (those not starting with `/`) are converted to absolute by
-/// prefixing with `/`.
-#[must_use]
-pub fn compose_file_entries(manifests: &[&OutputManifest]) -> Vec<FileEntryRef> {
-    let mut merged: BTreeMap<String, FileEntryRef> = BTreeMap::new();
-
-    for manifest in manifests {
-        for file in &manifest.files {
-            let abs_path = if file.path.starts_with('/') {
-                file.path.clone()
-            } else {
-                format!("/{}", file.path)
-            };
-
-            merged.insert(
-                abs_path.clone(),
-                FileEntryRef {
-                    path: abs_path,
-                    sha256_hash: file.hash.clone(),
-                    size: file.size,
-                    permissions: file.mode,
-                    owner: None,
-                    group_name: None,
-                    xattrs: BTreeMap::new(),
-                },
-            );
-        }
-    }
-
-    merged.into_values().collect()
-}
-
-/// Composed file entries and symlinks from multiple package outputs.
-///
-/// Produced by [`compose_entries`], this struct holds both files and symlinks
-/// ready for [`build_erofs_image`].
-#[derive(Debug, Clone)]
-pub struct ComposedEntries {
-    /// Merged file entries (deduplicated by path, last-writer-wins).
-    pub files: Vec<FileEntryRef>,
-    /// Merged symlink entries (deduplicated by path, last-writer-wins).
-    pub symlinks: Vec<SymlinkEntryRef>,
-}
-
-/// Internal enum for unified path deduplication during composition.
-enum ComposedEntry {
-    File(FileEntryRef),
-    Symlink(SymlinkEntryRef),
-}
-
-/// Merge files AND symlinks from multiple [`OutputManifest`]s.
-///
-/// All entries (files and symlinks) are keyed by absolute path in a single
-/// [`BTreeMap`] for deterministic iteration order and correct cross-type
-/// deduplication. When multiple manifests contain the same path -- even as
-/// different types (file vs symlink) -- the entry from the *last* manifest
-/// wins (last-writer-wins). Cross-type conflicts emit a `tracing::warn`.
-///
-/// Relative paths (those not starting with `/`) are converted to absolute by
-/// prefixing with `/`.
-#[must_use]
-pub fn compose_entries(manifests: &[&OutputManifest]) -> ComposedEntries {
-    let mut merged: BTreeMap<String, ComposedEntry> = BTreeMap::new();
-
-    for manifest in manifests {
-        for file in &manifest.files {
-            let abs_path = if file.path.starts_with('/') {
-                file.path.clone()
-            } else {
-                format!("/{}", file.path)
-            };
-
-            if let Some(ComposedEntry::Symlink(_)) = merged.get(&abs_path) {
-                warn!(
-                    path = %abs_path,
-                    "compose: path was symlink, now overwritten by file"
-                );
-            }
-
-            merged.insert(
-                abs_path.clone(),
-                ComposedEntry::File(FileEntryRef {
-                    path: abs_path,
-                    sha256_hash: file.hash.clone(),
-                    size: file.size,
-                    permissions: file.mode,
-                    owner: None,
-                    group_name: None,
-                    xattrs: BTreeMap::new(),
-                }),
-            );
-        }
-
-        for symlink in &manifest.symlinks {
-            let abs_path = if symlink.path.starts_with('/') {
-                symlink.path.clone()
-            } else {
-                format!("/{}", symlink.path)
-            };
-
-            if let Some(ComposedEntry::File(_)) = merged.get(&abs_path) {
-                warn!(
-                    path = %abs_path,
-                    "compose: path was file, now overwritten by symlink"
-                );
-            }
-
-            merged.insert(
-                abs_path.clone(),
-                ComposedEntry::Symlink(SymlinkEntryRef {
-                    path: abs_path,
-                    target: symlink.target.clone(),
-                }),
-            );
-        }
-    }
-
-    let mut files = Vec::new();
-    let mut symlinks = Vec::new();
-
-    for entry in merged.into_values() {
-        match entry {
-            ComposedEntry::File(f) => files.push(f),
-            ComposedEntry::Symlink(s) => symlinks.push(s),
-        }
-    }
-
-    ComposedEntries { files, symlinks }
-}
-
-/// Compose multiple package outputs into a single EROFS image.
-///
-/// Merges all file entries and symlinks via [`compose_entries`], then delegates
-/// to [`build_erofs_image`] to produce the image at `output_dir/root.erofs`.
-///
-/// # Errors
-///
-/// - [`ComposeError::EmptyComposition`] if `manifests` is empty.
-/// - [`ComposeError::Erofs`] if the EROFS builder fails.
-pub fn compose_erofs(
+/// Paths must already be normalized absolute paths. No mode, identity, xattr,
+/// timestamp, node kind, link target, or content authority is synthesized.
+pub fn compose_entries(
     manifests: &[&OutputManifest],
-    output_dir: &Path,
-) -> Result<BuildResult, ComposeError> {
+) -> Result<Vec<GenerationRootEntry>, ComposeError> {
     if manifests.is_empty() {
         return Err(ComposeError::EmptyComposition);
     }
 
-    let composed = compose_entries(manifests);
+    let mut merged = BTreeMap::<String, GenerationRootEntry>::new();
+    for manifest in manifests {
+        manifest
+            .validate()
+            .map_err(|error| ComposeError::InvalidManifest(error.to_string()))?;
+        for entry in &manifest.entries {
+            if let Some(previous) = merged.get(&entry.path)
+                && std::mem::discriminant(&previous.node.source.kind)
+                    != std::mem::discriminant(&entry.node.source.kind)
+            {
+                tracing::warn!(
+                    path = %entry.path,
+                    previous_kind = ?previous.node.source.kind,
+                    replacement_kind = ?entry.node.source.kind,
+                    "derivation composition replaced a path with a different node kind"
+                );
+            }
+            merged.insert(entry.path.clone(), entry.clone());
+        }
+    }
+    Ok(merged.into_values().collect())
+}
 
-    build_erofs_image(&composed.files, &composed.symlinks, output_dir)
-        .map_err(|e| ComposeError::Erofs(e.to_string()))
+/// Compose current derivation outputs into exact immutable and mutable-state
+/// root manifests.
+///
+/// Ephemeral mount and user-owned domains are deliberately absent from a
+/// persistent generation. Their classification is the typed
+/// [`RootPathDomain`] contract, not a filename heuristic.
+pub fn compose_selected_root(
+    manifests: &[&OutputManifest],
+    root: ResolvedPayloadNode,
+) -> Result<CapturedSelectedRoot, ComposeError> {
+    let entries = compose_entries(manifests)?;
+    let mut immutable = Vec::new();
+    let mut state = Vec::new();
+    for entry in entries {
+        match classify_root_path(&entry.path)
+            .map_err(|error| ComposeError::InvalidComposition(error.to_string()))?
+        {
+            RootPathDomain::Immutable => immutable.push(entry),
+            RootPathDomain::ConfigState | RootPathDomain::MutableState => state.push(entry),
+            RootPathDomain::EphemeralMountOrUser => {}
+        }
+    }
+
+    let captured = CapturedSelectedRoot {
+        generation: GenerationRootManifest {
+            version: GENERATION_ROOT_MANIFEST_VERSION,
+            root,
+            entries: immutable,
+        },
+        state: MutableStateManifest {
+            version: GENERATION_ROOT_MANIFEST_VERSION,
+            entries: state,
+        },
+    };
+    captured
+        .generation
+        .validate()
+        .map_err(|error| ComposeError::InvalidComposition(error.to_string()))?;
+    captured
+        .state
+        .validate()
+        .map_err(|error| ComposeError::InvalidComposition(error.to_string()))?;
+    Ok(captured)
+}
+
+/// Compose only the exact immutable generation-root manifest.
+pub fn compose_generation_root(
+    manifests: &[&OutputManifest],
+    root: ResolvedPayloadNode,
+) -> Result<GenerationRootManifest, ComposeError> {
+    Ok(compose_selected_root(manifests, root)?.generation)
+}
+
+/// Compose multiple package outputs into an exact EROFS generation.
+///
+/// The immutable manifest is the direct EROFS input. The mutable-state
+/// manifest is persisted beside it for later exact reconstruction.
+pub fn compose_erofs(
+    manifests: &[&OutputManifest],
+    root: ResolvedPayloadNode,
+    output_dir: &Path,
+) -> Result<BuildResult, ComposeError> {
+    let captured = compose_selected_root(manifests, root)?;
+    let build = build_erofs_image_from_root_manifest(&captured.generation, output_dir)
+        .map_err(|error| ComposeError::Erofs(error.to_string()))?;
+    captured
+        .state
+        .write_to(output_dir)
+        .map_err(|error| ComposeError::Io(error.to_string()))?;
+    Ok(build)
 }
 
 /// Compute the SHA-256 hash of an EROFS image file.
-///
-/// The returned hex string can be used as `build_env_hash` in derivation
-/// inputs, providing a content-addressed identifier for the composed image.
-///
-/// # Errors
-///
-/// - [`ComposeError::Io`] if the file cannot be read.
 pub fn erofs_image_hash(image_path: &Path) -> Result<String, ComposeError> {
     let file = File::open(image_path)
-        .map_err(|e| ComposeError::Io(format!("{}: {e}", image_path.display())))?;
+        .map_err(|error| ComposeError::Io(format!("{}: {error}", image_path.display())))?;
     let mut reader = BufReader::new(file);
-
     let hash = hash_reader(HashAlgorithm::Sha256, &mut reader)
-        .map_err(|e| ComposeError::Io(format!("{}: {e}", image_path.display())))?;
-
+        .map_err(|error| ComposeError::Io(format!("{}: {error}", image_path.display())))?;
     Ok(hash.value)
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
-    use crate::derivation::output::{OutputFile, OutputManifest, OutputSymlink};
+    use crate::payload::{
+        PayloadContentAuthority, PayloadIdentity, PayloadNode, PayloadNodeKind, PayloadTimestamp,
+    };
 
-    /// Build a minimal `OutputManifest` with the given files and no symlinks.
-    fn manifest_with_files(files: Vec<OutputFile>) -> OutputManifest {
-        OutputManifest {
-            derivation_id: "d".repeat(64),
-            output_hash: "e".repeat(64),
-            hash_version: 1,
-            files,
-            symlinks: vec![],
-            build_duration_secs: 1,
-            built_at: "2026-03-19T00:00:00Z".to_owned(),
+    fn node(kind: PayloadNodeKind, permissions: u32) -> ResolvedPayloadNode {
+        let mode_type = match kind {
+            PayloadNodeKind::Regular { .. } | PayloadNodeKind::Hardlink { .. } => libc::S_IFREG,
+            PayloadNodeKind::Directory => libc::S_IFDIR,
+            PayloadNodeKind::Symlink { .. } => libc::S_IFLNK,
+            PayloadNodeKind::BlockDevice { .. } => libc::S_IFBLK,
+            PayloadNodeKind::CharacterDevice { .. } => libc::S_IFCHR,
+            PayloadNodeKind::Fifo => libc::S_IFIFO,
+            PayloadNodeKind::Socket => libc::S_IFSOCK,
+        };
+        ResolvedPayloadNode {
+            source: PayloadNode {
+                kind,
+                mode: mode_type | permissions,
+                user: PayloadIdentity::Numeric { id: 0 },
+                group: PayloadIdentity::Numeric { id: 0 },
+                mtime: PayloadTimestamp::UNIX_EPOCH,
+                xattrs: BTreeMap::new(),
+            },
+            uid: 0,
+            gid: 0,
         }
     }
 
-    #[test]
-    fn compose_merges_files_from_multiple_outputs() {
-        let m1 = manifest_with_files(vec![OutputFile {
-            path: "/usr/bin/hello".to_owned(),
-            hash: "a".repeat(64),
-            size: 100,
-            mode: 0o755,
-        }]);
-
-        let m2 = manifest_with_files(vec![OutputFile {
-            path: "/usr/lib/libfoo.so".to_owned(),
-            hash: "b".repeat(64),
-            size: 200,
-            mode: 0o644,
-        }]);
-
-        let entries = compose_file_entries(&[&m1, &m2]);
-
-        assert_eq!(entries.len(), 2);
-
-        let paths: Vec<&str> = entries.iter().map(|e| e.path.as_str()).collect();
-        assert!(paths.contains(&"/usr/bin/hello"));
-        assert!(paths.contains(&"/usr/lib/libfoo.so"));
+    fn root() -> ResolvedPayloadNode {
+        node(PayloadNodeKind::Directory, 0o755)
     }
 
-    #[test]
-    fn last_writer_wins_on_path_conflicts() {
-        let m1 = manifest_with_files(vec![OutputFile {
-            path: "/usr/bin/hello".to_owned(),
-            hash: "a".repeat(64),
-            size: 100,
-            mode: 0o755,
-        }]);
-
-        let m2 = manifest_with_files(vec![OutputFile {
-            path: "/usr/bin/hello".to_owned(),
-            hash: "b".repeat(64),
-            size: 200,
-            mode: 0o644,
-        }]);
-
-        let entries = compose_file_entries(&[&m1, &m2]);
-
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].sha256_hash, "b".repeat(64));
-        assert_eq!(entries[0].size, 200);
-        assert_eq!(entries[0].permissions, 0o644);
-    }
-
-    #[test]
-    fn relative_paths_become_absolute() {
-        let m = manifest_with_files(vec![
-            OutputFile {
-                path: "usr/bin/hello".to_owned(),
-                hash: "a".repeat(64),
-                size: 100,
-                mode: 0o755,
-            },
-            OutputFile {
-                path: "/usr/lib/libfoo.so".to_owned(),
-                hash: "b".repeat(64),
-                size: 200,
-                mode: 0o644,
-            },
-        ]);
-
-        let entries = compose_file_entries(&[&m]);
-
-        for entry in &entries {
-            assert!(
-                entry.path.starts_with('/'),
-                "path '{}' should be absolute",
-                entry.path
-            );
+    fn directory(path: &str) -> GenerationRootEntry {
+        GenerationRootEntry {
+            path: path.to_string(),
+            node: node(PayloadNodeKind::Directory, 0o755),
+            content: None,
         }
     }
 
-    #[test]
-    fn deterministic_output_order() {
-        let m = manifest_with_files(vec![
-            OutputFile {
-                path: "/z/last".to_owned(),
-                hash: "c".repeat(64),
-                size: 300,
-                mode: 0o644,
-            },
-            OutputFile {
-                path: "/a/first".to_owned(),
-                hash: "a".repeat(64),
-                size: 100,
-                mode: 0o755,
-            },
-            OutputFile {
-                path: "/m/middle".to_owned(),
-                hash: "b".repeat(64),
-                size: 200,
-                mode: 0o644,
-            },
-        ]);
+    fn regular(path: &str, digest: char) -> GenerationRootEntry {
+        GenerationRootEntry {
+            path: path.to_string(),
+            node: node(
+                PayloadNodeKind::Regular {
+                    hardlink_identity: None,
+                },
+                0o644,
+            ),
+            content: Some(PayloadContentAuthority {
+                sha256: digest.to_string().repeat(64),
+                size: 3,
+            }),
+        }
+    }
 
-        let entries = compose_file_entries(&[&m]);
-
-        let paths: Vec<&str> = entries.iter().map(|e| e.path.as_str()).collect();
-        assert_eq!(paths, vec!["/a/first", "/m/middle", "/z/last"]);
-
-        // Run again to confirm determinism.
-        let entries2 = compose_file_entries(&[&m]);
-        let paths2: Vec<&str> = entries2.iter().map(|e| e.path.as_str()).collect();
-        assert_eq!(paths, paths2);
+    fn manifest(package: &str, entries: Vec<GenerationRootEntry>) -> OutputManifest {
+        OutputManifest::new(
+            package.repeat(64).chars().take(64).collect::<String>(),
+            package,
+            "1",
+            root(),
+            entries,
+            1,
+            "2026-03-19T00:00:00Z".to_string(),
+        )
+        .unwrap()
     }
 
     #[test]
-    fn empty_composition_returns_error() {
-        let empty: Vec<&OutputManifest> = vec![];
-        let result = compose_erofs(&empty, Path::new("/nonexistent"));
+    fn exact_entries_are_merged_in_path_order() {
+        let first = manifest(
+            "a",
+            vec![
+                directory("/usr"),
+                directory("/usr/bin"),
+                regular("/usr/bin/hello", 'a'),
+            ],
+        );
+        let second = manifest(
+            "b",
+            vec![
+                directory("/opt"),
+                regular("/opt/tool", 'b'),
+                directory("/usr"),
+                directory("/usr/bin"),
+            ],
+        );
+        let entries = compose_entries(&[&first, &second]).unwrap();
+        assert_eq!(
+            entries
+                .iter()
+                .map(|entry| entry.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["/opt", "/opt/tool", "/usr", "/usr/bin", "/usr/bin/hello"]
+        );
+        assert_eq!(entries[4].content.as_ref().unwrap().sha256, "a".repeat(64));
+    }
 
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(
-            matches!(err, ComposeError::EmptyComposition),
-            "expected EmptyComposition, got: {err}"
+    #[test]
+    fn last_writer_preserves_full_typed_authority() {
+        let first = manifest(
+            "a",
+            vec![
+                directory("/usr"),
+                directory("/usr/bin"),
+                regular("/usr/bin/hello", 'a'),
+            ],
+        );
+        let mut replacement = regular("/usr/bin/hello", 'b');
+        replacement.node.uid = 42;
+        replacement.node.source.user = PayloadIdentity::Numeric { id: 42 };
+        let second = manifest(
+            "b",
+            vec![
+                directory("/usr"),
+                directory("/usr/bin"),
+                replacement.clone(),
+            ],
+        );
+        let entries = compose_entries(&[&first, &second]).unwrap();
+        let actual = entries
+            .iter()
+            .find(|entry| entry.path == "/usr/bin/hello")
+            .unwrap();
+        assert_eq!(actual, &replacement);
+    }
+
+    #[test]
+    fn composition_splits_typed_publication_domains() {
+        let manifest = manifest(
+            "a",
+            vec![
+                directory("/etc"),
+                regular("/etc/tool.conf", 'a'),
+                directory("/run"),
+                regular("/run/transient", 'b'),
+                directory("/usr"),
+                directory("/usr/bin"),
+                regular("/usr/bin/tool", 'c'),
+            ],
+        );
+        let captured = compose_selected_root(&[&manifest], root()).unwrap();
+        assert_eq!(
+            captured
+                .generation
+                .entries
+                .iter()
+                .map(|entry| entry.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["/usr", "/usr/bin", "/usr/bin/tool"]
+        );
+        assert_eq!(
+            captured
+                .state
+                .entries
+                .iter()
+                .map(|entry| entry.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["/etc", "/etc/tool.conf"]
         );
     }
 
     #[test]
-    fn compose_file_entries_with_no_manifests_returns_empty() {
-        let entries = compose_file_entries(&[]);
-        assert!(entries.is_empty());
-    }
-
-    #[test]
-    fn erofs_image_hash_missing_file() {
-        let result = erofs_image_hash(Path::new("/nonexistent/file.erofs"));
-        assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ComposeError::Io(_)));
+    fn invalid_or_empty_inputs_are_rejected() {
+        assert!(matches!(
+            compose_entries(&[]),
+            Err(ComposeError::EmptyComposition)
+        ));
+        let mut invalid = manifest("a", vec![directory("/usr")]);
+        invalid.output_hash = "f".repeat(64);
+        assert!(matches!(
+            compose_entries(&[&invalid]),
+            Err(ComposeError::InvalidManifest(_))
+        ));
     }
 
     #[test]
@@ -372,175 +335,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("test.erofs");
         std::fs::write(&file, b"fake erofs content").unwrap();
-
         let hash = erofs_image_hash(&file).unwrap();
-
-        assert_eq!(hash.len(), 64, "SHA-256 hex should be 64 chars");
-        assert!(
-            hash.chars().all(|c| c.is_ascii_hexdigit()),
-            "hash should be valid hex"
-        );
-    }
-
-    // ---------------------------------------------------------------
-    // Symlink composition tests
-    // ---------------------------------------------------------------
-
-    /// Build a minimal `OutputManifest` with the given files and symlinks.
-    fn manifest_with_files_and_symlinks(
-        files: Vec<OutputFile>,
-        symlinks: Vec<OutputSymlink>,
-    ) -> OutputManifest {
-        OutputManifest {
-            derivation_id: "d".repeat(64),
-            output_hash: "e".repeat(64),
-            hash_version: 1,
-            files,
-            symlinks,
-            build_duration_secs: 1,
-            built_at: "2026-03-19T00:00:00Z".to_owned(),
-        }
-    }
-
-    #[test]
-    fn compose_includes_symlinks_from_manifests() {
-        let m1 = manifest_with_files_and_symlinks(
-            vec![OutputFile {
-                path: "/usr/lib/libfoo.so".to_owned(),
-                hash: "a".repeat(64),
-                size: 4096,
-                mode: 0o644,
-            }],
-            vec![OutputSymlink {
-                path: "/usr/lib/libfoo.so.1".to_owned(),
-                target: "libfoo.so".to_owned(),
-            }],
-        );
-
-        let m2 = manifest_with_files_and_symlinks(
-            vec![OutputFile {
-                path: "/usr/lib/libbar.so".to_owned(),
-                hash: "b".repeat(64),
-                size: 2048,
-                mode: 0o644,
-            }],
-            vec![OutputSymlink {
-                path: "/usr/lib/libbar.so.2".to_owned(),
-                target: "libbar.so".to_owned(),
-            }],
-        );
-
-        let composed = compose_entries(&[&m1, &m2]);
-
-        assert_eq!(composed.files.len(), 2, "should have 2 files");
-        assert_eq!(composed.symlinks.len(), 2, "should have 2 symlinks");
-
-        let symlink_paths: Vec<&str> = composed.symlinks.iter().map(|s| s.path.as_str()).collect();
-        assert!(symlink_paths.contains(&"/usr/lib/libfoo.so.1"));
-        assert!(symlink_paths.contains(&"/usr/lib/libbar.so.2"));
-
-        let foo_symlink = composed
-            .symlinks
-            .iter()
-            .find(|s| s.path == "/usr/lib/libfoo.so.1")
-            .unwrap();
-        assert_eq!(foo_symlink.target, "libfoo.so");
-    }
-
-    #[test]
-    fn symlink_last_writer_wins() {
-        let m1 = manifest_with_files_and_symlinks(
-            vec![],
-            vec![OutputSymlink {
-                path: "/usr/lib/libfoo.so.1".to_owned(),
-                target: "libfoo.so.1.0".to_owned(),
-            }],
-        );
-
-        let m2 = manifest_with_files_and_symlinks(
-            vec![],
-            vec![OutputSymlink {
-                path: "/usr/lib/libfoo.so.1".to_owned(),
-                target: "libfoo.so.1.1".to_owned(),
-            }],
-        );
-
-        let composed = compose_entries(&[&m1, &m2]);
-
-        assert_eq!(composed.symlinks.len(), 1, "should deduplicate by path");
-        assert_eq!(
-            composed.symlinks[0].target, "libfoo.so.1.1",
-            "last manifest should win"
-        );
-    }
-
-    #[test]
-    fn compose_entries_relative_symlink_paths_become_absolute() {
-        let m = manifest_with_files_and_symlinks(
-            vec![],
-            vec![OutputSymlink {
-                path: "usr/lib/libfoo.so.1".to_owned(),
-                target: "libfoo.so".to_owned(),
-            }],
-        );
-
-        let composed = compose_entries(&[&m]);
-
-        assert_eq!(composed.symlinks.len(), 1);
-        assert!(
-            composed.symlinks[0].path.starts_with('/'),
-            "symlink path '{}' should be absolute",
-            composed.symlinks[0].path
-        );
-    }
-
-    #[test]
-    fn compose_entries_with_no_manifests_returns_empty() {
-        let composed = compose_entries(&[]);
-        assert!(composed.files.is_empty());
-        assert!(composed.symlinks.is_empty());
-    }
-
-    #[test]
-    fn compose_entries_cross_type_conflict_last_writer_wins() {
-        // Case 1: file first, symlink second -- symlink wins.
-        let m_file = manifest_with_files_and_symlinks(
-            vec![OutputFile {
-                path: "/usr/lib/libconflict.so".to_owned(),
-                hash: "a".repeat(64),
-                size: 4096,
-                mode: 0o644,
-            }],
-            vec![],
-        );
-
-        let m_symlink = manifest_with_files_and_symlinks(
-            vec![],
-            vec![OutputSymlink {
-                path: "/usr/lib/libconflict.so".to_owned(),
-                target: "libconflict.so.1".to_owned(),
-            }],
-        );
-
-        let composed = compose_entries(&[&m_file, &m_symlink]);
-
-        assert!(
-            composed.files.is_empty(),
-            "file should be evicted by symlink"
-        );
-        assert_eq!(composed.symlinks.len(), 1);
-        assert_eq!(composed.symlinks[0].path, "/usr/lib/libconflict.so");
-        assert_eq!(composed.symlinks[0].target, "libconflict.so.1");
-
-        // Case 2: symlink first, file second -- file wins.
-        let composed = compose_entries(&[&m_symlink, &m_file]);
-
-        assert!(
-            composed.symlinks.is_empty(),
-            "symlink should be evicted by file"
-        );
-        assert_eq!(composed.files.len(), 1);
-        assert_eq!(composed.files[0].path, "/usr/lib/libconflict.so");
-        assert_eq!(composed.files[0].sha256_hash, "a".repeat(64));
+        assert_eq!(hash.len(), 64);
+        assert!(hash.chars().all(|character| character.is_ascii_hexdigit()));
     }
 }

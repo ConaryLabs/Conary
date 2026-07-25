@@ -67,8 +67,8 @@ pub(crate) fn is_valid_hex_hash(s: &str) -> bool {
 /// Open a database connection for request-time handler work.
 ///
 /// Remi server startup ensures schema readiness before requests are served, so
-/// handler hot paths can use the runtime fast path instead of re-running
-/// migrations on each connection open.
+/// handler hot paths can use the runtime fast path without repeating the
+/// current-schema validation on each connection open.
 pub(crate) fn open_handler_db(
     path: impl AsRef<std::path::Path>,
 ) -> conary_core::Result<Connection> {
@@ -246,8 +246,8 @@ pub fn json_response(json: String, cache_max_age: u32) -> Response {
 
 /// Find a repository configured for the given distro
 ///
-/// Tries `default_strategy_distro` first, then falls back to name matching.
-/// Returns the first match only (used by conversion endpoints and tests).
+/// Requires an exact public profile ID or unambiguous public route and returns
+/// the first declared source.
 // Used by test modules in sparse.rs and index.rs.
 #[allow(dead_code)]
 pub fn find_repository_for_distro(
@@ -260,40 +260,32 @@ pub fn find_repository_for_distro(
 
 /// Find all repositories configured for the given distro
 ///
-/// Returns repos with matching `default_strategy_distro` first,
-/// then any with matching names. Used by the metadata endpoint to
-/// aggregate packages across all repos for a distro (e.g. arch-core + arch-extra).
+/// Uses only the embedded route catalog and persisted typed profile identity.
+/// Repository names and URLs never establish distro authority.
 pub fn find_repositories_for_distro(
     conn: &Connection,
     distro: &str,
 ) -> Result<Vec<Repository>, anyhow::Error> {
+    let profile = conary_core::repository::supported_profiles::profile_by_public_id(distro)
+        .or_else(|| conary_core::repository::supported_profiles::profile_for_remi_route(distro));
+    let profile =
+        profile.ok_or_else(|| anyhow::anyhow!("unsupported public profile or route '{distro}'"))?;
     let repos = Repository::list_enabled(conn)?;
-    let mut matched = Vec::new();
-    let mut seen_ids = std::collections::HashSet::new();
+    Ok(repos
+        .into_iter()
+        .filter(|repository| repository.default_strategy_distro.as_deref() == Some(profile.id()))
+        .collect())
+}
 
-    // First pass: exact match on default_strategy_distro
-    for repo in &repos {
-        if repo.default_strategy_distro.as_deref() == Some(distro) {
-            if let Some(id) = repo.id {
-                seen_ids.insert(id);
-            }
-            matched.push(repo.clone());
-        }
-    }
-
-    // Second pass: name-based matching (skip already matched)
-    for repo in &repos {
-        if let Some(id) = repo.id
-            && seen_ids.contains(&id)
-        {
-            continue;
-        }
-        if repo.name.contains(distro) {
-            matched.push(repo.clone());
-        }
-    }
-
-    Ok(matched)
+/// Return the database identity required to use a repository as persisted
+/// serving authority.
+pub fn require_persisted_repository_id(repository: &Repository) -> anyhow::Result<i64> {
+    repository.id.ok_or_else(|| {
+        anyhow::anyhow!(
+            "repository '{}' was loaded for public serving without a persisted ID",
+            repository.name
+        )
+    })
 }
 
 #[cfg(test)]

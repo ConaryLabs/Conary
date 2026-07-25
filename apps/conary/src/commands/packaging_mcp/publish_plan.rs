@@ -211,10 +211,7 @@ mod tests {
             normalized_static_target: "/tmp/repo".to_string(),
             key_dir_path_when_supplied: Some("/tmp/keys".to_string()),
             state_file_path_when_supplied: None,
-            selected_options: BTreeMap::from([
-                ("refresh".to_string(), serde_json::json!(false)),
-                ("force_reinit".to_string(), serde_json::json!(false)),
-            ]),
+            selected_options: BTreeMap::from([("refresh".to_string(), serde_json::json!(false))]),
             command_risk_projection: "high".to_string(),
             destination_root_key_fingerprint: Some("sha256:root".to_string()),
             destination_package_key_hash: Some("sha256:packages".to_string()),

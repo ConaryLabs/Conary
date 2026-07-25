@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-15
-revision: 3
+last_updated: 2026-07-25
+revision: 6
 summary: Standalone normative contract for the static Conary repository format, publisher behavior, client behavior, and operator key lifecycle
 ---
 
@@ -133,13 +133,47 @@ index.
         {
           "name": "acme-widget",
           "version": "1.4.2",
+          "version_scheme": "conary",
           "release": "1",
           "arch": "x86_64",
           "path": "packages/acme-widget/acme-widget-1.4.2-1-x86_64.ccs",
           "sha256": "30e14955ebf1352266dc2ff8067e68104607e750abb9d3b36582b8af909fcb58",
           "size": 1048576,
           "description": "Widget frobnicator",
-          "dependencies": ["libfoo >= 2.0"]
+          "provides": [
+            {
+              "name": "acme-widget",
+              "kind": "PackageName",
+              "version": "1.4.2",
+              "native_text": null
+            }
+          ],
+          "requirements": [
+            {
+              "kind": "Depends",
+              "behavior": "Hard",
+              "expression": {
+                "operator": "atom",
+                "operands": {
+                  "name": "libfoo",
+                  "capability_kind": "Generic",
+                  "version_constraint": ">= 2.0",
+                  "native_text": null
+                }
+              },
+              "alternatives": [
+                {
+                  "name": "libfoo",
+                  "capability_kind": "Generic",
+                  "version_constraint": ">= 2.0",
+                  "native_text": null
+                }
+              ],
+              "description": null,
+              "native_text": "libfoo >= 2.0"
+            }
+          ],
+          "relations": []
         }
       ]
     }
@@ -155,7 +189,7 @@ Field rules:
   generated in the same publish (§5.3). Clients enforce the equality only;
   rollback protection is inherited from TUF targets-version monotonicity,
   so no separate `index_version` history is kept. The field exists because
-  the legacy client shape (`RepositoryMetadata.version`) is a free-form
+  the generic JSON repository shape (`RepositoryMetadata.version`) is a free-form
   string with no monotonicity guarantee, and the equality check is what
   binds the parsed index to the verified TUF state.
 - `generated`: RFC 3339 UTC; informational only — clients MUST NOT make
@@ -164,6 +198,12 @@ Field rules:
   repo; clients MUST ignore unknown package-entry fields after verification.
 - Package entries: `name`, `version`, `release`, `arch` are required and
   MUST match the artifact filename `<name>-<version>-<release>-<arch>.ccs`.
+  `version_scheme` is required and selects the exact comparison grammar for
+  the package, its versioned provides, and its requirement constraints.
+  `conary` is Semantic Versioning 2.0.0; `rpm`, `debian`, and `arch` use the
+  native RPM EVR, Debian policy, and ALPM grammars and orderings respectively.
+  Invalid versions and cross-scheme comparisons MUST be rejected rather than
+  assigned a fallback ordering.
   `arch` values follow `uname -m` (`x86_64`, `aarch64`, `riscv64`) or
   `noarch`. `sha256` is bare lowercase hex of the `.ccs` file; `size` in
   bytes. The example hash/size pair above is the SHA-256 of a 1 MiB
@@ -174,8 +214,23 @@ Field rules:
   contains percent-encoded sequences decoding to `/` or `..` (a naive
   `..`-substring check both misses encoded traversals and false-positives on
   names like `foo..bar`).
-  `description` and `dependencies` are optional; dependency strings use the
-  CCS manifest dependency syntax.
+  `description` is optional. `provides`, `requirements`, and `relations` are
+  required typed arrays, even when empty. `provides` MUST contain exactly one
+  `PackageName` self-provide whose name and version match the package entry.
+  A publisher MUST project capability kinds from the verified CCS authority
+  document or manifest field that declared them. It MUST NOT infer `File`,
+  `Soname`, `Virtual`, or any other kind from punctuation, path shape, or a
+  curated name list.
+  `requirements[].expression` is the resolution authority;
+  `requirements[].alternatives` is a clause index and MUST exactly match the
+  expression's atoms. String-valued `dependencies` are not part of this
+  contract and clients reject indexes that omit the typed fields.
+  `requirements` admits positive `Depends`, `PreDepends`, `Optional`, and
+  `Build` groups. `relations` carries the distinct typed `Conflict`, `Breaks`,
+  `Replace`, and `Obsolete` authority; a producer or client MUST reject those
+  kinds in `requirements` and positive kinds in `relations`. The publisher
+  MUST reject a CCS dependency carrying target or component selectors until
+  this schema has an exact field for those selectors.
 
 Consistency invariants (publisher MUST enforce, client MUST check on use):
 
@@ -188,7 +243,8 @@ Consistency invariants (publisher MUST enforce, client MUST check on use):
 Mapping note (M1a client work, non-normative): index entries map onto the
 existing client model `repository/metadata.rs::PackageMetadata` as
 name→name, version→version, arch→architecture, sha256→checksum,
-size→size, `<repo-url>/<path>`→download_url, dependencies→dependencies;
+size→size, `<repo-url>/<path>`→download_url; typed provides and requirement
+groups map to the normalized repository capability tables;
 `release` rides alongside; `delta_from`/`security_advisory` are absent in
 static-repo v1.
 
@@ -284,8 +340,9 @@ Field rules:
 - `comment`: optional human-readable text; clients ignore it.
 
 Clients import package keys into the repo's package trust policy only after
-TUF verification of this file (§6.2), and verify installed packages with
-`allow_unsigned = false` for static repos.
+TUF verification of this file (§6.2), and verify installed packages with the
+exact TUF-authorized package keys. Unsigned packages and signatures from keys
+absent from the verified key set fail closed; there is no unsigned override.
 
 Authority is **flat** in v1: every listed key may sign any package in the
 repo (no per-path constraint until TUF delegations, v2). Operators SHOULD
@@ -320,27 +377,23 @@ watermark only gates regressions and never derives the next version.
 1. Fetch `metadata/timestamp.json`, `metadata/snapshot.json`,
    `metadata/targets.json`, `metadata/root.json` from the destination.
 2. All absent → initial publish (§5.2). Partially absent → destination is
-   damaged; refuse unless `--force-reinit` (which re-runs §5.2 and is loud
-   about it).
+   damaged; refuse. Recovery must restore the existing signed metadata, or
+   the operator must choose a new empty destination for a new identity.
 3. Verify fetched metadata with the operator's own public keys (the
    operator trusts their own repo; this check catches destination
    tampering/corruption before building on top of it). Verification
-   failure → hard error, never silently re-sign. The one explicit override is
-   `--force-reinit` for a destination that still contains old metadata but is
-   intentionally becoming a new repo identity after root-key loss (§7.4);
-   this MUST print that clients will hard-fail until they run reset-trust and
-   re-pin the new repo fingerprint, then re-run §5.2.
+   failure → hard error, never silently re-sign or reinterpret the destination
+   as a new identity.
 4. Compare destination versions against the local version watermark
    (`~/.config/conary/keys/<repo-name>/last-published.toml`, or the
    `--state-file <path>` override for CI). Destination versions **lower**
    than the watermark → hard error naming both (a compromised or rolled-back
    destination is replaying old signed state; re-signing on top would
-   launder the rollback into fresh signatures). `--accept-destination-state`
-   overrides, loudly. A missing watermark (first publish from this machine)
-   skips the check with a notice. Version regression implies **content**
-   regression too: a publisher rebuilding from a rolled-back index would
-   silently drop packages published in the hidden versions — the watermark
-   gate is what prevents that, which is why overriding it is loud.
+   launder the rollback into fresh signatures). There is no publisher
+   override. A missing watermark (first publish from this machine) skips the
+   check with a notice. Version regression implies **content** regression too:
+   a publisher rebuilding from a rolled-back index would silently drop
+   packages published in the hidden versions.
 5. **Single-writer rule:** concurrent publishes to one destination are
    unsupported and MUST fail rather than interleave (two writers can both
    derive version N+1 and clobber each other). Where the backend supports
@@ -470,12 +523,11 @@ for a future v2 consistent-snapshot upgrade.
 
 1. Probe `<url>/conary-repo.toml`. Present → static repo flow (below).
    Absent → existing repo-type flows; not this spec.
-2. Static repos use TUF exclusively. Enforcement is two-stage because
-   static-ness isn't knowable at parse time: clap conflict rules reject
-   GPG flags (`--gpg-key`, `--no-gpg-check`, `--gpg-strict`) combined with
-   `--fingerprint`; and after the probe identifies a static repo, command
-   execution rejects any GPG flags that were passed without
-   `--fingerprint`.
+2. Static repos use TUF exclusively. Because static-ness is not known until
+   the identity probe succeeds, command execution rejects every native
+   repository trust option (`--debian-release-key`, the RPM metadata/package
+   authority options, and the Arch keyring/SigLevel options) when the probe
+   identifies a static repository.
 3. Fetch `<url>/metadata/root.json`; parse as `Signed<RootMetadata>`;
    verify self-signed (root-role threshold met by its own keys) and
    unexpired.
@@ -497,12 +549,11 @@ for a future v2 consistent-snapshot upgrade.
      casual/first-look use. "Non-interactive" is defined: stdin is not a
      terminal, or `CONARY_NON_INTERACTIVE=1` is set.
 6. Persist: repository row with `tuf_enabled = true`,
-   `tuf_root_url = <url>/metadata`, `gpg_check = false`,
-   `gpg_strict = false`, and `gpg_key_url = NULL`; bootstrap the verified
-   root via the existing `TufClient::bootstrap` path (persists root, role
-   keys, pinned versions). Static repo install/sync paths MUST use TUF
-   metadata plus CCS package signatures only; legacy GPG state is disabled,
-   not merely ignored by convention.
+   `tuf_root_url = <url>/metadata`, and `trust_policy_json = NULL`; bootstrap
+   the verified root via the existing `TufClient::bootstrap` path (persists
+   root, role keys, pinned versions). Static repo install/sync paths MUST use
+   TUF metadata plus CCS package signatures only. Native repository trust
+   state is absent rather than disabled by a boolean bypass.
 
 ### 6.2 Update (sync)
 
@@ -639,7 +690,7 @@ publishes.
 | Lost                  | Recoverable? | Procedure |
 |-----------------------|--------------|-----------|
 | publish key (root ok) | Yes          | §7.2 publish-key rotation |
-| root key              | No           | New repo identity: re-run ceremony (§5.2, via `--force-reinit` if old destination metadata remains) with new keys; clients hard-fail until each runs `conary repo reset-trust` plus one of the explicit §6.5 re-pin paths with the new repo fingerprint |
+| root key              | No           | Create a new empty destination and re-run ceremony (§5.2) with new keys; never overwrite the unverifiable old destination. Clients hard-fail until each runs `conary repo reset-trust` plus one of the explicit §6.5 re-pin paths with the new repo fingerprint |
 | both                  | No           | Same as root loss |
 
 The spec deliberately provides no root-loss escape hatch that skips

@@ -1,18 +1,16 @@
 // apps/conary/src/commands/query/scripts.rs
-//! Scriptlet inspection and passive legacy scriptlet bundle rendering.
+//! Scriptlet inspection and passive native lifecycle bundle rendering.
 
 use anyhow::{Context, Result, bail};
 use conary_core::ccs::CcsPackage;
-use conary_core::ccs::legacy_scriptlets::{
-    DecisionCounts, LegacyScriptletBundle, LegacyScriptletEntry, ScriptletEffect,
-    UnknownCommandEvidence,
-};
-use conary_core::db::models::{InstalledLegacyScriptletBundle, ScriptletEntry, Trove};
+use conary_core::ccs::archive_reader::inspect_untrusted_ccs_archive;
+use conary_core::ccs::native_lifecycle::{NativeLifecycleBundle, NativeLifecycleEntry};
+use conary_core::ccs::verify::{TrustPolicy, verify_package};
+use conary_core::db::models::{InstalledCcsRemoveHook, InstalledNativeLifecycleBundle, Trove};
 use conary_core::packages::PackageFormat;
 use conary_core::packages::arch::ArchPackage;
 use conary_core::packages::deb::DebPackage;
 use conary_core::packages::rpm::RpmPackage;
-use conary_core::packages::traits::ScriptletPhase;
 use serde::Serialize;
 use std::path::Path;
 
@@ -29,6 +27,7 @@ pub struct ScriptQueryOptions {
     pub verbose: bool,
     pub entry: Option<String>,
     pub json: bool,
+    pub policy_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -50,27 +49,23 @@ struct ScriptQueryReport {
     bundle_present: bool,
     bundle: Option<BundleQuerySummary>,
     entries: Vec<EntryQuerySummary>,
-    warnings: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
 struct InstalledScriptQueryReport {
     package: InstalledPackageQueryIdentity,
-    flattened_scriptlets: Vec<FlattenedScriptletQuerySummary>,
+    ccs_remove_hook: Option<CcsRemoveHookQuerySummary>,
     bundle_present: bool,
     bundle: Option<BundleQuerySummary>,
     entries: Vec<EntryQuerySummary>,
-    warnings: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
-struct FlattenedScriptletQuerySummary {
+struct CcsRemoveHookQuerySummary {
     source: String,
-    phase: String,
     interpreter: String,
-    flags: Option<String>,
-    package_format: String,
-    content_sha256: String,
+    reversible: Option<bool>,
+    script_sha256: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -84,15 +79,7 @@ struct BundleQuerySummary {
     source_arch: Option<String>,
     source_package: String,
     source_version: String,
-    target_compatibility: String,
-    foreign_replay_policy: String,
-    publication_policy: String,
-    publication_status: String,
     scriptlet_fidelity: String,
-    decision_counts: DecisionCounts,
-    unsupported_class_counts: std::collections::BTreeMap<String, u32>,
-    adapter_registry_digest: Option<String>,
-    target_policy_digest: Option<String>,
     evidence_digest: Option<String>,
 }
 
@@ -107,29 +94,9 @@ struct EntryQuerySummary {
     body_sha256: String,
     body_encoding: String,
     timeout_ms: u64,
-    decision: String,
-    reason_code: String,
-    human_reason: Option<String>,
     evidence_digest: Option<String>,
     source_evidence_refs: Vec<String>,
-    effects: Vec<EffectQuerySummary>,
-    unknown_command_evidence: Vec<UnknownCommandEvidence>,
-    blocked_classes: Vec<String>,
     reserved_metadata: ReservedMetadataSummary,
-}
-
-#[derive(Debug, Serialize)]
-struct EffectQuerySummary {
-    kind: String,
-    source: String,
-    confidence: String,
-    replacement: String,
-    adapter_id: Option<String>,
-    adapter_digest: Option<String>,
-    command: Option<String>,
-    args: Vec<String>,
-    path: Option<String>,
-    reason_code: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -137,7 +104,8 @@ struct ReservedMetadataSummary {
     rpm_trigger: bool,
     deb_maintainer: bool,
     arch_install: bool,
-    residual_replay: bool,
+    arch_hook: bool,
+    residual_lifecycle: bool,
 }
 
 pub async fn cmd_scripts(package_path: &str) -> Result<()> {
@@ -148,13 +116,6 @@ pub async fn cmd_scripts_with_options(
     package_path: &str,
     options: ScriptQueryOptions,
 ) -> Result<()> {
-    if package_path.ends_with(".ccs") {
-        let package = CcsPackage::parse(package_path).map_err(|error| {
-            anyhow::anyhow!("failed to parse CCS package '{package_path}': {error}")
-        })?;
-        return print_ccs_scriptlet_bundle(&package, &options);
-    }
-
     if !looks_like_package_file(package_path)
         && let Some(db_path) = options.db_path.as_deref()
     {
@@ -164,20 +125,36 @@ pub async fn cmd_scripts_with_options(
     let native_result = detect_package_format(package_path);
     match native_result {
         Ok(format) => print_native_scriptlets(package_path, format, &options),
-        Err(native_error) => match CcsPackage::parse(package_path) {
-            Ok(package) => print_ccs_scriptlet_bundle(&package, &options),
-            Err(_) => Err(native_error),
-        },
+        Err(native_error) => {
+            let package = load_verified_ccs_package(package_path, &options)
+                .with_context(|| format!("native package detection failed: {native_error}"))?;
+            print_ccs_scriptlet_bundle(&package, &options)
+        }
     }
 }
 
+fn load_verified_ccs_package(
+    package_path: &str,
+    options: &ScriptQueryOptions,
+) -> Result<CcsPackage> {
+    let file = std::fs::File::open(package_path)
+        .with_context(|| format!("open package file {package_path}"))?;
+    inspect_untrusted_ccs_archive(file)
+        .with_context(|| format!("{package_path} is not a current signed CCS v2 archive"))?;
+    let policy_path = options
+        .policy_path
+        .as_deref()
+        .with_context(|| format!("CCS package inspection requires --policy for {package_path}"))?;
+    let policy = TrustPolicy::from_file(Path::new(policy_path))
+        .with_context(|| format!("load CCS trust policy {policy_path}"))?;
+    let verified = verify_package(Path::new(package_path), &policy)
+        .with_context(|| format!("verify CCS package authority for {package_path}"))?;
+    CcsPackage::from_verified_archive(package_path, &verified)
+        .with_context(|| format!("open verified CCS package {package_path}"))
+}
+
 fn looks_like_package_file(package_path: &str) -> bool {
-    let lower = package_path.to_ascii_lowercase();
-    Path::new(package_path).exists()
-        || lower.ends_with(".ccs")
-        || lower.ends_with(".rpm")
-        || lower.ends_with(".deb")
-        || lower.contains(".pkg.tar")
+    Path::new(package_path).is_file()
 }
 
 fn print_ccs_scriptlet_bundle(package: &CcsPackage, options: &ScriptQueryOptions) -> Result<()> {
@@ -185,7 +162,7 @@ fn print_ccs_scriptlet_bundle(package: &CcsPackage, options: &ScriptQueryOptions
         name: package.manifest().package.name.clone(),
         version: package.manifest().package.version.clone(),
     };
-    let bundle = package.manifest().legacy_scriptlets.as_ref();
+    let bundle = package.manifest().native_lifecycle.as_ref();
 
     let output = if options.json {
         render_ccs_bundle_json(&identity, bundle, options)?
@@ -202,7 +179,7 @@ fn print_native_scriptlets(
     options: &ScriptQueryOptions,
 ) -> Result<()> {
     if options.json || options.entry.is_some() {
-        bail!("--json and --entry are only available for CCS legacy scriptlet bundles");
+        bail!("--json and --entry are only available for CCS native lifecycle bundles");
     }
 
     let package: Box<dyn PackageFormat> = match format {
@@ -211,7 +188,7 @@ fn print_native_scriptlets(
         PackageFormatType::Arch => Box::new(ArchPackage::parse(package_path)?),
     };
 
-    let scriptlets = package.scriptlets();
+    let scriptlets = package.native_scriptlet_abi();
 
     if scriptlets.is_empty() {
         crate::ui::note(&format!(
@@ -227,26 +204,25 @@ fn print_native_scriptlets(
     println!();
 
     for scriptlet in scriptlets {
-        let phase_name = match scriptlet.phase {
-            ScriptletPhase::PreInstall => "pre-install",
-            ScriptletPhase::PostInstall => "post-install",
-            ScriptletPhase::PreRemove => "pre-remove",
-            ScriptletPhase::PostRemove => "post-remove",
-            ScriptletPhase::PreUpgrade => "pre-upgrade",
-            ScriptletPhase::PostUpgrade => "post-upgrade",
-            ScriptletPhase::PreTransaction => "pre-transaction",
-            ScriptletPhase::PostTransaction => "post-transaction",
-            ScriptletPhase::Trigger => "trigger",
-        };
-
-        println!("=== {} ===", phase_name);
-        println!("Interpreter: {}", scriptlet.interpreter);
-        if let Some(flags) = &scriptlet.flags {
-            println!("Flags: {}", flags);
+        println!("=== {} ===", scriptlet.native_slot);
+        println!("Lifecycle: {:?}", scriptlet.primary_lifecycle);
+        if let Some(interpreter) = &scriptlet.interpreter {
+            println!("Interpreter: {}", interpreter);
+        }
+        if !scriptlet.interpreter_args.is_empty() {
+            println!("Arguments: {}", scriptlet.interpreter_args.join(" "));
         }
         println!("---");
-        for line in scriptlet.content.lines() {
-            println!("{}", line);
+        if let Some(text) = &scriptlet.body.text {
+            for line in text.lines() {
+                println!("{}", line);
+            }
+        } else {
+            println!(
+                "<binary body: {} bytes, {}>",
+                scriptlet.body.bytes.len(),
+                scriptlet.body.sha256
+            );
         }
         println!("---");
         println!();
@@ -267,26 +243,26 @@ fn print_installed_scriptlets(
         options.architecture.clone(),
     );
     let resolved = resolve_installed_package(&conn, &selector)?;
-    let flattened = ScriptletEntry::find_by_trove(&conn, resolved.trove_id)?;
-    let installed_bundle = InstalledLegacyScriptletBundle::find_by_trove(&conn, resolved.trove_id)?
+    let ccs_remove_hook = InstalledCcsRemoveHook::find_by_trove(&conn, resolved.trove_id)?;
+    let installed_bundle = InstalledNativeLifecycleBundle::find_by_trove(&conn, resolved.trove_id)?
         .map(|installed| {
             installed
                 .bundle()
-                .context("installed legacy scriptlet bundle cannot be decoded")
+                .context("installed native lifecycle bundle cannot be decoded")
         })
         .transpose()?;
 
     let output = if options.json {
         render_installed_scripts_json(
             &resolved.trove,
-            &flattened,
+            ccs_remove_hook.as_ref(),
             installed_bundle.as_ref(),
             options,
         )?
     } else {
         render_installed_scripts_text(
             &resolved.trove,
-            &flattened,
+            ccs_remove_hook.as_ref(),
             installed_bundle.as_ref(),
             options,
         )?
@@ -297,8 +273,8 @@ fn print_installed_scriptlets(
 
 fn render_installed_scripts_text(
     trove: &Trove,
-    flattened: &[ScriptletEntry],
-    bundle: Option<&LegacyScriptletBundle>,
+    ccs_remove_hook: Option<&InstalledCcsRemoveHook>,
+    bundle: Option<&NativeLifecycleBundle>,
     options: &ScriptQueryOptions,
 ) -> Result<String> {
     let mut output = String::new();
@@ -308,41 +284,37 @@ fn render_installed_scripts_text(
         trove.version,
         trove.architecture.as_deref().unwrap_or("none")
     ));
-    output.push_str(&format!(
-        "Flattened native scriptlets (scriptlets table): {}\n",
-        flattened.len()
-    ));
-    for scriptlet in flattened {
+    if let Some(hook) = ccs_remove_hook {
         output.push_str(&format!(
-            "  {:<16} source=scriptlets package_format={} interpreter={}\n",
-            scriptlet.phase, scriptlet.package_format, scriptlet.interpreter
+            "Installed CCS remove hook (installed_ccs_remove_hooks): present\n  pre-remove       source=installed_ccs_remove_hooks interpreter=/bin/sh reversible={}\n",
+            hook.reversible
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "unspecified".to_string())
         ));
         if options.verbose {
-            if let Some(flags) = &scriptlet.flags {
-                output.push_str(&format!("    flags={flags}\n"));
-            }
             output.push_str(&format!(
-                "    content_sha256={}\n",
-                conary_core::hash::sha256_prefixed(scriptlet.content.as_bytes())
+                "    script_sha256={}\n",
+                conary_core::hash::sha256_prefixed(hook.script.as_bytes())
             ));
         }
+    } else {
+        output.push_str("Installed CCS remove hook (installed_ccs_remove_hooks): none\n");
     }
 
     let Some(bundle) = bundle else {
         if let Some(entry_id) = &options.entry {
-            bail!("legacy scriptlet bundle entry '{entry_id}' not found: package has no bundle");
+            bail!("native lifecycle bundle entry '{entry_id}' not found: package has no bundle");
         }
-        output
-            .push_str("Installed legacy bundle entries (installed_legacy_scriptlet_bundles): 0\n");
+        output.push_str("Installed native lifecycle entries: 0\n");
         return Ok(output);
     };
 
     let entries = filtered_entries(bundle, options.entry.as_deref())?;
     output.push_str(&format!(
-        "Installed legacy bundle entries (installed_legacy_scriptlet_bundles): {}\n",
+        "Installed native lifecycle entries: {}\n",
         bundle.entries.len()
     ));
-    output.push_str(&format!("Legacy scriptlet bundle: {}\n", bundle.schema));
+    output.push_str(&format!("Native lifecycle bundle: {}\n", bundle.schema));
     output.push_str(&format!(
         "Fidelity: {}\n",
         bundle.scriptlet_fidelity.as_str()
@@ -350,11 +322,9 @@ fn render_installed_scripts_text(
 
     for entry in entries {
         output.push_str(&format!(
-            "  {:<18} source=installed_legacy_scriptlet_bundles decision={} lifecycle={} reason={}\n",
+            "  {:<18} source=installed_native_lifecycle_bundles lifecycle={}\n",
             entry.id,
-            entry.decision.as_str(),
-            entry.phase.as_str(),
-            entry.reason_code
+            entry.phase.as_str()
         ));
         if options.verbose {
             output.push_str(&format!("    Interpreter: {}\n", entry.interpreter));
@@ -383,24 +353,23 @@ fn render_installed_scripts_text(
 
 fn render_installed_scripts_json(
     trove: &Trove,
-    flattened: &[ScriptletEntry],
-    bundle: Option<&LegacyScriptletBundle>,
+    ccs_remove_hook: Option<&InstalledCcsRemoveHook>,
+    bundle: Option<&NativeLifecycleBundle>,
     options: &ScriptQueryOptions,
 ) -> Result<String> {
-    let (bundle_summary, entries, warnings) = if let Some(bundle) = bundle {
+    let (bundle_summary, entries) = if let Some(bundle) = bundle {
         (
             Some(bundle_summary(bundle)),
             filtered_entries(bundle, options.entry.as_deref())?
                 .into_iter()
                 .map(entry_summary)
                 .collect(),
-            collect_warnings(bundle),
         )
     } else {
         if let Some(entry_id) = &options.entry {
-            bail!("legacy scriptlet bundle entry '{entry_id}' not found: package has no bundle");
+            bail!("native lifecycle bundle entry '{entry_id}' not found: package has no bundle");
         }
-        (None, Vec::new(), Vec::new())
+        (None, Vec::new())
     };
 
     let report = InstalledScriptQueryReport {
@@ -409,11 +378,10 @@ fn render_installed_scripts_json(
             version: trove.version.clone(),
             architecture: trove.architecture.clone(),
         },
-        flattened_scriptlets: flattened.iter().map(flattened_summary).collect(),
+        ccs_remove_hook: ccs_remove_hook.map(ccs_remove_hook_summary),
         bundle_present: bundle.is_some(),
         bundle: bundle_summary,
         entries,
-        warnings,
     };
 
     serde_json::to_string_pretty(&report).context("failed to serialize installed script query JSON")
@@ -421,15 +389,15 @@ fn render_installed_scripts_json(
 
 fn render_ccs_bundle_text(
     package: &PackageQueryIdentity,
-    bundle: Option<&LegacyScriptletBundle>,
+    bundle: Option<&NativeLifecycleBundle>,
     options: &ScriptQueryOptions,
 ) -> Result<String> {
     let Some(bundle) = bundle else {
         if let Some(entry_id) = &options.entry {
-            bail!("legacy scriptlet bundle entry '{entry_id}' not found: package has no bundle");
+            bail!("native lifecycle bundle entry '{entry_id}' not found: package has no bundle");
         }
         return Ok(format!(
-            "Package: {} {}\nNo legacy scriptlet bundle found.\n",
+            "Package: {} {}\nNo native lifecycle bundle found.\n",
             package.name, package.version
         ));
     };
@@ -437,7 +405,7 @@ fn render_ccs_bundle_text(
     let entries = filtered_entries(bundle, options.entry.as_deref())?;
     let mut output = String::new();
     output.push_str(&format!("Package: {} {}\n", package.name, package.version));
-    output.push_str(&format!("Legacy scriptlet bundle: {}\n", bundle.schema));
+    output.push_str(&format!("Native lifecycle bundle: {}\n", bundle.schema));
     output.push_str(&format!(
         "Source: {}{}{}{}\n",
         bundle.source_format.as_str(),
@@ -446,35 +414,19 @@ fn render_ccs_bundle_text(
         optional_prefixed(" ", bundle.source_arch.as_deref())
     ));
     output.push_str(&format!(
-        "Compatibility: {}\nForeign replay: {}\nFidelity: {}\n",
-        bundle.target_compatibility.as_str(),
-        bundle.foreign_replay_policy.as_str(),
+        "Fidelity: {}\n",
         bundle.scriptlet_fidelity.as_str()
     ));
-    output.push_str(&format!(
-        "Entries: {} replaced, {} legacy, {} blocked, {} review\n",
-        bundle.decision_counts.replaced,
-        bundle.decision_counts.legacy,
-        bundle.decision_counts.blocked,
-        bundle.decision_counts.review
-    ));
+    output.push_str(&format!("Native entries: {}\n", bundle.entries.len()));
     output.push('\n');
 
     if bundle.entries.is_empty() {
-        output.push_str(
-            "No legacy scriptlet entries. This package does not require native scriptlet replay.\n",
-        );
+        output.push_str("No native lifecycle entries.\n");
         return Ok(output);
     }
 
     for entry in entries {
-        output.push_str(&format!(
-            "{:<18} {:<9} {:<16} reason={}\n",
-            entry.id,
-            entry.decision.as_str(),
-            entry.phase.as_str(),
-            entry.reason_code
-        ));
+        output.push_str(&format!("{:<18} {:<16}\n", entry.id, entry.phase.as_str()));
 
         if options.verbose {
             output.push_str(&format!("  Interpreter: {}\n", entry.interpreter));
@@ -493,45 +445,6 @@ fn render_ccs_bundle_text(
             if let Some(evidence_digest) = &entry.evidence_digest {
                 output.push_str(&format!("  evidence_digest={evidence_digest}\n"));
             }
-            if !entry.unknown_command_evidence.is_empty() {
-                output.push_str("  Unknown command evidence:\n");
-                for evidence in &entry.unknown_command_evidence {
-                    let argv = if evidence.argv.is_empty() {
-                        String::new()
-                    } else {
-                        format!(" {}", evidence.argv.join(" "))
-                    };
-                    output.push_str(&format!(
-                        "    - {}{} phase={} context={}\n",
-                        evidence.command,
-                        argv,
-                        evidence.phase.as_deref().unwrap_or("unknown"),
-                        evidence.execution_context.as_str()
-                    ));
-                }
-            }
-            if !entry.blocked_classes.is_empty() {
-                output.push_str(&format!(
-                    "  Blocked classes: {}\n",
-                    entry.blocked_classes.join(", ")
-                ));
-            }
-            if !entry.effects.is_empty() {
-                output.push_str("  Effects:\n");
-                for effect in &entry.effects {
-                    output.push_str(&format!(
-                        "    - {} replacement={} source={} confidence={}",
-                        effect.kind,
-                        effect.replacement.as_str(),
-                        effect.source.as_str(),
-                        effect.confidence.as_str()
-                    ));
-                    if let Some(adapter_id) = &effect.adapter_id {
-                        output.push_str(&format!(" adapter={adapter_id}"));
-                    }
-                    output.push('\n');
-                }
-            }
         }
     }
 
@@ -540,23 +453,22 @@ fn render_ccs_bundle_text(
 
 fn render_ccs_bundle_json(
     package: &PackageQueryIdentity,
-    bundle: Option<&LegacyScriptletBundle>,
+    bundle: Option<&NativeLifecycleBundle>,
     options: &ScriptQueryOptions,
 ) -> Result<String> {
-    let (bundle_summary, entries, warnings) = if let Some(bundle) = bundle {
+    let (bundle_summary, entries) = if let Some(bundle) = bundle {
         (
             Some(bundle_summary(bundle)),
             filtered_entries(bundle, options.entry.as_deref())?
                 .into_iter()
                 .map(entry_summary)
                 .collect(),
-            collect_warnings(bundle),
         )
     } else {
         if let Some(entry_id) = &options.entry {
-            bail!("legacy scriptlet bundle entry '{entry_id}' not found: package has no bundle");
+            bail!("native lifecycle bundle entry '{entry_id}' not found: package has no bundle");
         }
-        (None, Vec::new(), Vec::new())
+        (None, Vec::new())
     };
 
     let report = ScriptQueryReport {
@@ -564,23 +476,22 @@ fn render_ccs_bundle_json(
         bundle_present: bundle.is_some(),
         bundle: bundle_summary,
         entries,
-        warnings,
     };
 
     serde_json::to_string_pretty(&report).context("failed to serialize script query JSON")
 }
 
 fn filtered_entries<'a>(
-    bundle: &'a LegacyScriptletBundle,
+    bundle: &'a NativeLifecycleBundle,
     entry_id: Option<&str>,
-) -> Result<Vec<&'a LegacyScriptletEntry>> {
+) -> Result<Vec<&'a NativeLifecycleEntry>> {
     if let Some(entry_id) = entry_id {
         let entry = bundle
             .entries
             .iter()
             .find(|entry| entry.id == entry_id)
             .ok_or_else(|| {
-                anyhow::anyhow!("legacy scriptlet bundle entry '{entry_id}' not found")
+                anyhow::anyhow!("native lifecycle bundle entry '{entry_id}' not found")
             })?;
         Ok(vec![entry])
     } else {
@@ -588,7 +499,7 @@ fn filtered_entries<'a>(
     }
 }
 
-fn bundle_summary(bundle: &LegacyScriptletBundle) -> BundleQuerySummary {
+fn bundle_summary(bundle: &NativeLifecycleBundle) -> BundleQuerySummary {
     BundleQuerySummary {
         schema: bundle.schema.clone(),
         schema_revision: bundle.schema_revision,
@@ -599,20 +510,12 @@ fn bundle_summary(bundle: &LegacyScriptletBundle) -> BundleQuerySummary {
         source_arch: bundle.source_arch.clone(),
         source_package: bundle.source_package.clone(),
         source_version: bundle.source_version.clone(),
-        target_compatibility: bundle.target_compatibility.as_str().to_string(),
-        foreign_replay_policy: bundle.foreign_replay_policy.as_str().to_string(),
-        publication_policy: bundle.publication_policy.as_str().to_string(),
-        publication_status: bundle.publication_status.as_str().to_string(),
         scriptlet_fidelity: bundle.scriptlet_fidelity.as_str().to_string(),
-        decision_counts: bundle.decision_counts.clone(),
-        unsupported_class_counts: bundle.unsupported_class_counts.clone(),
-        adapter_registry_digest: bundle.adapter_registry_digest.clone(),
-        target_policy_digest: bundle.target_policy_digest.clone(),
         evidence_digest: bundle.evidence_digest.clone(),
     }
 }
 
-fn entry_summary(entry: &LegacyScriptletEntry) -> EntryQuerySummary {
+fn entry_summary(entry: &NativeLifecycleEntry) -> EntryQuerySummary {
     EntryQuerySummary {
         id: entry.id.clone(),
         native_slot: entry.native_slot.clone(),
@@ -626,129 +529,24 @@ fn entry_summary(entry: &LegacyScriptletEntry) -> EntryQuerySummary {
             .clone()
             .unwrap_or_else(|| "utf-8".to_string()),
         timeout_ms: entry.timeout_ms,
-        decision: entry.decision.as_str().to_string(),
-        reason_code: entry.reason_code.clone(),
-        human_reason: entry.human_reason.clone(),
         evidence_digest: entry.evidence_digest.clone(),
         source_evidence_refs: entry.source_evidence_refs.clone(),
-        effects: entry.effects.iter().map(effect_summary).collect(),
-        unknown_command_evidence: entry.unknown_command_evidence.clone(),
-        blocked_classes: entry.blocked_classes.clone(),
         reserved_metadata: ReservedMetadataSummary {
             rpm_trigger: entry.rpm_trigger.is_some(),
             deb_maintainer: entry.deb_maintainer.is_some(),
             arch_install: entry.arch_install.is_some(),
-            residual_replay: entry.residual_replay.is_some(),
+            arch_hook: entry.arch_hook.is_some(),
+            residual_lifecycle: entry.residual_lifecycle.is_some(),
         },
     }
 }
 
-fn flattened_summary(scriptlet: &ScriptletEntry) -> FlattenedScriptletQuerySummary {
-    FlattenedScriptletQuerySummary {
-        source: "scriptlets".to_string(),
-        phase: scriptlet.phase.clone(),
-        interpreter: scriptlet.interpreter.clone(),
-        flags: scriptlet.flags.clone(),
-        package_format: scriptlet.package_format.clone(),
-        content_sha256: conary_core::hash::sha256_prefixed(scriptlet.content.as_bytes()),
-    }
-}
-
-fn effect_summary(effect: &ScriptletEffect) -> EffectQuerySummary {
-    EffectQuerySummary {
-        kind: effect.kind.clone(),
-        source: effect.source.as_str().to_string(),
-        confidence: effect.confidence.as_str().to_string(),
-        replacement: effect.replacement.as_str().to_string(),
-        adapter_id: effect.adapter_id.clone(),
-        adapter_digest: effect.adapter_digest.clone(),
-        command: effect.command.clone(),
-        args: effect.args.clone(),
-        path: effect.path.clone(),
-        reason_code: effect.reason_code.clone(),
-    }
-}
-
-fn collect_warnings(bundle: &LegacyScriptletBundle) -> Vec<String> {
-    let mut warnings = Vec::new();
-    push_unknown_warning(
-        &mut warnings,
-        "source_format",
-        bundle.source_format.as_str(),
-        bundle.source_format.is_known(),
-    );
-    push_unknown_warning(
-        &mut warnings,
-        "target_compatibility",
-        bundle.target_compatibility.as_str(),
-        bundle.target_compatibility.is_known(),
-    );
-    push_unknown_warning(
-        &mut warnings,
-        "foreign_replay_policy",
-        bundle.foreign_replay_policy.as_str(),
-        bundle.foreign_replay_policy.is_known(),
-    );
-    push_unknown_warning(
-        &mut warnings,
-        "publication_policy",
-        bundle.publication_policy.as_str(),
-        bundle.publication_policy.is_known(),
-    );
-    push_unknown_warning(
-        &mut warnings,
-        "publication_status",
-        bundle.publication_status.as_str(),
-        bundle.publication_status.is_known(),
-    );
-    push_unknown_warning(
-        &mut warnings,
-        "scriptlet_fidelity",
-        bundle.scriptlet_fidelity.as_str(),
-        bundle.scriptlet_fidelity.is_known(),
-    );
-
-    for entry in &bundle.entries {
-        push_unknown_warning(
-            &mut warnings,
-            &format!("entry {} decision", entry.id),
-            entry.decision.as_str(),
-            entry.decision.is_known(),
-        );
-        push_unknown_warning(
-            &mut warnings,
-            &format!("entry {} phase", entry.id),
-            entry.phase.as_str(),
-            entry.phase.is_known(),
-        );
-        for effect in &entry.effects {
-            push_unknown_warning(
-                &mut warnings,
-                &format!("entry {} effect {} source", entry.id, effect.kind),
-                effect.source.as_str(),
-                effect.source.is_known(),
-            );
-            push_unknown_warning(
-                &mut warnings,
-                &format!("entry {} effect {} confidence", entry.id, effect.kind),
-                effect.confidence.as_str(),
-                effect.confidence.is_known(),
-            );
-            push_unknown_warning(
-                &mut warnings,
-                &format!("entry {} effect {} replacement", entry.id, effect.kind),
-                effect.replacement.as_str(),
-                effect.replacement.is_known(),
-            );
-        }
-    }
-
-    warnings
-}
-
-fn push_unknown_warning(warnings: &mut Vec<String>, field: &str, value: &str, known: bool) {
-    if !known {
-        warnings.push(format!("{field} has unknown passive value '{value}'"));
+fn ccs_remove_hook_summary(hook: &InstalledCcsRemoveHook) -> CcsRemoveHookQuerySummary {
+    CcsRemoveHookQuerySummary {
+        source: "installed_ccs_remove_hooks".to_string(),
+        interpreter: "/bin/sh".to_string(),
+        reversible: hook.reversible,
+        script_sha256: conary_core::hash::sha256_prefixed(hook.script.as_bytes()),
     }
 }
 

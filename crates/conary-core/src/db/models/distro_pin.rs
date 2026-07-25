@@ -58,13 +58,13 @@ impl DistroPin {
         Ok(())
     }
 
-    /// Set the compatibility table from a richer source-pin shape.
+    /// Persist a source pin.
     pub fn set_from_source_pin(conn: &Connection, pin: &SourcePinConfig) -> Result<()> {
         let strength = pin.strength.as_deref().unwrap_or("guarded");
         Self::set(conn, &pin.distro, strength)
     }
 
-    /// Convert the compatibility row into the richer source-pin shape.
+    /// Read the persisted pin as the model source-pin shape.
     pub fn as_source_pin(&self) -> SourcePinConfig {
         SourcePinConfig {
             distro: self.distro.clone(),
@@ -166,17 +166,16 @@ pub struct SystemAffinity {
 }
 
 impl SystemAffinity {
-    /// Recompute affinity from installed troves joined with repository metadata
+    /// Recompute affinity from exact installed-package provenance.
     ///
     /// Deletes all existing rows and reinserts from a join of troves,
-    /// repository_packages, and repositories where distro is not null.
+    /// repository provenance where distro is not null.
     pub fn recompute(conn: &Connection) -> Result<()> {
         conn.execute("DELETE FROM system_affinity", [])?;
         // Each installed trove counts toward exactly one distro:
         //   1. Use troves.source_distro if populated (adopted/taken packages).
         //   2. Use installed_from_repository_id -> repositories.default_strategy_distro
         //      (set at install time with deterministic repo selection).
-        //   3. Fall back to a repo lookup for legacy troves missing both fields.
         conn.execute(
             "INSERT INTO system_affinity (distro, package_count, percentage, updated_at)
              SELECT
@@ -197,26 +196,6 @@ impl SystemAffinity {
                  WHERE t.source_distro IS NULL
                    AND t.installed_from_repository_id IS NOT NULL
                    AND r.default_strategy_distro IS NOT NULL
-                 UNION ALL
-                 -- 3. Legacy fallback for troves missing both fields
-                 SELECT (
-                     SELECT r.default_strategy_distro
-                     FROM repository_packages rp
-                     JOIN repositories r ON rp.repository_id = r.id
-                     WHERE rp.name = t.name AND rp.version = t.version
-                       AND (t.architecture IS NULL OR rp.architecture IS NULL
-                            OR rp.architecture = t.architecture)
-                       AND r.default_strategy_distro IS NOT NULL
-                     ORDER BY
-                         (r.default_strategy_distro = (
-                             SELECT distro FROM distro_pin LIMIT 1
-                         )) DESC,
-                         r.priority DESC, r.id ASC
-                     LIMIT 1
-                 ) AS distro
-                 FROM troves t
-                 WHERE t.source_distro IS NULL
-                   AND t.installed_from_repository_id IS NULL
              )
              WHERE distro IS NOT NULL
              GROUP BY distro",
@@ -263,6 +242,7 @@ impl SystemAffinity {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::models::{Trove, TroveType};
     use crate::db::testing::create_test_db;
 
     #[test]
@@ -397,5 +377,36 @@ mod tests {
 
         let fedora = SystemAffinity::get_for_distro(&conn, "fedora").unwrap();
         assert!(fedora.is_none());
+    }
+
+    #[test]
+    fn system_affinity_never_infers_missing_install_provenance_from_catalog_matches() {
+        let (_temp, conn) = create_test_db();
+        let mut trove = Trove::new(
+            "catalog-match".to_string(),
+            "1.0".to_string(),
+            TroveType::Package,
+            crate::repository::versioning::VersionScheme::Conary,
+        );
+        trove.insert(&conn).unwrap();
+
+        conn.execute(
+            "INSERT INTO repositories (name, url, default_strategy_distro)
+             VALUES ('fedora', 'https://example.invalid', 'fedora')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO repository_packages (
+                repository_id, name, version, checksum, size, download_url,
+                version_scheme
+             ) VALUES (1, 'catalog-match', '1.0', 'sha256:fixture', 1,
+                       'https://example.invalid/catalog-match.rpm', 'rpm')",
+            [],
+        )
+        .unwrap();
+
+        SystemAffinity::recompute(&conn).unwrap();
+        assert!(SystemAffinity::list(&conn).unwrap().is_empty());
     }
 }

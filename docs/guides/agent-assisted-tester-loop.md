@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-07-23
-revision: 10
-summary: Pin the agent-supervised external tester loop to v0.12.0
+last_updated: 2026-07-25
+revision: 11
+summary: Pin the agent-supervised cross-distro package tester loop to v0.12.0
 ---
 
 # Agent-Assisted Tester Loop
@@ -28,9 +28,10 @@ I want you to help me run the Conary first external tester loop on this host.
 Read this guide first:
 https://github.com/ConaryLabs/Conary/blob/v0.12.0/docs/guides/agent-assisted-tester-loop.md
 
-Goal: validate the pinned Conary v0.12.0 package-manager preview loop and draft
-a beta feedback issue. You are testing the user-facing package-manager flow,
-not developing Conary itself.
+Goal: install, inspect, update-preview, and remove a package whose source
+format differs from this host's native package format with pinned Conary
+v0.12.0, then draft a beta feedback issue. You are testing the user-facing
+cross-distro package-manager flow, not developing Conary itself.
 
 Safety rules:
 - Stop immediately if this is not a VM, snapshot, or explicitly non-critical
@@ -70,8 +71,8 @@ Stop and do not install Conary if any of these are true:
   change.
 
 Stop after installing and file a partial report if any live command fails in a
-way the human cannot safely resolve. Try to run the unadopt dry-run before
-stopping when that is safe.
+way the human cannot safely resolve. If Conary installed the test package,
+preview its removal and ask before removing it when that remains safe.
 
 ## Preflight
 
@@ -176,10 +177,10 @@ conary --version
 conary --help | sed -n '1,80p'
 ```
 
-The package post-install step initializes the system database with the exact
-host profile and configures Remi plus only that profile's native repositories.
-Do not run `system init` or add a second Remi repository. Inspect and sync the
-configured preview source instead:
+The package post-install step initializes one source-independent system
+database and configures Remi plus the built-in RPM, Debian, and Arch source
+feeds. The host distribution does not constrain source selection. Do not rerun
+`system init`; inspect the configured sources and sync Remi instead:
 
 ```bash
 sudo conary repo list
@@ -192,26 +193,28 @@ Run each command in order. Ask the human before every command that is not a
 dry-run and can mutate system state.
 
 ```bash
-sudo conary install htop --dry-run --allow-capabilities
-sudo conary install htop --yes --allow-capabilities
-sudo conary system adopt --system --dry-run
-sudo conary system adopt --system
-sudo conary list
-sudo conary search htop
-sudo conary update --dry-run
-sudo conary system unadopt --all --dry-run
-sudo conary system unadopt --all --yes
+source=ubuntu-26.04  # Fedora/Arch hosts; use fedora-44 on Ubuntu
+sudo conary install htop --from "$source" --dry-run
+sudo conary install htop --from "$source" --yes
+sudo conary list htop --info
+sudo conary query depends htop
+sudo conary update htop --dry-run
+sudo conary remove htop --yes
 ```
 
-For `htop`, `--allow-capabilities` explicitly approves the package-declared
-capability; it is not blanket permission for later packages. Review the
-dry-run output first, then ask the human before the live `--yes` command.
+The chosen source must use a different package format from the host: Debian on
+Fedora or Arch, or RPM on Ubuntu. Conary validates `htop`'s exact typed
+capability declaration against the selected target during preflight and
+applies executor enforcement automatically. Unsupported requirements fail
+before mutation. Review the complete dry-run first, then ask the human before
+each live `--yes` command.
 
 During the run, capture:
 
 - command text;
 - exit status;
 - distro and kernel;
+- source package format and host native package format;
 - whether the full loop completed;
 - where a partial run stopped;
 - anything confusing, slow, scary, or unexpectedly pleasant.
@@ -229,6 +232,7 @@ Fill in:
 - **Preview Lane:** check "First external tester loop";
 - **Completed the full loop:** `yes`, `no`, or `partial`;
 - **Distribution:** Fedora 44, Ubuntu 26.04 LTS, or Arch Linux;
+- **Source and host formats:** name both package formats and confirm they differ;
 - **Kernel version:** output of `uname -r`;
 - **Conary version or commit:** output of `conary --version`;
 - **VM/snapshot/non-critical host:** `yes` or `no`;

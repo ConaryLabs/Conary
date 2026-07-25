@@ -2,23 +2,65 @@
 
 use super::*;
 
-const REMI_REPOSITORY_NAME: &str = "remi";
 const REMI_ENDPOINT: &str = "https://remi.conary.io";
-pub(super) const HOST_PROFILE_SETTING: &str = "system.host-profile";
 const MAX_INIT_SYMLINK_DEPTH: usize = 40;
+
+#[derive(Clone, Copy)]
+pub(super) enum NativeParserSeed {
+    Arch {
+        database: &'static str,
+    },
+    Deb {
+        distribution: &'static str,
+        component: &'static str,
+        architecture: &'static str,
+    },
+    Rpm {
+        architecture: &'static str,
+    },
+}
+
+impl NativeParserSeed {
+    pub(super) fn config(self) -> conary_core::repository::RepositoryParserConfig {
+        use conary_core::repository::RepositoryParserConfig;
+
+        match self {
+            Self::Arch { database } => RepositoryParserConfig::Arch {
+                database: database.to_string(),
+            },
+            Self::Deb {
+                distribution,
+                component,
+                architecture,
+            } => RepositoryParserConfig::Deb {
+                distribution: distribution.to_string(),
+                component: component.to_string(),
+                architecture: architecture.to_string(),
+            },
+            Self::Rpm { architecture } => RepositoryParserConfig::Rpm {
+                architecture: architecture.to_string(),
+            },
+        }
+    }
+
+    fn format(self) -> RepositoryFormat {
+        self.config().format()
+    }
+}
 
 #[derive(Clone, Copy)]
 pub(super) struct NativeRepositorySeed {
     pub(super) name: &'static str,
     pub(super) url: &'static str,
-    pub(super) legacy_urls: &'static [&'static str],
+    pub(super) parser: NativeParserSeed,
+    pub(super) source_feed: &'static str,
     pub(super) priority: i32,
     pub(super) description: &'static str,
 }
 
 impl NativeRepositorySeed {
     fn owns_url(self, url: &str) -> bool {
-        url == self.url || self.legacy_urls.contains(&url)
+        url == self.url
     }
 }
 
@@ -26,51 +68,55 @@ pub(super) const NATIVE_REPOSITORY_SEEDS: &[NativeRepositorySeed] = &[
     NativeRepositorySeed {
         name: "arch-core",
         url: "https://geo.mirror.pkgbuild.com/core/os/x86_64",
-        legacy_urls: &[],
+        parser: NativeParserSeed::Arch { database: "core" },
+        source_feed: "arch",
         priority: 100,
         description: "Arch Linux",
     },
     NativeRepositorySeed {
         name: "arch-extra",
         url: "https://geo.mirror.pkgbuild.com/extra/os/x86_64",
-        legacy_urls: &[],
+        parser: NativeParserSeed::Arch { database: "extra" },
+        source_feed: "arch",
         priority: 95,
         description: "Arch Linux",
     },
     NativeRepositorySeed {
         name: "fedora-44",
         url: "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/x86_64/os",
-        legacy_urls: &[],
+        parser: NativeParserSeed::Rpm {
+            architecture: "x86_64",
+        },
+        source_feed: "fedora-44",
         priority: 90,
         description: "Fedora 44",
     },
     NativeRepositorySeed {
         name: "arch-multilib",
         url: "https://geo.mirror.pkgbuild.com/multilib/os/x86_64",
-        legacy_urls: &[],
+        parser: NativeParserSeed::Arch {
+            database: "multilib",
+        },
+        source_feed: "arch",
         priority: 85,
         description: "Arch Linux",
     },
     NativeRepositorySeed {
         name: "ubuntu-26.04",
         url: "https://archive.ubuntu.com/ubuntu",
-        legacy_urls: &["http://archive.ubuntu.com/ubuntu"],
+        parser: NativeParserSeed::Deb {
+            distribution: "resolute",
+            component: "main",
+            architecture: "amd64",
+        },
+        source_feed: "ubuntu-26.04",
         priority: 80,
         description: "Ubuntu 26.04 LTS",
     },
 ];
 
 /// Initialize the Conary database and add default repositories
-pub async fn cmd_init(db_path: &str, profile_id: &str) -> Result<()> {
-    let profile = profile_by_public_id(profile_id).ok_or_else(|| {
-        let supported = conary_core::repository::supported_profiles::public_profiles()
-            .iter()
-            .map(SupportedProfile::id)
-            .collect::<Vec<_>>()
-            .join(", ");
-        anyhow!("unsupported host profile '{profile_id}'; expected one of: {supported}")
-    })?;
-
+pub async fn cmd_init(db_path: &str) -> Result<()> {
     info!("Initializing Conary database at: {}", db_path);
     let db_path_ref = Path::new(db_path);
     let runtime_root = ConaryRuntimeRoot::from_db_path(db_path_ref.to_path_buf());
@@ -81,15 +127,20 @@ pub async fn cmd_init(db_path: &str, profile_id: &str) -> Result<()> {
 
     let mut conn = open_db(db_path)?;
     info!("Adding default repositories...");
+    let host_capabilities = conary_core::ccs::HostCapabilityInventory::discover();
 
     // Collect messages inside the transaction; print after commit to avoid
     // interleaving output with a potential rollback log.
     let mut messages: Vec<(bool, String)> = Vec::new();
 
     conary_core::db::transaction(&mut conn, |tx| {
-        reconcile_remi_seed(tx, profile, &mut messages)?;
-        reconcile_native_repository_seeds(tx, profile, &mut messages)?;
-        conary_core::db::models::settings::set(tx, HOST_PROFILE_SETTING, profile.id())?;
+        host_capabilities.persist(tx).map_err(|error| {
+            conary_core::Error::InitError(format!(
+                "could not persist typed host capability inventory: {error}"
+            ))
+        })?;
+        reconcile_remi_seeds(tx, &mut messages)?;
+        reconcile_native_repository_seeds(tx, &mut messages)?;
 
         Ok(())
     })?;
@@ -102,11 +153,12 @@ pub async fn cmd_init(db_path: &str, profile_id: &str) -> Result<()> {
         }
     }
 
+    crate::ui::status("Configured", "all built-in package source feeds");
     crate::ui::status(
-        "Configured",
-        &format!("repositories for profile {}", profile.id()),
+        "Discovered",
+        "typed host lifecycle interfaces (service manager, sysusers, tmpfiles, sysctl, ldconfig)",
     );
-    crate::ui::note("Run 'conary repo sync remi' to download preview metadata.");
+    crate::ui::note("Run 'conary repo sync' to download metadata from every enabled Remi feed.");
     crate::ui::note(
         "Native metadata sources stay disabled until their signing trust is configured.",
     );
@@ -223,48 +275,65 @@ fn lexically_normalize_path(path: &Path) -> PathBuf {
     normalized
 }
 
-fn reconcile_remi_seed(
+fn reconcile_remi_seeds(
     conn: &rusqlite::Connection,
-    profile: &SupportedProfile,
     messages: &mut Vec<(bool, String)>,
 ) -> conary_core::Result<()> {
-    let Some(mut repo) = Repository::find_by_name(conn, REMI_REPOSITORY_NAME)? else {
-        let mut repo = Repository::new(REMI_REPOSITORY_NAME.to_string(), REMI_ENDPOINT.to_string());
-        repo.priority = 110;
-        repo.default_strategy = Some("remi".to_string());
-        repo.default_strategy_endpoint = Some(REMI_ENDPOINT.to_string());
-        repo.default_strategy_distro = Some(profile.id().to_string());
-        repo.insert(conn)?;
-        messages.push((false, "  Added: remi (Conary Remi (CCS))".to_string()));
-        return Ok(());
-    };
+    for (index, feed) in conary_core::repository::supported_profiles::public_profiles()
+        .iter()
+        .enumerate()
+    {
+        let name = format!("remi-{}", feed.id());
+        let Some(mut repo) = Repository::find_by_name(conn, &name)? else {
+            let mut repo = Repository::new(name.clone(), REMI_ENDPOINT.to_string());
+            repo.priority = 110 - i32::try_from(index).unwrap_or(0);
+            repo.default_strategy = Some("remi".to_string());
+            repo.default_strategy_endpoint = Some(REMI_ENDPOINT.to_string());
+            repo.default_strategy_distro = Some(feed.id().to_string());
+            repo.set_parser_config(conary_core::repository::RepositoryParserConfig::Json)?;
+            repo.insert(conn)?;
+            messages.push((
+                false,
+                format!(
+                    "  Added: {name} (Conary Remi, {} source)",
+                    feed.display_name()
+                ),
+            ));
+            continue;
+        };
 
-    let canonical_seed = repo.url == REMI_ENDPOINT
-        && repo.default_strategy.as_deref() == Some("remi")
-        && repo.default_strategy_endpoint.as_deref() == Some(REMI_ENDPOINT);
-    if !canonical_seed {
-        messages.push((
-            true,
-            "Existing repository 'remi' is user-managed; leaving its endpoint and target unchanged"
-                .to_string(),
-        ));
-        return Ok(());
-    }
+        let canonical_seed = repo.url == REMI_ENDPOINT
+            && repo.default_strategy.as_deref() == Some("remi")
+            && repo.default_strategy_endpoint.as_deref() == Some(REMI_ENDPOINT);
+        if !canonical_seed {
+            messages.push((
+                true,
+                format!(
+                    "Existing repository '{name}' is user-managed; leaving its endpoint and source feed unchanged"
+                ),
+            ));
+            continue;
+        }
 
-    if repo.default_strategy_distro.as_deref() != Some(profile.id()) {
-        let repo_id = repo.id.ok_or_else(|| {
-            conary_core::Error::MissingId("Remi repository has no ID".to_string())
-        })?;
-        RepositoryPackage::delete_by_repository(conn, repo_id)?;
-        PackageResolution::delete_by_repository(conn, repo_id)?;
-        conn.execute(
-            "DELETE FROM repository_package_keys WHERE repository_id = ?1",
-            [repo_id],
-        )?;
-        repo.default_strategy_distro = Some(profile.id().to_string());
-        repo.last_sync = None;
-        repo.update(conn)?;
-        messages.push((false, format!("  Updated: remi target ({})", profile.id())));
+        let parser_config = conary_core::repository::RepositoryParserConfig::Json;
+        if repo.default_strategy_distro.as_deref() != Some(feed.id())
+            || repo.parser_config.as_ref() != Some(&parser_config)
+        {
+            let repo_id = repo.id.ok_or_else(|| {
+                conary_core::Error::MissingId(format!("Remi repository '{name}' has no ID"))
+            })?;
+            RepositoryPackage::delete_by_repository(conn, repo_id)?;
+            PackageResolution::delete_by_repository(conn, repo_id)?;
+            conn.execute(
+                "DELETE FROM repository_package_keys WHERE repository_id = ?1",
+                [repo_id],
+            )?;
+            repo.default_strategy_distro = Some(feed.id().to_string());
+            repo.set_parser_config(parser_config)?;
+            repo.last_sync = None;
+            repo.update(conn)?;
+            messages.push((false, format!("  Updated: {name} source contract")));
+        }
     }
 
     Ok(())
@@ -272,25 +341,23 @@ fn reconcile_remi_seed(
 
 fn reconcile_native_repository_seeds(
     conn: &rusqlite::Connection,
-    profile: &SupportedProfile,
     messages: &mut Vec<(bool, String)>,
 ) -> conary_core::Result<()> {
-    let previous_profile = conary_core::db::models::settings::get(conn, HOST_PROFILE_SETTING)?;
-    let profile_changed = previous_profile.as_deref() != Some(profile.id());
-
     for seed in NATIVE_REPOSITORY_SEEDS {
-        let selected = profile.matches_repository_name(seed.name);
         let existing = Repository::find_by_name(conn, seed.name)?;
 
         match existing {
-            None if selected => {
-                conary_core::repository::add_repository(
+            None => {
+                let mut repository = conary_core::repository::add_repository(
                     conn,
                     seed.name.to_string(),
                     seed.url.to_string(),
+                    seed.parser.config(),
                     false,
                     seed.priority,
                 )?;
+                repository.default_strategy_distro = Some(seed.source_feed.to_string());
+                repository.update(conn)?;
                 messages.push((
                     false,
                     format!(
@@ -301,7 +368,10 @@ fn reconcile_native_repository_seeds(
             }
             Some(mut repo) if seed.owns_url(&repo.url) => {
                 let mut changed = false;
-                if repo.url != seed.url {
+                let parser_config = seed.parser.config();
+                if repo.parser_config.as_ref() != Some(&parser_config)
+                    || repo.default_strategy_distro.as_deref() != Some(seed.source_feed)
+                {
                     let repo_id = repo.id.ok_or_else(|| {
                         conary_core::Error::MissingId(format!(
                             "Repository '{}' has no ID",
@@ -310,30 +380,25 @@ fn reconcile_native_repository_seeds(
                     })?;
                     RepositoryPackage::delete_by_repository(conn, repo_id)?;
                     PackageResolution::delete_by_repository(conn, repo_id)?;
-                    repo.url = seed.url.to_string();
+                    repo.set_parser_config(parser_config)?;
+                    repo.default_strategy_distro = Some(seed.source_feed.to_string());
                     repo.last_sync = None;
                     changed = true;
                     messages.push((
                         false,
                         format!(
-                            "  Updated: {} secure endpoint ({})",
-                            seed.name, seed.description
+                            "  Updated: {} package source contract ({}, {})",
+                            seed.name,
+                            seed.parser.format().as_str(),
+                            seed.source_feed
                         ),
-                    ));
-                }
-                if profile_changed && repo.enabled {
-                    repo.enabled = false;
-                    changed = true;
-                    messages.push((
-                        false,
-                        format!("  Disabled: {} ({})", seed.name, seed.description),
                     ));
                 }
                 if changed {
                     repo.update(conn)?;
                 }
             }
-            Some(repo) if selected && repo.url != seed.url => messages.push((
+            Some(repo) if repo.url != seed.url => messages.push((
                 true,
                 format!(
                     "Existing repository '{}' is user-managed; leaving it unchanged",

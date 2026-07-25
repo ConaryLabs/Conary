@@ -3,12 +3,10 @@
 //! Archive and source file utilities for the Kitchen
 
 use crate::error::{Error, Result};
-use crate::hash::{HashAlgorithm, hash_bytes};
-use crate::recipe::kitchen::config::SourceChecksumPolicy;
+use crate::hash::{Hash, hash_bytes};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use tracing::warn;
 
 fn gnu_fetch_candidates(url: &str) -> Vec<String> {
     let mut candidates = vec![url.to_string()];
@@ -152,40 +150,15 @@ pub fn download_file(url: &str, dest: &Path) -> Result<()> {
 /// Returns `Ok(None)` when the checksum matches, or `Ok(Some(actual_hash))`
 /// when it does not, allowing callers to include the actual hash in error
 /// messages. Returns `Err` on I/O failure or unsupported algorithm.
-pub fn verify_file_checksum(
-    path: &Path,
-    expected: &str,
-    policy: SourceChecksumPolicy,
-) -> Result<Option<String>> {
+pub fn verify_file_checksum(path: &Path, expected: &str) -> Result<Option<String>> {
+    let expected_hash = Hash::parse_prefixed(expected)
+        .map_err(|error| Error::ParseError(format!("Invalid checksum: {error}")))?;
     let content = fs::read(path)?;
-
-    let (algorithm, expected_hash) = expected
-        .split_once(':')
-        .ok_or_else(|| Error::ParseError("Invalid checksum format".to_string()))?;
-
-    let algo = match algorithm {
-        "sha256" => HashAlgorithm::Sha256,
-        "xxh128" => HashAlgorithm::Xxh128,
-        _ if policy == SourceChecksumPolicy::BootstrapLegacy => {
-            warn!(
-                "Skipping unsupported checksum algorithm {} in bootstrap legacy mode",
-                algorithm
-            );
-            return Ok(None);
-        }
-        _ => {
-            return Err(Error::ParseError(format!(
-                "Unsupported checksum algorithm: {} (supported: sha256, xxh128)",
-                algorithm
-            )));
-        }
-    };
-
-    let actual = hash_bytes(algo, &content);
-    if actual.as_str() == expected_hash {
+    let actual = hash_bytes(expected_hash.algorithm, &content);
+    if actual == expected_hash {
         Ok(None)
     } else {
-        Ok(Some(format!("{}:{}", algorithm, actual.as_str())))
+        Ok(Some(actual.to_prefixed_string()))
     }
 }
 
@@ -305,18 +278,10 @@ mod tests {
     #[test]
     fn test_verify_checksum_format() {
         // Just testing the format parsing (not actual file content)
-        let result = verify_file_checksum(
-            Path::new("/nonexistent"),
-            "invalid",
-            SourceChecksumPolicy::Supported,
-        );
+        let result = verify_file_checksum(Path::new("/nonexistent"), "invalid");
         assert!(result.is_err());
 
-        let result = verify_file_checksum(
-            Path::new("/nonexistent"),
-            "unknown:abc",
-            SourceChecksumPolicy::Supported,
-        );
+        let result = verify_file_checksum(Path::new("/nonexistent"), "unknown:abc");
         assert!(result.is_err()); // unsupported algorithm
     }
 

@@ -2,7 +2,7 @@
 
 //! Remi client for fetching CCS packages from conversion proxies
 //!
-//! Remi is a server that converts legacy packages (RPM/DEB/Arch) to CCS
+//! Remi converts native package formats (RPM/DEB/Arch) to CCS
 //! format on-demand. When a package isn't cached, the server returns 202 Accepted
 //! with a job ID that the client polls until conversion completes.
 //!
@@ -31,10 +31,8 @@ use std::sync::Arc;
 mod async_client;
 pub use async_client::AsyncRemiClient;
 mod protocol;
-pub use protocol::{
-    ChunkRef, ConversionAccepted, JobStatus, PackageManifest, PublicationGateReport,
-};
-use protocol::{RemiClientCore, terminal_publication_status_error};
+use protocol::RemiClientCore;
+pub use protocol::{ChunkRef, ConversionAccepted, JobStatus, PackageManifest};
 
 /// Default timeout for initial request (30 seconds)
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
@@ -351,17 +349,6 @@ impl RemiClient {
                         error_msg
                     )));
                 }
-                "review-required" | "blocked" => {
-                    spinner.finish_with_message("Conversion refused by publication policy");
-                    return Err(
-                        terminal_publication_status_error(&status).unwrap_or_else(|| {
-                            Error::DownloadError(format!(
-                                "Remi returned terminal conversion status {} for {}/{}",
-                                status.status, status.distro, status.package
-                            ))
-                        }),
-                    );
-                }
                 "converting" | "queued" => {
                     // Still in progress - update spinner and continue polling
                     if let Some(progress) = status.progress {
@@ -373,8 +360,11 @@ impl RemiClient {
                     tokio::time::sleep(POLL_INTERVAL).await;
                 }
                 other => {
-                    warn!("Unknown job status: {}", other);
-                    tokio::time::sleep(POLL_INTERVAL).await;
+                    spinner.finish_with_message("Conversion protocol error");
+                    return Err(Error::DownloadError(format!(
+                        "Remi returned unsupported conversion status {other} for {}/{}",
+                        status.distro, status.package
+                    )));
                 }
             }
         }

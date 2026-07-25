@@ -206,12 +206,12 @@ pub fn compare_seed_builds(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::schema::migrate;
+    use crate::db::schema::ensure_current;
     use crate::derivation::index::{DerivationIndex, DerivationRecord};
 
     fn setup() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        ensure_current(&conn).unwrap();
         conn
     }
 

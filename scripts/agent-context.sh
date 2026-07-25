@@ -369,7 +369,7 @@ fallback_hint_for_path() {
         docs/modules/*|docs/operations/*|docs/INTEGRATION-TESTING.md|docs/ARCHITECTURE.md)
             printf 'Canonical docs | focused: bash scripts/check-doc-truth.sh | gate: affected feature-card proof when behavior claims or interaction boundaries change'
             ;;
-        docs/designs/*|docs/plans/*|docs/roadmaps/*)
+        docs/roadmaps/*)
             printf 'Planning docs | focused: bash scripts/check-doc-truth.sh | gate: risk-proportional review gate before lock-in or closeout'
             ;;
         *)
@@ -450,17 +450,29 @@ is_repo_path_span() {
     [[ "$span" == *.md ]]
 }
 
-span_exists_tracked() {
+list_worktree_files() {
+    local path
+    while IFS= read -r path; do
+        if [[ -f "$path" || -L "$path" ]]; then
+            printf '%s\n' "$path"
+        fi
+    done < <(git ls-files --cached --others --exclude-standard)
+}
+
+span_exists_in_worktree() {
     local span="${1%/}"
-    if git ls-files --error-unmatch -- "$span" >/dev/null 2>&1; then
+    if [[ ( -f "$span" || -L "$span" ) ]] \
+        && ! git check-ignore -q -- "$span" 2>/dev/null
+    then
         return 0
     fi
-    [[ -n "$(git ls-files -- "$span/" | head -n 1)" ]]
+    [[ -d "$span" ]] || return 1
+    [[ -n "$(list_worktree_files | awk -v prefix="$span/" 'index($0, prefix) == 1 { print; exit }')" ]]
 }
 
 mode_validate() {
     local heading field slug span i t matched
-    local -a tracked_files=()
+    local -a worktree_files=()
     declare -A seen_slugs=()
 
     if [[ "${#card_headings[@]}" -eq 0 ]]; then
@@ -497,18 +509,18 @@ mode_validate() {
 
         for field in "Start here" "Docs to update"; do
             while IFS= read -r span; do
-                if [[ -n "$span" ]] && is_repo_path_span "$span" && ! span_exists_tracked "$span"; then
-                    validate_err "card '$heading' $field references untracked path: $span"
+                if [[ -n "$span" ]] && is_repo_path_span "$span" && ! span_exists_in_worktree "$span"; then
+                    validate_err "card '$heading' $field references missing working-tree path: $span"
                 fi
             done < <(extract_spans "${card_fields["$heading|$field"]:-}")
         done
     done
 
-    mapfile -t tracked_files < <(git ls-files)
+    mapfile -t worktree_files < <(list_worktree_files)
 
     for i in "${!glob_patterns[@]}"; do
         matched=0
-        for t in "${tracked_files[@]}"; do
+        for t in "${worktree_files[@]}"; do
             # The glob must stay unquoted so [[ == ]] treats it as a pattern.
             if [[ "$t" == ${glob_patterns[$i]} ]]; then
                 matched=1
@@ -520,7 +532,7 @@ mode_validate() {
         fi
     done
 
-    for t in "${tracked_files[@]}"; do
+    for t in "${worktree_files[@]}"; do
         if route_path "$t"; then
             if (( $(distinct_tied_count) > 1 )); then
                 validate_err "equal-specificity Paths overlap for $t: $(printf '%s\n' "${route_tied[@]}" | sort -u | paste -sd ';' -)"

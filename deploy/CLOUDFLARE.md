@@ -6,7 +6,8 @@ This document covers the Cloudflare configuration for `remi.conary.io`, includin
 
 - A Cloudflare account (Free plan works, Pro recommended for advanced WAF rules)
 - The `remi.conary.io` domain managed by Cloudflare DNS
-- A running Remi server (see `deploy/setup-remi.sh`)
+- A running Remi server managed through the deployment contract in
+  `docs/operations/infrastructure.md`
 
 ## 1. DNS Setup
 
@@ -28,15 +29,9 @@ If using IPv6 (recommended on Hetzner):
 | AAAA | remi       | YOUR_IPV6_ADDR  | Yes   | Auto |
 | AAAA | ssh        | YOUR_IPV6_ADDR  | No    | Auto |
 
-If you are publishing `packages.conary.io` as a compatibility alias, keep
-matching proxied `packages` records as well and redirect or otherwise treat
-them as a compatibility hostname rather than the canonical public endpoint.
-
 Operationally, that means:
 
 - `remi.conary.io` is the proxied public UI and MCP hostname
-- `packages.conary.io` is the proxied compatibility alias for package-service
-  traffic and simple external health checks
 - `ssh.conary.io` is the direct origin SSH hostname and must not be proxied
 
 ### Admin and MCP proxying

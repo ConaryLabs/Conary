@@ -7,7 +7,7 @@ const pages = [
 		file: 'index.html',
 		title: 'Conary — One reversible package model for Linux',
 		canonical: 'https://conary.io/',
-		marker: 'Make Linux package state portable, inspectable, and reversible.'
+		marker: 'Install the package you want, not only the format your distro chose.'
 	},
 	{
 		file: 'features/index.html',

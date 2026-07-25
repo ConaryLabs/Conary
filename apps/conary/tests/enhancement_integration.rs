@@ -11,11 +11,14 @@ use tempfile::NamedTempFile;
 fn create_test_package(name: &str) -> (NamedTempFile, rusqlite::Connection, i64, i64) {
     let database = NamedTempFile::new().unwrap();
     let conn = rusqlite::Connection::open(database.path()).unwrap();
-    db::schema::migrate(&conn).unwrap();
+    db::schema::ensure_current(&conn).unwrap();
 
     conn.execute(
-        "INSERT INTO troves (name, version, type, architecture)
-         VALUES (?1, '1.0.0', 'package', 'x86_64')",
+        "INSERT INTO troves (
+             name, version, type, architecture, install_source, install_reason, version_scheme
+         ) VALUES (
+             ?1, '1.0.0', 'package', 'x86_64', 'file', 'explicit', 'conary'
+         )",
         [name],
     )
     .unwrap();
@@ -23,9 +26,9 @@ fn create_test_package(name: &str) -> (NamedTempFile, rusqlite::Connection, i64,
 
     conn.execute(
         "INSERT INTO converted_packages (
-             trove_id, original_format, original_checksum,
+             artifact_kind, trove_id, original_format, original_checksum,
              enhancement_status, enhancement_version
-         ) VALUES (?1, 'rpm', ?2, 'pending', 0)",
+         ) VALUES ('installed', ?1, 'rpm', ?2, 'pending', 0)",
         params![trove_id, format!("checksum-{name}")],
     )
     .unwrap();
@@ -83,7 +86,7 @@ fn provenance_enrichment_does_not_infer_policy_or_relationships() {
         .unwrap();
     let dependency_count: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM dependencies WHERE trove_id = ?1",
+            "SELECT COUNT(*) FROM package_requirement_groups WHERE trove_id = ?1",
             [trove_id],
             |row| row.get(0),
         )

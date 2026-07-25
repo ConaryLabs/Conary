@@ -94,7 +94,6 @@ use rusqlite::Connection;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use thiserror::Error;
-use tracing::warn;
 
 /// Default path for the system model file
 pub const DEFAULT_MODEL_PATH: &str = "/etc/conary/system.toml";
@@ -125,6 +124,9 @@ pub enum ModelError {
 
     #[error("Invalid source policy: {0}")]
     InvalidSourcePolicy(String),
+
+    #[error("Model serialization failed: {0}")]
+    SerializationError(String),
 
     #[error("Remote fetch failed: {0}")]
     RemoteFetchError(String),
@@ -245,10 +247,33 @@ pub struct FetchedCollection {
 ///
 /// Returns (name, optional label spec)
 pub fn parse_trove_spec(spec: &str) -> ModelResult<(String, Option<String>)> {
-    if let Some((name, label)) = spec.split_once('@') {
+    if spec.is_empty() {
+        return Err(ModelError::InvalidSearchPath(
+            "Collection specification must not be empty".to_string(),
+        ));
+    }
+    let mut parts = spec.split('@');
+    let name = parts.next().expect("split always returns one part");
+    let label = parts.next();
+    if name.is_empty() || parts.next().is_some() {
+        return Err(ModelError::InvalidSearchPath(format!(
+            "Invalid collection specification '{spec}': expected NAME or NAME@REPOSITORY:TAG"
+        )));
+    }
+    if let Some(label) = label {
+        let Some((repository, tag)) = label.split_once(':') else {
+            return Err(ModelError::InvalidSearchPath(format!(
+                "Invalid collection specification '{spec}': expected NAME@REPOSITORY:TAG"
+            )));
+        };
+        if repository.is_empty() || tag.is_empty() || tag.contains(':') {
+            return Err(ModelError::InvalidSearchPath(format!(
+                "Invalid collection specification '{spec}': repository and tag must each be non-empty"
+            )));
+        }
         Ok((name.to_string(), Some(label.to_string())))
     } else {
-        Ok((spec.to_string(), None))
+        Ok((name.to_string(), None))
     }
 }
 
@@ -261,7 +286,6 @@ async fn fetch_collection(
     name: &str,
     label: Option<&str>,
     offline: bool,
-    require_signatures: bool,
     trusted_keys: &[String],
 ) -> ModelResult<FetchedCollection> {
     use crate::db::models::{CollectionMember, Trove, TroveType};
@@ -307,7 +331,6 @@ async fn fetch_collection(
             name,
             label_str,
             offline,
-            require_signatures,
             trusted_keys,
         )
         .await;
@@ -351,12 +374,6 @@ pub async fn resolve_includes_with_options(
         return Ok(resolved);
     }
 
-    if !model.include.require_signatures {
-        warn!(
-            "Remote includes are configured with signature verification disabled; unsigned collections may be accepted"
-        );
-    }
-
     let mut visited: HashSet<String> = HashSet::new();
 
     resolve_includes_recursive(
@@ -366,7 +383,6 @@ pub async fn resolve_includes_with_options(
         &mut resolved,
         &mut visited,
         offline,
-        model.include.require_signatures,
         &model.include.trusted_keys,
         0,
     )
@@ -383,7 +399,6 @@ async fn resolve_includes_recursive(
     resolved: &mut ResolvedModel,
     visited: &mut HashSet<String>,
     offline: bool,
-    require_signatures: bool,
     trusted_keys: &[String],
     depth: usize,
 ) -> ModelResult<()> {
@@ -410,15 +425,8 @@ async fn resolve_includes_recursive(
         let (name, label) = parse_trove_spec(include_spec)?;
 
         // Fetch collection from local DB or repository
-        let collection = fetch_collection(
-            conn,
-            &name,
-            label.as_deref(),
-            offline,
-            require_signatures,
-            trusted_keys,
-        )
-        .await?;
+        let collection =
+            fetch_collection(conn, &name, label.as_deref(), offline, trusted_keys).await?;
 
         // Recursively resolve nested includes if the collection has them
         if !collection.includes.is_empty() {
@@ -429,7 +437,6 @@ async fn resolve_includes_recursive(
                 resolved,
                 visited,
                 offline,
-                require_signatures,
                 trusted_keys,
                 depth + 1,
             ))
@@ -574,5 +581,35 @@ packages = ["nginx-module-geoip"]
         assert_eq!(model.config.exclude.len(), 1);
         assert_eq!(model.pin.get("openssl"), Some(&"3.0.*".to_string()));
         assert_eq!(model.optional.packages.len(), 1);
+    }
+
+    #[test]
+    fn collection_spec_parser_enforces_exact_remote_grammar() {
+        assert_eq!(
+            parse_trove_spec("group-base@upstream:stable").unwrap(),
+            (
+                "group-base".to_string(),
+                Some("upstream:stable".to_string())
+            )
+        );
+        assert_eq!(
+            parse_trove_spec("group-local").unwrap(),
+            ("group-local".to_string(), None)
+        );
+
+        for invalid in [
+            "",
+            "@upstream:stable",
+            "group-base@",
+            "group-base@upstream",
+            "group-base@upstream:",
+            "group-base@upstream:stable:extra",
+            "group-base@upstream:stable@other:tag",
+        ] {
+            assert!(
+                parse_trove_spec(invalid).is_err(),
+                "{invalid:?} should be rejected"
+            );
+        }
     }
 }

@@ -154,15 +154,7 @@ impl FederationManifest {
 
     /// Verify the manifest signature against a trust policy
     pub fn verify(&self, policy: &ManifestTrustPolicy) -> Result<(), ManifestError> {
-        let signature = match &self.signature {
-            Some(sig) => sig,
-            None => {
-                if policy.allow_unsigned {
-                    return Ok(());
-                }
-                return Err(ManifestError::NotSigned);
-            }
-        };
+        let signature = self.signature.as_ref().ok_or(ManifestError::NotSigned)?;
 
         // Check algorithm
         if signature.algorithm != "ed25519" {
@@ -172,7 +164,7 @@ impl FederationManifest {
             )));
         }
 
-        if policy.trusted_keys.is_empty() && !policy.allow_unsigned {
+        if policy.trusted_keys.is_empty() {
             return Err(ManifestError::UntrustedKey(
                 signature
                     .key_id
@@ -253,30 +245,19 @@ struct CanonicalManifest<'a> {
 }
 
 /// Trust policy for manifest verification
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ManifestTrustPolicy {
     /// Trusted public keys (base64-encoded)
     pub trusted_keys: Vec<String>,
-    /// Whether to allow unsigned manifests
-    pub allow_unsigned: bool,
     /// Whether to require timestamp
     pub require_timestamp: bool,
 }
 
 impl ManifestTrustPolicy {
-    /// Create a permissive policy that allows unsigned manifests
-    pub fn permissive() -> Self {
-        Self {
-            allow_unsigned: true,
-            ..Default::default()
-        }
-    }
-
     /// Create a strict policy requiring signatures from trusted keys
     pub fn strict(trusted_keys: Vec<String>) -> Self {
         Self {
             trusted_keys,
-            allow_unsigned: false,
             require_timestamp: false,
         }
     }
@@ -285,7 +266,6 @@ impl ManifestTrustPolicy {
     pub fn from_config(config: &super::config::FederationConfig) -> Self {
         Self {
             trusted_keys: config.manifest_trusted_keys.clone(),
-            allow_unsigned: config.manifest_allow_unsigned,
             require_timestamp: false,
         }
     }
@@ -373,10 +353,6 @@ mod tests {
         // Verify with trusted key
         let policy = ManifestTrustPolicy::strict(vec![public_key.clone()]);
         assert!(signed.verify(&policy).is_ok());
-
-        // Verify with permissive policy
-        let permissive = ManifestTrustPolicy::permissive();
-        assert!(signed.verify(&permissive).is_ok());
     }
 
     #[test]
@@ -391,13 +367,16 @@ mod tests {
     }
 
     #[test]
-    fn test_unsigned_manifest_permissive_policy() {
+    fn test_empty_trust_policy_rejects_unsigned_manifest() {
         let manifest = ManifestBuilder::new("unsigned-package")
             .add_chunk("chunk1", 100)
             .build();
 
-        let permissive = ManifestTrustPolicy::permissive();
-        assert!(manifest.verify(&permissive).is_ok());
+        let strict = ManifestTrustPolicy::strict(Vec::new());
+        assert!(matches!(
+            manifest.verify(&strict),
+            Err(ManifestError::NotSigned)
+        ));
     }
 
     #[test]

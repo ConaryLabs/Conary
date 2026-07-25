@@ -11,12 +11,12 @@ use std::path::PathBuf;
 #[path = "src/commands/ccs/init_template.rs"]
 mod ccs_init_template;
 #[allow(dead_code)]
-#[path = "src/commands/install/dep_mode.rs"]
-mod dep_mode;
+#[path = "src/commands/install/ownership_mode.rs"]
+mod ownership_mode;
 
 mod commands {
     pub use super::ccs_init_template::CcsInitTemplate;
-    pub use super::dep_mode::DepMode;
+    pub use super::ownership_mode::OwnershipMode;
 }
 
 #[allow(dead_code, unused_imports)]
@@ -48,7 +48,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=src/cli");
     println!("cargo:rerun-if-changed=src/commands/ccs/init_template.rs");
-    println!("cargo:rerun-if-changed=src/commands/install/dep_mode.rs");
+    println!("cargo:rerun-if-changed=src/commands/install/ownership_mode.rs");
 
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?);
     let man_dir = manifest_dir.join("man");

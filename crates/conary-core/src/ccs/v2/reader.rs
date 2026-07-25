@@ -2,9 +2,7 @@
 
 use super::schema::AuthorityDocumentV2;
 use super::validation::validate_authority_structure;
-use crate::ccs::verify::{
-    PackageSignature, SignatureStatus, TrustPolicy, verify_manifest_signature,
-};
+use crate::ccs::verify::{PackageSignature, TrustPolicy, VerifyError, verify_manifest_signature};
 use anyhow::{Context, Result, bail};
 
 #[derive(Debug, Clone)]
@@ -27,7 +25,7 @@ pub fn read_authority_document(
     let authority =
         AuthorityDocumentV2::from_cbor(raw_manifest).context("decode CCS v2 MANIFEST")?;
     validate_authority_structure(&authority).map_err(|error| anyhow::anyhow!("{error}"))?;
-    let signature_raw = signature_raw.context("CCS v2 MANIFEST.sig is required")?;
+    let signature_raw = signature_raw.ok_or(VerifyError::NotSigned)?;
     let signature: PackageSignature =
         serde_json::from_str(signature_raw).context("parse MANIFEST.sig")?;
     verify_v2_signature(raw_manifest, &signature, policy)?;
@@ -56,14 +54,8 @@ fn verify_v2_signature(
     package_signature: &PackageSignature,
     policy: &TrustPolicy,
 ) -> Result<()> {
-    match verify_manifest_signature(raw_manifest, Some(package_signature), policy)? {
-        SignatureStatus::Valid { .. } => Ok(()),
-        SignatureStatus::Unsigned => bail!("CCS v2 MANIFEST.sig is required"),
-        SignatureStatus::Invalid(reason) => bail!("invalid CCS v2 signature: {reason}"),
-        SignatureStatus::Untrusted { key_id } => {
-            bail!("CCS v2 package signature key is not trusted: {key_id:?}")
-        }
-    }
+    verify_manifest_signature(raw_manifest, package_signature, policy)
+        .context("verify CCS v2 MANIFEST signature")
 }
 
 fn verify_debug_toml_hash(authority: &AuthorityDocumentV2, toml_raw: Option<&[u8]>) -> Result<()> {
@@ -175,9 +167,10 @@ mod tests {
 [package]
 name = "demo"
 version = "0.1.0"
-description = "demo package"
+version_scheme = "conary"
 release = "1"
 kind = "package"
+description = "demo package"
 
 [config]
 files = ["/etc/conary-example/config.toml"]
@@ -188,7 +181,7 @@ noreplace = true
         if let crate::ccs::v2::schema::PackageKindV2::Package(package) = &mut authority.kind {
             let file = package.files.first_mut().unwrap();
             file.path = "/etc/conary-example/config.toml".to_string();
-            file.mode = 0o644;
+            file.node.mode = libc::S_IFREG | 0o644;
             file.config = Some(crate::ccs::v2::schema::ConfigPolicyV2::NoReplace);
             package
                 .config
@@ -216,7 +209,11 @@ noreplace = true
     #[test]
     fn reader_accepts_lifecycle_authority_without_no_profile_rejection() {
         let mut authority = crate::ccs::v2::schema::AuthorityDocumentV2::package_for_tests("svc");
-        authority.lifecycle.services = vec!["conary-example.service".to_string()];
+        authority.lifecycle.services = vec![crate::ccs::v2::schema::LifecycleServiceV2 {
+            name: "conary-example.service".to_string(),
+            action: crate::ccs::v2::schema::LifecycleServiceActionV2::Restart,
+            reversible: None,
+        }];
         let raw = authority.to_cbor().unwrap();
         let key = SigningKeyPair::generate();
         let signature = key.sign(&raw);
@@ -239,9 +236,10 @@ noreplace = true
 [package]
 name = "demo"
 version = "0.1.0"
-description = "demo package"
+version_scheme = "conary"
 release = "1"
 kind = "package"
+description = "demo package"
 
 [[hooks.services]]
 name = "conary-example.service"
@@ -249,7 +247,11 @@ action = "restart"
 "#;
         let mut authority = crate::ccs::v2::schema::AuthorityDocumentV2::package_for_tests("demo");
         authority.debug_toml_sha256 = Some(crate::hash::sha256(toml.as_bytes()));
-        authority.lifecycle.services = vec!["conary-example.service".to_string()];
+        authority.lifecycle.services = vec![crate::ccs::v2::schema::LifecycleServiceV2 {
+            name: "conary-example.service".to_string(),
+            action: crate::ccs::v2::schema::LifecycleServiceActionV2::Restart,
+            reversible: None,
+        }];
         let raw = authority.to_cbor().unwrap();
         let key = SigningKeyPair::generate();
         let signature = key.sign(&raw);
@@ -267,26 +269,31 @@ action = "restart"
     }
 
     #[test]
-    fn v2_debug_toml_with_unsupported_dependencies_is_rejected() {
+    fn v2_debug_toml_requirements_must_match_signed_authority() {
         let toml = r#"
 [package]
 name = "hello"
 version = "0.1.0"
+version_scheme = "conary"
+release = "1"
+kind = "package"
 description = "hello"
-
-[[requires.packages]]
-name = "openssl"
-version = ">=3.0"
 "#;
 
-        let manifest = crate::ccs::manifest::CcsManifest::parse(toml).unwrap();
-        let error =
-            crate::ccs::v2::debug_projection::reject_unsupported_debug_toml_install_authority(
-                &manifest,
+        let mut manifest = crate::ccs::manifest::CcsManifest::parse(toml).unwrap();
+        manifest.requirements.push(
+            crate::repository::requirement::parse_native_requirement(
+                crate::repository::dependency_model::RepositoryRequirementKind::Depends,
+                crate::repository::versioning::VersionScheme::Conary,
+                "openssl >= 3.0.0",
             )
-            .unwrap_err();
-        assert!(error.to_string().contains("debug TOML"));
-        assert!(error.to_string().contains("dependencies"));
+            .unwrap(),
+        );
+        let authority = crate::ccs::v2::schema::AuthorityDocumentV2::package_for_tests("hello");
+        let error =
+            crate::ccs::v2::debug_projection::validate_debug_toml_projection(&authority, &manifest)
+                .unwrap_err();
+        assert!(error.to_string().contains("requirement projection"));
     }
 
     #[test]
@@ -329,6 +336,6 @@ version = ">=3.0"
             &policy,
         )
         .unwrap_err();
-        assert!(error.to_string().contains("Unsupported algorithm"));
+        assert!(format!("{error:#}").contains("unsupported algorithm"));
     }
 }

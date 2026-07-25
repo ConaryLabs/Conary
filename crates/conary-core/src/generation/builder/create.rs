@@ -4,17 +4,20 @@ use std::path::{Path, PathBuf};
 
 use tracing::{info, warn};
 
+use super::BuildResult;
 use super::GenerationActivation;
 use super::boot_assets::{
     resolve_generation_boot_asset_sources, stage_runtime_boot_assets_from_sources,
 };
-use super::cas::{cas_objects_from_file_refs, verify_runtime_generation_cas_object_presence};
-use super::erofs::{BuildResult, build_erofs_image};
-use super::file_capabilities::SECURITY_CAPABILITY_XATTR;
+use super::cas::{cas_objects_from_manifests, verify_runtime_generation_cas_object_presence};
 use super::root_validation::validate_runtime_generation_root_is_self_contained;
 use super::runtime_inputs;
 use super::sysroot::runtime_generation_architecture;
-use crate::db::models::{FileEntry, StateEngine, SystemState, Trove};
+use crate::db::models::{
+    FileEntry, GenerationActivationIntent, GenerationPublication, InstallSource, StateEngine,
+    SystemState, Trove,
+};
+use crate::filesystem::CasStore;
 use crate::generation::artifact::{
     ArtifactWriteInputs, CasObjectVerification, deduplicate_sort_cas_objects,
     write_generation_artifact,
@@ -22,12 +25,40 @@ use crate::generation::artifact::{
 use crate::generation::metadata::{
     GENERATION_FORMAT, GenerationMetadata, clear_generation_pending, mark_generation_pending,
 };
+use crate::generation::root_manifest::{
+    CapturedSelectedRoot, build_erofs_image_from_root_manifest, materialize_captured_selected_root,
+};
+
+/// Bootstrap an exact writable selected root from installed database state.
+///
+/// Once a complete current generation artifact exists, callers must
+/// materialize that artifact's typed manifests instead. Database projection is
+/// intentionally only the initial bootstrap bridge.
+pub fn materialize_selected_root_from_db(
+    conn: &rusqlite::Connection,
+    objects_dir: &Path,
+    selected_root: &Path,
+) -> crate::Result<()> {
+    let troves = Trove::list_all(conn)?;
+    let all_files = FileEntry::find_all_ordered(conn)?;
+    let runtime_inputs =
+        runtime_inputs::collect_runtime_generation_inputs(conn, &troves, all_files, selected_root)?;
+    let cas = CasStore::new(objects_dir)?;
+    materialize_captured_selected_root(
+        &CapturedSelectedRoot {
+            generation: runtime_inputs.generation,
+            state: runtime_inputs.state,
+        },
+        &cas,
+        selected_root,
+    )
+}
 
 /// Build a complete generation from the current database state.
 ///
 /// This is the high-level entry point that:
 /// 1. Queries all installed troves and their file entries
-/// 2. Builds the EROFS image via [`build_erofs_image`]
+/// 2. Builds the EROFS image from the exact generation-root manifest
 /// 3. Creates a system state snapshot (only after successful image build)
 /// 4. Writes generation metadata JSON
 ///
@@ -85,6 +116,72 @@ pub fn build_generation_from_db_with_boot_root_and_activation(
     summary: &str,
     boot_root: &Path,
     activation: GenerationActivation,
+) -> crate::Result<(i64, BuildResult)> {
+    let troves = Trove::list_all(conn)?;
+    let all_files = FileEntry::find_all_ordered(conn)?;
+    let runtime_inputs = runtime_inputs::collect_runtime_generation_inputs(
+        conn,
+        &troves,
+        all_files,
+        Path::new("/"),
+    )?;
+    build_generation_from_runtime_inputs(
+        conn,
+        generations_root,
+        summary,
+        boot_root,
+        activation,
+        troves,
+        runtime_inputs,
+    )
+}
+
+/// Build a generation from an exact selected-root capture.
+///
+/// This is the publication path for graph-driven lifecycle execution. The
+/// captured tree, including lifecycle-created, modified, and deleted nodes,
+/// is the filesystem authority; installed database rows are used only for
+/// package/state metadata and boot-asset selection.
+pub fn build_generation_from_captured_root_with_boot_root_and_activation(
+    conn: &rusqlite::Connection,
+    generations_root: &Path,
+    summary: &str,
+    boot_root: &Path,
+    activation: GenerationActivation,
+    captured: CapturedSelectedRoot,
+) -> crate::Result<(i64, BuildResult)> {
+    captured.generation.validate()?;
+    captured.state.validate()?;
+    let troves = Trove::list_all(conn)?;
+    let adopted_track_count = troves
+        .iter()
+        .filter(|trove| trove.install_source == InstallSource::AdoptedTrack)
+        .count();
+    let runtime_inputs = runtime_inputs::RuntimeGenerationInputs {
+        generation: captured.generation,
+        state: captured.state,
+        adopted_track_count,
+    };
+    build_generation_from_runtime_inputs(
+        conn,
+        generations_root,
+        summary,
+        boot_root,
+        activation,
+        troves,
+        runtime_inputs,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_generation_from_runtime_inputs(
+    conn: &rusqlite::Connection,
+    generations_root: &Path,
+    summary: &str,
+    boot_root: &Path,
+    activation: GenerationActivation,
+    troves: Vec<Trove>,
+    runtime_inputs: runtime_inputs::RuntimeGenerationInputs,
 ) -> crate::Result<(i64, BuildResult)> {
     struct PendingGenerationGuard {
         gen_dir: PathBuf,
@@ -181,41 +278,25 @@ pub fn build_generation_from_db_with_boot_root_and_activation(
     })?;
     let mut pending_guard = PendingGenerationGuard::new(gen_dir.clone());
 
-    // Step 3: Collect and validate exportable runtime inputs before building.
-    let troves = Trove::list_all(conn)?;
-    let all_files = FileEntry::find_all_ordered(conn)?;
-    let runtime_inputs =
-        runtime_inputs::collect_runtime_generation_inputs(conn, &troves, all_files)?;
-    let security_capability_xattr_count = runtime_inputs
-        .file_refs
-        .iter()
-        .filter(|file| file.xattrs.contains_key(SECURITY_CAPABILITY_XATTR))
-        .count();
+    // Step 3: Validate the exact runtime input selected by the caller.
+    let security_capability_xattr_count = runtime_inputs.security_capability_xattr_count();
 
     // Step 4: Build EROFS image with symlinks from DB.
     // This must succeed before we commit state to the database.
-    validate_runtime_generation_root_is_self_contained(
-        &runtime_inputs.file_refs,
-        &runtime_inputs.symlink_refs,
-    )?;
-    let cas_objects =
-        deduplicate_sort_cas_objects(cas_objects_from_file_refs(&runtime_inputs.file_refs))?;
+    validate_runtime_generation_root_is_self_contained(&runtime_inputs.generation)?;
+    let cas_objects = deduplicate_sort_cas_objects(cas_objects_from_manifests(
+        &runtime_inputs.generation,
+        &runtime_inputs.state,
+    ))?;
     verify_runtime_generation_cas_object_presence(generations_root, &cas_objects)?;
-    let result = build_erofs_image(
-        &runtime_inputs.file_refs,
-        &runtime_inputs.symlink_refs,
-        &gen_dir,
-    )?;
+    let result = build_erofs_image_from_root_manifest(&runtime_inputs.generation, &gen_dir)?;
+    runtime_inputs.state.write_to(&gen_dir)?;
 
     // Step 5: Stage boot assets and write the export artifact contract before
     // committing metadata. Export must not scrape live /boot later.
     let architecture = runtime_generation_architecture()?;
-    let boot_asset_sources = resolve_generation_boot_asset_sources(
-        &troves,
-        &runtime_inputs,
-        generations_root,
-        boot_root,
-    )?;
+    let boot_asset_sources =
+        resolve_generation_boot_asset_sources(&runtime_inputs, generations_root, boot_root)?;
     let kernel_version = boot_asset_sources.kernel_version.clone();
     let boot_assets = stage_runtime_boot_assets_from_sources(
         &gen_dir,
@@ -229,7 +310,6 @@ pub fn build_generation_from_db_with_boot_root_and_activation(
         architecture,
         erofs_path: &result.image_path,
         cas_base_rel: "../../objects",
-        cas_objects,
         cas_verification: CasObjectVerification::AlreadyVerified,
         boot_assets,
     })?;
@@ -247,6 +327,8 @@ pub fn build_generation_from_db_with_boot_root_and_activation(
     .map_err(|e| {
         crate::error::Error::InternalError(format!("Failed to create system state snapshot: {e}"))
     })?;
+    let applied_high_water = GenerationPublication::applied_high_water_changeset_id(conn)?;
+    GenerationActivationIntent::project_through(conn, gen_number, applied_high_water)?;
 
     // Step 7: Write generation metadata
     #[allow(clippy::cast_possible_wrap)]
@@ -290,14 +372,14 @@ pub fn build_generation_from_db_with_boot_root_and_activation(
 #[cfg(all(test, feature = "composefs-rs"))]
 mod tests {
     use super::super::test_support::{
-        assert_invalid_runtime_input_error, assert_missing_cas_object_error,
+        assert_invalid_runtime_input_error, assert_missing_cas_object_error, regular_file_entry,
         runtime_generation_db_with_invalid_regular_file,
         runtime_generation_db_with_missing_regular_file_cas_object,
     };
     use super::*;
     use crate::ccs::manifest::FileCapability;
-    use crate::db::models::{FileEntry, InstalledFileCapability, Trove, TroveType};
-    use crate::db::schema::migrate;
+    use crate::db::models::{InstalledFileCapability, Trove, TroveType};
+    use crate::db::schema::ensure_current;
     use crate::filesystem::CasStore;
     use crate::generation::builder::file_capabilities::SECURITY_CAPABILITY_XATTR;
     use crate::generation::metadata::GenerationMetadata;
@@ -319,29 +401,25 @@ mod tests {
         let hello_hash = cas.store(b"hello").unwrap();
         let init_hash = cas.store(b"init").unwrap();
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        ensure_current(&conn).unwrap();
         let mut trove = Trove::new(
             "kernel".to_string(),
             "6.19.8-conary".to_string(),
             TroveType::Package,
+            crate::repository::versioning::VersionScheme::Conary,
         );
         trove.architecture = Some("x86_64".to_string());
         let trove_id = trove.insert(&conn).unwrap();
-        let mut file = FileEntry::new(
-            "/usr/bin/hello".to_string(),
+        let mut file = regular_file_entry(
+            "/usr/bin/hello",
             hello_hash,
-            b"hello".len() as i64,
+            b"hello".len(),
             0o755,
             trove_id,
         );
         file.insert(&conn).unwrap();
-        let mut init = FileEntry::new(
-            "/usr/sbin/init".to_string(),
-            init_hash,
-            b"init".len() as i64,
-            0o755,
-            trove_id,
-        );
+        let mut init =
+            regular_file_entry("/usr/sbin/init", init_hash, b"init".len(), 0o755, trove_id);
         init.insert(&conn).unwrap();
 
         let (generation, _result) = build_generation_from_db_with_boot_root(
@@ -382,29 +460,25 @@ mod tests {
         let hello_hash = cas.store(b"hello").unwrap();
         let init_hash = cas.store(b"init").unwrap();
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        ensure_current(&conn).unwrap();
         let mut trove = Trove::new(
             "kernel".to_string(),
             "6.19.8-conary".to_string(),
             TroveType::Package,
+            crate::repository::versioning::VersionScheme::Conary,
         );
         trove.architecture = Some("x86_64".to_string());
         let trove_id = trove.insert(&conn).unwrap();
-        let mut file = FileEntry::new(
-            "/usr/bin/hello".to_string(),
+        let mut file = regular_file_entry(
+            "/usr/bin/hello",
             hello_hash,
-            b"hello".len() as i64,
+            b"hello".len(),
             0o755,
             trove_id,
         );
         file.insert(&conn).unwrap();
-        let mut init = FileEntry::new(
-            "/usr/sbin/init".to_string(),
-            init_hash,
-            b"init".len() as i64,
-            0o755,
-            trove_id,
-        );
+        let mut init =
+            regular_file_entry("/usr/sbin/init", init_hash, b"init".len(), 0o755, trove_id);
         init.insert(&conn).unwrap();
 
         InstalledFileCapability::replace_for_trove(
@@ -514,18 +588,19 @@ mod tests {
         let cas = CasStore::new(&objects_dir).unwrap();
         let hello_hash = cas.store(b"hello").unwrap();
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        ensure_current(&conn).unwrap();
         let mut trove = Trove::new(
             "kernel".to_string(),
             "6.19.8-conary".to_string(),
             TroveType::Package,
+            crate::repository::versioning::VersionScheme::Conary,
         );
         trove.architecture = Some("x86_64".to_string());
         let trove_id = trove.insert(&conn).unwrap();
-        let mut file = FileEntry::new(
-            "/usr/bin/hello".to_string(),
+        let mut file = regular_file_entry(
+            "/usr/bin/hello",
             hello_hash,
-            b"hello".len() as i64,
+            b"hello".len(),
             0o755,
             trove_id,
         );

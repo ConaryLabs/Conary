@@ -3,7 +3,7 @@
 use std::process::{Command, Output};
 
 #[test]
-fn ccs_build_v2_requires_key_or_local_dev() {
+fn ccs_build_requires_key_or_local_dev() {
     let fixture = MinimalPackageFixture::new();
 
     let output = fixture
@@ -11,8 +11,6 @@ fn ccs_build_v2_requires_key_or_local_dev() {
         .arg("ccs")
         .arg("build")
         .arg(fixture.project_dir())
-        .arg("--format")
-        .arg("v2")
         .arg("--output")
         .arg(fixture.output_dir())
         .output()
@@ -22,7 +20,7 @@ fn ccs_build_v2_requires_key_or_local_dev() {
 }
 
 #[test]
-fn ccs_build_v1_keeps_legacy_output_name() {
+fn ccs_build_uses_release_qualified_output_name() {
     let fixture = MinimalPackageFixture::new();
 
     let build = fixture
@@ -30,18 +28,19 @@ fn ccs_build_v1_keeps_legacy_output_name() {
         .arg("ccs")
         .arg("build")
         .arg(fixture.project_dir())
+        .arg("--local-dev")
         .arg("--output")
         .arg(fixture.output_dir())
         .output()
         .expect("run conary ccs build");
     assert_success(&build);
 
-    assert!(fixture.output_dir().join("hello-0.1.0.ccs").exists());
-    assert!(!fixture.output_dir().join("hello-0.1.0-1.ccs").exists());
+    assert!(fixture.output_dir().join("hello-0.1.0-1.ccs").exists());
+    assert!(!fixture.output_dir().join("hello-0.1.0.ccs").exists());
 }
 
 #[test]
-fn ccs_build_v2_accepts_explicit_release_key_and_policy_verify() {
+fn ccs_build_accepts_explicit_release_key_and_policy_verify() {
     let fixture = MinimalPackageFixture::new();
     let key_base = fixture.work.path().join("release-key");
     let private_key = key_base.with_extension("private");
@@ -66,8 +65,6 @@ fn ccs_build_v2_accepts_explicit_release_key_and_policy_verify() {
         .arg("ccs")
         .arg("build")
         .arg(fixture.project_dir())
-        .arg("--format")
-        .arg("v2")
         .arg("--key")
         .arg(&private_key)
         .arg("--output")
@@ -90,9 +87,9 @@ fn ccs_build_v2_accepts_explicit_release_key_and_policy_verify() {
 }
 
 #[test]
-fn local_dev_v2_package_passes_verify_and_dry_run_test() {
+fn local_dev_package_passes_verify_and_dry_run_test() {
     let fixture = MinimalPackageFixture::new();
-    let package = fixture.build_v2_local_dev();
+    let package = fixture.build_local_dev();
 
     let verify = fixture
         .conary()
@@ -125,7 +122,7 @@ fn local_dev_v2_package_passes_verify_and_dry_run_test() {
 #[test]
 fn ccs_test_requires_dry_run_for_m4b() {
     let fixture = MinimalPackageFixture::new();
-    let package = fixture.build_v2_local_dev();
+    let package = fixture.build_local_dev();
 
     let test = fixture
         .conary()
@@ -139,7 +136,7 @@ fn ccs_test_requires_dry_run_for_m4b() {
 }
 
 #[test]
-fn m4b_minimal_file_smoke_path_creates_lints_builds_verifies_and_tests_v2_package() {
+fn minimal_file_smoke_path_creates_lints_builds_verifies_and_tests_current_package() {
     let fixture = MinimalPackageFixture::new();
 
     let lint = fixture
@@ -151,10 +148,10 @@ fn m4b_minimal_file_smoke_path_creates_lints_builds_verifies_and_tests_v2_packag
         .expect("run conary ccs lint");
     assert_success(&lint);
 
-    let package = fixture.build_v2_local_dev();
+    let package = fixture.build_local_dev();
     assert!(
         package.exists(),
-        "expected v2 package {}",
+        "expected current package {}",
         package.display()
     );
 
@@ -179,7 +176,7 @@ fn m4b_minimal_file_smoke_path_creates_lints_builds_verifies_and_tests_v2_packag
 }
 
 #[test]
-fn lifecycle_authoring_now_requires_explicit_target_profile() {
+fn declarative_lifecycle_authoring_is_source_independent() {
     let fixture = MinimalPackageFixture::new();
     let manifest_path = fixture.project_dir().join("ccs.toml");
     let text = std::fs::read_to_string(&manifest_path).unwrap().replace(
@@ -193,19 +190,17 @@ fn lifecycle_authoring_now_requires_explicit_target_profile() {
         .arg("ccs")
         .arg("build")
         .arg(fixture.project_dir())
-        .arg("--format")
-        .arg("v2")
         .arg("--local-dev")
         .arg("--output")
         .arg(fixture.output_dir())
         .output()
         .expect("run conary ccs build");
 
-    assert_failure_contains(&output, &["target-profile"]);
+    assert_success(&output);
 }
 
 #[test]
-fn dependency_authoring_is_unsupported_and_blocks_v2_build() {
+fn dependency_authoring_builds_typed_v2_authority() {
     let fixture = MinimalPackageFixture::new();
     let manifest_path = fixture.project_dir().join("ccs.toml");
     let text = std::fs::read_to_string(&manifest_path).unwrap().replace(
@@ -219,15 +214,13 @@ fn dependency_authoring_is_unsupported_and_blocks_v2_build() {
         .arg("ccs")
         .arg("build")
         .arg(fixture.project_dir())
-        .arg("--format")
-        .arg("v2")
         .arg("--local-dev")
         .arg("--output")
         .arg(fixture.output_dir())
         .output()
         .expect("run conary ccs build");
 
-    assert_failure_contains(&output, &["dependencies", "m4e-dependencies-unsupported"]);
+    assert_success(&output);
 }
 
 struct MinimalPackageFixture {
@@ -285,14 +278,12 @@ impl MinimalPackageFixture {
         &self.output
     }
 
-    fn build_v2_local_dev(&self) -> std::path::PathBuf {
+    fn build_local_dev(&self) -> std::path::PathBuf {
         let output = self
             .conary()
             .arg("ccs")
             .arg("build")
             .arg(&self.project)
-            .arg("--format")
-            .arg("v2")
             .arg("--local-dev")
             .arg("--output")
             .arg(&self.output)
@@ -336,7 +327,7 @@ fn write_trust_policy_from_public_key(
     std::fs::write(
         policy_path,
         format!(
-            "trusted_keys = [\"{}\"]\nallow_unsigned = false\nrequire_timestamp = false\n",
+            "trusted_keys = [\"{}\"]\nrequire_timestamp = false\n",
             key.key
         ),
     )

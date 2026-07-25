@@ -1,15 +1,15 @@
 // conary-core/src/resolver/sat/removal.rs
 
-use resolvo::SolvableId;
 use rusqlite::Connection;
 use std::collections::HashSet;
 
 use crate::error::Result;
-use crate::repository::versioning::{RepoVersionConstraint, repo_version_satisfies};
-use crate::version::{RpmVersion, VersionConstraint};
 
+use super::super::provider::matching::{
+    constraint_matches_provide, provider_expression_matches_package,
+};
 use super::super::provider::{
-    ConaryConstraint, ConaryProvider, SolverDep, constraint_matches_package,
+    ConaryConstraint, ConaryProvider, SolverExpression, constraint_matches_package,
 };
 
 pub(super) fn build_provider_for_removal<'conn>(
@@ -25,35 +25,57 @@ pub(super) fn build_provider_for_removal<'conn>(
 pub(super) fn find_breaking_packages(
     provider: &ConaryProvider<'_>,
     to_remove: &[String],
-) -> Vec<String> {
-    let mut gone_set: HashSet<String> = to_remove.iter().cloned().collect();
-    let mut breaking_set: HashSet<String> = HashSet::new();
-    let solvable_count = provider.solvable_count();
+) -> Result<Vec<String>> {
+    let names = to_remove.iter().map(String::as_str).collect::<HashSet<_>>();
+    let trove_ids = provider
+        .solvable_ids()
+        .iter()
+        .filter_map(|id| {
+            let package = provider.get_solvable(*id);
+            names
+                .contains(package.name.as_str())
+                .then_some(package.installed_trove_id)
+                .flatten()
+        })
+        .collect::<Vec<_>>();
+    find_breaking_packages_for_troves(provider, &trove_ids)
+}
 
+pub(super) fn find_breaking_packages_for_troves(
+    provider: &ConaryProvider<'_>,
+    to_remove: &[i64],
+) -> Result<Vec<String>> {
+    let mut gone_troves = to_remove.iter().copied().collect::<HashSet<_>>();
+    let mut breaking_set: HashSet<String> = HashSet::new();
+    let baseline = HashSet::new();
     loop {
         let mut changed = false;
 
-        for index in 0..solvable_count {
-            let sid = SolvableId(index as u32);
-            let pkg = provider.get_solvable(sid);
+        for sid in provider.solvable_ids() {
+            let pkg = provider.get_solvable(*sid);
+            let Some(trove_id) = pkg.installed_trove_id else {
+                continue;
+            };
 
-            if pkg.installed_trove_id.is_none()
-                || gone_set.contains(&pkg.name)
-                || breaking_set.contains(&pkg.name)
-            {
+            if gone_troves.contains(&trove_id) {
                 continue;
             }
 
-            let has_broken_dep = provider
-                .get_removal_dependency_list(sid)
-                .is_some_and(|deps| {
-                    deps.iter()
-                        .any(|dep| !clause_satisfiable(provider, dep, &gone_set))
-                });
+            let mut has_broken_dep = false;
+            if let Some(dependencies) = provider.get_removal_dependency_list(*sid) {
+                for dependency in dependencies {
+                    if expression_satisfiable(provider, &dependency.expression, &baseline)?
+                        && !expression_satisfiable(provider, &dependency.expression, &gone_troves)?
+                    {
+                        has_broken_dep = true;
+                        break;
+                    }
+                }
+            }
 
             if has_broken_dep {
                 breaking_set.insert(pkg.name.clone());
-                gone_set.insert(pkg.name.clone());
+                gone_troves.insert(trove_id);
                 changed = true;
             }
         }
@@ -65,92 +87,83 @@ pub(super) fn find_breaking_packages(
 
     let mut breaking = breaking_set.into_iter().collect::<Vec<_>>();
     breaking.sort();
-    breaking
+    Ok(breaking)
 }
 
-fn clause_satisfiable(
+fn expression_satisfiable(
     provider: &ConaryProvider<'_>,
-    dep: &SolverDep,
-    gone: &HashSet<String>,
-) -> bool {
-    match dep {
-        SolverDep::Single(name, constraint) => {
-            alternative_satisfiable(provider, name, constraint, gone)
+    expression: &SolverExpression,
+    gone_troves: &HashSet<i64>,
+) -> Result<bool> {
+    match expression {
+        SolverExpression::Atom(atom) => {
+            atom_satisfiable(provider, &atom.name, &atom.constraint, gone_troves)
         }
-        SolverDep::OrGroup(alternatives) => alternatives
-            .iter()
-            .any(|(name, constraint)| alternative_satisfiable(provider, name, constraint, gone)),
+        SolverExpression::And(operands) => {
+            for operand in operands {
+                if !expression_satisfiable(provider, operand, gone_troves)? {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        }
+        SolverExpression::Or(operands) => {
+            for operand in operands {
+                if expression_satisfiable(provider, operand, gone_troves)? {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        }
+        SolverExpression::Not(operand) => {
+            Ok(!expression_satisfiable(provider, operand, gone_troves)?)
+        }
     }
 }
 
-fn alternative_satisfiable(
+fn atom_satisfiable(
     provider: &ConaryProvider<'_>,
     dep_name: &str,
     constraint: &ConaryConstraint,
-    gone: &HashSet<String>,
-) -> bool {
+    gone_troves: &HashSet<i64>,
+) -> Result<bool> {
+    if let ConaryConstraint::ProviderExpression { expression } = constraint {
+        for id in provider.solvable_ids() {
+            let package = provider.get_solvable(*id);
+            if let Some(trove_id) = package.installed_trove_id
+                && !gone_troves.contains(&trove_id)
+                && provider_expression_matches_package(expression, package)?
+            {
+                return Ok(true);
+            }
+        }
+        return Ok(false);
+    }
+
     let providers = provider.find_providers(dep_name);
-    if providers.iter().any(|(trove_id, provided_version)| {
-        provider
-            .trove_name(*trove_id)
-            .is_some_and(|name| !gone.contains(name))
-            && provider_version_satisfies_constraint(constraint, provided_version.as_deref())
-    }) {
-        return true;
+    for (trove_id, provided_version) in providers {
+        if let Some(package) = provider.installed_package_for_trove(trove_id)
+            && !gone_troves.contains(&trove_id)
+            && constraint_matches_provide(
+                constraint,
+                provided_version.as_deref(),
+                package.version_scheme,
+            )?
+        {
+            return Ok(true);
+        }
     }
 
-    let solvable_count = provider.solvable_count();
-    let has_matching_installed_name = (0..solvable_count).any(|index| {
-        let alt = provider.get_solvable(SolvableId(index as u32));
-        alt.installed_trove_id.is_some()
+    for id in provider.solvable_ids() {
+        let alt = provider.get_solvable(*id);
+        if let Some(trove_id) = alt.installed_trove_id
+            && !gone_troves.contains(&trove_id)
             && alt.name == dep_name
-            && !gone.contains(&alt.name)
-            && constraint_matches_package(constraint, &alt.version, alt.version_scheme)
-    });
-    if has_matching_installed_name {
-        return true;
-    }
-
-    let was_provided_by_removed = providers.iter().any(|(trove_id, _)| {
-        provider
-            .trove_name(*trove_id)
-            .is_some_and(|name| gone.contains(name))
-    });
-    let removed_name_match = (0..solvable_count).any(|index| {
-        let alt = provider.get_solvable(SolvableId(index as u32));
-        alt.installed_trove_id.is_some() && alt.name == dep_name && gone.contains(&alt.name)
-    });
-
-    !was_provided_by_removed && !removed_name_match
-}
-
-fn provider_version_satisfies_constraint(
-    constraint: &ConaryConstraint,
-    provider_version: Option<&str>,
-) -> bool {
-    match constraint {
-        ConaryConstraint::Legacy(VersionConstraint::Any) => true,
-        ConaryConstraint::Legacy(version_constraint) => {
-            let Some(version) = provider_version else {
-                return false;
-            };
-            RpmVersion::parse(version)
-                .map(|parsed| version_constraint.satisfies(&parsed))
-                .unwrap_or(false)
-        }
-        ConaryConstraint::Repository {
-            constraint: RepoVersionConstraint::Any,
-            ..
-        } => true,
-        ConaryConstraint::Repository {
-            scheme,
-            constraint: repo_constraint,
-            ..
-        } => {
-            let Some(version) = provider_version else {
-                return false;
-            };
-            repo_version_satisfies(*scheme, version, repo_constraint)
+            && constraint_matches_package(constraint, &alt.version, alt.version_scheme)?
+        {
+            return Ok(true);
         }
     }
+
+    Ok(false)
 }

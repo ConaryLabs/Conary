@@ -30,18 +30,23 @@ mod component;
 mod component_dependency;
 mod config;
 mod converted;
+mod debian_debconf_state;
 mod delta;
-mod dependency;
 mod derived;
 mod distro_pin;
 mod download_stats;
 mod file_entry;
 mod flavor;
+mod generation_activation;
 mod generation_publication;
+mod installed_ccs_remove_hook;
 mod installed_file_capability;
-mod installed_legacy_scriptlet_bundle;
+mod installed_native_lifecycle_bundle;
+mod installed_requirement_atom;
+mod installed_requirement_group;
 mod label;
 mod metadata;
+mod native_lifecycle_residual_state;
 mod native_publication;
 mod provenance;
 mod provide_entry;
@@ -53,8 +58,6 @@ mod repository_capability;
 mod repository_package_key;
 mod repository_requirement;
 mod resolution;
-mod scriptlet_entry;
-mod scriptlet_evidence;
 mod state;
 mod subpackage;
 mod trigger;
@@ -76,22 +79,31 @@ pub use component::Component;
 pub use component_dependency::{ComponentDepType, ComponentDependency, ComponentProvide};
 pub use config::{ConfigBackup, ConfigFile, ConfigSource, ConfigStatus};
 pub use converted::{
-    CONVERSION_VERSION, ChunkPublicationState, ConvertedPackage, ScriptletSummaryForPublication,
+    CONVERSION_VERSION, ChunkConversionState, ConvertedArtifactKind, ConvertedPackage,
+    RepositoryConvertedArtifact,
 };
+pub use debian_debconf_state::DebianDebconfState;
 pub use delta::{DeltaStats, PackageDelta};
-pub use dependency::DependencyEntry;
 pub use derived::{DerivedOverride, DerivedPackage, DerivedPatch, DerivedStatus, VersionPolicy};
 pub use distro_pin::{DistroPin, PackageOverride, SystemAffinity};
 pub use download_stats::{DownloadCount, DownloadStat, GlobalDownloadStats};
 pub use file_entry::FileEntry;
 pub use flavor::Flavor;
+pub use generation_activation::{
+    ActivationRequest, ActivationRequestSourceKind, GenerationActivationIntent,
+    GenerationActivationIntentStatus, NewActivationRequest,
+};
 pub use generation_publication::{
     GenerationPublication, GenerationPublicationPhase, GenerationPublicationStatus,
 };
+pub use installed_ccs_remove_hook::InstalledCcsRemoveHook;
 pub use installed_file_capability::InstalledFileCapability;
-pub use installed_legacy_scriptlet_bundle::InstalledLegacyScriptletBundle;
+pub use installed_native_lifecycle_bundle::InstalledNativeLifecycleBundle;
+pub use installed_requirement_atom::InstalledRequirementAtom;
+pub use installed_requirement_group::InstalledRequirementGroup;
 pub use label::{LabelEntry, LabelPathEntry, add_to_path, get_label_path, remove_from_path};
 pub use metadata::{MetadataTable, get_metadata, set_metadata};
+pub use native_lifecycle_residual_state::NativeLifecycleResidualState;
 pub use native_publication::{
     NATIVE_NOARCH, NativePackagePublication, NativePublicationStatus, normalize_native_architecture,
 };
@@ -100,20 +112,12 @@ pub use provide_entry::ProvideEntry;
 pub use redirect::{Redirect, RedirectType, ResolveResult};
 pub use remote_collection::{DEFAULT_CACHE_TTL_SECS, RemoteCollection};
 pub use repology_cache::RepologyCacheEntry;
-pub use repository::{Repository, RepositoryPackage, SecurityAdvisorySupport};
+pub(crate) use repository::version_scheme_from_row;
+pub use repository::{Repository, RepositoryOwnership, RepositoryPackage, SecurityAdvisorySupport};
 pub use repository_capability::RepositoryProvide;
 pub use repository_package_key::{RepositoryPackageKey, RepositoryPackageKeyStatus};
 pub use repository_requirement::{RepositoryRequirement, RepositoryRequirementGroup};
 pub use resolution::{CacheTier, PackageResolution, PrimaryStrategy, ResolutionStrategy};
-pub use scriptlet_entry::ScriptletEntry;
-pub use scriptlet_evidence::{
-    BackfillStatus, CLUSTER_KEY_PREFIX, NewScriptletEvidenceCluster, NewScriptletEvidenceSample,
-    SCRIPTLET_EVIDENCE_RECORD_SCHEMA_V1, ScriptletEvidenceBackfillRun, ScriptletEvidenceCluster,
-    ScriptletEvidenceClusterDetail, ScriptletEvidenceClusterListFilter,
-    ScriptletEvidenceClusterSummary, ScriptletEvidenceKind, ScriptletEvidenceNote,
-    ScriptletEvidenceRecord, ScriptletEvidenceSample, ScriptletEvidenceState,
-    ScriptletEvidenceStateEvent,
-};
 pub use state::{RestorePlan, StateDiff, StateEngine, StateMember, SystemState};
 pub use subpackage::{RelatedPackages, SubpackageRelationship, show_subpackage_guidance};
 pub use trigger::{ChangesetTrigger, Trigger, TriggerDependency, TriggerStatus};
@@ -132,6 +136,21 @@ pub fn format_size(bytes: i64) -> String {
 mod tests {
     use super::*;
     use crate::db::testing::create_test_db;
+    use crate::payload::{PayloadContentAuthority, PayloadNode, ResolvedPayloadNode};
+
+    fn regular_file(path: &str, size: u64, mode: u32, trove_id: i64) -> FileEntry {
+        let node =
+            ResolvedPayloadNode::from_numeric_source(PayloadNode::regular(mode & 0o7777)).unwrap();
+        FileEntry::new(
+            path.to_string(),
+            node,
+            Some(PayloadContentAuthority {
+                sha256: crate::hash::sha256(b"test payload"),
+                size,
+            }),
+            trove_id,
+        )
+    }
 
     #[test]
     fn test_trove_crud() {
@@ -142,6 +161,7 @@ mod tests {
             "test-package".to_string(),
             "1.0.0".to_string(),
             TroveType::Package,
+            crate::repository::versioning::VersionScheme::Conary,
         );
         trove.architecture = Some("x86_64".to_string());
         trove.description = Some("A test package".to_string());
@@ -193,13 +213,6 @@ mod tests {
         assert_eq!(updated.status, ChangesetStatus::Applied);
         assert!(updated.applied_at.is_some());
 
-        changeset
-            .update_status(&conn, ChangesetStatus::PostHooksFailed)
-            .unwrap();
-        let degraded = Changeset::find_by_id(&conn, id).unwrap().unwrap();
-        assert_eq!(degraded.status, ChangesetStatus::PostHooksFailed);
-        assert!(degraded.applied_at.is_some());
-
         // List all
         let all = Changeset::list_all(&conn).unwrap();
         assert_eq!(all.len(), 1);
@@ -214,18 +227,12 @@ mod tests {
             "test-package".to_string(),
             "1.0.0".to_string(),
             TroveType::Package,
+            crate::repository::versioning::VersionScheme::Conary,
         );
         let trove_id = trove.insert(&conn).unwrap();
 
         // Create a file
-        let mut file = FileEntry::new(
-            "/usr/bin/test".to_string(),
-            "abc123def456".to_string(),
-            1024,
-            0o755,
-            trove_id,
-        );
-        file.owner = Some("root".to_string());
+        let mut file = regular_file("/usr/bin/test", 1024, 0o755, trove_id);
 
         let id = file.insert(&conn).unwrap();
         assert!(id > 0);
@@ -234,8 +241,11 @@ mod tests {
         let found = FileEntry::find_by_path(&conn, "/usr/bin/test")
             .unwrap()
             .unwrap();
-        assert_eq!(found.sha256_hash, "abc123def456");
-        assert_eq!(found.size, 1024);
+        assert_eq!(
+            found.content.as_ref().unwrap().sha256,
+            crate::hash::sha256(b"test payload")
+        );
+        assert_eq!(found.content.as_ref().unwrap().size, 1024);
 
         // Find by trove
         let files = FileEntry::find_by_trove(&conn, trove_id).unwrap();
@@ -256,16 +266,11 @@ mod tests {
             "test-package".to_string(),
             "1.0.0".to_string(),
             TroveType::Package,
+            crate::repository::versioning::VersionScheme::Conary,
         );
         let trove_id = trove.insert(&conn).unwrap();
 
-        let mut file = FileEntry::new(
-            "/usr/bin/test".to_string(),
-            "abc123".to_string(),
-            1024,
-            0o755,
-            trove_id,
-        );
+        let mut file = regular_file("/usr/bin/test", 1024, 0o755, trove_id);
         file.insert(&conn).unwrap();
 
         // Delete the trove - file should be cascade deleted
@@ -285,6 +290,7 @@ mod tests {
             "nginx".to_string(),
             "1.21.0".to_string(),
             TroveType::Package,
+            crate::repository::versioning::VersionScheme::Conary,
         );
         let trove_id = trove.insert(&conn).unwrap();
 
@@ -323,6 +329,7 @@ mod tests {
             "nginx".to_string(),
             "1.21.0".to_string(),
             TroveType::Package,
+            crate::repository::versioning::VersionScheme::Conary,
         );
         let trove_id = trove.insert(&conn).unwrap();
 
@@ -369,6 +376,7 @@ mod tests {
             "test-pkg".to_string(),
             "1.0.0".to_string(),
             TroveType::Package,
+            crate::repository::versioning::VersionScheme::Conary,
         );
         let trove_id = trove.insert(&conn).unwrap();
 
@@ -392,6 +400,7 @@ mod tests {
             "test-pkg".to_string(),
             "1.0.0".to_string(),
             TroveType::Package,
+            crate::repository::versioning::VersionScheme::Conary,
         );
         let trove_id = trove.insert(&conn).unwrap();
 

@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use conary_core::db::schema::migrate;
+use conary_core::db::schema::ensure_current;
 use conary_core::derivation::{DerivationIndex, DerivationRecord};
 use rusqlite::Connection;
 
@@ -22,7 +22,7 @@ fn write_run_workdir(
 
     let db_path = op_dir.join("derivations.db");
     let conn = Connection::open(&db_path).unwrap();
-    migrate(&conn).unwrap();
+    ensure_current(&conn).unwrap();
     let index = DerivationIndex::new(&conn);
     for (package, output_hash) in builds {
         index

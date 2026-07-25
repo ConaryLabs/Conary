@@ -18,11 +18,6 @@ pub(super) async fn dispatch_verify_derivation_command(
             json,
             db,
         } => commands::verify::cmd_verify_chain(&profile, verbose, json, &db.db_path).await,
-        cli::VerifyCommands::Rebuild {
-            derivation,
-            work_dir,
-            db,
-        } => commands::verify::cmd_verify_rebuild(&derivation, &work_dir, &db.db_path).await,
         cli::VerifyCommands::Diverse {
             profile_a,
             profile_b,

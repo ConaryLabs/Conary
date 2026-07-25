@@ -52,7 +52,7 @@ impl TransactionEngine {
             );
         }
 
-        if let Ok(Some(current_num)) = current_generation(&self.config.root) {
+        if let Some(current_num) = current_generation(&self.config.root)? {
             let gen_dir = self.config.generations_dir.join(current_num.to_string());
 
             match load_generation_artifact_for_number(current_num, &gen_dir) {
@@ -91,8 +91,7 @@ impl TransactionEngine {
                         &artifact.cas_dir,
                         required_verity,
                         expected_digest.as_deref(),
-                    )
-                    .unwrap_or(false);
+                    )?;
 
                     if is_mounted {
                         tracing::debug!(
@@ -106,7 +105,7 @@ impl TransactionEngine {
                         "Recovery: generation {} has valid artifact but is not mounted, mounting",
                         current_num
                     );
-                    return self.mount_artifact_and_link(conn, current_num, &artifact, policy);
+                    return self.mount_artifact_and_link(conn, current_num, &artifact);
                 }
                 Err(error) => {
                     tracing::warn!(
@@ -151,7 +150,7 @@ impl TransactionEngine {
                         );
                         return mark_generation_state_active_if_present(conn, expected);
                     }
-                    return self.mount_artifact_and_link(conn, expected, &artifact, policy);
+                    return self.mount_artifact_and_link(conn, expected, &artifact);
                 }
                 Err(e) => {
                     if policy == RecoveryScanPolicy::SelectedGenerationOnly {
@@ -172,20 +171,20 @@ impl TransactionEngine {
                 );
                 return Ok(());
             }
-            if !generations_dir_has_entries(&self.config.generations_dir) {
+            if !generations_dir_has_entries(&self.config.generations_dir)? {
                 tracing::debug!("Recovery: no selected generation and no generation images exist");
                 return Ok(());
             }
             tracing::warn!("Recovery: no selected generation, scanning artifacts");
         }
 
-        if let Some(artifact) = self.find_latest_intact_generation() {
+        if let Some(artifact) = self.find_latest_intact_generation()? {
             let gen_num = artifact.generation;
             tracing::info!(
                 "Recovery: found valid generation artifact for generation {}, mounting",
                 gen_num
             );
-            return self.mount_artifact_and_link(conn, gen_num, &artifact, policy);
+            return self.mount_artifact_and_link(conn, gen_num, &artifact);
         }
 
         Err(crate::Error::RecoveryFailed(
@@ -206,7 +205,6 @@ impl TransactionEngine {
         conn: &Connection,
         gen_num: i64,
         artifact: &GenerationArtifact,
-        policy: RecoveryScanPolicy,
     ) -> Result<()> {
         let (requested_verity, digest) = artifact_mount_policy(artifact);
 
@@ -222,7 +220,7 @@ impl TransactionEngine {
             })?;
 
         crate::generation::mount::update_current_symlink(&self.config.root, gen_num)?;
-        mark_generation_state_active_for_policy(conn, gen_num, policy)?;
+        mark_generation_state_active_if_present(conn, gen_num)?;
 
         tracing::info!(
             "Recovery: generation {} mounted and symlink updated",
@@ -233,23 +231,43 @@ impl TransactionEngine {
 
     /// Scan the generations directory descending by number and return the
     /// highest generation whose artifact manifest and metadata validate.
-    pub(super) fn find_latest_intact_generation(&self) -> Option<GenerationArtifact> {
-        if !self.config.generations_dir.exists() {
-            return None;
-        }
+    pub(super) fn find_latest_intact_generation(&self) -> Result<Option<GenerationArtifact>> {
+        let entries = match std::fs::read_dir(&self.config.generations_dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
 
-        let mut candidates: Vec<i64> = std::fs::read_dir(&self.config.generations_dir)
-            .ok()?
-            .flatten()
-            .filter_map(|entry| entry.file_name().to_string_lossy().parse::<i64>().ok())
-            .collect();
+        let mut candidates = Vec::new();
+        for entry in entries {
+            let entry = entry?;
+            if !entry.file_type()?.is_dir() {
+                continue;
+            }
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else {
+                tracing::debug!(
+                    path = %entry.path().display(),
+                    "Recovery: ignoring generation entry whose name is not valid UTF-8"
+                );
+                continue;
+            };
+            let Ok(generation) = name.parse::<i64>() else {
+                tracing::debug!(
+                    path = %entry.path().display(),
+                    "Recovery: ignoring non-generation directory"
+                );
+                continue;
+            };
+            candidates.push(generation);
+        }
 
         candidates.sort_unstable_by(|a, b| b.cmp(a));
 
         for gen_num in candidates {
             let gen_dir = self.config.generations_dir.join(gen_num.to_string());
             match load_generation_artifact_for_number(gen_num, &gen_dir) {
-                Ok(artifact) => return Some(artifact),
+                Ok(artifact) => return Ok(Some(artifact)),
                 Err(error) => {
                     tracing::debug!(
                         "Recovery: generation {} failed artifact validation, skipping: {}",
@@ -260,7 +278,7 @@ impl TransactionEngine {
             }
         }
 
-        None
+        Ok(None)
     }
 }
 
@@ -319,34 +337,25 @@ fn mark_generation_state_active_if_present(conn: &Connection, gen_num: i64) -> R
     }
 }
 
-fn mark_generation_state_active_for_policy(
-    conn: &Connection,
-    gen_num: i64,
-    policy: RecoveryScanPolicy,
-) -> Result<()> {
-    match mark_generation_state_active_if_present(conn, gen_num) {
-        Ok(()) => Ok(()),
-        Err(error) if policy == RecoveryScanPolicy::SelectedOrLatestArtifact => {
-            tracing::warn!(
-                "Recovery selected valid generation {gen_num}, but DB active-state catch-up failed: {error}"
-            );
-            Ok(())
-        }
-        Err(error) => Err(error),
-    }
-}
-
 impl Drop for TransactionEngine {
     fn drop(&mut self) {
         self.release_lock();
     }
 }
 
-fn generations_dir_has_entries(path: &Path) -> bool {
-    std::fs::read_dir(path)
-        .ok()
-        .and_then(|mut entries| entries.next())
-        .is_some()
+fn generations_dir_has_entries(path: &Path) -> Result<bool> {
+    let mut entries = match std::fs::read_dir(path) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error.into()),
+    };
+    match entries.next() {
+        Some(entry) => {
+            entry?;
+            Ok(true)
+        }
+        None => Ok(false),
+    }
 }
 
 fn load_generation_artifact_for_number(gen_num: i64, gen_dir: &Path) -> Result<GenerationArtifact> {
@@ -412,6 +421,7 @@ mod tests {
             state_number: Some(7),
             generation_number: Some(7),
             summary: "fixture".to_string(),
+            config_transaction: Default::default(),
             last_error: None,
             retry_count: 1,
             recoverable: true,

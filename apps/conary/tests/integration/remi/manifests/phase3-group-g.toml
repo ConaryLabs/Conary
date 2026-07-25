@@ -44,11 +44,11 @@ timeout = 30
 group = "G"
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/corrupted/bad-checksum/output/bad-checksum-corrupted.ccs --allow-unsigned --yes"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/corrupted/bad-checksum/output/bad-checksum-corrupted.ccs --policy ${FIXTURE_CCS_POLICY} --yes"
 
 [test.step.assert]
 exit_code_not = 0
-stderr_contains = "hash"
+stderr_contains = "authority"
 
 # --------------------------------------------------------------------------
 # T78: Truncated chunk rejection
@@ -62,11 +62,11 @@ timeout = 30
 group = "G"
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/corrupted/truncated/output/truncated-corrupted.ccs --allow-unsigned --yes"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/corrupted/truncated/output/truncated-corrupted.ccs --policy ${FIXTURE_CCS_POLICY} --yes"
 
 [test.step.assert]
 exit_code_not = 0
-stderr_contains = "trunc"
+stderr_contains = "mismatch"
 
 # --------------------------------------------------------------------------
 # T79: Tampered file rejection
@@ -80,7 +80,7 @@ timeout = 30
 group = "G"
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/corrupted/tampered/output/tampered-corrupted.ccs --allow-unsigned --yes"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/corrupted/tampered/output/tampered-corrupted.ccs --policy ${FIXTURE_CCS_POLICY} --yes"
 
 [test.step.assert]
 exit_code_not = 0
@@ -104,7 +104,7 @@ conary = "repo sync ${REPO_NAME} --force"
 exit_code = 0
 
 [[test.step]]
-run = "${CONARY_BIN} repo add corrupted-meta http://127.0.0.1:18080/corrupted-index --db-path ${DB_PATH} --no-gpg-check >/dev/null 2>&1 || true; ${CONARY_BIN} repo sync corrupted-meta --db-path ${DB_PATH} 2>&1"
+run = "${CONARY_BIN} repo add corrupted-meta http://127.0.0.1:18080/corrupted-index --package-format json --db-path ${DB_PATH} >/dev/null 2>&1 || true; ${CONARY_BIN} repo sync corrupted-meta --db-path ${DB_PATH} 2>&1"
 
 [test.step.assert]
 exit_code_not = 0
@@ -129,7 +129,7 @@ timeout = 30
 group = "G"
 
 [[test.step]]
-conary = "install ${NATIVE_CORRUPTED_PKG} --yes --sandbox never"
+conary = "install ${NATIVE_CORRUPTED_PKG} --yes --sandbox always"
 
 [test.step.assert]
 exit_code_not = 0
@@ -147,7 +147,7 @@ timeout = 120
 group = "G"
 
 [[test.step]]
-run = "if ! test -f /usr/share/conary-test/hello.txt; then ${CONARY_BIN} ccs install --yes /opt/remi-tests/fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0.ccs --allow-unsigned --sandbox never --db-path ${DB_PATH}; fi"
+run = "if ! test -f /usr/share/conary-test/hello.txt; then ${CONARY_BIN} ccs install --yes /opt/remi-tests/fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0-1.ccs --policy ${FIXTURE_CCS_POLICY} --sandbox always --db-path ${DB_PATH}; fi"
 
 [test.step.assert]
 exit_code = 0
@@ -171,13 +171,13 @@ timeout = 120
 group = "G"
 
 [[test.step]]
-run = "if ! test -f /usr/share/conary-test/hello.txt; then ${CONARY_BIN} ccs install --yes /opt/remi-tests/fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0.ccs --allow-unsigned --sandbox never --db-path ${DB_PATH}; fi"
+run = "if ! test -f /usr/share/conary-test/hello.txt; then ${CONARY_BIN} ccs install --yes /opt/remi-tests/fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0-1.ccs --policy ${FIXTURE_CCS_POLICY} --sandbox always --db-path ${DB_PATH}; fi"
 
 [test.step.assert]
 exit_code = 0
 
 [[test.step]]
-run = "HASH=$(sqlite3 ${DB_PATH} \"SELECT sha256_hash FROM files WHERE path = '/usr/share/conary-test/hello.txt' LIMIT 1\") && test -n \"$HASH\" && PREFIX=$(printf '%s' \"$HASH\" | cut -c1-2) && SUFFIX=$(printf '%s' \"$HASH\" | cut -c3-) && OBJ=$(dirname \"${DB_PATH}\")/objects/$PREFIX/$SUFFIX && test -f \"$OBJ\" && rm -f \"$OBJ\""
+run = "HASH=$(sqlite3 ${DB_PATH} \"SELECT content_sha256 FROM files WHERE path = '/usr/share/conary-test/hello.txt' LIMIT 1\") && test -n \"$HASH\" && PREFIX=$(printf '%s' \"$HASH\" | cut -c1-2) && SUFFIX=$(printf '%s' \"$HASH\" | cut -c3-) && OBJ=$(dirname \"${DB_PATH}\")/objects/$PREFIX/$SUFFIX && test -f \"$OBJ\" && rm -f \"$OBJ\""
 
 [test.step.assert]
 exit_code = 0
@@ -201,11 +201,11 @@ timeout = 30
 group = "G"
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/corrupted/size-lie/output/size-lie-corrupted.ccs --allow-unsigned --yes"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/corrupted/size-lie/output/size-lie-corrupted.ccs --policy ${FIXTURE_CCS_POLICY} --yes"
 
 [test.step.assert]
 exit_code_not = 0
-stderr_contains = "hash"
+stderr_contains = "authority"
 
 # --------------------------------------------------------------------------
 # T85: Truncated HTTP response during download
@@ -226,19 +226,19 @@ exit_code_not = 0
 stdout_contains = "end of response"
 
 # --------------------------------------------------------------------------
-# T86: Unsigned package rejection
+# T86: Removed unsigned bypass flag rejection
 # --------------------------------------------------------------------------
 
 [[test]]
 id = "T86"
-name = "unsigned_package_rejection"
-description = "Install an unsigned package without --allow-unsigned and expect rejection"
+name = "removed_allow_unsigned_flag_rejected"
+description = "The removed --allow-unsigned bypass must be rejected even for a signed package with an explicit policy"
 timeout = 30
 group = "G"
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0.ccs --yes"
+conary = "ccs install /opt/remi-tests/fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0-1.ccs --policy ${FIXTURE_CCS_POLICY} --allow-unsigned --yes"
 
 [test.step.assert]
 exit_code_not = 0
-stderr_contains = "allow-unsigned"
+stderr_contains = "unexpected argument '--allow-unsigned'"

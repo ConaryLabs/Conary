@@ -10,11 +10,6 @@ pub(crate) struct InspectProjectInput {
     pub recipe: Option<String>,
 }
 
-#[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
-pub(crate) struct ExplainInferenceInput {
-    pub target: String,
-}
-
 #[derive(Debug, Clone, Default, serde::Deserialize, schemars::JsonSchema)]
 pub(crate) struct DiagnoseLatestFailureInput {
     #[serde(default)]

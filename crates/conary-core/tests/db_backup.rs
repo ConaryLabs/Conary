@@ -292,6 +292,7 @@ fn seed_publication_state(db_path: &Path, runtime_root: &Path, generation_number
         db_path.to_str().unwrap(),
         runtime_root.to_str().unwrap(),
         "fixture generation publication",
+        &Default::default(),
     )
     .unwrap();
     debt.set_phase(
@@ -317,7 +318,7 @@ fn write_generation_artifact_fixture(
     std::fs::write(boot_assets_dir.join("initramfs.img"), b"initramfs").unwrap();
     std::fs::write(boot_assets_dir.join("EFI/BOOT/BOOTX64.EFI"), b"efi").unwrap();
 
-    let cas_object = write_cas_object(objects_dir, b"cas object");
+    write_cas_object(objects_dir, b"cas object");
     let boot_assets = BootAssetsManifest {
         version: 1,
         generation: generation_number,
@@ -337,7 +338,6 @@ fn write_generation_artifact_fixture(
         architecture: "x86_64",
         erofs_path: &generation_dir.join("root.erofs"),
         cas_base_rel: "../../objects",
-        cas_objects: vec![cas_object],
         cas_verification: CasObjectVerification::Deep,
         boot_assets,
     })

@@ -19,7 +19,7 @@ use super::types::BootstrapRunOptions;
 /// full derivation pipeline. Writes generation output (EROFS image, metadata,
 /// profile) and creates a `current` symlink.
 pub async fn cmd_bootstrap_run(opts: BootstrapRunOptions<'_>) -> Result<()> {
-    use conary_core::db::schema::migrate;
+    use conary_core::db::schema::ensure_current;
     use conary_core::derivation::build_order::Stage;
     use conary_core::derivation::build_order::compute_build_order;
     use conary_core::derivation::executor::{DerivationExecutor, ExecutorConfig};
@@ -121,7 +121,8 @@ pub async fn cmd_bootstrap_run(opts: BootstrapRunOptions<'_>) -> Result<()> {
         // 5. Open DB
         let conn = Connection::open(&record.derivation_db_path)
             .context("Failed to open derivation database")?;
-        migrate(&conn).context("Failed to run database migrations")?;
+        ensure_current(&conn)
+            .context("Failed to create or validate the current database schema")?;
 
         // 6. Create CAS and executor
         let cas_dir = output_dir.join("objects");
@@ -226,28 +227,32 @@ pub async fn cmd_bootstrap_run(opts: BootstrapRunOptions<'_>) -> Result<()> {
         let gen_dir = output_dir.join("generations").join("1");
         std::fs::create_dir_all(&gen_dir)?;
 
-        let compose_erofs = op_dir.join("pipeline").join("compose").join("root.erofs");
-        let stage_erofs = profile.stages.last().map(|stage| {
-            op_dir
-                .join("pipeline")
-                .join(format!("stage-{}", stage.name))
-                .join("root.erofs")
-        });
-        let erofs_source = if compose_erofs.exists() {
-            compose_erofs
-        } else {
-            stage_erofs
-                .filter(|p| p.exists())
-                .ok_or_else(|| anyhow::anyhow!(
-                    "No EROFS image found in pipeline output; bootstrap-run cannot create an exportable generation"
-                ))?
-        };
+        let compose_dir = op_dir.join("pipeline").join("compose");
+        let erofs_source = compose_dir.join("root.erofs");
+        if !erofs_source.is_file() {
+            anyhow::bail!(
+                "Bootstrap pipeline did not produce its exact composed EROFS image at {}",
+                erofs_source.display()
+            );
+        }
         let dest = gen_dir.join("root.erofs");
         std::fs::copy(&erofs_source, &dest)?;
+        for manifest_name in [
+            conary_core::generation::root_manifest::GENERATION_ROOT_MANIFEST_FILE,
+            conary_core::generation::root_manifest::MUTABLE_STATE_MANIFEST_FILE,
+        ] {
+            let source = compose_dir.join(manifest_name);
+            if !source.is_file() {
+                anyhow::bail!(
+                    "Bootstrap pipeline did not produce exact root authority {}",
+                    source.display()
+                );
+            }
+            std::fs::copy(&source, gen_dir.join(manifest_name))?;
+        }
         println!("Generation 1 EROFS: {}", dest.display());
 
         write_bootstrap_run_generation_artifact(
-            &conn,
             &cas_dir,
             &gen_dir,
             &profile,

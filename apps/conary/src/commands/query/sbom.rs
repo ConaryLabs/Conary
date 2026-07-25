@@ -188,10 +188,10 @@ fn get_package_hashes(conn: &rusqlite::Connection, trove_id: i64) -> Result<Vec<
 
     // Include first non-empty sha256 as a representative hash
     for file in &files {
-        if !file.sha256_hash.is_empty() {
+        if let Some(content) = file.content.as_ref() {
             return Ok(vec![cyclonedx::Hash {
                 alg: "SHA-256".to_string(),
-                content: file.sha256_hash.clone(),
+                content: content.sha256.clone(),
             }]);
         }
     }

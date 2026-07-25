@@ -1,20 +1,21 @@
 // conary-core/src/ccs/inspector.rs
-//! CCS package inspection
+//! Explicitly non-authoritative CCS package inspection.
 //!
 //! Tools for reading and examining .ccs packages.
 
-use crate::ccs::archive_reader::read_ccs_archive;
+use crate::ccs::archive_reader::inspect_untrusted_ccs_archive;
 use crate::ccs::builder::{ComponentData, FileEntry};
 use crate::ccs::manifest::CcsManifest;
+use crate::payload::PayloadNodeKind;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::File;
 use std::path::Path;
 
-/// Inspected package data
+/// Structurally decoded package data that grants no trust or mutation authority.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct InspectedPackage {
+pub struct UntrustedPackageInspection {
     /// Package manifest
     pub manifest: CcsManifest,
     /// All files in the package
@@ -23,13 +24,13 @@ pub struct InspectedPackage {
     pub components: HashMap<String, ComponentData>,
 }
 
-impl InspectedPackage {
-    /// Load a package from a .ccs file
-    pub fn from_file(path: &Path) -> Result<Self> {
+impl UntrustedPackageInspection {
+    /// Decode a package for diagnostics without authenticating it.
+    pub fn inspect_untrusted_file(path: &Path) -> Result<Self> {
         let file = File::open(path)
             .with_context(|| format!("Failed to open package: {}", path.display()))?;
 
-        let contents = read_ccs_archive(file)?;
+        let contents = inspect_untrusted_ccs_archive(file)?;
 
         // Collect files from components (spec says files live in components/*.json)
         let files: Vec<FileEntry> = contents
@@ -38,7 +39,7 @@ impl InspectedPackage {
             .flat_map(|c| c.files.clone())
             .collect();
 
-        Ok(InspectedPackage {
+        Ok(Self {
             manifest: contents.manifest,
             files,
             components: contents.components,
@@ -62,7 +63,10 @@ impl InspectedPackage {
 
     /// Get total size
     pub fn total_size(&self) -> u64 {
-        self.files.iter().map(|f| f.size).sum()
+        self.files
+            .iter()
+            .filter_map(|file| file.content.as_ref().map(|content| content.size))
+            .sum()
     }
 
     /// Get component names
@@ -72,7 +76,7 @@ impl InspectedPackage {
 }
 
 /// Print package summary
-pub fn print_summary(pkg: &InspectedPackage) {
+pub fn print_summary(pkg: &UntrustedPackageInspection) {
     println!("Package: {} v{}", pkg.name(), pkg.version());
     println!("Description: {}", pkg.manifest.package.description);
 
@@ -103,22 +107,34 @@ pub fn print_summary(pkg: &InspectedPackage) {
 }
 
 /// Print file listing
-pub fn print_files(pkg: &InspectedPackage) {
+pub fn print_files(pkg: &UntrustedPackageInspection) {
     println!("Files ({}):", pkg.file_count());
     println!();
 
     for file in &pkg.files {
-        let mode_str = format_mode(file.mode);
-        let type_char = match file.file_type {
-            crate::ccs::builder::FileType::Regular => '-',
-            crate::ccs::builder::FileType::Symlink => 'l',
-            crate::ccs::builder::FileType::Directory => 'd',
+        let mode_str = format_mode(file.node.mode);
+        let type_char = match &file.node.kind {
+            PayloadNodeKind::Regular { .. } => '-',
+            PayloadNodeKind::Symlink { .. } => 'l',
+            PayloadNodeKind::Hardlink { .. } => 'h',
+            PayloadNodeKind::Directory => 'd',
+            PayloadNodeKind::BlockDevice { .. } => 'b',
+            PayloadNodeKind::CharacterDevice { .. } => 'c',
+            PayloadNodeKind::Fifo => 'p',
+            PayloadNodeKind::Socket => 's',
         };
 
-        let size_or_target = if let Some(target) = &file.target {
-            format!("-> {}", target)
-        } else {
-            format!("{:>10}", file.size)
+        let size_or_target = match (&file.node.kind, &file.content) {
+            (PayloadNodeKind::Symlink { target } | PayloadNodeKind::Hardlink { target, .. }, _) => {
+                format!("-> {target}")
+            }
+            (
+                PayloadNodeKind::BlockDevice { major, minor }
+                | PayloadNodeKind::CharacterDevice { major, minor },
+                _,
+            ) => format!("{major}:{minor}"),
+            (_, Some(content)) => format!("{:>10}", content.size),
+            (_, None) => "          ".to_string(),
         };
 
         println!(
@@ -129,7 +145,7 @@ pub fn print_files(pkg: &InspectedPackage) {
 }
 
 /// Print hooks
-pub fn print_hooks(pkg: &InspectedPackage) {
+pub fn print_hooks(pkg: &UntrustedPackageInspection) {
     let hooks = &pkg.manifest.hooks;
 
     if hooks.users.is_empty()
@@ -198,7 +214,7 @@ pub fn print_hooks(pkg: &InspectedPackage) {
 }
 
 /// Print dependencies
-pub fn print_dependencies(pkg: &InspectedPackage) {
+pub fn print_dependencies(pkg: &UntrustedPackageInspection) {
     println!("Provides:");
     if !pkg.manifest.provides.capabilities.is_empty() {
         for cap in &pkg.manifest.provides.capabilities {
@@ -210,22 +226,18 @@ pub fn print_dependencies(pkg: &InspectedPackage) {
 
     println!();
     println!("Requires:");
-    if !pkg.manifest.requires.capabilities.is_empty() {
-        for cap in &pkg.manifest.requires.capabilities {
-            println!("  - {}", cap.name());
-        }
-    } else {
+    if pkg.manifest.requirements.is_empty() {
         println!("  (none declared)");
-    }
-
-    if !pkg.manifest.requires.packages.is_empty() {
-        println!();
-        println!("Package dependencies (fallback):");
-        for dep in &pkg.manifest.requires.packages {
-            if let Some(ver) = &dep.version {
-                println!("  - {} {}", dep.name, ver);
+    } else {
+        for requirement in &pkg.manifest.requirements {
+            if let Some(native_text) = &requirement.native_text {
+                println!("  - {native_text}");
             } else {
-                println!("  - {}", dep.name);
+                println!(
+                    "  - {}",
+                    serde_json::to_string(requirement)
+                        .expect("typed CCS requirement is JSON serializable")
+                );
             }
         }
     }
@@ -233,7 +245,7 @@ pub fn print_dependencies(pkg: &InspectedPackage) {
 
 /// Print as JSON
 pub fn print_json(
-    pkg: &InspectedPackage,
+    pkg: &UntrustedPackageInspection,
     show_files: bool,
     show_hooks: bool,
     show_deps: bool,
@@ -255,7 +267,8 @@ pub fn print_json(
         #[serde(skip_serializing_if = "Option::is_none")]
         provides: Option<&'a crate::ccs::manifest::Provides>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        requires: Option<&'a crate::ccs::manifest::Requires>,
+        requirements:
+            Option<&'a Vec<crate::repository::dependency_model::RepositoryRequirementGroup>>,
     }
 
     let output = JsonOutput {
@@ -277,8 +290,8 @@ pub fn print_json(
         } else {
             None
         },
-        requires: if show_deps {
-            Some(&pkg.manifest.requires)
+        requirements: if show_deps {
+            Some(&pkg.manifest.requirements)
         } else {
             None
         },

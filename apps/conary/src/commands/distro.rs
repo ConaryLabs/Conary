@@ -5,7 +5,7 @@ use super::open_db;
 use anyhow::{Context, Result};
 use conary_core::db::models::{DistroPin, Repository, SystemAffinity, settings};
 use conary_core::model::parser::SourcePinConfig;
-use conary_core::repository::distro::supported_user_distros;
+use conary_core::repository::distro::source_feeds;
 use conary_core::repository::resolution_policy::{RequestScope, SelectionMode};
 use conary_core::repository::{SETTINGS_KEY_SELECTION_MODE, load_effective_policy};
 use rusqlite::Connection;
@@ -32,7 +32,7 @@ pub async fn cmd_distro_set(db_path: &str, distro: &str, mixing: &str) -> Result
     let profile = conary_core::repository::supported_profiles::profile_by_public_id(distro)
         .ok_or_else(|| {
             anyhow::anyhow!(
-                "Unsupported distro: {distro}. Use 'conary distro list' to see supported targets."
+                "Unsupported source feed: {distro}. Use 'conary distro list' to see configured feed families."
             )
         })?;
     let conn = open_db(db_path)?;
@@ -43,14 +43,14 @@ pub async fn cmd_distro_set(db_path: &str, distro: &str, mixing: &str) -> Result
             strength: Some(mixing.to_string()),
         },
     )?;
-    println!("Pinned to {} (mixing: {mixing})", profile.id());
+    println!("Source pinned to {} (mixing: {mixing})", profile.id());
     Ok(())
 }
 
 pub async fn cmd_distro_remove(db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
     DistroPin::remove(&conn)?;
-    println!("Distro pin removed. System is now distro-agnostic.");
+    println!("Source pin removed. Resolution can mix configured feeds.");
     Ok(())
 }
 
@@ -77,7 +77,7 @@ pub fn render_distro_info(conn: &Connection) -> Result<String> {
     let mut output = String::new();
     match DistroPin::get_current(conn)? {
         Some(pin) => {
-            output.push_str(&format!("Distro: {}\n", pin.distro));
+            output.push_str(&format!("Source feed: {}\n", pin.distro));
             output.push_str(&format!("Mixing: {}\n", pin.mixing_policy));
             output.push_str(&format!("{selection_mode}\n\n"));
             output.push_str("Source affinity:\n");
@@ -94,7 +94,7 @@ pub fn render_distro_info(conn: &Connection) -> Result<String> {
             }
         }
         None => {
-            output.push_str("No distro pin set. System is distro-agnostic.\n");
+            output.push_str("No source pin set. Resolution can mix configured feeds.\n");
             output.push_str(&format!("{selection_mode}\n"));
         }
     }
@@ -118,9 +118,9 @@ pub fn render_distro_list(conn: &Connection) -> Result<String> {
 }
 
 fn render_distro_list_for_repos(repos: &[Repository]) -> String {
-    let mut output = String::from("Available distros:\n");
+    let mut output = String::from("Available source feeds:\n");
 
-    for distro in supported_user_distros() {
+    for distro in source_feeds() {
         let matching_repos: Vec<_> = repos
             .iter()
             .filter(|repo| {
@@ -158,7 +158,7 @@ pub async fn cmd_distro_mixing(db_path: &str, policy: &str) -> Result<()> {
     let conn = open_db(db_path)?;
     if DistroPin::get_current(&conn)?.is_none() {
         anyhow::bail!(
-            "No distro pin set. Use 'conary distro set <distro>' before changing mixing policy."
+            "No source pin set. Use 'conary distro set <feed>' before changing mixing policy."
         );
     }
     DistroPin::set_mixing_policy(&conn, policy)?;
@@ -187,7 +187,7 @@ mod tests {
         let db_path = temp_file.path().display().to_string();
         let conn = Connection::open(temp_file.path()).unwrap();
         conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
-        schema::migrate(&conn).unwrap();
+        schema::ensure_current(&conn).unwrap();
         (temp_file, db_path, conn)
     }
 
@@ -211,7 +211,7 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert!(err.to_string().contains("Unsupported distro"));
+        assert!(err.to_string().contains("Unsupported source feed"));
         assert!(DistroPin::get_current(&conn).unwrap().is_none());
     }
 
@@ -223,7 +223,7 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert!(err.to_string().contains("Unsupported distro"));
+        assert!(err.to_string().contains("Unsupported source feed"));
         assert!(DistroPin::get_current(&conn).unwrap().is_none());
     }
 
@@ -243,7 +243,7 @@ mod tests {
 
         let err = cmd_distro_mixing(&db_path, "strict").await.unwrap_err();
 
-        assert!(err.to_string().contains("No distro pin set"));
+        assert!(err.to_string().contains("No source pin set"));
     }
 
     #[tokio::test]

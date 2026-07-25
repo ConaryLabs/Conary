@@ -1,13 +1,33 @@
 // conary-core/src/ccs/convert/command_evidence.rs
 
-pub use crate::ccs::legacy_scriptlets::CommandEvidenceSource;
-use crate::ccs::legacy_scriptlets::{CommandArgumentProvenance, CommandExecutionContext};
+use crate::ccs::native_lifecycle::CommandArgumentProvenance;
 use crate::packages::native_abi::{
     ArchNativeScriptletMetadata, NativeLifecyclePath, NativeScriptletEntry, NativeScriptletKind,
-    NativeScriptletMetadata, NativeScriptletSupport,
+    NativeScriptletMetadata,
 };
-use crate::packages::traits::Scriptlet;
+use crate::packages::traits::DiagnosticScriptletEvidence;
 use tree_sitter::{Node, Parser, Point};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub enum CommandExecutionContext {
+    Unconditional,
+    Conditional,
+    Loop,
+    Function,
+    Pipeline,
+    Subshell,
+    CommandSubstitution,
+    #[default]
+    Unresolved,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub enum CommandEvidenceSource {
+    ShellAst,
+    NativeShellAst,
+    #[default]
+    Unresolved,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandInvocation {
@@ -51,7 +71,7 @@ pub struct CommandEnvironmentFact {
 
 pub fn extract_scriptlet_invocations(
     entry_id: &str,
-    scriptlet: &Scriptlet,
+    scriptlet: &DiagnosticScriptletEvidence,
 ) -> Result<Vec<CommandInvocation>, ShellParseError> {
     if !is_shell_interpreter(&scriptlet.interpreter) {
         return Ok(Vec::new());
@@ -73,13 +93,6 @@ pub fn extract_native_entry_invocations(
     if entry.kind != NativeScriptletKind::Executable {
         return Ok(Vec::new());
     }
-    if !matches!(
-        entry.support,
-        NativeScriptletSupport::Parsed | NativeScriptletSupport::DeferredReview { .. }
-    ) {
-        return Ok(Vec::new());
-    }
-
     let Some(content) = native_entry_invocation_text(entry) else {
         return Ok(Vec::new());
     };
@@ -94,9 +107,9 @@ pub fn extract_native_entry_invocations(
 
     extract_invocations_from_text(InvocationText {
         entry_id: &entry.id,
-        content,
+        content: &content,
         source: CommandEvidenceSource::NativeShellAst,
-        phase: entry.compatibility_phase.map(|phase| phase.to_string()),
+        phase: Some(native_lifecycle_label(entry.primary_lifecycle).to_string()),
         lifecycle_paths: entry
             .lifecycle_paths
             .iter()
@@ -108,13 +121,44 @@ pub fn extract_native_entry_invocations(
     })
 }
 
-fn native_entry_invocation_text(entry: &NativeScriptletEntry) -> Option<&str> {
+fn native_entry_invocation_text(entry: &NativeScriptletEntry) -> Option<String> {
     match &entry.metadata {
         NativeScriptletMetadata::Arch(ArchNativeScriptletMetadata::Install(metadata)) => {
-            metadata.function_body.as_deref()
+            diagnostic_arch_function_body(
+                entry.body.text.as_deref()?,
+                metadata.function_name.as_str(),
+            )
         }
-        _ => entry.body.text.as_deref(),
+        _ => entry.body.text.clone(),
     }
+}
+
+fn diagnostic_arch_function_body(source: &str, function_name: &str) -> Option<String> {
+    let mut parser = Parser::new();
+    parser
+        .set_language(&tree_sitter_bash::LANGUAGE.into())
+        .ok()?;
+    let tree = parser.parse(source, None)?;
+    diagnostic_arch_function_body_in_node(tree.root_node(), source, function_name)
+}
+
+fn diagnostic_arch_function_body_in_node(
+    node: Node<'_>,
+    source: &str,
+    function_name: &str,
+) -> Option<String> {
+    if node.kind() == "function_definition" {
+        let name = node.child_by_field_name("name")?;
+        if node_text(name, source) == function_name {
+            return node
+                .child_by_field_name("body")
+                .map(|body| node_text(body, source).to_string());
+        }
+    }
+
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor)
+        .find_map(|child| diagnostic_arch_function_body_in_node(child, source, function_name))
 }
 
 pub fn extract_invocations_from_shell_text(
@@ -465,7 +509,9 @@ fn is_shell_interpreter(interpreter: &str) -> bool {
 
 fn native_lifecycle_label(path: NativeLifecyclePath) -> &'static str {
     match path {
+        NativeLifecyclePath::PackageControl => "package-control",
         NativeLifecyclePath::PreInstall => "pre-install",
+        NativeLifecyclePath::Sysusers => "rpm-sysusers",
         NativeLifecyclePath::PostInstall => "post-install",
         NativeLifecyclePath::PreUpgrade => "pre-upgrade",
         NativeLifecyclePath::PostUpgrade => "post-upgrade",
@@ -489,11 +535,11 @@ fn native_lifecycle_label(path: NativeLifecyclePath) -> &'static str {
 mod tests {
     use super::*;
     use crate::packages::native_abi::*;
-    use crate::packages::traits::{Scriptlet, ScriptletPhase};
+    use crate::packages::traits::{DiagnosticScriptletEvidence, DiagnosticScriptletPhase};
 
-    fn scriptlet(content: &str) -> Scriptlet {
-        Scriptlet {
-            phase: ScriptletPhase::PostInstall,
+    fn scriptlet(content: &str) -> DiagnosticScriptletEvidence {
+        DiagnosticScriptletEvidence {
+            phase: DiagnosticScriptletPhase::PostInstall,
             interpreter: "/bin/sh".to_string(),
             content: content.to_string(),
             flags: None,
@@ -507,7 +553,6 @@ mod tests {
             kind: NativeScriptletKind::Executable,
             native_slot: "%post".to_string(),
             primary_lifecycle: NativeLifecyclePath::PostInstall,
-            compatibility_phase: Some(ScriptletPhase::PostInstall),
             lifecycle_paths: vec![NativeLifecyclePath::PostInstall],
             interpreter: Some("/bin/sh".to_string()),
             interpreter_args: vec![],
@@ -517,26 +562,41 @@ mod tests {
             support,
             metadata: NativeScriptletMetadata::Rpm(RpmNativeScriptletMetadata {
                 slot: RpmScriptletSlot::Post,
-                scriptlet_flags: None,
+                runtime: rpm_runtime(),
                 trigger: None,
+                sysusers: None,
             }),
         }
     }
 
-    fn arch_install_entry(
-        install_source: &str,
-        function_name: &str,
-        function_body: &str,
-    ) -> NativeScriptletEntry {
+    fn rpm_runtime() -> RpmScriptletRuntimeMetadata {
+        RpmScriptletRuntimeMetadata {
+            program: RpmScriptletProgram::External,
+            flags: RpmScriptletFlagsMetadata {
+                names: Vec::new(),
+                raw_bits: 0,
+                unknown_bits: 0,
+                expand: false,
+                query_format: false,
+                critical: false,
+                criticality: RpmScriptletCriticality::WarningOnly,
+            },
+            install_prefixes: Vec::new(),
+            macro_context: Default::default(),
+            header_context: Default::default(),
+            package_rpm_version: None,
+        }
+    }
+
+    fn arch_install_entry(install_source: &str, function_name: &str) -> NativeScriptletEntry {
         NativeScriptletEntry {
             id: format!("arch:{function_name}"),
             format: NativeScriptletFormat::Arch,
             kind: NativeScriptletKind::Executable,
             native_slot: function_name.to_string(),
             primary_lifecycle: NativeLifecyclePath::PostInstall,
-            compatibility_phase: Some(ScriptletPhase::PostInstall),
             lifecycle_paths: vec![NativeLifecyclePath::PostInstall],
-            interpreter: Some("/bin/sh".to_string()),
+            interpreter: None,
             interpreter_args: vec![],
             body: NativeScriptletBody::from_bytes(install_source.as_bytes().to_vec()),
             invocation: NativeInvocationContract::none(),
@@ -546,11 +606,8 @@ mod tests {
                 ArchInstallScriptletMetadata {
                     install_source_sha256: crate::hash::sha256_prefixed(install_source.as_bytes()),
                     function_name: function_name.to_string(),
-                    function_body: Some(function_body.to_string()),
-                    function_body_sha256: Some(crate::hash::sha256_prefixed(
-                        function_body.as_bytes(),
-                    )),
-                    extraction_status: ArchFunctionExtractionStatus::Parsed,
+                    selection_contract:
+                        crate::packages::native_abi::ArchInstallSelectionContract::LibalpmGrepV1,
                 },
             )),
         }
@@ -656,16 +713,6 @@ mod tests {
         assert_eq!(invocations[0].phase.as_deref(), Some("post-install"));
         assert_eq!(invocations[0].lifecycle_paths, vec!["post-install"]);
         assert_eq!(invocations[0].command, "ldconfig");
-
-        let deferred = extract_native_entry_invocations(&native_entry(
-            "/sbin/ldconfig\n",
-            NativeScriptletSupport::DeferredReview {
-                reason_code: "rpm-trigger-semantics-deferred".to_string(),
-            },
-        ))
-        .unwrap();
-        assert_eq!(deferred.len(), 1);
-        assert_eq!(deferred[0].command, "ldconfig");
     }
 
     #[test]
@@ -679,7 +726,7 @@ post_install() {
     /sbin/ldconfig
 }
 ";
-        let entry = arch_install_entry(install_source, "post_install", "/sbin/ldconfig\n");
+        let entry = arch_install_entry(install_source, "post_install");
 
         let invocations = extract_native_entry_invocations(&entry).unwrap();
 

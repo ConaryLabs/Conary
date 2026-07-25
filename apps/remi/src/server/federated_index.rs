@@ -299,7 +299,10 @@ fn build_local_sparse_entry(
     // Use plural lookup so multi-repo distros (e.g. arch-core + arch-extra)
     // are all queried, matching the non-federated sparse path. (fix 10.7)
     let repositories = find_repositories_for_distro(conn, distro)?;
-    let repo_ids: Vec<i64> = repositories.into_iter().filter_map(|r| r.id).collect();
+    let repo_ids = repositories
+        .iter()
+        .map(crate::server::handlers::require_persisted_repository_id)
+        .collect::<anyhow::Result<Vec<_>>>()?;
     if repo_ids.is_empty() {
         return Ok(None);
     }
@@ -310,13 +313,12 @@ fn build_local_sparse_entry(
         .join(", ");
     let name_idx = repo_ids.len() + 1;
     let sql = format!(
-        "SELECT id, repository_id, name, version, architecture, description,
-                checksum, size, download_url, dependencies, metadata, synced_at,
-                is_security_update, severity, cve_ids, advisory_id, advisory_url
+        "SELECT {}
          FROM repository_packages
          WHERE repository_id IN ({placeholders}) AND name = ?{name_idx}
          AND size > 0
-         ORDER BY version"
+         ORDER BY version",
+        conary_core::db::models::RepositoryPackage::COLUMNS
     );
 
     let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = repo_ids
@@ -329,29 +331,7 @@ fn build_local_sparse_entry(
 
     let packages: Vec<conary_core::db::models::RepositoryPackage> = stmt
         .query_map(rusqlite::params_from_iter(&params), |row| {
-            Ok(conary_core::db::models::RepositoryPackage {
-                id: Some(row.get(0)?),
-                repository_id: row.get(1)?,
-                name: row.get(2)?,
-                version: row.get(3)?,
-                package_release: String::new(),
-                architecture: row.get(4)?,
-                description: row.get(5)?,
-                checksum: row.get(6)?,
-                size: row.get(7)?,
-                download_url: row.get(8)?,
-                dependencies: row.get(9)?,
-                metadata: row.get(10)?,
-                synced_at: row.get(11)?,
-                is_security_update: row.get::<_, i32>(12)? != 0,
-                severity: row.get(13)?,
-                cve_ids: row.get(14)?,
-                advisory_id: row.get(15)?,
-                advisory_url: row.get(16)?,
-                distro: None,
-                version_scheme: None,
-                canonical_id: None,
-            })
+            conary_core::db::models::RepositoryPackage::from_row(row)
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
 
@@ -360,35 +340,40 @@ fn build_local_sparse_entry(
     }
 
     let mut converted_map = HashMap::new();
-    for converted in ConvertedPackage::find_publication_candidates(conn, distro, Some(name))? {
-        if !converted.is_scriptlet_public_ready() {
-            continue;
-        }
-        if let Some(version) = converted.package_version {
-            converted_map.insert(
-                (version, converted.package_architecture),
-                converted.content_hash,
-            );
-        }
+    for converted in ConvertedPackage::find_current_conversions(conn, distro, Some(name))? {
+        converted.scriptlet_summary()?;
+        let artifact = converted.repository_artifact()?;
+        converted_map.insert(
+            (
+                artifact.package_version.to_string(),
+                artifact.package_architecture.map(str::to_string),
+            ),
+            artifact.content_hash.to_string(),
+        );
     }
 
     let versions = packages
         .into_iter()
-        .map(|pkg| {
+        .map(|pkg| -> Result<SparseVersionEntry> {
             let converted_info =
                 converted_map.get(&(pkg.version.clone(), pkg.architecture.clone()));
-            SparseVersionEntry {
+            let package_id = pkg
+                .id
+                .ok_or_else(|| anyhow::anyhow!("repository package has no persisted ID"))?;
+            let exact =
+                crate::server::package_metadata::load_exact_package_metadata(conn, package_id)?;
+            Ok(SparseVersionEntry {
                 version: pkg.version,
                 release: None,
-                dependencies: pkg.dependencies,
-                provides: pkg.metadata,
+                provides: exact.provides,
+                requirement_groups: exact.requirement_groups,
                 architecture: pkg.architecture,
                 size: pkg.size,
                 converted: converted_info.is_some(),
-                content_hash: converted_info.and_then(Option::clone),
-            }
+                content_hash: converted_info.cloned(),
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>>>()?;
 
     Ok(Some(SparseIndexEntry {
         name: name.to_string(),
@@ -400,15 +385,16 @@ fn build_local_sparse_entry(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use conary_core::ccs::convert::ScriptletBundleSummary;
-    use conary_core::db::models::{ConvertedPackage, Repository, RepositoryPackage};
+    use conary_core::db::models::{
+        CONVERSION_VERSION, ConvertedPackage, Repository, RepositoryPackage,
+    };
 
     fn make_version(ver: &str, converted: bool) -> SparseVersionEntry {
         SparseVersionEntry {
             version: ver.to_string(),
             release: None,
-            dependencies: None,
-            provides: None,
+            provides: Vec::new(),
+            requirement_groups: Vec::new(),
             architecture: Some("x86_64".to_string()),
             size: 1024,
             converted,
@@ -432,21 +418,34 @@ mod tests {
         let temp_file = tempfile::NamedTempFile::new().unwrap();
         let conn = rusqlite::Connection::open(temp_file.path()).unwrap();
         conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
-        conary_core::db::schema::migrate(&conn).unwrap();
+        conary_core::db::schema::ensure_current(&conn).unwrap();
         (temp_file, conn)
     }
 
     fn insert_repo(conn: &rusqlite::Connection, name: &str, distro: &str) -> i64 {
         let mut repo = Repository::new(name.to_string(), "https://example.com".to_string());
-        repo.default_strategy_distro = Some(distro.to_string());
+        let profile = conary_core::repository::supported_profiles::profile_for_remi_route(distro)
+            .unwrap_or_else(|| panic!("test route '{distro}' must name a supported Remi profile"));
+        repo.default_strategy_distro = Some(profile.id().to_string());
         repo.insert(conn).unwrap()
     }
 
     fn insert_package(conn: &rusqlite::Connection, repo_id: i64, name: &str, version: &str) {
+        let repository = Repository::find_by_id(conn, repo_id)
+            .unwrap()
+            .expect("test repository");
+        let profile = conary_core::repository::supported_profiles::profile_by_public_id(
+            repository
+                .default_strategy_distro
+                .as_deref()
+                .expect("test repository profile"),
+        )
+        .expect("exact test repository profile");
         let mut pkg = RepositoryPackage::new(
             repo_id,
             name.to_string(),
             version.to_string(),
+            profile.version_scheme(),
             format!("sha256:{name}-{version}"),
             1024,
             format!("https://example.com/{name}-{version}.rpm"),
@@ -455,13 +454,13 @@ mod tests {
         pkg.insert(conn).unwrap();
     }
 
-    fn insert_private_review_conversion(
+    fn insert_stale_conversion(
         conn: &rusqlite::Connection,
         distro: &str,
         package: &str,
         version: &str,
     ) {
-        let mut converted = ConvertedPackage::new_server(
+        let mut converted = ConvertedPackage::new_repository(
             distro.to_string(),
             package.to_string(),
             version.to_string(),
@@ -473,15 +472,7 @@ mod tests {
             format!("/tmp/{package}-{version}.ccs"),
         );
         converted.package_architecture = Some("x86_64".to_string());
-        converted
-            .set_scriptlet_metadata(&ScriptletBundleSummary {
-                publication_status: "private-review".to_string(),
-                scriptlet_fidelity: "review-required".to_string(),
-                target_compatibility: "review-required".to_string(),
-                review_reason_codes: vec!["review-class-debconf".to_string()],
-                ..Default::default()
-            })
-            .unwrap();
+        converted.conversion_version = CONVERSION_VERSION - 1;
         converted.insert(conn).unwrap();
     }
 
@@ -575,11 +566,11 @@ mod tests {
     }
 
     #[test]
-    fn federated_sparse_hides_non_public_content_hash() {
+    fn federated_sparse_hides_stale_content_hash() {
         let (_temp_file, conn) = create_test_db();
         let repo_id = insert_repo(&conn, "fedora-base", "fedora");
         insert_package(&conn, repo_id, "gtk3", "3.24.0");
-        insert_private_review_conversion(&conn, "fedora", "gtk3", "3.24.0");
+        insert_stale_conversion(&conn, "fedora", "gtk3", "3.24.0");
 
         let entry = build_local_sparse_entry(&conn, "fedora", "gtk3")
             .unwrap()

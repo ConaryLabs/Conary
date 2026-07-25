@@ -14,25 +14,26 @@ impl ConversionService {
         let distro = distro.to_string();
         tokio::task::spawn_blocking(move || {
             let conn = conary_core::db::open(&db_path)?;
-            let distro_filter = match distro.as_str() {
-                "fedora" => "fedora",
-                "ubuntu" => "ubuntu",
-                "debian" => "debian",
-                "arch" => "arch",
-                _ => return Err(anyhow!("Unknown distribution: {}", distro)),
-            };
+            let profile =
+                conary_core::repository::supported_profiles::profile_for_remi_route(&distro)
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "benchmark route '{distro}' does not map to exactly one public profile"
+                        )
+                    })?;
             let mut stmt = conn.prepare(
                 "SELECT DISTINCT rp.name
                  FROM repository_packages rp
                  JOIN repositories r ON rp.repository_id = r.id
-                 WHERE COALESCE(r.default_strategy_distro, rp.distro, r.name) LIKE ?1
+                 WHERE r.default_strategy_distro = ?1
                  AND rp.size > 0
                  ORDER BY rp.size DESC
                  LIMIT ?2",
             )?;
-            let pattern = format!("{distro_filter}%");
             let names = stmt
-                .query_map(rusqlite::params![pattern, limit as i64], |row| row.get(0))?
+                .query_map(rusqlite::params![profile.id(), limit as i64], |row| {
+                    row.get(0)
+                })?
                 .collect::<Result<Vec<String>, _>>()?;
             Ok(names)
         })
@@ -52,7 +53,7 @@ impl ConversionService {
             .await
         {
             Ok(outcome) => {
-                let result = outcome.into_result();
+                let result = outcome;
                 Ok(ConversionBenchmarkEvidence {
                     distro: distro.to_string(),
                     package: package_name.to_string(),

@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-06-10
-revision: 4
-summary: Clarify SBOM command routing
+last_updated: 2026-07-25
+revision: 5
+summary: Route exact installed package and native lifecycle query contracts
 ---
 
 # Query Module (apps/conary/src/commands/query/)
@@ -59,8 +59,8 @@ conary system sbom <package|all> [--format cyclonedx]
 | `FileEntry` | db/models/ | Installed file (path, hash, perms, component) |
 | `Component` | db/models/ | Logical subpackage (:runtime, :lib, :devel, :doc) |
 | `RepositoryPackage` | db/models/ | Available package from synced repo metadata |
-| `ScriptletEntry` | db/models/ | Flattened native install/remove hook rows |
-| `InstalledLegacyScriptletBundle` | db/models/ | Persisted CCS legacy bundle authority for replay-aware lifecycle queries |
+| `InstalledCcsRemoveHook` | db/models/ | Exact persisted CCS-authored pre-remove hook |
+| `InstalledNativeLifecycleBundle` | db/models/ | Persisted source-ABI lifecycle authority for later query and transaction planning |
 
 ## Database Tables
 
@@ -74,8 +74,8 @@ Primary tables hit by queries:
 | `files` | path, trove_id, component_id | component, conflicts |
 | `components` | parent_trove_id, name | component, components |
 | `repository_packages` | name, repository_id | repquery |
-| `scriptlets` | trove_id, phase | scripts |
-| `installed_legacy_scriptlet_bundles` | trove_id, evidence_digest | scripts |
+| `installed_ccs_remove_hooks` | trove_id | scripts |
+| `installed_native_lifecycle_bundles` | trove_id, evidence_digest | scripts |
 
 ## Query Patterns
 
@@ -86,11 +86,14 @@ Primary tables hit by queries:
 - **Reverse lookup**: `WHERE depends_on_name = ?` for rdepends/whatbreaks
 - **Scriptlet inspection**: `conary query scripts <path>` inspects native or CCS
   package files, while `conary query scripts <package> --db-path <db>` resolves an
-  installed package and separates flattened `scriptlets` rows from persisted
-  `installed_legacy_scriptlet_bundles` entries with replay decision and
-  lifecycle phase metadata. Text and JSON output identify installed bundle
-  entries by native slot, lifecycle path, replay decision, reason code, and
-  evidence digest without printing preserved raw script bodies by default.
+  installed package and separates the exact CCS `installed_ccs_remove_hooks`
+  contract from persisted `installed_native_lifecycle_bundles` entries with
+  source slot and lifecycle phase metadata. Native entries are never projected
+  into the CCS hook table. Text and JSON output identify installed bundle
+  entries by source slot, lifecycle path, preservation decision, reason code,
+  and evidence digest without printing preserved raw script bodies by default.
+  The JSON bundle summary exposes `diagnostic_class_counts`; these counts are
+  evidence for implementation prioritization and never lifecycle authority.
 
 ## Related SBOM Commands
 

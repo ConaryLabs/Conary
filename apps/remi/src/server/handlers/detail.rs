@@ -6,6 +6,7 @@
 //! All database queries run via `spawn_blocking` for async compatibility.
 
 use crate::server::ServerState;
+use anyhow::Context;
 use axum::{
     Json,
     extract::{Path, Query, State},
@@ -13,7 +14,8 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use conary_core::db::models::{ConvertedPackage, DownloadCount};
-use rusqlite::Connection;
+use conary_core::repository::remi_metadata::RemiRequirementGroup;
+use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -29,7 +31,7 @@ pub struct PackageDetail {
     pub latest_version: String,
     pub description: Option<String>,
     pub versions: Vec<VersionSummary>,
-    pub dependencies: Vec<String>,
+    pub requirement_groups: Vec<RemiRequirementGroup>,
     pub download_count: i64,
     pub download_count_30d: i64,
     pub size_bytes: i64,
@@ -253,7 +255,7 @@ fn query_package_detail(
     // Get the latest version and basic info across all repos for this distro
     let placeholders = repo_ids_placeholders(repo_ids.len());
     let sql = format!(
-        "SELECT rp.name, rp.version, rp.description, rp.size, rp.dependencies,
+        "SELECT rp.id, rp.name, rp.version, rp.description, rp.size,
                 rp.architecture
          FROM repository_packages rp
          WHERE rp.repository_id IN ({placeholders}) AND rp.name = ?{}
@@ -267,23 +269,24 @@ fn query_package_detail(
 
     let latest = conn.query_row(&sql, rusqlite::params_from_iter(&params), |row| {
         Ok((
-            row.get::<_, String>(0)?,
+            row.get::<_, i64>(0)?,
             row.get::<_, String>(1)?,
-            row.get::<_, Option<String>>(2)?,
-            row.get::<_, i64>(3)?,
-            row.get::<_, Option<String>>(4)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, Option<String>>(3)?,
+            row.get::<_, i64>(4)?,
             row.get::<_, Option<String>>(5)?,
         ))
     });
 
-    let (pkg_name, latest_version, description, size, deps_str, _arch) = match latest {
+    let (package_id, pkg_name, latest_version, description, size, _arch) = match latest {
         Ok(row) => row,
         Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
         Err(e) => return Err(e.into()),
     };
 
-    // Parse dependencies (stored as JSON array in DB)
-    let dependencies = parse_dependencies(deps_str.as_deref())?;
+    let requirement_groups =
+        crate::server::package_metadata::load_exact_package_metadata(&conn, package_id)?
+            .requirement_groups;
 
     // Get all versions
     let versions = query_versions_internal(&conn, distro, name)?;
@@ -306,7 +309,7 @@ fn query_package_detail(
         latest_version,
         description,
         versions,
-        dependencies,
+        requirement_groups,
         download_count,
         download_count_30d,
         size_bytes: size,
@@ -337,7 +340,7 @@ fn query_versions_internal(
 
     let placeholders = repo_ids_placeholders(repo_ids.len());
     let name_idx = repo_ids.len() + 1;
-    let converted_keys = public_ready_converted_keys(conn, distro, name)?;
+    let converted_keys = current_converted_keys(conn, distro, name)?;
     let sql = format!(
         "SELECT rp.version, rp.architecture, rp.size
          FROM repository_packages rp
@@ -362,14 +365,14 @@ fn query_versions_internal(
         })
     })?;
 
-    Ok(rows.filter_map(|r| r.ok()).collect())
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
 fn query_dependencies(
     db_path: &std::path::Path,
     distro: &str,
     name: &str,
-) -> anyhow::Result<Vec<String>> {
+) -> anyhow::Result<Vec<RemiRequirementGroup>> {
     let conn = open_handler_db(db_path)?;
 
     let repo_ids = resolve_all_repo_ids(&conn, distro)?;
@@ -380,7 +383,7 @@ fn query_dependencies(
     let placeholders = repo_ids_placeholders(repo_ids.len());
     let name_idx = repo_ids.len() + 1;
     let sql = format!(
-        "SELECT rp.dependencies
+        "SELECT rp.id
          FROM repository_packages rp
          WHERE rp.repository_id IN ({placeholders}) AND rp.name = ?{name_idx}
          ORDER BY rp.synced_at DESC
@@ -391,11 +394,17 @@ fn query_dependencies(
         repo_ids.iter().map(|id| Box::new(*id) as _).collect();
     params.push(Box::new(name.to_string()));
 
-    let deps_str: Option<String> = conn
-        .query_row(&sql, rusqlite::params_from_iter(&params), |row| row.get(0))
-        .ok();
-
-    parse_dependencies(deps_str.as_deref())
+    let package_id = match conn.query_row(&sql, rusqlite::params_from_iter(&params), |row| {
+        row.get::<_, i64>(0)
+    }) {
+        Ok(package_id) => package_id,
+        Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(Vec::new()),
+        Err(error) => return Err(error.into()),
+    };
+    Ok(
+        crate::server::package_metadata::load_exact_package_metadata(&conn, package_id)?
+            .requirement_groups,
+    )
 }
 
 fn query_reverse_dependencies(
@@ -433,7 +442,7 @@ fn query_reverse_dependencies(
         row.get::<_, String>(0)
     })?;
 
-    Ok(rows.filter_map(|r| r.ok()).collect())
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
 fn query_popular(
@@ -476,8 +485,8 @@ fn query_popular(
         })?;
 
         let mut results = Vec::new();
-        for row in rows.flatten() {
-            let (distro, name, count) = row;
+        for row in rows {
+            let (distro, name, count) = row?;
             if let Some(s) = enrich_package_summary(&conn, &distro, &name, count)? {
                 results.push(s);
             }
@@ -547,7 +556,7 @@ fn query_recent(
             })
         })?;
 
-        Ok(rows.filter_map(|r| r.ok()).collect())
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     } else {
         let mut stmt = conn.prepare(
             "SELECT rp.name, r.name, rp.version, rp.description, rp.size,
@@ -571,7 +580,7 @@ fn query_recent(
             })
         })?;
 
-        Ok(rows.filter_map(|r| r.ok()).collect())
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 }
 
@@ -588,15 +597,15 @@ fn query_overview(db_path: &std::path::Path) -> anyhow::Result<OverviewStats> {
         |row| row.get(0),
     )?;
 
-    // Total public-ready converted packages.
-    let total_converted = ConvertedPackage::list_all(&conn)?
-        .into_iter()
-        .filter(|converted| {
-            converted.distro.is_some()
-                && !converted.needs_reconversion()
-                && converted.is_scriptlet_public_ready()
-        })
-        .count() as i64;
+    // Total current converted packages.
+    let mut total_converted = 0_i64;
+    for converted in ConvertedPackage::list_repository_conversions(&conn)? {
+        if !converted.needs_reconversion() {
+            converted.repository_artifact()?;
+            converted.scriptlet_summary()?;
+            total_converted += 1;
+        }
+    }
 
     // Count distinct distro families from enabled repositories.
     // Multiple repos can serve the same distro (e.g., arch-core, arch-extra,
@@ -702,12 +711,16 @@ fn extract_metadata(
     params.push(Box::new(name.to_string()));
 
     let metadata_json: Option<String> = conn
-        .query_row(&sql, rusqlite::params_from_iter(&params), |row| row.get(0))
-        .ok();
+        .query_row(&sql, rusqlite::params_from_iter(&params), |row| {
+            row.get::<_, Option<String>>(0)
+        })
+        .optional()?
+        .flatten();
 
-    if let Some(json_str) = metadata_json
-        && let Ok(meta) = serde_json::from_str::<serde_json::Value>(&json_str)
-    {
+    if let Some(json_str) = metadata_json {
+        let meta = serde_json::from_str::<serde_json::Value>(&json_str).with_context(|| {
+            format!("package '{name}' in '{distro}' has malformed persisted metadata JSON")
+        })?;
         let license = meta
             .get("license")
             .and_then(|v| v.as_str())
@@ -723,35 +736,13 @@ fn extract_metadata(
     Ok((None, None))
 }
 
-/// Parse dependencies from the DB storage format (JSON array string).
-///
-/// Falls back to comma-separated parsing for legacy data.
-fn parse_dependencies(deps_str: Option<&str>) -> anyhow::Result<Vec<String>> {
-    let Some(s) = deps_str else {
-        return Ok(Vec::new());
-    };
-
-    if s.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    // Try JSON array first (current format)
-    if let Ok(deps) = serde_json::from_str::<Vec<String>>(s) {
-        return Ok(deps);
-    }
-
-    // Fallback: comma-separated (legacy)
-    Ok(s.split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(String::from)
-        .collect())
-}
-
 /// Resolve all repository IDs for a distro (e.g. arch-core + arch-extra).
 fn resolve_all_repo_ids(conn: &Connection, distro: &str) -> anyhow::Result<Vec<i64>> {
     let repos = super::find_repositories_for_distro(conn, distro)?;
-    Ok(repos.into_iter().filter_map(|r| r.id).collect())
+    repos
+        .iter()
+        .map(super::require_persisted_repository_id)
+        .collect()
 }
 
 /// Build a comma-separated `?1, ?2, ...` placeholder string for N parameters.
@@ -764,19 +755,19 @@ fn repo_ids_placeholders(count: usize) -> String {
 
 type ConvertedVersionKey = (String, Option<String>);
 
-fn public_ready_converted_keys(
+fn current_converted_keys(
     conn: &Connection,
     distro: &str,
     name: &str,
 ) -> anyhow::Result<HashSet<ConvertedVersionKey>> {
     let mut keys = HashSet::new();
-    for converted in ConvertedPackage::find_publication_candidates(conn, distro, Some(name))? {
-        if !converted.is_scriptlet_public_ready() {
-            continue;
-        }
-        if let Some(version) = converted.package_version {
-            keys.insert((version, converted.package_architecture));
-        }
+    for converted in ConvertedPackage::find_current_conversions(conn, distro, Some(name))? {
+        converted.scriptlet_summary()?;
+        let artifact = converted.repository_artifact()?;
+        keys.insert((
+            artifact.package_version.to_string(),
+            artifact.package_architecture.map(str::to_string),
+        ));
     }
     Ok(keys)
 }
@@ -784,7 +775,6 @@ fn public_ready_converted_keys(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use conary_core::ccs::convert::ScriptletBundleSummary;
     use conary_core::db::models::{CONVERSION_VERSION, ConvertedPackage};
     use conary_core::db::schema;
     use tempfile::NamedTempFile;
@@ -793,7 +783,7 @@ mod tests {
         let temp_file = NamedTempFile::new().unwrap();
         let conn = Connection::open(temp_file.path()).unwrap();
         conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
-        schema::migrate(&conn).unwrap();
+        schema::ensure_current(&conn).unwrap();
         (temp_file, conn)
     }
 
@@ -804,10 +794,17 @@ mod tests {
         version: &str,
         architecture: Option<&str>,
     ) {
+        let profile = conary_core::repository::supported_profiles::profile_for_remi_route(distro)
+            .unwrap_or_else(|| panic!("test route '{distro}' must name a supported Remi profile"));
         conn.execute(
-            "INSERT OR IGNORE INTO repositories (name, url, enabled)
-             VALUES (?1, ?2, 1)",
-            rusqlite::params![distro, format!("https://example.invalid/{distro}")],
+            "INSERT OR IGNORE INTO repositories
+             (name, url, enabled, default_strategy_distro)
+             VALUES (?1, ?2, 1, ?3)",
+            rusqlite::params![
+                distro,
+                format!("https://example.invalid/{distro}"),
+                profile.id()
+            ],
         )
         .unwrap();
         let repository_id: i64 = conn
@@ -819,8 +816,8 @@ mod tests {
             .unwrap();
         conn.execute(
             "INSERT INTO repository_packages
-             (repository_id, name, version, architecture, description, checksum, size, download_url, dependencies)
-             VALUES (?1, ?2, ?3, ?4, 'test package', 'sha256:repo', 3, 'https://example.invalid/pkg.rpm', '[]')",
+             (repository_id, name, version, architecture, description, checksum, size, download_url, version_scheme)
+             VALUES (?1, ?2, ?3, ?4, 'test package', 'sha256:repo', 3, 'https://example.invalid/pkg.rpm', 'rpm')",
             rusqlite::params![repository_id, name, version, architecture],
         )
         .unwrap();
@@ -834,7 +831,7 @@ mod tests {
         architecture: Option<&str>,
         conversion_version: i32,
     ) {
-        let mut converted = ConvertedPackage::new_server(
+        let mut converted = ConvertedPackage::new_repository(
             distro.to_string(),
             name.to_string(),
             version.to_string(),
@@ -850,14 +847,14 @@ mod tests {
         converted.insert(conn).unwrap();
     }
 
-    fn insert_private_review_conversion(
+    fn insert_stale_conversion(
         conn: &Connection,
         distro: &str,
         name: &str,
         version: &str,
         architecture: Option<&str>,
     ) {
-        let mut converted = ConvertedPackage::new_server(
+        let mut converted = ConvertedPackage::new_repository(
             distro.to_string(),
             name.to_string(),
             version.to_string(),
@@ -869,15 +866,7 @@ mod tests {
             format!("/tmp/{name}-{version}.ccs"),
         );
         converted.package_architecture = architecture.map(str::to_string);
-        converted
-            .set_scriptlet_metadata(&ScriptletBundleSummary {
-                publication_status: "private-review".to_string(),
-                scriptlet_fidelity: "review-required".to_string(),
-                target_compatibility: "review-required".to_string(),
-                review_reason_codes: vec!["review-class-debconf".to_string()],
-                ..Default::default()
-            })
-            .unwrap();
+        converted.conversion_version = CONVERSION_VERSION - 1;
         converted.insert(conn).unwrap();
     }
 
@@ -948,7 +937,7 @@ mod tests {
     }
 
     #[test]
-    fn package_detail_counts_only_public_ready_conversions() {
+    fn package_detail_counts_only_current_conversions() {
         let (temp_file, conn) = create_test_db();
         seed_repository_package(&conn, "fedora", "pkg", "1.0", Some("x86_64"));
         seed_repository_package(&conn, "fedora", "pkg", "2.0", Some("x86_64"));
@@ -961,7 +950,7 @@ mod tests {
             Some("x86_64"),
             CONVERSION_VERSION,
         );
-        insert_private_review_conversion(&conn, "fedora", "pkg", "2.0", Some("x86_64"));
+        insert_stale_conversion(&conn, "fedora", "pkg", "2.0", Some("x86_64"));
 
         let detail = query_package_detail(temp_file.path(), "fedora", "pkg")
             .unwrap()

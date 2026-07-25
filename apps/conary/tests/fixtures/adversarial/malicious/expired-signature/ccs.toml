@@ -1,6 +1,9 @@
 [package]
 name = "expired-signature"
 version = "1.0.0"
+version_scheme = "conary"
+release = "1"
+kind = "package"
 description = "Fixture signed with an intentionally stale timestamp"
 license = "MIT"
 
@@ -12,10 +15,6 @@ libc = "gnu"
 [provides]
 capabilities = ["expired-signature"]
 binaries = ["/usr/bin/expired-signature"]
-
-[requires]
-capabilities = []
-packages = []
 
 [components]
 default = ["runtime"]

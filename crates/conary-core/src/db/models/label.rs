@@ -22,9 +22,9 @@ pub struct LabelEntry {
     pub description: Option<String>,
     pub parent_label_id: Option<i64>,
     pub created_at: Option<String>,
-    /// Repository to use for package resolution through this label (v30)
+    /// Repository to use for package resolution through this label.
     pub repository_id: Option<i64>,
-    /// Delegate resolution to another label (v30 federation)
+    /// Delegate resolution to another label for federation.
     pub delegate_to_label_id: Option<i64>,
 }
 
@@ -356,7 +356,7 @@ impl LabelEntry {
 
     /// Convert a database row to a LabelEntry
     ///
-    /// Schema v52 guarantees all columns exist -- no compat fallbacks needed.
+    /// The current schema guarantees every selected column exists.
     fn from_row(row: &Row) -> rusqlite::Result<Self> {
         Ok(Self {
             id: Some(row.get(0)?),

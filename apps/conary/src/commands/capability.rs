@@ -1,4 +1,4 @@
-// src/commands/capability.rs
+// apps/conary/src/commands/capability.rs
 //! Command implementations for package capability declarations
 
 use super::open_db;
@@ -11,41 +11,10 @@ use conary_core::capability::enforcement::{
     seccomp_enforce,
 };
 use conary_core::capability::{
-    CapabilityDeclaration, SyscallCapabilities, list_packages_with_capabilities,
-    load_capabilities_by_name,
+    CapabilityDeclaration, list_packages_with_capabilities, load_capabilities_by_name,
 };
 use conary_core::ccs::manifest::CcsManifest;
 use conary_core::container::{ContainerConfig, Sandbox};
-
-const CAPABILITY_RUN_LAUNCHER_SYSCALLS: &[&str] = &[
-    "read",
-    "write",
-    "close",
-    "mmap",
-    "mprotect",
-    "munmap",
-    "brk",
-    "pread64",
-    "openat",
-    "newfstatat",
-    "access",
-    "execve",
-    "exit",
-    "exit_group",
-    "arch_prctl",
-    "rt_sigaction",
-    "rt_sigprocmask",
-    "futex",
-    "set_tid_address",
-    "set_robust_list",
-    "getcwd",
-    "readlink",
-    "prlimit64",
-    "clock_gettime",
-    "madvise",
-    "getrandom",
-    "rseq",
-];
 
 /// Show declared capabilities for a package
 pub async fn cmd_capability_show(db_path: &str, package: &str, format: &str) -> Result<()> {
@@ -58,24 +27,11 @@ pub async fn cmd_capability_show(db_path: &str, package: &str, format: &str) -> 
             display_capabilities(&caps, package, format)?;
         }
         None => {
-            // Check if package exists but has no capabilities
-            let exists: Option<i64> = conn
-                .query_row(
-                    "SELECT id FROM troves WHERE name = ?1 AND type = 'package'",
-                    [package],
-                    |row| row.get(0),
-                )
-                .ok();
-
-            if exists.is_some() {
-                println!("Package '{}' has no capability declarations.", package);
-                println!();
-                println!(
-                    "To add capabilities, include a [capabilities] section in the package's ccs.toml."
-                );
-            } else {
-                anyhow::bail!("Package '{}' not found", package);
-            }
+            println!("Package '{}' has no capability declarations.", package);
+            println!();
+            println!(
+                "To add capabilities, include a [capabilities] section in the package's ccs.toml."
+            );
         }
     }
 
@@ -111,11 +67,11 @@ fn display_capabilities(caps: &CapabilityDeclaration, package: &str, format: &st
                 if caps.network.none {
                     println!("  No network access required");
                 } else {
-                    if !caps.network.outbound.is_empty() {
-                        println!("  Outbound: {}", caps.network.outbound.join(", "));
+                    if !caps.network.connect_tcp.is_empty() {
+                        println!("  Connect TCP: {}", format_ports(&caps.network.connect_tcp));
                     }
-                    if !caps.network.listen.is_empty() {
-                        println!("  Listen:   {}", caps.network.listen.join(", "));
+                    if !caps.network.bind_tcp.is_empty() {
+                        println!("  Bind TCP:    {}", format_ports(&caps.network.bind_tcp));
                     }
                 }
                 println!();
@@ -154,9 +110,6 @@ fn display_capabilities(caps: &CapabilityDeclaration, package: &str, format: &st
             // Syscalls
             if !caps.syscalls.is_empty() {
                 println!("[Syscalls]");
-                if let Some(ref profile) = caps.syscalls.profile {
-                    println!("  Profile: {}", profile);
-                }
                 if !caps.syscalls.allow.is_empty() {
                     println!("  Allow: {}", caps.syscalls.allow.join(", "));
                 }
@@ -207,8 +160,8 @@ pub async fn cmd_capability_validate(path: &str, verbose: bool) -> Result<()> {
                 println!("  Version:    {}", caps.version);
                 println!(
                     "  Network:    {} rules",
-                    caps.network.outbound.len()
-                        + caps.network.listen.len()
+                    caps.network.connect_tcp.len()
+                        + caps.network.bind_tcp.len()
                         + if caps.network.none { 1 } else { 0 }
                 );
                 println!(
@@ -219,9 +172,8 @@ pub async fn cmd_capability_validate(path: &str, verbose: bool) -> Result<()> {
                         + caps.filesystem.deny.len()
                 );
                 println!(
-                    "  Syscalls:   {} rules (profile: {})",
-                    caps.syscalls.allow.len() + caps.syscalls.deny.len(),
-                    caps.syscalls.profile.as_deref().unwrap_or("none")
+                    "  Syscalls:   {} exact rules",
+                    caps.syscalls.allow.len() + caps.syscalls.deny.len()
                 );
             }
 
@@ -238,7 +190,8 @@ pub async fn cmd_capability_validate(path: &str, verbose: bool) -> Result<()> {
                 println!("  rationale = \"Description of why these capabilities are needed\"");
                 println!();
                 println!("  [capabilities.network]");
-                println!("  listen = [\"80\", \"443\"]");
+                println!("  bind_tcp = [80, 443]");
+                println!("  connect_tcp = [443]");
                 println!();
                 println!("  [capabilities.filesystem]");
                 println!("  read = [\"/etc/myapp\"]");
@@ -321,27 +274,11 @@ pub async fn cmd_capability_list(db_path: &str, missing_only: bool, format: &str
     Ok(())
 }
 
-/// Generate capability declarations by observing a binary (Phase 2 - Not yet implemented)
-pub async fn cmd_capability_generate(
-    _binary: &str,
-    _args: &[String],
-    _output: Option<&str>,
-    _timeout: u32,
-) -> Result<()> {
-    println!("[NOT YET IMPLEMENTED] capability generate is planned but not yet available.");
-    Ok(())
-}
-
 /// Audit a package's capabilities by showing what enforcement would be applied
 ///
 /// In audit mode, the enforcement is logged but not blocking. This lets users
 /// see what restrictions would be applied before enabling enforce mode.
-pub async fn cmd_capability_audit(
-    db_path: &str,
-    package: &str,
-    _command: Option<&str>,
-    _timeout: u32,
-) -> Result<()> {
+pub async fn cmd_capability_audit(db_path: &str, package: &str) -> Result<()> {
     let conn = open_db(db_path)?;
 
     let capabilities = load_capabilities_by_name(&conn, package)?;
@@ -372,6 +309,14 @@ pub async fn cmd_capability_audit(
         }
     );
     println!(
+        "  Landlock TCP: {}",
+        if support.landlock_network {
+            "supported (ABI V4)"
+        } else {
+            "NOT supported"
+        }
+    );
+    println!(
         "  Seccomp:  {}",
         if support.seccomp {
             "supported"
@@ -384,7 +329,7 @@ pub async fn cmd_capability_audit(
     // Filesystem enforcement report
     if !caps.filesystem.is_empty() {
         println!("[Filesystem Enforcement (Landlock)]");
-        let info = landlock_enforce::build_landlock_ruleset(&caps.filesystem)?;
+        let info = landlock_enforce::build_landlock_ruleset(Some(&caps.filesystem), None)?;
         println!("  Read rules:    {}", info.read_rules);
         println!("  Write rules:   {}", info.write_rules);
         println!("  Execute rules: {}", info.execute_rules);
@@ -407,19 +352,10 @@ pub async fn cmd_capability_audit(
     // Syscall enforcement report
     if !caps.syscalls.is_empty() {
         println!("[Syscall Enforcement (Seccomp)]");
-        let info = seccomp_enforce::describe_seccomp_filter(&caps.syscalls, EnforcementMode::Audit);
-        if let Some(ref profile) = info.profile {
-            println!("  Profile:          {}", profile);
-        }
+        let info =
+            seccomp_enforce::describe_seccomp_filter(&caps.syscalls, EnforcementMode::Audit)?;
         println!("  Allowed syscalls: {}", info.allowed_count);
         println!("  Explicit denies:  {}", info.denied_explicit);
-        if !info.unmapped_names.is_empty() {
-            println!(
-                "  Unmapped names:   {} ({})",
-                info.unmapped_names.len(),
-                info.unmapped_names.join(", ")
-            );
-        }
         println!();
     }
 
@@ -429,16 +365,20 @@ pub async fn cmd_capability_audit(
         if caps.network.none {
             println!("  Mode: Full network isolation (CLONE_NEWNET)");
         } else {
-            println!("  Mode: Network access allowed");
-            if !caps.network.outbound.is_empty() {
-                println!("  Outbound ports: {}", caps.network.outbound.join(", "));
+            let info = landlock_enforce::build_landlock_ruleset(None, Some(&caps.network))?;
+            println!("  Mode: Exact TCP-port filtering (Landlock ABI V4)");
+            if !info.connect_tcp_rules.is_empty() {
+                println!(
+                    "  Connect TCP ports: {}",
+                    format_ports(&info.connect_tcp_rules)
+                );
             }
-            if !caps.network.listen.is_empty() {
-                println!("  Listen ports:   {}", caps.network.listen.join(", "));
+            if !info.bind_tcp_rules.is_empty() {
+                println!(
+                    "  Bind TCP ports:    {}",
+                    format_ports(&info.bind_tcp_rules)
+                );
             }
-            println!(
-                "  Note: Port-level filtering requires iptables/nftables (not yet implemented)"
-            );
         }
         println!();
     }
@@ -461,7 +401,8 @@ pub async fn cmd_capability_audit(
 /// Loads the package's declared capabilities, builds an enforcement policy,
 /// creates a sandboxed environment, and executes the command with restrictions.
 ///
-/// `audit` logs violations without blocking them. Otherwise enforce mode blocks.
+/// `audit` applies seccomp's non-blocking log action. Landlock rules are
+/// reported but not applied because Landlock has no non-blocking audit mode.
 pub async fn cmd_capability_run(
     db_path: &str,
     package: &str,
@@ -493,7 +434,7 @@ pub async fn cmd_capability_run(
         EnforcementMode::Enforce
     };
 
-    let policy = build_enforcement_policy(&caps, mode);
+    let policy = build_enforcement_policy(&caps, mode)?;
 
     // Build container config with enforcement
     let mut config = ContainerConfig::default();
@@ -515,7 +456,8 @@ pub async fn cmd_capability_run(
     if mode == EnforcementMode::Enforce {
         println!("  Violations will be blocked at the kernel level.");
     } else {
-        println!("  Violations will be logged but allowed (audit mode).");
+        println!("  Seccomp violations will be logged but allowed.");
+        println!("  Landlock filesystem/TCP rules are reported but not applied in audit mode.");
     }
     println!();
 
@@ -543,31 +485,41 @@ pub async fn cmd_capability_run(
 fn build_enforcement_policy(
     caps: &CapabilityDeclaration,
     mode: EnforcementMode,
-) -> EnforcementPolicy {
-    EnforcementPolicy {
+) -> Result<EnforcementPolicy> {
+    let (syscalls, syscall_contract) = if caps.syscalls.is_empty() {
+        (None, None)
+    } else {
+        (
+            Some(seccomp_enforce::capability_run_executor_v1_capabilities(
+                &caps.syscalls,
+            )?),
+            Some(seccomp_enforce::CAPABILITY_RUN_EXECUTOR_ABI_V1),
+        )
+    };
+    Ok(EnforcementPolicy {
         mode,
         filesystem: if caps.filesystem.is_empty() {
             None
         } else {
             Some(caps.filesystem.clone())
         },
-        syscalls: if caps.syscalls.is_empty() {
+        network: if caps.network.connect_tcp.is_empty() && caps.network.bind_tcp.is_empty() {
             None
         } else {
-            Some(with_runtime_launcher_syscalls(&caps.syscalls))
+            Some(caps.network.clone())
         },
+        syscalls,
+        syscall_contract,
         network_isolation: caps.network.none,
-    }
+    })
 }
 
-fn with_runtime_launcher_syscalls(syscalls: &SyscallCapabilities) -> SyscallCapabilities {
-    let mut merged = syscalls.clone();
-    for syscall in CAPABILITY_RUN_LAUNCHER_SYSCALLS {
-        if !merged.allow.iter().any(|existing| existing == syscall) {
-            merged.allow.push((*syscall).to_string());
-        }
-    }
-    merged
+fn format_ports(ports: &[u16]) -> String {
+    ports
+        .iter()
+        .map(u16::to_string)
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 #[cfg(test)]
@@ -578,7 +530,7 @@ mod tests {
     #[test]
     fn test_display_capabilities_text() {
         let mut caps = CapabilityDeclaration::default();
-        caps.network.listen.push("80".to_string());
+        caps.network.bind_tcp.push(80);
         caps.filesystem.read.push("/etc".to_string());
 
         // Just verify it doesn't panic
@@ -602,12 +554,14 @@ mod tests {
         let mut caps = CapabilityDeclaration::default();
         caps.network.none = true;
         caps.filesystem.read.push("/etc/test".to_string());
-        caps.syscalls.profile = Some("scriptlet".to_string());
+        caps.syscalls.allow.push("socket".to_string());
+        caps.syscalls.deny.push("ptrace".to_string());
 
-        let policy = build_enforcement_policy(&caps, EnforcementMode::Enforce);
+        let policy = build_enforcement_policy(&caps, EnforcementMode::Enforce).unwrap();
 
         assert_eq!(policy.mode, EnforcementMode::Enforce);
         assert!(policy.network_isolation);
+        assert!(policy.network.is_none());
         assert_eq!(
             policy
                 .filesystem
@@ -616,15 +570,12 @@ mod tests {
                 .read,
             vec!["/etc/test".to_string()]
         );
-        assert_eq!(
-            policy
-                .syscalls
-                .as_ref()
-                .expect("syscall policy should be present")
-                .profile
-                .as_deref(),
-            Some("scriptlet")
-        );
+        let syscalls = policy
+            .syscalls
+            .as_ref()
+            .expect("syscall policy should be present");
+        assert!(syscalls.allow.contains(&"socket".to_string()));
+        assert_eq!(syscalls.deny, vec!["ptrace".to_string()]);
     }
 
     #[test]
@@ -632,7 +583,7 @@ mod tests {
         let mut caps = CapabilityDeclaration::default();
         caps.syscalls.allow.push("socket".to_string());
 
-        let policy = build_enforcement_policy(&caps, EnforcementMode::Enforce);
+        let policy = build_enforcement_policy(&caps, EnforcementMode::Enforce).unwrap();
         let syscalls = policy
             .syscalls
             .as_ref()
@@ -642,5 +593,22 @@ mod tests {
         assert!(syscalls.allow.contains(&"execve".to_string()));
         assert!(syscalls.allow.contains(&"prlimit64".to_string()));
         assert!(syscalls.allow.contains(&"clock_gettime".to_string()));
+        assert_eq!(
+            policy.syscall_contract,
+            Some(seccomp_enforce::CAPABILITY_RUN_EXECUTOR_ABI_V1)
+        );
+    }
+
+    #[test]
+    fn test_build_enforcement_policy_preserves_exact_tcp_rules() {
+        let mut caps = CapabilityDeclaration::default();
+        caps.network.connect_tcp = vec![443, 8443];
+        caps.network.bind_tcp = vec![8080];
+
+        let policy = build_enforcement_policy(&caps, EnforcementMode::Enforce).unwrap();
+        let network = policy.network.expect("exact TCP policy should be present");
+        assert_eq!(network.connect_tcp, [443, 8443]);
+        assert_eq!(network.bind_tcp, [8080]);
+        assert!(!policy.network_isolation);
     }
 }

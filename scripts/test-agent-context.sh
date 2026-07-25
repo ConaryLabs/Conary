@@ -177,11 +177,7 @@ grep -q '^Alpha Feature |' <<<"$path_brief_out" \
 grep -q '^# Task Packet: Alpha Feature$' "$tmp/path-full.out" \
     || fail "--path without --brief did not print the full packet"
 
-for planning_path in \
-    docs/designs/2099-01-01-example-design.md \
-    docs/plans/2099-01-01-example-plan.md \
-    docs/roadmaps/example-roadmap.md
-do
+for planning_path in docs/roadmaps/example-roadmap.md; do
     fallback_out="$("$script" --path "$planning_path" --map "$fixture_map")"
     grep -q '^Planning docs |' <<<"$fallback_out" \
         || fail "$planning_path did not use the planning fallback; got: $fallback_out"
@@ -189,6 +185,15 @@ do
         || fail "$planning_path fallback did not name documentation truth proof"
     grep -q 'risk-proportional review gate' <<<"$fallback_out" \
         || fail "$planning_path fallback did not name the proportional review gate"
+done
+
+for retired_planning_path in \
+    docs/designs/2099-01-01-example-design.md \
+    docs/plans/2099-01-01-example-plan.md
+do
+    fallback_out="$("$script" --path "$retired_planning_path" --map "$fixture_map")"
+    grep -q '^No feature-card hint matched\.' <<<"$fallback_out" \
+        || fail "$retired_planning_path still used a retired planning fallback; got: $fallback_out"
 done
 
 fallback_out="$("$script" --path docs/modules/anything-at-all.md --map "$fixture_map")"
@@ -341,7 +346,20 @@ run_validate_expect_fail "$vr" "equal-specificity Paths overlap for a/alpha.rs"
 vr="$tmp/validate-missing-start"
 make_validate_repo "$vr"
 sed -i 's|`a/alpha.rs`;|`a/missing.rs`;|' "$vr/map.md"
-run_validate_expect_fail "$vr" "references untracked path: a/missing.rs"
+run_validate_expect_fail "$vr" "references missing working-tree path: a/missing.rs"
+
+vr="$tmp/validate-deleted-start"
+make_validate_repo "$vr"
+rm "$vr/a/alpha.rs"
+run_validate_expect_fail "$vr" "references missing working-tree path: a/alpha.rs"
+
+vr="$tmp/validate-untracked-start"
+make_validate_repo "$vr"
+printf 'new alpha\n' > "$vr/a/new-alpha.rs"
+sed -i 's|`a/alpha.rs`;|`a/new-alpha.rs`;|' "$vr/map.md"
+good_out="$( (cd "$vr" && bash "$script" --map map.md --validate) )"
+grep -q "validation passed" <<<"$good_out" \
+    || fail "untracked nonignored start-here path did not validate; got: $good_out"
 
 vr="$tmp/validate-no-proof-command"
 make_validate_repo "$vr"
@@ -379,11 +397,18 @@ grep -q "command failed: false" "$tmp/run-fail.out" \
 real_list="$("$script" --list)"
 grep -q $'^packaging\t' <<<"$real_list" || fail "real map --list missing packaging slug"
 grep -q $'^profiles\t' <<<"$real_list" || fail "real map --list missing profiles slug"
-[[ "$(wc -l <<<"$real_list")" -eq 13 ]] || fail "real map --list did not print 13 cards"
+grep -q $'^resolution\t' <<<"$real_list" || fail "real map --list missing resolution slug"
+[[ "$(wc -l <<<"$real_list")" -eq 14 ]] || fail "real map --list did not print 14 cards"
 
 "$script" --path apps/conary/src/commands/install/mod.rs > "$tmp/real-install.out"
 grep -q '^slug: install$' "$tmp/real-install.out" \
     || fail "install path did not route to the install card"
+"$script" --path crates/conary-core/src/payload.rs > "$tmp/real-payload.out"
+grep -q '^slug: ccs$' "$tmp/real-payload.out" \
+    || fail "shared payload authority did not route to the ccs card"
+"$script" --path crates/conary-core/src/resolver/sat/relations.rs > "$tmp/real-resolution.out"
+grep -q '^slug: resolution$' "$tmp/real-resolution.out" \
+    || fail "SAT relation path did not route to the resolution card"
 "$script" --path apps/remi/src/server/mcp.rs > "$tmp/real-mcp.out"
 grep -q '^slug: agent-mcp$' "$tmp/real-mcp.out" \
     || fail "remi mcp.rs did not route to agent-mcp (specificity)"

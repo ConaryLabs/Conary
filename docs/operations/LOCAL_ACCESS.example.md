@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-06-13
-revision: 2
+last_updated: 2026-07-25
+revision: 3
 summary: Template for local machine-specific access and remote-workbench notes that must not be committed
 ---
 
@@ -29,10 +29,12 @@ untracked.
 ## Credential Storage Locations
 
 - Where credentials live locally
-- Prefer an ignored env file such as `docs/operations/LOCAL_SECRETS.env` for literal values
+- Prefer an ignored env file such as `docs/operations/LOCAL_SECRETS.env` for
+  literal values
 - How they are loaded
 - Rotation reminders
-- Any credentials that should be migrated out of legacy assistant config files
+- Any credentials that should be migrated out of superseded assistant config
+  files
 
 ## Local Workflow Notes
 

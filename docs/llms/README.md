@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-07-24
-revision: 15
-summary: Vendor-neutral assistant map with issue-backed pull requests, neutral active planning, feature ownership, and documentation-truth routing
+last_updated: 2026-07-25
+revision: 17
+summary: Vendor-neutral assistant map with canonical design ownership, issue-backed execution, feature ownership, and documentation-truth routing
 ---
 
 # Conary For Coding Assistants
@@ -71,9 +71,11 @@ second subsystem manual.
 - Tool-specific entrypoints such as `CLAUDE.md`, `GEMINI.md`, `REASONIX.md`, and
   `.github/copilot-instructions.md` stay intentionally thin and point back to
   this layered doc system instead of becoming parallel manuals.
-- Detailed roadmap state lives in `docs/roadmaps/`, active decision records in
-  `docs/designs/`, and active multi-step implementation plans in `docs/plans/`.
-  Stable public or persisted contracts remain in `docs/specs/`.
+- Detailed roadmap state lives in `docs/roadmaps/`. Durable design decisions
+  live in the architecture, module, or `docs/specs/` document that owns the
+  affected surface. Bounded execution state lives in the primary issue and
+  draft pull request. Stable public or persisted contracts remain in
+  `docs/specs/`.
 
 ## Core Docs
 
@@ -88,14 +90,12 @@ second subsystem manual.
 - [`docs/modules/source-selection.md`](../modules/source-selection.md): source-policy inputs, runtime mirrors, and replatform/update behavior
 - [`docs/operations/infrastructure.md`](../operations/infrastructure.md): structured operations transport, deploy, and host notes
 - [`docs/roadmaps/development-roadmap.md`](../roadmaps/development-roadmap.md): current maturity, ordered workstreams, blockers, proof, and longer horizons
-- [`docs/llms/subsystem-map.md`](subsystem-map.md): stable "look here first" pointers distilled from legacy assistant docs
+- [`docs/llms/subsystem-map.md`](subsystem-map.md): stable "look here first" pointers distilled from retired assistant docs
 
 ## Focused Docs
 
 - [`docs/operations/bootstrap-selfhosting-vm.md`](../operations/bootstrap-selfhosting-vm.md): truthful operator flow for the current bootstrap self-hosting VM path
 - [`docs/operations/daily-driver-ux-matrix.md`](../operations/daily-driver-ux-matrix.md): daily-driver CLI diagnostics, unsupported-case routes, shell completion checks, and focused Goal 7 tests
-- [`docs/operations/post-generation-export-follow-up-roadmap.md`](../operations/post-generation-export-follow-up-roadmap.md): remaining bundle, boot-artifact verification, pristine-validation, sandbox, and image-projection work after x86_64 ISO export landed
-- [`docs/operations/bootstrap-follow-up-investigations.md`](../operations/bootstrap-follow-up-investigations.md): deferred architecture and cleanup ideas to revisit after bootstrap is stable
 - [`docs/llms/openai-codex.md`](openai-codex.md): OpenAI/Codex-specific prompt and harness notes kept out of the vendor-neutral map
 
 ## Doc Families
@@ -107,10 +107,11 @@ second subsystem manual.
 - **Canonical docs:** architecture, module, integration-testing, operations,
   guide, and `docs/specs/` contract docs that describe current repo behavior or
   intended active product contracts.
-- **Roadmap and planning docs:** `docs/roadmaps/` owns detailed current status,
-  `docs/designs/` owns active decisions, and `docs/plans/` owns active
-  multi-step execution. They must not be mistaken for already-shipped
-  behavior.
+- **Roadmap and execution state:** `docs/roadmaps/` owns detailed current
+  ordering and milestone status. The primary issue and draft pull request own
+  bounded execution state. Durable decisions move directly into the canonical
+  architecture, module, or specification document they affect. None of these
+  surfaces should be mistaken for already-shipped behavior.
 - **Planning history:** after durable truth and resume facts move to canonical
   owners, completed, superseded, or abandoned planning is deleted from the
   current tree and recovered through Git history. Do not create a replacement
@@ -148,9 +149,6 @@ second subsystem manual.
 - Treat `bootstrap smoke` as a local test-runner proof loop. It may build
   images, start containers, and write result files, but it is not fixture
   publishing and does not add live MCP resources or live MCP prompts.
-- When version-specific library, SDK, MCP, model, or coding-agent behavior
-  matters, check current external documentation before editing durable
-  guidance.
 - For maintainability, pruning, or refactor work, require the task packet to
   name the owning subsystem, the current large-file or stale-surface pressure,
   the intended new boundary, persisted-state impact, focused verification, and
@@ -191,6 +189,3 @@ phrase touched by the edit.
   then validate feature-card routing and local-link/diff hygiene.
 - For implementation-to-claim work, use the owning feature card to select the
   focused behavior proof and interaction gate in addition to doc truth.
-- When version-specific library, SDK, MCP, model, or coding-agent behavior
-  matters, check current external documentation before editing durable
-  guidance.

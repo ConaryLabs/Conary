@@ -279,7 +279,7 @@ impl RemiMcpServer {
 
     /// List all configured repositories.
     #[tool(
-        description = "List all configured repositories with name, URL, enabled status, priority, last sync, and GPG settings."
+        description = "List all configured repositories with name, URL, enabled status, priority, last sync, parser, and ecosystem-native trust policy."
     )]
     async fn list_repos(&self) -> Result<CallToolResult, McpError> {
         let repos = admin_service::list_repos(&self.state)
@@ -296,7 +296,9 @@ impl RemiMcpServer {
                     "enabled": r.enabled,
                     "priority": r.priority,
                     "last_sync": r.last_sync,
-                    "gpg_check": r.gpg_check,
+                    "package_format": r.package_format,
+                    "parser": r.parser_config,
+                    "trust": r.trust_policy,
                 })
             })
             .collect();
@@ -324,9 +326,9 @@ impl RemiMcpServer {
                     "content_url": r.content_url,
                     "enabled": r.enabled,
                     "priority": r.priority,
-                    "gpg_check": r.gpg_check,
-                    "gpg_strict": r.gpg_strict,
-                    "gpg_key_url": r.gpg_key_url,
+                    "package_format": r.package_format,
+                    "parser": r.parser_config,
+                    "trust": r.trust_policy,
                     "metadata_expire": r.metadata_expire,
                     "last_sync": r.last_sync,
                     "created_at": r.created_at,
@@ -632,10 +634,9 @@ impl RemiMcpServer {
 
     /// Rebuild the canonical package mapping from all indexed distros.
     ///
-    /// Runs auto-discovery and curated rules to create cross-distro name
-    /// equivalences.
+    /// Ingests explicit curated-rule, Repology, and AppStream contracts.
     #[tool(
-        description = "Rebuild the canonical package mapping from all indexed distros. Runs auto-discovery and curated rules to create cross-distro name equivalences. Risk: medium. Requires plan-then-apply confirmation in the LLM-native operations contract before this tool remains exposed in the stateless MCP mutation surface."
+        description = "Rebuild the canonical package mapping from explicit curated-rule, Repology, and AppStream contracts. Risk: medium. Requires plan-then-apply confirmation in the LLM-native operations contract before this tool remains exposed in the stateless MCP mutation surface."
     )]
     async fn canonical_rebuild(&self) -> Result<CallToolResult, McpError> {
         let state = self.state.read().await;

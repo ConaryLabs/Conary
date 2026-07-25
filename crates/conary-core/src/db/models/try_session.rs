@@ -46,6 +46,7 @@ impl TrySessionMode {
 pub struct TrySession {
     pub id: String,
     pub package_path: String,
+    pub package_signing_key: String,
     pub package_name: Option<String>,
     pub package_version: Option<String>,
     pub previous_generation_id: Option<i64>,
@@ -65,6 +66,7 @@ pub struct TrySession {
 pub struct CreateTrySession<'a> {
     pub id: &'a str,
     pub package_path: &'a str,
+    pub package_signing_key: &'a str,
     pub package_name: Option<&'a str>,
     pub package_version: Option<&'a str>,
     pub previous_generation_id: Option<i64>,
@@ -73,19 +75,20 @@ pub struct CreateTrySession<'a> {
 }
 
 impl TrySession {
-    const COLUMNS: &'static str = "id, package_path, package_name, package_version, \
+    const COLUMNS: &'static str = "id, package_path, package_signing_key, package_name, package_version, \
         previous_generation_id, try_generation_id, launcher_pid, launcher_boot_id, \
         status, mode, work_dir, last_error, started_at, updated_at, completed_at";
 
     pub fn create_active(conn: &Connection, session: CreateTrySession<'_>) -> Result<Self> {
         let result = conn.execute(
             "INSERT INTO try_sessions (
-                id, package_path, package_name, package_version, previous_generation_id,
-                status, mode, work_dir
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                id, package_path, package_signing_key, package_name, package_version,
+                previous_generation_id, status, mode, work_dir
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 session.id,
                 session.package_path,
+                session.package_signing_key,
                 session.package_name,
                 session.package_version,
                 session.previous_generation_id,
@@ -145,18 +148,21 @@ impl TrySession {
         conn: &Connection,
         expected_try_generation_id: i64,
         package_path: &str,
+        package_signing_key: &str,
         next_try_generation_id: i64,
     ) -> Result<bool> {
         let rows = conn.execute(
             "UPDATE try_sessions
              SET package_path = ?1,
-                 try_generation_id = ?2,
+                 package_signing_key = ?2,
+                 try_generation_id = ?3,
                  updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-             WHERE id = ?3
+             WHERE id = ?4
                AND status = 'active'
-               AND try_generation_id = ?4",
+               AND try_generation_id = ?5",
             params![
                 package_path,
+                package_signing_key,
                 next_try_generation_id,
                 self.id,
                 expected_try_generation_id,
@@ -291,31 +297,32 @@ impl TrySession {
     }
 
     fn from_row(row: &Row) -> rusqlite::Result<Self> {
-        let status_raw: String = row.get(8)?;
-        let mode_raw: String = row.get(9)?;
+        let status_raw: String = row.get(9)?;
+        let mode_raw: String = row.get(10)?;
         let status = status_raw.parse::<TrySessionStatus>().map_err(|e| {
-            rusqlite::Error::FromSqlConversionFailure(8, rusqlite::types::Type::Text, Box::new(e))
+            rusqlite::Error::FromSqlConversionFailure(9, rusqlite::types::Type::Text, Box::new(e))
         })?;
         let mode = mode_raw.parse::<TrySessionMode>().map_err(|e| {
-            rusqlite::Error::FromSqlConversionFailure(9, rusqlite::types::Type::Text, Box::new(e))
+            rusqlite::Error::FromSqlConversionFailure(10, rusqlite::types::Type::Text, Box::new(e))
         })?;
 
         Ok(Self {
             id: row.get(0)?,
             package_path: row.get(1)?,
-            package_name: row.get(2)?,
-            package_version: row.get(3)?,
-            previous_generation_id: row.get(4)?,
-            try_generation_id: row.get(5)?,
-            launcher_pid: row.get(6)?,
-            launcher_boot_id: row.get(7)?,
+            package_signing_key: row.get(2)?,
+            package_name: row.get(3)?,
+            package_version: row.get(4)?,
+            previous_generation_id: row.get(5)?,
+            try_generation_id: row.get(6)?,
+            launcher_pid: row.get(7)?,
+            launcher_boot_id: row.get(8)?,
             status,
             mode,
-            work_dir: row.get(10)?,
-            last_error: row.get(11)?,
-            started_at: row.get(12)?,
-            updated_at: row.get(13)?,
-            completed_at: row.get(14)?,
+            work_dir: row.get(11)?,
+            last_error: row.get(12)?,
+            started_at: row.get(13)?,
+            updated_at: row.get(14)?,
+            completed_at: row.get(15)?,
         })
     }
 }
@@ -331,6 +338,7 @@ mod tests {
             CreateTrySession {
                 id,
                 package_path: &format!("/tmp/{id}.ccs"),
+                package_signing_key: "test-signing-key",
                 package_name: Some("demo"),
                 package_version: Some("1.0.0-1"),
                 previous_generation_id: Some(41),
@@ -345,6 +353,7 @@ mod tests {
         TrySession {
             id: id.to_string(),
             package_path: format!("/tmp/{id}.ccs"),
+            package_signing_key: "test-signing-key".to_string(),
             package_name: None,
             package_version: None,
             previous_generation_id: None,
@@ -385,6 +394,7 @@ mod tests {
             CreateTrySession {
                 id: "try-a",
                 package_path: "/tmp/demo.ccs",
+                package_signing_key: "test-signing-key",
                 package_name: Some("demo"),
                 package_version: Some("1.0.0-1"),
                 previous_generation_id: Some(7),
@@ -413,6 +423,24 @@ mod tests {
     }
 
     #[test]
+    fn current_try_session_requires_package_signing_key() {
+        let (_temp, conn) = create_test_db();
+        let error = conn
+            .execute(
+                "INSERT INTO try_sessions (id, package_path, status, mode, work_dir)
+                 VALUES ('try-missing-signer', '/tmp/demo.ccs', 'active', 'namespace', '/tmp/try')",
+                [],
+            )
+            .expect_err("current try sessions must persist the accepted package signer");
+        assert!(error.to_string().contains("NOT NULL"));
+        assert!(
+            TrySession::find_by_id(&conn, "try-missing-signer")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
     fn second_active_session_fails() {
         let (_temp, conn) = create_test_db();
         create_namespace_session(&conn, "try-a");
@@ -422,6 +450,7 @@ mod tests {
             CreateTrySession {
                 id: "try-b",
                 package_path: "/tmp/other.ccs",
+                package_signing_key: "test-signing-key",
                 package_name: None,
                 package_version: None,
                 previous_generation_id: None,
@@ -596,12 +625,13 @@ mod tests {
         session.set_try_generation(&conn, 41).unwrap();
 
         let replaced = session
-            .replace_active_try_generation(&conn, 41, "/tmp/new.ccs", 42)
+            .replace_active_try_generation(&conn, 41, "/tmp/new.ccs", "new-signing-key", 42)
             .unwrap();
 
         assert!(replaced);
         let stored = TrySession::find_by_id(&conn, "try-a").unwrap().unwrap();
         assert_eq!(stored.package_path, "/tmp/new.ccs");
+        assert_eq!(stored.package_signing_key, "new-signing-key");
         assert_eq!(stored.try_generation_id, Some(42));
         assert_eq!(stored.status, TrySessionStatus::Active);
     }
@@ -614,7 +644,7 @@ mod tests {
 
         assert!(
             !session
-                .replace_active_try_generation(&conn, 40, "/tmp/new.ccs", 42)
+                .replace_active_try_generation(&conn, 40, "/tmp/new.ccs", "new-signing-key", 42,)
                 .unwrap()
         );
         let stored = TrySession::find_by_id(&conn, "try-a").unwrap().unwrap();
@@ -624,7 +654,7 @@ mod tests {
         session.mark_orphaned(&conn).unwrap();
         assert!(
             !session
-                .replace_active_try_generation(&conn, 41, "/tmp/new.ccs", 42)
+                .replace_active_try_generation(&conn, 41, "/tmp/new.ccs", "new-signing-key", 42,)
                 .unwrap()
         );
         let stored = TrySession::find_by_id(&conn, "try-a").unwrap().unwrap();

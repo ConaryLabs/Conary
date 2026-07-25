@@ -78,7 +78,7 @@ group = "E"
 fatal = true
 
 [[test.step]]
-run = "${CONARY_BIN} ccs install --yes /opt/remi-tests/fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0.ccs --allow-unsigned --sandbox never --db-path ${DB_PATH}"
+run = "${CONARY_BIN} ccs install --yes /opt/remi-tests/fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0-1.ccs --policy ${FIXTURE_CCS_POLICY} --sandbox always --db-path ${DB_PATH}"
 
 [test.step.assert]
 exit_code = 0
@@ -107,7 +107,7 @@ group = "E"
 depends_on = ["T256"]
 
 [[test.step]]
-run = "${CONARY_BIN} ccs install --yes /opt/remi-tests/fixtures/conary-test-fixture/v2/output/conary-test-fixture-2.0.0.ccs --allow-unsigned --sandbox never --db-path ${DB_PATH}"
+run = "${CONARY_BIN} ccs install --yes /opt/remi-tests/fixtures/conary-test-fixture/v2/output/conary-test-fixture-2.0.0-1.ccs --policy ${FIXTURE_CCS_POLICY} --sandbox always --db-path ${DB_PATH}"
 
 [test.step.assert]
 exit_code = 0
@@ -132,7 +132,7 @@ group = "E"
 depends_on = ["T257"]
 
 [[test.step]]
-conary = "remove conary-test-fixture --no-scripts --yes"
+conary = "remove conary-test-fixture --sandbox always --yes"
 
 [test.step.assert]
 exit_code = 0
@@ -176,7 +176,7 @@ group = "E"
 depends_on = ["T258a"]
 
 [[test.step]]
-run = "PKG_FILE=$(ls /tmp/phase4-native-output/${local_native_glob} | head -1) && ${CONARY_BIN} install \"$PKG_FILE\" --db-path ${DB_PATH} --no-deps --yes --sandbox never"
+run = "PKG_FILE=$(ls /tmp/phase4-native-output/${local_native_glob} | head -1) && ${CONARY_BIN} install \"$PKG_FILE\" --db-path ${DB_PATH} --no-deps --yes --sandbox always"
 
 [test.step.assert]
 exit_code = 0
@@ -192,7 +192,7 @@ stdout_contains_all = ["phase4-runtime-fixture", "1.0.0"]
 file_exists = "/usr/bin/phase4-runtime-fixture"
 
 [[test.step]]
-conary = "remove phase4-runtime-fixture --no-scripts --yes"
+conary = "remove phase4-runtime-fixture --sandbox always --yes"
 
 [test.step.assert]
 exit_code = 0
@@ -280,7 +280,7 @@ group = "E"
 depends_on = ["T261"]
 
 [[test.step]]
-conary = "install tree --repo ${distro_repo} --no-deps --yes --sandbox never"
+conary = "install tree --repo ${distro_repo} --no-deps --yes --sandbox always"
 
 [test.step.assert]
 exit_code = 0
@@ -344,7 +344,7 @@ depends_on = ["T262"]
 
 # Install a CCS package alongside the native one
 [[test.step]]
-run = "${CONARY_BIN} ccs install --yes /opt/remi-tests/fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0.ccs --allow-unsigned --sandbox never --db-path ${DB_PATH}"
+run = "${CONARY_BIN} ccs install --yes /opt/remi-tests/fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0-1.ccs --policy ${FIXTURE_CCS_POLICY} --sandbox always --db-path ${DB_PATH}"
 
 [test.step.assert]
 exit_code = 0
@@ -359,7 +359,7 @@ stdout_contains_all = ["conary-test-fixture", "tree"]
 
 # Remove CCS, native should remain
 [[test.step]]
-conary = "remove conary-test-fixture --no-scripts --yes"
+conary = "remove conary-test-fixture --sandbox always --yes"
 
 [test.step.assert]
 exit_code = 0
@@ -404,7 +404,7 @@ requires = ["composefs_runtime"]
 
 # Reinstall CCS fixture
 [[test.step]]
-run = "${CONARY_BIN} ccs install --yes /opt/remi-tests/fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0.ccs --allow-unsigned --sandbox never --db-path ${DB_PATH}"
+run = "${CONARY_BIN} ccs install --yes /opt/remi-tests/fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0-1.ccs --policy ${FIXTURE_CCS_POLICY} --sandbox always --db-path ${DB_PATH}"
 
 [test.step.assert]
 exit_code = 0
@@ -419,7 +419,7 @@ stdout_contains = "Generation"
 
 # Clean up
 [[test.step]]
-run = "${CONARY_BIN} remove conary-test-fixture --no-scripts --yes --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} remove tree --no-scripts --yes --db-path ${DB_PATH} 2>/dev/null; true"
+run = "${CONARY_BIN} remove conary-test-fixture --sandbox always --yes --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} remove tree --sandbox always --yes --db-path ${DB_PATH} 2>/dev/null; true"
 
 # ==========================================================================
 # Distro Replatforming Tests (T268-T275)
@@ -466,7 +466,7 @@ depends_on = ["T268"]
 
 # Add the replatform target repo with Remi strategy (may already exist, ignore errors)
 [[test.step]]
-run = "${CONARY_BIN} repo add ${replatform_repo} https://remi.conary.io --default-strategy remi --remi-endpoint https://remi.conary.io --remi-distro ${replatform_remi_distro} --no-gpg-check --db-path ${DB_PATH} 2>&1; true"
+run = "${CONARY_BIN} repo add ${replatform_repo} https://remi.conary.io --package-format json --default-strategy remi --remi-endpoint https://remi.conary.io --remi-distro ${replatform_remi_distro} --db-path ${DB_PATH} 2>&1; true"
 
 [test.step.assert]
 exit_code = 0
@@ -486,7 +486,7 @@ exit_code = 0
 
 # Install a package from the current distro
 [[test.step]]
-conary = "install tree --repo ${distro_repo} --no-deps --yes --sandbox never"
+conary = "install tree --repo ${distro_repo} --no-deps --yes --sandbox always"
 
 [test.step.assert]
 exit_code = 0
@@ -536,7 +536,7 @@ group = "E"
 depends_on = ["T270"]
 
 [[test.step]]
-run = "${CONARY_BIN} model apply -m /tmp/replatform-model.toml --db-path ${DB_PATH} --yes --sandbox never 2>&1; echo EXIT:$?"
+run = "${CONARY_BIN} model apply -m /tmp/replatform-model.toml --db-path ${DB_PATH} --yes --sandbox always 2>&1; echo EXIT:$?"
 
 [test.step.assert]
 exit_code = 0
@@ -630,7 +630,7 @@ exit_code = 0
 
 # Attempt install from the non-pinned distro repo should be blocked or warned
 [[test.step]]
-run = "${CONARY_BIN} install tree --repo ${distro_repo} --no-deps --yes --sandbox never --db-path ${DB_PATH} 2>&1; echo EXIT:$?"
+run = "${CONARY_BIN} install tree --repo ${distro_repo} --no-deps --yes --sandbox always --db-path ${DB_PATH} 2>&1; echo EXIT:$?"
 
 [test.step.assert]
 exit_code = 0
@@ -686,7 +686,7 @@ conary = "system takeover --up-to owned --yes"
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["Finished Phase 2 (Owned).", "Conary now owns all non-blocked packages."]
+stdout_contains_all = ["Finished Phase 2 (Owned).", "Conary now owns all adopted packages."]
 
 [[test.step]]
 run = "OP_FILE=$(find \"$(dirname \"${DB_PATH}\")/takeover/operations\" -name '*.json' | sort | tail -1); grep -q '\"requested_level\": \"owned\"' \"$OP_FILE\" && grep -q '\"status\": \"Incomplete\"' \"$OP_FILE\" && grep -q '\"completed_phases\": \\[' \"$OP_FILE\" && grep -q '\"Cas\"' \"$OP_FILE\" && grep -q '\"Owned\"' \"$OP_FILE\" && echo takeover-owned-record"

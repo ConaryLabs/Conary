@@ -4,6 +4,7 @@
 use super::ConversionService;
 use anyhow::{Context, Result};
 use conary_core::ccs::convert::ConversionResult;
+use conary_core::db::models::ChunkAccess;
 use std::path::Path;
 use std::time::{Duration, Instant};
 use tracing::debug;
@@ -28,11 +29,14 @@ impl ConversionService {
         let mut chunk_hashes = Vec::new();
         let mut cas_duration = Duration::default();
         let mut r2_duration = self.r2_store.as_ref().map(|_| Duration::default());
+        let mut exact_sizes = Vec::new();
         let objects_dir = self.chunk_dir.join("objects");
 
         // Get blobs from the build result (chunks or whole files)
         for (hash, data) in &result.build_result.blobs {
             let cas_started = Instant::now();
+            let size = i64::try_from(data.len()).context("converted chunk is too large")?;
+            exact_sizes.push((hash.clone(), size));
             let (prefix, rest) = hash.split_at(2.min(hash.len()));
             let chunk_path = objects_dir.join(prefix).join(rest);
 
@@ -78,6 +82,30 @@ impl ConversionService {
             chunk_hashes.push(hash.clone());
         }
 
+        if !exact_sizes.is_empty() {
+            let db_path = self.db_path.clone();
+            tokio::task::spawn_blocking(move || -> Result<()> {
+                let mut conn = crate::server::open_runtime_db(&db_path)?;
+                let tx = conn.transaction()?;
+                for (hash, size) in exact_sizes {
+                    if let Some(existing) = ChunkAccess::find_by_hash(&tx, &hash)?
+                        && existing.size_bytes != size
+                    {
+                        anyhow::bail!(
+                            "chunk {hash} size disagrees with persisted CAS authority: \
+                             {} != {size}",
+                            existing.size_bytes
+                        );
+                    }
+                    ChunkAccess::new(hash, size).upsert(&tx)?;
+                }
+                tx.commit()?;
+                Ok(())
+            })
+            .await
+            .context("join exact chunk-size persistence task")??;
+        }
+
         Ok(StoredChunks {
             chunk_hashes,
             cas_duration,
@@ -97,6 +125,13 @@ mod tests {
     use super::super::test_support::make_conversion_result;
     use super::*;
     use std::path::{Path, PathBuf};
+
+    fn initialized_db(temp_dir: &tempfile::TempDir) -> PathBuf {
+        let db_path = temp_dir.path().join("remi.db");
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conary_core::db::schema::ensure_current(&conn).unwrap();
+        db_path
+    }
 
     #[test]
     fn test_calculate_checksum_valid_file() {
@@ -141,7 +176,7 @@ mod tests {
         let service = ConversionService::new(
             chunk_dir.clone(),
             temp_dir.path().to_path_buf(),
-            PathBuf::from("/tmp/nonexistent.db"),
+            initialized_db(&temp_dir),
             None,
         );
 
@@ -162,6 +197,12 @@ mod tests {
                 "Chunk file should exist at {:?}",
                 chunk_path
             );
+            let conn = rusqlite::Connection::open(temp_dir.path().join("remi.db")).unwrap();
+            let size = ChunkAccess::find_by_hash(&conn, hash)
+                .unwrap()
+                .unwrap()
+                .size_bytes;
+            assert!(size > 0);
         }
     }
 
@@ -174,7 +215,7 @@ mod tests {
         let service = ConversionService::new(
             chunk_dir.clone(),
             temp_dir.path().to_path_buf(),
-            PathBuf::from("/tmp/nonexistent.db"),
+            initialized_db(&temp_dir),
             None,
         );
 
@@ -200,7 +241,7 @@ mod tests {
         let service = ConversionService::new(
             chunk_dir,
             temp_dir.path().to_path_buf(),
-            PathBuf::from("/tmp/nonexistent.db"),
+            initialized_db(&temp_dir),
             None,
         );
 

@@ -3,18 +3,19 @@
 //! Version constraint matching functions.
 //!
 //! Determines whether a constraint matches a package version or a provided
-//! capability version, handling cross-format comparisons between legacy RPM
-//! constraints and native (Debian, Arch) version schemes.
+//! capability version using the source ecosystem's exact version scheme.
 //!
 //! All functions now work with `(version: &str, scheme: VersionScheme)` pairs
 //! from `PackageIdentity` instead of the former `ConaryPackageVersion` enum.
 
 use crate::repository::versioning::{
-    RepoVersionConstraint, VersionScheme, compare_repo_versions, repo_version_satisfies,
+    RepoVersionConstraint, VersionResult, VersionScheme, compare_mixed_repo_versions,
+    repo_version_satisfies,
 };
-use crate::version::{RpmVersion, VersionConstraint};
+use crate::resolver::identity::PackageIdentity;
+use crate::version::VersionConstraint;
 
-use super::types::ConaryConstraint;
+use super::types::{CapabilityExpression, ConaryConstraint};
 
 /// Check whether a constraint matches a package's version.
 ///
@@ -23,21 +24,11 @@ pub fn constraint_matches_package(
     constraint: &ConaryConstraint,
     version: &str,
     scheme: VersionScheme,
-) -> bool {
+) -> VersionResult<bool> {
     match constraint {
-        // Legacy constraint (RPM-style)
-        ConaryConstraint::Legacy(vc) => match vc {
-            VersionConstraint::Any => true,
-            _ => match scheme {
-                VersionScheme::Rpm => RpmVersion::parse(version)
-                    .map(|v| vc.satisfies(&v))
-                    .unwrap_or(false),
-                // Legacy constraint against non-RPM version: only `Any` matches
-                // (handled above), all others fail.
-                _ => false,
-            },
-        },
-        // Native (scheme-aware) constraint
+        ConaryConstraint::Requested(constraint) => {
+            requested_constraint_matches(constraint, version, scheme)
+        }
         ConaryConstraint::Repository {
             scheme: constraint_scheme,
             constraint: repo_constraint,
@@ -45,34 +36,14 @@ pub fn constraint_matches_package(
         } => {
             // `Any` matches everything regardless of scheme
             if matches!(repo_constraint, RepoVersionConstraint::Any) {
-                return true;
+                return Ok(true);
             }
             if constraint_scheme == &scheme {
                 return repo_version_satisfies(scheme, version, repo_constraint);
             }
-            // Cross-scheme RPM: native RPM constraint vs RPM version string
-            if *constraint_scheme == VersionScheme::Rpm && scheme == VersionScheme::Rpm {
-                let legacy = repo_constraint_to_legacy(repo_constraint);
-                return RpmVersion::parse(version)
-                    .map(|v| legacy.satisfies(&v))
-                    .unwrap_or(false);
-            }
-            // Cross-distro version scheme mismatch: the constraint was built
-            // for one versioning scheme (e.g. RPM) but the candidate uses a
-            // different scheme (e.g. Debian/ALPM).  We cannot compare them
-            // meaningfully, so reject with a diagnostic warning.
-            // TODO(G2): detect the target repo's version scheme *before*
-            // creating the constraint so cross-distro versioned installs work
-            // end-to-end instead of silently rejecting all candidates.
-            tracing::warn!(
-                "Version scheme mismatch: constraint uses {:?} but candidate version \
-                 '{}' uses {:?} -- cross-distro versioned install not yet supported",
-                constraint_scheme,
-                version,
-                scheme,
-            );
-            false
+            Ok(false)
         }
+        ConaryConstraint::ProviderExpression { .. } => Ok(false),
     }
 }
 
@@ -82,61 +53,128 @@ pub fn constraint_matches_package(
 /// is NOT used as a fallback. A package at 2.0 providing `foo = 1.0` must not
 /// satisfy `foo >= 2.0` just because the package version is high enough.
 ///
-/// Only when `provide_version` is `None` (unversioned provide) do we fall back
-/// to the owning package's version.
-pub(super) fn constraint_matches_provide(
+pub(crate) fn constraint_matches_provide(
     constraint: &ConaryConstraint,
     provide_version: Option<&str>,
     provide_scheme: VersionScheme,
-    package_version: &str,
-    package_scheme: VersionScheme,
-) -> bool {
+) -> VersionResult<bool> {
     if let Some(pv) = provide_version {
-        // Explicit provide version is authoritative -- no fallback.
         return constraint_matches_package(constraint, pv, provide_scheme);
     }
-    // Unversioned provide: fall back to the owning package's version.
-    constraint_matches_package(constraint, package_version, package_scheme)
+    Ok(constraint_is_unversioned(constraint))
+}
+
+pub(crate) fn provider_expression_matches_package(
+    expression: &CapabilityExpression,
+    package: &PackageIdentity,
+) -> VersionResult<bool> {
+    match expression {
+        CapabilityExpression::Atom {
+            name,
+            scheme,
+            constraint,
+        } => {
+            if package.name == *name {
+                if matches!(constraint, RepoVersionConstraint::Any) {
+                    return Ok(true);
+                }
+                if *scheme != package.version_scheme {
+                    return Ok(false);
+                }
+                return repo_version_satisfies(*scheme, &package.version, constraint);
+            }
+            for capability in package
+                .provided_capabilities
+                .iter()
+                .filter(|capability| capability.name == *name)
+            {
+                if matches!(constraint, RepoVersionConstraint::Any) {
+                    return Ok(true);
+                }
+                if let Some(version) = capability.version.as_deref()
+                    && *scheme == capability.version_scheme
+                    && repo_version_satisfies(*scheme, version, constraint)?
+                {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        }
+        CapabilityExpression::And(operands) => {
+            for operand in operands {
+                if !provider_expression_matches_package(operand, package)? {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        }
+        CapabilityExpression::Or(operands) => {
+            for operand in operands {
+                if provider_expression_matches_package(operand, package)? {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        }
+        CapabilityExpression::Not(operand) => {
+            Ok(!provider_expression_matches_package(operand, package)?)
+        }
+    }
+}
+
+fn constraint_is_unversioned(constraint: &ConaryConstraint) -> bool {
+    match constraint {
+        ConaryConstraint::Requested(VersionConstraint::Any)
+        | ConaryConstraint::Repository {
+            constraint: RepoVersionConstraint::Any,
+            ..
+        } => true,
+        ConaryConstraint::Requested(_)
+        | ConaryConstraint::Repository { .. }
+        | ConaryConstraint::ProviderExpression { .. } => false,
+    }
+}
+
+fn requested_constraint_matches(
+    constraint: &VersionConstraint,
+    version: &str,
+    scheme: VersionScheme,
+) -> VersionResult<bool> {
+    let native = match constraint {
+        VersionConstraint::Any => return Ok(true),
+        VersionConstraint::Exact(expected) => RepoVersionConstraint::Exact(expected.to_string()),
+        VersionConstraint::GreaterThan(expected) => {
+            RepoVersionConstraint::GreaterThan(expected.to_string())
+        }
+        VersionConstraint::GreaterOrEqual(expected) => {
+            RepoVersionConstraint::GreaterOrEqual(expected.to_string())
+        }
+        VersionConstraint::LessThan(expected) => {
+            RepoVersionConstraint::LessThan(expected.to_string())
+        }
+        VersionConstraint::LessOrEqual(expected) => {
+            RepoVersionConstraint::LessOrEqual(expected.to_string())
+        }
+        VersionConstraint::NotEqual(expected) => {
+            RepoVersionConstraint::NotEqual(expected.to_string())
+        }
+        VersionConstraint::And(left, right) => {
+            return Ok(requested_constraint_matches(left, version, scheme)?
+                && requested_constraint_matches(right, version, scheme)?);
+        }
+    };
+    repo_version_satisfies(scheme, version, &native)
 }
 
 /// Compare two package versions in descending order (highest first).
 ///
-/// Returns `None` when the schemes differ and comparison is not meaningful.
+/// Scheme disagreement is a typed error rather than a fallback ordering.
 pub(super) fn compare_package_versions_desc(
     a_version: &str,
     a_scheme: VersionScheme,
     b_version: &str,
     b_scheme: VersionScheme,
-) -> Option<std::cmp::Ordering> {
-    if a_scheme != b_scheme {
-        return None;
-    }
+) -> VersionResult<std::cmp::Ordering> {
     // compare_repo_versions returns descending when args are (scheme, b, a)
-    compare_repo_versions(a_scheme, b_version, a_version)
-}
-
-/// Convert a `RepoVersionConstraint` to a legacy `VersionConstraint` for RPM
-/// cross-format matching (repo RPM constraint vs installed RPM `RpmVersion`).
-fn repo_constraint_to_legacy(constraint: &RepoVersionConstraint) -> VersionConstraint {
-    match constraint {
-        RepoVersionConstraint::Any => VersionConstraint::Any,
-        RepoVersionConstraint::Exact(v) => {
-            VersionConstraint::parse(&format!("= {v}")).unwrap_or(VersionConstraint::Any)
-        }
-        RepoVersionConstraint::GreaterThan(v) => {
-            VersionConstraint::parse(&format!("> {v}")).unwrap_or(VersionConstraint::Any)
-        }
-        RepoVersionConstraint::GreaterOrEqual(v) => {
-            VersionConstraint::parse(&format!(">= {v}")).unwrap_or(VersionConstraint::Any)
-        }
-        RepoVersionConstraint::LessThan(v) => {
-            VersionConstraint::parse(&format!("< {v}")).unwrap_or(VersionConstraint::Any)
-        }
-        RepoVersionConstraint::LessOrEqual(v) => {
-            VersionConstraint::parse(&format!("<= {v}")).unwrap_or(VersionConstraint::Any)
-        }
-        RepoVersionConstraint::NotEqual(v) => {
-            VersionConstraint::parse(&format!("!= {v}")).unwrap_or(VersionConstraint::Any)
-        }
-    }
+    compare_mixed_repo_versions(b_scheme, b_version, a_scheme, a_version)
 }

@@ -44,7 +44,7 @@ pub enum HashAlgorithm {
     /// - Any case where speed matters more than cryptographic security
     Xxh128,
 
-    /// MD5 (128-bit cryptographic hash, legacy)
+    /// MD5 (128-bit upstream-source compatibility hash)
     ///
     /// Cryptographically broken -- do NOT use for security. Supported only
     /// for verifying upstream source tarballs that ship MD5 checksums (LFS).
@@ -100,8 +100,8 @@ impl FromStr for HashAlgorithm {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "sha256" | "sha-256" => Ok(Self::Sha256),
-            "xxh128" | "xxhash" | "xxh3" => Ok(Self::Xxh128),
+            "sha256" => Ok(Self::Sha256),
+            "xxh128" => Ok(Self::Xxh128),
             "md5" => Ok(Self::Md5),
             _ => Err(HashError::UnknownAlgorithm(s.to_string())),
         }
@@ -120,6 +120,9 @@ pub enum HashError {
     /// Hash string contains invalid hex characters
     #[error("invalid hex in hash: {0}")]
     InvalidHex(String),
+    /// Hash string does not identify its algorithm
+    #[error("hash must use the canonical <algorithm>:<hex> form")]
+    MissingAlgorithm,
 }
 
 /// A hash value with its algorithm
@@ -168,13 +171,9 @@ impl Hash {
 
     /// Parse a prefixed hash string (e.g., "sha256:abc123..." or "xxh128:abc123...")
     pub fn parse_prefixed(s: &str) -> Result<Self, HashError> {
-        if let Some((algo, hash)) = s.split_once(':') {
-            let algorithm = algo.parse()?;
-            Self::new(algorithm, hash)
-        } else {
-            // Default to SHA-256 for unprefixed hashes (backward compatibility)
-            Self::new(HashAlgorithm::Sha256, s)
-        }
+        let (algo, hash) = s.split_once(':').ok_or(HashError::MissingAlgorithm)?;
+        let algorithm = algo.parse()?;
+        Self::new(algorithm, hash)
     }
 
     /// Format as a prefixed string (e.g., "sha256:abc123...")
@@ -274,7 +273,7 @@ pub fn hash_reader<R: Read>(algorithm: HashAlgorithm, reader: &mut R) -> io::Res
     Ok(hasher.finalize())
 }
 
-/// Compute SHA-256 hash (convenience function for backward compatibility)
+/// Compute a SHA-256 hash as unprefixed hexadecimal bytes.
 #[inline]
 pub fn sha256(data: &[u8]) -> String {
     hash_bytes(HashAlgorithm::Sha256, data).value
@@ -469,17 +468,15 @@ mod tests {
             HashAlgorithm::Sha256
         );
         assert_eq!(
-            "SHA-256".parse::<HashAlgorithm>().unwrap(),
+            "SHA256".parse::<HashAlgorithm>().unwrap(),
             HashAlgorithm::Sha256
         );
         assert_eq!(
             "xxh128".parse::<HashAlgorithm>().unwrap(),
             HashAlgorithm::Xxh128
         );
-        assert_eq!(
-            "xxhash".parse::<HashAlgorithm>().unwrap(),
-            HashAlgorithm::Xxh128
-        );
+        assert!("sha-256".parse::<HashAlgorithm>().is_err());
+        assert!("xxhash".parse::<HashAlgorithm>().is_err());
         assert!("unknown".parse::<HashAlgorithm>().is_err());
     }
 
@@ -515,12 +512,18 @@ mod tests {
         let hash = Hash::parse_prefixed("xxh128:00000000000000000000000000000000").unwrap();
         assert_eq!(hash.algorithm, HashAlgorithm::Xxh128);
 
-        // Unprefixed defaults to SHA-256
-        let hash = Hash::parse_prefixed(
+        let error = Hash::parse_prefixed(
             "dffd6021bb2bd5b0af676290809ec3a53191dd81c7f70a4b28688a362182986f",
         )
-        .unwrap();
-        assert_eq!(hash.algorithm, HashAlgorithm::Sha256);
+        .unwrap_err();
+        assert_eq!(error, HashError::MissingAlgorithm);
+
+        for alias in ["sha-256", "xxhash", "xxh3"] {
+            assert!(matches!(
+                alias.parse::<HashAlgorithm>(),
+                Err(HashError::UnknownAlgorithm(_))
+            ));
+        }
     }
 
     #[test]

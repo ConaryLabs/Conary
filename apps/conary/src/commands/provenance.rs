@@ -20,11 +20,15 @@ use sigstore::rekor::models::{
 use std::str::FromStr;
 use std::time::Duration;
 use thiserror::Error;
-use uuid::Uuid;
 use webpki::{EndEntityCert, KeyUsage};
 use x509_cert::der::Decode;
 
 use conary_core::provenance::{SlsaContext, build_slsa_statement};
+
+mod render;
+mod sbom;
+use render::{print_json, print_text, print_tree};
+use sbom::{collect_dependencies, generate_cyclonedx, generate_spdx};
 
 #[derive(Debug, Error)]
 enum SigstoreCommandError {
@@ -100,9 +104,9 @@ pub async fn cmd_provenance_show(
             let prov = query_provenance(&conn, trove_id)?;
 
             match format {
-                "json" => print_provenance_json(&prov, section, recursive)?,
-                "tree" => print_provenance_tree(&prov, section, recursive)?,
-                _ => print_provenance_text(&trove_name, &trove_version, &prov, section, recursive)?,
+                "json" => print_json(&prov, section, recursive)?,
+                "tree" => print_tree(&prov, section, recursive)?,
+                _ => print_text(&trove_name, &trove_version, &prov, section, recursive)?,
             }
         }
         None => {
@@ -386,8 +390,8 @@ pub async fn cmd_provenance_export(
                     host_kernel: prov.host_kernel.as_deref(),
                     dependencies: &deps,
                 })?,
-                "cyclonedx" => generate_cyclonedx_sbom(&trove_name, &trove_version, &prov, &deps)?,
-                _ => generate_spdx_sbom(&trove_name, &trove_version, &prov, &deps)?,
+                "cyclonedx" => generate_cyclonedx(&trove_name, &trove_version, &prov, &deps)?,
+                _ => generate_spdx(&trove_name, &trove_version, &prov, &deps)?,
             };
 
             // Output to file or stdout
@@ -409,199 +413,6 @@ pub async fn cmd_provenance_export(
     Ok(())
 }
 
-fn purl(name: &str, version: &str) -> String {
-    format!("pkg:conary/{}@{}", name, version)
-}
-
-/// Generate SPDX 2.3 SBOM in JSON format
-fn generate_spdx_sbom(
-    name: &str,
-    version: &str,
-    prov: &ProvenanceData,
-    deps: &[(String, String, Option<String>)],
-) -> Result<String> {
-    let timestamp = Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
-    let doc_id = format!("SPDXRef-DOCUMENT-{}-{}", name, version.replace('.', "-"));
-    let pkg_id = format!("SPDXRef-Package-{}", name);
-
-    let mut packages = vec![serde_json::json!({
-        "SPDXID": pkg_id,
-        "name": name,
-        "versionInfo": version,
-        "downloadLocation": prov.upstream_url.as_deref().unwrap_or("NOASSERTION"),
-        "filesAnalyzed": false,
-        "checksums": prov.upstream_hash.as_ref().map(|h| vec![{
-            let parts: Vec<&str> = h.splitn(2, ':').collect();
-            serde_json::json!({
-                "algorithm": parts.first().unwrap_or(&"SHA256").to_uppercase(),
-                "checksumValue": parts.get(1).unwrap_or(&h.as_str())
-            })
-        }]).unwrap_or_default(),
-        "externalRefs": prov.dna_hash.as_ref().map(|dna| vec![serde_json::json!({
-            "referenceCategory": "PACKAGE-MANAGER",
-            "referenceType": "purl",
-            "referenceLocator": format!("{}?dna={}", purl(name, version), dna)
-        })]).unwrap_or_default(),
-        "supplier": "NOASSERTION",
-        "copyrightText": "NOASSERTION"
-    })];
-
-    let mut relationships = vec![serde_json::json!({
-        "spdxElementId": doc_id,
-        "relatedSpdxElement": pkg_id,
-        "relationshipType": "DESCRIBES"
-    })];
-
-    // Add dependencies
-    for (dep_name, dep_version, dep_dna) in deps {
-        let dep_id = format!("SPDXRef-Package-{}", dep_name);
-        packages.push(serde_json::json!({
-            "SPDXID": dep_id,
-            "name": dep_name,
-            "versionInfo": dep_version,
-            "downloadLocation": "NOASSERTION",
-            "filesAnalyzed": false,
-            "externalRefs": dep_dna.as_ref().map(|dna| vec![serde_json::json!({
-                "referenceCategory": "PACKAGE-MANAGER",
-                "referenceType": "purl",
-                "referenceLocator": format!("{}?dna={}", purl(dep_name, dep_version), dna)
-            })]).unwrap_or_default(),
-            "supplier": "NOASSERTION",
-            "copyrightText": "NOASSERTION"
-        }));
-
-        relationships.push(serde_json::json!({
-            "spdxElementId": pkg_id,
-            "relatedSpdxElement": dep_id,
-            "relationshipType": "DEPENDS_ON"
-        }));
-    }
-
-    let sbom = serde_json::json!({
-        "spdxVersion": "SPDX-2.3",
-        "dataLicense": "CC0-1.0",
-        "SPDXID": doc_id,
-        "name": format!("{}-{}", name, version),
-        "documentNamespace": format!("https://conary.dev/spdx/{}/{}", name, version),
-        "creationInfo": {
-            "created": timestamp,
-            "creators": ["Tool: conary-provenance"],
-            "licenseListVersion": "3.19"
-        },
-        "packages": packages,
-        "relationships": relationships
-    });
-
-    Ok(serde_json::to_string_pretty(&sbom)?)
-}
-
-/// Generate CycloneDX 1.5 SBOM in JSON format
-fn generate_cyclonedx_sbom(
-    name: &str,
-    version: &str,
-    prov: &ProvenanceData,
-    deps: &[(String, String, Option<String>)],
-) -> Result<String> {
-    let timestamp = Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
-    let serial = Uuid::new_v4().to_string();
-
-    let mut components = vec![serde_json::json!({
-        "type": "library",
-        "bom-ref": purl(name, version),
-        "name": name,
-        "version": version,
-        "purl": purl(name, version),
-        "hashes": prov.upstream_hash.as_ref().map(|h| {
-            let parts: Vec<&str> = h.splitn(2, ':').collect();
-            vec![serde_json::json!({
-                "alg": parts.first().unwrap_or(&"SHA-256").to_uppercase().replace("SHA", "SHA-"),
-                "content": parts.get(1).unwrap_or(&h.as_str())
-            })]
-        }).unwrap_or_default(),
-        "externalReferences": prov.upstream_url.as_ref().map(|url| vec![serde_json::json!({
-            "type": "distribution",
-            "url": url
-        })]).unwrap_or_default()
-    })];
-
-    let mut dependencies = vec![serde_json::json!({
-        "ref": purl(name, version),
-        "dependsOn": deps.iter().map(|(n, v, _)| purl(n, v)).collect::<Vec<_>>()
-    })];
-
-    // Add dependency components
-    for (dep_name, dep_version, _dep_dna) in deps {
-        components.push(serde_json::json!({
-            "type": "library",
-            "bom-ref": purl(dep_name, dep_version),
-            "name": dep_name,
-            "version": dep_version,
-            "purl": purl(dep_name, dep_version)
-        }));
-
-        dependencies.push(serde_json::json!({
-            "ref": purl(dep_name, dep_version),
-            "dependsOn": []
-        }));
-    }
-
-    let sbom = serde_json::json!({
-        "bomFormat": "CycloneDX",
-        "specVersion": "1.5",
-        "serialNumber": format!("urn:uuid:{}", serial),
-        "version": 1,
-        "metadata": {
-            "timestamp": timestamp,
-            "tools": [{
-                "vendor": "Conary",
-                "name": "conary-provenance",
-                "version": "0.1.0"
-            }],
-            "component": {
-                "type": "application",
-                "name": name,
-                "version": version,
-                "purl": purl(name, version)
-            }
-        },
-        "components": components,
-        "dependencies": dependencies
-    });
-
-    Ok(serde_json::to_string_pretty(&sbom)?)
-}
-
-/// Collect dependencies for a package
-fn collect_dependencies(
-    conn: &Connection,
-    trove_id: i64,
-) -> Result<Vec<(String, String, Option<String>)>> {
-    let mut deps = Vec::new();
-
-    let mut stmt = conn.prepare(
-        "SELECT t.name, t.version, p.dna_hash
-         FROM dependencies d
-         JOIN troves t ON d.dependency_name = t.name
-         LEFT JOIN provenance p ON t.id = p.trove_id
-         WHERE d.trove_id = ?1",
-    )?;
-
-    let rows = stmt.query_map([trove_id], |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, String>(1)?,
-            row.get::<_, Option<String>>(2)?,
-        ))
-    })?;
-
-    for row in rows {
-        deps.push(row?);
-    }
-
-    Ok(deps)
-}
-
-/// Register provenance in transparency log
 pub async fn cmd_provenance_register(
     db_path: &str,
     package: &str,
@@ -1096,147 +907,6 @@ fn query_provenance(conn: &Connection, trove_id: i64) -> Result<ProvenanceData> 
         Err(rusqlite::Error::QueryReturnedNoRows) => Ok(ProvenanceData::default()),
         Err(e) => Err(e.into()),
     }
-}
-
-/// Print provenance in text format
-fn print_provenance_text(
-    name: &str,
-    version: &str,
-    prov: &ProvenanceData,
-    section: &str,
-    _recursive: bool,
-) -> Result<()> {
-    println!("=== Package DNA: {} v{} ===", name, version);
-    println!();
-
-    if let Some(ref dna) = prov.dna_hash {
-        println!("DNA Hash: {}", dna);
-    } else {
-        println!("DNA Hash: (not computed)");
-    }
-    println!();
-
-    let show = |name: &str| section == "all" || section == name;
-
-    if show("source") {
-        println!("--- Source Layer ---");
-        if let Some(ref url) = prov.upstream_url {
-            println!("  Upstream: {}", url);
-        }
-        if let Some(ref hash) = prov.upstream_hash {
-            println!("  Hash: {}", hash);
-        }
-        if let Some(ref commit) = prov.git_commit {
-            println!("  Git commit: {}", commit);
-        }
-        if prov.patches_json.is_some() {
-            println!("  Patches: (see JSON output for details)");
-        }
-        if prov.upstream_url.is_none() && prov.git_commit.is_none() {
-            println!("  (no source provenance recorded)");
-        }
-        println!();
-    }
-
-    if show("build") {
-        println!("--- Build Layer ---");
-        if let Some(ref hash) = prov.recipe_hash {
-            println!("  Recipe hash: {}", hash);
-        }
-        if let Some(ref arch) = prov.host_arch {
-            println!("  Build arch: {}", arch);
-        }
-        if let Some(ref kernel) = prov.host_kernel {
-            println!("  Build kernel: {}", kernel);
-        }
-        if prov.build_deps_json.is_some() {
-            println!("  Build deps: (see JSON output for details)");
-        }
-        if prov.recipe_hash.is_none() {
-            println!("  (no build provenance recorded)");
-        }
-        println!();
-    }
-
-    if show("signatures") {
-        println!("--- Signature Layer ---");
-        if prov.signatures_json.is_some() {
-            println!("  Signatures: (see JSON output for details)");
-        } else {
-            println!("  (no signatures recorded)");
-        }
-        if let Some(idx) = prov.rekor_log_index {
-            println!("  Rekor log index: {}", idx);
-        }
-        println!();
-    }
-
-    if show("content") {
-        println!("--- Content Layer ---");
-        if let Some(ref root) = prov.merkle_root {
-            println!("  Merkle root: {}", root);
-        } else {
-            println!("  (no content hash recorded)");
-        }
-        println!();
-    }
-
-    Ok(())
-}
-
-/// Print provenance in JSON format
-fn print_provenance_json(prov: &ProvenanceData, section: &str, _recursive: bool) -> Result<()> {
-    let json = serde_json::json!({
-        "dna_hash": prov.dna_hash,
-        "source": {
-            "upstream_url": prov.upstream_url,
-            "upstream_hash": prov.upstream_hash,
-            "git_commit": prov.git_commit,
-        },
-        "build": {
-            "recipe_hash": prov.recipe_hash,
-            "host_arch": prov.host_arch,
-            "host_kernel": prov.host_kernel,
-        },
-        "signatures": {
-            "rekor_log_index": prov.rekor_log_index,
-        },
-        "content": {
-            "merkle_root": prov.merkle_root,
-        },
-        "section_filter": section,
-    });
-
-    println!("{}", serde_json::to_string_pretty(&json)?);
-    Ok(())
-}
-
-/// Print provenance in tree format
-fn print_provenance_tree(prov: &ProvenanceData, _section: &str, _recursive: bool) -> Result<()> {
-    fn field(val: &Option<String>) -> &str {
-        val.as_deref().unwrap_or("(none)")
-    }
-
-    let rekor = prov
-        .rekor_log_index
-        .map(|i| i.to_string())
-        .unwrap_or_else(|| "(none)".to_string());
-
-    println!("DNA: {}", field(&prov.dna_hash));
-    println!("├── Source");
-    println!("│   ├── URL: {}", field(&prov.upstream_url));
-    println!("│   ├── Hash: {}", field(&prov.upstream_hash));
-    println!("│   └── Git: {}", field(&prov.git_commit));
-    println!("├── Build");
-    println!("│   ├── Recipe: {}", field(&prov.recipe_hash));
-    println!("│   ├── Arch: {}", field(&prov.host_arch));
-    println!("│   └── Kernel: {}", field(&prov.host_kernel));
-    println!("├── Signatures");
-    println!("│   └── Rekor: {}", rekor);
-    println!("└── Content");
-    println!("    └── Merkle: {}", field(&prov.merkle_root));
-
-    Ok(())
 }
 
 #[cfg(test)]

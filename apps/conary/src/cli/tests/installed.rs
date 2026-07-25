@@ -56,8 +56,8 @@ fn export_rejects_legacy_db_argument() {
 }
 
 #[test]
-fn cli_accepts_allow_live_system_mutation_as_global_flag() {
-    let cli = parse_cli([
+fn cli_rejects_removed_allow_live_system_mutation_flag() {
+    let err = parse_cli([
         "conary",
         "--allow-live-system-mutation",
         "system",
@@ -65,9 +65,10 @@ fn cli_accepts_allow_live_system_mutation_as_global_flag() {
         "switch",
         "7",
     ])
-    .expect("global live-mutation flag should parse before nested commands");
+    .err()
+    .expect("removed live-mutation flag must not parse");
 
-    assert!(cli.allow_live_system_mutation);
+    assert!(err.to_string().contains("unexpected argument"));
 }
 
 #[test]
@@ -422,6 +423,62 @@ fn parses_system_adopt_package_dry_run_preview_surface() {
 }
 
 #[test]
+fn parses_explicit_native_authority_for_adopt_and_takeover() {
+    let adopt = parse_cli([
+        "conary",
+        "system",
+        "adopt",
+        "curl",
+        "--dry-run",
+        "--package-manager",
+        "dpkg",
+    ])
+    .expect("explicit dpkg authority should parse for adoption");
+    match adopt.command {
+        Some(Commands::System(SystemCommands::Adopt {
+            package_manager, ..
+        })) => {
+            assert_eq!(package_manager, Some(NativePackageManager::Dpkg));
+        }
+        _ => panic!("expected system adopt command"),
+    }
+
+    let takeover = parse_cli([
+        "conary",
+        "system",
+        "takeover",
+        "--dry-run",
+        "--package-manager",
+        "pacman",
+    ])
+    .expect("explicit pacman authority should parse for takeover");
+    match takeover.command {
+        Some(Commands::System(SystemCommands::Takeover {
+            package_manager, ..
+        })) => {
+            assert_eq!(package_manager, Some(NativePackageManager::Pacman));
+        }
+        _ => panic!("expected system takeover command"),
+    }
+}
+
+#[test]
+fn rejects_native_authority_for_conversion_only_mode() {
+    let err = match parse_cli([
+        "conary",
+        "system",
+        "adopt",
+        "--convert",
+        "--package-manager",
+        "rpm",
+    ]) {
+        Ok(_) => panic!("conversion does not consume native database authority"),
+        Err(error) => error,
+    };
+    assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+}
+
+#[test]
 fn rejects_system_adopt_package_with_refresh_mode() {
     let err = match parse_cli(["conary", "system", "adopt", "curl", "--refresh"]) {
         Ok(_) => panic!("package adopt must conflict with --refresh mode"),
@@ -568,25 +625,34 @@ fn cli_rejects_generation_export_path_and_number_together() {
 
 #[test]
 fn try_package_parses() {
-    let cli = parse_cli(["conary", "try", "pkg.ccs"]).expect("try package command should parse");
+    let cli = parse_cli(["conary", "try", "pkg.ccs", "--policy", "policy.toml"])
+        .expect("try package command should parse");
     match cli.command {
         Some(Commands::Try {
             target,
             activate,
-            allow_irreversible,
+            policy,
             run,
             ..
         }) => {
             assert_eq!(target.as_deref(), Some("pkg.ccs"));
             assert!(!activate);
-            assert!(!allow_irreversible);
+            assert_eq!(policy.as_deref(), Some("policy.toml"));
             assert!(run.is_empty());
         }
         _ => panic!("expected try package command"),
     }
 
-    let with_run = parse_cli(["conary", "try", "pkg.ccs", "--", "/usr/bin/hello"])
-        .expect("try package run command should parse");
+    let with_run = parse_cli([
+        "conary",
+        "try",
+        "pkg.ccs",
+        "--policy",
+        "policy.toml",
+        "--",
+        "/usr/bin/hello",
+    ])
+    .expect("try package run command should parse");
     match with_run.command {
         Some(Commands::Try { target, run, .. }) => {
             assert_eq!(target.as_deref(), Some("pkg.ccs"));
@@ -595,8 +661,15 @@ fn try_package_parses() {
         _ => panic!("expected try package command with runner"),
     }
 
-    let activated = parse_cli(["conary", "try", "pkg.ccs", "--activate"])
-        .expect("activated try package command should parse");
+    let activated = parse_cli([
+        "conary",
+        "try",
+        "pkg.ccs",
+        "--policy",
+        "policy.toml",
+        "--activate",
+    ])
+    .expect("activated try package command should parse");
     match activated.command {
         Some(Commands::Try {
             target, activate, ..
@@ -606,28 +679,20 @@ fn try_package_parses() {
         }
         _ => panic!("expected activated try package command"),
     }
+}
 
-    let irreversible = parse_cli([
+#[test]
+fn try_rejects_removed_allow_irreversible_bypass() {
+    let error = parse_cli([
         "conary",
         "try",
         "pkg.ccs",
         "--allow-irreversible",
         "--activate",
     ])
-    .expect("activated irreversible try package command should parse");
-    match irreversible.command {
-        Some(Commands::Try {
-            target,
-            activate,
-            allow_irreversible,
-            ..
-        }) => {
-            assert_eq!(target.as_deref(), Some("pkg.ccs"));
-            assert!(activate);
-            assert!(allow_irreversible);
-        }
-        _ => panic!("expected activated irreversible try package command"),
-    }
+    .err()
+    .expect("try must not expose an irreversible-hook bypass");
+    assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
 }
 
 #[test]
@@ -641,7 +706,6 @@ fn try_watch_parses_project_recipe_and_json_forms() {
             json,
             isolated,
             activate,
-            allow_irreversible,
             run,
             ..
         }) => {
@@ -651,7 +715,6 @@ fn try_watch_parses_project_recipe_and_json_forms() {
             assert!(!json);
             assert!(!isolated);
             assert!(!activate);
-            assert!(!allow_irreversible);
             assert!(run.is_empty());
         }
         other => panic!("unexpected command: {other:?}"),
@@ -695,13 +758,11 @@ fn try_action_words_parse() {
             Some(Commands::Try {
                 target,
                 activate,
-                allow_irreversible,
                 run,
                 ..
             }) => {
                 assert_eq!(target.as_deref(), Some(action));
                 assert!(!activate);
-                assert!(!allow_irreversible);
                 assert!(run.is_empty());
             }
             _ => panic!("expected try action command"),

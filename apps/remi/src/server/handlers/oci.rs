@@ -14,10 +14,11 @@
 //! - GET /v2/{name}/tags/list - List tags (versions)
 
 use crate::server::ServerState;
+use anyhow::Context;
 use axum::{
     body::Body,
     extract::State,
-    http::{HeaderMap, StatusCode, header},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
 use conary_core::db::models::ConvertedPackage;
@@ -87,12 +88,25 @@ fn oci_error_response(status: StatusCode, code: &str, message: &str) -> Response
             message: message.to_string(),
         }],
     };
-    let json = serde_json::to_string(&body).unwrap_or_default();
-    Response::builder()
-        .status(status)
-        .header(header::CONTENT_TYPE, "application/json")
-        .body(Body::from(json))
-        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+    let (status, json) = match serde_json::to_vec(&body) {
+        Ok(json) => (status, json),
+        Err(error) => {
+            tracing::error!(%error, "failed to serialize OCI error response");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                br#"{"errors":[{"code":"INTERNAL_ERROR","message":"Failed to serialize OCI error response"}]}"#
+                    .to_vec(),
+            )
+        }
+    };
+
+    let mut response = Response::new(Body::from(json));
+    *response.status_mut() = status;
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    response
 }
 
 async fn blob_allowed_by_public_gate(
@@ -100,7 +114,7 @@ async fn blob_allowed_by_public_gate(
     hash: String,
 ) -> std::result::Result<bool, Response> {
     match tokio::task::spawn_blocking(move || {
-        crate::server::publication::local_chunk_servable_by_public_gate(&db_path, &hash)
+        crate::server::publication::local_chunk_servable(&db_path, &hash)
     })
     .await
     {
@@ -525,21 +539,17 @@ fn build_manifest(
         ConvertedPackage::find_by_content_hash_identity(&conn, distro, package, reference)?
     };
 
-    let converted = converted.filter(|converted| {
-        !converted.needs_reconversion() && converted.is_scriptlet_public_ready()
-    });
-
     let converted = match converted {
-        Some(c) => c,
+        Some(converted) if !converted.needs_reconversion() => {
+            converted.scriptlet_summary()?;
+            converted
+        }
         None => return Ok(None),
+        Some(_) => return Ok(None),
     };
 
-    // Parse chunk hashes from JSON
-    let chunk_hashes: Vec<String> = converted
-        .chunk_hashes_json
-        .as_ref()
-        .and_then(|json| serde_json::from_str(json).ok())
-        .unwrap_or_default();
+    let artifact = converted.repository_artifact()?;
+    let chunk_hashes = &artifact.chunk_hashes;
 
     if chunk_hashes.is_empty() {
         return Ok(None);
@@ -547,42 +557,37 @@ fn build_manifest(
 
     // Build layer descriptors from chunk hashes
     let mut layers = Vec::with_capacity(chunk_hashes.len());
-    for hash in &chunk_hashes {
+    for hash in chunk_hashes {
         // Try to get actual size from disk
         let chunk_path = chunk_cache.chunk_path(hash);
-        let size = std::fs::metadata(&chunk_path)
-            .map(|m| m.len() as i64)
-            .unwrap_or(0);
+        let size = i64::try_from(
+            std::fs::metadata(&chunk_path)
+                .with_context(|| format!("converted chunk {hash} is missing from local CAS"))?
+                .len(),
+        )
+        .context("converted chunk size exceeds OCI descriptor range")?;
+        let digest = if hash.starts_with("sha256:") {
+            hash.to_string()
+        } else {
+            format!("sha256:{hash}")
+        };
 
         layers.push(OciDescriptor {
             media_type: CONARY_CHUNK_MEDIA_TYPE.to_string(),
-            digest: format!("sha256:{}", hash),
+            digest,
             size,
             annotations: None,
         });
     }
 
     // Build config blob (synthetic JSON with package metadata)
-    let pkg_version = converted
-        .package_version
-        .clone()
-        .unwrap_or_else(|| "unknown".to_string());
-    let pkg_name = converted
-        .package_name
-        .clone()
-        .unwrap_or_else(|| package.to_string());
-    let pkg_distro = converted
-        .distro
-        .clone()
-        .unwrap_or_else(|| distro.to_string());
-
     let config_json = serde_json::json!({
-        "name": pkg_name,
-        "version": pkg_version,
-        "distro": pkg_distro,
+        "name": artifact.package_name,
+        "version": artifact.package_version,
+        "distro": artifact.distro,
         "format": converted.original_format,
-        "total_size": converted.total_size.unwrap_or(0),
-        "content_hash": converted.content_hash.clone().unwrap_or_default(),
+        "total_size": artifact.total_size,
+        "content_hash": artifact.content_hash,
     });
     let config_bytes = serde_json::to_vec(&config_json)?;
     let config_digest = format!("sha256:{}", conary_core::hash::sha256(&config_bytes));
@@ -617,11 +622,11 @@ fn build_tags_list(
     package: &str,
 ) -> Result<Vec<String>, anyhow::Error> {
     let conn = Connection::open(db_path)?;
-    let mut tags = ConvertedPackage::find_publication_candidates(&conn, distro, Some(package))?
-        .into_iter()
-        .filter(|converted| converted.is_scriptlet_public_ready())
-        .filter_map(|converted| converted.package_version)
-        .collect::<Vec<_>>();
+    let mut tags = Vec::new();
+    for converted in ConvertedPackage::find_current_conversions(&conn, distro, Some(package))? {
+        converted.scriptlet_summary()?;
+        tags.push(converted.repository_artifact()?.package_version.to_string());
+    }
     tags.sort();
     tags.dedup();
 
@@ -631,18 +636,18 @@ fn build_tags_list(
 /// Build the OCI catalog (list of all repositories)
 fn build_catalog(db_path: &std::path::Path) -> Result<OciCatalog, anyhow::Error> {
     let conn = Connection::open(db_path)?;
-    let mut repositories = ConvertedPackage::list_all(&conn)?
-        .into_iter()
-        .filter(|converted| {
-            !converted.needs_reconversion() && converted.is_scriptlet_public_ready()
-        })
-        .filter_map(|converted| {
-            Some(format!(
-                "conary/{}/{}",
-                converted.distro?, converted.package_name?
-            ))
-        })
-        .collect::<Vec<_>>();
+    let mut repositories = Vec::new();
+    for converted in ConvertedPackage::list_repository_conversions(&conn)? {
+        if converted.needs_reconversion() {
+            continue;
+        }
+        converted.scriptlet_summary()?;
+        let artifact = converted.repository_artifact()?;
+        repositories.push(format!(
+            "conary/{}/{}",
+            artifact.distro, artifact.package_name
+        ));
+    }
     repositories.sort();
     repositories.dedup();
 

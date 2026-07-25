@@ -1,12 +1,7 @@
 // conary-core/src/packages/query_common.rs
 //! Shared types and helpers for native package manager queries.
 
-/// Dependency with version constraint
-#[derive(Debug, Clone)]
-pub struct DependencyInfo {
-    pub name: String,
-    pub constraint: Option<String>, // e.g., ">= 1.0", "< 2.0"
-}
+use crate::packages::InstalledPackageIdentity;
 
 /// Information about a single installed file from a native package manager.
 #[derive(Debug, Clone)]
@@ -19,6 +14,13 @@ pub struct InstalledFileInfo {
     pub group: Option<String>,
     pub link_target: Option<String>,
     pub mtime: Option<i64>, // RPM provides this, others don't
+}
+
+/// One exact installed native-manager record and its manager-specific metadata.
+#[derive(Debug, Clone)]
+pub struct InstalledPackageRecord<T> {
+    pub identity: InstalledPackageIdentity,
+    pub info: T,
 }
 
 impl InstalledFileInfo {
@@ -45,6 +47,7 @@ impl InstalledFileInfo {
 pub fn run_query_command(cmd: &str, args: &[&str]) -> crate::Result<String> {
     let output = std::process::Command::new(cmd)
         .args(args)
+        .env("LC_ALL", "C")
         .output()
         .map_err(|e| crate::error::Error::IoError(format!("Failed to run {cmd}: {e}")))?;
     if !output.status.success() {
@@ -53,5 +56,7 @@ pub fn run_query_command(cmd: &str, args: &[&str]) -> crate::Result<String> {
             "{cmd} failed: {stderr}"
         )));
     }
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    String::from_utf8(output.stdout).map_err(|error| {
+        crate::error::Error::ParseError(format!("{cmd} stdout is not valid UTF-8: {error}"))
+    })
 }

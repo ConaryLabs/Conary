@@ -3,6 +3,7 @@
 //! Repository package signing key persistence.
 
 use crate::error::{Error, Result};
+use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use rusqlite::{Connection, params};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -100,6 +101,59 @@ impl RepositoryPackageKey {
         let keys = stmt
             .query_map([repository_id], |row| row.get(0))?
             .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(keys)
+    }
+
+    /// Load exact Ed25519 package authority keys assigned to the TUF targets
+    /// role by the repository's verified root metadata.
+    pub fn trusted_tuf_targets_keys_for_repository(
+        conn: &Connection,
+        repository_id: i64,
+    ) -> Result<Vec<String>> {
+        let mut stmt = conn.prepare(
+            "SELECT key_type, public_key, roles_json
+             FROM tuf_keys
+             WHERE repository_id = ?1
+             ORDER BY id",
+        )?;
+        let rows = stmt
+            .query_map([repository_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        let mut keys = Vec::new();
+        for (key_type, public_key, roles_json) in rows {
+            let roles: Vec<String> = serde_json::from_str(&roles_json).map_err(|error| {
+                Error::ParseError(format!(
+                    "Invalid TUF key roles for repository {repository_id}: {error}"
+                ))
+            })?;
+            if !roles.iter().any(|role| role == "targets") {
+                continue;
+            }
+            if key_type != "ed25519" {
+                return Err(Error::ParseError(format!(
+                    "TUF targets key for repository {repository_id} uses unsupported type {key_type:?}"
+                )));
+            }
+            let bytes = hex::decode(&public_key).map_err(|error| {
+                Error::ParseError(format!(
+                    "Invalid TUF targets public key for repository {repository_id}: {error}"
+                ))
+            })?;
+            if bytes.len() != 32 {
+                return Err(Error::ParseError(format!(
+                    "TUF targets key for repository {repository_id} decoded to {} bytes; expected 32",
+                    bytes.len()
+                )));
+            }
+            keys.push(BASE64.encode(bytes));
+        }
         Ok(keys)
     }
 }

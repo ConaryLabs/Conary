@@ -16,9 +16,6 @@ pub(super) async fn dispatch_trust_command(cmd: cli::TrustCommands) -> Result<()
         cli::TrustCommands::Enable { repo, tuf_url, db } => {
             commands::cmd_trust_enable(&repo, tuf_url.as_deref(), &db.db_path).await
         }
-        cli::TrustCommands::Disable { repo, force, db } => {
-            commands::cmd_trust_disable(&repo, force, &db.db_path).await
-        }
         cli::TrustCommands::Status { repo, db } => {
             commands::cmd_trust_status(&repo, &db.db_path).await
         }

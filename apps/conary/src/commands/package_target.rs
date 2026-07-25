@@ -107,7 +107,7 @@ pub(crate) fn format_installed_variant(trove: &Trove) -> String {
         trove.version,
         trove.architecture.as_deref().unwrap_or("none"),
         package_authority_label(trove.install_source.clone()),
-        trove.version_scheme.as_deref().unwrap_or("unknown-scheme")
+        trove.version_scheme.as_str()
     )
 }
 
@@ -134,13 +134,14 @@ mod tests {
 
     fn db_with_variants() -> rusqlite::Connection {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conary_core::db::schema::migrate(&conn).unwrap();
+        conary_core::db::schema::ensure_current(&conn).unwrap();
 
         let mut x86 = Trove::new_with_source(
             "demo".to_string(),
             "1.0.0".to_string(),
             TroveType::Package,
             InstallSource::Repository,
+            conary_core::repository::versioning::VersionScheme::Conary,
         );
         x86.architecture = Some("x86_64".to_string());
         x86.insert(&conn).unwrap();
@@ -150,6 +151,7 @@ mod tests {
             "1.0.0".to_string(),
             TroveType::Package,
             InstallSource::Repository,
+            conary_core::repository::versioning::VersionScheme::Conary,
         );
         arm.architecture = Some("aarch64".to_string());
         arm.insert(&conn).unwrap();
@@ -210,17 +212,23 @@ mod tests {
     #[test]
     fn selector_ignores_non_package_troves() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conary_core::db::schema::migrate(&conn).unwrap();
+        conary_core::db::schema::ensure_current(&conn).unwrap();
 
         let mut component = Trove::new(
             "demo".to_string(),
             "1.0.0".to_string(),
             TroveType::Component,
+            conary_core::repository::versioning::VersionScheme::Conary,
         );
         component.architecture = Some("aarch64".to_string());
         component.insert(&conn).unwrap();
 
-        let mut package = Trove::new("demo".to_string(), "1.0.0".to_string(), TroveType::Package);
+        let mut package = Trove::new(
+            "demo".to_string(),
+            "1.0.0".to_string(),
+            TroveType::Package,
+            conary_core::repository::versioning::VersionScheme::Conary,
+        );
         package.architecture = Some("x86_64".to_string());
         package.insert(&conn).unwrap();
 
@@ -233,13 +241,22 @@ mod tests {
     #[test]
     fn selector_can_target_unspecified_architecture() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conary_core::db::schema::migrate(&conn).unwrap();
+        conary_core::db::schema::ensure_current(&conn).unwrap();
 
-        let mut unspecified =
-            Trove::new("demo".to_string(), "1.0.0".to_string(), TroveType::Package);
+        let mut unspecified = Trove::new(
+            "demo".to_string(),
+            "1.0.0".to_string(),
+            TroveType::Package,
+            conary_core::repository::versioning::VersionScheme::Conary,
+        );
         unspecified.insert(&conn).unwrap();
 
-        let mut x86 = Trove::new("demo".to_string(), "1.0.0".to_string(), TroveType::Package);
+        let mut x86 = Trove::new(
+            "demo".to_string(),
+            "1.0.0".to_string(),
+            TroveType::Package,
+            conary_core::repository::versioning::VersionScheme::Conary,
+        );
         x86.architecture = Some("x86_64".to_string());
         x86.insert(&conn).unwrap();
 

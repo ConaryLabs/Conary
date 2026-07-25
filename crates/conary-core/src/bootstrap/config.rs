@@ -87,9 +87,6 @@ pub struct BootstrapConfig {
 
     /// Enable verbose output
     pub verbose: bool,
-
-    /// Skip checksum verification (development only -- not for production)
-    pub skip_verify: bool,
 }
 
 impl Default for BootstrapConfig {
@@ -100,7 +97,6 @@ impl Default for BootstrapConfig {
             tools_prefix: PathBuf::from("/mnt/lfs/tools"),
             jobs: num_cpus(),
             verbose: false,
-            skip_verify: false,
         }
     }
 }
@@ -140,12 +136,6 @@ impl BootstrapConfig {
     /// Enable verbose output
     pub fn with_verbose(mut self, verbose: bool) -> Self {
         self.verbose = verbose;
-        self
-    }
-
-    /// Skip checksum verification (development only -- not for production)
-    pub fn with_skip_verify(mut self, skip: bool) -> Self {
-        self.skip_verify = skip;
         self
     }
 
@@ -214,18 +204,6 @@ mod tests {
         assert_eq!(config.tools_prefix, PathBuf::from("/opt/cross"));
         assert_eq!(config.jobs, 8);
         assert!(config.verbose);
-    }
-
-    #[test]
-    fn test_skip_verify_default_false() {
-        let config = BootstrapConfig::new();
-        assert!(!config.skip_verify);
-    }
-
-    #[test]
-    fn test_skip_verify_builder() {
-        let config = BootstrapConfig::new().with_skip_verify(true);
-        assert!(config.skip_verify);
     }
 
     #[test]

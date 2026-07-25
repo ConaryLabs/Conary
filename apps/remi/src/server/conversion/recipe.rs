@@ -15,8 +15,17 @@ impl ConversionService {
     /// 3. Cook it using the Kitchen (with isolation)
     /// 4. Store chunks in CAS
     /// 5. Return the result
-    pub async fn build_from_recipe(&self, recipe_url: &str) -> Result<ServerConversionResult> {
-        use conary_core::recipe::{Kitchen, KitchenConfig, parse_recipe};
+    pub async fn build_from_recipe(
+        &self,
+        recipe_url: &str,
+        distro: &str,
+    ) -> Result<ServerConversionResult> {
+        use conary_core::recipe::{
+            CcsPackageSigningAuthority, Kitchen, KitchenConfig, parse_recipe,
+        };
+
+        let profile = conary_core::repository::supported_profiles::profile_for_remi_target(distro)
+            .with_context(|| format!("Unsupported Remi recipe target: {distro}"))?;
 
         info!("Building package from recipe: {}", recipe_url);
 
@@ -37,9 +46,16 @@ impl ConversionService {
         let temp_dir =
             TempDir::new_in(&self.cache_dir).context("Failed to create temp directory")?;
 
+        let keys_dir = self.repository_keys_dir.as_ref().context(
+            "Remi recipe builds require release_publish.repository_keys_dir for CCS authority signing",
+        )?;
+        let key_path = keys_dir.join(profile.id()).join("targets.private");
+        let signing_key = conary_core::ccs::SigningKeyPair::load_from_file(&key_path)
+            .with_context(|| format!("load Remi recipe signing key {}", key_path.display()))?;
         let config = KitchenConfig {
             source_cache: self.cache_dir.join("sources"),
             use_isolation: true, // Always use isolation on server
+            ccs_signing_authority: Some(CcsPackageSigningAuthority::new(signing_key)),
             ..Default::default()
         };
 
@@ -85,7 +101,6 @@ impl ConversionService {
             ccs_path: final_ccs_path,
             cache_state: "recipe".to_string(),
             scriptlets: ScriptletPackageMetadata::from(&ScriptletBundleSummary::default()),
-            publication: None,
             timing: None,
         })
     }
@@ -309,7 +324,7 @@ mod tests {
         );
 
         let err = service
-            .build_from_recipe("https://localhost/recipe.conary")
+            .build_from_recipe("https://localhost/recipe.conary", "fedora-44")
             .await
             .expect_err("localhost recipe URL should be rejected before fetch")
             .to_string();

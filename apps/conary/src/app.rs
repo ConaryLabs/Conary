@@ -18,8 +18,6 @@ pub async fn run() -> Result<()> {
         print!("{}", crate::cli::render_advanced_help());
         return Ok(());
     }
-    conary_core::scriptlet::set_seccomp_warn_override(cli.seccomp_warn);
-
     dispatch::dispatch(cli).await
 }
 
@@ -38,14 +36,13 @@ fn render_error_lines(err: &anyhow::Error) -> Vec<String> {
             {
                 vec![
                     "Error: Database not initialized.".to_string(),
-                    "Run 'sudo conary system init --profile <fedora-44|ubuntu-26.04|arch>' to set up the system database."
+                    "Run 'sudo conary system init' to set up the system database and all built-in source feeds."
                         .to_string(),
                 ]
             }
             conary_core::Error::DatabaseNotFound(path) => vec![
                 format!("Error: Custom database not initialized at {path:?}."),
-                "Run 'conary system init --profile <fedora-44|ubuntu-26.04|arch> --db-path <PATH>' with the same custom path."
-                    .to_string(),
+                "Run 'conary system init --db-path <PATH>' with the same custom path.".to_string(),
             ],
             conary_core::Error::NotFound(detail) => vec![format!("Error: {detail}")],
             conary_core::Error::ConflictError(detail) => vec![
@@ -80,8 +77,7 @@ mod tests {
             render_error_lines(&err),
             vec![
                 "Error: Custom database not initialized at \"/tmp/conary.db\".".to_string(),
-                "Run 'conary system init --profile <fedora-44|ubuntu-26.04|arch> --db-path <PATH>' with the same custom path."
-                    .to_string(),
+                "Run 'conary system init --db-path <PATH>' with the same custom path.".to_string(),
             ]
         );
     }
@@ -96,7 +92,7 @@ mod tests {
             render_error_lines(&err),
             vec![
                 "Error: Database not initialized.".to_string(),
-                "Run 'sudo conary system init --profile <fedora-44|ubuntu-26.04|arch>' to set up the system database."
+                "Run 'sudo conary system init' to set up the system database and all built-in source feeds."
                     .to_string(),
             ]
         );

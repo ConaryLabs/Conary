@@ -36,7 +36,7 @@ fatal = true
 
 # cook does not accept --db-path
 [[test.step]]
-run = "${CONARY_BIN} cook ${FIXTURE_DIR}/recipes/simple-hello/recipe.toml --output /tmp/conary-recipe-output --source-cache /tmp/conary-recipe-cache --no-isolation"
+run = "${CONARY_BIN} cook ${FIXTURE_DIR}/recipes/simple-hello/recipe.toml --output /tmp/conary-recipe-output --source-cache /tmp/conary-recipe-cache"
 
 [test.step.assert]
 exit_code = 0
@@ -60,44 +60,6 @@ run = "test $(ls /tmp/conary-recipe-output/*.ccs 2>/dev/null | wc -l) -gt 0 && e
 exit_code = 0
 
 # --------------------------------------------------------------------------
-# T64: PKGBUILD conversion
-# --------------------------------------------------------------------------
-
-[[test]]
-id = "T64"
-name = "pkgbuild_conversion"
-description = "Convert a PKGBUILD to a TOML recipe"
-timeout = 60
-group = "D"
-
-# convert-pkgbuild does not accept --db-path
-[[test.step]]
-run = "${CONARY_BIN} convert-pkgbuild ${FIXTURE_DIR}/pkgbuild/PKGBUILD"
-
-[test.step.assert]
-exit_code = 0
-stdout_contains_all = ["name", "version"]
-
-# --------------------------------------------------------------------------
-# T65: Converted recipe cooks
-# --------------------------------------------------------------------------
-
-[[test]]
-id = "T65"
-name = "converted_recipe_cooks"
-description = "Convert PKGBUILD, save as recipe, and verify fetch-only cook does not panic"
-timeout = 120
-group = "D"
-depends_on = ["T64"]
-
-# Convert PKGBUILD to temp recipe file, then attempt a fetch-only cook
-[[test.step]]
-run = "${CONARY_BIN} convert-pkgbuild ${FIXTURE_DIR}/pkgbuild/PKGBUILD > /tmp/conary-converted-recipe.toml && ${CONARY_BIN} cook /tmp/conary-converted-recipe.toml --output /tmp/conary-recipe-output --source-cache /tmp/conary-recipe-cache --fetch-only --no-isolation 2>&1 || true"
-
-[test.step.assert]
-stdout_not_contains = "panic"
-
-# --------------------------------------------------------------------------
 # T66: Hermetic build
 # --------------------------------------------------------------------------
 
@@ -111,7 +73,7 @@ group = "D"
 # Hermetic mode with no sysroot should fail (no /bin/sh in pristine sandbox).
 # This verifies the mode activates rather than silently falling back.
 [[test.step]]
-run = "${CONARY_BIN} cook ${FIXTURE_DIR}/recipes/simple-hello/recipe.toml --output /tmp/conary-hermetic-output --source-cache /tmp/conary-recipe-cache --hermetic"
+run = "${CONARY_BIN} cook ${FIXTURE_DIR}/recipes/simple-hello/recipe.toml --output /tmp/conary-hermetic-output --source-cache /tmp/conary-recipe-cache --isolated"
 
 [test.step.assert]
 # Must fail (non-zero exit)
@@ -121,4 +83,4 @@ stdout_contains_any = ["pristine", "sandbox", "hermetic", "no such file", "not f
 
 # Cleanup step: remove recipe temp directories
 [[test.step]]
-run = "rm -rf /tmp/conary-recipe-output /tmp/conary-recipe-cache /tmp/conary-hermetic-output /tmp/conary-converted-recipe.toml"
+run = "rm -rf /tmp/conary-recipe-output /tmp/conary-recipe-cache /tmp/conary-hermetic-output"

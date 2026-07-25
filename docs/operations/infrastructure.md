@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-20
-revision: 13
+last_updated: 2026-07-25
+revision: 16
 summary: Non-secret infrastructure, agent-operations transport, release, Remi deploy, TLS renewal, remote development, and Forge staging guidance for Conary contributors and coding assistants
 ---
 
@@ -9,8 +9,6 @@ summary: Non-secret infrastructure, agent-operations transport, release, Remi de
 ## Host Roles
 
 - Remi is the production package service behind `https://remi.conary.io`.
-- `https://packages.conary.io` remains the public compatibility alias and
-  simple external health-check hostname for that same Remi service.
 - Direct SSH access for the Remi host uses `ssh.conary.io`, not the proxied
   public HTTPS hostnames.
 - Remi currently runs Arch Linux on the Hetzner origin. Host-level
@@ -32,8 +30,8 @@ summary: Non-secret infrastructure, agent-operations transport, release, Remi de
 
 ## Agent Operations And MCP
 
-Today, the live Remi MCP endpoint and the legacy `conary-test` `/mcp` endpoint
-are session-based, tool-only surfaces. `conary-test` also exposes
+Today, the live Remi MCP endpoint and the `conary-test` `/mcp` endpoint are
+session-based, tool-only surfaces. `conary-test` also exposes
 `/mcp/stateless` as a draft stateless preview route with `server/discover`,
 `resources/list`, and `resources/read` for
 `conary-local://bootstrap/status` and `conary-test://suites`. Those resources
@@ -50,8 +48,8 @@ the stateless MCP adapter decision is satisfied.
 The transport-neutral contract lives in `crates/conary-agent-contract`;
 `crates/conary-mcp` remains MCP-specific adapter glue.
 
-Remi and legacy MCP endpoints remain session-based until stateless support is
-intentionally expanded for those services.
+Remi and the existing session-based MCP endpoints remain on that transport
+until stateless support is intentionally expanded for those services.
 
 - Remi admin and package-service operations
 - `conary-test` run control, deploy/restart flows, image management, and fixture publishing
@@ -71,8 +69,6 @@ not cover the task or when you are debugging the underlying service path itself.
 
 - Public package web UI and authenticated MCP endpoint:
   `https://remi.conary.io`
-- Public package API and compatibility health alias:
-  `https://packages.conary.io`
 - Direct SSH hostname for the Remi origin host: `ssh.conary.io`
 - Remi admin origin API: `http://localhost:8082` via SSH tunnel or direct
   origin access
@@ -140,14 +136,23 @@ not cover the task or when you are debugging the underlying service path itself.
 - The durable deploy entry point is the root-owned helper installed at
   `/usr/local/sbin/conary-remi-deploy`, with the sudo policy tracked in
   `deploy/sudoers/remi`. The helper owns privileged actions for publishing
-  Conary release artifacts, replacing the Remi binary, and applying operational
-  Remi concurrency config.
+  Conary release artifacts and performing recoverable Remi service transitions.
 - Normal Remi binary replacement is driven by GitHub Actions
   `release-build` -> `deploy-and-verify`. The workflow stages the built bundle
-  on the host, then calls `/usr/local/sbin/conary-remi-deploy deploy-remi`.
-- When the workflow updates Remi conversion concurrency during a binary deploy,
-  it calls `configure-concurrency ... --skip-restart` before `deploy-remi` so
-  the rollout performs one service restart and one health check.
+  and exact-tag repository manifest on the host, atomically self-updates the
+  helper by SHA-256, then calls
+  `/usr/local/sbin/conary-remi-deploy deploy-remi`.
+- The candidate Remi binary owns config/schema preparation. It type-checks the
+  current config and source manifest, installs exact parser authority,
+  snapshots a current SQLite epoch or moves a retired epoch plus WAL/SHM into
+  `/conary/deployment-backups/`, and emits the transition manifest used for
+  automatic rollback. The pre-deploy database remains recoverable; retired
+  schemas are not migrated in place.
+- After health succeeds, the deployment job polls
+  `conary-remi-deploy inspect-remi --require-repopulated`. Success requires all
+  configured sources to contain metadata and at least one validated converted
+  artifact for every configured public profile; dispatch or a green health
+  probe alone is not deployment proof.
 - Conary release artifact publication through the same helper verifies the
   CI-produced `SHA256SUMS` file from the staging directory before installing
   files into `/conary/releases/<version>`. The helper copies that verified
@@ -186,8 +191,6 @@ not cover the task or when you are debugging the underlying service path itself.
 - The package frontend is the one wired into Remi's tracked config via
   `[web].root = "/conary/web"`; the main site remains a separate static root on
   the same host
-- `packages.conary.io` should be treated as the public compatibility alias for
-  the same Remi origin, not as a separate host or deployment target
 - The production certificate currently uses Certbot's standalone authenticator,
   so `/etc/letsencrypt/renewal-hooks/pre/10-nginx-stop` must stop nginx before
   an attempted renewal and
@@ -272,10 +275,8 @@ old process. That can fail with `Text file busy`.
   - `remi-v*` for `remi`
   - `conaryd-v*` for `conaryd`
   - `conary-test-v*` for `conary-test`
-- Legacy tags are read for continuity only:
-  - `server-v*` continues the historical `remi` line
-  - `test-v*` continues the historical `conary-test` line
-- New releases emit canonical tags only; legacy prefixes remain lookup-only
+- Historical tag prefixes are not release inputs; only canonical tags participate
+  in version baselines and release routing
 - Push the relevant canonical tags to trigger the GitHub release pipeline
 - GitHub Actions builds release artifacts in `release-build` and serializes the
   resolved product metadata into the bundle

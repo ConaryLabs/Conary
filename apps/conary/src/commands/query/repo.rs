@@ -88,13 +88,20 @@ fn show_repo_package_info(
         println!("Status      : Not installed");
     }
 
-    // Show dependencies
-    if let Ok(deps) = pkg.parse_dependencies()
-        && !deps.is_empty()
-    {
-        println!("\nDependencies ({}):", deps.len());
-        for dep in &deps {
-            println!("  {}", dep);
+    let requirements =
+        conary_core::db::models::RepositoryRequirementGroup::find_by_repository_package(
+            conn,
+            pkg.id
+                .ok_or_else(|| anyhow::anyhow!("repository package has no database ID"))?,
+        )?;
+    if !requirements.is_empty() {
+        println!("\nRequirements ({}):", requirements.len());
+        for requirement in requirements {
+            let expression = requirement
+                .native_text
+                .as_deref()
+                .unwrap_or(&requirement.expression_json);
+            println!("  {}: {}", requirement.kind, expression);
         }
     }
 

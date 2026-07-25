@@ -1,13 +1,14 @@
 ---
-last_updated: 2026-07-24
-revision: 26
-summary: Route foreign lifecycle authority through formal shell parsing and exact helper contracts
+last_updated: 2026-07-25
+revision: 41
+summary: Convert foreign packages into source-independent CCS lifecycle transactions and export CCS as native packages
 ---
 
 # CCS Module (conary-core/src/ccs/)
 
 Conary's native package format. Handles building, signing, policy enforcement,
-declarative hooks, legacy format conversion, and OCI export.
+declarative hooks, foreign package conversion, native package export, and OCI
+export.
 
 ## Data Flow: Package Build
 
@@ -21,7 +22,7 @@ CcsBuilder::new(manifest, source_dir)
   For each file:
      +-- Compute SHA-256 hash
      +-- Apply PolicyChain (Keep / Replace / Skip / Reject)
-     +-- Classify into component (explicit override or auto)
+     +-- Apply exact path/rule component assignment, else lossless `runtime`
      +-- Optional: split into CDC chunks (FastCDC)
      |
   Group files by component -> ComponentData
@@ -30,7 +31,7 @@ CcsBuilder::new(manifest, source_dir)
      |
   Sign manifest (Ed25519) -> embed PackageSignature
      |
-  Output .ccs archive (tar.gz with MANIFEST.cbor + MANIFEST.toml + objects/)
+  Output .ccs archive (tar.gz with MANIFEST + MANIFEST.toml + objects/)
 ```
 
 ## Key Types
@@ -43,12 +44,16 @@ CcsBuilder::new(manifest, source_dir)
 | `CcsBuilder` | builder.rs | Builds a CCS package from manifest + source directory |
 | `BuildResult` | builder.rs | Output: manifest, components, files, blobs, total_size |
 | `CcsPackage` | package.rs | Parsed .ccs file ready for installation via PackageFormat trait |
+| CCS package projection | package/v2_projection.rs | Project verified signed v2 authority into install-time package data |
 | `AuthorityDocumentV2` | v2/schema.rs | Signed CCS v2 native package authority |
-| `BinaryManifest` | binary_manifest.rs | CBOR-encoded compact manifest (FORMAT_VERSION=1) |
+| `ComponentType` | components/types.rs | Closed typed names for standard component metadata; never inferred from payload paths |
 | `SigningKeyPair` | signing.rs | Ed25519 key generation, signing, file I/O |
 | `PackageSignature` | signing.rs | Embedded signature with algorithm, key_id, timestamp |
 | `HookExecutor` | hooks/ | Runs declarative hooks with rollback tracking |
-| `LegacyScriptletBundle` | legacy_scriptlets.rs | Converted RPM/DEB/Arch scriptlet decisions and local replay policy |
+| `HostCapabilityInventory` | hooks/capabilities.rs | Persists source-independent host lifecycle interfaces and performs typed preflight |
+| `NativeLifecycleBundle` | native_lifecycle.rs | Byte-preserved RPM/DEB/Arch lifecycle ABI and typed source metadata |
+| `NativeTransactionPlan` | native_transaction.rs, native_transaction/{rpm,deb,arch}.rs | Exact lifecycle events derived from typed package changes and installed state |
+| `NativeExport` | manifest.rs, native_export/ | Format-specific RPM, Debian, and Arch export overrides and generators |
 | `BuildPolicy` (trait) | policy.rs | Pluggable build policy (DenyPaths, StripBinaries, FixShebangs, etc.) |
 | `EnhancementEngine` (trait) | enhancement/ | Exact post-conversion provenance recording |
 
@@ -58,8 +63,8 @@ CcsBuilder::new(manifest, source_dir)
 manifest schema and validation owner. Declarative hook schemas, capability
 validation, and hook reversibility live in `ccs::manifest::hooks` and are
 re-exported through that root entrypoint. The provenance DTOs live in
-`ccs::manifest_provenance` and are likewise re-exported so existing imports
-keep working. M2 release publish stores hermetic evidence, signed
+`ccs::manifest_provenance` and are exported through the same root schema. M2
+release publish stores hermetic evidence, signed
 build-attestation envelopes, and foreign conversion boundaries in manifest
 provenance. Artifact-form `conary publish <pkg.ccs> <target>` is allowed only
 after `repository::static_repo::publish_gate` verifies package signatures,
@@ -67,107 +72,166 @@ TOML integrity, attestation authority, output identity, command-risk evidence,
 and foreign-boundary hashes.
 
 **hooks/** -- Declarative hook executors. Pre-install order: groups, users,
-directories. Post-install order: systemd, tmpfiles, sysctl, alternatives.
+directories. Post-install order: live systemd daemon reload, explicit systemd
+enable or disable, generic service actions, tmpfiles, sysctl, alternatives.
 All operations respect a target_root parameter for bootstrap/container use.
+`hooks/capabilities.rs` owns the typed host-inventory epoch. `conary
+system init` discovers and persists the active init interface plus exact
+`systemctl`, `systemd-sysusers`, `systemd-tmpfiles`, `sysctl`, and target-root
+`ldconfig` executable interfaces in `system.host-capability-inventory`.
+Each schema-v3 interface is bound to a command/root grammar, implementation
+family and version, and executable digest established by a non-mutating
+functional handshake. Install loads that document, repeats the handshake and
+identity check, and preflights the complete hook set before dry-run output or
+payload mutation. Missing, replaced, or stale required interfaces are typed
+actionable errors, never silent skips.
 
-Hook types: User, Group, Directory, Systemd, Tmpfiles, Sysctl, Alternatives.
+Tmpfiles declarations retain all seven `tmpfiles.d` columns exactly: type,
+path, mode, user, group, age, and argument. Type validation parses the
+documented structural grammar (one ASCII letter followed by `+`, `!`, `-`,
+`=`, `~`, `^`, or `$` modifiers) without maintaining a line-type allowlist.
+The persisted typed `systemd-tmpfiles` interface owns support for particular
+line types, modifier combinations, specifiers, and field semantics. Live-root
+installs pass the exact rendered declaration to that executable; offline-root
+installs write the same declaration under the target root for its own
+`systemd-tmpfiles` implementation to consume.
 
-**convert/** -- Legacy (RPM/DEB/Arch) to CCS conversion. Builds scriptlet
-decisions from the adapter registry, blocked-class registry, support matrix,
-replay policy, and target compatibility checks. Declarative manifest hooks are
-emitted only from adapter-backed typed evidence. Shell bodies are parsed with
-the tree-sitter Bash grammar into command nodes that retain command/argument
-provenance and execution context. Malformed shell produces a typed parser
-diagnostic and no guessed commands. Text-pattern detections remain advisory
-metadata for review diagnostics and can never grant compatibility,
-publication, mutation, or security authority. Remaining scripts are
-preserved for guarded local replay or review when they cannot be safely
-replaced. The authoritative package-manager lifecycle and helper-source map is
+Systemd enable and disable use the documented `systemctl` grammar on a live
+host and `systemctl --root=...` for an offline root. A generic service start,
+stop, or restart is valid only against a running typed service manager; it is
+not guessed or deferred for an offline root. A `[[hooks.systemd]]` entry with
+`enable = false` is an explicit disable operation. Author-declared systemd and
+service fields are pathless unit names; raw native lifecycle argv has a
+separate exact systemctl-operand contract and is not narrowed by this
+declarative safety envelope.
+
+SELinux/AppArmor conversion adapters record discovery evidence only. CCS has no
+parallel `SecurityPolicyIntent` mutation contract. During selected-root
+lifecycle execution, `crates/conary-core/src/scriptlet/activation_capture.rs`
+observes actual provider argv and
+`crates/conary-core/src/activation/security_policy/` applies the current
+upstream helper grammars. Filesystem/policy-store work stays in the selected
+root through documented no-live flags; kernel-active work becomes an exact
+generation request bound to the captured provider path and SHA-256.
+
+Hook types: Capability, User, Group, Directory, Systemd, Service, Tmpfiles,
+Sysctl, Alternatives.
+
+**components/types.rs and builder.rs** -- Component correctness is
+author-owned metadata. Exact `[components.files]` paths take precedence over
+exact `[components].rules` glob assignments; an unmatched payload remains in
+one lossless `runtime` component. Conary does not infer libraries, development
+files, documentation, or configuration ownership from path spelling.
+Overlapping rules that select different component names are invalid. Foreign
+packages without an explicit Conary component contract likewise remain one
+lossless `runtime` component.
+
+### Exact payload authority
+
+`crates/conary-core/src/payload.rs` is the single file-node contract shared by
+native parsers, CCS, installed database rows, selected-root transactions, and
+generation artifacts. Every entry carries an explicit node variant, complete
+POSIX mode, source owner and group identity, mtime, xattrs, and, only for a
+regular file, an exact SHA-256 and byte length. Symlink targets, hardlink
+identity, device numbers, FIFOs, sockets, and directories are variant data;
+consumers must not recover node kind from mode bits, path spelling, content
+length, or the presence of an unrelated field.
+
+RPM header arrays own installed metadata while the paired CPIO member owns
+bytes. RPM `FILEUSERNAME` and `FILEGROUPNAME` remain named source identities
+and are resolved from the selected target root's exact passwd and group
+records immediately before apply. Debian and Arch payloads retain the numeric
+uid and gid declared by their accepted tar grammars. Installed rows preserve
+both source identity and resolved numeric identity so later generation,
+rollback, query, and verification paths do not repeat or guess resolution.
+Unknown names, conflicting header/payload facts, unsupported archive records,
+and missing content authority reject the package before filesystem mutation.
+
+**convert/** -- RPM, Debian, and Arch to CCS conversion. Source package parsers
+produce a typed native ABI before conversion: exact lifecycle slots, body
+bytes, interpreters, invocation contracts, trigger/control metadata, and
+package-manager ordering. Conversion persists every executable entry with a
+digest; entry presence is lifecycle authority. It does not decide event order
+by inspecting the script body and it does not suppress an entry because a
+command appears to have a declarative replacement. The resulting CCS is
+executed by Conary on any supported target; conversion and install do not
+delegate lifecycle planning, database mutation, or transaction completion to
+`rpm`, `dpkg`, or `pacman`.
+Source format and target host are orthogonal: the running system exposes typed
+ABI/libc/loader, init, LSM, filesystem, boot/kernel, and helper capabilities.
+The implemented hook inventory currently records init/systemd, sysusers,
+tmpfiles, sysctl, and ldconfig interfaces; the remaining capability families
+stay typed implementation work rather than distro-name fallbacks. Distro names
+do not select pairwise converters, compatibility profiles, or string gates.
+
+`convert/converter.rs` is the conversion orchestration hub.
+`convert/scriptlet_bundle/{builder,entries,format_metadata,native_contracts}.rs`
+projects package-parser ABI entries into the durable bundle, and
+`convert/scriptlet_bundle/{digest,summary}.rs` owns its content identity and
+minimal fidelity summary. `convert/command_evidence.rs` and
+`convert/converter/evidence.rs` may parse shell bodies for private diagnostic
+evidence and engineering prioritization. That evidence is not persisted in the
+lifecycle bundle and cannot affect publication, compatibility, mutation,
+security, event selection, or event order. The retired adapter registry,
+effect projection, classification, and policy-authority modules do not have a
+runtime replacement.
+
+The authoritative package-manager surface, invocation matrices, event order,
+and payload visibility contract is
 `docs/specs/foreign-package-lifecycle-contracts.md`.
 
-`adapters.rs` is the thin registry and authority gate;
-`adapters/builtin.rs` owns cross-distribution implementations;
-`debian_adapters.rs`, `selinux_adapters.rs`, and `apparmor_adapters.rs` own
-provider-specific grammars. Complete adapter results are downgraded to typed
-discovery-only evidence unless the AST form is literal and unconditional or an
-adapter validates an exact documented expansion grammar.
+**native_lifecycle.rs** -- Current persisted RPM, Debian, and Arch lifecycle
+ABI. The schema-revision-17 bundle lives in the TOML manifest as
+`[native_lifecycle]` and records source identity and version scheme, exact
+entries with typed executable/control-artifact kind, body digests,
+interpreters, native invocation contracts, RPM triggers, Debian
+maintainer/trigger metadata including each exact trigger declaration line,
+Arch install functions and ALPM hooks, and residual lifecycle metadata. All
+persisted lifecycle structs reject unknown fields; there is no arbitrary
+extension map. The bundle has no reason code, effect projection, unknown-command
+evidence, diagnostic-class list/count, adapter-registry digest, publication
+policy, or parallel security-policy intent.
 
-`converter.rs` remains the conversion orchestration hub.
-`converter/evidence.rs` owns foreign conversion evidence and command-risk
-projection, while `converter/authority.rs` owns scriptlet classification and
-the projection of complete adapter effects into native manifest authority.
-Tests live under `converter/tests/`.
+The typed Debian declaration list is the sole trigger authority: validation
+reparses the preserved control artifact and rejects parallel superseded
+trigger-body or trigger-name projections. Actual provider execution at the
+selected-root process boundary is systemd, SELinux, AppArmor, boot, and kernel
+runtime authority; static script classifications are not persisted authority.
+Revision 17 is a hard cut: earlier artifacts and installed rows must be
+reconverted, rebuilt, or discarded with the pre-alpha database rather than
+migrated. `native-free` means no lifecycle entries; `native-lifecycle` means
+source behavior is preserved by the Conary runtime. Only a future complete
+typed lowering contract may suppress a source program. Entry presence is the
+exact lifecycle authority.
+Successful conversion carries or declares the interpreter/helper runtime it
+needs, uses a Conary-owned compatibility implementation, or has a complete
+typed lowering. A source-manager-dependent entry is a missing implementation,
+not a successful conversion.
+The lifecycle contract carries no scriptlet publication policy or status.
+Storage and serving validate the current typed bundle and artifact integrity;
+diagnostics do not create a second admission state.
 
-The `dpkg-maintscript-helper/v1` adapter parses the four documented dpkg
-actions and the required `-- "$@"` forwarding contract. `rm_conffile` is a
-complete native replacement when the obsolete path is absent from the new
-payload because Conary's generation `/etc` three-way merge removes unchanged
-package configuration and preserves a user-modified orphan. The other three
-actions remain typed partial evidence with the missing native transition model
-named explicitly.
+**native_transaction.rs and native_transaction/** -- Plan exact transaction
+events from validated lifecycle bundles, typed install/upgrade/remove changes,
+installed state, and lossless old/new payload sets. The RPM module owns the
+separate installed-database-owner and transaction-owner trigger passes; the
+`rpm/counts.rs` child owns database and script-argument instance counts at
+their exact RPM state-machine boundaries; the
+Arch module derives Install, Upgrade, and Remove hook candidates from added,
+retained, and removed paths. The planner owns source-ABI argv, trigger stdin,
+stage order, source transaction order, and intra-stage keys. It never invokes
+the source package manager or reads script bodies or diagnostic command labels
+to decide whether an event runs. Debian relation transactions carry exact
+deconfiguration causes and identities, schedule deconfiguration before
+conflict removal and incoming `preinst`, and persist documented reverse
+`abort-remove`/`abort-deconfigure` recovery without mutating deconfigured
+payload ownership.
 
-The `sysctl/v1` adapter projects only narrow, validated
-`sysctl -w <key>=<value>` invocations into native `hooks.sysctl`; broad forms
-such as `sysctl -p` and denied security-sensitive keys remain blocked. One
-validated write still counts as complete native replacement evidence, but
-public-ready conversion additionally requires the target profile to allow the
-exact sysctl key. Missing target-profile context and supported-but-unallowed
-keys stay `private-review`; the current public fixture uses `kernel.example`,
-while `net.ipv4.ip_forward` remains private-review evidence.
-The `setuid-mode/v1` adapter projects only payload-executable
-`chmod u+s` or `chmod 4xxx` forms into native file mode authority plus an exact
-`policy.allow_setuid_paths` build-policy allowlist entry. The
-`file-capability/v1` adapter separately projects known Linux
-`setcap cap_*=+ep <payload-executable>` grants into
-`[[file_capabilities]]`. The manifest still validates `[[file_capabilities]]`
-against the known Linux capability table. Public-ready conversion is narrower:
-the first public allowlist is `cap_net_bind_service`; other known capability
-names remain valid native manifest authority but non-public conversion
-evidence. Mutable live-root installs apply that authority after file deployment
-and before DB commit. Generation-aware installs preserve the same authority
-only when Conary persists the installed file-capability rows, attaches
-`security.capability` during generation runtime-input collection, publishes a
-non-deferred generation, and emits the expected capability-xattr count through
-generation inspection metadata. Setcap removal,
-inheritable/process/ambient capability forms, setgid, broad `chmod +s`, unknown
-capability names, and non-payload privilege mutations remain blocked/private.
-Supported SELinux scriptlet forms are modeled as
-`selinux-policy/v1` effects and bridged into generic `SecurityPolicyIntent`
-metadata, so Fedora-origin policy declarations can be portable to Arch or
-Debian targets without requiring SELinux on those targets. Generic intent
-records provider, operation, scope, fallback, payload evidence, and
-reconciliation state while preserving provider-specific effect evidence.
-The `apparmor-policy/v1` adapter projects only payload-backed
-`apparmor_parser -r|--replace /etc/apparmor.d/<profile>` reloads into generic
-`SecurityPolicyIntent` metadata with dormant optional-policy fallback. AppArmor
-mode changes, disable/status helpers, broad reloads, and unbacked paths remain
-blocked/private and use `block-on-enforcing-target` fallback when classified as
-review intent. Aggregate scriptlet fidelity is derived only from typed lifecycle
-coverage in the durable scriptlet bundle; the retired regex analyzer and its
-parallel guessed-hook score no longer exist.
-Future LSM expansion must add target-provider facts and content semantics
-before any mode change, status, disable, directory reload, or policy-store
-mutation can become public-ready.
-
-Non-default scriptlet publication summaries must include typed command
-evidence plus both
-`boot_security_intents` and `security_policy_intents`; rows that predate the
-current conversion version are stale and must be reconverted before they can be
-public-ready. The empty `{}` summary shape is reserved for native/default rows
-without scriptlet evidence.
-
-**legacy_scriptlets.rs** -- Current metadata for converted package scriptlet
-semantics and local replay planning. The v1 bundle lives in the TOML manifest as
-`[legacy_scriptlets]` and records source package identity, target
-compatibility, per-entry decisions, effects, reserved trigger/purge metadata,
-timeouts, and evidence digests. It is TOML-only in this revision; the CBOR
-`BinaryManifest` remains unchanged and archive reads overlay the TOML field
-when both manifest formats are present.
-
-The large conversion surfaces are split by ownership. Adapter registry tests
-live under `convert/adapters/tests/`; legacy bundle tests live under
-`ccs/legacy_scriptlets/tests.rs`; Remi protocol, async-client, and client tests
-live under `repository/remi/`.
+The large conversion surfaces are split by ownership. Conversion projection
+tests live under `convert/converter/tests.rs`; lifecycle schema tests live under
+`ccs/native_lifecycle/tests.rs`; transaction-order tests live under
+`ccs/native_transaction/tests.rs`; Remi protocol, async-client, and client
+tests live under `repository/remi/`.
 
 **v2/** -- CCS v2 native package authority. Start in
 `crates/conary-core/src/ccs/v2/` for v2 authority, validation, diagnostics,
@@ -179,7 +243,10 @@ Native v2 authoring from `ccs.toml` starts in
 `apps/conary/src/commands/ccs/{templates.rs,lint.rs,build.rs,test.rs,local_dev.rs}`
 for command ergonomics and local-dev state, and
 `crates/conary-core/src/ccs/v2/authoring.rs` for projection from `BuildResult`
-into signed v2 authority. Debug TOML consistency checks live in
+into signed v2 authority. `crates/conary-core/src/ccs/v2/lifecycle.rs` owns the
+exact bidirectional projection between manifest lifecycle declarations, signed
+v2 lifecycle authority, and the install-interface manifest projection.
+Debug TOML consistency checks live in
 `crates/conary-core/src/ccs/v2/debug_projection.rs`; debug TOML is verified
 against signed authority and never becomes install-time authority.
 
@@ -187,6 +254,16 @@ against signed authority and never becomes install-time authority.
 Records exact conversion provenance. The retired capability and subpackage
 enhancers guessed authority from package names and file paths; declared
 capabilities and source package-manager metadata own those contracts instead.
+
+**native_export/** -- CCS-to-native package generation for RPM, Debian, and
+Arch. This is a current output surface, not a backward-compatibility layer.
+`[native_export]` in `ccs.toml` holds format-specific metadata that has no
+source-independent CCS equivalent. The exporters report every lossy
+translation and do not provide a `[legacy]` schema alias. Required target
+metadata comes from exact manifest fields: RPM requires the package license,
+Arch requires homepage and maintainer-backed packager identity, and Debian
+omits its optional maintainer field when no exact value exists. Exporters do
+not invent unknown identities or unconditional maintainer scriptlets.
 
 **export/** -- OCI image export. Produces OCI-layout archives with gzipped
 tar layers, image config, and manifest. ContainerConfig controls entrypoint,
@@ -203,13 +280,14 @@ enables delta-efficient distribution via the Remi server.
 
 The first fixture ownership map for CCS conversion lives in
 `docs/modules/test-fixtures.md`. Start there before changing golden conversion
-cases, support-matrix fixture names, adapter-backed public-ready evidence, or
-legacy scriptlet bundle fixtures. The fast proof for map-only or table-only
+cases, formal command evidence, source ABI parsing, or native lifecycle bundle
+fixtures. The fast proof for map-only or table-only
 changes is:
 
 ```bash
-cargo test -p conary-core golden_fixtures
-cargo test -p conary-core support_matrix
+cargo test -p conary-core native_abi
+cargo test -p conary-core native_lifecycle
+cargo test -p conary-core native_transaction
 ```
 
 If conversion output changes, also run:
@@ -218,17 +296,20 @@ If conversion output changes, also run:
 cargo test -p conary --test conversion_integration golden_conversion
 ```
 
-The golden conversion corpus includes a Fedora-to-Arch `adapter-selinux-policy`
-case proving supported SELinux intent is fully replaced while unsupported
-SELinux mutation remains covered by the `blocked-class-selinux` fixture.
+Golden conversion cases may assert diagnostic command/effect evidence, but
+exact lifecycle proof comes from source ABI, event-order, argv/stdin, and
+payload-visibility tests.
 
 ## CCS v2 Native Authority
 
 CCS v2 packages use the CBOR `MANIFEST` with `format_version = 2` as signed
 install-time authority. `MANIFEST.toml` may be present for source/debug
-visibility, but TOML-only install behavior is not native authority. The v2
-implementation lives under `crates/conary-core/src/ccs/v2/`; legacy v1
-`BinaryManifest` parsing remains a migration/fixture surface.
+visibility, but TOML-only install behavior is not native authority. The
+implementation lives under `crates/conary-core/src/ccs/v2/`. CCS v2 is the
+sole native package contract: the repository has no v1 writer, parser,
+projection, fixture factory, or compatibility path. `MANIFEST.toml` and
+component JSON are checked projections only; malformed, unsupported, or
+unsigned authority never falls back to them.
 
 ### Native CCS v2 Local Authoring Loop
 
@@ -237,132 +318,123 @@ The minimal native authoring loop is:
 ```text
 conary ccs init --template minimal-file
 conary ccs lint
-conary ccs build --format v2 --local-dev
+conary ccs build --local-dev
 conary ccs verify package.ccs
 conary ccs test package.ccs --dry-run
 ```
 
-Config-only packages can be authored and contract-tested without a target
-profile:
+Config-only packages can be authored and contract-tested directly:
 
 ```text
 conary ccs init --template config-noreplace
 conary ccs lint
-conary ccs build --format v2 --local-dev
+conary ccs build --local-dev
 conary ccs verify package.ccs
 conary ccs test package.ccs --dry-run
 ```
 
-Lifecycle-bearing packages require an explicit supported target profile during
-lint, build, and dry-run test. Supported public profile IDs are `fedora-44`,
-`ubuntu-26.04`, and `arch`; Remi route slugs such as `fedora` are not accepted
-as CLI target profile IDs.
+Declarative lifecycle is signed source-independent package intent. Authoring
+does not name a destination distro: the install transaction resolves that
+intent against the destination host's typed capabilities.
 
 ```text
 conary ccs init --template service
-conary ccs lint --target-profile fedora-44
-conary ccs build --format v2 --local-dev --target-profile fedora-44
+conary ccs lint
+conary ccs build --local-dev
 conary ccs verify package.ccs
-conary ccs test package.ccs --dry-run --target-profile fedora-44
+conary ccs test package.ccs --dry-run
 ```
 
 `--local-dev` signs with a user-local development key for iteration.
 Local-dev artifacts can verify and dry-run-test locally, but static publish and
 Remi release paths still require accepted release trust and build attestation.
 
-`TargetProfileQuery` covers users, groups, directories, services, tmpfiles,
-sysctl, and alternatives. Profile-backed validation accepts only explicit
-per-entry policy and reports `LifecycleUnsupported` for unsupported signed
-lifecycle authority. M4e's proof corpus covers the `config-noreplace` and
-`service` templates, unsupported target-profile IDs, unsupported lifecycle
-entries, debug TOML projection drift, and Remi lifecycle-bearing native release
-upload.
+Structural validation covers the complete typed values for users, groups,
+directories, generic services, systemd units, tmpfiles, sysctl, alternatives,
+and executable post-install/pre-remove hooks without a distro allowlist.
+Executable hooks sign their interpreter, body, capabilities, reversibility,
+and sandboxed-target-root execution contract; install never guesses those
+fields from script text or the destination distro. Destination capability
+resolution belongs to transaction planning, not package authoring or Remi
+publication. The proof corpus covers typed lifecycle round trips, install hook
+projection, the `config-noreplace` and `service` templates, debug TOML
+projection drift, and lifecycle-bearing native release upload.
 
-## Legacy Scriptlet Bundles And Replay
+## Source-Independent Lifecycle Bundles And Execution
 
-Converted CCS packages may carry a `[legacy_scriptlets]` section. Local Conary
-clients consume this bundle during install, update, remove, restore, batch, and
-autoremove planning. Entries with `review`, `blocked`, or unknown decisions
-refuse before mutation. Entries with `legacy` decisions are replayed only after
-the bundle passes target, sandbox, lifecycle, timeout, and ordering preflight
-and the operator explicitly provides `--allow-legacy-replay`.
+Converted CCS packages and directly acquired RPM/DEB/Arch artifacts use the
+same `[native_lifecycle]` bundle and Conary transaction engine. Local Conary
+clients consume it during install, update, remove, restore, batch, and
+autoremove planning. Flattened script text may exist only as explicitly
+diagnostic evidence. A source parser that reports diagnostic script evidence
+without typed ABI entries is a parser defect; there is no generic-hook fallback
+and no source-package-manager runtime fallback.
 
-Passive conversion bundle construction lives under
+Bundle construction lives under
 `crates/conary-core/src/ccs/convert/scriptlet_bundle.rs` and
-`crates/conary-core/src/ccs/convert/scriptlet_bundle/`. The hub preserves the
-public conversion API while child modules own public DTOs, entry decisions,
-native ABI metadata projection, evidence digests, summaries, and fixtures.
+`crates/conary-core/src/ccs/convert/scriptlet_bundle/`. Child modules own entry
+projection, source-format metadata, body/evidence digests, summaries, and test
+fixtures. Every entry is byte-preserved and has the single current authority of
+being present in the validated bundle; there is no parallel decision tag.
 
-Core replay planning lives in
-`crates/conary-core/src/ccs/legacy_replay.rs`. The install-side adapter that
-binds that planner to local install/update/remove replay execution and audit
-metadata lives in `apps/conary/src/commands/install/legacy_replay.rs`.
+Debian lifecycle service-helper argv starts in
+`crates/conary-core/src/packages/deb/lifecycle_helpers.rs` and its focused
+children. That module pins `init-system-helpers` `1.69~deb13u1`, owns the exact
+option/action/status/policy tables for all five helpers, and provides one typed
+parse/render union for a later Conary-owned broker. It is grammar only: no
+helper execution, target inspection, or schema authority lives there.
 
-Public-ready conversion is narrower than local replay acceptance. The supported
-public source targets are `fedora-44`, `ubuntu-26.04`, and `arch`. A converted
-artifact is public-ready only when the scriptlet outcome is native-free or
-fully replaced by adapter/support-matrix evidence for the exact source and
-target, such as validated `sysctl/v1` evidence projected into native
-`hooks.sysctl` plus target-profile approval for the exact key, or validated
-`setuid-mode/v1` evidence projected into payload file mode plus
-`policy.allow_setuid_paths`. For the current public sysctl proof corpus,
-`kernel.example` is allowed and `net.ipv4.ip_forward` stays private-review
-until a supported profile explicitly allows it. Legacy replay, review-required,
-blocked, malformed, or local-only scriptlet outcomes remain private conversion
-results.
+Core event planning lives in `crates/conary-core/src/ccs/native_transaction.rs`.
+`apps/conary/src/commands/install/native_events.rs` binds that plan to the
+shared install/remove executor. Command, batch, CCS, restore, remove, and
+autoremove paths call the same stage groups instead of maintaining
+format-specific copies.
 
-Common PAM stack helpers (`authselect`, `authconfig`, `pam-auth-update`, and
-`pam-config`) remain `blocked-class-pam` evidence. They do not project native
-manifest authority or public Remi eligibility without a future native PAM
-policy adapter and target-profile PAM facts.
+Applied package transactions cannot suppress lifecycle execution. Install,
+update, remove, restore, batch, autoremove, CCS install, automation, and daemon
+package jobs have no `--no-scripts` or request-level equivalent; only a
+non-mutating dry run stops before execution after reporting the typed plan.
 
-Remi consumes the typed command nodes emitted by conversion and never
-reclassifies their strings. Its privacy normalization changes only displayed
-argument values and clustering keys; it does not remove commands from the
-signed conversion summary, change entry decisions, grant adapter coverage,
-enable raw replay, or make an artifact public.
+An upgrade exposes new payload before post-install events while retaining
+old-only paths through the source ABI's pre-removal boundary. The
+transaction then removes old-only paths and old ownership before post-removal
+events. Mutable-root and generation-aware installs use the same boundary; a
+generation cannot be deferred past an event that needs to observe it.
 
-Live network fetches and nested package-manager calls remain blocked conversion
-evidence. A scriptlet that fetches content with `curl`, `wget`, `scp`, `ssh`, or
-`git clone`, or that invokes a nested package manager such as `dnf`, `apt`,
-`dpkg`, `rpm`, `pacman`, `apk`, `microdnf`, or `zypper`, does not project native
-manifest authority and cannot become public-ready without a future dependency
-or offline-artifact authority model.
+Bundles are persisted with the installed trove so later remove, upgrade, and
+restore transactions retain source lifecycle authority even when the original
+archive is no longer cached. Unknown schema revisions, source slots,
+interpreter modes, invocation shapes, or trigger semantics fail typed preflight
+before mutation. During pre-alpha, each such result is a required implementation
+defect with upstream-source citation and conformance coverage; it is not an
+operator review state or a permanent supported-format boundary.
 
-Foreign raw replay has a second gate. If the bundle source target differs from
-the host target and the host is not listed in `allowed_targets`, the operation
-also requires `--allow-foreign-legacy-replay` plus compatible bundle and host
-mixing policy. `--no-scripts` is not a bypass for required raw replay: it
-suppresses ordinary CCS hooks for replaced-only bundles, but refuses when the
-selected lifecycle needs a raw legacy entry.
+Cross-distribution execution is the point of the bundle, not an optional
+promotion. A Debian package on Fedora, an RPM on Arch, and an Arch package on
+Ubuntu preserve their source ABI without reading or mutating dpkg, RPM, or ALPM
+state. Interpreters and helpers come from declared dependencies, a
+Conary-owned compatibility runtime, or complete typed lowerings. Diagnostic
+helper/effect records do not satisfy that requirement.
 
-Converted CCS packages can carry metadata about legacy native scriptlets, but
-CCS format does not make raw native scriptlets portable across distributions.
-Raw replay of `family-compatible` legacy scriptlets is accepted only when an
-explicit target compatibility matrix entry authorizes the source and host target
-pair and the shallow compatibility preflight succeeds. The default production
-matrix is empty, so Conary fails closed unless a later release ships or
-configures validated compatibility evidence.
-
-Accepted bundles are persisted with the installed trove so remove and upgrade
-can replay or refuse safely even if the original `.ccs` archive is no longer in
-the cache. Remi publication remains a separate gate; review, blocked, and raw
-legacy replay requirements do not become public-serving approval merely because
-the local client can consume the bundle.
+Private conversion diagnostics may retain privacy-normalized command evidence
+for engineering prioritization. Normalization affects display only; it cannot
+remove lifecycle entries, change event order, alter publication, or authorize
+mutation.
 
 Operators can inspect a local CCS package with:
 
 ```bash
-conary query scripts ./nginx.ccs
-conary query scripts ./nginx.ccs --verbose
-conary query scripts ./nginx.ccs --entry rpm:%post
-conary query scripts ./nginx.ccs --json
+conary query scripts ./nginx.ccs --policy ./ccs-trust.toml
+conary query scripts ./nginx.ccs --verbose --policy ./ccs-trust.toml
+conary query scripts ./nginx.ccs --entry rpm:%post --policy ./ccs-trust.toml
+conary query scripts ./nginx.ccs --json --policy ./ccs-trust.toml
 ```
 
-The CCS query output shows decisions, reasons, effects, body digests, and
-reserved metadata summaries. It does not print preserved raw script bodies in
-text or JSON output by default. Existing RPM/DEB/Arch package-file scriptlet
-inspection keeps its current default behavior.
+The CCS query output shows lifecycle entries, native slots, arguments,
+transaction metadata, reserved source metadata, and body digests. It does not
+print preserved raw program bodies in text or JSON output by default. Existing
+RPM/DEB/Arch package-file lifecycle inspection keeps its current default
+behavior.
 
 ## Install
 
@@ -371,9 +443,9 @@ signatures, evaluates capability policy, stores content in CAS, reuses the
 shared composefs generation transaction, and runs declarative hooks.
 
 ```bash
-conary ccs install package.ccs --yes         # Standard install
-conary ccs install package.ccs --reinstall --yes # Reinstall same version (replaces files in CAS)
-conary ccs install package.ccs --dry-run     # Preview without applying
+conary ccs install package.ccs --policy ./ccs-trust.toml --yes
+conary ccs install package.ccs --policy ./ccs-trust.toml --reinstall --yes
+conary ccs install package.ccs --policy ./ccs-trust.toml --dry-run
 ```
 
 The `--reinstall` flag forces reinstallation even when the same version is
@@ -389,21 +461,26 @@ beneath that root. Escapes, loops, and children beneath symlinks created by the
 package remain fail-closed; an existing leaf symlink also keeps the separate
 replacement/collision semantics owned by the payload type.
 
-For `[[file_capabilities]]`, the install boundary depends on the execution
-path. Mutable live-root installs still apply the manifest authority with a
-controlled `setcap` call after deployment. Generation-aware installs preserve
-the same authority only through immediate generation publication: Conary
-persists the installed file-capability rows, attaches `security.capability`
-while building the runtime generation inputs, and reports the resulting xattr
-count through `conary system generation info`.
+The source-independent node contract in
+`crates/conary-core/src/payload.rs` is the sole authority for payload kind,
+mode, numeric ownership, timestamp, xattrs, device identity, symlink target,
+hardlink identity, and content reference. Native parsers, CCS v2, installed
+state, and generation manifests use that same type; they do not maintain
+parallel partial file projections.
+
+For `[[file_capabilities]]`, Conary persists the signed authority in the
+selected-root transaction, attaches `security.capability` while building the
+runtime generation inputs, and reports the resulting xattr count through
+`conary system generation info`. There is no mutable live-root application
+path.
 
 Implementation routing: `apps/conary/src/commands/ccs/install.rs` is the
 stable command hub. Command execution lives in
 `apps/conary/src/commands/ccs/install/command.rs`; dependency/version policy
 lives in `apps/conary/src/commands/ccs/install/dependency.rs`; component
 selection lives in `apps/conary/src/commands/ccs/install/component_selection.rs`;
-capability-policy enforcement lives in
-`apps/conary/src/commands/ccs/install/capability_policy.rs`; and payload path
+exact target capability validation lives in
+`apps/conary/src/commands/ccs/install/capability_declaration.rs`; and payload path
 normalization remains in `apps/conary/src/commands/ccs/payload_paths.rs`.
 
 CCS also exposes two package-scoped runtime helpers that are positively covered
@@ -412,11 +489,13 @@ in Phase 4:
 ```bash
 conary ccs shell package-name          # Interactive environment with package contents
 conary ccs run package-name -- cmd     # One-shot execution under that environment
-conary ccs install package.ccs --components runtime,config --yes
+conary ccs install package.ccs --policy ./ccs-trust.toml --components runtime,config --yes
 ```
 
 Selective component installs persist only the requested components and skip
-runtime hooks when a purely non-runtime slice is installed.
+unselected payloads. Declared CCS hooks are package-scoped and run for every
+component selection; no script-disabling bypass exists, and component names
+do not infer lifecycle ownership.
 
-See also: [docs/specs/ccs-format-v1.md](/docs/specs/ccs-format-v1.md),
+See also: [docs/specs/ccs-format-v2.md](/docs/specs/ccs-format-v2.md),
 [docs/ARCHITECTURE.md](/docs/ARCHITECTURE.md).

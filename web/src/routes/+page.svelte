@@ -44,7 +44,7 @@
 
 <PageMeta
 	title="Conary Package Index"
-	description="Browse public package metadata and policy-gated conversion evidence served by Conary Remi."
+	description="Browse public RPM, Debian, and Arch metadata plus source-independent CCS conversions served by Conary Remi."
 	path="/"
 />
 
@@ -55,7 +55,7 @@
 			<h1>Package evidence, across distributions.</h1>
 			<p class="hero-subtitle">
 				Search upstream package metadata, inspect version and dependency evidence, and see
-				which artifacts have crossed Remi's public conversion policy boundary.
+				the CCS artifact that carries each source package ABI across distro boundaries.
 			</p>
 			<SearchBar placeholder="Search packages across all distributions…" />
 		</div>
@@ -75,11 +75,11 @@
 				</li>
 				<li>
 					<span>02</span>
-					<div><strong>Policy review</strong><small>Unsupported behavior stays refused or held</small></div>
+					<div><strong>Typed conversion</strong><small>Preserve source lifecycle, payload, and dependency semantics</small></div>
 				</li>
 				<li>
 					<span>03</span>
-					<div><strong>Public result</strong><small>Metadata and approved CCS conversions</small></div>
+					<div><strong>Public result</strong><small>Current-schema metadata and CCS transactions</small></div>
 				</li>
 			</ol>
 		</div>
@@ -92,20 +92,20 @@
 			<p class="eyebrow">One layer in a larger system</p>
 			<h2 class="section-heading">The index turns distribution differences into inspectable package evidence.</h2>
 			<p class="section-copy">
-				Conary's wider direction is a shared model for package intent, authority,
-				builds, and complete systems. Remi supplies the distribution-aware metadata
-				and policy boundary that lets those layers make grounded decisions.
+				Conary uses source-format semantics as package authority and typed host
+				capabilities as target input. Remi supplies the exact RPM, Debian, and Arch
+				metadata and source-independent CCS transaction that connect those layers.
 			</p>
 			<a href="https://conary.io/features/" class="text-link">Explore the Conary product direction <span aria-hidden="true">↗</span></a>
 		</div>
 		<ol class="system-steps" aria-label="How the package index supports Conary">
 			<li>
 				<span>01</span>
-				<div><strong>Resolve for the real target</strong><small>Keep distro identity, versions, repositories, and policy visible.</small></div>
+				<div><strong>Preserve the source ABI</strong><small>Keep version schemes, relations, lifecycle, and payload metadata explicit.</small></div>
 			</li>
 			<li>
 				<span>02</span>
-				<div><strong>Publish only reviewed results</strong><small>Expose approved conversion evidence while unsupported behavior stays refused.</small></div>
+				<div><strong>Convert to one transaction model</strong><small>Emit current-schema CCS without command-name or distro-name guesses.</small></div>
 			</li>
 			<li>
 				<span>03</span>

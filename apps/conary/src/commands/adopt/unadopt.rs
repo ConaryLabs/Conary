@@ -269,6 +269,7 @@ mod tests {
     use std::cell::Cell;
 
     use conary_core::db::models::{Changeset, ChangesetStatus, InstallSource, TroveType};
+    use conary_core::packages::InstalledPackageIdentity;
 
     use super::*;
     use crate::commands::test_helpers::create_test_db;
@@ -296,12 +297,32 @@ mod tests {
         db::transaction(&mut conn, |tx| {
             let mut changeset = Changeset::new(format!("Seed {name}"));
             let changeset_id = changeset.insert(tx)?;
+            let version = if source.is_adopted() {
+                "1.0.0-1"
+            } else {
+                "1.0.0"
+            };
             let mut trove = Trove::new_with_source(
                 name.to_string(),
-                "1.0.0".to_string(),
+                version.to_string(),
                 TroveType::Package,
-                source,
+                source.clone(),
+                conary_core::repository::versioning::VersionScheme::Conary,
             );
+            if source.is_adopted() {
+                trove.architecture = Some("x86_64".to_string());
+                trove.native_package_identity = Some(
+                    InstalledPackageIdentity::rpm(
+                        format!("{name}-1.0.0-1.x86_64"),
+                        name,
+                        None,
+                        "1.0.0",
+                        "1",
+                        "x86_64",
+                    )
+                    .unwrap(),
+                );
+            }
             trove.installed_by_changeset_id = Some(changeset_id);
             let trove_id = trove.insert(tx)?;
             changeset.update_status(tx, ChangesetStatus::Applied)?;

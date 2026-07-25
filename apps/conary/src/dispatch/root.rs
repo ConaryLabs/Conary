@@ -16,7 +16,7 @@ use super::catalog::{
 use super::ccs::dispatch_ccs_command;
 use super::collection::dispatch_collection_command;
 use super::config::dispatch_config_command;
-use super::context::{legacy_replay_options, require_live_mutation};
+use super::context::require_live_mutation;
 use super::derivation::dispatch_derivation_command;
 use super::derive::dispatch_derive_command;
 use super::federation::dispatch_federation_command;
@@ -44,10 +44,7 @@ use try_preflight::{
 };
 use try_preflight::{TryDispatchAction, TryDispatchInput, try_dispatch_action};
 
-pub(super) async fn dispatch_command(
-    command: Option<Commands>,
-    allow_live_system_mutation: bool,
-) -> Result<()> {
+pub(super) async fn dispatch_command(command: Option<Commands>) -> Result<()> {
     match command {
         // =====================================================================
         // Primary Commands (Hoisted to Root)
@@ -59,27 +56,20 @@ pub(super) async fn dispatch_command(
             repo,
             dry_run,
             no_deps,
-            no_scripts,
-            allow_legacy_replay,
-            allow_foreign_legacy_replay,
             sandbox,
             allow_downgrade,
-            allow_capabilities,
             convert_to_ccs,
             skip_optional,
-            force,
-            dep_mode,
+            ownership,
             from,
             yes,
         }) => {
             let sandbox_mode = sandbox.into();
-            let legacy_replay =
-                legacy_replay_options(allow_legacy_replay, allow_foreign_legacy_replay);
 
             // Smart dispatch: @name installs a collection
             if package.starts_with('@') {
                 require_live_mutation(
-                    MutationIntent::from_apply_intent(yes, allow_live_system_mutation),
+                    MutationIntent::from_apply_intent(yes),
                     Cow::Borrowed("conary install @collection"),
                     LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
                     dry_run,
@@ -92,13 +82,11 @@ pub(super) async fn dispatch_command(
                     dry_run,
                     skip_optional,
                     sandbox_mode,
-                    no_scripts,
-                    legacy_replay,
                 )
                 .await
             } else {
                 require_live_mutation(
-                    MutationIntent::from_apply_intent(yes, allow_live_system_mutation),
+                    MutationIntent::from_apply_intent(yes),
                     Cow::Borrowed("conary install"),
                     LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
                     dry_run,
@@ -113,18 +101,14 @@ pub(super) async fn dispatch_command(
                         architecture: None,
                         dry_run,
                         no_deps,
-                        no_scripts,
                         selection_reason: None,
                         sandbox_mode,
                         allow_downgrade,
-                        allow_capabilities,
                         convert_to_ccs,
-                        force,
-                        dep_mode,
+                        ownership,
                         yes,
                         from_distro: from,
                         repository_provenance: None,
-                        legacy_replay,
                     },
                 )
                 .await
@@ -136,17 +120,12 @@ pub(super) async fn dispatch_command(
             common,
             version,
             architecture,
-            no_scripts,
             yes,
-            allow_legacy_replay,
-            allow_foreign_legacy_replay,
             sandbox,
-            purge_files,
+            purge,
         }) => {
-            let legacy_replay =
-                legacy_replay_options(allow_legacy_replay, allow_foreign_legacy_replay);
             require_live_mutation(
-                MutationIntent::from_apply_intent(yes, allow_live_system_mutation),
+                MutationIntent::from_apply_intent(yes),
                 Cow::Borrowed("conary remove"),
                 LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
                 false,
@@ -154,13 +133,10 @@ pub(super) async fn dispatch_command(
             commands::cmd_remove(
                 &package_name,
                 &common.db.db_path,
-                &common.root,
                 version,
                 architecture,
-                no_scripts,
                 sandbox.into(),
-                purge_files,
-                legacy_replay,
+                purge,
             )
             .await
         }
@@ -172,16 +148,11 @@ pub(super) async fn dispatch_command(
             architecture,
             security,
             dry_run,
-            no_scripts,
-            allow_legacy_replay,
-            allow_foreign_legacy_replay,
             sandbox,
-            dep_mode,
+            ownership,
             yes,
         }) => {
             let sandbox_mode = sandbox.into();
-            let legacy_replay =
-                legacy_replay_options(allow_legacy_replay, allow_foreign_legacy_replay);
             // Smart dispatch: @name updates a collection/group
             if let Some(ref pkg) = package
                 && pkg.starts_with('@')
@@ -192,7 +163,7 @@ pub(super) async fn dispatch_command(
                     );
                 }
                 require_live_mutation(
-                    MutationIntent::from_apply_intent(yes, allow_live_system_mutation),
+                    MutationIntent::from_apply_intent(yes),
                     Cow::Borrowed("conary update @collection"),
                     LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
                     dry_run,
@@ -204,16 +175,14 @@ pub(super) async fn dispatch_command(
                     &common.root,
                     security,
                     dry_run,
-                    no_scripts,
                     sandbox_mode,
-                    dep_mode,
+                    ownership,
                     yes,
-                    legacy_replay,
                 )
                 .await;
             }
             require_live_mutation(
-                MutationIntent::from_apply_intent(yes, allow_live_system_mutation),
+                MutationIntent::from_apply_intent(yes),
                 Cow::Borrowed("conary update"),
                 LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
                 dry_run,
@@ -224,13 +193,11 @@ pub(super) async fn dispatch_command(
                 &common.root,
                 security,
                 dry_run,
-                no_scripts,
                 sandbox_mode,
-                dep_mode,
+                ownership,
                 yes,
                 version,
                 architecture,
-                legacy_replay,
             )
             .await
         }
@@ -271,29 +238,16 @@ pub(super) async fn dispatch_command(
         Some(Commands::Autoremove {
             common,
             dry_run,
-            no_scripts,
             yes,
-            allow_legacy_replay,
-            allow_foreign_legacy_replay,
             sandbox,
         }) => {
-            let legacy_replay =
-                legacy_replay_options(allow_legacy_replay, allow_foreign_legacy_replay);
             require_live_mutation(
-                MutationIntent::from_apply_intent(yes, allow_live_system_mutation),
+                MutationIntent::from_apply_intent(yes),
                 Cow::Borrowed("conary autoremove"),
                 LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
                 dry_run,
             )?;
-            commands::cmd_autoremove(
-                &common.db.db_path,
-                &common.root,
-                dry_run,
-                no_scripts,
-                sandbox.into(),
-                legacy_replay,
-            )
-            .await
+            commands::cmd_autoremove(&common.db.db_path, dry_run, sandbox.into()).await
         }
 
         Some(Commands::Pin {
@@ -327,18 +281,14 @@ pub(super) async fn dispatch_command(
             keep_builddir,
             validate_only,
             fetch_only,
-            explain,
             isolated,
-            no_isolation,
-            hermetic,
             json,
+            key,
             record,
             record_output,
             record_backend,
             record_validate,
             keep_raw_trace,
-            record_unsafe_host,
-            record_allow_network,
             record_command,
         }) => {
             if record {
@@ -358,9 +308,8 @@ pub(super) async fn dispatch_command(
                     )?,
                     validate: record_validate,
                     keep_raw_trace,
-                    unsafe_host: record_unsafe_host,
-                    allow_network: record_allow_network,
                     json,
+                    signing_key_path: key.as_ref().map(std::path::PathBuf::from),
                     command: record_command,
                 })
                 .await;
@@ -375,58 +324,50 @@ pub(super) async fn dispatch_command(
                 keep_builddir,
                 validate_only,
                 fetch_only,
-                explain,
                 isolated,
-                no_isolation,
-                hermetic,
                 json,
+                key.as_deref().map(Path::new),
             )
             .await
         }
 
         Some(Commands::New {
             name,
-            from,
             output,
             force,
-            explain,
-        }) => {
-            commands::cmd_new(
-                name.as_deref(),
-                from.as_deref(),
-                output.as_deref(),
-                force,
-                explain,
-            )
-            .await
-        }
+        }) => commands::cmd_new(&name, output.as_deref(), force).await,
 
         Some(Commands::Try {
             target,
             activate,
-            allow_irreversible,
+            policy,
             watch,
             isolated,
             recipe,
+            key,
             json,
             run,
             db,
         }) => match try_dispatch_action(TryDispatchInput {
             target,
             activate,
-            allow_irreversible,
+            policy,
             isolated,
             run: &run,
             watch,
             recipe,
+            key,
             json,
         })? {
-            TryDispatchAction::Package(package) => {
+            TryDispatchAction::Package {
+                package,
+                trust_policy_path,
+            } => {
                 commands::cmd_try_package(
                     &db.db_path,
                     Path::new(&package),
+                    &trust_policy_path,
                     activate,
-                    allow_irreversible,
                     &run,
                 )
                 .await
@@ -436,6 +377,7 @@ pub(super) async fn dispatch_command(
                     &db.db_path,
                     &watch.target,
                     watch.recipe.as_deref(),
+                    &watch.signing_key_path,
                     watch.isolated,
                     watch.json,
                 )
@@ -453,8 +395,6 @@ pub(super) async fn dispatch_command(
             key_dir,
             state_file,
             refresh,
-            force_reinit,
-            accept_destination_state,
             rotate_publish_key,
             rotate_root_key,
             yes,
@@ -467,18 +407,12 @@ pub(super) async fn dispatch_command(
                 key_dir,
                 state_file,
                 refresh,
-                force_reinit,
-                accept_destination_state,
                 rotate_publish_key,
                 rotate_root_key,
                 yes,
                 json,
             })
             .await
-        }
-
-        Some(Commands::ConvertPkgbuild { pkgbuild, output }) => {
-            commands::cmd_convert_pkgbuild(&pkgbuild, output.as_deref()).await
         }
 
         Some(Commands::RecipeAudit { recipe, all, trace }) => {
@@ -492,9 +426,7 @@ pub(super) async fn dispatch_command(
         // =====================================================================
         // System Commands
         // =====================================================================
-        Some(Commands::System(sys_cmd)) => {
-            dispatch_system_command(sys_cmd, allow_live_system_mutation).await
-        }
+        Some(Commands::System(sys_cmd)) => dispatch_system_command(sys_cmd).await,
 
         // =====================================================================
         // Repository Commands
@@ -519,9 +451,7 @@ pub(super) async fn dispatch_command(
         // =====================================================================
         // CCS Commands
         // =====================================================================
-        Some(Commands::Ccs(ccs_cmd)) => {
-            dispatch_ccs_command(ccs_cmd, allow_live_system_mutation).await
-        }
+        Some(Commands::Ccs(ccs_cmd)) => dispatch_ccs_command(ccs_cmd).await,
 
         // =====================================================================
         // Derive Commands
@@ -531,16 +461,12 @@ pub(super) async fn dispatch_command(
         // =====================================================================
         // Model Commands
         // =====================================================================
-        Some(Commands::Model(model_cmd)) => {
-            dispatch_model_command(model_cmd, allow_live_system_mutation).await
-        }
+        Some(Commands::Model(model_cmd)) => dispatch_model_command(model_cmd).await,
 
         // =====================================================================
         // Automation Commands
         // =====================================================================
-        Some(Commands::Automation(auto_cmd)) => {
-            dispatch_automation_command(auto_cmd, allow_live_system_mutation).await
-        }
+        Some(Commands::Automation(auto_cmd)) => dispatch_automation_command(auto_cmd).await,
 
         // =====================================================================
         // Bootstrap Commands
@@ -610,7 +536,6 @@ pub(super) async fn dispatch_command(
             check,
             force,
             version,
-            no_verify,
             verify_sha256,
             verify_signature_file,
             trusted_keys,
@@ -622,7 +547,6 @@ pub(super) async fn dispatch_command(
                     check,
                     force,
                     version,
-                    no_verify,
                     verify_sha256,
                     verify_signature_file,
                     trusted_keys,

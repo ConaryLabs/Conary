@@ -1,127 +1,59 @@
 // conary-core/src/ccs/convert/scriptlet_bundle/entries.rs
 
-use super::super::security_policy::policy_intents_from_effects;
-use super::classification::{classification_entries_for, classify_entry};
-use super::format_metadata::project_format_metadata;
+use super::format_metadata::{FormatMetadataProjection, project_format_metadata};
 use super::native_contracts::{
-    encoded_native_body, flat_transaction_order, native_invocation, native_lifecycle_paths,
-    native_scriptlet_kind, native_transaction_order, non_empty_or_default,
-    phase_from_native_lifecycle, phase_from_scriptlet_phase,
+    encoded_native_body, native_invocation, native_lifecycle_entry_kind, native_lifecycle_paths,
+    native_transaction_order, phase_from_native_lifecycle,
 };
 use super::types::ScriptletBundleInput;
-use crate::ccs::convert::effects::{
-    EntryClassification, ScriptletClassificationReport,
-    classification_is_complete_adapter_coverage, native_deferred_support_can_be_adapter_covered,
+use crate::ccs::native_lifecycle::NativeLifecycleEntry;
+use crate::packages::native_abi::{
+    ArchNativeScriptletMetadata, NativeScriptletEntry, NativeScriptletMetadata,
 };
-use crate::ccs::legacy_scriptlets::{LegacyScriptletEntry, NativeInvocation};
-use crate::packages::native_abi::{NativeScriptletEntry, NativeScriptletSupport};
-use crate::packages::traits::Scriptlet;
-use std::collections::BTreeMap;
+use crate::repository::supported_profiles;
 
 pub(super) fn build_entries(
     input: &ScriptletBundleInput<'_>,
-) -> anyhow::Result<Vec<LegacyScriptletEntry>> {
-    if !input.source_metadata.native_scriptlet_abi.is_empty() {
-        input
-            .source_metadata
-            .native_scriptlet_abi
-            .iter()
-            .map(|entry| build_native_entry(entry, input.classification))
-            .collect()
-    } else {
-        input
-            .source_metadata
-            .scriptlets
-            .iter()
-            .enumerate()
-            .map(|(index, scriptlet)| build_flat_entry(index, scriptlet, input.classification))
-            .collect()
-    }
-}
-
-fn build_flat_entry(
-    index: usize,
-    scriptlet: &Scriptlet,
-    report: &ScriptletClassificationReport,
-) -> anyhow::Result<LegacyScriptletEntry> {
-    let id = format!("scriptlet:{index}:{}", scriptlet.phase);
-    let phase = phase_from_scriptlet_phase(scriptlet.phase);
-    let lifecycle_paths = vec![phase.as_str().to_string()];
-    let classifications = classification_entries_for(report, &id);
-    let outcome = classify_entry(&classifications, &NativeScriptletSupport::Parsed);
-    let mut security_policy_intents = outcome.security_policy_intents.clone();
-    security_policy_intents.extend(policy_intents_from_effects(&id, &outcome.effects));
-    let body_bytes = scriptlet.content.as_bytes();
-
-    Ok(LegacyScriptletEntry {
-        id,
-        native_slot: scriptlet.phase.to_string(),
-        phase,
-        lifecycle_paths,
-        interpreter: non_empty_or_default(&scriptlet.interpreter, "/bin/sh"),
-        interpreter_args: scriptlet
-            .flags
-            .as_deref()
-            .map(|flags| flags.split_whitespace().map(str::to_string).collect())
-            .unwrap_or_default(),
-        body_sha256: crate::hash::sha256_prefixed(body_bytes),
-        body: scriptlet.content.clone(),
-        body_encoding: None,
-        native_invocation: NativeInvocation::default(),
-        transaction_order: flat_transaction_order(scriptlet.phase),
-        timeout_ms: 30_000,
-        sandbox: None,
-        capabilities: Vec::new(),
-        decision: outcome.decision,
-        reason_code: outcome.reason_code,
-        human_reason: None,
-        evidence_digest: None,
-        source_evidence_refs: Vec::new(),
-        effects: outcome.effects,
-        unknown_command_evidence: outcome.unknown_command_evidence,
-        blocked_classes: outcome.blocked_classes,
-        boot_security_intents: outcome.boot_security_intents,
-        security_policy_intents,
-        rpm_trigger: None,
-        deb_maintainer: None,
-        arch_install: None,
-        residual_replay: None,
-        extra: BTreeMap::new(),
-    })
+) -> anyhow::Result<Vec<NativeLifecycleEntry>> {
+    input
+        .source_metadata
+        .native_scriptlet_abi
+        .iter()
+        .map(|entry| build_native_entry(entry, input))
+        .collect()
 }
 
 fn build_native_entry(
     native: &NativeScriptletEntry,
-    report: &ScriptletClassificationReport,
-) -> anyhow::Result<LegacyScriptletEntry> {
-    let classifications = classification_entries_for(report, &native.id);
-    let effective_support =
-        if deferred_native_support_is_fully_adapter_covered(native, &classifications) {
-            NativeScriptletSupport::Parsed
-        } else {
-            native.support.clone()
-        };
-    let outcome = classify_entry(&classifications, &effective_support);
-    let mut security_policy_intents = outcome.security_policy_intents.clone();
-    security_policy_intents.extend(policy_intents_from_effects(&native.id, &outcome.effects));
+    input: &ScriptletBundleInput<'_>,
+) -> anyhow::Result<NativeLifecycleEntry> {
+    if matches!(
+        native.metadata,
+        NativeScriptletMetadata::DebconfTemplates(_)
+    ) {
+        crate::packages::deb::templates::validate_native_entry(native)
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    }
     let phase = phase_from_native_lifecycle(native.primary_lifecycle);
     let lifecycle_paths = native_lifecycle_paths(native);
     let (body, body_encoding) = encoded_native_body(&native.body);
-    let mut extra = BTreeMap::from([(
-        "native_scriptlet_kind".to_string(),
-        toml::Value::String(native_scriptlet_kind(native.kind).to_string()),
-    )]);
-    let (rpm_trigger, deb_maintainer, arch_install) = project_format_metadata(native, &mut extra);
+    let FormatMetadataProjection {
+        rpm_runtime,
+        rpm_sysusers,
+        rpm_trigger,
+        deb_maintainer,
+        arch_install,
+        arch_hook,
+    } = project_format_metadata(native);
+    let interpreter = native_interpreter(native, input.source_distro)?;
 
-    Ok(LegacyScriptletEntry {
+    Ok(NativeLifecycleEntry {
         id: native.id.clone(),
         native_slot: native.native_slot.clone(),
+        kind: native_lifecycle_entry_kind(native.kind),
         phase,
         lifecycle_paths,
-        interpreter: native
-            .interpreter
-            .clone()
-            .unwrap_or_else(|| "package-manager-control-artifact".to_string()),
+        interpreter,
         interpreter_args: native.interpreter_args.clone(),
         body_sha256: native.body.sha256.clone(),
         body,
@@ -131,412 +63,59 @@ fn build_native_entry(
         timeout_ms: 30_000,
         sandbox: None,
         capabilities: Vec::new(),
-        decision: outcome.decision,
-        reason_code: outcome.reason_code,
-        human_reason: None,
         evidence_digest: None,
         source_evidence_refs: Vec::new(),
-        effects: outcome.effects,
-        unknown_command_evidence: outcome.unknown_command_evidence,
-        blocked_classes: outcome.blocked_classes,
-        boot_security_intents: outcome.boot_security_intents,
-        security_policy_intents,
         rpm_trigger,
+        rpm_runtime,
+        rpm_sysusers,
         deb_maintainer,
         arch_install,
-        residual_replay: None,
-        extra,
+        arch_hook,
+        residual_lifecycle: None,
     })
 }
 
-fn deferred_native_support_is_fully_adapter_covered(
-    entry: &NativeScriptletEntry,
-    classifications: &[&EntryClassification],
-) -> bool {
-    if !native_deferred_support_can_be_adapter_covered(entry) || classifications.is_empty() {
-        return false;
+fn native_interpreter(
+    native: &NativeScriptletEntry,
+    source_profile_or_route: Option<&str>,
+) -> anyhow::Result<String> {
+    if native.kind == crate::packages::native_abi::NativeScriptletKind::ControlArtifact {
+        anyhow::ensure!(
+            native.interpreter.is_none() && native.interpreter_args.is_empty(),
+            "control artifact '{}' must not declare an executable interpreter",
+            native.id
+        );
+        return Ok("package-manager-control-artifact".to_string());
     }
 
-    classifications
-        .iter()
-        .all(|entry| classification_is_complete_adapter_coverage(&entry.classification))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::super::ScriptletBundleSummary;
-    use super::super::test_support::{
-        bundle_for_metadata, complete_effect, known_report_with_effect, native_entry_with_body,
-        package_metadata,
-    };
-    use crate::ccs::convert::effects::{
-        ScriptletClassification, ScriptletClassificationReport, ScriptletCommandEvidence,
-    };
-    use crate::ccs::legacy_scriptlets::{
-        CommandArgumentProvenance, CommandExecutionContext, ForeignReplayPolicy, PublicationPolicy,
-        PublicationStatus, ScriptletDecision, ScriptletFidelity, TargetCompatibility,
-    };
-    use crate::packages::native_abi::NativeScriptletSupport;
-    use crate::packages::traits::{Scriptlet, ScriptletPhase};
-
-    #[test]
-    fn flattened_scriptlet_with_complete_effect_builds_replaced_entry() {
-        let mut metadata = package_metadata("flat", "1.0");
-        metadata.scriptlets.push(Scriptlet {
-            phase: ScriptletPhase::PostInstall,
-            interpreter: "/bin/sh".to_string(),
-            content: "/sbin/ldconfig\n".to_string(),
-            flags: None,
-        });
-        let files = Vec::new();
-        let mut classification = ScriptletClassificationReport::default();
-        classification.push(
-            "scriptlet:0:post-install",
-            ScriptletClassification::Known {
-                reason_code: "dynamic-linker-cache-complete".to_string(),
-                effects: vec![complete_effect("dynamic-linker-cache", "ldconfig")],
-            },
-        );
-
-        let build = bundle_for_metadata(&metadata, &files, &classification).unwrap();
-
-        assert_eq!(build.bundle.entries.len(), 1);
-        let entry = &build.bundle.entries[0];
-        assert_eq!(entry.decision.as_str(), "replaced");
-        assert_eq!(entry.reason_code, "dynamic-linker-cache-complete");
-        assert_eq!(entry.effects.len(), 1);
-        assert_eq!(entry.body, "/sbin/ldconfig\n");
-        build.bundle.validate().unwrap();
+    if let Some(interpreter) = &native.interpreter {
+        return Ok(interpreter.clone());
     }
 
-    #[test]
-    fn native_abi_binary_body_is_base64_encoded_and_validates() {
-        let mut metadata = package_metadata("native-bin", "1.0");
-        metadata
-            .native_scriptlet_abi
-            .push(native_entry_with_body(vec![0xff, 0x00, 0x01]));
-        let files = Vec::new();
-        let classification = ScriptletClassificationReport::default();
-
-        let build = bundle_for_metadata(&metadata, &files, &classification).unwrap();
-        let entry = &build.bundle.entries[0];
-
-        assert_eq!(entry.body_encoding.as_deref(), Some("base64"));
-        assert_eq!(
-            entry.body_sha256,
-            crate::hash::sha256_prefixed(&[0xff, 0x00, 0x01])
-        );
-        build.bundle.validate().unwrap();
+    if matches!(
+        native.metadata,
+        NativeScriptletMetadata::Arch(ArchNativeScriptletMetadata::Install(_))
+    ) {
+        let profile =
+            supported_profiles::arch_source_profile(source_profile_or_route).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Arch .INSTALL entry '{}' has no unambiguous source profile runtime",
+                    native.id
+                )
+            })?;
+        return profile
+            .scriptlet_shell()
+            .map(str::to_string)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Arch source profile '{}' has no scriptlet shell",
+                    profile.id()
+                )
+            });
     }
 
-    #[test]
-    fn unknown_classification_becomes_source_native_legacy_replay_entry() {
-        let mut metadata = package_metadata("unknown", "1.0");
-        metadata.scriptlets.push(Scriptlet {
-            phase: ScriptletPhase::PostInstall,
-            interpreter: "/bin/sh".to_string(),
-            content: "custom-helper --do-thing\n".to_string(),
-            flags: None,
-        });
-        let mut classification = ScriptletClassificationReport::default();
-        classification.push(
-            "scriptlet:0:post-install",
-            ScriptletClassification::Unknown {
-                reason_code: "unknown-command".to_string(),
-                command: ScriptletCommandEvidence {
-                    command: "custom-helper".to_string(),
-                    command_provenance: CommandArgumentProvenance::Literal,
-                    argv: vec!["--do-thing".to_string()],
-                    argument_provenance: vec![CommandArgumentProvenance::Literal],
-                    phase: Some("post-install".to_string()),
-                    lifecycle_paths: vec!["post-install".to_string()],
-                    raw_line: Some("custom-helper --do-thing".to_string()),
-                    source: crate::ccs::legacy_scriptlets::CommandEvidenceSource::ShellAst,
-                    environment: Vec::new(),
-                    ..ScriptletCommandEvidence::default()
-                },
-            },
-        );
-
-        let build = bundle_for_metadata(&metadata, &[], &classification).unwrap();
-        let entry = &build.bundle.entries[0];
-
-        assert_eq!(entry.decision, ScriptletDecision::Legacy);
-        assert_eq!(entry.reason_code, "unknown-command");
-        assert_eq!(entry.unknown_command_evidence.len(), 1);
-        assert_eq!(entry.unknown_command_evidence[0].command, "custom-helper");
-        assert_eq!(entry.unknown_command_evidence[0].argv, vec!["--do-thing"]);
-        assert_eq!(
-            entry.unknown_command_evidence[0].phase.as_deref(),
-            Some("post-install")
-        );
-        assert_eq!(build.bundle.decision_counts.legacy, 1);
-        assert_eq!(
-            build.bundle.scriptlet_fidelity,
-            ScriptletFidelity::LegacyReplay
-        );
-        assert_eq!(
-            build.bundle.target_compatibility,
-            TargetCompatibility::SourceNative
-        );
-        assert_eq!(
-            build.bundle.foreign_replay_policy,
-            ForeignReplayPolicy::Deny
-        );
-        assert_eq!(
-            build.bundle.publication_policy,
-            PublicationPolicy::LocalOnly
-        );
-        assert_eq!(
-            build.bundle.publication_status,
-            PublicationStatus::LocalOnly
-        );
-        assert_ne!(build.bundle.publication_status, PublicationStatus::Public);
-        assert_eq!(build.summary.scriptlet_fidelity, "legacy-replay");
-        assert_eq!(build.summary.target_compatibility, "source-native");
-        assert_eq!(build.summary.publication_status, "local-only");
-        assert_eq!(build.summary.decision_counts.legacy, 1);
-        assert_eq!(
-            build.summary.unknown_command_evidence,
-            entry.unknown_command_evidence
-        );
-    }
-
-    #[test]
-    fn review_classification_becomes_private_review_entry() {
-        let mut metadata = package_metadata("review", "1.0");
-        metadata.scriptlets.push(Scriptlet {
-            phase: ScriptletPhase::PostInstall,
-            interpreter: "/bin/sh".to_string(),
-            content: "systemctl restart demo.service\n".to_string(),
-            flags: None,
-        });
-        let mut classification = ScriptletClassificationReport::default();
-        classification.push(
-            "scriptlet:0:post-install",
-            ScriptletClassification::Review {
-                reason_code: "review-class-systemd-runtime-action".to_string(),
-                class_id: Some("systemd-runtime-action".to_string()),
-                command: None,
-            },
-        );
-
-        let build = bundle_for_metadata(&metadata, &[], &classification).unwrap();
-        let entry = &build.bundle.entries[0];
-
-        assert_eq!(entry.decision, ScriptletDecision::Review);
-        assert_eq!(entry.reason_code, "review-class-systemd-runtime-action");
-        assert_eq!(build.bundle.decision_counts.review, 1);
-        assert_eq!(
-            build.bundle.scriptlet_fidelity,
-            ScriptletFidelity::ReviewRequired
-        );
-        assert_eq!(
-            build.bundle.target_compatibility,
-            TargetCompatibility::ReviewRequired
-        );
-        assert_eq!(
-            build.bundle.publication_status,
-            PublicationStatus::PrivateReview
-        );
-        assert_eq!(
-            build.summary.review_reason_codes,
-            vec!["review-class-systemd-runtime-action"]
-        );
-    }
-
-    #[test]
-    fn blocked_classification_becomes_blocked_entry() {
-        let mut metadata = package_metadata("blocked", "1.0");
-        metadata.scriptlets.push(Scriptlet {
-            phase: ScriptletPhase::PostInstall,
-            interpreter: "/bin/sh".to_string(),
-            content: "curl https://example.invalid\n".to_string(),
-            flags: None,
-        });
-        let mut classification = ScriptletClassificationReport::default();
-        classification.push(
-            "scriptlet:0:post-install",
-            ScriptletClassification::Blocked {
-                reason_code: "blocked-class-network".to_string(),
-                class_id: "network".to_string(),
-                command: None,
-            },
-        );
-
-        let build = bundle_for_metadata(&metadata, &[], &classification).unwrap();
-        let entry = &build.bundle.entries[0];
-
-        assert_eq!(entry.decision, ScriptletDecision::Blocked);
-        assert_eq!(entry.reason_code, "blocked-class-network");
-        assert_eq!(entry.blocked_classes, vec!["network"]);
-        assert_eq!(
-            build.summary.blocked_reason_codes,
-            vec!["blocked-class-network"]
-        );
-        assert_eq!(build.summary.blocked_classes, vec!["network"]);
-        assert_eq!(build.summary.publication_status, "blocked");
-    }
-
-    #[test]
-    fn blocked_boot_security_evidence_is_stored_on_bundle_entry() {
-        let mut metadata = package_metadata("kernelish", "1.0");
-        metadata.scriptlets.push(Scriptlet {
-            phase: ScriptletPhase::PostInstall,
-            interpreter: "/bin/sh".to_string(),
-            content: "dracut --force /boot/initramfs.img\n".to_string(),
-            flags: None,
-        });
-        let mut classification = ScriptletClassificationReport::default();
-        classification.push(
-            "scriptlet:0:post-install",
-            ScriptletClassification::Blocked {
-                reason_code: "blocked-class-initramfs".to_string(),
-                class_id: "initramfs".to_string(),
-                command: Some(crate::ccs::convert::effects::ScriptletCommandEvidence {
-                    command: "dracut".to_string(),
-                    command_provenance: CommandArgumentProvenance::Literal,
-                    argv: vec!["--force".to_string(), "<boot>/initramfs.img".to_string()],
-                    argument_provenance: vec![
-                        CommandArgumentProvenance::Literal,
-                        CommandArgumentProvenance::Literal,
-                    ],
-                    execution_context: CommandExecutionContext::Unconditional,
-                    phase: Some("post-install".to_string()),
-                    lifecycle_paths: vec!["post-install".to_string()],
-                    raw_line: Some("dracut --force /boot/initramfs.img".to_string()),
-                    source: crate::ccs::legacy_scriptlets::CommandEvidenceSource::ShellAst,
-                    environment: Vec::new(),
-                    ..crate::ccs::convert::effects::ScriptletCommandEvidence::default()
-                }),
-            },
-        );
-
-        let build = bundle_for_metadata(&metadata, &[], &classification).unwrap();
-        assert_eq!(build.summary.boot_security_intents.len(), 1);
-        assert_eq!(build.summary.boot_security_intents[0].class_id, "initramfs");
-        assert_eq!(build.summary.boot_security_intents[0].command, "dracut");
-        let entry = &build.bundle.entries[0];
-
-        assert_eq!(entry.boot_security_intents.len(), 1);
-        assert_eq!(entry.boot_security_intents[0].class_id, "initramfs");
-        assert_eq!(entry.boot_security_intents[0].command, "dracut");
-        assert_eq!(
-            entry.boot_security_intents[0].argv,
-            vec!["--force", "<boot>/initramfs.img"]
-        );
-    }
-
-    #[test]
-    fn blocked_boot_security_class_without_command_evidence_is_safe() {
-        let mut metadata = package_metadata("synthetic-block", "1.0");
-        metadata.scriptlets.push(Scriptlet {
-            phase: ScriptletPhase::PostInstall,
-            interpreter: "/bin/sh".to_string(),
-            content: "echo synthetic\n".to_string(),
-            flags: None,
-        });
-        let mut classification = ScriptletClassificationReport::default();
-        classification.push(
-            "scriptlet:0:post-install",
-            ScriptletClassification::Blocked {
-                reason_code: "blocked-class-initramfs".to_string(),
-                class_id: "initramfs".to_string(),
-                command: None,
-            },
-        );
-
-        let build = bundle_for_metadata(&metadata, &[], &classification).unwrap();
-
-        assert_eq!(build.bundle.entries[0].decision, ScriptletDecision::Blocked);
-        assert!(build.bundle.entries[0].boot_security_intents.is_empty());
-    }
-
-    #[test]
-    fn native_deferred_and_unpreservable_support_drive_decisions() {
-        let mut metadata = package_metadata("native-support", "1.0");
-        let mut deferred = native_entry_with_body(b"echo deferred\n".to_vec());
-        deferred.id = "rpm:%verify".to_string();
-        deferred.native_slot = "%verify".to_string();
-        deferred.support = NativeScriptletSupport::DeferredReview {
-            reason_code: "rpm-verify-scriptlet-deferred".to_string(),
-        };
-        let mut unpreservable = native_entry_with_body(b"echo nope\n".to_vec());
-        unpreservable.id = "rpm:%postun".to_string();
-        unpreservable.native_slot = "%postun".to_string();
-        unpreservable.support = NativeScriptletSupport::Unpreservable {
-            reason_code: "native-abi-parser-limitation".to_string(),
-        };
-        metadata.native_scriptlet_abi = vec![deferred, unpreservable];
-
-        let build =
-            bundle_for_metadata(&metadata, &[], &ScriptletClassificationReport::default()).unwrap();
-
-        let deferred = build
-            .bundle
-            .entries
-            .iter()
-            .find(|entry| entry.id == "rpm:%verify")
-            .unwrap();
-        let unpreservable = build
-            .bundle
-            .entries
-            .iter()
-            .find(|entry| entry.id == "rpm:%postun")
-            .unwrap();
-        assert_eq!(deferred.decision, ScriptletDecision::Review);
-        assert_eq!(deferred.reason_code, "rpm-verify-scriptlet-deferred");
-        assert_eq!(unpreservable.decision, ScriptletDecision::Blocked);
-        assert_eq!(unpreservable.reason_code, "native-abi-parser-limitation");
-    }
-
-    #[test]
-    fn selinux_policy_effects_project_generic_policy_intent() {
-        let mut metadata = package_metadata("selinux-generic-intent", "1.0");
-        metadata.scriptlets.push(Scriptlet {
-            phase: ScriptletPhase::PostInstall,
-            interpreter: "/bin/sh".to_string(),
-            content: "restorecon -R /usr/share/demo\n".to_string(),
-            flags: None,
-        });
-
-        let mut effect = complete_effect("selinux-label-refresh", "restorecon");
-        effect.adapter_id = Some("selinux-policy/v1".to_string());
-        effect.args = vec!["-R".to_string(), "/usr/share/demo".to_string()];
-        effect.path = Some("/usr/share/demo".to_string());
-        effect.extra.insert(
-            "selinux_operation".to_string(),
-            toml::Value::String("label-refresh".to_string()),
-        );
-        effect
-            .extra
-            .insert("recursive".to_string(), toml::Value::Boolean(true));
-        effect
-            .extra
-            .insert("payload_backed".to_string(), toml::Value::Boolean(true));
-        effect.extra.insert(
-            "paths".to_string(),
-            toml::Value::Array(vec![toml::Value::String("/usr/share/demo".to_string())]),
-        );
-
-        let classification = known_report_with_effect(effect);
-        let build = bundle_for_metadata(&metadata, &[], &classification).unwrap();
-        let entry = &build.bundle.entries[0];
-
-        assert_eq!(entry.security_policy_intents.len(), 1);
-        let intent = &entry.security_policy_intents[0];
-        assert_eq!(intent.provider.as_str(), "selinux");
-        assert_eq!(intent.operation, "label-refresh");
-        assert_eq!(intent.scope.kind, "path");
-        assert_eq!(intent.scope.paths, vec!["/usr/share/demo"]);
-        assert!(intent.payload_evidence.payload_backed);
-        assert_eq!(intent.fallback.as_str(), "dormant");
-        assert_eq!(intent.reconciliation.state.as_str(), "pending");
-
-        let summary = ScriptletBundleSummary::from_bundle(
-            &build.bundle,
-            build.bundle.evidence_digest.clone(),
-        );
-        assert_eq!(summary.security_policy_intents.len(), 1);
-    }
+    anyhow::bail!(
+        "executable native lifecycle entry '{}' has no exact interpreter",
+        native.id
+    )
 }

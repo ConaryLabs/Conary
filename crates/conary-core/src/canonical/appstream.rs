@@ -492,7 +492,7 @@ mod tests {
         let temp_file = NamedTempFile::new().unwrap();
         let conn = rusqlite::Connection::open(temp_file.path()).unwrap();
         conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
-        schema::migrate(&conn).unwrap();
+        schema::ensure_current(&conn).unwrap();
 
         let components = vec![
             AppStreamComponent {
@@ -536,7 +536,7 @@ mod tests {
     #[test]
     fn test_cache_appstream_components() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        crate::db::schema::migrate(&conn).unwrap();
+        crate::db::schema::ensure_current(&conn).unwrap();
 
         let components = vec![AppStreamComponent {
             id: "org.mozilla.firefox".into(),

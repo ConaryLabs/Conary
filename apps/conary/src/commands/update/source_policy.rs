@@ -224,7 +224,7 @@ mod tests {
             .find(|transaction| transaction.package == "zsh")
             .expect("expected zsh transaction");
         assert!(!zsh.executable);
-        assert_eq!(zsh.install_route.as_deref(), Some("default:legacy"));
+        assert_eq!(zsh.install_route.as_deref(), Some("default:binary"));
         assert_eq!(
             zsh.blocked_reason,
             Some(ReplatformBlockedReason::MissingVersionedInstallRoute)

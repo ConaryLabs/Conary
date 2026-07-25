@@ -25,6 +25,7 @@ const MAX_INCLUDE_SIZE: usize = 1_048_576;
 
 /// Wire format for collection data served by Remi `/v1/models/:name`
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CollectionData {
     pub name: String,
     pub version: String,
@@ -36,8 +37,30 @@ pub struct CollectionData {
     pub published_at: String,
 }
 
+/// Signed publication envelope accepted by Remi's model collection API.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PublishedCollectionEnvelope {
+    pub collection: CollectionData,
+    /// Ed25519 signature over canonical `collection` JSON, base64 encoded.
+    pub signature: String,
+    /// Ed25519 public key, hex encoded.
+    pub public_key: String,
+}
+
+/// Wire format served by Remi's collection signature endpoint.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CollectionSignature {
+    /// Ed25519 signature over canonical `CollectionData` JSON, base64 encoded.
+    pub signature: String,
+    /// Hex-encoded first eight bytes of the verifying public key.
+    pub key_id: String,
+}
+
 /// A member entry in the wire format
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CollectionMemberData {
     pub name: String,
     pub version_constraint: Option<String>,
@@ -98,7 +121,6 @@ fn parse_simple_label(label_str: &str) -> ModelResult<(String, String)> {
 /// 1. Try `LabelEntry::find_by_repository` to find labels linked to a repo name
 /// 2. If label has `repository_id`, follow to Repository and use its URL
 /// 3. If label has `delegate_to_label_id`, follow delegation chain
-/// 4. Fallback: `Repository::find_by_name` and use its URL directly
 pub fn resolve_label_to_url(conn: &Connection, name: &str, label_str: &str) -> ModelResult<String> {
     let (repo_name, _tag) = parse_simple_label(label_str)?;
 
@@ -130,21 +152,8 @@ pub fn resolve_label_to_url(conn: &Connection, name: &str, label_str: &str) -> M
         }
     }
 
-    // Fallback: try Repository::find_by_name directly
-    if let Some(repo) = Repository::find_by_name(conn, &repo_name)
-        .map_err(|e| ModelError::DatabaseError(e.to_string()))?
-    {
-        let base_url = repo.url.trim_end_matches('/');
-        debug!(
-            repo = %repo.name,
-            url = %base_url,
-            "Resolved label via repository name fallback"
-        );
-        return Ok(format!("{}/v1/models/{}", base_url, name));
-    }
-
     Err(ModelError::InvalidSearchPath(format!(
-        "Cannot resolve label '{}': no repository '{}' found",
+        "Cannot resolve label '{}': no exact label contract for repository '{}'",
         label_str, repo_name
     )))
 }
@@ -194,36 +203,30 @@ fn follow_delegation(
     Ok(None)
 }
 
-/// Fetch a remote collection, using cache when available
+/// Fetch a signed remote collection, using cache when available.
 ///
-/// When `offline` is true, only returns cached data (no HTTP requests).
-/// This delegates to `fetch_and_verify_remote_collection` with signature
-/// verification disabled.
+/// When `offline` is true, only returns cached and reverified data.
 pub async fn fetch_remote_collection(
     conn: &Connection,
     name: &str,
     label: &str,
     offline: bool,
+    trusted_keys: &[String],
 ) -> ModelResult<FetchedCollection> {
-    fetch_and_verify_remote_collection(conn, name, label, offline, false, &[]).await
+    fetch_and_verify_remote_collection(conn, name, label, offline, trusted_keys).await
 }
 
-/// Fetch a remote collection with optional Ed25519 signature verification
-///
-/// When `require_signatures` is true, the collection must have a valid signature
-/// from one of the `trusted_keys`. When false, signatures are verified
-/// opportunistically (warn on failure but don't block).
+/// Fetch a remote collection with mandatory Ed25519 signature verification.
 pub async fn fetch_and_verify_remote_collection(
     conn: &Connection,
     name: &str,
     label: &str,
     offline: bool,
-    require_signatures: bool,
     trusted_keys: &[String],
 ) -> ModelResult<FetchedCollection> {
-    if require_signatures && trusted_keys.is_empty() {
+    if trusted_keys.is_empty() {
         return Err(ModelError::RemoteFetchError(format!(
-            "Collection '{name}' requires signatures, but no trusted keys are configured"
+            "Collection '{name}' requires a trusted signing key, but no trusted keys are configured"
         )));
     }
 
@@ -235,20 +238,26 @@ pub async fn fetch_and_verify_remote_collection(
         let data: CollectionData = serde_json::from_str(&cached.data_json)
             .map_err(|e| ModelError::RemoteFetchError(format!("Corrupt cache entry: {e}")))?;
 
-        // Re-verify signature on cached data when signatures are required
-        if require_signatures {
-            if let Some(ref sig_bytes) = cached.signature {
-                let verified = verify_against_trusted_keys(&data, sig_bytes, trusted_keys)?;
-                if !verified {
-                    return Err(ModelError::RemoteFetchError(format!(
-                        "Cached signature for collection '{name}' did not match any trusted key"
-                    )));
-                }
-            } else {
-                return Err(ModelError::RemoteFetchError(format!(
-                    "No cached signature for collection '{name}' and signatures are required"
-                )));
-            }
+        validate_collection_data(&data, name)?;
+        let computed_hash = collection_content_hash(&data)?;
+        if computed_hash != data.content_hash || cached.content_hash != data.content_hash {
+            return Err(ModelError::RemoteFetchError(format!(
+                "Cached content hash for collection '{name}' does not match its signed data"
+            )));
+        }
+        let sig_bytes = cached.signature.as_deref().ok_or_else(|| {
+            ModelError::RemoteFetchError(format!("No cached signature for collection '{name}'"))
+        })?;
+        let verified_key_id = verify_against_trusted_keys(&data, sig_bytes, trusted_keys)?
+            .ok_or_else(|| {
+                ModelError::RemoteFetchError(format!(
+                    "Cached signature for collection '{name}' did not match any trusted key"
+                ))
+            })?;
+        if cached.signer_key_id.as_deref() != Some(verified_key_id.as_str()) {
+            return Err(ModelError::RemoteFetchError(format!(
+                "Cached signer identity for collection '{name}' does not match the verifying key"
+            )));
         }
 
         return Ok(data.to_fetched_collection());
@@ -283,107 +292,54 @@ pub async fn fetch_and_verify_remote_collection(
 
     let data: CollectionData = serde_json::from_slice(&bytes)
         .map_err(|e| ModelError::RemoteFetchError(format!("Invalid JSON from {url}: {e}")))?;
+    validate_collection_data(&data, name)?;
 
-    // Verify content hash using canonical JSON — the same representation used
-    // by signing.rs when signing/verifying collections. serde_json::to_vec is
-    // non-deterministic across serde versions (field ordering may vary), whereas
-    // crate::json::canonical_json produces sorted, whitespace-free JSON that is
-    // stable regardless of struct field declaration order.
-    // The content_hash is computed over JSON with content_hash set to "" to
-    // avoid the chicken-and-egg problem of hashing a struct that contains its
-    // own hash.
-    let computed_hash = if !data.content_hash.is_empty() {
-        let mut verification_data = data.clone();
-        verification_data.content_hash = String::new();
-        let verification_json = crate::json::canonical_json(&verification_data)
-            .map_err(|e| ModelError::RemoteFetchError(format!("Re-serialize failed: {e}")))?;
-        let hash = hash::sha256_prefixed(&verification_json);
-        if hash != data.content_hash {
-            return Err(ModelError::RemoteFetchError(format!(
-                "Content hash mismatch for remote collection '{name}': expected {}, computed {}",
-                data.content_hash, hash
-            )));
-        }
-        hash
-    } else {
-        hash::sha256_prefixed(&bytes)
-    };
+    let computed_hash = collection_content_hash(&data)?;
+    if computed_hash != data.content_hash {
+        return Err(ModelError::RemoteFetchError(format!(
+            "Content hash mismatch for remote collection '{name}': expected {}, computed {}",
+            data.content_hash, computed_hash
+        )));
+    }
 
     // Attempt to fetch signature
     let sig_url = format!("{}/signature", url.trim_end_matches('/'));
-    let signature_result = client.download_to_bytes(&sig_url).await;
-
-    let mut cached_signature: Option<Vec<u8>> = None;
-    let mut cached_key_id: Option<String> = None;
-
-    match signature_result {
+    let (cached_signature, cached_key_id) = match client.download_to_bytes(&sig_url).await {
         Ok(sig_bytes) => {
-            // Parse signature JSON response
-            if let Ok(sig_json) = serde_json::from_slice::<serde_json::Value>(&sig_bytes) {
-                let sig_b64 = sig_json.get("signature").and_then(|v| v.as_str());
-                let key_id = sig_json.get("key_id").and_then(|v| v.as_str());
+            use base64::Engine;
+            use base64::engine::general_purpose::STANDARD as BASE64;
 
-                if let Some(sig_b64) = sig_b64 {
-                    use base64::Engine;
-                    use base64::engine::general_purpose::STANDARD as BASE64;
-
-                    match BASE64.decode(sig_b64) {
-                        Ok(sig_raw) => {
-                            // Try to verify against trusted keys
-                            let verified =
-                                verify_against_trusted_keys(&data, &sig_raw, trusted_keys);
-
-                            match verified {
-                                Ok(true) => {
-                                    info!(name = %name, "Signature verified successfully");
-                                    cached_signature = Some(sig_raw);
-                                    cached_key_id = key_id.map(String::from);
-                                }
-                                Ok(false) => {
-                                    if require_signatures {
-                                        return Err(ModelError::RemoteFetchError(format!(
-                                            "Signature for collection '{name}' did not match any trusted key"
-                                        )));
-                                    }
-                                    warn!(name = %name, "Signature did not match any trusted key");
-                                }
-                                Err(e) => {
-                                    if require_signatures {
-                                        return Err(e);
-                                    }
-                                    warn!(name = %name, error = %e, "Signature verification error");
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            if require_signatures {
-                                return Err(ModelError::RemoteFetchError(format!(
-                                    "Invalid base64 signature for '{name}': {e}"
-                                )));
-                            }
-                            warn!(name = %name, "Invalid base64 signature: {e}");
-                        }
-                    }
-                } else if require_signatures {
-                    return Err(ModelError::RemoteFetchError(format!(
-                        "Signature response for '{name}' missing 'signature' field"
-                    )));
-                }
-            } else if require_signatures {
+            let response: CollectionSignature =
+                serde_json::from_slice(&sig_bytes).map_err(|error| {
+                    ModelError::RemoteFetchError(format!(
+                        "Invalid signature response for '{name}': {error}"
+                    ))
+                })?;
+            let signature = BASE64.decode(&response.signature).map_err(|error| {
+                ModelError::RemoteFetchError(format!(
+                    "Invalid base64 signature for '{name}': {error}"
+                ))
+            })?;
+            let verified_key_id = verify_against_trusted_keys(&data, &signature, trusted_keys)?
+                .ok_or_else(|| {
+                    ModelError::RemoteFetchError(format!(
+                        "Signature for collection '{name}' did not match any trusted key"
+                    ))
+                })?;
+            if response.key_id != verified_key_id {
                 return Err(ModelError::RemoteFetchError(format!(
-                    "Invalid signature JSON for '{name}'"
+                    "Signer identity for collection '{name}' does not match the verifying key"
                 )));
             }
-        }
-        Err(_) if require_signatures => {
-            return Err(ModelError::RemoteFetchError(format!(
-                "No signature available for collection '{name}' and signatures are required"
-            )));
+            info!(name = %name, "Signature verified successfully");
+            (Some(signature), Some(verified_key_id))
         }
         Err(_) => {
-            debug!(name = %name, "No signature available (optional)");
+            return Err(ModelError::RemoteFetchError(format!(
+                "No signature available for collection '{name}'"
+            )));
         }
-    }
+    };
 
     // Cache the result
     let expires_at = (Utc::now() + chrono::Duration::seconds(DEFAULT_CACHE_TTL_SECS))
@@ -422,7 +378,7 @@ fn verify_against_trusted_keys(
     data: &CollectionData,
     signature: &[u8],
     trusted_keys: &[String],
-) -> ModelResult<bool> {
+) -> ModelResult<Option<String>> {
     use super::signing;
 
     if trusted_keys.is_empty() {
@@ -438,13 +394,76 @@ fn verify_against_trusted_keys(
         })?;
 
         match signing::verify_collection(data, signature, &key_bytes) {
-            Ok(true) => return Ok(true),
+            Ok(true) => return Ok(Some(hex::encode(&key_bytes[..8]))),
             Ok(false) => continue,
-            Err(_) => continue, // Try next key
+            Err(error) => {
+                return Err(ModelError::RemoteFetchError(format!(
+                    "Invalid trusted key '{key_hex}': {error}"
+                )));
+            }
         }
     }
 
-    Ok(false)
+    Ok(None)
+}
+
+/// Validate the exact signed collection wire contract.
+pub fn validate_collection_data(data: &CollectionData, expected_name: &str) -> ModelResult<()> {
+    if data.name != expected_name {
+        return Err(ModelError::RemoteFetchError(format!(
+            "Remote collection name mismatch: requested '{expected_name}', received '{}'",
+            data.name
+        )));
+    }
+    if data.version.is_empty() {
+        return Err(ModelError::RemoteFetchError(format!(
+            "Remote collection '{expected_name}' has no version"
+        )));
+    }
+    if data.content_hash.is_empty() {
+        return Err(ModelError::RemoteFetchError(format!(
+            "Remote collection '{expected_name}' has no content hash"
+        )));
+    }
+    if data.published_at.is_empty() {
+        return Err(ModelError::RemoteFetchError(format!(
+            "Remote collection '{expected_name}' has no publication timestamp"
+        )));
+    }
+    if data.members.iter().any(|member| member.name.is_empty()) {
+        return Err(ModelError::RemoteFetchError(format!(
+            "Remote collection '{expected_name}' contains an unnamed member"
+        )));
+    }
+    if data.includes.iter().any(String::is_empty) {
+        return Err(ModelError::RemoteFetchError(format!(
+            "Remote collection '{expected_name}' contains an empty include"
+        )));
+    }
+    if data.exclude.iter().any(String::is_empty) {
+        return Err(ModelError::RemoteFetchError(format!(
+            "Remote collection '{expected_name}' contains an empty exclusion"
+        )));
+    }
+    if data
+        .pins
+        .iter()
+        .any(|(package, constraint)| package.is_empty() || constraint.is_empty())
+    {
+        return Err(ModelError::RemoteFetchError(format!(
+            "Remote collection '{expected_name}' contains an incomplete pin"
+        )));
+    }
+    Ok(())
+}
+
+/// Compute the signed collection's canonical content hash.
+pub fn collection_content_hash(data: &CollectionData) -> ModelResult<String> {
+    let mut verification_data = data.clone();
+    verification_data.content_hash.clear();
+    let verification_json = crate::json::canonical_json(&verification_data)
+        .map_err(|error| ModelError::SerializationError(error.to_string()))?;
+    Ok(hash::sha256_prefixed(&verification_json))
 }
 
 /// Publish a collection to a remote Remi server via HTTP PUT
@@ -454,10 +473,41 @@ fn verify_against_trusted_keys(
 pub async fn publish_remote_collection(
     base_url: &str,
     data: &CollectionData,
+    signature: &[u8],
+    public_key: &[u8],
+    bearer_token: &str,
     force: bool,
 ) -> ModelResult<()> {
-    let json = serde_json::to_vec(data).map_err(|e| {
-        ModelError::RemoteFetchError(format!("Failed to serialize collection: {}", e))
+    use base64::Engine;
+    use base64::engine::general_purpose::STANDARD as BASE64;
+
+    validate_collection_data(data, &data.name)?;
+    let computed_hash = collection_content_hash(data)?;
+    if computed_hash != data.content_hash {
+        return Err(ModelError::RemoteFetchError(format!(
+            "Collection '{}' has content hash '{}', expected '{}'",
+            data.name, data.content_hash, computed_hash
+        )));
+    }
+    if !super::signing::verify_collection(data, signature, public_key)? {
+        return Err(ModelError::RemoteFetchError(format!(
+            "Collection '{}' signature does not match its publishing key",
+            data.name
+        )));
+    }
+    if bearer_token.is_empty() {
+        return Err(ModelError::RemoteFetchError(
+            "Remote collection publication requires a Remi admin token".to_string(),
+        ));
+    }
+
+    let envelope = PublishedCollectionEnvelope {
+        collection: data.clone(),
+        signature: BASE64.encode(signature),
+        public_key: hex::encode(public_key),
+    };
+    let json = serde_json::to_vec(&envelope).map_err(|e| {
+        ModelError::RemoteFetchError(format!("Failed to serialize signed collection: {e}"))
     })?;
 
     let base = base_url.trim_end_matches('/');
@@ -475,6 +525,7 @@ pub async fn publish_remote_collection(
 
     let response = client
         .put(&url)
+        .bearer_auth(bearer_token)
         .header("Content-Type", "application/json")
         .body(json)
         .send()
@@ -491,7 +542,11 @@ pub async fn publish_remote_collection(
             data.name
         ))),
         status => {
-            let body = response.text().await.unwrap_or_default();
+            let body = response.text().await.map_err(|error| {
+                ModelError::RemoteFetchError(format!(
+                    "Remote publish failed (HTTP {status}) and its response body could not be read: {error}"
+                ))
+            })?;
             Err(ModelError::RemoteFetchError(format!(
                 "Remote publish failed (HTTP {}): {}",
                 status, body
@@ -505,7 +560,7 @@ pub fn build_collection_data_from_model(
     model: &super::SystemModel,
     name: &str,
     version: &str,
-) -> CollectionData {
+) -> Result<CollectionData, ModelError> {
     let optional_set: HashSet<&str> = model.optional.packages.iter().map(|s| s.as_str()).collect();
     let install_set: HashSet<&str> = model.config.install.iter().map(|s| s.as_str()).collect();
 
@@ -552,18 +607,26 @@ pub fn build_collection_data_from_model(
         published_at: Utc::now().to_rfc3339(),
     };
 
-    // Compute content hash using canonical JSON so the hash is stable and
-    // matches what fetch_and_verify_remote_collection verifies against.
-    let json_bytes = crate::json::canonical_json(&data).unwrap_or_default();
-    data.content_hash = hash::sha256_prefixed(&json_bytes);
+    data.content_hash = collection_content_hash(&data)?;
+    validate_collection_data(&data, name)?;
 
-    data
+    Ok(data)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::db::testing::create_test_db;
+    use crate::model::signing::sign_collection;
+    use ed25519_dalek::SigningKey;
+
+    fn test_signature(data: &CollectionData) -> (Vec<u8>, Vec<String>) {
+        let key = SigningKey::from_bytes(&[7; 32]);
+        (
+            sign_collection(data, &key).unwrap(),
+            vec![hex::encode(key.verifying_key().to_bytes())],
+        )
+    }
 
     #[test]
     fn test_collection_data_roundtrip() {
@@ -641,7 +704,7 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_label_fallback_to_repo_name() {
+    fn repository_name_without_label_is_not_remote_authority() {
         let (_temp, conn) = create_test_db();
 
         // Create a repository with no labels pointing to it
@@ -649,9 +712,8 @@ mod tests {
             Repository::new("myrepo".to_string(), "https://remi.example.com".to_string());
         repo.insert(&conn).unwrap();
 
-        // Resolve should fall back to Repository::find_by_name
-        let url = resolve_label_to_url(&conn, "group-base", "myrepo:stable").unwrap();
-        assert_eq!(url, "https://remi.example.com/v1/models/group-base");
+        let error = resolve_label_to_url(&conn, "group-base", "myrepo:stable").unwrap_err();
+        assert!(error.to_string().contains("no exact label contract"));
     }
 
     #[test]
@@ -669,7 +731,7 @@ mod tests {
         let (_temp, conn) = create_test_db();
 
         // Pre-populate cache
-        let data = CollectionData {
+        let mut data = CollectionData {
             name: "group-cached".to_string(),
             version: "2.0".to_string(),
             members: vec![CollectionMemberData {
@@ -680,24 +742,28 @@ mod tests {
             includes: vec![],
             pins: BTreeMap::new(),
             exclude: vec![],
-            content_hash: "sha256:cached".to_string(),
+            content_hash: String::new(),
             published_at: "2026-01-01T00:00:00Z".to_string(),
         };
+        data.content_hash = collection_content_hash(&data).unwrap();
 
         let data_json = serde_json::to_string(&data).unwrap();
         let mut cache_entry = RemoteCollection::new(
             "group-cached".to_string(),
             Some("repo:tag".to_string()),
-            "sha256:cached".to_string(),
+            data.content_hash.clone(),
             data_json,
             "2099-12-31T23:59:59".to_string(),
         );
+        let (signature, trusted_keys) = test_signature(&data);
+        cache_entry.signature = Some(signature);
+        cache_entry.signer_key_id = Some(trusted_keys[0][..16].to_string());
         cache_entry.upsert(&conn).unwrap();
 
-        // fetch_remote_collection should return from cache without HTTP
-        let result = fetch_remote_collection(&conn, "group-cached", "repo:tag", false)
-            .await
-            .unwrap();
+        let result =
+            fetch_remote_collection(&conn, "group-cached", "repo:tag", false, &trusted_keys)
+                .await
+                .unwrap();
         assert_eq!(result.name, "group-cached");
         assert_eq!(result.members.len(), 1);
         assert_eq!(result.members[0].name, "cached-pkg");
@@ -708,19 +774,21 @@ mod tests {
         let (_temp, conn) = create_test_db();
 
         // No cache entry exists, offline mode should fail
-        let result = fetch_remote_collection(&conn, "group-missing", "repo:tag", true).await;
+        let key = SigningKey::from_bytes(&[7; 32]);
+        let trusted_keys = vec![hex::encode(key.verifying_key().to_bytes())];
+        let result =
+            fetch_remote_collection(&conn, "group-missing", "repo:tag", true, &trusted_keys).await;
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("offline"));
     }
 
     #[tokio::test]
-    async fn test_fetch_requires_trusted_keys_when_signatures_required() {
+    async fn test_fetch_requires_trusted_keys() {
         let (_temp, conn) = create_test_db();
 
         let result =
-            fetch_and_verify_remote_collection(&conn, "group-missing", "repo:tag", true, true, &[])
-                .await;
+            fetch_and_verify_remote_collection(&conn, "group-missing", "repo:tag", true, &[]).await;
         let err = result.unwrap_err().to_string();
         assert!(err.contains("no trusted keys are configured"));
     }
@@ -744,10 +812,11 @@ packages = ["nginx-module-geoip", "redis"]
 
 [include]
 models = ["group-core@upstream:stable"]
+trusted_keys = ["d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"]
 "#;
 
         let model = parse_model_string(toml).unwrap();
-        let data = build_collection_data_from_model(&model, "group-web", "2.0.0");
+        let data = build_collection_data_from_model(&model, "group-web", "2.0.0").unwrap();
 
         assert_eq!(data.name, "group-web");
         assert_eq!(data.version, "2.0.0");

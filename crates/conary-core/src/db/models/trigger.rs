@@ -774,4 +774,43 @@ mod tests {
         );
         assert_eq!(order[1].name, "zz_low_priority");
     }
+
+    #[test]
+    fn test_execution_order_rejects_dependency_cycles() {
+        let (_temp, conn) = create_test_db();
+
+        let mut trigger_a = Trigger::new(
+            "trigger_a".to_string(),
+            "/usr/lib/*".to_string(),
+            "/bin/true".to_string(),
+        );
+        let id_a = trigger_a.insert(&conn).unwrap();
+        let mut trigger_b = Trigger::new(
+            "trigger_b".to_string(),
+            "/usr/lib/*".to_string(),
+            "/bin/true".to_string(),
+        );
+        let id_b = trigger_b.insert(&conn).unwrap();
+
+        TriggerDependency::add(&conn, id_a, "trigger_b").unwrap();
+        TriggerDependency::add(&conn, id_b, "trigger_a").unwrap();
+
+        conn.execute("INSERT INTO changesets (description) VALUES ('test')", [])
+            .unwrap();
+        let changeset_id = conn.last_insert_rowid();
+        ChangesetTrigger::new(changeset_id, id_a)
+            .upsert(&conn)
+            .unwrap();
+        ChangesetTrigger::new(changeset_id, id_b)
+            .upsert(&conn)
+            .unwrap();
+
+        let error = TriggerEngine::new(&conn)
+            .get_execution_order(changeset_id)
+            .unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("dependency cycle"));
+        assert!(message.contains("trigger_a"));
+        assert!(message.contains("trigger_b"));
+    }
 }

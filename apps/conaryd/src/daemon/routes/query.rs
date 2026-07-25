@@ -12,7 +12,7 @@ use axum::{
     response::Json,
     routing::get,
 };
-use conary_core::db::models::{Changeset, DependencyEntry, GenerationPublication, Trove};
+use conary_core::db::models::{Changeset, GenerationPublication, InstalledRequirementAtom, Trove};
 
 pub(super) fn router() -> Router<SharedState> {
     Router::new()
@@ -45,7 +45,7 @@ async fn get_package_handler(
             None => Ok(None),
             Some(t) => {
                 let deps = if let Some(id) = t.id {
-                    DependencyEntry::find_by_trove(conn, id)?
+                    InstalledRequirementAtom::find_by_trove(conn, id)?
                 } else {
                     vec![]
                 };
@@ -147,7 +147,7 @@ async fn depends_handler(
             None => Ok(None),
             Some(t) => {
                 let deps = if let Some(id) = t.id {
-                    DependencyEntry::find_by_trove(conn, id)?
+                    InstalledRequirementAtom::find_by_trove(conn, id)?
                 } else {
                     vec![]
                 };
@@ -168,7 +168,7 @@ async fn rdepends_handler(
     let pkg_name = name.clone();
 
     let troves = run_db_query(&state, move |conn| {
-        let dep_entries = DependencyEntry::find_dependents(conn, &pkg_name)?;
+        let dep_entries = InstalledRequirementAtom::find_dependents(conn, &pkg_name)?;
         let mut troves = Vec::new();
         let mut seen_ids = std::collections::HashSet::new();
         for dep in dep_entries {

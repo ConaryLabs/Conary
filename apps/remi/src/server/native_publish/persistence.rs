@@ -8,6 +8,7 @@ use anyhow::{Context, Result};
 use conary_core::db::models::{
     NativePackagePublication, NativePublicationStatus, Repository, RepositoryPackage,
 };
+use conary_core::repository::versioning::VersionScheme;
 use conary_core::trust::{
     MetaFile, Signed, SnapshotMetadata, TUF_SPEC_VERSION, TargetDescription, TargetsMetadata,
     sign_tuf_metadata,
@@ -94,6 +95,8 @@ pub fn commit_native_publication_blocking(
 }
 
 fn ensure_release_repository(conn: &rusqlite::Connection, distro: &str) -> Result<i64> {
+    let profile = conary_core::repository::supported_profiles::profile_for_remi_route(distro)
+        .ok_or_else(|| anyhow::anyhow!("unsupported release route '{distro}'"))?;
     if let Some((id, tuf_enabled)) = conn
         .query_row(
             "SELECT id, tuf_enabled FROM repositories WHERE name = ?1",
@@ -108,11 +111,16 @@ fn ensure_release_repository(conn: &rusqlite::Connection, distro: &str) -> Resul
                 params![id],
             )?;
         }
+        conn.execute(
+            "UPDATE repositories SET default_strategy_distro = ?1 WHERE id = ?2",
+            params![profile.id(), id],
+        )?;
         return Ok(id);
     }
 
     let mut repo = Repository::new(distro.to_string(), format!("remi-release://{distro}"));
     repo.tuf_enabled = true;
+    repo.default_strategy_distro = Some(profile.id().to_string());
     repo.insert(conn).map_err(anyhow::Error::from)
 }
 
@@ -178,6 +186,7 @@ fn upsert_repository_projection(
         repo_id,
         artifact.name.clone(),
         artifact.version.clone(),
+        VersionScheme::Conary,
         artifact.content_hash.clone(),
         i64::try_from(artifact.total_size).context("native artifact size exceeds i64")?,
         download_url,

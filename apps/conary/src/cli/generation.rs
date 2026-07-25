@@ -43,6 +43,13 @@ pub enum GenerationCommands {
         db: DbArgs,
     },
 
+    /// Apply exact lifecycle work for the generation proven by /proc/cmdline
+    #[command(hide = true)]
+    Activate {
+        #[command(flatten)]
+        db: DbArgs,
+    },
+
     /// Verify the SQLite DB backup stored with a generation
     VerifyDbBackup {
         /// Installed generation number to verify

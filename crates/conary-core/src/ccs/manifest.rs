@@ -10,16 +10,23 @@ pub use hooks::*;
 
 use crate::capability::CapabilityDeclaration;
 use crate::ccs::hooks::{
-    is_denied_sysctl_key, is_safe_unit_name, validate_shell, validate_tmpfiles_entry_type,
+    is_denied_sysctl_key, is_safe_declarative_unit_name, validate_shell, validate_tmpfiles_fields,
     validate_username,
 };
-use crate::ccs::legacy_scriptlets::LegacyScriptletBundle;
 pub use crate::ccs::manifest_provenance::{
     ManifestProvenance, ProvenanceDep, ProvenancePatch, ProvenanceSignature,
+};
+use crate::ccs::native_lifecycle::{
+    NativeLifecycleBundle, VersionScheme as NativeLifecycleVersionScheme,
 };
 use crate::ccs::policy::BuildPolicyConfig;
 use crate::ccs::v2::PackageKindTagV2;
 use crate::filesystem::path::sanitize_path;
+use crate::repository::versioning::VersionScheme;
+use crate::repository::{
+    dependency_model::RepositoryRequirementGroup, package_relation::validate_native_relation,
+    requirement::validate_requirement_group,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
@@ -42,14 +49,23 @@ pub enum ManifestError {
 
 /// Root structure of ccs.toml
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CcsManifest {
     pub package: Package,
 
     #[serde(default)]
     pub provides: Provides,
 
+    /// Exact positive requirement authority. Native conversions and CCS v2
+    /// use this field for Boolean expressions.
     #[serde(default)]
-    pub requires: Requires,
+    pub requirements: Vec<RepositoryRequirementGroup>,
+
+    /// Exact source-native conflict, break, replacement, and obsolescence
+    /// authority. These relations are deliberately separate from positive
+    /// dependencies and provides.
+    #[serde(default)]
+    pub relations: Vec<RepositoryRequirementGroup>,
 
     #[serde(default)]
     pub suggests: Suggests,
@@ -64,9 +80,9 @@ pub struct CcsManifest {
     #[serde(default)]
     pub scriptlets: ScriptletDeclarations,
 
-    /// Passive legacy scriptlet semantics bundle for converted packages.
+    /// Passive native lifecycle semantics bundle for converted packages.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub legacy_scriptlets: Option<LegacyScriptletBundle>,
+    pub native_lifecycle: Option<NativeLifecycleBundle>,
 
     #[serde(default)]
     pub config: Config,
@@ -75,7 +91,7 @@ pub struct CcsManifest {
     pub build: Option<BuildInfo>,
 
     #[serde(default)]
-    pub legacy: Option<Legacy>,
+    pub native_export: Option<NativeExport>,
 
     /// Build policy configuration
     #[serde(default)]
@@ -122,6 +138,16 @@ impl CcsManifest {
         }
         if self.package.version.is_empty() {
             return Err(ManifestError::MissingField("package.version".to_string()));
+        }
+        crate::repository::versioning::validate_repo_version(
+            self.package.version_scheme,
+            &self.package.version,
+        )
+        .map_err(|error| {
+            ManifestError::Invalid(format!("invalid package.version contract: {error}"))
+        })?;
+        if self.package.release.is_empty() {
+            return Err(ManifestError::MissingField("package.release".to_string()));
         }
 
         for user in &self.hooks.users {
@@ -188,15 +214,18 @@ impl CcsManifest {
         }
 
         for entry in &self.hooks.tmpfiles {
-            validate_tmpfiles_entry_type(&entry.entry_type).map_err(|error| {
+            validate_tmpfiles_fields(
+                &entry.entry_type,
+                &entry.path,
+                &entry.mode,
+                &entry.user,
+                &entry.group,
+                &entry.age,
+                &entry.argument,
+            )
+            .map_err(|error| {
                 ManifestError::Invalid(format!(
-                    "invalid hooks.tmpfiles entry type '{}': {}",
-                    entry.entry_type, error
-                ))
-            })?;
-            sanitize_path(&entry.path).map_err(|error| {
-                ManifestError::Invalid(format!(
-                    "invalid hooks.tmpfiles path '{}': {}",
+                    "invalid hooks.tmpfiles entry for '{}': {}",
                     entry.path, error
                 ))
             })?;
@@ -212,24 +241,78 @@ impl CcsManifest {
         }
 
         for unit in &self.hooks.systemd {
-            if !is_safe_unit_name(&unit.unit) {
+            if !is_safe_declarative_unit_name(&unit.unit) {
                 return Err(ManifestError::Invalid(format!(
-                    "hooks.systemd unit '{}' is unsafe",
+                    "hooks.systemd unit '{}' must be a pathless, nonempty declarative unit name without NUL bytes",
                     unit.unit
+                )));
+            }
+        }
+        for service in &self.hooks.services {
+            if !is_safe_declarative_unit_name(&service.name) {
+                return Err(ManifestError::Invalid(format!(
+                    "hooks.services name '{}' must be a pathless, nonempty declarative service name without NUL bytes",
+                    service.name
                 )));
             }
         }
 
         self.scriptlets.validate()?;
+        for requirement in &self.requirements {
+            if requirement.kind.is_negative_relation() {
+                return Err(ManifestError::Invalid(
+                    "negative package relation stored in positive requirements".to_string(),
+                ));
+            }
+            validate_requirement_group(requirement, self.package.version_scheme).map_err(
+                |error| {
+                    ManifestError::Invalid(format!(
+                        "invalid positive package requirement authority: {error}"
+                    ))
+                },
+            )?;
+        }
+        for relation in &self.relations {
+            validate_native_relation(relation, self.package.version_scheme).map_err(|error| {
+                ManifestError::Invalid(format!("invalid package relation authority: {error}"))
+            })?;
+        }
         for capability in &self.file_capabilities {
             capability.validate()?;
         }
-        if let Some(bundle) = &self.legacy_scriptlets {
+        if let Some(capabilities) = &self.capabilities {
+            capabilities
+                .validate_for_target_arch(
+                    self.package
+                        .platform
+                        .as_ref()
+                        .and_then(|platform| platform.arch.as_deref()),
+                )
+                .map_err(|error| {
+                    ManifestError::Invalid(format!(
+                        "capability declaration validation failed: {error}"
+                    ))
+                })?;
+        }
+        if let Some(bundle) = &self.native_lifecycle {
             bundle.validate().map_err(|error| {
                 ManifestError::Invalid(format!(
-                    "legacy scriptlet bundle validation failed: {error}"
+                    "native lifecycle bundle validation failed: {error}"
                 ))
             })?;
+            let bundle_scheme = match &bundle.version_scheme {
+                NativeLifecycleVersionScheme::Rpm => VersionScheme::Rpm,
+                NativeLifecycleVersionScheme::Deb => VersionScheme::Debian,
+                NativeLifecycleVersionScheme::Arch => VersionScheme::Arch,
+                NativeLifecycleVersionScheme::Semver => VersionScheme::Conary,
+            };
+            if self.package.version_scheme != bundle_scheme {
+                return Err(ManifestError::Invalid(format!(
+                    "package version scheme '{}' disagrees with native lifecycle bundle scheme '{}'",
+                    self.package.version_scheme.as_str(),
+                    bundle_scheme.as_str()
+                )));
+            }
         }
 
         Ok(())
@@ -241,9 +324,10 @@ impl CcsManifest {
             package: Package {
                 name: name.to_string(),
                 version: version.to_string(),
+                version_scheme: VersionScheme::Conary,
                 description: format!("A new CCS package: {}", name),
-                release: None,
-                kind: None,
+                release: "1".to_string(),
+                kind: PackageKindTagV2::Package,
                 license: None,
                 homepage: None,
                 repository: None,
@@ -251,15 +335,16 @@ impl CcsManifest {
                 authors: None,
             },
             provides: Provides::default(),
-            requires: Requires::default(),
+            requirements: Vec::new(),
+            relations: Vec::new(),
             suggests: Suggests::default(),
             components: Components::default(),
             hooks: Hooks::default(),
             scriptlets: ScriptletDeclarations::default(),
-            legacy_scriptlets: None,
+            native_lifecycle: None,
             config: Config::default(),
             build: None,
-            legacy: None,
+            native_export: None,
             policy: BuildPolicyConfig::default(),
             file_capabilities: Vec::new(),
             provenance: None,
@@ -276,16 +361,16 @@ impl CcsManifest {
 
 /// Package metadata
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Package {
     pub name: String,
     pub version: String,
+    pub version_scheme: VersionScheme,
     pub description: String,
 
-    #[serde(default)]
-    pub release: Option<String>,
+    pub release: String,
 
-    #[serde(default)]
-    pub kind: Option<PackageKindTagV2>,
+    pub kind: PackageKindTagV2,
 
     #[serde(default)]
     pub license: Option<String>,
@@ -339,65 +424,22 @@ pub struct Authors {
 
 /// What this package provides
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct Provides {
     #[serde(default)]
     pub capabilities: Vec<String>,
 
-    /// Auto-detected shared library sonames
+    /// Exact shared-library capabilities declared by package metadata.
     #[serde(default)]
     pub sonames: Vec<String>,
 
-    /// Auto-detected executable paths
+    /// Exact executable capabilities declared by package metadata.
     #[serde(default)]
     pub binaries: Vec<String>,
 
-    /// Auto-detected pkg-config files
+    /// Exact pkg-config capabilities declared by package metadata.
     #[serde(default)]
     pub pkgconfig: Vec<String>,
-}
-
-/// What this package requires
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct Requires {
-    #[serde(default)]
-    pub capabilities: Vec<Capability>,
-
-    /// Fallback package dependencies (name-based)
-    #[serde(default)]
-    pub packages: Vec<PackageDep>,
-}
-
-/// A capability requirement with optional version constraint
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum Capability {
-    Simple(String),
-    Versioned { name: String, version: String },
-}
-
-impl Capability {
-    pub fn name(&self) -> &str {
-        match self {
-            Capability::Simple(s) => s,
-            Capability::Versioned { name, .. } => name,
-        }
-    }
-
-    pub fn version(&self) -> Option<&str> {
-        match self {
-            Capability::Simple(_) => None,
-            Capability::Versioned { version, .. } => Some(version),
-        }
-    }
-}
-
-/// A package dependency with version constraint
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PackageDep {
-    pub name: String,
-
-    #[serde(default)]
-    pub version: Option<String>,
 }
 
 /// Optional/suggested dependencies
@@ -408,13 +450,13 @@ pub struct Suggests {
 }
 
 /// Component configuration
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Components {
-    /// Glob pattern overrides for component assignment
+    /// Exact author-declared glob rules for component assignment.
     #[serde(default)]
-    pub overrides: Vec<ComponentOverride>,
+    pub rules: Vec<ComponentRule>,
 
-    /// Exact file path overrides
+    /// Exact author-declared file path assignments.
     #[serde(default)]
     pub files: HashMap<String, String>,
 
@@ -424,16 +466,22 @@ pub struct Components {
 }
 
 fn default_components() -> Vec<String> {
-    vec![
-        "runtime".to_string(),
-        "lib".to_string(),
-        "config".to_string(),
-    ]
+    vec!["runtime".to_string()]
 }
 
-/// A component override rule
+impl Default for Components {
+    fn default() -> Self {
+        Self {
+            rules: Vec::new(),
+            files: HashMap::new(),
+            default: default_components(),
+        }
+    }
+}
+
+/// An exact glob-to-component assignment rule.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ComponentOverride {
+pub struct ComponentRule {
     pub path: String,
     pub component: String,
 }
@@ -474,22 +522,24 @@ pub struct BuildInfo {
     pub reproducible: bool,
 }
 
-/// Legacy format generation settings
+/// Native package export settings.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct Legacy {
+#[serde(deny_unknown_fields)]
+pub struct NativeExport {
     #[serde(default)]
-    pub rpm: Option<RpmLegacy>,
+    pub rpm: Option<RpmExport>,
 
     #[serde(default)]
-    pub deb: Option<DebLegacy>,
+    pub deb: Option<DebExport>,
 
     #[serde(default)]
-    pub arch: Option<ArchLegacy>,
+    pub arch: Option<ArchExport>,
 }
 
-/// RPM-specific overrides
+/// RPM-specific export overrides.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct RpmLegacy {
+#[serde(deny_unknown_fields)]
+pub struct RpmExport {
     #[serde(default)]
     pub group: Option<String>,
 
@@ -500,9 +550,10 @@ pub struct RpmLegacy {
     pub provides: Vec<String>,
 }
 
-/// DEB-specific overrides
+/// Debian-specific export overrides.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct DebLegacy {
+#[serde(deny_unknown_fields)]
+pub struct DebExport {
     #[serde(default)]
     pub section: Option<String>,
 
@@ -513,11 +564,16 @@ pub struct DebLegacy {
     pub depends: Vec<String>,
 }
 
-/// Arch-specific overrides
+/// Arch-specific export overrides.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct ArchLegacy {
+#[serde(deny_unknown_fields)]
+pub struct ArchExport {
     #[serde(default)]
     pub groups: Vec<String>,
+
+    /// Exact ALPM dependency strings for native export.
+    #[serde(default)]
+    pub depends: Vec<String>,
 }
 
 /// Package redirects / supersedes declarations

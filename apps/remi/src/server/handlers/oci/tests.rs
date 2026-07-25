@@ -1,6 +1,5 @@
 // apps/remi/src/server/handlers/oci/tests.rs
 use super::*;
-use conary_core::ccs::convert::ScriptletBundleSummary;
 use conary_core::db::models::{CONVERSION_VERSION, ConvertedPackage};
 use conary_core::db::schema;
 use tempfile::NamedTempFile;
@@ -9,7 +8,7 @@ fn create_test_db() -> (NamedTempFile, Connection) {
     let temp_file = NamedTempFile::new().unwrap();
     let conn = Connection::open(temp_file.path()).unwrap();
     conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
-    schema::migrate(&conn).unwrap();
+    schema::ensure_current(&conn).unwrap();
     (temp_file, conn)
 }
 
@@ -20,7 +19,7 @@ fn insert_converted_package(
     version: &str,
     chunks: &[String],
 ) {
-    let mut pkg = ConvertedPackage::new_server(
+    let mut pkg = ConvertedPackage::new_repository(
         distro.to_string(),
         name.to_string(),
         version.to_string(),
@@ -41,7 +40,7 @@ fn insert_stale_converted_package(
     version: &str,
     chunks: &[String],
 ) {
-    let mut pkg = ConvertedPackage::new_server(
+    let mut pkg = ConvertedPackage::new_repository(
         distro.to_string(),
         name.to_string(),
         version.to_string(),
@@ -56,55 +55,16 @@ fn insert_stale_converted_package(
     pkg.insert(conn).unwrap();
 }
 
-fn insert_private_review_converted_package(
-    conn: &Connection,
-    distro: &str,
-    name: &str,
-    version: &str,
-    chunks: &[String],
-) {
-    let mut pkg = ConvertedPackage::new_server(
-        distro.to_string(),
-        name.to_string(),
-        version.to_string(),
-        "rpm".to_string(),
-        format!("sha256:test-{}-{}", name, version),
-        chunks,
-        4096,
-        format!("sha256:content-{}-{}", name, version),
-        format!("/data/{}-{}.ccs", name, version),
-    );
-    pkg.set_scriptlet_metadata(&ScriptletBundleSummary {
-        publication_status: "private-review".to_string(),
-        scriptlet_fidelity: "review-required".to_string(),
-        target_compatibility: "review-required".to_string(),
-        review_reason_codes: vec!["review-class-debconf".to_string()],
-        ..Default::default()
-    })
-    .unwrap();
-    pkg.insert(conn).unwrap();
-}
-
 const OCI_TEST_HASH: &str = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
-
-fn private_review_summary() -> ScriptletBundleSummary {
-    ScriptletBundleSummary {
-        publication_status: "private-review".to_string(),
-        scriptlet_fidelity: "review-required".to_string(),
-        target_compatibility: "review-required".to_string(),
-        review_reason_codes: vec!["review-class-debconf".to_string()],
-        ..Default::default()
-    }
-}
 
 async fn oci_blob_state_with_db(
     hash: &str,
-    rows: Vec<ScriptletBundleSummary>,
+    stale_rows: Vec<bool>,
 ) -> (Arc<RwLock<crate::server::ServerState>>, tempfile::TempDir) {
     let temp = tempfile::tempdir().unwrap();
     let db_path = temp.path().join("test.db");
     let conn = Connection::open(&db_path).unwrap();
-    schema::migrate(&conn).unwrap();
+    schema::ensure_current(&conn).unwrap();
 
     let chunk_dir = temp.path().join("chunks");
     let cache_dir = temp.path().join("cache");
@@ -112,8 +72,8 @@ async fn oci_blob_state_with_db(
     std::fs::create_dir_all(chunk_path.parent().unwrap()).unwrap();
     std::fs::write(&chunk_path, b"blob bytes").unwrap();
 
-    for (index, summary) in rows.into_iter().enumerate() {
-        let mut converted = ConvertedPackage::new_server(
+    for (index, stale) in stale_rows.into_iter().enumerate() {
+        let mut converted = ConvertedPackage::new_repository(
             "fedora".to_string(),
             format!("pkg-{index}"),
             "1.0".to_string(),
@@ -124,7 +84,9 @@ async fn oci_blob_state_with_db(
             format!("sha256:content-{index}"),
             format!("/tmp/pkg-{index}.ccs"),
         );
-        converted.set_scriptlet_metadata(&summary).unwrap();
+        if stale {
+            converted.conversion_version = CONVERSION_VERSION - 1;
+        }
         converted.insert(&conn).unwrap();
     }
 
@@ -343,6 +305,14 @@ fn test_build_manifest() {
         30,
         temp_file.path().to_path_buf(),
     );
+    for (hash, bytes) in [
+        ("aabbccdd", b"first".as_slice()),
+        ("eeff0011", b"second".as_slice()),
+    ] {
+        let path = chunk_cache.chunk_path(hash);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, bytes).unwrap();
+    }
 
     let result =
         build_manifest(temp_file.path(), "fedora", "nginx", "1.24.0", &chunk_cache).unwrap();
@@ -360,6 +330,8 @@ fn test_build_manifest() {
     assert_eq!(layers.len(), 2);
     assert_eq!(layers[0]["digest"], "sha256:aabbccdd");
     assert_eq!(layers[1]["digest"], "sha256:eeff0011");
+    assert_eq!(layers[0]["size"], 5);
+    assert_eq!(layers[1]["size"], 6);
 
     // Config should be present
     assert!(
@@ -420,14 +392,14 @@ fn oci_manifest_ignores_stale_converted_rows() {
 }
 
 #[test]
-fn oci_tags_catalog_and_manifest_ignore_non_public_rows() {
+fn oci_tags_catalog_and_manifest_ignore_stale_rows() {
     let (temp_file, conn) = create_test_db();
-    insert_private_review_converted_package(
+    insert_stale_converted_package(
         &conn,
         "fedora",
-        "private-only",
+        "stale-only",
         "1.0",
-        &["private-chunk".to_string()],
+        &["stale-chunk".to_string()],
     );
 
     let chunk_dir = tempfile::tempdir().unwrap();
@@ -438,12 +410,12 @@ fn oci_tags_catalog_and_manifest_ignore_non_public_rows() {
         temp_file.path().to_path_buf(),
     );
 
-    let tags = build_tags_list(temp_file.path(), "fedora", "private-only").unwrap();
+    let tags = build_tags_list(temp_file.path(), "fedora", "stale-only").unwrap();
     let catalog = build_catalog(temp_file.path()).unwrap();
     let manifest = build_manifest(
         temp_file.path(),
         "fedora",
-        "private-only",
+        "stale-only",
         "1.0",
         &chunk_cache,
     )
@@ -455,9 +427,8 @@ fn oci_tags_catalog_and_manifest_ignore_non_public_rows() {
 }
 
 #[tokio::test]
-async fn oci_blob_returns_not_found_for_non_public_only_hash() {
-    let (state, _temp) =
-        oci_blob_state_with_db(OCI_TEST_HASH, vec![private_review_summary()]).await;
+async fn oci_blob_returns_not_found_for_stale_conversion_only_hash() {
+    let (state, _temp) = oci_blob_state_with_db(OCI_TEST_HASH, vec![true]).await;
     let digest = format!("sha256:{OCI_TEST_HASH}");
 
     let response = get_blob_inner(state, "conary/fedora/pkg", &digest).await;
@@ -466,9 +437,8 @@ async fn oci_blob_returns_not_found_for_non_public_only_hash() {
 }
 
 #[tokio::test]
-async fn oci_head_blob_returns_not_found_for_non_public_only_hash() {
-    let (state, _temp) =
-        oci_blob_state_with_db(OCI_TEST_HASH, vec![private_review_summary()]).await;
+async fn oci_head_blob_returns_not_found_for_stale_conversion_only_hash() {
+    let (state, _temp) = oci_blob_state_with_db(OCI_TEST_HASH, vec![true]).await;
     let digest = format!("sha256:{OCI_TEST_HASH}");
 
     let response = head_blob_inner(state, "conary/fedora/pkg", &digest).await;
@@ -477,12 +447,8 @@ async fn oci_head_blob_returns_not_found_for_non_public_only_hash() {
 }
 
 #[tokio::test]
-async fn oci_blob_allows_hash_shared_with_public_ready_row() {
-    let (state, _temp) = oci_blob_state_with_db(
-        OCI_TEST_HASH,
-        vec![private_review_summary(), ScriptletBundleSummary::default()],
-    )
-    .await;
+async fn oci_blob_allows_hash_shared_with_current_conversion_row() {
+    let (state, _temp) = oci_blob_state_with_db(OCI_TEST_HASH, vec![true, false]).await;
     let digest = format!("sha256:{OCI_TEST_HASH}");
 
     let response = get_blob_inner(state, "conary/fedora/pkg", &digest).await;

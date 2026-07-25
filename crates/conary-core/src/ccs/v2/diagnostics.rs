@@ -6,11 +6,10 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "kebab-case")]
 pub enum V2DiagnosticCode {
     MissingAuthority,
-    LegacyV1Package,
+    UnsupportedFormatVersion,
     TomlOnlyAuthority,
     KindContractViolation,
     ComponentAuthorityMismatch,
-    LifecycleUnsupported,
     IdentityUnstable,
     ConversionNotNative,
 }

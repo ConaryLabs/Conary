@@ -1,6 +1,9 @@
 [package]
 name = "dep-virtual-provider"
 version = "1.0.0"
+version_scheme = "conary"
+release = "1"
+kind = "package"
 description = "Provides a virtual mail transport capability"
 license = "MIT"
 
@@ -12,10 +15,6 @@ libc = "gnu"
 [provides]
 capabilities = ["dep-virtual-provider", "mail-transport-agent"]
 binaries = ["/usr/bin/dep-virtual-provider-v1"]
-
-[requires]
-capabilities = []
-packages = []
 
 [components]
 default = ["runtime"]

@@ -175,9 +175,7 @@ fn show_package_info(
         println!("Distro      : {}", source_distro);
     }
 
-    if let Some(version_scheme) = &trove.version_scheme {
-        println!("Versioning  : {}", version_scheme);
-    }
+    println!("Versioning  : {}", trove.version_scheme.as_str());
 
     if let Some(repository_id) = trove.installed_from_repository_id {
         println!(
@@ -211,14 +209,17 @@ fn show_package_info(
     println!("Files       : {}", files.len());
 
     // Calculate total size
-    let total_size: i64 = files.iter().map(|f| f.size).sum();
+    let total_size: u64 = files
+        .iter()
+        .filter_map(|file| file.content.as_ref().map(|content| content.size))
+        .sum();
     println!(
         "Size        : {}",
-        crate::commands::format_bytes(total_size as u64)
+        crate::commands::format_bytes(total_size)
     );
 
     // Dependencies
-    let deps = conary_core::db::models::DependencyEntry::find_by_trove(conn, trove_id)?;
+    let deps = conary_core::db::models::InstalledRequirementAtom::find_by_trove(conn, trove_id)?;
     if !deps.is_empty() {
         println!("\nDependencies ({}):", deps.len());
         for dep in &deps {
@@ -286,8 +287,8 @@ fn list_package_files(
             println!(
                 "{} {:>8} {:>8} {:>8} {}",
                 file.format_permissions(),
-                file.owner.as_deref().unwrap_or("root"),
-                file.group_name.as_deref().unwrap_or("root"),
+                display_payload_identity(&file.node.source.user),
+                display_payload_identity(&file.node.source.group),
                 file.size_human(),
                 file.path
             );
@@ -302,6 +303,13 @@ fn list_package_files(
     Ok(())
 }
 
+fn display_payload_identity(identity: &conary_core::payload::PayloadIdentity) -> String {
+    match identity {
+        conary_core::payload::PayloadIdentity::Numeric { id } => id.to_string(),
+        conary_core::payload::PayloadIdentity::Named { name } => name.clone(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -310,7 +318,7 @@ mod tests {
 
     fn test_db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        schema::migrate(&conn).unwrap();
+        schema::ensure_current(&conn).unwrap();
         conn
     }
 

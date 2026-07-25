@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-06-09
-revision: 11
-summary: Add CLI bootstrap command child-module ownership
+last_updated: 2026-07-25
+revision: 12
+summary: Route exact EROFS bootstrap generation through the shared payload manifest
 ---
 
 # Bootstrap Module (conary-core/src/bootstrap/)
@@ -68,7 +68,9 @@ Host System (any Linux with gcc)
 | `TempToolsBuilder` | temp_tools.rs | Phase 2: temporary tools (cross + chroot packages) |
 | `FinalSystemBuilder` | final_system.rs | Phase 3: complete system build (SYSTEM_BUILD_ORDER) |
 | `configure_system()` | system_config.rs | Phase 4: system configuration |
-| `ImageBuilder` | image.rs | Phase 5: bootstrap sysroot image generation (raw, qcow2, preview ISO scaffolding, EROFS) |
+| `ImageBuilder` | image.rs | Phase 5 dispatch plus raw, qcow2, and preview ISO image generation |
+| EROFS generation | image/erofs_generation.rs | Capture the complete sysroot with the shared exact root manifest, persist exact installed payload rows, and write generation artifacts |
+| Image tests | image/tests.rs | Image-format behavior and exact EROFS artifact integration proof |
 | `ImageFormat` | image.rs | Enum: Raw, Qcow2, Iso, Erofs |
 | `ImageSize` | image.rs / `image/size.rs` | Parsed size specification for disk images |
 | `ImageTools` | image.rs | Host tool availability check for imaging |
@@ -161,7 +163,7 @@ export, provenance sidecar, host copy-back, readonly-carrier boot, and writable
 `/etc` overlay proof. Metadata-only or partial installed generations still fail
 closed before artifact publication. Remaining image-projection follow-ups are
 tracked in
-[docs/operations/post-generation-export-follow-up-roadmap.md](/docs/operations/post-generation-export-follow-up-roadmap.md).
+[docs/roadmaps/development-roadmap.md](/docs/roadmaps/development-roadmap.md).
 
 ## Architecture Context
 
@@ -266,4 +268,4 @@ See also:
 
 - [docs/ARCHITECTURE.md](/docs/ARCHITECTURE.md)
 - [docs/operations/bootstrap-selfhosting-vm.md](/docs/operations/bootstrap-selfhosting-vm.md)
-- [docs/operations/bootstrap-follow-up-investigations.md](/docs/operations/bootstrap-follow-up-investigations.md)
+- [docs/roadmaps/development-roadmap.md](/docs/roadmaps/development-roadmap.md)

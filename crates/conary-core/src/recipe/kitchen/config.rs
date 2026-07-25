@@ -2,25 +2,54 @@
 
 //! Configuration types for the Kitchen build system
 
+use crate::ccs::signing::SigningKeyPair;
 use crate::recipe::format::BuildStage;
 use crate::recipe::hermetic::HostBuildRecord;
 use crate::recipe::hermetic::evidence::HermeticBuildEvidence;
 use crate::recipe::hermetic::reproducibility::ReproducibilityConfig;
 use crate::recipe::hermetic::source_identity::CanonicalLocalFile;
-use crate::recipe::inference::SourceTargetProvenance;
 use std::collections::HashMap;
+use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
-/// Source-checksum verification policy for Kitchen fetches.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SourceChecksumPolicy {
-    /// Default Kitchen behavior: verify supported algorithms and reject
-    /// unsupported ones.
-    Supported,
-    /// Bootstrap early-phase behavior: verify supported algorithms but allow
-    /// legacy/unsupported algorithms to pass through unchanged.
-    BootstrapLegacy,
+/// Explicit package-authority capability used by Kitchen output emission.
+///
+/// The wrapper is cloneable for derived Kitchen configurations while keeping
+/// private key material out of debug output.
+#[derive(Clone)]
+pub struct CcsPackageSigningAuthority {
+    key_pair: Arc<SigningKeyPair>,
+}
+
+impl CcsPackageSigningAuthority {
+    pub fn new(key_pair: SigningKeyPair) -> Self {
+        Self {
+            key_pair: Arc::new(key_pair),
+        }
+    }
+
+    pub fn from_key_pair(key_pair: &SigningKeyPair) -> Self {
+        let mut cloned = SigningKeyPair::from_signing_key(key_pair.signing_key().clone());
+        if let Some(key_id) = key_pair.key_id() {
+            cloned = cloned.with_key_id(key_id);
+        }
+        Self::new(cloned)
+    }
+
+    pub(crate) fn key_pair(&self) -> &SigningKeyPair {
+        self.key_pair.as_ref()
+    }
+}
+
+impl fmt::Debug for CcsPackageSigningAuthority {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CcsPackageSigningAuthority")
+            .field("key_id", &self.key_pair.key_id())
+            .finish_non_exhaustive()
+    }
 }
 
 /// Source download policy for Kitchen fetches.
@@ -198,6 +227,10 @@ impl StageRegistry {
 pub struct KitchenConfig {
     /// Directory for downloaded sources
     pub source_cache: PathBuf,
+    /// Authority used to sign every CCS artifact emitted by this Kitchen.
+    ///
+    /// Package-producing calls fail when this capability is absent.
+    pub ccs_signing_authority: Option<CcsPackageSigningAuthority>,
     /// Directory containing the recipe file.
     ///
     /// Local `[source] path = ...` entries resolve relative to this directory.
@@ -206,8 +239,6 @@ pub struct KitchenConfig {
     pub recipe_source_base_dir: Option<PathBuf>,
     /// Override for CCS manifest origin_class.
     pub origin_class_override: Option<String>,
-    /// Source-target provenance captured before recipe inference.
-    pub source_provenance_override: Option<SourceTargetProvenance>,
     /// Already-planned hermetic local source file list.
     pub hermetic_local_files: Option<Vec<CanonicalLocalFile>>,
     /// Already-planned unsigned hermetic build evidence.
@@ -242,15 +273,6 @@ pub struct KitchenConfig {
     /// Only used when pristine_mode is true. This directory should contain
     /// the cross-compiler and libraries needed for the build.
     pub sysroot: Option<PathBuf>,
-    /// Auto-install makedepends before building
-    ///
-    /// When true, the Kitchen will check and install makedepends before
-    /// starting the build, and optionally clean them up afterward.
-    pub auto_makedepends: bool,
-    /// Clean up makedepends after build completes
-    ///
-    /// Only meaningful if auto_makedepends is true.
-    pub cleanup_makedepends: bool,
     /// Extra environment variables to inject into every build step.
     ///
     /// These are merged into the environment passed to each `Command` spawn
@@ -259,8 +281,6 @@ pub struct KitchenConfig {
     /// `std::env::set_var` to avoid the UB associated with mutating the
     /// process-wide environment from a multi-threaded context.
     pub extra_env: Vec<(String, String)>,
-    /// Source-checksum verification policy for fetches.
-    pub checksum_policy: SourceChecksumPolicy,
     /// Source-download behavior after a source cache miss.
     pub source_download_policy: SourceDownloadPolicy,
 }
@@ -273,9 +293,9 @@ impl Default for KitchenConfig {
 
         Self {
             source_cache: PathBuf::from("/var/cache/conary/sources"),
+            ccs_signing_authority: None,
             recipe_source_base_dir: None,
             origin_class_override: None,
-            source_provenance_override: None,
             hermetic_local_files: None,
             hermetic_evidence: None,
             reproducibility: None,
@@ -290,10 +310,7 @@ impl Default for KitchenConfig {
             cpu_time_limit: 0,   // No CPU time limit (builds can be long)
             pristine_mode: false,
             sysroot: None,
-            auto_makedepends: false,   // Off by default, requires resolver
-            cleanup_makedepends: true, // Clean up by default when auto is enabled
             extra_env: Vec::new(),
-            checksum_policy: SourceChecksumPolicy::Supported,
             source_download_policy: SourceDownloadPolicy::AllowDownloads,
         }
     }
@@ -313,23 +330,6 @@ impl KitchenConfig {
             use_isolation: false,
             pristine_mode: true,
             sysroot: Some(sysroot.to_path_buf()),
-            // In bootstrap mode, we typically don't auto-install makedepends
-            // since the sysroot should already be configured with the toolchain
-            auto_makedepends: false,
-            cleanup_makedepends: false,
-            checksum_policy: SourceChecksumPolicy::BootstrapLegacy,
-            ..Self::default()
-        }
-    }
-
-    /// Create a configuration with makedepends auto-resolution
-    ///
-    /// This is useful for building packages in a normal environment
-    /// where missing build dependencies should be automatically installed.
-    pub fn with_auto_makedepends(cleanup: bool) -> Self {
-        Self {
-            auto_makedepends: true,
-            cleanup_makedepends: cleanup,
             ..Self::default()
         }
     }
@@ -344,8 +344,6 @@ pub struct CookResult {
     pub log: String,
     /// Warnings generated during build
     pub warnings: Vec<String>,
-    /// Makedepends resolution result (if auto_makedepends was enabled)
-    pub makedepends: Option<super::makedepends::MakedependsResult>,
     /// Whether this result came from cache
     pub from_cache: bool,
     /// Cache key used (if caching was enabled)
@@ -364,8 +362,6 @@ mod tests {
         assert!(config.jobs > 0);
         assert!(!config.allow_network);
         assert!(!config.keep_builddir);
-        assert!(!config.auto_makedepends);
-        assert!(config.cleanup_makedepends);
         assert_eq!(
             config.source_download_policy,
             SourceDownloadPolicy::AllowDownloads
@@ -382,18 +378,5 @@ mod tests {
         assert!(!config.use_isolation, "bootstrap disables isolation");
         assert!(config.pristine_mode);
         assert_eq!(config.sysroot, Some(PathBuf::from("/opt/stage0")));
-        assert!(!config.auto_makedepends);
-        assert!(!config.cleanup_makedepends);
-    }
-
-    #[test]
-    fn test_kitchen_config_with_auto_makedepends() {
-        let config = KitchenConfig::with_auto_makedepends(true);
-        assert!(config.auto_makedepends);
-        assert!(config.cleanup_makedepends);
-
-        let config_no_cleanup = KitchenConfig::with_auto_makedepends(false);
-        assert!(config_no_cleanup.auto_makedepends);
-        assert!(!config_no_cleanup.cleanup_makedepends);
     }
 }

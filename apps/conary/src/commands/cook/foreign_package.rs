@@ -1,23 +1,14 @@
 // apps/conary/src/commands/cook/foreign_package.rs
 
 use anyhow::{Context, Result};
-use conary_core::ccs::convert::{ConversionOptions, LegacyConverter};
+use conary_core::ccs::convert::{ConversionOptions, NativePackageConverter};
 use conary_core::packages::common::PackageMetadata;
 use conary_core::packages::registry::{detect_format, parse_package};
 use std::io::Write;
 use std::path::Path;
 
 pub(super) fn foreign_package_format(path: &Path) -> Option<&'static str> {
-    let name = path.file_name()?.to_str()?;
-    if name.ends_with(".rpm") {
-        Some("rpm")
-    } else if name.ends_with(".deb") {
-        Some("deb")
-    } else if name.ends_with(".pkg.tar.zst") {
-        Some("arch")
-    } else {
-        None
-    }
+    detect_format(path).ok().map(|format| format.name())
 }
 
 pub(super) fn cook_foreign_package(
@@ -50,19 +41,24 @@ pub(super) fn cook_foreign_package(
         package_path: package_path.to_path_buf(),
         name: package.name().to_string(),
         version: package.version().to_string(),
+        version_scheme: package.version_scheme(),
         architecture: package.architecture().map(str::to_string),
         description: package.description().map(str::to_string),
         files: package.files().to_vec(),
-        dependencies: package.dependencies().to_vec(),
+        requirements: package.requirements().to_vec(),
         provides: package.provides().to_vec(),
-        scriptlets: package.scriptlets().to_vec(),
+        relations: package.relations().to_vec(),
+        diagnostic_scriptlet_evidence: Vec::new(),
         native_scriptlet_abi: package.native_scriptlet_abi().to_vec(),
         config_files: Vec::new(),
     };
-    let converter = LegacyConverter::new(ConversionOptions {
+    let converter = NativePackageConverter::new(ConversionOptions {
         enable_chunking: true,
         output_dir: output_dir.to_path_buf(),
-    });
+    })
+    .with_signing_key(std::sync::Arc::new(
+        crate::commands::ccs::load_or_create_local_dev_key()?,
+    ));
     let result = converter
         .convert(&metadata, &extracted, format.name(), &checksum)
         .with_context(|| {

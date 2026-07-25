@@ -1,6 +1,7 @@
 // conary-core/src/ccs/convert/converter/tests/manifest.rs
 
 use super::*;
+use crate::packages::traits::Dependency;
 
 #[test]
 fn test_conversion_options_default() {
@@ -10,7 +11,7 @@ fn test_conversion_options_default() {
 
 #[test]
 fn test_converter_creation() {
-    let converter = LegacyConverter::with_defaults();
+    let converter = NativePackageConverter::with_defaults();
     assert!(converter.options.enable_chunking);
 }
 
@@ -20,17 +21,20 @@ fn test_build_manifest() {
         enable_chunking: false,
         output_dir: PathBuf::from("/tmp/test"),
     };
-    let converter = LegacyConverter::new(options);
+    let converter = NativePackageConverter::new(options);
 
     let metadata = make_test_metadata();
 
     let manifest = converter
-        .build_manifest(&metadata, &make_test_files(), &Hooks::default())
+        .build_manifest(&metadata, &Hooks::default())
         .unwrap();
 
     assert_eq!(manifest.package.name, "test-package");
     assert_eq!(manifest.package.version, "1.0.0");
-    assert_eq!(manifest.provides.binaries, vec!["test".to_string()]);
+    assert!(
+        manifest.provides.binaries.is_empty(),
+        "payload paths must not synthesize authoritative binary provides"
+    );
 
     assert!(
         manifest.hooks.users.is_empty(),
@@ -39,40 +43,8 @@ fn test_build_manifest() {
 }
 
 #[test]
-fn test_build_manifest_derives_sonames_and_pkgconfig() {
-    let converter = LegacyConverter::with_defaults();
-    let mut metadata = make_test_metadata();
-    metadata.files = vec![];
-    let files = vec![
-        ExtractedFile {
-            path: "/usr/lib64/libjq.so.1.0.4".to_string(),
-            content: vec![],
-            size: 0,
-            mode: 0o755,
-            sha256: Some("abc".to_string()),
-            symlink_target: None,
-        },
-        ExtractedFile {
-            path: "/usr/share/pkgconfig/jq.pc".to_string(),
-            content: vec![],
-            size: 0,
-            mode: 0o644,
-            sha256: Some("def".to_string()),
-            symlink_target: None,
-        },
-    ];
-
-    let manifest = converter
-        .build_manifest(&metadata, &files, &Hooks::default())
-        .unwrap();
-
-    assert_eq!(manifest.provides.sonames, vec!["libjq.so.1".to_string()]);
-    assert_eq!(manifest.provides.pkgconfig, vec!["jq".to_string()]);
-}
-
-#[test]
 fn build_manifest_preserves_native_virtual_provides_from_package_metadata() {
-    let converter = LegacyConverter::with_defaults();
+    let converter = NativePackageConverter::with_defaults();
     let mut metadata = make_test_metadata();
     metadata.provides = vec![Dependency {
         name: "kernel-uname-r".to_string(),
@@ -82,7 +54,7 @@ fn build_manifest_preserves_native_virtual_provides_from_package_metadata() {
     }];
 
     let manifest = converter
-        .build_manifest(&metadata, &make_test_files(), &Hooks::default())
+        .build_manifest(&metadata, &Hooks::default())
         .unwrap();
 
     assert!(
@@ -104,16 +76,9 @@ fn build_manifest_preserves_native_virtual_provides_from_package_metadata() {
 #[cfg(unix)]
 #[test]
 fn write_files_to_temp_preserves_symlinks() {
-    let converter = LegacyConverter::with_defaults();
+    let converter = NativePackageConverter::with_defaults();
     let temp_dir = tempfile::tempdir().unwrap();
-    let files = vec![ExtractedFile {
-        path: "/usr/bin/sh".to_string(),
-        content: Vec::new(),
-        size: 4,
-        mode: 0o120777,
-        sha256: None,
-        symlink_target: Some("bash".to_string()),
-    }];
+    let files = vec![extracted_symlink("/usr/bin/sh", "bash", 0o777)];
 
     converter
         .write_files_to_temp(&files, temp_dir.path())
@@ -130,7 +95,7 @@ fn write_files_to_temp_preserves_symlinks() {
 
 #[test]
 fn test_write_files_to_temp() {
-    let converter = LegacyConverter::with_defaults();
+    let converter = NativePackageConverter::with_defaults();
     let files = make_test_files();
 
     let temp_dir = TempDir::new().unwrap();

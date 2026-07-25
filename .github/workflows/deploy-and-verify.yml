@@ -516,6 +516,22 @@ jobs:
     runs-on: ubuntu-latest
     environment: ${{ needs.resolve.outputs.environment }}
     steps:
+      - name: Check out exact release tag
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.resolve.outputs.tag_name }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Verify exact release tag checkout
+        env:
+          TAG_NAME: ${{ needs.resolve.outputs.tag_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git tag --points-at HEAD | grep -Fx "$TAG_NAME" >/dev/null || {
+            echo "Checked-out commit is not the serialized release tag ${TAG_NAME}" >&2
+            exit 1
+          }
       - name: Download source artifacts
         shell: bash
         env:
@@ -580,15 +596,38 @@ jobs:
           ssh_opts="-i ~/.ssh/remi_key -o StrictHostKeyChecking=accept-new"
 
           remote_bundle="/tmp/remi-${VERSION}-${GITHUB_RUN_ID}.tar.gz"
+          remote_repositories="/tmp/remi-repositories-${GITHUB_RUN_ID}.toml"
+          remote_helper="/tmp/remi-deploy-helper-${GITHUB_RUN_ID}"
+          helper_sha="$(sha256sum deploy/remi-deploy-helper.sh | cut -d ' ' -f 1)"
           ssh $ssh_opts "$target" "sudo -n /usr/local/sbin/conary-remi-deploy verify-access"
+          scp $ssh_opts deploy/remi-deploy-helper.sh "${target}:${remote_helper}"
+          ssh $ssh_opts "$target" \
+            "sudo -n /usr/local/sbin/conary-remi-deploy install-helper '$helper_sha' '$remote_helper'"
           scp $ssh_opts "$bundle" "${target}:${remote_bundle}"
-          ssh $ssh_opts "$target" bash -s "$VERSION" "$remote_bundle" "$REMI_MAX_CONCURRENT" <<'REMOTE_EOF'
+          scp $ssh_opts deploy/remi-repositories.toml "${target}:${remote_repositories}"
+          ssh $ssh_opts "$target" bash -s \
+            "$VERSION" "$remote_bundle" "$remote_repositories" "$REMI_MAX_CONCURRENT" <<'REMOTE_EOF'
             set -euo pipefail
             VERSION="$1"
             remote_bundle="$2"
-            max_concurrent="$3"
-            sudo -n /usr/local/sbin/conary-remi-deploy configure-concurrency "$max_concurrent" --skip-restart
-            sudo -n /usr/local/sbin/conary-remi-deploy deploy-remi "$VERSION" "$remote_bundle"
+            remote_repositories="$3"
+            max_concurrent="$4"
+            sudo -n /usr/local/sbin/conary-remi-deploy deploy-remi \
+              "$VERSION" "$remote_bundle" "$remote_repositories" "$max_concurrent"
+
+            for attempt in $(seq 1 120); do
+              if sudo -n /usr/local/sbin/conary-remi-deploy inspect-remi \
+                --require-repopulated
+              then
+                exit 0
+              fi
+              echo "Remi repopulation is still in progress (${attempt}/120)" >&2
+              sleep 30
+            done
+
+            sudo -n /usr/local/sbin/conary-remi-deploy inspect-remi
+            echo "Remi did not repopulate source and conversion state within one hour" >&2
+            exit 1
           REMOTE_EOF
       - name: Verify remi health
         run: curl -fsS https://remi.conary.io/health >/dev/null

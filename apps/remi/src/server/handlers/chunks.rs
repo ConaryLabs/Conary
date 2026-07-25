@@ -69,18 +69,18 @@ fn chunk_not_found() -> Response {
     (StatusCode::NOT_FOUND, "Chunk not found").into_response()
 }
 
-async fn chunk_allowed_by_public_gate(
+async fn chunk_servable_by_authority(
     db_path: std::path::PathBuf,
     hash: String,
 ) -> std::result::Result<bool, Response> {
     match tokio::task::spawn_blocking(move || {
-        crate::server::publication::local_chunk_servable_by_public_gate(&db_path, &hash)
+        crate::server::publication::local_chunk_servable(&db_path, &hash)
     })
     .await
     {
         Ok(Ok(value)) => Ok(value),
         Ok(Err(error)) => {
-            tracing::error!("Failed to check chunk publication reachability: {error}");
+            tracing::error!("Failed to check chunk conversion reachability: {error}");
             Err((StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response())
         }
         Err(error) => {
@@ -111,7 +111,7 @@ pub async fn head_chunk(
         let state = state.read().await;
         state.config.db_path.clone()
     };
-    match chunk_allowed_by_public_gate(db_path, hash.clone()).await {
+    match chunk_servable_by_authority(db_path, hash.clone()).await {
         Ok(true) => {}
         Ok(false) => return chunk_not_found(),
         Err(response) => return response,
@@ -206,7 +206,7 @@ pub async fn get_chunk(
         let state_guard = state.read().await;
         state_guard.config.db_path.clone()
     };
-    match chunk_allowed_by_public_gate(db_path, hash.clone()).await {
+    match chunk_servable_by_authority(db_path, hash.clone()).await {
         Ok(true) => {}
         Ok(false) => return chunk_not_found(),
         Err(response) => return response,
@@ -605,7 +605,7 @@ pub async fn find_missing(
         }
         let hash = normalize_hash(raw_hash);
 
-        match chunk_allowed_by_public_gate(db_path.clone(), hash.clone()).await {
+        match chunk_servable_by_authority(db_path.clone(), hash.clone()).await {
             Ok(true) => {}
             Ok(false) => {
                 missing.push(hash);
@@ -641,22 +641,16 @@ pub async fn find_missing(
 
 /// Request body for batch fetch endpoint
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BatchFetchRequest {
     /// List of chunk hashes to fetch
     pub hashes: Vec<String>,
-    /// Response format: "multipart" (default, efficient) or "json" (legacy, base64)
-    #[serde(default)]
-    pub format: Option<String>,
 }
 
 /// POST /v1/chunks/batch
 ///
 /// Fetch multiple chunks in a single request.
-/// Returns multipart response by default for efficiency.
-///
-/// Response formats:
-/// - `multipart` (default): Efficient binary transfer with multipart/mixed
-/// - `json`: Legacy JSON with base64-encoded chunks (for compatibility)
+/// Returns an efficient binary `multipart/mixed` response.
 ///
 /// Multipart format:
 /// ```text
@@ -691,7 +685,6 @@ pub async fn batch_fetch(
     /// Maximum aggregate response size for batch fetch (256 MB).
     const MAX_BATCH_BYTES: u64 = 256 * 1024 * 1024;
 
-    let format = request.format.as_deref().unwrap_or("multipart");
     let (db_path, chunk_cache, metrics) = {
         let state = state.read().await;
         (
@@ -714,7 +707,7 @@ pub async fn batch_fetch(
         }
         let hash = normalize_hash(raw_hash);
 
-        match chunk_allowed_by_public_gate(db_path.clone(), hash.clone()).await {
+        match chunk_servable_by_authority(db_path.clone(), hash.clone()).await {
             Ok(true) => {}
             Ok(false) => {
                 missing.push(hash);
@@ -747,41 +740,6 @@ pub async fn batch_fetch(
                 missing.push(hash.clone());
             }
         }
-    }
-
-    // Return JSON format if requested
-    if format == "json" {
-        use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
-
-        #[derive(Serialize)]
-        struct ChunkData {
-            hash: String,
-            data: String, // Base64 encoded
-            size: u64,
-        }
-
-        #[derive(Serialize)]
-        struct BatchResponse {
-            chunks: Vec<ChunkData>,
-            missing: Vec<String>,
-            invalid: Vec<String>,
-        }
-
-        let chunks: Vec<ChunkData> = chunks_data
-            .into_iter()
-            .map(|(hash, data)| ChunkData {
-                size: data.len() as u64,
-                data: BASE64.encode(&data),
-                hash,
-            })
-            .collect();
-
-        return Json(BatchResponse {
-            chunks,
-            missing,
-            invalid,
-        })
-        .into_response();
     }
 
     // Build multipart response

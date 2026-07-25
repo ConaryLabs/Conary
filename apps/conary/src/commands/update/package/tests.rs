@@ -2,21 +2,19 @@
 
 use super::*;
 use crate::commands::test_helpers::create_test_db;
-use conary_core::ccs::builder::{CcsBuilder, write_ccs_package};
-use conary_core::ccs::legacy_scriptlets::{
-    DecisionCounts, ForeignReplayPolicy, LEGACY_SCRIPTLET_SCHEMA_V1, LegacyScriptletBundle,
-    LegacyScriptletEntry, LifecyclePath, NativeInvocation, PublicationPolicy, PublicationStatus,
-    ScriptletDecision, ScriptletFidelity, SourceFormat, TargetCompatibility, TransactionOrder,
-    VersionScheme,
-};
+use conary_core::ccs::builder::{CcsBuilder, write_signed_current_ccs_package};
 use conary_core::ccs::manifest::{CcsManifest, Platform};
+use conary_core::ccs::native_lifecycle::{
+    LifecyclePath, NATIVE_LIFECYCLE_SCHEMA_V1, NativeInvocation, NativeLifecycleBundle,
+    NativeLifecycleEntry, NativeLifecycleEntryKind, RpmCriticality, RpmProgram, RpmRuntimeMetadata,
+    ScriptletFidelity, SourceFormat, TransactionOrder, VersionScheme,
+};
 use conary_core::db::models::{
     Changeset, ChangesetStatus, DistroPin, InstallSource, PackageDelta, PackageResolution,
     PrimaryStrategy, Repository, ResolutionStrategy, Trove, TroveType,
 };
 use conary_core::filesystem::{CasStore, object_path};
 use conary_core::repository::resolution_policy::ResolutionPolicy;
-use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
@@ -25,7 +23,7 @@ fn build_test_ccs_package_with_bundle(
     dir: &Path,
     name: &str,
     version: &str,
-    legacy_scriptlets: Option<LegacyScriptletBundle>,
+    native_lifecycle: Option<NativeLifecycleBundle>,
 ) -> PathBuf {
     let source_dir = dir.join("src");
     std::fs::create_dir_all(source_dir.join("usr/bin")).unwrap();
@@ -36,25 +34,27 @@ fn build_test_ccs_package_with_bundle(
     .unwrap();
 
     let mut manifest = CcsManifest::new_minimal(name, version);
+    manifest.package.version_scheme = conary_core::repository::versioning::VersionScheme::Rpm;
     manifest.package.platform = Some(Platform {
         os: "linux".to_string(),
         arch: Some("x86_64".to_string()),
         libc: "gnu".to_string(),
         abi: None,
     });
-    manifest.legacy_scriptlets = legacy_scriptlets;
+    manifest.native_lifecycle = native_lifecycle;
 
     let result = CcsBuilder::new(manifest, &source_dir).build().unwrap();
     let package_path = dir.join(format!("{name}-{version}.ccs"));
-    write_ccs_package(&result, &package_path).unwrap();
+    let signing_key = crate::commands::ccs::load_or_create_local_dev_key().unwrap();
+    write_signed_current_ccs_package(&result, &package_path, &signing_key, true).unwrap();
     package_path
 }
 
-fn legacy_upgrade_bundle(package: &str, version: &str) -> LegacyScriptletBundle {
-    let entry = legacy_upgrade_entry();
-    LegacyScriptletBundle {
-        schema: LEGACY_SCRIPTLET_SCHEMA_V1.to_string(),
-        schema_revision: 2,
+fn rpm_upgrade_bundle(package: &str, version: &str) -> NativeLifecycleBundle {
+    let entry = rpm_upgrade_entry();
+    NativeLifecycleBundle {
+        schema: NATIVE_LIFECYCLE_SCHEMA_V1.to_string(),
+        schema_revision: conary_core::ccs::native_lifecycle::NATIVE_LIFECYCLE_SCHEMA_REVISION,
         source_format: SourceFormat::Rpm,
         source_family: "fedora-rhel".to_string(),
         source_distro: Some("fedora".to_string()),
@@ -67,39 +67,23 @@ fn legacy_upgrade_bundle(package: &str, version: &str) -> LegacyScriptletBundle 
         conversion_tool: "remi".to_string(),
         conversion_tool_version: "0.8.0".to_string(),
         conversion_policy: "goal6-update-test".to_string(),
-        adapter_registry_digest: None,
-        target_policy_digest: None,
         evidence_digest: Some(conary_core::hash::sha256_prefixed(
-            format!("{package}-{version}-legacy-upgrade").as_bytes(),
+            format!("{package}-{version}-typed-rpm-upgrade").as_bytes(),
         )),
-        target_compatibility: TargetCompatibility::SourceNative,
-        allowed_targets: vec!["rpm/fedora/44/x86_64".to_string()],
-        foreign_replay_policy: ForeignReplayPolicy::Deny,
-        publication_policy: PublicationPolicy::LocalOnly,
-        publication_status: PublicationStatus::Public,
-        scriptlet_fidelity: ScriptletFidelity::LegacyReplay,
-        decision_counts: DecisionCounts {
-            replaced: 0,
-            legacy: 1,
-            blocked: 0,
-            review: 0,
-            extra: BTreeMap::new(),
-        },
-        unsupported_class_counts: BTreeMap::new(),
-        security_policy_intents: Vec::new(),
+        scriptlet_fidelity: ScriptletFidelity::NativeLifecycle,
         entries: vec![entry],
-        extra: BTreeMap::new(),
     }
 }
 
-fn legacy_upgrade_entry() -> LegacyScriptletEntry {
-    let body = "echo replay-upgrade-new-pre\n";
-    LegacyScriptletEntry {
+fn rpm_upgrade_entry() -> NativeLifecycleEntry {
+    let body = "print('rpm-upgrade-new-pre')\n";
+    NativeLifecycleEntry {
         id: "rpm:%pre".to_string(),
         native_slot: "%pre".to_string(),
+        kind: NativeLifecycleEntryKind::Executable,
         phase: LifecyclePath::PreUpgrade,
         lifecycle_paths: vec!["upgrade:new-pre".to_string()],
-        interpreter: "/bin/sh".to_string(),
+        interpreter: "<lua>".to_string(),
         interpreter_args: Vec::new(),
         body_sha256: conary_core::hash::sha256_prefixed(body.as_bytes()),
         body: body.to_string(),
@@ -109,26 +93,30 @@ fn legacy_upgrade_entry() -> LegacyScriptletEntry {
             position: "before-payload".to_string(),
             before: vec!["payload".to_string()],
             after: Vec::new(),
-            extra: BTreeMap::new(),
         },
         timeout_ms: 30_000,
         sandbox: None,
         capabilities: Vec::new(),
-        decision: ScriptletDecision::Legacy,
-        reason_code: "legacy-replay-required".to_string(),
-        human_reason: Some("fixture legacy pre-upgrade".to_string()),
         evidence_digest: None,
         source_evidence_refs: Vec::new(),
-        effects: Vec::new(),
-        unknown_command_evidence: Vec::new(),
-        blocked_classes: Vec::new(),
-        boot_security_intents: Vec::new(),
-        security_policy_intents: Vec::new(),
         rpm_trigger: None,
+        rpm_runtime: Some(RpmRuntimeMetadata {
+            program: RpmProgram::EmbeddedLua,
+            body_transforms: Vec::new(),
+            critical: true,
+            criticality: RpmCriticality::Header,
+            raw_flags: 0,
+            unknown_flags: 0,
+            install_prefixes: Vec::new(),
+            macro_context: Default::default(),
+            header_context: Default::default(),
+            package_rpm_version: None,
+        }),
+        rpm_sysusers: None,
         deb_maintainer: None,
         arch_install: None,
-        residual_replay: None,
-        extra: BTreeMap::new(),
+        arch_hook: None,
+        residual_lifecycle: None,
     }
 }
 
@@ -165,10 +153,15 @@ fn table_count(conn: &rusqlite::Connection, table: &str) -> i64 {
 #[test]
 fn package_specific_update_requires_selector_for_ambiguous_variants() {
     let conn = rusqlite::Connection::open_in_memory().unwrap();
-    conary_core::db::schema::migrate(&conn).unwrap();
+    conary_core::db::schema::ensure_current(&conn).unwrap();
 
     for arch in ["x86_64", "aarch64"] {
-        let mut trove = Trove::new("demo".to_string(), "1.0.0".to_string(), TroveType::Package);
+        let mut trove = Trove::new(
+            "demo".to_string(),
+            "1.0.0".to_string(),
+            TroveType::Package,
+            conary_core::repository::versioning::VersionScheme::Conary,
+        );
         trove.architecture = Some(arch.to_string());
         trove.insert(&conn).unwrap();
     }
@@ -193,7 +186,7 @@ fn package_specific_update_requires_selector_for_ambiguous_variants() {
 #[test]
 fn update_selector_without_package_refuses() {
     let conn = rusqlite::Connection::open_in_memory().unwrap();
-    conary_core::db::schema::migrate(&conn).unwrap();
+    conary_core::db::schema::ensure_current(&conn).unwrap();
 
     let err = installed_troves_for_update(&conn, None, None, Some("x86_64".to_string()))
         .unwrap_err()
@@ -203,7 +196,7 @@ fn update_selector_without_package_refuses() {
 }
 
 #[tokio::test]
-async fn update_refuses_legacy_replay_before_creating_changeset() {
+async fn update_executes_typed_rpm_lifecycle_and_commits_changeset() {
     let (_temp, db_path) = create_test_db();
     let root = tempfile::tempdir().unwrap();
     let package_dir = tempfile::tempdir().unwrap();
@@ -213,7 +206,7 @@ async fn update_refuses_legacy_replay_before_creating_changeset() {
         package_dir.path(),
         "vim",
         "2.0.0",
-        Some(legacy_upgrade_bundle("vim", "2.0.0")),
+        Some(rpm_upgrade_bundle("vim", "2.0.0")),
     );
     let package_bytes = std::fs::read(&package_path).unwrap();
     let package_checksum = conary_core::hash::sha256(&package_bytes);
@@ -223,8 +216,6 @@ async fn update_refuses_legacy_replay_before_creating_changeset() {
     let mut conn = crate::commands::open_db(&db_path).unwrap();
     DistroPin::set(&conn, "fedora-44", "strict").unwrap();
     let mut repo = Repository::new("fedora-test".to_string(), package_url.clone());
-    repo.gpg_check = false;
-    repo.gpg_strict = false;
     repo.default_strategy_distro = Some("fedora-44".to_string());
     let repo_id = repo.insert(&conn).unwrap();
 
@@ -236,10 +227,10 @@ async fn update_refuses_legacy_replay_before_creating_changeset() {
             "1.0.0".to_string(),
             TroveType::Package,
             InstallSource::Repository,
+            conary_core::repository::versioning::VersionScheme::Rpm,
         );
         installed.architecture = Some("x86_64".to_string());
         installed.source_distro = Some("fedora-44".to_string());
-        installed.version_scheme = Some("rpm".to_string());
         installed.installed_from_repository_id = Some(repo_id);
         installed.installed_by_changeset_id = Some(changeset_id);
         installed.insert(tx)?;
@@ -252,13 +243,13 @@ async fn update_refuses_legacy_replay_before_creating_changeset() {
         repo_id,
         "vim".to_string(),
         "2.0.0".to_string(),
+        conary_core::repository::versioning::VersionScheme::Rpm,
         package_checksum.clone(),
         package_size,
         package_url.clone(),
     );
     repo_pkg.architecture = Some("x86_64".to_string());
     repo_pkg.distro = Some("fedora-44".to_string());
-    repo_pkg.version_scheme = Some("rpm".to_string());
     repo_pkg.insert(&conn).unwrap();
 
     let mut resolution = PackageResolution::new(
@@ -277,30 +268,25 @@ async fn update_refuses_legacy_replay_before_creating_changeset() {
     let before_changesets = table_count(&conn, "changesets");
     drop(conn);
 
-    let err = cmd_update(
+    cmd_update(
         Some("vim".to_string()),
         &db_path,
         root.path().to_str().unwrap(),
         false,
         false,
-        false,
-        SandboxMode::None,
+        SandboxMode::Always,
         None,
         true,
         None,
         Some("x86_64".to_string()),
-        crate::commands::LegacyReplayOptions::default(),
     )
     .await
-    .expect_err("update should fail closed before admitting a raw legacy replay package");
-    let message = err.to_string();
-    assert!(message.contains("LegacyReplayFeatureDisabled"), "{message}");
+    .expect("typed RPM lifecycle update should execute");
 
     let conn = crate::commands::open_db(&db_path).unwrap();
-    assert_eq!(
-        table_count(&conn, "changesets"),
-        before_changesets,
-        "legacy replay refusal must happen before update changeset insertion"
+    assert!(
+        table_count(&conn, "changesets") > before_changesets,
+        "successful typed lifecycle update must commit a changeset"
     );
     let installed_versions = Trove::find_by_name(&conn, "vim")
         .unwrap()
@@ -308,11 +294,11 @@ async fn update_refuses_legacy_replay_before_creating_changeset() {
         .filter(|trove| trove.trove_type == TroveType::Package)
         .map(|trove| trove.version)
         .collect::<Vec<_>>();
-    assert_eq!(installed_versions, vec!["1.0.0".to_string()]);
+    assert_eq!(installed_versions, vec!["2.0.0".to_string()]);
 }
 
 #[tokio::test]
-async fn static_ccs_update_verifies_signature_before_legacy_replay_preflight() {
+async fn static_ccs_update_verifies_signature_before_lifecycle_execution_preflight() {
     let (_temp, db_path) = create_test_db();
     let root = tempfile::tempdir().unwrap();
     let package_dir = tempfile::tempdir().unwrap();
@@ -322,7 +308,7 @@ async fn static_ccs_update_verifies_signature_before_legacy_replay_preflight() {
         package_dir.path(),
         "vim",
         "2.0.0",
-        Some(legacy_upgrade_bundle("vim", "2.0.0")),
+        Some(rpm_upgrade_bundle("vim", "2.0.0")),
     );
     let package_bytes = std::fs::read(&package_path).unwrap();
     let package_checksum = conary_core::hash::sha256(&package_bytes);
@@ -332,8 +318,6 @@ async fn static_ccs_update_verifies_signature_before_legacy_replay_preflight() {
     let mut conn = crate::commands::open_db(&db_path).unwrap();
     DistroPin::set(&conn, "fedora-44", "strict").unwrap();
     let mut repo = Repository::new("static-test".to_string(), package_url.clone());
-    repo.gpg_check = false;
-    repo.gpg_strict = false;
     repo.default_strategy = Some("static".to_string());
     repo.default_strategy_distro = Some("fedora-44".to_string());
     let repo_id = repo.insert(&conn).unwrap();
@@ -346,10 +330,10 @@ async fn static_ccs_update_verifies_signature_before_legacy_replay_preflight() {
             "1.0.0".to_string(),
             TroveType::Package,
             InstallSource::Repository,
+            conary_core::repository::versioning::VersionScheme::Rpm,
         );
         installed.architecture = Some("x86_64".to_string());
         installed.source_distro = Some("fedora-44".to_string());
-        installed.version_scheme = Some("rpm".to_string());
         installed.installed_from_repository_id = Some(repo_id);
         installed.installed_by_changeset_id = Some(changeset_id);
         installed.insert(tx)?;
@@ -362,13 +346,13 @@ async fn static_ccs_update_verifies_signature_before_legacy_replay_preflight() {
         repo_id,
         "vim".to_string(),
         "2.0.0".to_string(),
+        conary_core::repository::versioning::VersionScheme::Rpm,
         package_checksum.clone(),
         package_size,
         package_url.clone(),
     );
     repo_pkg.architecture = Some("x86_64".to_string());
     repo_pkg.distro = Some("fedora-44".to_string());
-    repo_pkg.version_scheme = Some("rpm".to_string());
     repo_pkg.insert(&conn).unwrap();
 
     let mut resolution = PackageResolution::new(
@@ -393,23 +377,17 @@ async fn static_ccs_update_verifies_signature_before_legacy_replay_preflight() {
         root.path().to_str().unwrap(),
         false,
         false,
-        false,
-        SandboxMode::None,
+        SandboxMode::Always,
         None,
         true,
         None,
         Some("x86_64".to_string()),
-        crate::commands::LegacyReplayOptions::default(),
     )
     .await
     .expect_err("static unsigned update must fail before CCS preflight parses scriptlets");
     let message = format!("{err:?}");
     assert!(
         message.contains("Static repository package signature verification failed"),
-        "{message}"
-    );
-    assert!(
-        !message.contains("LegacyReplayFeatureDisabled"),
         "{message}"
     );
 
@@ -422,7 +400,7 @@ async fn static_ccs_update_verifies_signature_before_legacy_replay_preflight() {
 }
 
 #[tokio::test]
-async fn update_delta_candidate_refuses_legacy_replay_before_creating_changeset() {
+async fn update_delta_candidate_executes_typed_rpm_lifecycle() {
     let (_temp, db_path) = create_test_db();
     let root = tempfile::tempdir().unwrap();
     let package_dir = tempfile::tempdir().unwrap();
@@ -432,7 +410,7 @@ async fn update_delta_candidate_refuses_legacy_replay_before_creating_changeset(
         package_dir.path(),
         "vim",
         "2.0.0",
-        Some(legacy_upgrade_bundle("vim", "2.0.0")),
+        Some(rpm_upgrade_bundle("vim", "2.0.0")),
     );
     let package_bytes = std::fs::read(&package_path).unwrap();
     let package_checksum = conary_core::hash::sha256(&package_bytes);
@@ -442,8 +420,6 @@ async fn update_delta_candidate_refuses_legacy_replay_before_creating_changeset(
     let mut conn = crate::commands::open_db(&db_path).unwrap();
     DistroPin::set(&conn, "fedora-44", "strict").unwrap();
     let mut repo = Repository::new("fedora-test".to_string(), package_url.clone());
-    repo.gpg_check = false;
-    repo.gpg_strict = false;
     repo.default_strategy_distro = Some("fedora-44".to_string());
     let repo_id = repo.insert(&conn).unwrap();
 
@@ -455,10 +431,10 @@ async fn update_delta_candidate_refuses_legacy_replay_before_creating_changeset(
             "1.0.0".to_string(),
             TroveType::Package,
             InstallSource::Repository,
+            conary_core::repository::versioning::VersionScheme::Rpm,
         );
         installed.architecture = Some("x86_64".to_string());
         installed.source_distro = Some("fedora-44".to_string());
-        installed.version_scheme = Some("rpm".to_string());
         installed.installed_from_repository_id = Some(repo_id);
         installed.installed_by_changeset_id = Some(changeset_id);
         installed.insert(tx)?;
@@ -471,13 +447,13 @@ async fn update_delta_candidate_refuses_legacy_replay_before_creating_changeset(
         repo_id,
         "vim".to_string(),
         "2.0.0".to_string(),
+        conary_core::repository::versioning::VersionScheme::Rpm,
         package_checksum.clone(),
         package_size,
         package_url.clone(),
     );
     repo_pkg.architecture = Some("x86_64".to_string());
     repo_pkg.distro = Some("fedora-44".to_string());
-    repo_pkg.version_scheme = Some("rpm".to_string());
     repo_pkg.insert(&conn).unwrap();
 
     let mut resolution = PackageResolution::new(
@@ -519,30 +495,25 @@ async fn update_delta_candidate_refuses_legacy_replay_before_creating_changeset(
     let before_changesets = table_count(&conn, "changesets");
     drop(conn);
 
-    let err = cmd_update(
+    cmd_update(
         Some("vim".to_string()),
         &db_path,
         root.path().to_str().unwrap(),
         false,
         false,
-        false,
-        SandboxMode::None,
+        SandboxMode::Always,
         None,
         true,
         None,
         Some("x86_64".to_string()),
-        crate::commands::LegacyReplayOptions::default(),
     )
     .await
-    .expect_err("delta update should fail closed during admission preflight");
-    let message = err.to_string();
-    assert!(message.contains("LegacyReplayFeatureDisabled"), "{message}");
+    .expect("delta-selected typed RPM lifecycle update should execute");
 
     let conn = crate::commands::open_db(&db_path).unwrap();
-    assert_eq!(
-        table_count(&conn, "changesets"),
-        before_changesets,
-        "delta legacy replay refusal must happen before update changeset insertion"
+    assert!(
+        table_count(&conn, "changesets") > before_changesets,
+        "successful delta-selected lifecycle update must commit a changeset"
     );
     let installed_versions = Trove::find_by_name(&conn, "vim")
         .unwrap()
@@ -550,7 +521,7 @@ async fn update_delta_candidate_refuses_legacy_replay_before_creating_changeset(
         .filter(|trove| trove.trove_type == TroveType::Package)
         .map(|trove| trove.version)
         .collect::<Vec<_>>();
-    assert_eq!(installed_versions, vec!["1.0.0".to_string()]);
+    assert_eq!(installed_versions, vec!["2.0.0".to_string()]);
 }
 
 #[test]
@@ -566,19 +537,22 @@ fn update_repository_install_provenance_uses_selected_package_metadata() {
         42,
         "phase4-runtime-fixture".to_string(),
         "1.0.1-1".to_string(),
+        conary_core::repository::versioning::VersionScheme::Rpm,
         "sha256:fixture".to_string(),
         123,
         "https://example.test/phase4-runtime-fixture-1.0.1.rpm".to_string(),
     );
     package.architecture = Some("x86_64".to_string());
     package.distro = Some("fedora".to_string());
-    package.version_scheme = Some("rpm".to_string());
 
     let provenance = repository_install_provenance_from_package(&package, &repo).unwrap();
 
     assert_eq!(provenance.repository_id, 42);
     assert_eq!(provenance.source_distro.as_deref(), Some("fedora"));
-    assert_eq!(provenance.version_scheme.as_deref(), Some("rpm"));
+    assert_eq!(
+        provenance.version_scheme,
+        conary_core::repository::versioning::VersionScheme::Rpm
+    );
 }
 
 #[test]
@@ -593,6 +567,7 @@ fn selected_update_resolution_bypasses_local_cas_shortcut() {
         42,
         "phase4-runtime-fixture".to_string(),
         "1.0.1-1".to_string(),
+        conary_core::repository::versioning::VersionScheme::Rpm,
         "sha256:fixture".to_string(),
         123,
         "https://example.test/phase4-runtime-fixture-1.0.1.rpm".to_string(),
@@ -608,7 +583,7 @@ fn selected_update_resolution_bypasses_local_cas_shortcut() {
         Some(RepositoryDependencyFlavor::Rpm),
     );
 
-    assert!(options.skip_cas);
+    assert!(options.skip_installed);
     assert_eq!(options.version.as_deref(), Some("1.0.1-1"));
     assert_eq!(options.repository.as_deref(), Some("slice-d-source-switch"));
     assert_eq!(options.architecture.as_deref(), Some("x86_64"));

@@ -3,9 +3,18 @@
 # CCS manifest for the Conary package manager itself.
 # Used to build the self-update CCS package served from Remi.
 
+requirements = [
+    { kind = "Depends", behavior = "Hard", expression = { operator = "atom", operands = { name = "glibc", capability_kind = "Virtual", native_text = "glibc" } }, alternatives = [{ name = "glibc", capability_kind = "Virtual", native_text = "glibc" }], native_text = "glibc" },
+    { kind = "Depends", behavior = "Hard", expression = { operator = "atom", operands = { name = "openssl-libs", capability_kind = "PackageName", version_constraint = ">=3.0", native_text = "openssl-libs >=3.0" } }, alternatives = [{ name = "openssl-libs", capability_kind = "PackageName", version_constraint = ">=3.0", native_text = "openssl-libs >=3.0" }], native_text = "openssl-libs >=3.0" },
+    { kind = "Depends", behavior = "Hard", expression = { operator = "atom", operands = { name = "xz-libs", capability_kind = "PackageName", native_text = "xz-libs" } }, alternatives = [{ name = "xz-libs", capability_kind = "PackageName", native_text = "xz-libs" }], native_text = "xz-libs" },
+]
+
 [package]
 name = "conary"
 version = "0.12.0"
+version_scheme = "conary"
+release = "1"
+kind = "package"
 description = "Early-preview Linux package manager with native-package adoption"
 license = "MIT"
 homepage = "https://conary.io"
@@ -22,13 +31,6 @@ maintainers = ["Peter <peter@conary.io>"]
 [provides]
 capabilities = ["package-manager", "conary"]
 binaries = ["/usr/bin/conary"]
-
-[requires]
-capabilities = ["glibc"]
-packages = [
-    { name = "openssl-libs", version = ">=3.0" },
-    { name = "xz-libs" },
-]
 
 [components]
 default = ["runtime", "doc", "config"]

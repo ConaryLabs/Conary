@@ -2,18 +2,21 @@
 
 ## Direction
 
-Conary is pursuing an adoption-led limited preview: make the reversible path
-on an existing supported Linux system safe, understandable, and useful before
-expanding the product surface or support claims. Native package managers remain
-authoritative for adopted packages until a user explicitly chooses otherwise.
+Conary is pursuing a cross-distro package-installation preview: make RPM, DEB,
+and Arch packages retain their source ABI while Conary installs them on any
+supported Linux target with the required typed capabilities. Conary owns normal
+install, update, remove, and rollback operations. Native package managers remain
+authority only for packages in the explicit adoption/takeover migration path.
 
 ## Current Milestone
 
 The first external tester milestone is ten people outside the existing project
-circle completing the bounded preview loop on supported systems and reporting
-friction. An evidence-backed maintainer pivot may close the milestone instead
-only when a reproducible systemic blocker is documented with the affected
-attempts and the chosen next action.
+circle completing a bounded cross-distro artifact loop on supported systems and
+reporting friction. Each qualifying run installs at least one package whose
+source format differs from the host's native format. An evidence-backed
+maintainer pivot may close the milestone instead only when a reproducible
+systemic blocker is documented with the affected attempts and chosen next
+action.
 
 The enabling sequence is:
 

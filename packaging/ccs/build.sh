@@ -34,6 +34,14 @@ install -Dpm 0755 "$RELEASE_BIN" "$STAGE/usr/bin/$NAME"
 # Man page
 install -Dpm 0644 "$REPO_ROOT/apps/conary/man/$NAME.1" "$STAGE/usr/share/man/man1/$NAME.1"
 
+# Booted-generation activation
+install -Dpm 0644 \
+    "$REPO_ROOT/packaging/systemd/$NAME-generation-activation.service" \
+    "$STAGE/usr/lib/systemd/system/$NAME-generation-activation.service"
+install -d "$STAGE/usr/lib/systemd/system/multi-user.target.wants"
+ln -s "../$NAME-generation-activation.service" \
+    "$STAGE/usr/lib/systemd/system/multi-user.target.wants/$NAME-generation-activation.service"
+
 # Shell completions
 install -d "$STAGE/usr/share/bash-completion/completions"
 install -d "$STAGE/usr/share/zsh/site-functions"

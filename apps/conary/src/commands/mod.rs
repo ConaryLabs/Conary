@@ -13,7 +13,6 @@ mod changeset_metadata;
 mod collection;
 pub(crate) mod composefs_ops;
 mod config;
-mod convert_pkgbuild;
 mod cook;
 mod db_backup;
 mod derivation;
@@ -29,7 +28,6 @@ pub(crate) mod hermetic_config;
 pub(crate) mod hermetic_state;
 mod install;
 mod label;
-mod legacy_replay_policy;
 #[allow(dead_code)]
 mod live_root;
 mod model;
@@ -86,21 +84,17 @@ pub use bootstrap::{
 };
 pub use cache::{cmd_cache_populate, cmd_cache_status};
 pub use capability::{
-    cmd_capability_audit, cmd_capability_generate, cmd_capability_list, cmd_capability_run,
-    cmd_capability_show, cmd_capability_validate,
+    cmd_capability_audit, cmd_capability_list, cmd_capability_run, cmd_capability_show,
+    cmd_capability_validate,
 };
 pub use ccs::CcsInitTemplate;
 #[allow(unused_imports)]
 pub(crate) use changeset_metadata::{
     AdoptionWarning, ChangesetMetadataEnvelope, DeferredFollowUp, DeferredFollowUpKind,
-    LegacyReplayAudit, LegacyReplayCompatibilityAudit, LegacyReplayOutcomeAudit,
-    LegacyReplayPlannedEntryAudit, LegacyReplayPreflightCheckAudit, ScriptletWarning,
     adoption_warnings, append_adoption_warning_metadata, append_deferred_follow_up_metadata,
-    append_legacy_replay_audit_metadata, append_scriptlet_warning_metadata,
-    classify_deferred_follow_up_kind, deferred_follow_up, legacy_replay_audit,
-    metadata_with_adoption_warnings, metadata_with_deferred_follow_up, metadata_with_full_envelope,
-    metadata_with_removed_troves, parse_rollback_snapshots, publication_deferred_follow_up,
-    scriptlet_warnings,
+    classify_deferred_follow_up_kind, deferred_follow_up, metadata_with_adoption_warnings,
+    metadata_with_deferred_follow_up, metadata_with_removed_troves, parse_rollback_snapshots,
+    publication_deferred_follow_up,
 };
 pub use collection::{
     cmd_collection_add, cmd_collection_create, cmd_collection_delete, cmd_collection_install,
@@ -111,7 +105,6 @@ pub use config::{
     cmd_config_backup, cmd_config_backups, cmd_config_check, cmd_config_diff, cmd_config_list,
     cmd_config_restore,
 };
-pub use convert_pkgbuild::cmd_convert_pkgbuild;
 pub use cook::cmd_cook;
 pub use db_backup::{cmd_db_backup_list, cmd_db_backup_recover, cmd_db_backup_verify};
 pub use derivation::{cmd_derivation_build, cmd_derivation_show};
@@ -126,7 +119,7 @@ pub use federation::{
     cmd_federation_add_peer, cmd_federation_enable_peer, cmd_federation_peers,
     cmd_federation_remove_peer, cmd_federation_stats, cmd_federation_status, cmd_federation_test,
 };
-pub use install::{DepMode, InstallOptions, LegacyReplayOptions, cmd_install};
+pub use install::{InstallOptions, OwnershipMode, cmd_install};
 pub use label::{
     cmd_label_add, cmd_label_delegate, cmd_label_link, cmd_label_list, cmd_label_path,
     cmd_label_query, cmd_label_remove, cmd_label_set, cmd_label_show,
@@ -165,8 +158,8 @@ pub use redirect::{
 };
 pub use remove::{cmd_autoremove, cmd_remove};
 pub use repo::{
-    RepoAddOptions, cmd_key_import, cmd_key_list, cmd_key_remove, cmd_repo_add, cmd_repo_disable,
-    cmd_repo_enable, cmd_repo_list, cmd_repo_remove, cmd_repo_sync, cmd_search,
+    RepoAddOptions, cmd_repo_add, cmd_repo_disable, cmd_repo_enable, cmd_repo_list,
+    cmd_repo_remove, cmd_repo_sync, cmd_search,
 };
 pub use repo_static::cmd_repo_reset_trust;
 pub use restore::{cmd_restore, cmd_restore_all};
@@ -181,8 +174,7 @@ pub use triggers::{
     cmd_trigger_run, cmd_trigger_show,
 };
 pub use trust::{
-    cmd_trust_disable, cmd_trust_enable, cmd_trust_init, cmd_trust_key_gen, cmd_trust_status,
-    cmd_trust_verify,
+    cmd_trust_enable, cmd_trust_init, cmd_trust_key_gen, cmd_trust_status, cmd_trust_verify,
 };
 pub(crate) use try_session::{
     cmd_try_keep, cmd_try_package, cmd_try_rollback, cmd_try_status, cmd_try_watch,
@@ -196,28 +188,8 @@ pub use update_channel::{
 };
 
 use anyhow::{Context, Result};
+pub use conary_core::packages::PackageFormatType;
 use serde::{Deserialize, Serialize};
-use std::fs::File;
-use std::io::Read;
-
-/// Package format types we support
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PackageFormatType {
-    Rpm,
-    Deb,
-    Arch,
-}
-
-impl PackageFormatType {
-    #[must_use]
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Rpm => "rpm",
-            Self::Deb => "deb",
-            Self::Arch => "arch",
-        }
-    }
-}
 
 /// Serializable trove metadata for rollback support
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -227,28 +199,38 @@ pub(crate) struct TroveSnapshot {
     pub architecture: Option<String>,
     pub description: Option<String>,
     pub install_source: String,
+    pub source_distro: Option<String>,
+    pub version_scheme: conary_core::repository::versioning::VersionScheme,
+    pub native_lifecycle: Option<NativeLifecycleSnapshot>,
+    pub ccs_remove_hook: Option<CcsRemoveHookSnapshot>,
     /// Repository this package was installed from (for provenance/affinity).
     #[serde(default)]
     pub installed_from_repository_id: Option<i64>,
     pub files: Vec<FileSnapshot>,
 }
 
-/// Rollback metadata for state-revert style changesets that may remove
-/// multiple troves under one wrapping changeset.
+/// Exact installed lifecycle state retained across remove rollback.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct RevertMetadata {
-    pub removed_troves: Vec<TroveSnapshot>,
+pub(crate) struct NativeLifecycleSnapshot {
+    pub bundle_toml: String,
+    pub lifecycle_state: String,
+    pub pending_triggers: Vec<String>,
+    pub awaited_packages: Vec<conary_core::ccs::native_transaction::NativePackageIdentity>,
+}
+
+/// Exact installed CCS remove hook retained across remove rollback.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct CcsRemoveHookSnapshot {
+    pub script: String,
+    pub reversible: Option<bool>,
 }
 
 /// Serializable file metadata for rollback support
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct FileSnapshot {
     pub path: String,
-    pub sha256_hash: String,
-    pub size: i64,
-    pub permissions: i32,
-    #[serde(default)]
-    pub symlink_target: Option<String>,
+    pub node: conary_core::payload::ResolvedPayloadNode,
+    pub content: Option<conary_core::payload::PayloadContentAuthority>,
 }
 
 /// Open the package database with a standard error context.
@@ -259,36 +241,9 @@ pub(crate) fn open_db(path: &str) -> Result<rusqlite::Connection> {
     conary_core::db::open(path).context("Failed to open package database")
 }
 
-/// Detect package format from file path and magic bytes
+/// Identify package format from package-owned structural markers.
 pub fn detect_package_format(path: &str) -> Result<PackageFormatType> {
-    // First try file extension
-    if path.ends_with(".rpm") {
-        return Ok(PackageFormatType::Rpm);
-    } else if path.ends_with(".deb") {
-        return Ok(PackageFormatType::Deb);
-    } else if path.ends_with(".pkg.tar.zst") || path.ends_with(".pkg.tar.xz") {
-        return Ok(PackageFormatType::Arch);
-    }
-
-    // Fallback to magic bytes detection
-    let mut file = File::open(path)?;
-    let mut magic = [0u8; 8];
-    file.read_exact(&mut magic)?;
-
-    // RPM magic: 0xED 0xAB 0xEE 0xDB
-    if magic[0..4] == [0xED, 0xAB, 0xEE, 0xDB] {
-        return Ok(PackageFormatType::Rpm);
-    }
-
-    // DEB magic: "!<arch>\n"
-    if magic[0..7] == *b"!<arch>" {
-        return Ok(PackageFormatType::Deb);
-    }
-
-    Err(anyhow::anyhow!(
-        "Unable to detect package format for: {}",
-        path
-    ))
+    conary_core::packages::detect_format(path).map_err(Into::into)
 }
 
 /// Format a byte count as a human-readable string (e.g. "1.23 MB").
@@ -354,24 +309,15 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_format_from_rpm_extension() {
-        let result = detect_package_format("/path/to/package.rpm");
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), PackageFormatType::Rpm);
-    }
-
-    #[test]
-    fn test_detect_format_from_deb_extension() {
-        let result = detect_package_format("/path/to/package.deb");
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), PackageFormatType::Deb);
-    }
-
-    #[test]
-    fn test_detect_format_from_arch_extension() {
-        let result = detect_package_format("/path/to/package.pkg.tar.zst");
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), PackageFormatType::Arch);
+    fn package_extensions_are_not_format_authority() {
+        for extension in ["rpm", "deb", "pkg.tar.zst"] {
+            let mut file = tempfile::Builder::new()
+                .suffix(&format!(".{extension}"))
+                .tempfile()
+                .unwrap();
+            file.write_all(b"not a package").unwrap();
+            assert!(detect_package_format(file.path().to_str().unwrap()).is_err());
+        }
     }
 
     #[test]

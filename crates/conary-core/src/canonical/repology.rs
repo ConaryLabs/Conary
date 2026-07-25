@@ -108,39 +108,9 @@ pub fn parse_projects_batch(json: &str) -> Result<Vec<RepologyProject>> {
 ///
 /// This is the inverse of `repo_to_distro`. Returns `None` for unrecognised distros.
 pub fn distro_to_repo(distro: &str) -> Option<String> {
-    match distro {
-        "arch" => return Some("arch".to_string()),
-        "ubuntu-26.04" => return Some("ubuntu_26_04".to_string()),
-        "ubuntu-noble" => return Some("ubuntu_24_04".to_string()),
-        "ubuntu-jammy" => return Some("ubuntu_22_04".to_string()),
-        "debian-bookworm" => return Some("debian_12".to_string()),
-        "debian-bullseye" => return Some("debian_11".to_string()),
-        "debian-trixie" => return Some("debian_13".to_string()),
-        "debian-sid" => return Some("debian_unstable".to_string()),
-        "opensuse-tumbleweed" => return Some("opensuse_tumbleweed".to_string()),
-        _ => {}
-    }
-
-    // Pattern: fedora-NN -> fedora_NN
-    if let Some(version) = distro.strip_prefix("fedora-")
-        && version.chars().all(|c| c.is_ascii_digit())
-    {
-        return Some(format!("fedora_{version}"));
-    }
-
-    // Pattern: debian-NN -> debian_NN
-    if let Some(version) = distro.strip_prefix("debian-")
-        && version.chars().all(|c| c.is_ascii_digit())
-    {
-        return Some(format!("debian_{version}"));
-    }
-
-    // Pattern: opensuse-* -> opensuse_*
-    if let Some(suffix) = distro.strip_prefix("opensuse-") {
-        return Some(format!("opensuse_{suffix}"));
-    }
-
-    None
+    crate::repository::supported_profiles::profile_by_public_id(distro)
+        .or_else(|| crate::repository::supported_profiles::profile_by_family_slug(distro))
+        .map(|profile| profile.repology_repo().to_string())
 }
 
 /// Map a Repology repository ID to a Conary distro identifier.
@@ -154,40 +124,10 @@ pub fn distro_to_repo(distro: &str) -> Option<String> {
 /// sync config, a Containerfile for integration tests, and a config.toml entry
 /// in conary-test. See `.claude/rules/integration-tests.md` "Adding a New Distro".
 pub fn repo_to_distro(repo: &str) -> Option<String> {
-    // Exact matches first
-    match repo {
-        "arch" => return Some("arch".to_string()),
-        "ubuntu_26_04" => return Some("ubuntu-26.04".to_string()),
-        "ubuntu_24_04" => return Some("ubuntu-noble".to_string()),
-        "ubuntu_22_04" => return Some("ubuntu-jammy".to_string()),
-        "debian_12" => return Some("debian-bookworm".to_string()),
-        "debian_11" => return Some("debian-bullseye".to_string()),
-        "debian_13" => return Some("debian-trixie".to_string()),
-        "debian_unstable" => return Some("debian-sid".to_string()),
-        "opensuse_tumbleweed" => return Some("opensuse-tumbleweed".to_string()),
-        _ => {}
-    }
-
-    // Pattern: fedora_NN -> fedora-NN
-    if let Some(version) = repo.strip_prefix("fedora_")
-        && version.chars().all(|c| c.is_ascii_digit())
-    {
-        return Some(format!("fedora-{version}"));
-    }
-
-    // Pattern: debian_NN -> debian-NN
-    if let Some(version) = repo.strip_prefix("debian_")
-        && version.chars().all(|c| c.is_ascii_digit())
-    {
-        return Some(format!("debian-{version}"));
-    }
-
-    // Pattern: opensuse_* -> opensuse-*
-    if let Some(suffix) = repo.strip_prefix("opensuse_") {
-        return Some(format!("opensuse-{suffix}"));
-    }
-
-    None
+    crate::repository::supported_profiles::public_profiles()
+        .iter()
+        .find(|profile| profile.repology_repo() == repo)
+        .map(|profile| profile.id().to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -320,85 +260,6 @@ impl RepologyClient {
 }
 
 // ---------------------------------------------------------------------------
-// Repology rules YAML ingestion
-// ---------------------------------------------------------------------------
-
-/// A rename rule extracted from Repology's YAML ruleset.
-///
-/// We only consume `setname` rules -- other actions (setver, devel, ignore)
-/// are for version tracking (future Repology dump ingestion work).
-#[derive(Debug, Clone)]
-pub struct RepologyRenameRule {
-    pub from_name: String,
-    pub canonical_name: String,
-    pub distro: Option<String>,
-}
-
-/// Raw Repology rule from YAML deserialization.
-#[derive(serde::Deserialize)]
-struct RawRepologyRule {
-    #[serde(default)]
-    name: Option<String>,
-    #[serde(default)]
-    setname: Option<String>,
-    // Other fields (namepat, setver, devel, ignore, etc.) are intentionally
-    // ignored -- we only extract exact name renames.
-}
-
-/// Parse Repology rename rules from YAML text.
-///
-/// Only extracts rules with both `name` and `setname` (exact renames).
-/// Pattern-based rules (`namepat`) are skipped for now.
-pub fn parse_repology_rules(yaml: &str) -> Result<Vec<RepologyRenameRule>> {
-    let raw_rules: Vec<RawRepologyRule> = serde_yaml::from_str(yaml)
-        .map_err(|e| Error::ParseError(format!("Repology rules YAML: {e}")))?;
-
-    Ok(raw_rules
-        .into_iter()
-        .filter_map(|r| match (r.name, r.setname) {
-            (Some(name), Some(setname)) if name != setname => Some(RepologyRenameRule {
-                from_name: name,
-                canonical_name: setname,
-                distro: None,
-            }),
-            _ => None,
-        })
-        .collect())
-}
-
-/// Apply rename rules to create/update canonical_packages + package_implementations.
-pub fn apply_repology_rules(
-    conn: &rusqlite::Connection,
-    rules: &[RepologyRenameRule],
-) -> Result<usize> {
-    let mut count = 0;
-    for rule in rules {
-        // Upsert canonical package
-        conn.execute(
-            "INSERT INTO canonical_packages (name, kind) VALUES (?1, 'package')
-             ON CONFLICT(name) DO NOTHING",
-            [&rule.canonical_name],
-        )?;
-        let canonical_id: i64 = conn.query_row(
-            "SELECT id FROM canonical_packages WHERE name = ?1",
-            [&rule.canonical_name],
-            |row| row.get(0),
-        )?;
-
-        // Upsert implementation mapping
-        let distro = rule.distro.as_deref().unwrap_or("unknown");
-        conn.execute(
-            "INSERT INTO package_implementations (canonical_id, distro, distro_name, source)
-             VALUES (?1, ?2, ?3, 'repology')
-             ON CONFLICT(canonical_id, distro, distro_name) DO UPDATE SET source = 'repology'",
-            rusqlite::params![canonical_id, distro, &rule.from_name],
-        )?;
-        count += 1;
-    }
-    Ok(count)
-}
-
-// ---------------------------------------------------------------------------
 // Cache persistence
 // ---------------------------------------------------------------------------
 
@@ -472,70 +333,24 @@ mod tests {
     }
 
     #[test]
-    fn test_repo_id_to_distro() {
-        assert_eq!(repo_to_distro("fedora_41"), Some("fedora-41".to_string()));
+    fn supported_profile_catalog_owns_repology_identity() {
+        assert_eq!(repo_to_distro("fedora_44"), Some("fedora-44".to_string()));
         assert_eq!(
             repo_to_distro("ubuntu_26_04"),
             Some("ubuntu-26.04".to_string())
         );
         assert_eq!(repo_to_distro("arch"), Some("arch".to_string()));
+        assert_eq!(distro_to_repo("fedora-44"), Some("fedora_44".to_string()));
+        assert_eq!(distro_to_repo("fedora"), Some("fedora_44".to_string()));
+        assert_eq!(
+            distro_to_repo("ubuntu-26.04"),
+            Some("ubuntu_26_04".to_string())
+        );
         assert_eq!(repo_to_distro("unknown_repo_xyz"), None);
-    }
-
-    #[test]
-    fn test_repo_to_distro_opensuse() {
-        assert_eq!(
-            repo_to_distro("opensuse_tumbleweed"),
-            Some("opensuse-tumbleweed".to_string())
-        );
-        assert_eq!(
-            repo_to_distro("opensuse_leap_15_5"),
-            Some("opensuse-leap_15_5".to_string())
-        );
-    }
-
-    #[test]
-    fn test_repo_to_distro_debian() {
-        assert_eq!(
-            repo_to_distro("debian_12"),
-            Some("debian-bookworm".to_string())
-        );
-        assert_eq!(
-            repo_to_distro("debian_11"),
-            Some("debian-bullseye".to_string())
-        );
-        assert_eq!(
-            repo_to_distro("debian_13"),
-            Some("debian-trixie".to_string())
-        );
-        assert_eq!(
-            repo_to_distro("debian_unstable"),
-            Some("debian-sid".to_string())
-        );
-        // Numeric fallback pattern
-        assert_eq!(repo_to_distro("debian_10"), Some("debian-10".to_string()));
-    }
-
-    #[test]
-    fn test_distro_to_repo_debian() {
-        assert_eq!(
-            distro_to_repo("debian-bookworm"),
-            Some("debian_12".to_string())
-        );
-        assert_eq!(
-            distro_to_repo("debian-bullseye"),
-            Some("debian_11".to_string())
-        );
-        assert_eq!(
-            distro_to_repo("debian-trixie"),
-            Some("debian_13".to_string())
-        );
-        assert_eq!(
-            distro_to_repo("debian-sid"),
-            Some("debian_unstable".to_string())
-        );
-        // Numeric fallback pattern
-        assert_eq!(distro_to_repo("debian-10"), Some("debian_10".to_string()));
+        assert_eq!(repo_to_distro("fedora_41"), None);
+        assert_eq!(repo_to_distro("debian_10"), None);
+        assert_eq!(repo_to_distro("opensuse_tumbleweed"), None);
+        assert_eq!(distro_to_repo("debian-10"), None);
     }
 
     #[test]
@@ -555,13 +370,13 @@ mod tests {
     #[test]
     fn test_cache_repology_projects() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        crate::db::schema::migrate(&conn).unwrap();
+        crate::db::schema::ensure_current(&conn).unwrap();
 
         let projects = vec![RepologyProject {
             name: "python".into(),
             implementations: vec![
                 RepologyImplementation {
-                    repo: "fedora_43".into(),
+                    repo: "fedora_44".into(),
                     visiblename: "python3".into(),
                     version: "3.12.0".into(),
                     status: "newest".into(),
@@ -580,91 +395,5 @@ mod tests {
 
         let entries = crate::db::models::RepologyCacheEntry::find_all(&conn).unwrap();
         assert_eq!(entries.len(), 2);
-    }
-
-    #[test]
-    fn test_parse_repology_rename_rules() {
-        let yaml = r#"
-- { name: httpd, setname: apache }
-- { name: apache2, setname: apache }
-- { name: python3-requests, setname: "python:requests" }
-"#;
-        let rules = parse_repology_rules(yaml).unwrap();
-        assert_eq!(rules.len(), 3);
-        assert_eq!(rules[0].from_name, "httpd");
-        assert_eq!(rules[0].canonical_name, "apache");
-        assert_eq!(rules[2].from_name, "python3-requests");
-        assert_eq!(rules[2].canonical_name, "python:requests");
-    }
-
-    #[test]
-    fn test_parse_repology_rules_skips_identity_renames() {
-        let yaml = r#"
-- { name: firefox, setname: firefox }
-- { name: httpd, setname: apache }
-"#;
-        let rules = parse_repology_rules(yaml).unwrap();
-        assert_eq!(rules.len(), 1);
-        assert_eq!(rules[0].from_name, "httpd");
-    }
-
-    #[test]
-    fn test_parse_repology_rules_skips_non_rename() {
-        let yaml = r#"
-- { name: firefox, setver: "125.0" }
-- { namepat: "lib(.+)-dev", setname: "$1" }
-- { name: httpd, setname: apache }
-"#;
-        let rules = parse_repology_rules(yaml).unwrap();
-        assert_eq!(rules.len(), 1);
-    }
-
-    #[test]
-    fn test_apply_repology_rules_creates_canonical_mappings() {
-        use crate::db::testing::create_test_db;
-
-        let (_temp, conn) = create_test_db();
-
-        let rules = vec![
-            RepologyRenameRule {
-                from_name: "httpd".to_string(),
-                canonical_name: "apache".to_string(),
-                distro: Some("fedora".to_string()),
-            },
-            RepologyRenameRule {
-                from_name: "apache2".to_string(),
-                canonical_name: "apache".to_string(),
-                distro: Some("debian".to_string()),
-            },
-        ];
-
-        let count = apply_repology_rules(&conn, &rules).unwrap();
-        assert_eq!(count, 2);
-
-        let canonical = CanonicalPackage::find_by_name(&conn, "apache").unwrap();
-        assert!(canonical.is_some());
-
-        let impls = PackageImplementation::find_by_canonical(&conn, canonical.unwrap().id.unwrap())
-            .unwrap();
-        assert_eq!(impls.len(), 2);
-    }
-
-    #[test]
-    fn test_apply_repology_rules_idempotent() {
-        use crate::db::testing::create_test_db;
-
-        let (_temp, conn) = create_test_db();
-
-        let rules = vec![RepologyRenameRule {
-            from_name: "httpd".to_string(),
-            canonical_name: "apache".to_string(),
-            distro: Some("fedora".to_string()),
-        }];
-
-        apply_repology_rules(&conn, &rules).unwrap();
-        apply_repology_rules(&conn, &rules).unwrap(); // should not fail
-
-        let canonical = CanonicalPackage::find_by_name(&conn, "apache").unwrap();
-        assert!(canonical.is_some());
     }
 }

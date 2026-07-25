@@ -7,14 +7,14 @@
 
 <PageMeta
 	title="Install the Conary limited preview — Conary"
-	description={`Install the Conary ${previewRelease.tag} limited preview on Fedora 44, Ubuntu 26.04 LTS, or Arch and begin with reversible native-package adoption.`}
+	description={`Install the Conary ${previewRelease.tag} limited preview on Fedora 44, Ubuntu 26.04 LTS, or Arch and test a package from another distro.`}
 	path="/install/"
 />
 
 <PageIntro
 	eyebrow="Preview runbook"
 	title="Install Conary without skipping the safety gate."
-	description={`Use the pinned ${previewRelease.tag} release on a VM or non-critical x86_64 host. Verify the package, inspect every dry-run, and keep the native package manager authoritative during adoption.`}
+	description={`Use the pinned ${previewRelease.tag} release on a VM or non-critical x86_64 host. Verify Conary, select a non-native package source, and inspect the complete cross-distro transaction before apply.`}
 />
 
 <section class="install-section">
@@ -132,8 +132,9 @@
 					<div>
 						<h2>Confirm the installed version and repository</h2>
 						<p>
-							Release packages initialize the exact host profile and configure Remi plus that
-							profile's native repositories. Inspect the configured source before the package loop.
+							Release packages initialize one source-independent database and configure
+							Remi plus all built-in RPM, Debian, and Arch source feeds. Inspect the
+							configured sources before the package loop.
 						</p>
 					</div>
 				</div>
@@ -158,8 +159,8 @@
 					<div>
 						<h2>Run the bounded tester loop in order</h2>
 						<p>
-							Review every dry-run first. Ask before each live mutation, including the commands
-							with <code>--yes</code> and the live adoption command.
+							Choose a source that differs from the host's native package format. Review
+							every dry-run first and ask before each command with <code>--yes</code>.
 						</p>
 					</div>
 				</div>
@@ -170,22 +171,20 @@
 					<span><i class="intent-mark read" aria-hidden="true"></i>read-only check</span>
 				</div>
 
-				<TerminalFrame title="first external tester loop">
-					<span class="terminal-line intent-dry"><span class="intent-label">inspect</span><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary install htop --dry-run --allow-capabilities</span></span>
-					<span class="terminal-line intent-live"><span class="intent-label">live</span><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary install htop --yes --allow-capabilities</span></span>
-					<span class="terminal-line intent-dry"><span class="intent-label">inspect</span><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary system adopt --system --dry-run</span></span>
-					<span class="terminal-line intent-live"><span class="intent-label">live</span><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary system adopt --system</span></span>
-					<span class="terminal-line intent-read"><span class="intent-label">read</span><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary list</span></span>
-					<span class="terminal-line intent-read"><span class="intent-label">read</span><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary search htop</span></span>
-					<span class="terminal-line intent-dry"><span class="intent-label">inspect</span><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary update --dry-run</span></span>
-					<span class="terminal-line intent-dry"><span class="intent-label">inspect</span><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary system unadopt --all --dry-run</span></span>
-					<span class="terminal-line intent-live"><span class="intent-label">live</span><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary system unadopt --all --yes</span></span>
+				<TerminalFrame title="first cross-distro tester loop">
+					<span class="terminal-line intent-read"><span class="intent-label">choose</span><span class="terminal-command">source=ubuntu-26.04  # Fedora/Arch; use fedora-44 on Ubuntu</span></span>
+						<span class="terminal-line intent-dry"><span class="intent-label">inspect</span><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary install htop --from "$source" --dry-run</span></span>
+						<span class="terminal-line intent-live"><span class="intent-label">live</span><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary install htop --from "$source" --yes</span></span>
+					<span class="terminal-line intent-read"><span class="intent-label">read</span><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary list htop --info</span></span>
+					<span class="terminal-line intent-read"><span class="intent-label">read</span><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary query depends htop</span></span>
+					<span class="terminal-line intent-dry"><span class="intent-label">inspect</span><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary update htop --dry-run</span></span>
+					<span class="terminal-line intent-live"><span class="intent-label">live</span><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary remove htop --yes</span></span>
 				</TerminalFrame>
 
 				<div class="boundary-note step-note">
-					<strong>The capability approval is operation-specific.</strong>
-					For <code>htop</code>, <code>--allow-capabilities</code> approves the package-declared
-					capability for this operation; it is not blanket permission for later packages.
+						<strong>Capability preflight and enforcement are automatic.</strong>
+						Conary validates <code>htop</code>'s exact package declaration against the target
+						before mutation and rejects unsupported requirements without a bypass flag.
 				</div>
 			</section>
 
@@ -193,10 +192,11 @@
 				<div class="step-heading">
 					<span class="step-number">06</span>
 					<div>
-						<h2>Report the complete, partial, slow, or refused path</h2>
+						<h2>Report the complete, partial, slow, or failed path</h2>
 						<p>
-							A policy refusal or slow first conversion is useful evidence. Keep the public
-							report concise and include only the output needed to explain the result.
+							An exact capability error, lifecycle defect, or slow first conversion is
+							useful evidence. Keep the public report concise and include only the output
+							needed to explain the result.
 						</p>
 					</div>
 				</div>
@@ -207,6 +207,7 @@
 						<ul>
 							<li>Exact commands and exit statuses.</li>
 							<li>Distribution, kernel, architecture, and Conary version.</li>
+							<li>Source package format and the host's native package format.</li>
 							<li>Release tag, exact package filename, and checksum result.</li>
 							<li>Whether the loop completed and where a partial run stopped.</li>
 							<li>Anything confusing, slow, scary, or unexpectedly good.</li>
@@ -248,7 +249,7 @@
 					<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">cd Conary</span></span>
 					<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">cargo build -p conary</span></span>
 					<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">sudo install -m 755 target/debug/conary /usr/local/bin/</span></span>
-					<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary system init --profile fedora-44</span></span>
+					<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary system init</span></span>
 				</TerminalFrame>
 
 				<p class="profile-note">

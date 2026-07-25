@@ -17,12 +17,15 @@ pub fn seed_native_publication(
     architecture: &str,
     package_path: &str,
 ) {
+    let profile =
+        conary_core::repository::supported_profiles::profile_for_remi_route(distro).unwrap();
     use rusqlite::params;
 
     conn.execute(
-        "INSERT OR IGNORE INTO repositories (name, url, enabled, tuf_enabled)
-         VALUES (?1, ?2, 1, 1)",
-        params![distro, format!("remi-release://{distro}")],
+        "INSERT OR IGNORE INTO repositories
+         (name, url, enabled, tuf_enabled, default_strategy_distro)
+         VALUES (?1, ?2, 1, 1, ?3)",
+        params![distro, format!("remi-release://{distro}"), profile.id()],
     )
     .unwrap();
     let repo_id: i64 = conn
@@ -53,8 +56,8 @@ pub fn seed_native_publication(
     conn.execute(
         "INSERT INTO repository_packages
          (repository_id, name, version, package_release, architecture, description,
-          checksum, size, download_url, metadata, distro)
-         VALUES (?1, ?2, ?3, ?4, ?5, 'native test package', ?6, 42, ?7, ?8, ?9)",
+          checksum, size, download_url, metadata, distro, version_scheme)
+         VALUES (?1, ?2, ?3, ?4, ?5, 'native test package', ?6, 42, ?7, ?8, ?9, 'conary')",
         params![
             repo_id,
             name,

@@ -35,7 +35,18 @@ pub async fn cmd_config_list(db_path: &str, package: Option<&str>, all: bool) ->
         // List config files for a specific package
         let troves = Trove::find_by_name(&conn, pkg_name)?;
         if troves.is_empty() {
-            return Err(anyhow::anyhow!("Package '{}' is not installed", pkg_name));
+            let residual = ConfigFile::find_by_package(&conn, pkg_name)?;
+            if residual.is_empty() {
+                return Err(anyhow::anyhow!(
+                    "Package '{}' is not installed and has no residual config state",
+                    pkg_name
+                ));
+            }
+            println!("{} ({} residual config files):", pkg_name, residual.len());
+            for config in &residual {
+                print_config_entry(config);
+            }
+            return Ok(());
         }
 
         for trove in &troves {
@@ -100,9 +111,16 @@ pub async fn cmd_config_diff(db_path: &str, path: &str, root: &str) -> Result<()
     let objects_dir = objects_dir(db_path);
     let cas = CasStore::new(&objects_dir)?;
 
+    let original_hash = config.original_hash.as_deref().ok_or_else(|| {
+        anyhow::anyhow!(
+            "Config file '{}' is an RPM ghost path and has no package content to diff",
+            path
+        )
+    })?;
+
     // Get the original (package) content from CAS
     let original_content = cas
-        .retrieve(&config.original_hash)
+        .retrieve(original_hash)
         .map_err(|_| anyhow::anyhow!("Original config content not found in CAS"))?;
     let original_str = String::from_utf8_lossy(&original_content);
 
@@ -284,15 +302,16 @@ pub async fn cmd_config_check(db_path: &str, root: &str, package: Option<&str>) 
     let configs = if let Some(pkg_name) = package {
         let troves = Trove::find_by_name(&conn, pkg_name)?;
         if troves.is_empty() {
-            return Err(anyhow::anyhow!("Package '{}' is not installed", pkg_name));
-        }
-        let mut all_configs = Vec::new();
-        for trove in &troves {
-            if let Some(trove_id) = trove.id {
-                all_configs.extend(ConfigFile::find_by_trove(&conn, trove_id)?);
+            ConfigFile::find_by_package(&conn, pkg_name)?
+        } else {
+            let mut all_configs = Vec::new();
+            for trove in &troves {
+                if let Some(trove_id) = trove.id {
+                    all_configs.extend(ConfigFile::find_by_trove(&conn, trove_id)?);
+                }
             }
+            all_configs
         }
-        all_configs
     } else {
         ConfigFile::list_all(&conn)?
     };
@@ -322,7 +341,7 @@ pub async fn cmd_config_check(db_path: &str, root: &str, package: Option<&str>) 
             .with_context(|| format!("Failed to read config file '{}'", config.path))?;
         let current_hash = CasStore::compute_sha256(&content);
 
-        if current_hash == config.original_hash {
+        if config.original_hash.as_deref() == Some(current_hash.as_str()) {
             if config.status != ConfigStatus::Pristine {
                 config.mark_pristine(&conn, &current_hash)?;
             }

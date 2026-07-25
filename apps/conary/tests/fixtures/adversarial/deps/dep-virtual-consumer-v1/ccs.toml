@@ -1,6 +1,13 @@
+requirements = [
+    { kind = "Depends", behavior = "Hard", expression = { operator = "atom", operands = { name = "mail-transport-agent", capability_kind = "Virtual", native_text = "mail-transport-agent" } }, alternatives = [{ name = "mail-transport-agent", capability_kind = "Virtual", native_text = "mail-transport-agent" }], native_text = "mail-transport-agent" },
+]
+
 [package]
 name = "dep-virtual-consumer"
 version = "1.0.0"
+version_scheme = "conary"
+release = "1"
+kind = "package"
 description = "Consumes a virtual mail transport capability"
 license = "MIT"
 
@@ -12,10 +19,6 @@ libc = "gnu"
 [provides]
 capabilities = ["dep-virtual-consumer"]
 binaries = ["/usr/bin/dep-virtual-consumer-v1"]
-
-[requires]
-capabilities = ["mail-transport-agent"]
-packages = []
 
 [components]
 default = ["runtime"]

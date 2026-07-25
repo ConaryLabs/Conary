@@ -9,7 +9,7 @@ use super::super::open_db;
 use crate::commands::{InstalledPackageSelector, resolve_installed_package};
 use anyhow::Result;
 use conary_core::db::models::{
-    DependencyEntry, ProvideEntry, Repository, RepositoryPackage, RepositoryProvide, Trove,
+    InstalledRequirementAtom, ProvideEntry, Repository, RepositoryPackage, RepositoryProvide, Trove,
 };
 use std::collections::HashSet;
 use tracing::info;
@@ -23,7 +23,7 @@ pub async fn cmd_depends(package_name: &str, db_path: &str) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("Package '{}' not found", package_name))?;
     let trove_id = trove.id.ok_or_else(|| anyhow::anyhow!("Trove has no ID"))?;
 
-    let deps = DependencyEntry::find_by_trove(&conn, trove_id)?;
+    let deps = InstalledRequirementAtom::find_by_trove(&conn, trove_id)?;
 
     if deps.is_empty() {
         println!("Package '{}' has no dependencies", package_name);
@@ -48,7 +48,7 @@ pub async fn cmd_rdepends(package_name: &str, db_path: &str) -> Result<()> {
     info!("Showing reverse dependencies for package: {}", package_name);
     let conn = open_db(db_path)?;
 
-    let dependents = DependencyEntry::find_dependents(&conn, package_name)?;
+    let dependents = InstalledRequirementAtom::find_dependents(&conn, package_name)?;
 
     if dependents.is_empty() {
         println!(
@@ -93,13 +93,6 @@ pub async fn cmd_whatbreaks(package_name: &str, db_path: &str) -> Result<()> {
     if trove.pinned {
         println!(
             "Package '{}' is pinned and remove would be refused before mutation.",
-            trove.name
-        );
-        has_preflight_blocker = true;
-    }
-    if crate::commands::install::is_package_blocked(&trove.name) {
-        println!(
-            "Package '{}' is critical and remove would be refused before mutation.",
             trove.name
         );
         has_preflight_blocker = true;

@@ -1,6 +1,13 @@
+requirements = [
+    { kind = "Depends", behavior = "Hard", expression = { operator = "atom", operands = { name = "dep-or-provider", capability_kind = "Virtual", native_text = "dep-or-provider" } }, alternatives = [{ name = "dep-or-provider", capability_kind = "Virtual", native_text = "dep-or-provider" }], native_text = "dep-or-provider" },
+]
+
 [package]
 name = "dep-or-consumer"
 version = "1.0.0"
+version_scheme = "conary"
+release = "1"
+kind = "package"
 description = "Consumer of the shared OR-style provider capability"
 license = "MIT"
 
@@ -12,10 +19,6 @@ libc = "gnu"
 [provides]
 capabilities = ["dep-or-consumer"]
 binaries = ["/usr/bin/dep-or-consumer-v1"]
-
-[requires]
-capabilities = ["dep-or-provider"]
-packages = []
 
 [components]
 default = ["runtime"]

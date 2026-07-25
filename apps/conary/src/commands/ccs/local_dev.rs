@@ -41,7 +41,7 @@ pub fn write_local_dev_policy(path: &Path, key: &SigningKeyPair) -> Result<()> {
     std::fs::write(
         path,
         format!(
-            "trusted_keys = [\"{}\"]\nallow_unsigned = false\nrequire_timestamp = false\n",
+            "trusted_keys = [\"{}\"]\nrequire_timestamp = false\n",
             key.public_key_base64()
         ),
     )
@@ -81,7 +81,6 @@ mod tests {
         write_local_dev_policy(&policy_path, &key).unwrap();
         let policy = conary_core::ccs::verify::TrustPolicy::from_file(&policy_path).unwrap();
 
-        assert_eq!(policy.trusted_keys, vec![key.public_key_base64()]);
-        assert!(!policy.allow_unsigned);
+        assert_eq!(policy.trusted_keys(), &[key.public_key_base64()]);
     }
 }

@@ -2,8 +2,11 @@
 # tests/fixtures/adversarial/build-corrupted.sh
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONARY_BIN="${1:-${CONARY_BIN:-$(pwd)/target/debug/conary}}"
+DEFAULT_CONARY_BIN="${CARGO_TARGET_DIR:-$(pwd)/target}/debug/conary"
+CONARY_BIN="${1:-${CONARY_BIN:-$DEFAULT_CONARY_BIN}}"
 NATIVE_OUTPUT_DIR="$SCRIPT_DIR/corrupted/native/output"
+source "$SCRIPT_DIR/../ccs-test-authority/env.sh"
+fixture_ccs_require_authority
 
 build_valid_fixture() {
     local fixture_dir="$1"
@@ -11,7 +14,8 @@ build_valid_fixture() {
     rm -f "$fixture_dir/output/"*.ccs
     "$CONARY_BIN" ccs build "$fixture_dir/ccs.toml" \
         --source "$fixture_dir/stage" \
-        --output "$fixture_dir/output/"
+        --output "$fixture_dir/output/" \
+        --key "$FIXTURE_CCS_KEY"
 }
 
 mutate_ccs() {
@@ -22,7 +26,8 @@ mutate_ccs() {
     tmpdir="$(mktemp -d)"
     tar -xzf "$source_ccs" -C "$tmpdir"
     "$mutator" "$tmpdir"
-    tar -czf "$output_ccs" -C "$tmpdir" .
+    mapfile -t archive_entries < <(find "$tmpdir" -type f -printf '%P\n' | sort)
+    tar -czf "$output_ccs" -C "$tmpdir" "${archive_entries[@]}"
     rm -rf "$tmpdir"
 }
 
@@ -34,7 +39,8 @@ import sys
 path = sys.argv[1]
 with open(path, "r", encoding="utf-8") as f:
     data = json.load(f)
-data["files"][0]["hash"] = "0" * 64
+entry = next(item for item in data["files"] if "content" in item)
+entry["content"]["sha256"] = "0" * 64
 with open(path, "w", encoding="utf-8") as f:
     json.dump(data, f, indent=2)
     f.write("\n")
@@ -63,7 +69,8 @@ import sys
 path = sys.argv[1]
 with open(path, "r", encoding="utf-8") as f:
     data = json.load(f)
-data["files"][0]["size"] = 1073741824
+entry = next(item for item in data["files"] if "content" in item)
+entry["content"]["size"] = 1073741824
 data["size"] = 1073741824
 with open(path, "w", encoding="utf-8") as f:
     json.dump(data, f, indent=2)
@@ -174,6 +181,13 @@ PY
 }
 
 build_native_fixtures() {
+    for tool in rpmbuild dpkg-deb zstd; do
+        if ! command -v "$tool" >/dev/null 2>&1; then
+            echo "FATAL: native corrupted fixture build requires $tool" >&2
+            return 69
+        fi
+    done
+
     mkdir -p "$NATIVE_OUTPUT_DIR"
     rm -f "$NATIVE_OUTPUT_DIR"/native-package-corrupted.*
 
@@ -219,8 +233,12 @@ tampered_src="$(find "$SCRIPT_DIR/corrupted/tampered/output" -maxdepth 1 -name '
 tampered_dst="$SCRIPT_DIR/corrupted/tampered/output/tampered-corrupted.ccs"
 mutate_ccs "$tampered_src" "$tampered_dst" mutate_tampered
 
-echo "Building corrupted native package fixtures..."
-build_native_fixtures
+if [ "${BUILD_NATIVE_FIXTURES:-1}" = "1" ]; then
+    echo "Building corrupted native package fixtures..."
+    build_native_fixtures
+else
+    echo "Skipping corrupted native package fixtures (BUILD_NATIVE_FIXTURES=0)"
+fi
 
 echo "[OK] Corrupted fixtures built:"
 printf '  %s\n' "$bad_dst" "$trunc_dst" "$size_dst" "$tampered_dst"

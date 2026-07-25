@@ -7,12 +7,34 @@
 //! so each test module can import them with `use super::test_helpers::*`.
 
 use conary_core::db::models::{
-    Changeset, ChangesetStatus, Component, DependencyEntry, FileEntry, InstallSource, LabelEntry,
-    PackageResolution, PrimaryStrategy, ProvideEntry, Repository, RepositoryPackage,
+    Changeset, ChangesetStatus, Component, FileEntry, InstallSource, InstalledRequirementGroup,
+    LabelEntry, PackageResolution, PrimaryStrategy, ProvideEntry, Repository, RepositoryPackage,
     ResolutionStrategy, Trove, TroveType,
 };
 use conary_core::db::schema;
+use conary_core::payload::{PayloadContentAuthority, PayloadNode, ResolvedPayloadNode};
+use conary_core::repository::dependency_model::RepositoryRequirementKind;
+use conary_core::repository::requirement::parse_native_requirement;
+use conary_core::repository::versioning::VersionScheme;
 use tempfile::TempDir;
+
+fn stored_regular_file(
+    path: &str,
+    hash: String,
+    size: i64,
+    permissions: u32,
+    trove_id: i64,
+) -> FileEntry {
+    FileEntry::new(
+        path.to_string(),
+        ResolvedPayloadNode::from_numeric_source(PayloadNode::regular(permissions)).unwrap(),
+        Some(PayloadContentAuthority {
+            sha256: hash,
+            size: u64::try_from(size).unwrap(),
+        }),
+        trove_id,
+    )
+}
 
 pub(crate) fn create_test_db() -> (TempDir, String) {
     let temp_dir = tempfile::tempdir().unwrap();
@@ -20,7 +42,10 @@ pub(crate) fn create_test_db() -> (TempDir, String) {
     let db_path_string = db_path.display().to_string();
     let conn = rusqlite::Connection::open(&db_path).unwrap();
     conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
-    schema::migrate(&conn).unwrap();
+    schema::ensure_current(&conn).unwrap();
+    conary_core::ccs::HostCapabilityInventory::discover()
+        .persist(&conn)
+        .unwrap();
     drop(conn);
     stage_test_boot_assets(temp_dir.path());
     (temp_dir, db_path_string)
@@ -48,6 +73,9 @@ pub(crate) fn setup_command_test_db() -> (TempDir, String) {
     let nginx_config_hash = cas.store(nginx_config_contents).unwrap();
     let nginx_config_size = i64::try_from(nginx_config_contents.len()).unwrap();
     let mut conn = conary_core::db::open(&db_path).unwrap();
+    conary_core::ccs::HostCapabilityInventory::discover()
+        .persist(&conn)
+        .unwrap();
 
     conary_core::db::transaction(&mut conn, |tx| {
         let mut changeset1 = Changeset::new("Install nginx-1.24.0".to_string());
@@ -57,7 +85,7 @@ pub(crate) fn setup_command_test_db() -> (TempDir, String) {
             "nginx".to_string(),
             "1.24.0".to_string(),
             TroveType::Package,
-        );
+        conary_core::repository::versioning::VersionScheme::Conary);
         nginx.architecture = Some("x86_64".to_string());
         nginx.description = Some("High performance web server".to_string());
         nginx.installed_by_changeset_id = Some(changeset1_id);
@@ -94,8 +122,8 @@ pub(crate) fn setup_command_test_db() -> (TempDir, String) {
             ],
         )?;
 
-        let mut f1 = FileEntry::new(
-            "/usr/sbin/nginx".to_string(),
+        let mut f1 = stored_regular_file(
+            "/usr/sbin/nginx",
             nginx_binary_hash.clone(),
             nginx_binary_size,
             0o755,
@@ -104,8 +132,8 @@ pub(crate) fn setup_command_test_db() -> (TempDir, String) {
         f1.component_id = Some(runtime_id);
         f1.insert(tx)?;
 
-        let mut init = FileEntry::new(
-            "/usr/sbin/init".to_string(),
+        let mut init = stored_regular_file(
+            "/usr/sbin/init",
             init_binary_hash.clone(),
             init_binary_size,
             0o755,
@@ -114,8 +142,8 @@ pub(crate) fn setup_command_test_db() -> (TempDir, String) {
         init.component_id = Some(runtime_id);
         init.insert(tx)?;
 
-        let mut f2 = FileEntry::new(
-            "/etc/nginx/nginx.conf".to_string(),
+        let mut f2 = stored_regular_file(
+            "/etc/nginx/nginx.conf",
             nginx_config_hash.clone(),
             nginx_config_size,
             0o644,
@@ -129,14 +157,18 @@ pub(crate) fn setup_command_test_db() -> (TempDir, String) {
         let mut p2 = ProvideEntry::new(nginx_id, "webserver".to_string(), None);
         p2.insert(tx)?;
 
-        let mut dep = DependencyEntry::new(
+        let dependency = parse_native_requirement(
+            RepositoryRequirementKind::Depends,
+            VersionScheme::Conary,
+            "openssl >= 3.0.0",
+        )
+        .map_err(conary_core::Error::ParseError)?;
+        InstalledRequirementGroup::insert_groups(
+            tx,
             nginx_id,
-            "openssl".to_string(),
-            Some(">= 3.0".to_string()),
-            "runtime".to_string(),
-            None,
-        );
-        dep.insert(tx)?;
+            VersionScheme::Conary,
+            &[dependency],
+        )?;
 
         changeset1.update_status(tx, ChangesetStatus::Applied)?;
 
@@ -147,7 +179,7 @@ pub(crate) fn setup_command_test_db() -> (TempDir, String) {
             "openssl".to_string(),
             "3.0.0".to_string(),
             TroveType::Package,
-        );
+        conary_core::repository::versioning::VersionScheme::Conary);
         openssl.architecture = Some("x86_64".to_string());
         openssl.description = Some("Cryptography and SSL/TLS toolkit".to_string());
         openssl.installed_by_changeset_id = Some(changeset2_id);
@@ -172,8 +204,7 @@ pub(crate) fn setup_command_test_db() -> (TempDir, String) {
 }
 
 fn stage_test_boot_assets(root: &std::path::Path) {
-    let kernel_version = conary_core::generation::builder::detect_kernel_version_from_troves(&[])
-        .unwrap_or_else(|| "test-kernel".to_string());
+    let kernel_version = "test-kernel";
     let boot_root = root.join("boot");
     std::fs::create_dir_all(boot_root.join("EFI/BOOT")).unwrap();
     std::fs::write(
@@ -201,7 +232,7 @@ pub(crate) fn seed_mixed_replatform_fixture(conn: &rusqlite::Connection) {
         "arch-core".to_string(),
         "https://example.test/arch".to_string(),
     );
-    arch_repo.default_strategy = Some("legacy".to_string());
+    arch_repo.default_strategy = Some("binary".to_string());
     arch_repo.default_strategy_distro = Some("arch".to_string());
     let arch_repo_id = arch_repo.insert(conn).unwrap();
 
@@ -221,6 +252,7 @@ pub(crate) fn seed_mixed_replatform_fixture(conn: &rusqlite::Connection) {
             version.to_string(),
             TroveType::Package,
             InstallSource::Repository,
+            conary_core::repository::versioning::VersionScheme::Conary,
         );
         trove.architecture = Some("x86_64".to_string());
         trove.label_id = fedora_label.id;
@@ -232,6 +264,7 @@ pub(crate) fn seed_mixed_replatform_fixture(conn: &rusqlite::Connection) {
             arch_repo_id,
             name.to_string(),
             version.to_string(),
+            conary_core::repository::versioning::VersionScheme::Arch,
             format!("sha256:{name}"),
             123,
             format!("https://example.test/arch/{name}.pkg.tar.zst"),

@@ -210,8 +210,8 @@ license = "MIT"
         assert_eq!(manifest.package.version, "0.2.0");
         assert_eq!(manifest.package.description, "cargo description");
         assert_eq!(manifest.package.license.as_deref(), Some("MIT"));
-        assert_eq!(manifest.package.release.as_deref(), Some("1"));
-        assert_eq!(manifest.package.kind, Some(PackageKindTagV2::Package));
+        assert_eq!(manifest.package.release.as_str(), "1");
+        assert_eq!(manifest.package.kind, PackageKindTagV2::Package);
     }
 
     #[tokio::test]

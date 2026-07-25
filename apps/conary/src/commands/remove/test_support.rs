@@ -3,6 +3,11 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use conary_core::payload::{
+    PayloadContentAuthority, PayloadIdentity, PayloadNode, PayloadNodeKind, PayloadTimestamp,
+    ResolvedPayloadNode,
+};
+use std::collections::BTreeMap;
 use tempfile::TempDir;
 use tracing::warn;
 
@@ -14,13 +19,55 @@ struct DirectRemovalStats {
     dirs_removed: usize,
 }
 
-pub(super) fn file_snapshot(path: &str, permissions: i32) -> FileSnapshot {
+fn resolved_node(kind: PayloadNodeKind, mode: u32) -> ResolvedPayloadNode {
+    ResolvedPayloadNode::from_numeric_source(PayloadNode {
+        kind,
+        mode,
+        user: PayloadIdentity::Numeric { id: 0 },
+        group: PayloadIdentity::Numeric { id: 0 },
+        mtime: PayloadTimestamp::UNIX_EPOCH,
+        xattrs: BTreeMap::new(),
+    })
+    .unwrap()
+}
+
+pub(super) fn regular_snapshot(path: &str, permissions: u32) -> FileSnapshot {
     FileSnapshot {
         path: path.to_string(),
-        sha256_hash: "0".repeat(64),
-        size: 1,
-        permissions,
-        symlink_target: None,
+        node: resolved_node(
+            PayloadNodeKind::Regular {
+                hardlink_identity: None,
+            },
+            libc::S_IFREG | (permissions & 0o7777),
+        ),
+        content: Some(PayloadContentAuthority {
+            sha256: conary_core::hash::sha256(b"x"),
+            size: 1,
+        }),
+    }
+}
+
+fn symlink_snapshot(path: &str, target: &str) -> FileSnapshot {
+    FileSnapshot {
+        path: path.to_string(),
+        node: resolved_node(
+            PayloadNodeKind::Symlink {
+                target: target.to_string(),
+            },
+            libc::S_IFLNK | 0o777,
+        ),
+        content: None,
+    }
+}
+
+fn directory_snapshot(path: &str, permissions: u32) -> FileSnapshot {
+    FileSnapshot {
+        path: path.to_string(),
+        node: resolved_node(
+            PayloadNodeKind::Directory,
+            libc::S_IFDIR | (permissions & 0o7777),
+        ),
+        content: None,
     }
 }
 
@@ -31,6 +78,10 @@ pub(super) fn remove_snapshot(files: Vec<FileSnapshot>) -> TroveSnapshot {
         architecture: Some("x86_64".to_string()),
         description: None,
         install_source: "Package".to_string(),
+        source_distro: None,
+        version_scheme: conary_core::repository::versioning::VersionScheme::Conary,
+        native_lifecycle: None,
+        ccs_remove_hook: None,
         installed_from_repository_id: None,
         files,
     }
@@ -41,7 +92,7 @@ fn snapshot_path_under_root(root: &Path, path: &str) -> PathBuf {
 }
 
 fn snapshot_entry_is_dir(file: &FileSnapshot) -> bool {
-    file.path.ends_with('/') || (file.permissions as u32 & 0o170000) == 0o040000
+    matches!(file.node.source.kind, PayloadNodeKind::Directory)
 }
 
 fn remove_files_from_live_root(
@@ -116,10 +167,10 @@ mod tests {
         std::os::unix::fs::symlink("fixture", root.join("usr/bin/fixture-link")).unwrap();
 
         let snapshot = remove_snapshot(vec![
-            file_snapshot("/usr/bin/fixture", 0o100755),
-            file_snapshot("/usr/bin/fixture-link", 0o120777),
-            file_snapshot("/usr/share/fixture/readme", 0o100644),
-            file_snapshot("/usr/share/fixture/", 0o040755),
+            regular_snapshot("/usr/bin/fixture", 0o755),
+            symlink_snapshot("/usr/bin/fixture-link", "fixture"),
+            regular_snapshot("/usr/share/fixture/readme", 0o644),
+            directory_snapshot("/usr/share/fixture/", 0o755),
         ]);
 
         let stats = remove_files_from_live_root(root, &snapshot).unwrap();
@@ -135,7 +186,7 @@ mod tests {
     #[test]
     fn direct_live_root_removal_ignores_already_missing_paths() {
         let tmp = TempDir::new().unwrap();
-        let snapshot = remove_snapshot(vec![file_snapshot("/usr/bin/missing", 0o100755)]);
+        let snapshot = remove_snapshot(vec![regular_snapshot("/usr/bin/missing", 0o755)]);
 
         let stats = remove_files_from_live_root(tmp.path(), &snapshot).unwrap();
 

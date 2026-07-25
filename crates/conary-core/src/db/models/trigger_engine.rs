@@ -7,10 +7,10 @@
 //! ordering logic a dedicated home.
 
 use super::{ChangesetTrigger, Trigger, TriggerDependency};
-use crate::error::Result;
+use crate::error::{Error, Result};
 use rusqlite::Connection;
 use std::collections::{HashMap, VecDeque};
-use tracing::{debug, warn};
+use tracing::debug;
 
 /// Trigger execution engine.
 pub struct TriggerEngine<'a> {
@@ -159,10 +159,12 @@ impl<'a> TriggerEngine<'a> {
         }
 
         if sorted.len() != changeset_triggers.len() {
-            warn!("Circular dependency detected in triggers, using priority order fallback");
-            let mut remaining: Vec<Trigger> = triggers.into_values().collect();
-            remaining.sort_by_key(|trigger| trigger.priority);
-            sorted.extend(remaining);
+            let mut cycle_members: Vec<String> = triggers.into_keys().collect();
+            cycle_members.sort();
+            return Err(Error::TriggerError(format!(
+                "dependency cycle among triggers: {}",
+                cycle_members.join(", ")
+            )));
         }
 
         Ok(sorted)

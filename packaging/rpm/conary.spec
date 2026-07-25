@@ -12,12 +12,14 @@ Source1:        vendor.tar.gz
 
 BuildRequires:  openssl-devel
 BuildRequires:  xz-devel
+BuildRequires:  libseccomp-devel
 BuildRequires:  pkg-config
 BuildRequires:  cmake
 BuildRequires:  perl
 
 Requires:       openssl-libs
 Requires:       xz-libs
+Requires:       libseccomp
 
 ExclusiveArch:  x86_64
 
@@ -48,6 +50,13 @@ install -Dpm 0755 target/release/%{crate} %{buildroot}%{_bindir}/%{crate}
 # Man page
 install -Dpm 0644 apps/conary/man/%{crate}.1 %{buildroot}%{_mandir}/man1/%{crate}.1
 
+# Booted-generation activation
+install -Dpm 0644 packaging/systemd/%{crate}-generation-activation.service \
+    %{buildroot}%{_unitdir}/%{crate}-generation-activation.service
+install -d %{buildroot}%{_unitdir}/multi-user.target.wants
+ln -s ../%{crate}-generation-activation.service \
+    %{buildroot}%{_unitdir}/multi-user.target.wants/%{crate}-generation-activation.service
+
 # Shell completions
 install -d %{buildroot}%{_datadir}/bash-completion/completions
 install -d %{buildroot}%{_datadir}/zsh/site-functions
@@ -66,13 +75,15 @@ install -Dpm 0644 LICENSE %{buildroot}%{_datadir}/licenses/%{crate}/LICENSE
 %post
 # Initialize the Conary database and seed default repos (including Remi CCS proxy).
 # Safe to re-run: init reconciles managed defaults without replacing user-managed endpoints.
-%{_bindir}/%{crate} system init --profile fedora-44
+%{_bindir}/%{crate} system init
 
 %files
 %license LICENSE
 %doc README.md
 %{_bindir}/%{crate}
 %{_mandir}/man1/%{crate}.1*
+%{_unitdir}/%{crate}-generation-activation.service
+%{_unitdir}/multi-user.target.wants/%{crate}-generation-activation.service
 %{_datadir}/bash-completion/completions/%{crate}
 %{_datadir}/zsh/site-functions/_%{crate}
 %{_datadir}/fish/vendor_completions.d/%{crate}.fish

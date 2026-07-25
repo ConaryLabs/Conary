@@ -20,19 +20,8 @@ pub(super) async fn dispatch_capability_command(cmd: cli::CapabilityCommands) ->
             missing,
             format,
         } => commands::cmd_capability_list(&db.db_path, missing, &format).await,
-        cli::CapabilityCommands::Generate {
-            binary,
-            args,
-            output,
-            timeout,
-        } => commands::cmd_capability_generate(&binary, &args, output.as_deref(), timeout).await,
-        cli::CapabilityCommands::Audit {
-            package,
-            db,
-            command,
-            timeout,
-        } => {
-            commands::cmd_capability_audit(&db.db_path, &package, command.as_deref(), timeout).await
+        cli::CapabilityCommands::Audit { package, db } => {
+            commands::cmd_capability_audit(&db.db_path, &package).await
         }
         cli::CapabilityCommands::Run {
             package,

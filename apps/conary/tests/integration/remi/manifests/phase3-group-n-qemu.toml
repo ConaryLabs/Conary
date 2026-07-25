@@ -39,14 +39,14 @@ timeout_seconds = 1800
 ssh_port = 2230
 stage_conary = true
 commands = [
-    "conary system init --profile fedora-44",
+    "conary system init",
     "for cmd in sqlite3 cpio dracut depmod; do command -v \"$cmd\" >/dev/null || { echo \"generation-builder-ready QEMU fixture missing $cmd\"; exit 1; }; done",
     "test -d /usr/lib/dracut || { echo 'generation-builder-ready QEMU fixture missing /usr/lib/dracut'; exit 1; }",
-    "conary repo remove remi || true",
-    "conary repo add remi ${REMI_ENDPOINT} --default-strategy remi --remi-endpoint ${REMI_ENDPOINT} --remi-distro ${REMI_DISTRO} --no-gpg-check",
-    "conary repo sync remi --force",
+    "conary repo remove ${REPO_NAME} || true",
+    "conary repo add ${REPO_NAME} ${REMI_ENDPOINT} --package-format json --default-strategy remi --remi-endpoint ${REMI_ENDPOINT} --remi-distro ${REMI_DISTRO}",
+    "conary repo sync ${REPO_NAME} --force",
     "conary system adopt --system --full",
-    "conary install kernel --repo remi --yes --sandbox never",
+    "conary install kernel --repo ${REPO_NAME} --yes --sandbox always",
     "conary system generation build --yes --summary \"T150 kernel deployment\"",
     "GEN=$(find /conary/generations -mindepth 1 -maxdepth 1 -type d -printf '%f\\n' | sort -n | tail -1); test -n \"$GEN\"; conary system generation switch \"$GEN\" --yes",
     "GEN=$(basename \"$(readlink /conary/current)\"); test -n \"$GEN\"; test -f /conary/generations/$GEN/.conary-artifact.json; test -f /conary/generations/$GEN/root.erofs; test -f /conary/generations/$GEN/boot-assets/vmlinuz; test -f /conary/generations/$GEN/boot-assets/initramfs.img; test -f /conary/generations/$GEN/boot-assets/manifest.json",
@@ -80,14 +80,14 @@ timeout_seconds = 1800
 ssh_port = 2231
 stage_conary = true
 commands = [
-    "conary system init --profile fedora-44",
+    "conary system init",
     "for cmd in sqlite3 cpio dracut depmod; do command -v \"$cmd\" >/dev/null || { echo \"generation-builder-ready QEMU fixture missing $cmd\"; exit 1; }; done",
     "test -d /usr/lib/dracut || { echo 'generation-builder-ready QEMU fixture missing /usr/lib/dracut'; exit 1; }",
-    "conary repo remove remi || true",
-    "conary repo add remi ${REMI_ENDPOINT} --default-strategy remi --remi-endpoint ${REMI_ENDPOINT} --remi-distro ${REMI_DISTRO} --no-gpg-check",
-    "conary repo sync remi --force",
+    "conary repo remove ${REPO_NAME} || true",
+    "conary repo add ${REPO_NAME} ${REMI_ENDPOINT} --package-format json --default-strategy remi --remi-endpoint ${REMI_ENDPOINT} --remi-distro ${REMI_DISTRO}",
+    "conary repo sync ${REPO_NAME} --force",
     "conary system adopt --system --full",
-    "conary install kernel --repo remi --yes --sandbox never",
+    "conary install kernel --repo ${REPO_NAME} --yes --sandbox always",
     "conary system generation build --yes --summary \"T151 BLS generation\"",
     "GEN=$(find /conary/generations -mindepth 1 -maxdepth 1 -type d -printf '%f\\n' | sort -n | tail -1); test -n \"$GEN\"; conary system generation switch \"$GEN\" --yes",
     "GEN=$(basename \"$(readlink /conary/current)\"); test -f /boot/loader/entries/conary-gen-$GEN.conf; grep -q \"conary.generation=$GEN\" /boot/loader/entries/conary-gen-$GEN.conf",
@@ -120,14 +120,14 @@ timeout_seconds = 1800
 ssh_port = 2232
 stage_conary = true
 commands = [
-    "conary system init --profile fedora-44",
+    "conary system init",
     "for cmd in sqlite3 cpio dracut depmod; do command -v \"$cmd\" >/dev/null || { echo \"generation-builder-ready QEMU fixture missing $cmd\"; exit 1; }; done",
     "test -d /usr/lib/dracut || { echo 'generation-builder-ready QEMU fixture missing /usr/lib/dracut'; exit 1; }",
-    "conary repo remove remi || true",
-    "conary repo add remi ${REMI_ENDPOINT} --default-strategy remi --remi-endpoint ${REMI_ENDPOINT} --remi-distro ${REMI_DISTRO} --no-gpg-check",
-    "conary repo sync remi --force",
+    "conary repo remove ${REPO_NAME} || true",
+    "conary repo add ${REPO_NAME} ${REMI_ENDPOINT} --package-format json --default-strategy remi --remi-endpoint ${REMI_ENDPOINT} --remi-distro ${REMI_DISTRO}",
+    "conary repo sync ${REPO_NAME} --force",
     "conary system adopt --system --full",
-    "conary install kernel --repo remi --yes --sandbox never",
+    "conary install kernel --repo ${REPO_NAME} --yes --sandbox always",
     "conary system generation build --yes --summary \"T153 baseline generation\"",
     "GEN1=$(find /conary/generations -mindepth 1 -maxdepth 1 -type d -printf '%f\\n' | sort -n | tail -1); test -n \"$GEN1\"; conary system generation switch \"$GEN1\" --yes; echo \"$GEN1\" > /tmp/conary-gen1",
     "conary system generation build --yes",
@@ -163,15 +163,15 @@ timeout_seconds = 1800
 ssh_port = 2233
 stage_conary = true
 commands = [
-    "conary system init --profile fedora-44",
+    "conary system init",
     "for cmd in sqlite3 cpio dracut depmod; do command -v \"$cmd\" >/dev/null || { echo \"generation-builder-ready QEMU fixture missing $cmd\"; exit 1; }; done",
     "test -d /usr/lib/dracut || { echo 'generation-builder-ready QEMU fixture missing /usr/lib/dracut'; exit 1; }",
-    "conary repo remove remi || true",
-    "conary repo add remi ${REMI_ENDPOINT} --default-strategy remi --remi-endpoint ${REMI_ENDPOINT} --remi-distro ${REMI_DISTRO} --no-gpg-check",
-    "conary repo sync remi --force",
+    "conary repo remove ${REPO_NAME} || true",
+    "conary repo add ${REPO_NAME} ${REMI_ENDPOINT} --package-format json --default-strategy remi --remi-endpoint ${REMI_ENDPOINT} --remi-distro ${REMI_DISTRO}",
+    "conary repo sync ${REPO_NAME} --force",
     "conary system adopt --system --full",
-    "conary install kernel --repo remi --yes --sandbox never",
-    "conary install grub2 --repo remi --yes --sandbox never",
+    "conary install kernel --repo ${REPO_NAME} --yes --sandbox always",
+    "conary install grub2 --repo ${REPO_NAME} --yes --sandbox always",
     "conary system generation build --yes --summary \"T154 bootloader generation\"",
     "GEN=$(find /conary/generations -mindepth 1 -maxdepth 1 -type d -printf '%f\\n' | sort -n | tail -1); test -n \"$GEN\"; conary system generation switch \"$GEN\" --yes",
     "GEN=$(basename \"$(readlink /conary/current)\"); test -n \"$GEN\"; test -f /conary/generations/$GEN/.conary-artifact.json",

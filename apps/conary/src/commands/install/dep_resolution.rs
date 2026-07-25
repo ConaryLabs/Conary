@@ -1,579 +1,247 @@
-// src/commands/install/dep_resolution.rs
-//! Dependency resolution with dep-mode awareness
+// apps/conary/src/commands/install/dep_resolution.rs
+//! Repository-backed dependency planning.
 //!
-//! This module implements the dep-mode-aware resolution logic that determines
-//! how each missing dependency should be handled based on the user's chosen
-//! `DepMode` (Satisfy, Adopt, Takeover).
+//! Normal installation never asks a native package manager or probes the live
+//! filesystem to decide whether a requirement is satisfied. Installed
+//! providers come from Conary's persisted provider graph; missing providers
+//! must resolve through exact repository metadata.
 
-use super::blocklist;
-use super::dep_mode::DepMode;
-use super::system_pm;
-use conary_core::db::models::Trove;
+use anyhow::{Context, Result};
+use conary_core::repository;
+use conary_core::repository::versioning::{
+    RepoVersionConstraint, VersionScheme, repo_version_satisfies,
+};
 use conary_core::resolver::MissingDependency;
 use conary_core::version::VersionConstraint;
 use tracing::debug;
 
-/// A dependency that needs to be installed from a repository
-#[derive(Debug, Clone)]
+/// A dependency selected for installation from a configured repository.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedDep {
     pub name: String,
-    #[allow(dead_code)]
-    pub version: Option<String>,
-    #[allow(dead_code)]
+    pub constraint: VersionConstraint,
     pub required_by: Vec<String>,
 }
 
-/// Result of dep-mode-aware dependency resolution
+/// Result of resolving requirements that were not satisfied by Conary's
+/// installed provider graph.
 #[derive(Debug, Default)]
 pub struct DepResolutionPlan {
-    /// Dependencies to download and install from Remi
     pub to_install: Vec<ResolvedDep>,
-    /// Dependencies to auto-adopt from system PM (adopt mode)
-    pub to_adopt: Vec<String>,
-    /// Dependencies already satisfied (name, reason)
-    pub satisfied: Vec<(String, String)>,
-    /// Dependencies on the blocklist (treated as satisfied)
-    pub blocked: Vec<String>,
-    /// Dependencies that cannot be resolved
     pub unresolvable: Vec<MissingDependency>,
 }
 
-/// Resolve missing dependencies using the active source policy convergence intent
-/// as the default dep mode.
-///
-/// When the user has not explicitly specified `--dep-mode`, this function reads
-/// the convergence intent from the source policy and derives an appropriate mode:
-/// - `TrackOnly` -> `Satisfy`
-/// - `CasBacked` -> `Adopt`
-/// - `FullOwnership` -> `Takeover`
-///
-/// If `explicit_mode` is `Some`, it takes precedence over the policy default.
-pub fn resolve_missing_deps_policy_aware(
-    conn: &rusqlite::Connection,
-    missing: &[MissingDependency],
-    explicit_mode: Option<DepMode>,
-    convergence: &conary_core::model::parser::ConvergenceIntent,
-) -> DepResolutionPlan {
-    let effective_mode =
-        explicit_mode.unwrap_or_else(|| DepMode::from_convergence_intent(convergence));
-    debug!(
-        "Dep resolution: explicit_mode={:?}, convergence={}, effective={}",
-        explicit_mode,
-        convergence.display_name(),
-        effective_mode
-    );
-    resolve_missing_deps(conn, missing, effective_mode)
+pub(super) fn version_satisfies_constraint(
+    scheme: VersionScheme,
+    version: &str,
+    constraint: &VersionConstraint,
+) -> Result<bool> {
+    match constraint {
+        VersionConstraint::Any => Ok(true),
+        VersionConstraint::And(left, right) => {
+            Ok(version_satisfies_constraint(scheme, version, left)?
+                && version_satisfies_constraint(scheme, version, right)?)
+        }
+        VersionConstraint::Exact(expected) => Ok(repo_version_satisfies(
+            scheme,
+            version,
+            &RepoVersionConstraint::Exact(expected.to_string()),
+        )?),
+        VersionConstraint::GreaterThan(expected) => Ok(repo_version_satisfies(
+            scheme,
+            version,
+            &RepoVersionConstraint::GreaterThan(expected.to_string()),
+        )?),
+        VersionConstraint::GreaterOrEqual(expected) => Ok(repo_version_satisfies(
+            scheme,
+            version,
+            &RepoVersionConstraint::GreaterOrEqual(expected.to_string()),
+        )?),
+        VersionConstraint::LessThan(expected) => Ok(repo_version_satisfies(
+            scheme,
+            version,
+            &RepoVersionConstraint::LessThan(expected.to_string()),
+        )?),
+        VersionConstraint::LessOrEqual(expected) => Ok(repo_version_satisfies(
+            scheme,
+            version,
+            &RepoVersionConstraint::LessOrEqual(expected.to_string()),
+        )?),
+        VersionConstraint::NotEqual(expected) => Ok(repo_version_satisfies(
+            scheme,
+            version,
+            &RepoVersionConstraint::NotEqual(expected.to_string()),
+        )?),
+    }
 }
 
-/// Classify missing dependencies according to the chosen `DepMode`.
+/// Plan every missing requirement against normalized repository facts.
 ///
-/// For each missing dependency, the function checks (in order):
-/// 1. Blocklist -- always treated as satisfied (never touched)
-/// 2. Already tracked in Conary DB -- satisfied or needs takeover
-/// 3. System PM presence -- depends on dep mode
-///
-/// The caller is responsible for actually installing, adopting, or
-/// reporting the results.
-pub fn resolve_missing_deps(
+/// A successful lookup proves that a configured repository has an exact
+/// package or capability provider. A lookup failure remains an explicit
+/// unresolved requirement; it is never converted into a live-host guess.
+pub fn plan_repository_dependencies(
     conn: &rusqlite::Connection,
     missing: &[MissingDependency],
-    dep_mode: DepMode,
-) -> DepResolutionPlan {
-    resolve_missing_deps_with_probes(
-        conn,
-        missing,
-        dep_mode,
-        system_pm::is_system_package_installed,
-        system_pm::is_live_runtime_dependency_present,
-    )
-}
-
-fn resolve_missing_deps_with_probes<PackageProbe, RuntimeProbe>(
-    conn: &rusqlite::Connection,
-    missing: &[MissingDependency],
-    dep_mode: DepMode,
-    is_system_package_installed: PackageProbe,
-    is_live_runtime_dependency_present: RuntimeProbe,
-) -> DepResolutionPlan
-where
-    PackageProbe: Fn(&str) -> bool,
-    RuntimeProbe: Fn(&str, &VersionConstraint) -> bool,
-{
+    options: &repository::SelectionOptions,
+) -> Result<DepResolutionPlan> {
     let mut plan = DepResolutionPlan::default();
 
     for dep in missing {
-        // 1. Check blocklist first -- these are never replaced, but must be present
-        if blocklist::is_blocked(&dep.name) {
-            // Verify the blocked package is actually installed on the system
-            let is_tracked = Trove::find_by_name(conn, &dep.name)
-                .map(|t| !t.is_empty())
-                .unwrap_or(false);
-            let is_on_system = is_tracked
-                || is_system_package_installed(&dep.name)
-                || is_live_runtime_dependency_present(&dep.name, &dep.constraint);
-
-            if is_on_system {
-                debug!("Dependency '{}' is blocked and present on system", dep.name);
-                plan.blocked.push(dep.name.clone());
-            } else {
-                debug!(
-                    "Dependency '{}' is blocked but NOT present on system",
-                    dep.name
-                );
+        let request = [(dep.name.clone(), dep.constraint.clone())];
+        match repository::resolve_dependency_requests(conn, &request, options) {
+            Ok(resolved) if !resolved.is_empty() => {
+                let selected = &resolved[0].1.package;
+                let constraint = VersionConstraint::parse(&format!("= {}", selected.version))
+                    .with_context(|| {
+                        format!(
+                            "repository selected invalid version '{}' for dependency '{}'",
+                            selected.version, dep.name
+                        )
+                    })?;
+                plan.to_install.push(ResolvedDep {
+                    name: selected.name.clone(),
+                    constraint,
+                    required_by: dep.required_by.clone(),
+                });
+            }
+            Ok(_) | Err(conary_core::Error::NotFound(_)) => {
                 plan.unresolvable.push(dep.clone());
             }
-            continue;
-        }
-
-        // 2. Check if already tracked in Conary's DB
-        if let Ok(troves) = Trove::find_by_name(conn, &dep.name)
-            && !troves.is_empty()
-        {
-            let trove = &troves[0];
-            match dep_mode {
-                DepMode::Satisfy | DepMode::Adopt => {
-                    // Already tracked (any source) = satisfied
-                    plan.satisfied.push((
-                        dep.name.clone(),
-                        format!("tracked ({})", trove.install_source),
-                    ));
-                    continue;
-                }
-                DepMode::Takeover => {
-                    if trove.install_source.is_conary_owned() {
-                        // Already Conary-owned = satisfied
-                        plan.satisfied
-                            .push((dep.name.clone(), "Conary-owned".into()));
-                        continue;
-                    }
-                    // Adopted but not owned -- need to take over
-                    debug!(
-                        "Dependency '{}' is adopted but not owned, scheduling takeover",
-                        dep.name
-                    );
-                    plan.to_install.push(ResolvedDep {
-                        name: dep.name.clone(),
-                        version: dependency_version_constraint(dep),
-                        required_by: dep.required_by.clone(),
-                    });
-                    continue;
-                }
-            }
-        }
-
-        // 3. Not in Conary DB -- check system PM
-        match dep_mode {
-            DepMode::Satisfy => {
-                if is_system_package_installed(&dep.name) {
-                    plan.satisfied.push((dep.name.clone(), "system PM".into()));
-                } else if is_live_runtime_dependency_present(&dep.name, &dep.constraint) {
-                    plan.satisfied
-                        .push((dep.name.clone(), "live runtime".into()));
-                } else {
-                    // Not on system either -- unresolvable in satisfy mode
-                    debug!(
-                        "Dependency '{}' not found in system PM (satisfy mode), marking unresolvable",
-                        dep.name
-                    );
-                    plan.unresolvable.push(dep.clone());
-                }
-            }
-            DepMode::Adopt => {
-                if is_system_package_installed(&dep.name) {
-                    debug!(
-                        "Dependency '{}' found in system PM, scheduling auto-adopt",
-                        dep.name
-                    );
-                    plan.to_adopt.push(dep.name.clone());
-                } else if is_live_runtime_dependency_present(&dep.name, &dep.constraint) {
-                    plan.satisfied
-                        .push((dep.name.clone(), "live runtime".into()));
-                } else {
-                    // Not on system either -- need to install from Remi
-                    debug!(
-                        "Dependency '{}' not found in system PM (adopt mode), scheduling install",
-                        dep.name
-                    );
-                    plan.to_install.push(ResolvedDep {
-                        name: dep.name.clone(),
-                        version: dependency_version_constraint(dep),
-                        required_by: dep.required_by.clone(),
-                    });
-                }
-            }
-            DepMode::Takeover => {
-                // Always install CCS version from Remi
-                debug!(
-                    "Dependency '{}' scheduled for Remi install (takeover mode)",
-                    dep.name
-                );
-                plan.to_install.push(ResolvedDep {
-                    name: dep.name.clone(),
-                    version: dependency_version_constraint(dep),
-                    required_by: dep.required_by.clone(),
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!("failed to resolve repository dependency '{}'", dep.name)
                 });
             }
         }
     }
 
+    plan.to_install.sort_by(|left, right| {
+        left.name.cmp(&right.name).then_with(|| {
+            left.constraint
+                .to_string()
+                .cmp(&right.constraint.to_string())
+        })
+    });
+    plan.to_install
+        .dedup_by(|left, right| left.name == right.name && left.constraint == right.constraint);
+
     debug!(
-        "Dep resolution plan: {} to_install, {} to_adopt, {} satisfied, {} blocked, {} unresolvable",
+        "Repository dependency plan: {} to install, {} unresolved",
         plan.to_install.len(),
-        plan.to_adopt.len(),
-        plan.satisfied.len(),
-        plan.blocked.len(),
         plan.unresolvable.len()
     );
-
-    plan
-}
-
-fn dependency_version_constraint(dep: &MissingDependency) -> Option<String> {
-    if matches!(dep.constraint, VersionConstraint::Any) {
-        None
-    } else {
-        Some(dep.constraint.to_string())
-    }
+    Ok(plan)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use conary_core::db::models::{Repository, RepositoryPackage, RepositoryProvide};
     use conary_core::db::schema;
-    use conary_core::version::VersionConstraint;
+    use conary_core::repository::versioning::VersionScheme;
 
-    /// Set up an in-memory database with the full Conary schema and
-    /// blocked system packages pre-inserted so tests don't depend on host PM.
     fn test_db() -> rusqlite::Connection {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch(
-            "PRAGMA journal_mode = WAL;
-             PRAGMA foreign_keys = ON;",
-        )
-        .unwrap();
-        schema::migrate(&conn).unwrap();
-
-        // Insert blocked packages as tracked troves so the blocklist logic
-        // treats them as "present on system" regardless of host distro.
-        for pkg in ["glibc", "systemd", "openssl"] {
-            conn.execute(
-                "INSERT INTO troves (name, version, type, architecture)
-                 VALUES (?1, '1.0', 'package', 'x86_64')",
-                [pkg],
-            )
-            .unwrap();
-        }
-
+        schema::ensure_current(&conn).unwrap();
         conn
     }
 
-    fn make_dep(name: &str, required_by: &[&str]) -> MissingDependency {
+    fn add_repository_package(
+        conn: &rusqlite::Connection,
+        name: &str,
+        version: &str,
+    ) -> RepositoryPackage {
+        let repo_id = match Repository::find_by_name(conn, "test").unwrap() {
+            Some(repo) => repo.id.unwrap(),
+            None => {
+                let mut repo =
+                    Repository::new("test".to_string(), "https://example.invalid".to_string());
+                repo.insert(conn).unwrap();
+                repo.id.unwrap()
+            }
+        };
+        let mut package = RepositoryPackage::new(
+            repo_id,
+            name.to_string(),
+            version.to_string(),
+            VersionScheme::Rpm,
+            format!("sha256:{name}"),
+            1,
+            format!("https://example.invalid/{name}.ccs"),
+        );
+        package.insert(conn).unwrap();
+        package
+    }
+
+    fn dependency(name: &str, constraint: VersionConstraint) -> MissingDependency {
         MissingDependency {
             name: name.to_string(),
-            constraint: VersionConstraint::Any,
-            required_by: required_by.iter().map(|s| s.to_string()).collect(),
-        }
-    }
-
-    fn make_versioned_dep(name: &str, version: &str, required_by: &[&str]) -> MissingDependency {
-        MissingDependency {
-            name: name.to_string(),
-            constraint: VersionConstraint::parse(&format!("= {version}")).unwrap(),
-            required_by: required_by.iter().map(|s| s.to_string()).collect(),
+            constraint,
+            required_by: vec!["consumer".to_string()],
         }
     }
 
     #[test]
-    fn test_blocked_deps_always_blocked() {
+    fn missing_package_becomes_exact_repository_install() {
         let conn = test_db();
+        add_repository_package(&conn, "openssl-libs", "3.5.1-1");
 
-        let missing = vec![make_dep("glibc", &["nginx"])];
-
-        let plan = resolve_missing_deps(&conn, &missing, DepMode::Takeover);
-        assert_eq!(plan.blocked.len(), 1);
-        assert_eq!(plan.blocked[0], "glibc");
-        assert!(plan.to_install.is_empty());
-        assert!(plan.to_adopt.is_empty());
-        assert!(plan.unresolvable.is_empty());
-    }
-
-    #[test]
-    fn test_blocked_in_all_modes() {
-        let conn = test_db();
-
-        for mode in [DepMode::Satisfy, DepMode::Adopt, DepMode::Takeover] {
-            let missing = vec![make_dep("systemd", &["nginx"])];
-            let plan = resolve_missing_deps(&conn, &missing, mode);
-            assert_eq!(
-                plan.blocked.len(),
-                1,
-                "systemd should be blocked in {} mode",
-                mode
-            );
-        }
-    }
-
-    #[test]
-    fn test_satisfy_mode_uses_live_root_probe_for_bootstrap_core_packages() {
-        let conn = test_db();
-        let missing = vec![
-            make_dep("bash", &["dracut"]),
-            make_dep("filesystem", &["bash"]),
-            make_dep("filesystem(unmerged-sbin-symlinks)", &["dosfstools"]),
-            make_dep("group(mail)", &["setup"]),
-            make_dep("setup", &["filesystem"]),
-        ];
-
-        let plan = resolve_missing_deps_with_probes(
+        let plan = plan_repository_dependencies(
             &conn,
-            &missing,
-            DepMode::Satisfy,
-            |_| false,
-            |name, _| {
-                matches!(
-                    name,
-                    "bash"
-                        | "filesystem"
-                        | "filesystem(unmerged-sbin-symlinks)"
-                        | "group(mail)"
-                        | "setup"
-                )
-            },
-        );
+            &[dependency("openssl-libs", VersionConstraint::Any)],
+            &repository::SelectionOptions::default(),
+        )
+        .unwrap();
 
-        assert!(plan.to_install.is_empty());
         assert!(plan.unresolvable.is_empty());
-        assert_eq!(
-            plan.blocked,
-            vec![
-                "bash".to_string(),
-                "filesystem".to_string(),
-                "filesystem(unmerged-sbin-symlinks)".to_string(),
-                "group(mail)".to_string(),
-                "setup".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn test_normal_dep_in_takeover_mode() {
-        let conn = test_db();
-
-        let missing = vec![make_dep("pcre2", &["nginx"])];
-
-        let plan = resolve_missing_deps(&conn, &missing, DepMode::Takeover);
-        // pcre2 is not blocked, not in DB, so should be in to_install
         assert_eq!(plan.to_install.len(), 1);
-        assert_eq!(plan.to_install[0].name, "pcre2");
-        assert!(plan.blocked.is_empty());
+        assert_eq!(plan.to_install[0].name, "openssl-libs");
+        assert_eq!(plan.to_install[0].constraint.to_string(), "= 3.5.1-1");
     }
 
     #[test]
-    fn test_takeover_mode_preserves_versioned_dependency_constraint() {
+    fn normalized_capability_selects_declared_provider() {
         let conn = test_db();
-        let missing = vec![make_versioned_dep(
-            "kernel-core-uname-r",
-            "6.19.10-300.fc44.x86_64",
-            &["kernel"],
-        )];
-
-        let plan = resolve_missing_deps_with_probes(
-            &conn,
-            &missing,
-            DepMode::Takeover,
-            |_| false,
-            |_, _| false,
-        );
-
-        assert_eq!(plan.to_install.len(), 1);
-        assert_eq!(plan.to_install[0].name, "kernel-core-uname-r");
-        assert_eq!(
-            plan.to_install[0].version.as_deref(),
-            Some("= 6.19.10-300.fc44.x86_64")
-        );
-    }
-
-    #[test]
-    fn test_mixed_deps() {
-        let conn = test_db();
-
-        let missing = vec![
-            make_dep("glibc", &["nginx"]),   // blocked
-            make_dep("pcre2", &["nginx"]),   // not blocked, not installed
-            make_dep("openssl", &["nginx"]), // blocked
-        ];
-
-        let plan = resolve_missing_deps(&conn, &missing, DepMode::Takeover);
-        assert_eq!(plan.blocked.len(), 2, "glibc and openssl should be blocked");
-        assert_eq!(plan.to_install.len(), 1, "pcre2 should be to_install");
-        assert_eq!(plan.to_install[0].name, "pcre2");
-    }
-
-    #[test]
-    fn adopt_mode_treats_live_runtime_soname_dependencies_as_satisfied() {
-        let conn = test_db();
-        let missing = vec![make_dep("libcap.so.2()(64bit)", &["htop"])];
-
-        let plan = resolve_missing_deps_with_probes(
-            &conn,
-            &missing,
-            DepMode::Adopt,
-            |_| false,
-            |name, _| name == "libcap.so.2()(64bit)",
-        );
-
-        assert!(plan.to_install.is_empty());
-        assert!(plan.to_adopt.is_empty());
-        assert!(plan.unresolvable.is_empty());
-        assert_eq!(
-            plan.satisfied,
-            vec![("libcap.so.2()(64bit)".to_string(), "live runtime".into())]
-        );
-    }
-
-    #[test]
-    fn adopt_mode_passes_arch_soname_constraint_to_runtime_probe() {
-        let conn = test_db();
-        let missing = vec![make_versioned_dep("libcap.so", "2-64", &["htop"])];
-        let expected_constraint = VersionConstraint::parse("= 2-64").unwrap();
-
-        let plan = resolve_missing_deps_with_probes(
-            &conn,
-            &missing,
-            DepMode::Adopt,
-            |_| false,
-            |name, constraint| name == "libcap.so" && constraint == &expected_constraint,
-        );
-
-        assert!(plan.to_install.is_empty());
-        assert!(plan.to_adopt.is_empty());
-        assert!(plan.unresolvable.is_empty());
-        assert_eq!(
-            plan.satisfied,
-            vec![("libcap.so".to_string(), "live runtime".into())]
-        );
-    }
-
-    #[test]
-    fn test_empty_missing_list() {
-        let conn = test_db();
-
-        let plan = resolve_missing_deps(&conn, &[], DepMode::Satisfy);
-        assert!(plan.to_install.is_empty());
-        assert!(plan.to_adopt.is_empty());
-        assert!(plan.satisfied.is_empty());
-        assert!(plan.blocked.is_empty());
-        assert!(plan.unresolvable.is_empty());
-    }
-
-    #[test]
-    fn test_satisfy_mode_unknown_dep_is_unresolvable() {
-        let conn = test_db();
-
-        // In satisfy mode, a dep not in DB and not on system PM is unresolvable
-        // (system PM check will fail in test env since no PM is available)
-        let missing = vec![make_dep("some-obscure-lib", &["myapp"])];
-        let plan = resolve_missing_deps(&conn, &missing, DepMode::Satisfy);
-
-        // Since we're in a test environment without a real system PM,
-        // the dep should end up as unresolvable
-        assert_eq!(plan.unresolvable.len(), 1);
-        assert_eq!(plan.unresolvable[0].name, "some-obscure-lib");
-    }
-
-    #[test]
-    fn test_policy_aware_uses_convergence_when_no_explicit_mode() {
-        use conary_core::model::parser::ConvergenceIntent;
-
-        let conn = test_db();
-        let missing = vec![make_dep("pcre2", &["nginx"])];
-
-        // FullOwnership convergence intent -> Takeover mode -> to_install
-        let plan = resolve_missing_deps_policy_aware(
-            &conn,
-            &missing,
+        let package = add_repository_package(&conn, "glibc", "2.43-2");
+        let mut provide = RepositoryProvide::new(
+            package.id.unwrap(),
+            "libc.so.6(GLIBC_2.34)(64bit)".to_string(),
             None,
-            &ConvergenceIntent::FullOwnership,
+            "soname".to_string(),
+            None,
+            VersionScheme::Rpm,
         );
-        assert_eq!(plan.to_install.len(), 1);
-        assert_eq!(plan.to_install[0].name, "pcre2");
-    }
+        provide.insert(&conn).unwrap();
 
-    #[test]
-    fn test_policy_aware_explicit_mode_overrides_convergence() {
-        use conary_core::model::parser::ConvergenceIntent;
-
-        let conn = test_db();
-        let missing = vec![make_dep("some-obscure-lib", &["myapp"])];
-
-        // Even though convergence is FullOwnership (-> Takeover), the explicit
-        // mode Satisfy should win and produce unresolvable (no system PM in test)
-        let plan = resolve_missing_deps_policy_aware(
+        let plan = plan_repository_dependencies(
             &conn,
-            &missing,
-            Some(DepMode::Satisfy),
-            &ConvergenceIntent::FullOwnership,
-        );
-        assert_eq!(plan.unresolvable.len(), 1);
-    }
+            &[dependency(
+                "libc.so.6(GLIBC_2.34)(64bit)",
+                VersionConstraint::Any,
+            )],
+            &repository::SelectionOptions::default(),
+        )
+        .unwrap();
 
-    #[test]
-    fn test_glibc_runtime_capability_blocks_repo_promotion_when_live_root_satisfies_it() {
-        let conn = test_db();
-        let missing = vec![make_dep("libc.so.6(GLIBC_2.34)(64bit)", &["tree"])];
-
-        let plan = resolve_missing_deps_with_probes(
-            &conn,
-            &missing,
-            DepMode::Satisfy,
-            |_| false,
-            |dep, _| dep.starts_with("libc.so.6"),
-        );
-
-        assert_eq!(plan.blocked, vec!["libc.so.6(GLIBC_2.34)(64bit)"]);
-        assert!(plan.to_install.is_empty());
-        assert!(plan.to_adopt.is_empty());
-        assert!(plan.satisfied.is_empty());
         assert!(plan.unresolvable.is_empty());
+        assert_eq!(plan.to_install[0].name, "glibc");
     }
 
     #[test]
-    fn test_libudev_runtime_capability_blocks_systemd_libs_conversion() {
+    fn package_names_and_runtime_capabilities_have_no_special_exceptions() {
         let conn = test_db();
-        let missing = vec![make_dep("libudev.so.1()(64bit)", &["device-mapper"])];
+        let missing = vec![
+            dependency("systemd", VersionConstraint::Any),
+            dependency("libc.so.6(GLIBC_2.34)(64bit)", VersionConstraint::Any),
+            dependency("/usr/bin/sh", VersionConstraint::Any),
+        ];
 
-        let plan = resolve_missing_deps_with_probes(
-            &conn,
-            &missing,
-            DepMode::Satisfy,
-            |_| false,
-            |dep, _| dep.starts_with("libudev.so."),
-        );
+        let plan =
+            plan_repository_dependencies(&conn, &missing, &repository::SelectionOptions::default())
+                .unwrap();
 
-        assert_eq!(plan.blocked, vec!["libudev.so.1()(64bit)"]);
         assert!(plan.to_install.is_empty());
-        assert!(plan.to_adopt.is_empty());
-        assert!(plan.satisfied.is_empty());
-        assert!(plan.unresolvable.is_empty());
-    }
-
-    #[test]
-    fn test_udev_virtual_dependency_blocks_systemd_udev_conversion() {
-        let conn = test_db();
-        let missing = vec![make_dep("udev", &["grub2-tools-minimal"])];
-
-        let plan = resolve_missing_deps_with_probes(
-            &conn,
-            &missing,
-            DepMode::Satisfy,
-            |_| false,
-            |dep, _| dep == "udev",
-        );
-
-        assert_eq!(plan.blocked, vec!["udev"]);
-        assert!(plan.to_install.is_empty());
-        assert!(plan.to_adopt.is_empty());
-        assert!(plan.satisfied.is_empty());
-        assert!(plan.unresolvable.is_empty());
+        assert_eq!(plan.unresolvable, missing);
     }
 }

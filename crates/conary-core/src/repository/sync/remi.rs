@@ -2,20 +2,24 @@
 
 use crate::db::models::{
     CanonicalPackage, PackageImplementation, Repository, RepositoryPackage, RepositoryProvide,
-    RepositoryRequirement,
+    RepositoryRequirement, RepositoryRequirementGroup as DbRequirementGroup,
 };
 use crate::error::{Error, Result};
 use crate::repository::client::RepositoryClient;
+use crate::repository::dependency_model::{
+    ConditionalRequirementBehavior, RepositoryRequirementExpression,
+    RepositoryRequirementGroup as TypedRequirementGroup, RepositoryRequirementKind,
+};
 use crate::repository::metadata::PackageSecurityAdvisoryMetadata;
+use crate::repository::package_relation::validate_native_relation;
 use crate::repository::retry::RetryConfig;
+use crate::repository::versioning::VersionScheme;
 use rusqlite::Connection;
 use std::collections::HashSet;
 use tracing::{debug, info, warn};
 
 use super::apply_trusted_package_security_advisory;
-use super::native::{
-    extract_extra_metadata_provides, persist_native_sync_rows, split_on_version_op,
-};
+use super::native::persist_native_sync_rows;
 use super::types::{
     CanonicalMapSnapshot, RemiMetadataResponse, RemiPackageEntry, SyncedPackageRow,
 };
@@ -26,24 +30,30 @@ pub(super) fn remi_sync_row(
     distro: String,
     entry: RemiPackageEntry,
 ) -> Result<SyncedPackageRow> {
+    let RemiPackageEntry {
+        name,
+        version,
+        release,
+        converted: _,
+        architecture,
+        provides: wire_provides,
+        requirement_groups: wire_requirement_groups,
+        metadata,
+    } = entry;
     let profile = crate::repository::supported_profiles::profile_for_remi_target(&distro)
         .ok_or_else(|| Error::ConfigError(format!("unsupported Remi target: {distro}")))?;
     let route_slug = profile.remi_route_slug();
     let public_profile_id = profile.id();
-    let architecture = entry.architecture.clone();
-    let package_release = entry
-        .release
-        .clone()
+    let package_release = release
         .or_else(|| {
-            entry
-                .metadata
+            metadata
                 .as_ref()
                 .and_then(|metadata| metadata.pointer("/identity/release"))
                 .and_then(|value| value.as_str())
                 .map(str::to_string)
         })
         .unwrap_or_default();
-    let mut query = vec![format!("version={}", urlencoding::encode(&entry.version))];
+    let mut query = vec![format!("version={}", urlencoding::encode(&version))];
     if !package_release.is_empty() {
         query.push(format!("release={}", urlencoding::encode(&package_release)));
     }
@@ -52,26 +62,24 @@ pub(super) fn remi_sync_row(
     }
     let download_url = format!(
         "{endpoint}/v1/{route_slug}/packages/{}/download?{}",
-        urlencoding::encode(&entry.name),
+        urlencoding::encode(&name),
         query.join("&")
     );
 
+    let scheme = profile.version_scheme();
     let mut package = RepositoryPackage::new(
         repo_id,
-        entry.name.clone(),
-        entry.version.clone(),
+        name.clone(),
+        version.clone(),
+        scheme,
         "remi:server-verified".to_string(),
         0,
         download_url,
     );
     package.package_release = package_release;
     package.architecture = architecture;
-    package.dependencies = entry
-        .dependencies
-        .as_ref()
-        .map(|deps| serde_json::to_string(deps).unwrap_or_default());
 
-    let mut metadata = entry.metadata.unwrap_or(serde_json::Value::Null);
+    let mut metadata = metadata.unwrap_or(serde_json::Value::Null);
     if let Some(advisory_value) = metadata.get("security_advisory").cloned() {
         match serde_json::from_value::<PackageSecurityAdvisoryMetadata>(advisory_value) {
             Ok(advisory) => {
@@ -89,7 +97,7 @@ pub(super) fn remi_sync_row(
                     Err(error) => {
                         warn!(
                             "Ignoring untrusted Remi security advisory metadata for {} {}: {}",
-                            entry.name, entry.version, error
+                            name, version, error
                         );
                     }
                 }
@@ -97,7 +105,7 @@ pub(super) fn remi_sync_row(
             Err(error) => {
                 warn!(
                     "Ignoring malformed Remi security advisory metadata for {} {}: {}",
-                    entry.name, entry.version, error
+                    name, version, error
                 );
             }
         }
@@ -107,69 +115,146 @@ pub(super) fn remi_sync_row(
         ref value => Some(value.to_string()),
     };
 
-    let scheme = profile.version_scheme();
-    let scheme_str = Some(match scheme {
-        crate::repository::versioning::VersionScheme::Rpm => "rpm".to_string(),
-        crate::repository::versioning::VersionScheme::Debian => "debian".to_string(),
-        crate::repository::versioning::VersionScheme::Arch => "arch".to_string(),
-    });
     package.distro = Some(public_profile_id.to_string());
-    package.version_scheme = scheme_str.clone();
 
-    let mut self_provide = RepositoryProvide::new(
-        0,
-        entry.name.clone(),
-        Some(entry.version.clone()),
-        "package".to_string(),
-        Some(entry.name.clone()),
-    );
-    if let Some(ref scheme) = scheme_str {
-        self_provide = self_provide.with_version_scheme(scheme.clone());
+    if !wire_provides
+        .iter()
+        .any(|provide| provide.kind == "package" && provide.capability == name)
+    {
+        return Err(Error::ConfigError(format!(
+            "Remi metadata for '{name}' has no normalized package self-provide"
+        )));
     }
-
-    let mut provides = vec![self_provide];
-    provides.extend(extract_extra_metadata_provides(&metadata).into_iter().map(
-        |(capability, version, raw)| {
-            let mut provide =
-                RepositoryProvide::new(0, capability, version, "package".to_string(), Some(raw));
-            if let Some(ref scheme) = scheme_str {
-                provide = provide.with_version_scheme(scheme.clone());
-            }
-            provide
-        },
-    ));
-
-    let requirements = entry
-        .dependencies
-        .unwrap_or_default()
+    let provides = wire_provides
         .into_iter()
-        .map(|raw| {
-            let (capability, version_constraint) = parse_raw_dependency_entry(&raw);
-            RepositoryRequirement::new(
+        .map(|provide| {
+            if provide.version_scheme != scheme {
+                return Err(Error::ConfigError(format!(
+                    "Remi provide '{}' scheme '{}' disagrees with target '{}' scheme '{}'",
+                    provide.capability,
+                    provide.version_scheme.as_str(),
+                    public_profile_id,
+                    scheme.as_str()
+                )));
+            }
+            Ok(RepositoryProvide::new(
                 0,
-                capability,
-                version_constraint,
-                "package".to_string(),
-                "runtime".to_string(),
-                Some(raw),
-            )
+                provide.capability,
+                provide.version,
+                provide.kind,
+                provide.raw,
+                provide.version_scheme,
+            ))
         })
-        .collect();
+        .collect::<Result<Vec<_>>>()?;
+
+    let mut requirement_groups = Vec::with_capacity(wire_requirement_groups.len());
+    let mut requirement_group_clauses = Vec::with_capacity(wire_requirement_groups.len());
+    for (group_index, wire_group) in wire_requirement_groups.into_iter().enumerate() {
+        let group_token =
+            i64::try_from(group_index + 1).expect("Remi requirement group count cannot exceed i64");
+        validate_remi_relation_group(&wire_group, scheme)?;
+        let mut group = DbRequirementGroup::new(
+            0,
+            wire_group.kind,
+            wire_group.behavior,
+            wire_group.expression_json,
+        );
+        group.description = wire_group.description;
+        group.native_text = wire_group.native_text;
+        requirement_groups.push(group);
+        requirement_group_clauses.push(
+            wire_group
+                .clauses
+                .into_iter()
+                .map(|requirement| {
+                    RepositoryRequirement::new(
+                        0,
+                        group_token,
+                        requirement.capability,
+                        requirement.version_constraint,
+                        requirement.kind,
+                        requirement.dependency_type,
+                        requirement.raw,
+                    )
+                })
+                .collect(),
+        );
+    }
 
     Ok(SyncedPackageRow {
         package,
         provides,
-        requirements,
-        requirement_groups: Vec::new(),
-        requirement_group_clauses: Vec::new(),
+        requirement_groups,
+        requirement_group_clauses,
     })
 }
 
-pub(super) fn parse_raw_dependency_entry(entry: &str) -> (String, Option<String>) {
-    match split_on_version_op(entry) {
-        Some((name, op, version)) => (name, Some(format!("{op} {version}"))),
-        None => (entry.trim().to_string(), None),
+fn validate_remi_relation_group(
+    group: &crate::repository::remi_metadata::RemiRequirementGroup,
+    scheme: VersionScheme,
+) -> Result<()> {
+    let Some(kind) = RepositoryRequirementKind::from_str_exact(&group.kind) else {
+        return Err(Error::ConfigError(format!(
+            "Remi requirement group has unknown kind '{}'",
+            group.kind
+        )));
+    };
+    if !kind.is_negative_relation() {
+        return Ok(());
     }
+
+    let expression = serde_json::from_str::<RepositoryRequirementExpression>(
+        &group.expression_json,
+    )
+    .map_err(|error| {
+        Error::ConfigError(format!(
+            "Remi {} relation has invalid expression JSON: {error}",
+            kind.as_str()
+        ))
+    })?;
+    let behavior = match group.behavior.as_str() {
+        "hard" => ConditionalRequirementBehavior::Hard,
+        "conditional" => ConditionalRequirementBehavior::Conditional,
+        other => {
+            return Err(Error::ConfigError(format!(
+                "Remi {} relation has unknown behavior '{other}'",
+                kind.as_str()
+            )));
+        }
+    };
+    let alternatives = expression.atoms().into_iter().cloned().collect::<Vec<_>>();
+    let first = alternatives.first().cloned().ok_or_else(|| {
+        Error::ConfigError(format!(
+            "Remi {} relation has no expression atoms",
+            kind.as_str()
+        ))
+    })?;
+
+    let mut indexed = group
+        .clauses
+        .iter()
+        .map(|clause| (clause.capability.clone(), clause.version_constraint.clone()))
+        .collect::<Vec<_>>();
+    indexed.sort();
+    let mut authoritative = alternatives
+        .iter()
+        .map(|clause| (clause.name.clone(), clause.version_constraint.clone()))
+        .collect::<Vec<_>>();
+    authoritative.sort();
+    if indexed != authoritative {
+        return Err(Error::ConfigError(format!(
+            "Remi {} relation clause index disagrees with its authoritative expression",
+            kind.as_str()
+        )));
+    }
+
+    let mut relation = TypedRequirementGroup::simple(kind, first)
+        .with_behavior(behavior)
+        .with_expression(expression);
+    relation.alternatives = alternatives;
+    relation.native_text = group.native_text.clone();
+    validate_native_relation(&relation, scheme).map_err(Error::ConfigError)
 }
 
 /// Synchronize repository directly from a Remi metadata API
@@ -358,15 +443,30 @@ pub(super) async fn fetch_and_persist_canonical_map(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::models::RepositoryRequirementGroup as DbRequirementGroup;
+    use crate::db::testing::create_test_db;
+    use crate::repository::package_relation::parse_native_relation;
+    use crate::repository::remi_metadata::{RemiProvide, RemiRequirement, RemiRequirementGroup};
 
-    fn remi_entry_for_tests(name: &str, version: &str) -> RemiPackageEntry {
+    fn remi_entry_for_tests(
+        name: &str,
+        version: &str,
+        version_scheme: VersionScheme,
+    ) -> RemiPackageEntry {
         RemiPackageEntry {
             name: name.to_string(),
             version: version.to_string(),
             release: None,
             converted: false,
             architecture: Some("x86_64".to_string()),
-            dependencies: None,
+            provides: vec![RemiProvide {
+                capability: name.to_string(),
+                version: Some(version.to_string()),
+                kind: "package".to_string(),
+                raw: Some(name.to_string()),
+                version_scheme,
+            }],
+            requirement_groups: Vec::new(),
             metadata: None,
         }
     }
@@ -376,16 +476,8 @@ mod tests {
         let row = remi_sync_row(
             7,
             "http://remi.test".to_string(),
-            "fedora".to_string(),
-            RemiPackageEntry {
-                name: "qemu-img".to_string(),
-                version: "2:10.1.0-7.fc44".to_string(),
-                release: None,
-                converted: false,
-                architecture: Some("x86_64".to_string()),
-                dependencies: None,
-                metadata: None,
-            },
+            "fedora-44".to_string(),
+            remi_entry_for_tests("qemu-img", "2:10.1.0-7.fc44", VersionScheme::Rpm),
         )
         .unwrap();
 
@@ -397,15 +489,12 @@ mod tests {
         let row = remi_sync_row(
             7,
             "https://remi.example.test".to_string(),
-            "fedora".to_string(),
-            RemiPackageEntry {
-                name: "hello".to_string(),
-                version: "1.0.0".to_string(),
-                release: Some("2".to_string()),
-                converted: false,
-                architecture: Some("noarch".to_string()),
-                dependencies: None,
-                metadata: None,
+            "fedora-44".to_string(),
+            {
+                let mut entry = remi_entry_for_tests("hello", "1.0.0", VersionScheme::Rpm);
+                entry.release = Some("2".to_string());
+                entry.architecture = Some("noarch".to_string());
+                entry
             },
         )
         .unwrap();
@@ -422,31 +511,32 @@ mod tests {
         let row = remi_sync_row(
             7,
             "http://remi.test".to_string(),
-            "ubuntu".to_string(),
-            RemiPackageEntry {
-                name: "nano".to_string(),
-                version: "8.7.1-1".to_string(),
-                release: None,
-                converted: false,
-                architecture: Some("amd64".to_string()),
-                dependencies: None,
-                metadata: None,
+            "ubuntu-26.04".to_string(),
+            {
+                let mut entry = remi_entry_for_tests("nano", "8.7.1-1", VersionScheme::Debian);
+                entry.architecture = Some("amd64".to_string());
+                entry
             },
         )
         .unwrap();
 
         assert_eq!(row.package.distro.as_deref(), Some("ubuntu-26.04"));
-        assert_eq!(row.package.version_scheme.as_deref(), Some("debian"));
+        assert_eq!(row.package.version_scheme, VersionScheme::Debian);
     }
 
     #[test]
     fn remi_sync_row_accepts_public_profile_id_and_uses_route_slug() {
         for (public_id, route_slug) in [("fedora-44", "fedora"), ("ubuntu-26.04", "ubuntu")] {
+            let scheme = if public_id == "fedora-44" {
+                VersionScheme::Rpm
+            } else {
+                VersionScheme::Debian
+            };
             let row = remi_sync_row(
                 1,
                 "https://remi.example.test".to_string(),
                 public_id.to_string(),
-                remi_entry_for_tests("bash", "5.2.0"),
+                remi_entry_for_tests("bash", "5.2.0", scheme),
             )
             .unwrap();
 
@@ -460,17 +550,113 @@ mod tests {
     }
 
     #[test]
-    fn remi_sync_row_normalizes_legacy_route_slug_to_public_profile() {
-        let row = remi_sync_row(
+    fn remi_sync_row_rejects_route_slug_as_package_identity() {
+        let error = remi_sync_row(
             1,
             "https://remi.example.test".to_string(),
             "ubuntu".to_string(),
-            remi_entry_for_tests("bash", "5.2.0"),
+            remi_entry_for_tests("bash", "5.2.0", VersionScheme::Debian),
+        )
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("unsupported Remi target: ubuntu")
+        );
+    }
+
+    fn wire_relation(relation: &TypedRequirementGroup) -> RemiRequirementGroup {
+        RemiRequirementGroup {
+            kind: relation.kind.as_str().to_string(),
+            behavior: match relation.behavior {
+                ConditionalRequirementBehavior::Hard => "hard",
+                ConditionalRequirementBehavior::Conditional => "conditional",
+            }
+            .to_string(),
+            description: relation.description.clone(),
+            native_text: relation.native_text.clone(),
+            expression_json: serde_json::to_string(&relation.expression).unwrap(),
+            clauses: relation
+                .alternatives
+                .iter()
+                .map(|clause| RemiRequirement {
+                    capability: clause.name.clone(),
+                    version_constraint: clause.version_constraint.clone(),
+                    kind: "package".to_string(),
+                    dependency_type: "runtime".to_string(),
+                    raw: clause.native_text.clone(),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn remi_wire_relation_persists_exact_obsolete_authority() {
+        let (_temp, conn) = create_test_db();
+        let mut repository = Repository::new("fedora".to_string(), "https://remi.test".to_string());
+        repository.default_strategy_distro = Some("fedora-44".to_string());
+        let repository_id = repository.insert(&conn).unwrap();
+        let relation = parse_native_relation(
+            RepositoryRequirementKind::Obsolete,
+            VersionScheme::Rpm,
+            "oldpkg < 2",
+        )
+        .unwrap();
+        let mut entry = remi_entry_for_tests("newpkg", "2", VersionScheme::Rpm);
+        entry.requirement_groups = vec![wire_relation(&relation)];
+        let row = remi_sync_row(
+            repository_id,
+            "https://remi.test".to_string(),
+            "fedora-44".to_string(),
+            entry,
         )
         .unwrap();
 
-        assert_eq!(row.package.distro.as_deref(), Some("ubuntu-26.04"));
-        assert_eq!(row.package.version_scheme.as_deref(), Some("debian"));
+        persist_remi_sync_rows(&conn, &mut repository, vec![row]).unwrap();
+
+        let package = RepositoryPackage::find_by_repository(&conn, repository_id)
+            .unwrap()
+            .into_iter()
+            .find(|package| package.name == "newpkg")
+            .unwrap();
+        let stored =
+            DbRequirementGroup::find_by_repository_package(&conn, package.id.unwrap()).unwrap();
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].kind, "obsolete");
+        assert_eq!(stored[0].native_text.as_deref(), Some("oldpkg < 2"));
+        assert_eq!(
+            serde_json::from_str::<RepositoryRequirementExpression>(&stored[0].expression_json,)
+                .unwrap(),
+            relation.expression
+        );
+    }
+
+    #[test]
+    fn remi_wire_relation_rejects_malformed_exact_constraint() {
+        let mut relation = parse_native_relation(
+            RepositoryRequirementKind::Obsolete,
+            VersionScheme::Rpm,
+            "oldpkg < 2",
+        )
+        .unwrap();
+        let RepositoryRequirementExpression::Atom(clause) = &mut relation.expression else {
+            panic!("fixture must remain atomic");
+        };
+        clause.version_constraint = Some(">=".to_string());
+        relation.alternatives = vec![clause.clone()];
+        let mut entry = remi_entry_for_tests("newpkg", "2", VersionScheme::Rpm);
+        entry.requirement_groups = vec![wire_relation(&relation)];
+
+        let error = remi_sync_row(
+            7,
+            "https://remi.test".to_string(),
+            "fedora-44".to_string(),
+            entry,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("invalid rpm constraint"));
     }
 
     #[tokio::test]
@@ -508,7 +694,7 @@ mod tests {
                 let body = if attempt == 0 {
                     r#"{"packages":[{"name":"qemu-img""#
                 } else {
-                    r#"{"packages":[{"name":"qemu-img","version":"2:10.1.0-7.fc44","converted":false,"architecture":"x86_64"}]}"#
+                    r#"{"packages":[{"name":"qemu-img","version":"2:10.1.0-7.fc44","converted":false,"architecture":"x86_64","provides":[],"requirement_groups":[]}]}"#
                 };
                 let response = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",

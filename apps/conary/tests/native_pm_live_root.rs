@@ -1,6 +1,7 @@
 // apps/conary/tests/native_pm_live_root.rs
 
 use conary_core::db::models::{Repository, RepositoryPackage, SecurityAdvisorySupport};
+use conary_core::payload::{PayloadContentAuthority, PayloadNode, ResolvedPayloadNode};
 use std::ffi::OsStr;
 use std::fs;
 use std::io::{Read, Write};
@@ -11,6 +12,23 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 const FIXTURE_NAME: &str = "conary-test-fixture";
+
+fn regular_file_entry(
+    path: impl Into<String>,
+    content: &[u8],
+    permissions: u32,
+    trove_id: i64,
+) -> conary_core::db::models::FileEntry {
+    conary_core::db::models::FileEntry::new(
+        path.into(),
+        ResolvedPayloadNode::from_numeric_source(PayloadNode::regular(permissions)).unwrap(),
+        Some(PayloadContentAuthority {
+            sha256: conary_core::hash::sha256(content),
+            size: content.len() as u64,
+        }),
+        trove_id,
+    )
+}
 
 fn run_conary(args: &[&str]) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_conary"))
@@ -84,7 +102,7 @@ fn install_ccs_into_root(root: &Path, db_path: &Path, package_path: &Path) {
         root.to_string_lossy().into_owned(),
         "--allow-unsigned".to_string(),
         "--sandbox".to_string(),
-        "never".to_string(),
+        "always".to_string(),
         "--no-deps".to_string(),
         "--yes".to_string(),
     ]);
@@ -103,8 +121,6 @@ fn seed_fixture_update(
         "fedora-slice-b-fixture".to_string(),
         "https://example.invalid/fedora/repodata/".to_string(),
     );
-    repo.gpg_check = false;
-    repo.gpg_strict = false;
     repo.default_strategy = Some("binary".to_string());
     repo.security_advisory_support = security_advisory_support;
     let repo_id = repo.insert(&conn).unwrap();
@@ -114,6 +130,7 @@ fn seed_fixture_update(
         repo_id,
         FIXTURE_NAME.to_string(),
         "2.0.0".to_string(),
+        conary_core::repository::versioning::VersionScheme::Rpm,
         conary_core::hash::sha256(&package_bytes),
         package_bytes.len() as i64,
         download_url,
@@ -121,7 +138,6 @@ fn seed_fixture_update(
     repo_package.architecture = Some(std::env::consts::ARCH.to_string());
     repo_package.description = Some("Slice B update fixture".to_string());
     repo_package.distro = Some("fedora".to_string());
-    repo_package.version_scheme = Some("rpm".to_string());
     repo_package.is_security_update = is_security_update;
     if is_security_update {
         repo_package.severity = Some("critical".to_string());
@@ -302,17 +318,12 @@ fn no_generation_remove_deletes_file_and_history_records_apply() {
         "1.0.0".to_string(),
         conary_core::db::models::TroveType::Package,
         conary_core::db::models::InstallSource::Repository,
+        conary_core::repository::versioning::VersionScheme::Conary,
     );
     let trove_id = trove.insert(&conn).unwrap();
-    conary_core::db::models::FileEntry::new(
-        "/usr/bin/fixture".to_string(),
-        "0".repeat(64),
-        7,
-        0o100755,
-        trove_id,
-    )
-    .insert(&conn)
-    .unwrap();
+    regular_file_entry("/usr/bin/fixture", b"fixture", 0o755, trove_id)
+        .insert(&conn)
+        .unwrap();
     drop(conn);
 
     let output = run_conary(&[
@@ -322,9 +333,8 @@ fn no_generation_remove_deletes_file_and_history_records_apply() {
         db_path.to_str().unwrap(),
         "--root",
         root.path().to_str().unwrap(),
-        "--no-scripts",
         "--sandbox",
-        "never",
+        "always",
         "--yes",
     ]);
 
@@ -365,14 +375,14 @@ fn remove_arch_selector_targets_one_variant() {
             "1.0.0".to_string(),
             conary_core::db::models::TroveType::Package,
             conary_core::db::models::InstallSource::Repository,
+            conary_core::repository::versioning::VersionScheme::Conary,
         );
         trove.architecture = Some(arch.to_string());
         let trove_id = trove.insert(&conn).unwrap();
-        conary_core::db::models::FileEntry::new(
+        regular_file_entry(
             format!("/usr/bin/remove-demo-{arch}"),
-            "0".repeat(64),
-            arch.len() as i64,
-            0o100755,
+            arch.as_bytes(),
+            0o755,
             trove_id,
         )
         .insert(&conn)
@@ -387,9 +397,8 @@ fn remove_arch_selector_targets_one_variant() {
         db_path.to_str().unwrap(),
         "--root",
         root.path().to_str().unwrap(),
-        "--no-scripts",
         "--sandbox",
-        "never",
+        "always",
         "--yes",
     ]);
     assert!(!ambiguous.status.success(), "{}", output_text(&ambiguous));
@@ -405,9 +414,8 @@ fn remove_arch_selector_targets_one_variant() {
         db_path.to_str().unwrap(),
         "--root",
         root.path().to_str().unwrap(),
-        "--no-scripts",
         "--sandbox",
-        "never",
+        "always",
         "--yes",
     ]);
     assert_success(&selected);
@@ -431,13 +439,13 @@ fn remove_ignores_non_package_trove_with_same_name() {
         "1.0.0".to_string(),
         conary_core::db::models::TroveType::Package,
         conary_core::db::models::InstallSource::Repository,
+        conary_core::repository::versioning::VersionScheme::Conary,
     );
     let trove_id = package.insert(&conn).unwrap();
-    conary_core::db::models::FileEntry::new(
-        "/usr/bin/remove-shared-selector".to_string(),
-        "0".repeat(64),
-        7,
-        0o100755,
+    regular_file_entry(
+        "/usr/bin/remove-shared-selector",
+        b"fixture",
+        0o755,
         trove_id,
     )
     .insert(&conn)
@@ -447,6 +455,7 @@ fn remove_ignores_non_package_trove_with_same_name() {
         "remove-shared-selector".to_string(),
         "1.0.0".to_string(),
         conary_core::db::models::TroveType::Collection,
+        conary_core::repository::versioning::VersionScheme::Conary,
     );
     collection.insert(&conn).unwrap();
     drop(conn);
@@ -458,9 +467,8 @@ fn remove_ignores_non_package_trove_with_same_name() {
         db_path.to_str().unwrap(),
         "--root",
         root.path().to_str().unwrap(),
-        "--no-scripts",
         "--sandbox",
-        "never",
+        "always",
         "--yes",
     ]);
 
@@ -511,7 +519,7 @@ fn no_generation_update_installs_repository_ccs_into_live_root() {
         "--root".to_string(),
         root.to_string_lossy().into_owned(),
         "--sandbox".to_string(),
-        "never".to_string(),
+        "always".to_string(),
         "--yes".to_string(),
     ]);
     server.join().unwrap();
@@ -568,7 +576,7 @@ fn security_update_with_unknown_advisory_support_refuses_before_mutation() {
         "--root".to_string(),
         root.to_string_lossy().into_owned(),
         "--sandbox".to_string(),
-        "never".to_string(),
+        "always".to_string(),
         "--yes".to_string(),
     ]);
 
@@ -607,7 +615,6 @@ fn security_update_syncs_trusted_json_advisory_and_applies_fix() {
         repo_url.clone(),
         "--db-path".to_string(),
         db_path.to_string_lossy().into_owned(),
-        "--no-gpg-check".to_string(),
         "--security-advisories".to_string(),
         "supported".to_string(),
     ]);
@@ -645,7 +652,7 @@ fn security_update_syncs_trusted_json_advisory_and_applies_fix() {
         "--root".to_string(),
         root.to_string_lossy().into_owned(),
         "--sandbox".to_string(),
-        "never".to_string(),
+        "always".to_string(),
         "--yes".to_string(),
     ]);
     server.join().unwrap();

@@ -2,14 +2,15 @@
 
 //! Shared test utilities and helpers for integration tests.
 
-#[allow(dead_code)]
-pub mod legacy_scriptlet_fixtures;
-
 use conary_core::db;
 use conary_core::db::models::{
-    Changeset, ChangesetStatus, Component, DependencyEntry, FileEntry, ProvideEntry, Trove,
-    TroveType,
+    Changeset, ChangesetStatus, Component, FileEntry, InstalledRequirementGroup, ProvideEntry,
+    Trove, TroveType,
 };
+use conary_core::payload::{PayloadContentAuthority, PayloadNode, ResolvedPayloadNode};
+use conary_core::repository::dependency_model::RepositoryRequirementKind;
+use conary_core::repository::requirement::parse_native_requirement;
+use conary_core::repository::versioning::VersionScheme;
 use tempfile::TempDir;
 
 #[allow(dead_code)]
@@ -17,6 +18,23 @@ use tempfile::TempDir;
 pub struct DatabaseSnapshot {
     schema: Vec<(String, String, Option<String>)>,
     rows: Vec<(String, Vec<Vec<Vec<u8>>>)>,
+}
+
+pub fn regular_file_entry(
+    path: impl Into<String>,
+    content: &[u8],
+    permissions: u32,
+    trove_id: i64,
+) -> FileEntry {
+    FileEntry::new(
+        path.into(),
+        ResolvedPayloadNode::from_numeric_source(PayloadNode::regular(permissions)).unwrap(),
+        Some(PayloadContentAuthority {
+            sha256: conary_core::hash::sha256(content),
+            size: content.len() as u64,
+        }),
+        trove_id,
+    )
 }
 
 /// Capture every user-visible SQLite schema entry and table cell.
@@ -139,14 +157,11 @@ pub fn setup_command_test_db() -> (TempDir, String) {
     stage_test_boot_assets(temp_dir.path());
     let cas = conary_core::filesystem::CasStore::new(temp_dir.path().join("objects")).unwrap();
     let nginx_binary = vec![b'n'; 1_024_000];
-    let nginx_binary_hash = cas.store(&nginx_binary).unwrap();
-    let nginx_binary_size = i64::try_from(nginx_binary.len()).unwrap();
+    cas.store(&nginx_binary).unwrap();
     let nginx_config = vec![b'c'; 2048];
-    let nginx_config_hash = cas.store(&nginx_config).unwrap();
-    let nginx_config_size = i64::try_from(nginx_config.len()).unwrap();
+    cas.store(&nginx_config).unwrap();
     let init_binary = b"test init binary";
-    let init_binary_hash = cas.store(init_binary).unwrap();
-    let init_binary_size = i64::try_from(init_binary.len()).unwrap();
+    cas.store(init_binary).unwrap();
     let mut conn = db::open(&db_path).unwrap();
 
     db::transaction(&mut conn, |tx| {
@@ -158,6 +173,7 @@ pub fn setup_command_test_db() -> (TempDir, String) {
             "nginx".to_string(),
             "1.24.0".to_string(),
             TroveType::Package,
+            conary_core::repository::versioning::VersionScheme::Conary,
         );
         nginx.architecture = Some("x86_64".to_string());
         nginx.description = Some("High performance web server".to_string());
@@ -168,27 +184,15 @@ pub fn setup_command_test_db() -> (TempDir, String) {
         let mut nginx_runtime = Component::new(nginx_id, "runtime".to_string());
         let runtime_id = nginx_runtime.insert(tx)?;
 
-        let mut nginx_config = Component::new(nginx_id, "config".to_string());
-        let config_id = nginx_config.insert(tx)?;
+        let mut nginx_config_component = Component::new(nginx_id, "config".to_string());
+        let config_id = nginx_config_component.insert(tx)?;
 
         // Add nginx files
-        let mut f1 = FileEntry::new(
-            "/usr/sbin/nginx".to_string(),
-            nginx_binary_hash.clone(),
-            nginx_binary_size,
-            0o755,
-            nginx_id,
-        );
+        let mut f1 = regular_file_entry("/usr/sbin/nginx", &nginx_binary, 0o755, nginx_id);
         f1.component_id = Some(runtime_id);
         f1.insert(tx)?;
 
-        let mut f2 = FileEntry::new(
-            "/etc/nginx/nginx.conf".to_string(),
-            nginx_config_hash.clone(),
-            nginx_config_size,
-            0o644,
-            nginx_id,
-        );
+        let mut f2 = regular_file_entry("/etc/nginx/nginx.conf", &nginx_config, 0o644, nginx_id);
         f2.component_id = Some(config_id);
         f2.insert(tx)?;
 
@@ -199,14 +203,18 @@ pub fn setup_command_test_db() -> (TempDir, String) {
         p2.insert(tx)?;
 
         // Add nginx dependency
-        let mut dep = DependencyEntry::new(
+        let dependency = parse_native_requirement(
+            RepositoryRequirementKind::Depends,
+            VersionScheme::Conary,
+            "openssl >= 3.0.0",
+        )
+        .map_err(conary_core::Error::ParseError)?;
+        InstalledRequirementGroup::insert_groups(
+            tx,
             nginx_id,
-            "openssl".to_string(),
-            Some(">= 3.0".to_string()),
-            "runtime".to_string(),
-            None,
-        );
-        dep.insert(tx)?;
+            VersionScheme::Conary,
+            &[dependency],
+        )?;
 
         changeset1.update_status(tx, ChangesetStatus::Applied)?;
 
@@ -218,6 +226,7 @@ pub fn setup_command_test_db() -> (TempDir, String) {
             "openssl".to_string(),
             "3.0.0".to_string(),
             TroveType::Package,
+            conary_core::repository::versioning::VersionScheme::Conary,
         );
         openssl.architecture = Some("x86_64".to_string());
         openssl.description = Some("Cryptography and SSL/TLS toolkit".to_string());
@@ -227,13 +236,7 @@ pub fn setup_command_test_db() -> (TempDir, String) {
         let mut openssl_runtime = Component::new(openssl_id, "runtime".to_string());
         let openssl_runtime_id = openssl_runtime.insert(tx)?;
 
-        let mut init = FileEntry::new(
-            "/usr/sbin/init".to_string(),
-            init_binary_hash.clone(),
-            init_binary_size,
-            0o755,
-            openssl_id,
-        );
+        let mut init = regular_file_entry("/usr/sbin/init", init_binary, 0o755, openssl_id);
         init.component_id = Some(openssl_runtime_id);
         init.insert(tx)?;
 
@@ -254,8 +257,7 @@ pub fn setup_command_test_db() -> (TempDir, String) {
 
 #[allow(dead_code)]
 fn stage_test_boot_assets(root: &std::path::Path) {
-    let kernel_version = conary_core::generation::builder::detect_kernel_version_from_troves(&[])
-        .unwrap_or_else(|| "test-kernel".to_string());
+    let kernel_version = "test-kernel";
     let boot_root = root.join("boot");
     std::fs::create_dir_all(boot_root.join("EFI/BOOT")).unwrap();
     std::fs::write(

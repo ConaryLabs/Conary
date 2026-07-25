@@ -97,7 +97,7 @@ export CONARY_BOOTSTRAP_QEMU_CPU="max"
 
 bash "$TARGET_SCRIPT" \
     --work-dir "$WORK_DIR" \
-    --repo-name remi \
+    --repo-name remi-fedora-44 \
     --repo-url https://remi.conary.io \
     --remi-endpoint https://remi.conary.io \
     --remi-distro fedora-44
@@ -129,7 +129,7 @@ printf 'badbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadb\n' \
 STALE_STDERR="$TMPDIR_ROOT/stale.err"
 if bash "$TARGET_SCRIPT" \
     --work-dir "$WORK_DIR" \
-    --repo-name remi \
+    --repo-name remi-fedora-44 \
     --repo-url https://remi.conary.io \
     --remi-endpoint https://remi.conary.io \
     --remi-distro fedora-44 2>"$STALE_STDERR"; then

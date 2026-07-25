@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-24
-revision: 33
+last_updated: 2026-07-25
+revision: 36
 summary: Document native package-adoption preview and integration proof
 ---
 
@@ -167,6 +167,34 @@ Common conary-test operations have CLI equivalents for human use:
 Commands with structured output accept `--json`; `conary-test run` emits a JSON
 result report by default.
 
+## CCS Fixture Trust
+
+All checked-in and runtime-generated CCS integration fixtures share the
+disposable Ed25519 authority under
+`apps/conary/tests/fixtures/ccs-test-authority/`. The harness derives
+`${FIXTURE_CCS_KEY}`, `${FIXTURE_CCS_POLICY}`, and
+`${FIXTURE_CCS_EXPIRED_POLICY}` from `[paths].fixture_dir`; fixture builds pass
+the key explicitly, and every install or verify passes one of those policies.
+This authority is public test data and must never authorize release,
+repository, federation, update, or production packages.
+
+Rotate and rebuild the complete CCS fixture corpus together:
+
+```bash
+cargo build -p conary
+apps/conary/tests/fixtures/ccs-test-authority/generate.sh
+apps/conary/tests/fixtures/conary-test-fixture/build-all.sh
+apps/conary/tests/fixtures/adversarial/build-all.sh
+cargo run -p conary-test -- list
+```
+
+The `conary-test-fixture/v1` and `v2` directory names mean package version 1
+and package version 2; both emit the current signed CCS format. Adversarial
+archive fixtures are built as signed current packages first and only then
+mutated, so failures exercise their named integrity boundary. Failing
+post-install scriptlet fixtures must return nonzero and leave package database
+state and payload absent.
+
 From a checkout, use
 `cargo run -p conary-test -- bootstrap check --json` before smoke validation to
 inspect local prerequisites such as Cargo, manifest availability, container
@@ -231,12 +259,15 @@ Current Group N QEMU evidence from 2026-05-21:
   - `T153` `kernel_generation_rollback`: 1183803ms
   - `T154` `bootloader_config_deployed`: 1180481ms
   - `T156` `boot_minimal_image`: 20686ms
-- `T154` validates `grub2` installation after full CAS-backed live-root
-  adoption, including versioned critical runtime dependency satisfaction
-  through `conary-live-root` identity provides for `glibc`/`libc6`
-- The manifest now builds and switches a generation explicitly after
-  no-generation live-root installs, matching the current package-manager
-  contract instead of assuming `conary install` publishes `/conary/current`.
+- The historical `T154` run installed `grub2` after full CAS-backed live-root
+  adoption, but its dependency proof relied on synthetic
+  `conary-live-root` provides inferred from file paths. That heuristic
+  authority has been deleted; this result does not count as current dependency
+  proof until the fixture supplies exact package identities and the gate is
+  rerun.
+- This historical manifest predated mandatory selected-root publication.
+  Current installs materialize DB/CAS state when no generation exists and
+  publish `/conary/current` through the same atomic package transaction.
 
 Current Group O QEMU export evidence from 2026-07-16:
 
@@ -330,11 +361,15 @@ Focused Slice D native package-manager parity proof:
 - `cargo run -p conary-test -- run --suite phase4-native-pm-parity --distro ubuntu-26.04 --phase 4`
 - `cargo run -p conary-test -- run --suite phase4-native-pm-parity --distro arch --phase 4`
 
-The current `phase4-native-pm-parity` manifest has 18 tests. `TNPM01` through
-`TNPM12` keep the original repository, local-native package, update, query,
-security-refusal, and autoremove parity proof. `TNPM13` through `TNPM18` add the
-daily-driver corpus group. That corpus builds a native package per distro and
-then proves:
+The current `phase4-native-pm-parity` manifest has 19 tests. `TNPM02X` builds
+RPM, DEB, and Arch artifacts on every target image, installs and purges all
+three through Conary, and places failing `rpm`, `dpkg`, `apt`, and `pacman`
+shims first on `PATH` so source-package-manager delegation fails the run. The
+three distro jobs therefore form a 3x3 source-format/target-image matrix.
+`TNPM01` through `TNPM12` otherwise retain the repository, host-native package,
+update, query, security-refusal, and autoremove parity proof. `TNPM13` through
+`TNPM18` add the daily-driver corpus group. That corpus builds a package in the
+host-native format and then proves:
 
 - systemd unit file deployment and trigger matching
 - tracked `/etc` config file metadata
@@ -347,9 +382,9 @@ then proves:
 - an alternative target binary (`/usr/bin/phase4-corpus-alt`) as packaged file
   coverage
 
-Known unsupported or deliberately out-of-scope classes for this corpus:
+Corpus coverage boundaries (not product support exemptions):
 
-- native alternatives registration is still a legacy-format conversion note
+- native alternatives registration is still a foreign-format conversion note
   (`alternatives`/`update-alternatives` on RPM/DEB; no Arch equivalent here);
   the corpus covers the target file, not registration ownership
 - bootloader or kernel post-install hooks that regenerate initrds, boot entries,
@@ -365,14 +400,9 @@ unsuccessfully for skipped or cancelled results. Distro images rebuild by
 default so the matrix uses the current checkout; set `CONARY_TEST_REUSE_IMAGE=1`
 only for local iterative debugging where stale-image risk is acceptable.
 
-Fresh Slice D evidence from May 19, 2026:
-
-- Fedora 44/RPM: `fedora44-phase4.json`, 18 passed, 0 failed, 0 skipped, 0 cancelled.
-- Ubuntu 26.04/DEB: `ubuntu-26.04-phase4.json`, 18 passed, 0 failed, 0 skipped, 0 cancelled.
-- Arch/package format: `arch-phase4.json`, 18 passed, 0 failed, 0 skipped, 0 cancelled.
-
-All three result files include the `TNPM13` through `TNPM18` daily-driver
-corpus group and passed `scripts/check-conary-test-result-gate.sh`.
+Evidence from the former 18-test, host-native-only matrix does not certify the
+current 19-test cross-source contract. Record new evidence only after all three
+current distro jobs pass the result gate.
 
 Focused Goal 3 security advisory pipeline proof:
 
@@ -476,7 +506,7 @@ Always runs. Tests basic conary operations against a live Remi server:
 | T22-T23 | Pin | Pin/unpin package |
 | T24 | History | Changeset history |
 | T25-T27 | Dependencies | Install with deps, verify, multi-package coexist |
-| T28-T31 | Dep modes | Satisfy, adopt, takeover, blocklist |
+| T28, T30 | Recorded ownership modes | Preserve, explicit takeover |
 | T32 | Update | Update with adopted packages; native PM authority remains in effect unless takeover is explicit |
 | T33-T37 | Generations | List, GC, info, takeover dry-run, composefs format |
 
@@ -497,12 +527,11 @@ manager state, hooks, generations, or live-root paths.
 
 The focused CLI integration test
 `apps/conary/tests/native_pm_live_root.rs` complements the manifest matrix for
-Slice B. It proves that a Conary-owned package can update from v1 to v2 on a
-mutable live root with no selected generation, and that `update --security`
-refuses before mutation when the requested repository cannot prove advisory
-metadata support. It also includes a trusted JSON advisory repository fixture
-that syncs advisory metadata and applies a security update while surfacing
-advisory ID, CVE, fixed version, and trusted source output.
+source-owned update policy. Its package mutations now prove selected-root
+publication from an initially generation-free DB/CAS state. The security cases
+still prove refusal before mutation when a repository cannot prove advisory
+metadata support and successful application from a trusted JSON advisory
+fixture with advisory ID, CVE, fixed version, and source output.
 
 ### Phase 2: Deep E2E (T38-T76)
 

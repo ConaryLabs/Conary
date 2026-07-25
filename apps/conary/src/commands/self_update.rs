@@ -4,52 +4,25 @@
 
 use super::open_db;
 use anyhow::Result;
-use conary_core::db::models::settings;
 use conary_core::db::paths::objects_dir;
 use conary_core::self_update::{
     LatestVersionInfo, VersionCheckResult, apply_update, check_for_update,
     download_update_with_progress, extract_binary, fetch_latest_version_info, fetch_version_info,
-    get_update_channel,
+    get_update_channel, trusted_update_ccs_policy,
 };
-use rusqlite::Connection;
-use serde::{Deserialize, Serialize};
 use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
 
-const NO_VERIFY_AUDIT_KEY: &str = "self-update.no-verify-audit";
-const MAX_NO_VERIFY_AUDIT_EVENTS: usize = 20;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct NoVerifyAuditEvent {
-    timestamp_unix: u64,
-    channel_url: String,
-    current_version: String,
-    target_version: String,
-}
-
-fn check_update_signature(sha256: &str, signature: &Option<String>, no_verify: bool) -> Result<()> {
-    // --no-verify explicitly bypasses all signature checks
-    if no_verify {
-        crate::ui::warn("--no-verify specified, skipping signature verification.");
-        return Ok(());
-    }
-
+fn check_update_signature(sha256: &str, signature: &Option<String>) -> Result<()> {
     let have_trusted_keys = !conary_core::self_update::TRUSTED_UPDATE_KEYS.is_empty();
 
     if !have_trusted_keys {
-        // No trusted keys are configured in this build, so signature
-        // verification is impossible. Refuse by default; the user must pass
-        // --no-verify to proceed with an unverifiable update. This prevents
-        // silent unsigned binary replacement when TRUSTED_UPDATE_KEYS is empty.
         if signature.is_some() {
             anyhow::bail!(
-                "Update has a signature but no trusted keys are configured to verify it. \
-                 Use --no-verify to proceed without verification (NOT RECOMMENDED)."
+                "Update has a signature but this build has no trusted update keys configured"
             );
         }
         anyhow::bail!(
-            "Update has no signature and no trusted keys are configured. \
-             Refusing unsigned update. Use --no-verify to override (NOT RECOMMENDED)."
+            "Update has no signature and this build has no trusted update keys configured"
         );
     }
 
@@ -61,62 +34,16 @@ fn check_update_signature(sha256: &str, signature: &Option<String>, no_verify: b
             println!("Signature verified");
         }
         None => {
-            anyhow::bail!(
-                "Update has no signature. Refusing to install an unsigned release. \
-                 Use --no-verify to override (NOT RECOMMENDED)."
-            );
+            anyhow::bail!("Update has no signature; refusing to install an unsigned release");
         }
     }
     Ok(())
 }
 
-fn record_no_verify_audit_event(
-    conn: &Connection,
-    have_trusted_keys: bool,
-    channel_url: &str,
-    current_version: &str,
-    target_version: &str,
-) -> Result<()> {
-    if !have_trusted_keys {
-        return Ok(());
-    }
-
-    let mut events = settings::get(conn, NO_VERIFY_AUDIT_KEY)?
-        .and_then(|value| serde_json::from_str::<Vec<NoVerifyAuditEvent>>(&value).ok())
-        .unwrap_or_default();
-
-    let timestamp_unix = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|e| anyhow::anyhow!("System clock before Unix epoch: {e}"))?
-        .as_secs();
-
-    events.push(NoVerifyAuditEvent {
-        timestamp_unix,
-        channel_url: channel_url.to_string(),
-        current_version: current_version.to_string(),
-        target_version: target_version.to_string(),
-    });
-
-    if events.len() > MAX_NO_VERIFY_AUDIT_EVENTS {
-        let drop_count = events.len() - MAX_NO_VERIFY_AUDIT_EVENTS;
-        events.drain(0..drop_count);
-    }
-
-    settings::set(conn, NO_VERIFY_AUDIT_KEY, &serde_json::to_string(&events)?)?;
-    crate::ui::warn(&format!(
-        "--no-verify bypassed update signature verification even though trusted keys are configured. Event recorded in {}.",
-        NO_VERIFY_AUDIT_KEY
-    ));
-    Ok(())
-}
-
 fn validate_requested_version(version: &str) -> Result<()> {
-    let parts: Vec<&str> = version.split('.').collect();
-    if parts.len() == 3 && parts.iter().all(|part| part.parse::<u64>().is_ok()) {
-        Ok(())
-    } else {
-        anyhow::bail!("Invalid version format: {version} (expected SemVer x.y.z)");
-    }
+    semver::Version::parse(version)
+        .map(|_| ())
+        .map_err(|error| anyhow::anyhow!("Invalid SemVer version {version:?}: {error}"))
 }
 
 fn validate_sha256_hex(sha256: &str) -> Result<()> {
@@ -180,7 +107,6 @@ pub struct SelfUpdateOptions {
     pub check: bool,
     pub force: bool,
     pub version: Option<String>,
-    pub no_verify: bool,
     pub verify_sha256: Option<String>,
     pub verify_signature_file: Option<String>,
     pub trusted_keys: Vec<String>,
@@ -192,7 +118,6 @@ pub async fn cmd_self_update(db_path: &str, options: SelfUpdateOptions) -> Resul
         check,
         force,
         version,
-        no_verify,
         verify_sha256,
         verify_signature_file,
         trusted_keys,
@@ -203,7 +128,6 @@ pub async fn cmd_self_update(db_path: &str, options: SelfUpdateOptions) -> Resul
         if check
             || force
             || version.is_some()
-            || no_verify
             || verify_sha256.is_some()
             || verify_signature_file.is_some()
             || !trusted_keys.is_empty()
@@ -220,7 +144,7 @@ pub async fn cmd_self_update(db_path: &str, options: SelfUpdateOptions) -> Resul
     let offline_verify_mode =
         verify_sha256.is_some() || verify_signature_file.is_some() || !trusted_keys.is_empty();
     if offline_verify_mode {
-        if check || force || version.is_some() || no_verify {
+        if check || force || version.is_some() {
             anyhow::bail!(
                 "Offline signature verification mode cannot be combined with update/install flags"
             );
@@ -242,7 +166,6 @@ pub async fn cmd_self_update(db_path: &str, options: SelfUpdateOptions) -> Resul
     let current_version = env!("CARGO_PKG_VERSION");
     let conn = open_db(db_path)?;
     let channel_url = get_update_channel(&conn)?;
-    let have_trusted_keys = !conary_core::self_update::TRUSTED_UPDATE_KEYS.is_empty();
     let user_agent = format!("conary/{current_version}");
 
     println!("Current version: {current_version}");
@@ -305,7 +228,7 @@ pub async fn cmd_self_update(db_path: &str, options: SelfUpdateOptions) -> Resul
         ..
     } = result
     {
-        check_update_signature(sha256, signature, no_verify)?;
+        check_update_signature(sha256, signature)?;
     }
 
     // Determine download URL and expected version
@@ -323,20 +246,10 @@ pub async fn cmd_self_update(db_path: &str, options: SelfUpdateOptions) -> Resul
             } else {
                 fetch_latest_version_info(&channel_url, &user_agent).await?
             };
-            check_update_signature(&info.sha256, &info.signature, no_verify)?;
+            check_update_signature(&info.sha256, &info.signature)?;
             (info.download_url, info.sha256, info.version)
         }
     };
-
-    if no_verify {
-        record_no_verify_audit_event(
-            &conn,
-            have_trusted_keys,
-            &channel_url,
-            current_version,
-            &expected_version,
-        )?;
-    }
 
     // Determine target binary path (the currently running binary)
     let target_path = std::env::current_exe()
@@ -358,7 +271,12 @@ pub async fn cmd_self_update(db_path: &str, options: SelfUpdateOptions) -> Resul
             .await?;
 
     println!("Extracting binary...");
-    let new_binary = extract_binary(&ccs_path, target_dir)?;
+    let verified_ccs =
+        conary_core::ccs::verify::verify_package(&ccs_path, &trusted_update_ccs_policy()?)
+            .map_err(|error| {
+                anyhow::anyhow!("Self-update CCS authority verification failed: {error}")
+            })?;
+    let new_binary = extract_binary(&verified_ccs, target_dir)?;
 
     println!("Replacing binary...");
     let obj_dir = objects_dir(db_path);
@@ -377,43 +295,10 @@ pub async fn cmd_self_update(db_path: &str, options: SelfUpdateOptions) -> Resul
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        NO_VERIFY_AUDIT_KEY, record_no_verify_audit_event, validate_requested_version,
-        verify_detached_signature_file,
-    };
+    use super::{validate_requested_version, verify_detached_signature_file};
     use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
-    use conary_core::db::models::settings;
-    use conary_core::db::schema;
     use ed25519_dalek::Signer;
-    use rusqlite::Connection;
     use tempfile::tempdir;
-
-    fn create_test_db() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
-        schema::migrate(&conn).unwrap();
-        conn
-    }
-
-    #[test]
-    fn record_no_verify_audit_event_persists_when_trusted_keys_exist() {
-        let conn = create_test_db();
-
-        record_no_verify_audit_event(
-            &conn,
-            true,
-            "https://remi.conary.io/v1/ccs/conary",
-            "0.7.0",
-            "0.8.0",
-        )
-        .unwrap();
-
-        let value = settings::get(&conn, NO_VERIFY_AUDIT_KEY)
-            .unwrap()
-            .expect("audit record should be written");
-        assert!(value.contains("\"current_version\":\"0.7.0\""));
-        assert!(value.contains("\"target_version\":\"0.8.0\""));
-    }
 
     #[test]
     fn validate_requested_version_accepts_semver_triple() {
@@ -423,7 +308,7 @@ mod tests {
     #[test]
     fn validate_requested_version_rejects_non_semver() {
         let err = validate_requested_version("latest").unwrap_err();
-        assert!(err.to_string().contains("Invalid version format"));
+        assert!(err.to_string().contains("Invalid SemVer version"));
     }
 
     #[test]

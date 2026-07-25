@@ -8,88 +8,6 @@ use conary_core::db;
 use tempfile::NamedTempFile;
 
 #[test]
-#[ignore] // Ignored by default since it requires a real RPM file
-fn test_rpm_install_workflow() {
-    use conary_core::db::models::{Changeset, ChangesetStatus, FileEntry, Trove};
-    use conary_core::packages::PackageFormat;
-    use conary_core::packages::rpm::RpmPackage;
-
-    // This test requires a real RPM file to be present
-    // To run: place an RPM file at /tmp/test.rpm and run:
-    // cargo test test_rpm_install_workflow -- --ignored
-
-    let rpm_path = "/tmp/test.rpm";
-    if !std::path::Path::new(rpm_path).exists() {
-        eprintln!("Skipping RPM install test: no RPM file at {}", rpm_path);
-        return;
-    }
-
-    let temp_file = NamedTempFile::new().unwrap();
-    let db_path = temp_file.path().to_str().unwrap().to_string();
-    drop(temp_file);
-
-    // Initialize database
-    db::init(&db_path).unwrap();
-    let mut conn = db::open(&db_path).unwrap();
-
-    // Parse the RPM
-    let rpm = RpmPackage::parse(rpm_path).expect("Failed to parse RPM");
-
-    // Verify basic metadata was extracted
-    assert!(!rpm.name().is_empty(), "Package name should not be empty");
-    assert!(
-        !rpm.version().is_empty(),
-        "Package version should not be empty"
-    );
-
-    // Perform installation within changeset (simulating the install command)
-    db::transaction(&mut conn, |tx| {
-        let mut changeset = Changeset::new(format!("Install {}-{}", rpm.name(), rpm.version()));
-        let changeset_id = changeset.insert(tx)?;
-
-        let mut trove = rpm.to_trove();
-        trove.installed_by_changeset_id = Some(changeset_id);
-        let trove_id = trove.insert(tx)?;
-
-        // Store file metadata
-        for file in rpm.files() {
-            let mut file_entry = FileEntry::new(
-                file.path.clone(),
-                file.sha256.clone().unwrap_or_default(),
-                file.size,
-                file.mode,
-                trove_id,
-            );
-            file_entry.insert(tx)?;
-        }
-
-        changeset.update_status(tx, ChangesetStatus::Applied)?;
-        Ok(())
-    })
-    .unwrap();
-
-    // Verify it was stored correctly
-    let troves = Trove::find_by_name(&conn, rpm.name()).unwrap();
-    assert_eq!(troves.len(), 1);
-    assert_eq!(troves[0].version, rpm.version());
-
-    // Verify changeset was created
-    let changesets = Changeset::list_all(&conn).unwrap();
-    assert_eq!(changesets.len(), 1);
-    assert_eq!(changesets[0].status, ChangesetStatus::Applied);
-
-    // Verify files were stored
-    let files = FileEntry::find_by_trove(&conn, troves[0].id.unwrap()).unwrap();
-    assert_eq!(files.len(), rpm.files().len());
-
-    println!("Successfully installed RPM package:");
-    println!("  Name: {}", rpm.name());
-    println!("  Version: {}", rpm.version());
-    println!("  Files: {}", rpm.files().len());
-    println!("  Dependencies: {}", rpm.dependencies().len());
-}
-
-#[test]
 fn test_install_and_remove_workflow() {
     use conary_core::db::models::{Changeset, ChangesetStatus, Trove, TroveType};
 
@@ -109,6 +27,7 @@ fn test_install_and_remove_workflow() {
             "test-package".to_string(),
             "1.0.0".to_string(),
             TroveType::Package,
+            conary_core::repository::versioning::VersionScheme::Conary,
         );
         trove.installed_by_changeset_id = Some(changeset_id);
         let trove_id = trove.insert(tx)?;
@@ -159,6 +78,7 @@ fn test_install_and_rollback() {
             "nginx".to_string(),
             "1.21.0".to_string(),
             TroveType::Package,
+            conary_core::repository::versioning::VersionScheme::Conary,
         );
         trove.installed_by_changeset_id = Some(changeset_id);
         trove.insert(tx)?;
@@ -298,15 +218,14 @@ fn test_derive_build_cli_surfaces_persisted_artifact() {
 
 #[test]
 fn test_parent_upgrade_marks_built_derived_package_stale_via_install_cli() {
-    use conary_core::ccs::builder::write_ccs_package;
+    use conary_core::ccs::builder::write_signed_current_ccs_package;
     use conary_core::ccs::manifest::Platform;
-    use conary_core::ccs::{
-        BuildResult, CcsManifest, ComponentData, FileEntry as CcsFileEntry, FileType,
-    };
+    use conary_core::ccs::{BuildResult, CcsManifest, ComponentData, FileEntry as CcsFileEntry};
     use conary_core::db::models::{DerivedOverride, DerivedPackage, DerivedStatus, VersionPolicy};
     use conary_core::derived::{build_from_definition, persist_build_artifact};
     use conary_core::filesystem::CasStore;
     use conary_core::hash;
+    use conary_core::payload::{PayloadContentAuthority, PayloadNode};
     use std::collections::HashMap;
     use std::process::Command;
 
@@ -342,22 +261,22 @@ fn test_parent_upgrade_marks_built_derived_package_stale_via_install_cli() {
     let files = vec![
         CcsFileEntry {
             path: "/usr/sbin/nginx".to_string(),
-            hash: binary_hash.clone(),
-            size: binary_content.len() as u64,
-            mode: 0o100755,
+            node: PayloadNode::regular(0o755),
+            content: Some(PayloadContentAuthority {
+                sha256: binary_hash.clone(),
+                size: binary_content.len() as u64,
+            }),
             component: "runtime".to_string(),
-            file_type: FileType::Regular,
-            target: None,
             chunks: None,
         },
         CcsFileEntry {
             path: "/etc/nginx/nginx.conf".to_string(),
-            hash: config_hash.clone(),
-            size: config_content.len() as u64,
-            mode: 0o100644,
+            node: PayloadNode::regular(0o644),
+            content: Some(PayloadContentAuthority {
+                sha256: config_hash.clone(),
+                size: config_content.len() as u64,
+            }),
             component: "runtime".to_string(),
-            file_type: FileType::Regular,
-            target: None,
             chunks: None,
         },
     ];
@@ -386,10 +305,19 @@ fn test_parent_upgrade_marks_built_derived_package_stale_via_install_cli() {
         chunked: false,
         chunk_stats: None,
     };
-    write_ccs_package(&result, &package_path).unwrap();
+    let local_dev_root = install_temp.path().join("xdg/conary/ccs/local-dev");
+    let signing_key = conary_core::ccs::SigningKeyPair::generate().with_key_id("local-dev");
+    signing_key
+        .save_to_files(
+            &local_dev_root.join("local-dev-key.private.toml"),
+            &local_dev_root.join("local-dev-key.public.toml"),
+        )
+        .unwrap();
+    write_signed_current_ccs_package(&result, &package_path, &signing_key, true).unwrap();
 
     let install_output = Command::new(env!("CARGO_BIN_EXE_conary"))
         .env("CONARY_TEST_SKIP_GENERATION_MOUNT", "1")
+        .env("XDG_DATA_HOME", install_temp.path().join("xdg"))
         .arg("install")
         .arg(package_path.to_str().unwrap())
         .arg("--db-path")
@@ -397,7 +325,7 @@ fn test_parent_upgrade_marks_built_derived_package_stale_via_install_cli() {
         .arg("--root")
         .arg(install_root.to_str().unwrap())
         .arg("--sandbox")
-        .arg("never")
+        .arg("always")
         .arg("--yes")
         .output()
         .unwrap();
@@ -445,9 +373,8 @@ fn test_capability_run_uses_installed_package_declaration() {
         .arg("install")
         .arg(fixture_path)
         .arg("--allow-unsigned")
-        .arg("--allow-capabilities")
         .arg("--sandbox")
-        .arg("never")
+        .arg("always")
         .arg("--reinstall")
         .arg("--db-path")
         .arg(&db_path)

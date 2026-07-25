@@ -5,9 +5,11 @@
 //! Functions for resolving package dependencies across repositories,
 //! including transitive resolution and parallel downloads.
 
-use crate::db::models::{RepositoryProvide, Trove};
+use crate::db::models::RepositoryProvide;
 use crate::error::{Error, Result};
-use crate::repository::versioning::{RepoVersionConstraint, VersionScheme, repo_version_satisfies};
+use crate::repository::versioning::{
+    RepoVersionConstraint, repo_version_satisfies, resolve_package_version_scheme,
+};
 use crate::version::VersionConstraint;
 use rusqlite::Connection;
 use std::collections::HashSet;
@@ -46,16 +48,9 @@ fn to_repo_constraint(constraint: &VersionConstraint) -> RepoVersionConstraint {
     }
 }
 
-/// Infer the `VersionScheme` from a provide's `version_scheme` field.
-fn provide_version_scheme(provide: &RepositoryProvide) -> VersionScheme {
-    match provide.version_scheme.as_deref() {
-        Some("debian") => VersionScheme::Debian,
-        Some("arch") => VersionScheme::Arch,
-        // Default to RPM -- the most common ecosystem and safe fallback for
-        // segment-based comparison.
-        _ => VersionScheme::Rpm,
-    }
-}
+#[cfg(test)]
+#[path = "dependencies/tests.rs"]
+mod tests;
 
 /// Check if a provide's version satisfies the dependency constraint.
 ///
@@ -64,25 +59,57 @@ fn provide_version_scheme(provide: &RepositoryProvide) -> VersionScheme {
 fn provide_satisfies_constraint(
     provide: &RepositoryProvide,
     constraint: &VersionConstraint,
-) -> bool {
+) -> Result<bool> {
     if matches!(constraint, VersionConstraint::Any) {
-        return true;
+        return Ok(true);
     }
 
     // Handle And constraints by checking both halves.
     if let VersionConstraint::And(a, b) = constraint {
-        return provide_satisfies_constraint(provide, a)
-            && provide_satisfies_constraint(provide, b);
+        return Ok(
+            provide_satisfies_constraint(provide, a)? && provide_satisfies_constraint(provide, b)?
+        );
     }
 
     let Some(ref provide_version) = provide.version else {
         // Unversioned provide cannot satisfy a versioned constraint.
-        return false;
+        return Ok(false);
     };
 
-    let scheme = provide_version_scheme(provide);
+    let scheme = provide.version_scheme;
     let repo_constraint = to_repo_constraint(constraint);
-    repo_version_satisfies(scheme, provide_version, &repo_constraint)
+    Ok(repo_version_satisfies(
+        scheme,
+        provide_version,
+        &repo_constraint,
+    )?)
+}
+
+fn package_satisfies_constraint(
+    candidate: &PackageWithRepo,
+    constraint: &VersionConstraint,
+) -> Result<bool> {
+    if matches!(constraint, VersionConstraint::Any) {
+        return Ok(true);
+    }
+    if let VersionConstraint::And(left, right) = constraint {
+        return Ok(package_satisfies_constraint(candidate, left)?
+            && package_satisfies_constraint(candidate, right)?);
+    }
+    let scheme = resolve_package_version_scheme(&candidate.package);
+    Ok(repo_version_satisfies(
+        scheme,
+        &candidate.package.version,
+        &to_repo_constraint(constraint),
+    )?)
+}
+
+fn exact_selected_constraint(dep_name: &str, version: &str) -> Result<VersionConstraint> {
+    VersionConstraint::parse(&format!("= {version}")).map_err(|error| {
+        Error::VersionParse(format!(
+            "repository provider for '{dep_name}' selected invalid package version '{version}': {error}"
+        ))
+    })
 }
 
 /// Resolve a dependency by querying normalized `repository_provides` data.
@@ -116,7 +143,7 @@ fn resolve_repo_dependency_by_capability(
 
     for (provide, name) in &provides_with_name {
         // Filter by provide version vs dependency constraint.
-        if !provide_satisfies_constraint(provide, constraint) {
+        if !provide_satisfies_constraint(provide, constraint)? {
             debug!(
                 "Provide {} version {:?} does not satisfy constraint {:?}, skipping",
                 provide.capability, provide.version, constraint
@@ -147,73 +174,25 @@ fn resolve_repo_dependency_by_capability(
     )))
 }
 
-/// Fallback: scan JSON metadata blobs for capability information.
-///
-/// This handles packages that were sync'd before normalized provide data was
-/// available.  It is only reached when the `repository_provides` table has no
-/// matching rows for the requested capability.
-fn resolve_repo_dependency_by_metadata(
-    conn: &Connection,
-    dep_name: &str,
-    options: &SelectionOptions,
-) -> Result<Option<(String, Option<String>)>> {
-    let pattern = format!("%{dep_name}%");
-    let mut stmt = conn.prepare(
-        "SELECT DISTINCT name FROM repository_packages
-         WHERE metadata LIKE ?1
-         ORDER BY LENGTH(name), name",
-    )?;
-
-    let rows = stmt.query_map([pattern], |row| row.get::<_, String>(0))?;
-    let mut candidates = Vec::new();
-
-    for row in rows {
-        let name = row?;
-        for candidate in PackageSelector::search_packages(conn, &name, options)? {
-            let Some(metadata_json) = candidate.package.metadata.as_ref() else {
-                continue;
-            };
-            let Ok(metadata) = serde_json::from_str::<serde_json::Value>(metadata_json) else {
-                continue;
-            };
-            let Some(provides) = metadata
-                .get("rpm_provides")
-                .and_then(|value| value.as_array())
-            else {
-                continue;
-            };
-            if provides.iter().any(|value| {
-                value.as_str().is_some_and(|provide| {
-                    provide == dep_name
-                        || provide.starts_with(&format!("{dep_name} "))
-                        || provide.starts_with(&format!("{dep_name}("))
-                })
-            }) {
-                candidates.push(candidate);
-            }
-        }
-    }
-
-    if candidates.is_empty() {
-        return Ok(None);
-    }
-
-    let selected = PackageSelector::select_best_with_options(conn, candidates, options)?;
-    Ok(Some((
-        selected.package.name.clone(),
-        Some(selected.package.version.clone()),
-    )))
-}
-
 fn resolve_repo_dependency_request(
     conn: &Connection,
     dep_name: &str,
     constraint: &VersionConstraint,
     options: &SelectionOptions,
 ) -> Result<(String, VersionConstraint)> {
-    // 1. Exact package name match -- cheapest check.
-    if PackageSelector::find_best_package(conn, dep_name, options).is_ok() {
-        return Ok((dep_name.to_string(), constraint.clone()));
+    // 1. Exact package name and native-version match.
+    let mut exact_candidates = Vec::new();
+    for candidate in PackageSelector::search_packages(conn, dep_name, options)? {
+        if package_satisfies_constraint(&candidate, constraint)? {
+            exact_candidates.push(candidate);
+        }
+    }
+    if !exact_candidates.is_empty() {
+        let selected = PackageSelector::select_best_with_options(conn, exact_candidates, options)?;
+        return Ok((
+            dep_name.to_string(),
+            exact_selected_constraint(dep_name, &selected.package.version)?,
+        ));
     }
 
     // 2. Normalized capability lookup -- preferred resolution path.
@@ -223,20 +202,7 @@ fn resolve_repo_dependency_request(
         resolve_repo_dependency_by_capability(conn, dep_name, constraint, options)?
     {
         let resolved_constraint = if let Some(version) = package_version {
-            VersionConstraint::parse(&format!("= {version}")).unwrap_or(VersionConstraint::Any)
-        } else {
-            constraint.clone()
-        };
-        return Ok((package_name, resolved_constraint));
-    }
-
-    // 3. Legacy JSON metadata blob scan -- backward compat for packages that
-    //    haven't been re-sync'd with normalized provide data yet.
-    if let Some((package_name, package_version)) =
-        resolve_repo_dependency_by_metadata(conn, dep_name, options)?
-    {
-        let resolved_constraint = if let Some(version) = package_version {
-            VersionConstraint::parse(&format!("= {version}")).unwrap_or(VersionConstraint::Any)
+            exact_selected_constraint(dep_name, &version)?
         } else {
             constraint.clone()
         };
@@ -248,63 +214,10 @@ fn resolve_repo_dependency_request(
     )))
 }
 
-/// Resolve dependencies and return list of packages to download
-///
-/// This function takes a list of dependency names and searches repositories
-/// for matching packages. It checks which dependencies are already installed
-/// and returns only the ones that need to be downloaded.
-///
-/// Returns: Vec<(dependency_name, PackageWithRepo)>
-pub fn resolve_dependencies(
-    conn: &Connection,
-    dependencies: &[String],
-) -> Result<Vec<(String, PackageWithRepo)>> {
-    let mut to_download = Vec::new();
-
-    for dep_name in dependencies {
-        // Skip rpmlib dependencies and file paths
-        if dep_name.starts_with("rpmlib(") || dep_name.starts_with('/') {
-            continue;
-        }
-
-        // Check if already installed
-        let installed = Trove::find_by_name(conn, dep_name)?;
-        if !installed.is_empty() {
-            debug!("Dependency {} already installed, skipping", dep_name);
-            continue;
-        }
-
-        // Search repositories for this dependency
-        let options = SelectionOptions::default();
-        let (resolved_name, _) =
-            resolve_repo_dependency_request(conn, dep_name, &VersionConstraint::Any, &options)?;
-        match PackageSelector::find_best_package(conn, &resolved_name, &options) {
-            Ok(pkg_with_repo) => {
-                info!(
-                    "Found dependency {} as package {} version {} in repository {}",
-                    dep_name,
-                    resolved_name,
-                    pkg_with_repo.package.version,
-                    pkg_with_repo.repository.name
-                );
-                to_download.push((dep_name.clone(), pkg_with_repo));
-            }
-            Err(e) => {
-                // Dependency not found - this is a critical error
-                return Err(Error::NotFound(format!(
-                    "Required dependency '{dep_name}' not found in any repository: {e}"
-                )));
-            }
-        }
-    }
-
-    Ok(to_download)
-}
-
 /// Resolve dependency requests without transitive expansion.
 ///
-/// Like [`resolve_dependencies`] but accepts `(name, constraint)` pairs
-/// and passes the constraint into the capability/name resolution step.
+/// Accepts `(name, constraint)` pairs and passes the constraint into the
+/// capability/name resolution step.
 /// Does **not** invoke the SAT solver or expand transitive dependencies.
 ///
 /// Designed for callers that handle transitive expansion themselves (e.g.
@@ -312,35 +225,14 @@ pub fn resolve_dependencies(
 pub fn resolve_dependency_requests(
     conn: &Connection,
     requests: &[(String, VersionConstraint)],
+    options: &SelectionOptions,
 ) -> Result<Vec<(String, PackageWithRepo)>> {
     let mut to_download = Vec::new();
     let mut queued_packages = std::collections::HashSet::new();
-    let options = SelectionOptions::default();
 
     for (dep_name, constraint) in requests {
-        if dep_name.starts_with("rpmlib(") || dep_name.starts_with('/') {
-            continue;
-        }
-
-        let installed = Trove::find_by_name(conn, dep_name)?;
-        if !installed.is_empty() {
-            debug!("Dependency {} already installed, skipping", dep_name);
-            continue;
-        }
-
         let (resolved_name, resolved_constraint) =
-            resolve_repo_dependency_request(conn, dep_name, constraint, &options)?;
-
-        if resolved_name != *dep_name {
-            let installed = Trove::find_by_name(conn, &resolved_name)?;
-            if !installed.is_empty() {
-                debug!(
-                    "Dependency {} resolves to installed package {}, skipping",
-                    dep_name, resolved_name
-                );
-                continue;
-            }
-        }
+            resolve_repo_dependency_request(conn, dep_name, constraint, options)?;
 
         // Use the resolved constraint's version to pin selection when possible
         let select_options = match &resolved_constraint {
@@ -385,39 +277,17 @@ pub fn resolve_dependency_requests(
     Ok(to_download)
 }
 
-/// Resolve dependencies transitively using the SAT solver
-///
-/// Uses resolvo's CDCL SAT solver for dependency resolution with backtracking.
-/// The solver handles transitive resolution, cycle detection, and topological
-/// ordering natively — no manual BFS or Kahn's sort needed.
-///
-/// Returns: Vec<(dependency_name, PackageWithRepo)> in dependency order
-pub fn resolve_dependencies_transitive(
-    conn: &Connection,
-    initial_dependencies: &[String],
-    _max_depth: usize,
-) -> Result<Vec<(String, PackageWithRepo)>> {
-    let requests: Vec<_> = initial_dependencies
-        .iter()
-        .filter(|d| !d.starts_with("rpmlib(") && !d.starts_with('/'))
-        .map(|d| Ok((d.clone(), VersionConstraint::Any)))
-        .collect::<Result<Vec<_>>>()?;
-
-    resolve_dependencies_transitive_requests(conn, &requests, _max_depth)
-}
-
 pub fn resolve_dependencies_transitive_requests(
     conn: &Connection,
     initial_requests: &[(String, VersionConstraint)],
     _max_depth: usize,
+    options: &SelectionOptions,
 ) -> Result<Vec<(String, PackageWithRepo)>> {
     use crate::resolver::sat;
 
-    let options = SelectionOptions::default();
     let requests: Vec<_> = initial_requests
         .iter()
-        .filter(|(d, _)| !d.starts_with("rpmlib(") && !d.starts_with('/'))
-        .map(|(d, constraint)| resolve_repo_dependency_request(conn, d, constraint, &options))
+        .map(|(d, constraint)| resolve_repo_dependency_request(conn, d, constraint, options))
         .collect::<Result<Vec<_>>>()?;
 
     if requests.is_empty() {
@@ -425,7 +295,9 @@ pub fn resolve_dependencies_transitive_requests(
     }
 
     // Use SAT solver for transitive resolution
-    let resolution = sat::solve_install(conn, &requests)?;
+    let default_policy = crate::repository::resolution_policy::ResolutionPolicy::default();
+    let policy = options.policy.as_ref().unwrap_or(&default_policy);
+    let resolution = sat::solve_install_with_policy(conn, &requests, policy)?;
 
     if let Some(conflict_msg) = resolution.conflict_message {
         return Err(Error::NotFound(format!(
@@ -446,7 +318,7 @@ pub fn resolve_dependencies_transitive_requests(
         // Pin selection to the exact version the SAT solver chose
         let options = SelectionOptions {
             version: Some(pkg.version.to_string()),
-            ..SelectionOptions::default()
+            ..options.clone()
         };
 
         // Look up the package in repos for download info
@@ -478,14 +350,14 @@ pub fn resolve_dependencies_transitive_requests(
 /// # Arguments
 /// * `dependencies` - List of (name, package info) tuples to download
 /// * `dest_dir` - Directory to download packages to
-/// * `keyring_dir` - Optional keyring directory for GPG verification
+/// * `keyring_dir` - Prepared native repository trust store
 ///
 /// # Returns
 /// Vec<(dependency_name, downloaded_path)> on success
 pub async fn download_dependencies(
     dependencies: &[(String, PackageWithRepo)],
     dest_dir: &Path,
-    keyring_dir: Option<&Path>,
+    keyring_dir: &Path,
 ) -> Result<Vec<(String, PathBuf)>> {
     if dependencies.is_empty() {
         return Ok(Vec::new());
@@ -521,39 +393,28 @@ pub async fn download_dependencies(
     for ((dep_name, pkg_with_repo), pb) in dependencies.iter().zip(progress_bars.iter()) {
         info!("Downloading dependency: {}", dep_name);
 
-        // Build GPG options if keyring_dir provided and repo has gpg_check enabled
-        let gpg_options = if let Some(keyring) = keyring_dir {
-            if pkg_with_repo.repository.gpg_check {
-                Some(DownloadOptions {
-                    gpg_check: true,
-                    gpg_strict: pkg_with_repo.repository.gpg_strict,
-                    keyring_dir: keyring.to_path_buf(),
-                    repository_name: pkg_with_repo.repository.name.clone(),
-                })
-            } else {
-                None
-            }
-        } else {
+        let trust = if pkg_with_repo.repository.default_strategy.as_deref() == Some("static") {
             None
+        } else {
+            Some(DownloadOptions::for_repository(
+                &pkg_with_repo.repository,
+                keyring_dir,
+            )?)
         };
 
-        let result = match download_dependency_package(
-            pkg_with_repo,
-            dest_dir,
-            gpg_options.as_ref(),
-            Some(pb),
-        )
-        .await
-        {
-            Ok(path) => {
-                DownloadProgress::finish_download(pb, dep_name);
-                Ok((dep_name.clone(), path, pkg_with_repo.package.size as u64))
-            }
-            Err(e) => {
-                DownloadProgress::fail_download(pb, dep_name, &e.to_string());
-                Err(e)
-            }
-        };
+        let result =
+            match download_dependency_package(pkg_with_repo, dest_dir, trust.as_ref(), Some(pb))
+                .await
+            {
+                Ok(path) => {
+                    DownloadProgress::finish_download(pb, dep_name);
+                    Ok((dep_name.clone(), path, pkg_with_repo.package.size as u64))
+                }
+                Err(e) => {
+                    DownloadProgress::fail_download(pb, dep_name, &e.to_string());
+                    Err(e)
+                }
+            };
         individual_results.push(result);
     }
 
@@ -605,584 +466,30 @@ pub async fn download_dependencies(
 async fn download_dependency_package(
     pkg_with_repo: &PackageWithRepo,
     dest_dir: &Path,
-    gpg_options: Option<&DownloadOptions>,
+    native_trust: Option<&DownloadOptions>,
     progress_bar: Option<&indicatif::ProgressBar>,
 ) -> Result<PathBuf> {
     if pkg_with_repo.repository.default_strategy.as_deref() == Some("static") {
         download_static_package_verified_with_progress(
             &pkg_with_repo.package,
             dest_dir,
-            gpg_options,
+            None,
             progress_bar,
         )
         .await
     } else {
+        let trust = native_trust.ok_or_else(|| {
+            Error::ConfigError(format!(
+                "native repository '{}' download has no prepared trust policy",
+                pkg_with_repo.repository.name
+            ))
+        })?;
         download_package_verified_with_progress(
             &pkg_with_repo.package,
             dest_dir,
-            gpg_options,
+            trust,
             progress_bar,
         )
         .await
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::db::models::{Repository, RepositoryPackage, RepositoryProvide};
-    use crate::db::schema;
-    use rusqlite::Connection;
-
-    fn test_db() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
-            "PRAGMA journal_mode = WAL;
-             PRAGMA foreign_keys = ON;",
-        )
-        .unwrap();
-        schema::migrate(&conn).unwrap();
-        conn
-    }
-
-    #[test]
-    fn does_not_resolve_soname_dependency_from_package_name_guess() {
-        let conn = test_db();
-
-        let mut repo = Repository::new("fedora-remi".to_string(), "https://example.invalid".into());
-        repo.insert(&conn).unwrap();
-        let repo_id = repo.id.unwrap();
-
-        let mut pkg = RepositoryPackage::new(
-            repo_id,
-            "libjq".to_string(),
-            "1.8.1-1.fc44".to_string(),
-            "sha256:test".to_string(),
-            123,
-            "https://example.invalid/libjq.rpm".to_string(),
-        );
-        pkg.insert(&conn).unwrap();
-
-        let err = resolve_repo_dependency_request(
-            &conn,
-            "libjq.so.1",
-            &VersionConstraint::Any,
-            &SelectionOptions::default(),
-        )
-        .unwrap_err();
-
-        assert!(
-            err.to_string()
-                .contains("Required dependency 'libjq.so.1' not found"),
-            "{err}"
-        );
-    }
-
-    #[test]
-    fn does_not_resolve_soname_dependency_by_search_stem() {
-        let conn = test_db();
-
-        let mut repo = Repository::new("fedora-remi".to_string(), "https://example.invalid".into());
-        repo.insert(&conn).unwrap();
-        let repo_id = repo.id.unwrap();
-
-        for name in ["oniguruma", "oniguruma-devel", "rust-onig-devel"] {
-            let mut pkg = RepositoryPackage::new(
-                repo_id,
-                name.to_string(),
-                "6.9.10-3.fc44".to_string(),
-                format!("sha256:{name}"),
-                123,
-                format!("https://example.invalid/{name}.rpm"),
-            );
-            pkg.insert(&conn).unwrap();
-        }
-
-        let err = resolve_repo_dependency_request(
-            &conn,
-            "libonig.so.5",
-            &VersionConstraint::Any,
-            &SelectionOptions::default(),
-        )
-        .unwrap_err();
-
-        assert!(
-            err.to_string()
-                .contains("Required dependency 'libonig.so.5' not found"),
-            "{err}"
-        );
-    }
-
-    #[test]
-    fn resolves_capability_dependency_from_repo_metadata_provides() {
-        let conn = test_db();
-
-        let mut repo = Repository::new("fedora-remi".to_string(), "https://example.invalid".into());
-        repo.insert(&conn).unwrap();
-        let repo_id = repo.id.unwrap();
-
-        let mut pkg = RepositoryPackage::new(
-            repo_id,
-            "kernel-core".to_string(),
-            "6.19.6-200.fc44".to_string(),
-            "sha256:test".to_string(),
-            123,
-            "https://example.invalid/kernel-core.rpm".to_string(),
-        );
-        pkg.metadata = Some(
-            serde_json::json!({
-                "rpm_provides": ["kernel-core-uname-r = 6.19.6-200.fc44.x86_64"]
-            })
-            .to_string(),
-        );
-        pkg.insert(&conn).unwrap();
-
-        let (resolved, constraint) = resolve_repo_dependency_request(
-            &conn,
-            "kernel-core-uname-r",
-            &VersionConstraint::parse("= 6.19.6-200.fc44.x86_64").unwrap(),
-            &SelectionOptions::default(),
-        )
-        .unwrap();
-        assert_eq!(resolved, "kernel-core");
-        assert_eq!(
-            constraint,
-            VersionConstraint::parse("= 6.19.6-200.fc44").unwrap()
-        );
-    }
-
-    #[test]
-    fn resolves_capability_dependency_from_normalized_repo_provides() {
-        let conn = test_db();
-
-        let mut repo = Repository::new("fedora-remi".to_string(), "https://example.invalid".into());
-        repo.insert(&conn).unwrap();
-        let repo_id = repo.id.unwrap();
-
-        let mut pkg = RepositoryPackage::new(
-            repo_id,
-            "kernel-core".to_string(),
-            "6.19.6-200.fc44".to_string(),
-            "sha256:test".to_string(),
-            123,
-            "https://example.invalid/kernel-core.rpm".to_string(),
-        );
-        pkg.insert(&conn).unwrap();
-        let repo_package_id = pkg.id.unwrap();
-
-        let mut provide = RepositoryProvide::new(
-            repo_package_id,
-            "kernel-core-uname-r".to_string(),
-            Some("6.19.6-200.fc44.x86_64".to_string()),
-            "package".to_string(),
-            Some("kernel-core-uname-r = 6.19.6-200.fc44.x86_64".to_string()),
-        );
-        provide.insert(&conn).unwrap();
-
-        let (resolved, constraint) = resolve_repo_dependency_request(
-            &conn,
-            "kernel-core-uname-r",
-            &VersionConstraint::parse("= 6.19.6-200.fc44.x86_64").unwrap(),
-            &SelectionOptions::default(),
-        )
-        .unwrap();
-        assert_eq!(resolved, "kernel-core");
-        assert_eq!(
-            constraint,
-            VersionConstraint::parse("= 6.19.6-200.fc44").unwrap()
-        );
-    }
-
-    #[test]
-    fn resolve_dependency_requests_finds_direct_packages_without_transitive_expansion() {
-        let conn = test_db();
-
-        let mut repo = Repository::new("fedora-remi".to_string(), "https://example.invalid".into());
-        repo.insert(&conn).unwrap();
-        let repo_id = repo.id.unwrap();
-
-        // Package A depends on B (but we only resolve A, not transitively)
-        let mut pkg_a = RepositoryPackage::new(
-            repo_id,
-            "pkg-a".to_string(),
-            "1.0-1.fc44".to_string(),
-            "sha256:a".to_string(),
-            100,
-            "https://example.invalid/pkg-a.rpm".to_string(),
-        );
-        pkg_a.insert(&conn).unwrap();
-
-        let mut pkg_b = RepositoryPackage::new(
-            repo_id,
-            "pkg-b".to_string(),
-            "2.0-1.fc44".to_string(),
-            "sha256:b".to_string(),
-            200,
-            "https://example.invalid/pkg-b.rpm".to_string(),
-        );
-        pkg_b.insert(&conn).unwrap();
-
-        let requests = vec![
-            ("pkg-a".to_string(), VersionConstraint::Any),
-            ("pkg-b".to_string(), VersionConstraint::Any),
-        ];
-
-        let result = resolve_dependency_requests(&conn, &requests).unwrap();
-
-        // Both should be found (non-transitive: just the requested packages)
-        assert_eq!(result.len(), 2);
-        let names: Vec<&str> = result.iter().map(|(n, _)| n.as_str()).collect();
-        assert!(names.contains(&"pkg-a"));
-        assert!(names.contains(&"pkg-b"));
-    }
-
-    #[test]
-    fn resolve_dependency_requests_skips_installed() {
-        let conn = test_db();
-
-        let mut repo = Repository::new("fedora-remi".to_string(), "https://example.invalid".into());
-        repo.insert(&conn).unwrap();
-        let repo_id = repo.id.unwrap();
-
-        let mut pkg = RepositoryPackage::new(
-            repo_id,
-            "already-here".to_string(),
-            "1.0-1.fc44".to_string(),
-            "sha256:ah".to_string(),
-            100,
-            "https://example.invalid/already-here.rpm".to_string(),
-        );
-        pkg.insert(&conn).unwrap();
-
-        // Install a trove with the same name
-        conn.execute(
-            "INSERT INTO troves (name, version, type, install_source, install_reason)
-             VALUES ('already-here', '1.0-1.fc44', 'package', 'repository', 'explicit')",
-            [],
-        )
-        .unwrap();
-
-        let requests = vec![("already-here".to_string(), VersionConstraint::Any)];
-        let result = resolve_dependency_requests(&conn, &requests).unwrap();
-
-        assert!(result.is_empty(), "installed packages should be skipped");
-    }
-
-    #[test]
-    fn resolve_dependency_requests_deduplicates_capabilities_to_same_package() {
-        let conn = test_db();
-
-        let mut repo = Repository::new("fedora-remi".to_string(), "https://example.invalid".into());
-        repo.insert(&conn).unwrap();
-        let repo_id = repo.id.unwrap();
-
-        let mut pkg = RepositoryPackage::new(
-            repo_id,
-            "kmod".to_string(),
-            "34.2-2.fc44".to_string(),
-            "sha256:kmod".to_string(),
-            100,
-            "https://example.invalid/kmod.rpm".to_string(),
-        );
-        pkg.insert(&conn).unwrap();
-        let pkg_id = pkg.id.unwrap();
-
-        for capability in ["libkmod.so.2()(64bit)", "libkmod.so.2(LIBKMOD_22)(64bit)"] {
-            let mut provide = RepositoryProvide::new(
-                pkg_id,
-                capability.to_string(),
-                None,
-                "soname".to_string(),
-                Some(capability.to_string()),
-            );
-            provide.insert(&conn).unwrap();
-        }
-
-        let requests = vec![
-            ("kmod".to_string(), VersionConstraint::Any),
-            ("libkmod.so.2()(64bit)".to_string(), VersionConstraint::Any),
-            (
-                "libkmod.so.2(LIBKMOD_22)(64bit)".to_string(),
-                VersionConstraint::Any,
-            ),
-        ];
-
-        let result = resolve_dependency_requests(&conn, &requests).unwrap();
-
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].1.package.name, "kmod");
-        assert_eq!(result[0].1.package.version, "34.2-2.fc44");
-    }
-
-    #[test]
-    fn resolve_dependency_requests_requires_normalized_rpm_soname_key() {
-        let conn = test_db();
-
-        let mut repo = Repository::new("fedora-remi".to_string(), "https://example.invalid".into());
-        repo.insert(&conn).unwrap();
-        let repo_id = repo.id.unwrap();
-
-        let mut pkg = RepositoryPackage::new(
-            repo_id,
-            "glib2".to_string(),
-            "2.86.0-2.fc44".to_string(),
-            "sha256:glib2".to_string(),
-            100,
-            "https://example.invalid/glib2.rpm".to_string(),
-        );
-        pkg.insert(&conn).unwrap();
-        let pkg_id = pkg.id.unwrap();
-
-        let mut provide = RepositoryProvide::new(
-            pkg_id,
-            "libglib-2.0.so.0".to_string(),
-            None,
-            "soname".to_string(),
-            Some("libglib-2.0.so.0()(64bit)".to_string()),
-        );
-        provide.insert(&conn).unwrap();
-
-        let raw_requests = vec![(
-            "libglib-2.0.so.0()(64bit)".to_string(),
-            VersionConstraint::Any,
-        )];
-        let err = resolve_dependency_requests(&conn, &raw_requests).unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("Required dependency 'libglib-2.0.so.0()(64bit)' not found"),
-            "{err}"
-        );
-
-        let normalized_requests = vec![("libglib-2.0.so.0".to_string(), VersionConstraint::Any)];
-        let result = resolve_dependency_requests(&conn, &normalized_requests).unwrap();
-
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].1.package.name, "glib2");
-    }
-
-    #[test]
-    fn resolves_rpm_provided_capability_via_normalized_provides() {
-        let conn = test_db();
-
-        let mut repo = Repository::new("fedora".to_string(), "https://example.invalid".into());
-        repo.insert(&conn).unwrap();
-        let repo_id = repo.id.unwrap();
-
-        let mut pkg = RepositoryPackage::new(
-            repo_id,
-            "glibc".to_string(),
-            "2.39-1.fc44".to_string(),
-            "sha256:glibc".to_string(),
-            500,
-            "https://example.invalid/glibc.rpm".to_string(),
-        );
-        pkg.insert(&conn).unwrap();
-        let pkg_id = pkg.id.unwrap();
-
-        // RPM-style soname provide
-        let mut provide = RepositoryProvide::new(
-            pkg_id,
-            "libc.so.6(GLIBC_2.17)(64bit)".to_string(),
-            Some("2.39".to_string()),
-            "soname".to_string(),
-            Some("libc.so.6(GLIBC_2.17)(64bit)".to_string()),
-        );
-        provide.insert(&conn).unwrap();
-
-        let (resolved, _) = resolve_repo_dependency_request(
-            &conn,
-            "libc.so.6(GLIBC_2.17)(64bit)",
-            &VersionConstraint::Any,
-            &SelectionOptions::default(),
-        )
-        .unwrap();
-        assert_eq!(resolved, "glibc");
-    }
-
-    #[test]
-    fn resolves_debian_virtual_package_via_normalized_provides() {
-        let conn = test_db();
-
-        let mut repo = Repository::new("ubuntu".to_string(), "https://example.invalid".into());
-        repo.insert(&conn).unwrap();
-        let repo_id = repo.id.unwrap();
-
-        let mut pkg = RepositoryPackage::new(
-            repo_id,
-            "postfix".to_string(),
-            "3.8.4-1".to_string(),
-            "sha256:postfix".to_string(),
-            300,
-            "https://example.invalid/postfix.deb".to_string(),
-        );
-        pkg.insert(&conn).unwrap();
-        let pkg_id = pkg.id.unwrap();
-
-        // Debian virtual package provide
-        let mut provide = RepositoryProvide::new(
-            pkg_id,
-            "mail-transport-agent".to_string(),
-            None,
-            "virtual".to_string(),
-            Some("mail-transport-agent".to_string()),
-        );
-        provide.insert(&conn).unwrap();
-
-        let (resolved, _) = resolve_repo_dependency_request(
-            &conn,
-            "mail-transport-agent",
-            &VersionConstraint::Any,
-            &SelectionOptions::default(),
-        )
-        .unwrap();
-        assert_eq!(resolved, "postfix");
-    }
-
-    #[test]
-    fn resolves_arch_versioned_provide_via_normalized_provides() {
-        let conn = test_db();
-
-        let mut repo = Repository::new("arch".to_string(), "https://example.invalid".into());
-        repo.insert(&conn).unwrap();
-        let repo_id = repo.id.unwrap();
-
-        let mut pkg = RepositoryPackage::new(
-            repo_id,
-            "sh".to_string(),
-            "5.2.37-1".to_string(),
-            "sha256:sh".to_string(),
-            200,
-            "https://example.invalid/sh.pkg.tar.zst".to_string(),
-        );
-        pkg.insert(&conn).unwrap();
-        let pkg_id = pkg.id.unwrap();
-
-        // Arch versioned provide
-        let mut provide = RepositoryProvide::new(
-            pkg_id,
-            "sh".to_string(),
-            Some("5.2.37".to_string()),
-            "package".to_string(),
-            Some("sh=5.2.37".to_string()),
-        );
-        provide.insert(&conn).unwrap();
-
-        let (resolved, constraint) = resolve_repo_dependency_request(
-            &conn,
-            "sh",
-            &VersionConstraint::Any,
-            &SelectionOptions::default(),
-        )
-        .unwrap();
-        // Direct package name match takes precedence
-        assert_eq!(resolved, "sh");
-        assert_eq!(constraint, VersionConstraint::Any);
-    }
-
-    #[test]
-    fn no_fallback_to_name_guessing_when_normalized_provide_exists() {
-        // When a normalized provide exists, resolution should use only the
-        // package that declared it.
-        let conn = test_db();
-
-        let mut repo = Repository::new("fedora".to_string(), "https://example.invalid".into());
-        repo.insert(&conn).unwrap();
-        let repo_id = repo.id.unwrap();
-
-        // Two packages: one whose name resembles the soname, one that
-        // actually declares the provide.
-        let mut wrong_pkg = RepositoryPackage::new(
-            repo_id,
-            "libfoo".to_string(),
-            "1.0-1.fc44".to_string(),
-            "sha256:wrong".to_string(),
-            100,
-            "https://example.invalid/libfoo.rpm".to_string(),
-        );
-        wrong_pkg.insert(&conn).unwrap();
-
-        let mut correct_pkg = RepositoryPackage::new(
-            repo_id,
-            "libfoo-compat".to_string(),
-            "2.0-1.fc44".to_string(),
-            "sha256:correct".to_string(),
-            100,
-            "https://example.invalid/libfoo-compat.rpm".to_string(),
-        );
-        correct_pkg.insert(&conn).unwrap();
-        let correct_id = correct_pkg.id.unwrap();
-
-        // Only the compat package actually provides the soname
-        let mut provide = RepositoryProvide::new(
-            correct_id,
-            "libfoo.so.1".to_string(),
-            None,
-            "soname".to_string(),
-            Some("libfoo.so.1".to_string()),
-        );
-        provide.insert(&conn).unwrap();
-
-        let (resolved, _) = resolve_repo_dependency_request(
-            &conn,
-            "libfoo.so.1",
-            &VersionConstraint::Any,
-            &SelectionOptions::default(),
-        )
-        .unwrap();
-        // Must resolve to the package that declares the provide, not the
-        // one whose name merely resembles it.
-        assert_eq!(resolved, "libfoo-compat");
-    }
-
-    #[test]
-    fn capability_lookup_ignores_lookalike_package_names() {
-        // Verify that normalized capability lookup is the source of truth.
-        let conn = test_db();
-
-        let mut repo = Repository::new("fedora".to_string(), "https://example.invalid".into());
-        repo.insert(&conn).unwrap();
-        let repo_id = repo.id.unwrap();
-
-        // A package whose name looks related but declares no provide.
-        let mut lookalike_pkg = RepositoryPackage::new(
-            repo_id,
-            "libssl3".to_string(),
-            "3.2.0-1.fc44".to_string(),
-            "sha256:lookalike".to_string(),
-            100,
-            "https://example.invalid/libssl3.rpm".to_string(),
-        );
-        lookalike_pkg.insert(&conn).unwrap();
-
-        // A different package that actually provides the capability
-        let mut provider_pkg = RepositoryPackage::new(
-            repo_id,
-            "openssl-libs".to_string(),
-            "3.2.0-1.fc44".to_string(),
-            "sha256:provider".to_string(),
-            200,
-            "https://example.invalid/openssl-libs.rpm".to_string(),
-        );
-        provider_pkg.insert(&conn).unwrap();
-        let provider_id = provider_pkg.id.unwrap();
-
-        let mut provide = RepositoryProvide::new(
-            provider_id,
-            "libssl.so.3".to_string(),
-            None,
-            "soname".to_string(),
-            Some("libssl.so.3()(64bit)".to_string()),
-        );
-        provide.insert(&conn).unwrap();
-
-        let (resolved, _) = resolve_repo_dependency_request(
-            &conn,
-            "libssl.so.3",
-            &VersionConstraint::Any,
-            &SelectionOptions::default(),
-        )
-        .unwrap();
-        // Should resolve via declared capability, not package-name resemblance.
-        assert_eq!(resolved, "openssl-libs");
     }
 }

@@ -6,14 +6,14 @@
 
 <PageMeta
 	title="Conary compared with apt, dnf, pacman, and Nix — Conary"
-	description="Compare Conary's migration path, package-state model, and current maturity with apt, dnf, pacman, and Nix."
+	description="Compare Conary's cross-distro package model, migration path, and current maturity with apt, dnf, pacman, and Nix."
 	path="/compare/"
 />
 
 <PageIntro
 	eyebrow="Trade-off matrix"
 	title="Compare the operating models, not one-word scores."
-	description="Conary is not the mature choice today. Its near-term bet is a reversible path from the distro you already run toward shared package state and, only when chosen, Conary-owned generations."
+	description="Conary is not the mature choice today. Its near-term bet is that RPM, DEB, and Arch packages can retain their source semantics while one engine owns the transaction on any supported Linux target."
 />
 
 <section class="compare-section">
@@ -26,7 +26,7 @@
 				</div>
 				<div class="matrix-meta">
 					<span>Compared on</span>
-					<strong>2026-07-19</strong>
+					<strong>2026-07-25</strong>
 					<p>Documentation snapshot · default first-party behavior unless a cell says otherwise</p>
 				</div>
 			</div>
@@ -41,7 +41,7 @@
 			<!-- svelte-ignore a11y_no_noninteractive_tabindex (horizontal comparison needs a keyboard focus target) -->
 			<div class="compare-table-wrap scroll-region" tabindex="0" role="region" aria-label="Package manager operating-model comparison">
 				<table class="compare-table">
-					<caption>Documentation-based comparison of package-manager operating models, reviewed 2026-07-19.</caption>
+					<caption>Documentation-based comparison of package-manager operating models, reviewed 2026-07-25.</caption>
 					<thead>
 						<tr>
 							<th scope="col" class="feature-heading">Defined behavior</th>
@@ -119,7 +119,7 @@
 						</tr>
 						<tr>
 							<th scope="row" class="feature-name">Cross-target package portability</th>
-							<td class="highlight"><span class="status no">Not supported</span></td>
+							<td class="highlight"><span class="status preview">preview core</span></td>
 							<td><span class="status different">Debian-family model</span></td>
 							<td><span class="status different">RPM-family model</span></td>
 							<td><span class="status different">Arch package model</span></td>
@@ -150,7 +150,7 @@
 				<div><dt>Inverse package transaction</dt><dd>A built-in history command attempts to reverse recorded package actions; this is not a filesystem snapshot.</dd></div>
 				<div><dt>Bootable generations</dt><dd>Retained complete system closures are selectable as boot entries, not merely package-cache downgrades.</dd></div>
 				<div><dt>Alternate root or architecture</dt><dd>First-party operation targets a root or architecture different from the running host.</dd></div>
-				<div><dt>Cross-target portability</dt><dd>A package model is officially usable across unrelated target operating systems; equivalent-name mapping alone does not count.</dd></div>
+				<div><dt>Cross-target portability</dt><dd>A source package keeps its version, dependency, payload, configuration, and lifecycle ABI on a host whose native package format differs; equivalent-name mapping alone does not count.</dd></div>
 			</dl>
 		</section>
 
@@ -177,8 +177,9 @@
 					<h3>Alongside apt on Ubuntu 26.04 LTS</h3>
 					<p>
 						APT is the established DEB workflow. APT 3 adds a SAT fallback and version-gated
-						history rollback, while dpkg still applies package state in place. Conary's
-						different proposition is reversible native tracking plus a separate CAS-backed path.
+						history rollback, while dpkg still applies package state in place. Conary can
+						install RPM or Arch inputs on the same host without asking apt or dpkg to own
+						the transaction.
 					</p>
 				</article>
 
@@ -186,8 +187,8 @@
 					<h3>Alongside dnf on Fedora 44</h3>
 					<p>
 						DNF5 uses libsolv and has built-in history reversal. Fedora stopped generating
-						delta RPMs in Fedora 40, and DNF5 does not plan that legacy path. Conary adds a
-						reversible adoption boundary and VM-only generation experiments instead.
+						delta RPMs in Fedora 40. Conary adds source-independent DEB and Arch package
+						execution, a reversible adoption bridge, and VM-focused generations.
 					</p>
 				</article>
 
@@ -195,8 +196,8 @@
 					<h3>Alongside pacman on Arch</h3>
 					<p>
 						pacman keeps a direct prepare-and-commit model without native transaction undo or
-						binary payload deltas. Conary uses the matching Arch profile and repositories; it
-						does not make Fedora or Ubuntu artifacts portable to an Arch host.
+						binary payload deltas. Conary can consume RPM and DEB inputs on Arch while
+						retaining their source-native transaction semantics.
 					</p>
 				</article>
 
@@ -222,8 +223,9 @@
 					<h3>Where Conary is still early</h3>
 					<p>
 						Conary {previewRelease.version} is a limited preview. Native CCS packages are few,
-						policy-blocked conversions are expected, generation work is VM-only, and the
-						community and operational evidence are small beside established managers.
+						the cross-distro lifecycle matrix still needs wider installed-host evidence,
+						generation work is VM-only, and the community and operational evidence are
+						small beside established managers.
 					</p>
 				</article>
 			</div>
@@ -250,7 +252,7 @@
 		<div class="compare-cta">
 			<div>
 				<p class="eyebrow">The useful question</p>
-				<h2>Is the reversible migration path worth testing?</h2>
+				<h2>Would one package engine across distro boundaries solve a real problem?</h2>
 			</div>
 			<a href="/install/" class="btn btn-primary">Run the bounded preview</a>
 		</div>

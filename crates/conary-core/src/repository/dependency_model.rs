@@ -27,6 +27,8 @@ use serde::{Deserialize, Serialize};
 /// dependency entries rather than version strings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum RepositoryDependencyFlavor {
+    /// Conary-native package metadata and version ordering.
+    Conary,
     /// RPM-based (Fedora, RHEL, openSUSE, etc.)
     Rpm,
     /// Debian-based (Debian, Ubuntu, etc.)
@@ -40,6 +42,7 @@ impl RepositoryDependencyFlavor {
     #[must_use]
     pub fn version_scheme(self) -> VersionScheme {
         match self {
+            Self::Conary => VersionScheme::Conary,
             Self::Rpm => VersionScheme::Rpm,
             Self::Deb => VersionScheme::Debian,
             Self::Arch => VersionScheme::Arch,
@@ -85,25 +88,88 @@ pub enum RepositoryRequirementKind {
     Conflict,
     /// Partial breakage declaration (Debian Breaks).
     Breaks,
+    /// Ownership replacement (Debian/Arch Replaces).
+    Replace,
+    /// Package obsolescence with replacement (RPM Obsoletes).
+    Obsolete,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PackageRelationRemovalMode {
+    /// Remove a package solely to satisfy a co-installation constraint.
+    Constraint,
+    /// Transfer payload ownership from a replaced/obsolete package.
+    OwnershipTransfer,
+}
+
+impl RepositoryRequirementKind {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Depends => "depends",
+            Self::PreDepends => "pre_depends",
+            Self::Optional => "optional",
+            Self::Build => "build",
+            Self::Conflict => "conflict",
+            Self::Breaks => "breaks",
+            Self::Replace => "replace",
+            Self::Obsolete => "obsolete",
+        }
+    }
+
+    #[must_use]
+    pub fn from_str_exact(value: &str) -> Option<Self> {
+        match value {
+            "depends" => Some(Self::Depends),
+            "pre_depends" => Some(Self::PreDepends),
+            "optional" => Some(Self::Optional),
+            "build" => Some(Self::Build),
+            "conflict" => Some(Self::Conflict),
+            "breaks" => Some(Self::Breaks),
+            "replace" => Some(Self::Replace),
+            "obsolete" => Some(Self::Obsolete),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn is_negative_relation(self) -> bool {
+        matches!(
+            self,
+            Self::Conflict | Self::Breaks | Self::Replace | Self::Obsolete
+        )
+    }
+
+    #[must_use]
+    pub const fn removes_matching_packages(self) -> bool {
+        matches!(self, Self::Replace | Self::Obsolete)
+    }
+
+    #[must_use]
+    pub const fn removal_mode(self) -> Option<PackageRelationRemovalMode> {
+        match self {
+            Self::Conflict => Some(PackageRelationRemovalMode::Constraint),
+            Self::Replace | Self::Obsolete => Some(PackageRelationRemovalMode::OwnershipTransfer),
+            Self::Depends | Self::PreDepends | Self::Optional | Self::Build | Self::Breaks => None,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
 // Conditional / rich dependency behavior
 // ---------------------------------------------------------------------------
 
-/// How a conditional or rich dependency expression was classified.
+/// Diagnostic shape of a parsed dependency expression.
 ///
-/// The resolver must know whether a dependency was treated as a hard
-/// requirement, a conditional marker, or was left uninterpreted because the
-/// expression could not be reliably decomposed.
+/// Resolution uses [`RepositoryRequirementExpression`] directly. This label is
+/// never an execution or admission decision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ConditionalRequirementBehavior {
     /// Unconditional hard requirement (the common case).
     Hard,
     /// Conditional on a boolean predicate (RPM rich deps `(foo if bar)`).
     Conditional,
-    /// The expression was too complex to decompose; kept as opaque text.
-    UnsupportedRich,
 }
 
 // ---------------------------------------------------------------------------
@@ -206,6 +272,89 @@ pub struct RepositoryRequirementClause {
     pub native_text: Option<String>,
 }
 
+/// Exact boolean dependency expression from a native package manager.
+///
+/// RPM rich dependencies use all six binary operators below. Keeping the
+/// parsed expression makes the source grammar authoritative through sync and
+/// resolution; no later layer needs to rediscover semantics from text.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(tag = "operator", content = "operands", rename_all = "snake_case")]
+pub enum RepositoryRequirementExpression {
+    Atom(RepositoryRequirementClause),
+    And(Vec<RepositoryRequirementExpression>),
+    Or(Vec<RepositoryRequirementExpression>),
+    If {
+        requirement: Box<RepositoryRequirementExpression>,
+        condition: Box<RepositoryRequirementExpression>,
+        otherwise: Option<Box<RepositoryRequirementExpression>>,
+    },
+    Unless {
+        requirement: Box<RepositoryRequirementExpression>,
+        condition: Box<RepositoryRequirementExpression>,
+        otherwise: Option<Box<RepositoryRequirementExpression>>,
+    },
+    With {
+        left: Box<RepositoryRequirementExpression>,
+        right: Box<RepositoryRequirementExpression>,
+    },
+    Without {
+        left: Box<RepositoryRequirementExpression>,
+        right: Box<RepositoryRequirementExpression>,
+    },
+}
+
+impl RepositoryRequirementExpression {
+    /// Collect the atomic clauses for candidate preloading and diagnostics.
+    pub fn atoms(&self) -> Vec<&RepositoryRequirementClause> {
+        let mut atoms = Vec::new();
+        self.collect_atoms(&mut atoms);
+        atoms
+    }
+
+    fn collect_atoms<'a>(&'a self, atoms: &mut Vec<&'a RepositoryRequirementClause>) {
+        match self {
+            Self::Atom(clause) => atoms.push(clause),
+            Self::And(operands) | Self::Or(operands) => {
+                for operand in operands {
+                    operand.collect_atoms(atoms);
+                }
+            }
+            Self::If {
+                requirement,
+                condition,
+                otherwise,
+            }
+            | Self::Unless {
+                requirement,
+                condition,
+                otherwise,
+            } => {
+                requirement.collect_atoms(atoms);
+                condition.collect_atoms(atoms);
+                if let Some(otherwise) = otherwise {
+                    otherwise.collect_atoms(atoms);
+                }
+            }
+            Self::With { left, right } | Self::Without { left, right } => {
+                left.collect_atoms(atoms);
+                right.collect_atoms(atoms);
+            }
+        }
+    }
+
+    #[must_use]
+    pub fn is_conditional(&self) -> bool {
+        match self {
+            Self::If { .. } | Self::Unless { .. } => true,
+            Self::And(operands) | Self::Or(operands) => operands.iter().any(Self::is_conditional),
+            Self::With { left, right } | Self::Without { left, right } => {
+                left.is_conditional() || right.is_conditional()
+            }
+            Self::Atom(_) => false,
+        }
+    }
+}
+
 impl RepositoryRequirementClause {
     /// Simple clause with just a name.
     #[must_use]
@@ -250,6 +399,10 @@ pub struct RepositoryRequirementGroup {
     /// How this requirement was classified (hard, conditional, unsupported).
     pub behavior: ConditionalRequirementBehavior,
 
+    /// Parsed native boolean expression. Simple dependencies are represented
+    /// as a single [`RepositoryRequirementExpression::Atom`].
+    pub expression: RepositoryRequirementExpression,
+
     /// One or more alternative clauses (OR semantics).
     ///
     /// Invariant: never empty.
@@ -269,6 +422,7 @@ impl RepositoryRequirementGroup {
         Self {
             kind,
             behavior: ConditionalRequirementBehavior::Hard,
+            expression: RepositoryRequirementExpression::Atom(clause.clone()),
             alternatives: vec![clause],
             description: None,
             native_text: None,
@@ -284,6 +438,13 @@ impl RepositoryRequirementGroup {
         Self {
             kind,
             behavior: ConditionalRequirementBehavior::Hard,
+            expression: RepositoryRequirementExpression::Or(
+                clauses
+                    .iter()
+                    .cloned()
+                    .map(RepositoryRequirementExpression::Atom)
+                    .collect(),
+            ),
             alternatives: clauses,
             description: None,
             native_text: None,
@@ -296,6 +457,7 @@ impl RepositoryRequirementGroup {
         Self {
             kind: RepositoryRequirementKind::Optional,
             behavior: ConditionalRequirementBehavior::Hard,
+            expression: RepositoryRequirementExpression::Atom(clause.clone()),
             alternatives: vec![clause],
             description,
             native_text: None,
@@ -306,6 +468,14 @@ impl RepositoryRequirementGroup {
     #[must_use]
     pub fn with_behavior(mut self, behavior: ConditionalRequirementBehavior) -> Self {
         self.behavior = behavior;
+        self
+    }
+
+    /// Replace the default simple/alternative expression with source-native
+    /// parsed semantics.
+    #[must_use]
+    pub fn with_expression(mut self, expression: RepositoryRequirementExpression) -> Self {
+        self.expression = expression;
         self
     }
 

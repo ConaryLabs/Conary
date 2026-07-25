@@ -3,22 +3,23 @@
 //! Scheduled job that builds the canonical package mapping from all
 //! indexed distros. Runs after mirror sync or on demand.
 //!
-//! The rebuild runs a 4-phase pipeline, each phase committing independently
+//! The rebuild runs a 3-phase pipeline, each phase committing independently
 //! for short write locks:
 //!
 //! 1. **Curated Rules** — YAML rules from `config.rules_dir`
 //! 2. **Repology** — Cross-distro mappings from `repology_cache`
 //! 3. **AppStream** — Enrichment with AppStream component IDs
-//! 4. **Auto-Discovery** — Fallback heuristic discovery from repo packages
+//!
+//! Package names, provides, and payload paths are never canonical mapping
+//! authority. Every persisted mapping comes from one of the parsed contracts
+//! above.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::Result;
 use chrono::Utc;
-use conary_core::canonical::repology::repo_to_distro;
 use conary_core::canonical::rules::RulesEngine;
-use conary_core::canonical::sync::{RepoPackageInfo, ingest_canonical_mappings};
 use conary_core::db::models::{
     AppstreamCacheEntry, CanonicalPackage, MetadataTable, PackageImplementation,
     RepologyCacheEntry, get_metadata, set_metadata,
@@ -60,9 +61,12 @@ pub fn record_rebuild_timestamp(conn: &Connection) -> Result<()> {
 
 /// Atomically increment and return the canonical map version counter.
 pub fn bump_map_version(conn: &Connection) -> Result<u64> {
-    let current: u64 = get_metadata(conn, MetadataTable::Server, "canonical_map_version")?
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(0);
+    let current = match get_metadata(conn, MetadataTable::Server, "canonical_map_version")? {
+        Some(value) => value
+            .parse::<u64>()
+            .map_err(|error| anyhow::anyhow!("invalid canonical map version '{value}': {error}"))?,
+        None => 0,
+    };
 
     let next = current + 1;
     set_metadata(
@@ -75,12 +79,12 @@ pub fn bump_map_version(conn: &Connection) -> Result<u64> {
 }
 
 // ---------------------------------------------------------------------------
-// 4-phase rebuild
+// 3-phase rebuild
 // ---------------------------------------------------------------------------
 
 /// Rebuild the canonical map from all enabled repositories.
 ///
-/// Opens the database at `db_path` and runs four phases, each committing
+/// Opens the database at `db_path` and runs three phases, each committing
 /// independently for short write locks. After all phases, records the
 /// rebuild timestamp and bumps the map version.
 ///
@@ -98,9 +102,6 @@ pub fn rebuild_canonical_map(db_path: &Path, config: &CanonicalSection) -> Resul
 
     // Phase 3 — AppStream
     total_new += phase_appstream(&conn)?;
-
-    // Phase 4 — Auto-Discovery
-    total_new += phase_auto_discovery(&conn, rules_dir)?;
 
     // Finalise: record timestamp and bump version
     record_rebuild_timestamp(&conn)?;
@@ -122,24 +123,13 @@ pub fn rebuild_canonical_map(db_path: &Path, config: &CanonicalSection) -> Resul
 /// rule that has both a `setname` and a `name`.
 fn phase_curated_rules(conn: &Connection, rules_dir: &Path) -> Result<u64> {
     let engine = if rules_dir.is_dir() {
-        match RulesEngine::load_from_dir(rules_dir) {
-            Ok(engine) => {
-                info!(
-                    "Phase 1: loaded {} curated rules from {}",
-                    engine.rule_count(),
-                    rules_dir.display()
-                );
-                engine
-            }
-            Err(e) => {
-                warn!(
-                    "Phase 1: failed to load rules from {}: {}",
-                    rules_dir.display(),
-                    e
-                );
-                return Ok(0);
-            }
-        }
+        let engine = RulesEngine::load_from_dir(rules_dir)?;
+        info!(
+            "Phase 1: loaded {} curated rules from {}",
+            engine.rule_count(),
+            rules_dir.display()
+        );
+        engine
     } else {
         debug!(
             "Phase 1: no rules directory at {}, skipping",
@@ -156,6 +146,36 @@ fn phase_curated_rules(conn: &Connection, rules_dir: &Path) -> Result<u64> {
             continue;
         }
 
+        let Some(repository_identities) = rule.repo.as_ref() else {
+            warn!(
+                "Phase 1: canonical rule '{}' -> '{}' has no repository identity; skipping",
+                rule.name, rule.setname
+            );
+            continue;
+        };
+        let identities: Vec<&str> = match repository_identities {
+            conary_core::canonical::rules::StringOrVec::Single(identity) => {
+                vec![identity.as_str()]
+            }
+            conary_core::canonical::rules::StringOrVec::Multiple(identities) => {
+                identities.iter().map(String::as_str).collect()
+            }
+        };
+        let mut profile_ids = identities
+            .into_iter()
+            .filter_map(|identity| {
+                conary_core::repository::supported_profiles::profile_by_repository_identity(
+                    identity,
+                )
+                .map(|profile| profile.id().to_string())
+            })
+            .collect::<Vec<_>>();
+        profile_ids.sort();
+        profile_ids.dedup();
+        if profile_ids.is_empty() {
+            continue;
+        }
+
         let kind = rule.kind.clone().unwrap_or_else(|| "package".to_string());
 
         let mut canonical = CanonicalPackage::new(rule.setname.clone(), kind);
@@ -163,16 +183,15 @@ fn phase_curated_rules(conn: &Connection, rules_dir: &Path) -> Result<u64> {
         let id = canonical.insert_or_ignore(&tx)?;
 
         if let Some(canonical_id) = id {
-            // Use the rule's name as the distro_name; distro is "curated" for
-            // rules without a repo constraint.
-            let distro = "curated".to_string();
-            let mut imp = PackageImplementation::new(
-                canonical_id,
-                distro,
-                rule.name.clone(),
-                "curated".to_string(),
-            );
-            imp.insert_or_ignore(&tx)?;
+            for profile_id in profile_ids {
+                let mut imp = PackageImplementation::new(
+                    canonical_id,
+                    profile_id,
+                    rule.name.clone(),
+                    "curated".to_string(),
+                );
+                imp.insert_or_ignore(&tx)?;
+            }
 
             if !already_exists {
                 new_count += 1;
@@ -192,8 +211,37 @@ fn phase_curated_rules(conn: &Connection, rules_dir: &Path) -> Result<u64> {
 // Phase 2 — Repology
 // ---------------------------------------------------------------------------
 
-/// Acceptable Repology statuses for inclusion in the canonical map.
-const ACCEPTABLE_STATUSES: &[&str] = &["newest", "devel", "unique", "outdated", "rolling"];
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RepologyMappingStatus {
+    Newest,
+    Devel,
+    Unique,
+    Outdated,
+    Rolling,
+    Legacy,
+}
+
+impl RepologyMappingStatus {
+    fn parse(value: Option<&str>) -> Result<Self> {
+        match value {
+            Some("newest") => Ok(Self::Newest),
+            Some("devel") => Ok(Self::Devel),
+            Some("unique") => Ok(Self::Unique),
+            Some("outdated") => Ok(Self::Outdated),
+            Some("rolling") => Ok(Self::Rolling),
+            Some("legacy") => Ok(Self::Legacy),
+            Some(other) => anyhow::bail!("unsupported Repology package status '{other}'"),
+            None => anyhow::bail!("Repology package status is missing"),
+        }
+    }
+
+    fn is_mapping_eligible(self) -> bool {
+        matches!(
+            self,
+            Self::Newest | Self::Devel | Self::Unique | Self::Outdated | Self::Rolling
+        )
+    }
+}
 
 /// Read the `repology_cache` table, group by `project_name`, and insert
 /// canonical entries for projects that appear in 2+ distinct distros with
@@ -220,16 +268,24 @@ fn phase_repology(conn: &Connection) -> Result<u64> {
 
     for (project_name, entries) in &by_project {
         // Filter to acceptable statuses and collect distinct distros.
-        let good: Vec<&RepologyCacheEntry> = entries
-            .iter()
-            .filter(|e| {
-                e.status
-                    .as_deref()
-                    .is_some_and(|s| ACCEPTABLE_STATUSES.contains(&s))
-            })
-            .collect();
+        let mut good: Vec<(
+            &RepologyCacheEntry,
+            &conary_core::repository::supported_profiles::SupportedProfile,
+        )> = Vec::new();
+        for entry in entries {
+            let status = RepologyMappingStatus::parse(entry.status.as_deref())?;
+            if !status.is_mapping_eligible() {
+                continue;
+            }
+            if let Some(profile) =
+                conary_core::repository::supported_profiles::profile_by_public_id(&entry.distro)
+            {
+                good.push((entry, profile));
+            }
+        }
 
-        let distinct_distros: HashSet<&str> = good.iter().map(|e| e.distro.as_str()).collect();
+        let distinct_distros: HashSet<&str> =
+            good.iter().map(|(_, profile)| profile.id()).collect();
 
         if distinct_distros.len() < 2 {
             continue;
@@ -240,13 +296,10 @@ fn phase_repology(conn: &Connection) -> Result<u64> {
         let id = canonical.insert_or_ignore(&tx)?;
 
         if let Some(canonical_id) = id {
-            for entry in &good {
-                // Map Repology repo -> Conary distro; use raw distro field as fallback.
-                let distro = repo_to_distro(&entry.distro).unwrap_or_else(|| entry.distro.clone());
-
+            for (entry, profile) in &good {
                 let mut imp = PackageImplementation::new(
                     canonical_id,
-                    distro,
+                    profile.id().to_string(),
                     entry.distro_name.clone(),
                     "repology".to_string(),
                 );
@@ -275,7 +328,8 @@ fn phase_repology(conn: &Connection) -> Result<u64> {
 /// Enrich canonical entries with AppStream component IDs.
 ///
 /// For each cached AppStream component, look for an existing
-/// `package_implementations` row where `distro_name` matches `pkgname`.
+/// `package_implementations` row where both `distro` and `distro_name` match
+/// the AppStream entry.
 /// If found, set `appstream_id` on the parent `canonical_packages` row.
 /// If no existing mapping, insert a new canonical entry with the
 /// AppStream ID attached.
@@ -291,8 +345,8 @@ fn phase_appstream(conn: &Connection) -> Result<u64> {
     let mut new_count: u64 = 0;
 
     for entry in &entries {
-        // Try to find an existing implementation matching this pkgname.
-        let existing = PackageImplementation::find_by_any_distro_name(&tx, &entry.pkgname)?;
+        let existing =
+            PackageImplementation::find_by_distro_name(&tx, &entry.distro, &entry.pkgname)?;
 
         if let Some(impl_row) = existing {
             // Enrich the parent canonical package with the AppStream ID.
@@ -339,74 +393,6 @@ fn phase_appstream(conn: &Connection) -> Result<u64> {
     Ok(new_count)
 }
 
-// ---------------------------------------------------------------------------
-// Phase 4 — Auto-Discovery
-// ---------------------------------------------------------------------------
-
-/// Run the existing auto-discovery pipeline from `conary_core::canonical::sync`
-/// on all packages from enabled repositories.
-fn phase_auto_discovery(conn: &Connection, rules_dir: &Path) -> Result<u64> {
-    // Load curated rules for the sync pipeline (it uses them for first-match).
-    let rules = if rules_dir.is_dir() {
-        RulesEngine::load_from_dir(rules_dir).ok()
-    } else {
-        None
-    };
-
-    let packages = build_repo_package_list(conn)?;
-    info!(
-        "Phase 4: {} packages from enabled repositories",
-        packages.len()
-    );
-
-    if packages.is_empty() {
-        return Ok(0);
-    }
-
-    let new_count = ingest_canonical_mappings(conn, &packages, rules.as_ref())?;
-    info!(
-        "Phase 4: {} new canonical entries from auto-discovery",
-        new_count
-    );
-
-    Ok(new_count as u64)
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/// Query all packages from all enabled repositories and build a list of
-/// `RepoPackageInfo` for canonical mapping.
-///
-/// Uses `COALESCE(r.default_strategy_distro, r.name)` as the distro
-/// identifier so that repos with an explicit distro strategy use it,
-/// while others fall back to the repository name.
-fn build_repo_package_list(conn: &Connection) -> Result<Vec<RepoPackageInfo>> {
-    let mut stmt = conn.prepare(
-        "SELECT rp.name, COALESCE(r.default_strategy_distro, r.name) AS distro
-         FROM repository_packages rp
-         JOIN repositories r ON rp.repository_id = r.id
-         WHERE r.enabled = 1",
-    )?;
-
-    let rows = stmt.query_map([], |row| {
-        Ok(RepoPackageInfo {
-            name: row.get(0)?,
-            distro: row.get(1)?,
-            provides: Vec::new(),
-            files: Vec::new(),
-        })
-    })?;
-
-    let mut packages = Vec::new();
-    for row in rows {
-        packages.push(row?);
-    }
-
-    Ok(packages)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -418,7 +404,7 @@ mod tests {
         let db_path = dir.path().join("conary.db");
         let conn = Connection::open(&db_path).unwrap();
         conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
-        schema::migrate(&conn).unwrap();
+        schema::ensure_current(&conn).unwrap();
 
         // Insert a test repository
         conn.execute(
@@ -438,20 +424,25 @@ mod tests {
 
         // Insert test packages
         conn.execute(
-            "INSERT INTO repository_packages (repository_id, name, version, checksum, size, download_url)
-             VALUES (?1, 'curl', '8.5.0', 'abc123', 1000, 'https://example.com/curl.rpm')",
+            "INSERT INTO repository_packages
+                (repository_id, name, version, checksum, size, download_url, version_scheme)
+             VALUES
+                (?1, 'curl', '8.5.0', 'abc123', 1000, 'https://example.com/curl.rpm', 'rpm')",
             [repo_id],
         )
         .unwrap();
 
         conn.execute(
-            "INSERT INTO repository_packages (repository_id, name, version, checksum, size, download_url)
-             VALUES (?1, 'wget', '1.21', 'def456', 2000, 'https://example.com/wget.rpm')",
+            "INSERT INTO repository_packages
+                (repository_id, name, version, checksum, size, download_url, version_scheme)
+             VALUES
+                (?1, 'wget', '1.21', 'def456', 2000, 'https://example.com/wget.rpm', 'rpm')",
             [repo_id],
         )
         .unwrap();
 
-        // Insert a second repository so auto-discovery can match across 2+ distros
+        // Insert a second repository with the same package names. Similarity
+        // must never create canonical mapping authority.
         conn.execute(
             "INSERT INTO repositories (name, url, enabled, default_strategy_distro)
              VALUES ('arch', 'https://example.com/arch', 1, 'arch')",
@@ -466,15 +457,19 @@ mod tests {
             .unwrap();
 
         conn.execute(
-            "INSERT INTO repository_packages (repository_id, name, version, checksum, size, download_url)
-             VALUES (?1, 'curl', '8.5.0', 'abc124', 1000, 'https://example.com/curl.pkg.tar.zst')",
+            "INSERT INTO repository_packages
+                (repository_id, name, version, checksum, size, download_url, version_scheme)
+             VALUES
+                (?1, 'curl', '8.5.0', 'abc124', 1000, 'https://example.com/curl.pkg.tar.zst', 'arch')",
             [repo2_id],
         )
         .unwrap();
 
         conn.execute(
-            "INSERT INTO repository_packages (repository_id, name, version, checksum, size, download_url)
-             VALUES (?1, 'wget', '1.21', 'def457', 2000, 'https://example.com/wget.pkg.tar.zst')",
+            "INSERT INTO repository_packages
+                (repository_id, name, version, checksum, size, download_url, version_scheme)
+             VALUES
+                (?1, 'wget', '1.21', 'def457', 2000, 'https://example.com/wget.pkg.tar.zst', 'arch')",
             [repo2_id],
         )
         .unwrap();
@@ -485,7 +480,7 @@ mod tests {
     #[test]
     fn test_should_rebuild_respects_cooldown() {
         let conn = Connection::open_in_memory().unwrap();
-        conary_core::db::schema::migrate(&conn).unwrap();
+        conary_core::db::schema::ensure_current(&conn).unwrap();
 
         // No previous rebuild -- should proceed
         assert!(should_rebuild(&conn, 5));
@@ -500,7 +495,7 @@ mod tests {
     #[test]
     fn test_bump_map_version() {
         let conn = Connection::open_in_memory().unwrap();
-        conary_core::db::schema::migrate(&conn).unwrap();
+        conary_core::db::schema::ensure_current(&conn).unwrap();
 
         let v1 = bump_map_version(&conn).unwrap();
         assert_eq!(v1, 1);
@@ -510,32 +505,19 @@ mod tests {
     }
 
     #[test]
-    fn test_build_repo_package_list() {
-        let dir = TempDir::new().unwrap();
-        let db_path = create_test_db(&dir);
-        let conn = conary_core::db::open(&db_path).unwrap();
+    fn bump_map_version_rejects_corrupt_persisted_state() {
+        let conn = Connection::open_in_memory().unwrap();
+        conary_core::db::schema::ensure_current(&conn).unwrap();
+        set_metadata(
+            &conn,
+            MetadataTable::Server,
+            "canonical_map_version",
+            "not-a-version",
+        )
+        .unwrap();
 
-        let packages = build_repo_package_list(&conn).unwrap();
-        // 2 repos x 2 packages each = 4 total
-        assert_eq!(packages.len(), 4);
-        assert!(packages.iter().any(|p| p.distro == "fedora"));
-        assert!(packages.iter().any(|p| p.distro == "arch"));
-        assert!(packages.iter().any(|p| p.name == "curl"));
-        assert!(packages.iter().any(|p| p.name == "wget"));
-    }
-
-    #[test]
-    fn test_build_repo_package_list_skips_disabled() {
-        let dir = TempDir::new().unwrap();
-        let db_path = create_test_db(&dir);
-        let conn = conary_core::db::open(&db_path).unwrap();
-
-        // Disable both repositories
-        conn.execute("UPDATE repositories SET enabled = 0", [])
-            .unwrap();
-
-        let packages = build_repo_package_list(&conn).unwrap();
-        assert!(packages.is_empty());
+        let error = bump_map_version(&conn).unwrap_err();
+        assert!(error.to_string().contains("invalid canonical map version"));
     }
 
     #[test]
@@ -544,7 +526,7 @@ mod tests {
         let db_path = dir.path().join("conary.db");
         let conn = Connection::open(&db_path).unwrap();
         conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
-        schema::migrate(&conn).unwrap();
+        schema::ensure_current(&conn).unwrap();
         drop(conn);
 
         let config = CanonicalSection {
@@ -556,7 +538,7 @@ mod tests {
     }
 
     #[test]
-    fn test_rebuild_canonical_map_with_packages() {
+    fn repository_similarity_does_not_create_canonical_authority() {
         let dir = TempDir::new().unwrap();
         let db_path = create_test_db(&dir);
         let config = CanonicalSection {
@@ -565,8 +547,21 @@ mod tests {
         };
 
         let count = rebuild_canonical_map(&db_path, &config).unwrap();
-        // curl and wget should each produce at least one canonical mapping
-        assert!(count > 0);
+        assert_eq!(count, 0);
+
+        let conn = conary_core::db::open(&db_path).unwrap();
+        assert!(
+            CanonicalPackage::find_by_name(&conn, "curl")
+                .unwrap()
+                .is_none(),
+            "matching package names across repositories are discovery evidence, not mapping authority"
+        );
+        assert!(
+            CanonicalPackage::find_by_name(&conn, "wget")
+                .unwrap()
+                .is_none(),
+            "matching package names across repositories are discovery evidence, not mapping authority"
+        );
     }
 
     #[test]
@@ -578,7 +573,7 @@ mod tests {
         std::fs::create_dir_all(&rules_dir).unwrap();
         std::fs::write(
             rules_dir.join("01-rename.yaml"),
-            "rules:\n  - name: curl\n    setname: curl-tools\n",
+            "rules:\n  - name: curl\n    setname: curl-tools\n    repo: fedora\n",
         )
         .unwrap();
 
@@ -600,16 +595,33 @@ mod tests {
     }
 
     #[test]
+    fn configured_invalid_curated_rules_are_a_hard_error() {
+        let dir = TempDir::new().unwrap();
+        let rules_dir = dir.path().join("rules");
+        std::fs::create_dir_all(&rules_dir).unwrap();
+        std::fs::write(rules_dir.join("invalid.yaml"), "rules: [").unwrap();
+
+        let conn = Connection::open_in_memory().unwrap();
+        schema::ensure_current(&conn).unwrap();
+
+        let error = phase_curated_rules(&conn, &rules_dir).unwrap_err();
+        assert!(
+            error.to_string().contains("YAML parse error"),
+            "configured rules are an authority contract and parse failures must abort: {error}"
+        );
+    }
+
+    #[test]
     fn test_phase_repology_filters_by_status_and_distro_count() {
         let conn = Connection::open_in_memory().unwrap();
-        schema::migrate(&conn).unwrap();
+        schema::ensure_current(&conn).unwrap();
 
         // Insert cache entries: python in 2 distros (newest) -- should be included
         RepologyCacheEntry::insert_or_replace(
             &conn,
             &RepologyCacheEntry {
                 project_name: "python".into(),
-                distro: "fedora_43".into(),
+                distro: "fedora-44".into(),
                 distro_name: "python3".into(),
                 version: Some("3.12.0".into()),
                 status: Some("newest".into()),
@@ -657,7 +669,7 @@ mod tests {
     #[test]
     fn test_phase_appstream_enriches_existing() {
         let conn = Connection::open_in_memory().unwrap();
-        schema::migrate(&conn).unwrap();
+        schema::ensure_current(&conn).unwrap();
 
         // Create a canonical package with an implementation
         let mut pkg = CanonicalPackage::new("firefox".into(), "package".into());
@@ -691,5 +703,55 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(updated.appstream_id.as_deref(), Some("org.mozilla.firefox"));
+    }
+
+    #[test]
+    fn appstream_enrichment_uses_exact_distro_identity() {
+        let conn = Connection::open_in_memory().unwrap();
+        schema::ensure_current(&conn).unwrap();
+
+        let mut fedora_pkg = CanonicalPackage::new("fedora-editor".into(), "package".into());
+        let fedora_id = fedora_pkg.insert(&conn).unwrap();
+        let mut fedora_imp = PackageImplementation::new(
+            fedora_id,
+            "fedora".into(),
+            "editor".into(),
+            "repology".into(),
+        );
+        fedora_imp.insert(&conn).unwrap();
+
+        let mut arch_pkg = CanonicalPackage::new("arch-editor".into(), "package".into());
+        let arch_id = arch_pkg.insert(&conn).unwrap();
+        let mut arch_imp =
+            PackageImplementation::new(arch_id, "arch".into(), "editor".into(), "repology".into());
+        arch_imp.insert(&conn).unwrap();
+
+        AppstreamCacheEntry::insert_or_replace(
+            &conn,
+            &AppstreamCacheEntry {
+                appstream_id: "org.example.Editor".into(),
+                pkgname: "editor".into(),
+                display_name: Some("Editor".into()),
+                summary: None,
+                distro: "fedora".into(),
+                fetched_at: "2026-03-19T00:00:00Z".into(),
+            },
+        )
+        .unwrap();
+
+        let count = phase_appstream(&conn).unwrap();
+        assert_eq!(count, 0);
+
+        let fedora = CanonicalPackage::find_by_name(&conn, "fedora-editor")
+            .unwrap()
+            .unwrap();
+        let arch = CanonicalPackage::find_by_name(&conn, "arch-editor")
+            .unwrap()
+            .unwrap();
+        assert_eq!(fedora.appstream_id.as_deref(), Some("org.example.Editor"));
+        assert_eq!(
+            arch.appstream_id, None,
+            "same package name in another distro is not AppStream identity authority"
+        );
     }
 }

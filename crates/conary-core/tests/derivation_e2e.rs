@@ -14,6 +14,7 @@ use conary_core::derivation::{
     capture_output, compute_build_order, source_hash,
 };
 use conary_core::filesystem::CasStore;
+use conary_core::payload::PayloadNodeKind;
 use conary_core::recipe::parse_recipe_file;
 use rusqlite::Connection;
 use tempfile::TempDir;
@@ -38,7 +39,7 @@ fn setup_test_db() -> (TempDir, Connection) {
     let db_path = tmp.path().join("test.db");
     let conn = Connection::open(&db_path).unwrap();
     conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
-    conary_core::db::schema::migrate(&conn).unwrap();
+    conary_core::db::schema::ensure_current(&conn).unwrap();
     (tmp, conn)
 }
 
@@ -136,22 +137,40 @@ fn capture_and_index_round_trip() {
 
     // Capture the DESTDIR into CAS.
     let derivation_id = "a".repeat(64);
-    let manifest =
-        capture_output(&destdir, &cas, &derivation_id, 7).expect("capture_output must succeed");
+    let manifest = capture_output(&destdir, &cas, &derivation_id, "test-pkg", "1.0.0", 7)
+        .expect("capture_output must succeed");
 
-    assert_eq!(manifest.files.len(), 2, "should capture 2 regular files");
-    assert_eq!(manifest.symlinks.len(), 1, "should capture 1 symlink");
+    assert_eq!(
+        manifest
+            .entries
+            .iter()
+            .filter(|entry| matches!(entry.node.source.kind, PayloadNodeKind::Regular { .. }))
+            .count(),
+        2,
+        "should capture 2 regular files"
+    );
+    assert_eq!(
+        manifest
+            .entries
+            .iter()
+            .filter(|entry| matches!(entry.node.source.kind, PayloadNodeKind::Symlink { .. }))
+            .count(),
+        1,
+        "should capture 1 symlink"
+    );
     assert_eq!(manifest.derivation_id, derivation_id);
     assert_eq!(manifest.build_duration_secs, 7);
     assert_eq!(manifest.output_hash.len(), 64);
 
     // Verify CAS contains the captured files.
-    for file in &manifest.files {
-        assert!(
-            cas.exists(&file.hash),
-            "CAS must contain file: {}",
-            file.path
-        );
+    for entry in &manifest.entries {
+        if let Some(content) = &entry.content {
+            assert!(
+                cas.exists(&content.sha256),
+                "CAS must contain file: {}",
+                entry.path
+            );
+        }
     }
 
     // Serialize manifest to TOML and store in CAS.
@@ -197,13 +216,13 @@ fn capture_and_index_round_trip() {
         .retrieve(&manifest_cas_hash)
         .expect("retrieve manifest from CAS");
     let retrieved_toml = String::from_utf8(retrieved_bytes).expect("valid UTF-8");
-    let loaded_manifest: conary_core::derivation::OutputManifest =
-        toml::from_str(&retrieved_toml).expect("deserialize manifest");
+    let loaded_manifest = conary_core::derivation::OutputManifest::from_toml(&retrieved_toml)
+        .expect("deserialize and validate manifest");
 
     assert_eq!(loaded_manifest.derivation_id, derivation_id);
     assert_eq!(loaded_manifest.output_hash, manifest.output_hash);
-    assert_eq!(loaded_manifest.files.len(), manifest.files.len());
-    assert_eq!(loaded_manifest.symlinks.len(), manifest.symlinks.len());
+    assert_eq!(loaded_manifest.root, manifest.root);
+    assert_eq!(loaded_manifest.entries, manifest.entries);
 }
 
 // ---------------------------------------------------------------------------
@@ -238,17 +257,30 @@ fn compose_erofs_from_captured_output() {
 
     // Capture to CAS.
     let drv_id = "b".repeat(64);
-    let manifest = capture_output(&destdir, &cas, &drv_id, 3).expect("capture_output must succeed");
+    let manifest = capture_output(&destdir, &cas, &drv_id, "tool", "1.0", 3)
+        .expect("capture_output must succeed");
 
-    assert!(!manifest.files.is_empty(), "must have captured files");
-    assert!(!manifest.symlinks.is_empty(), "must have captured symlinks");
+    assert!(
+        manifest
+            .entries
+            .iter()
+            .any(|entry| matches!(entry.node.source.kind, PayloadNodeKind::Regular { .. })),
+        "must have captured files"
+    );
+    assert!(
+        manifest
+            .entries
+            .iter()
+            .any(|entry| matches!(entry.node.source.kind, PayloadNodeKind::Symlink { .. })),
+        "must have captured symlinks"
+    );
 
     // Compose an EROFS image from the captured output.
     let output_dir = tmp.path().join("erofs_output");
     std::fs::create_dir_all(&output_dir).unwrap();
 
-    let build_result =
-        compose_erofs(&[&manifest], &output_dir).expect("compose_erofs must succeed");
+    let build_result = compose_erofs(&[&manifest], manifest.root.clone(), &output_dir)
+        .expect("compose_erofs must succeed");
 
     // Verify image exists and has non-zero size.
     assert!(

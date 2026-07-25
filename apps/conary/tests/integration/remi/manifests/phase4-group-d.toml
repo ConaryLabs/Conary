@@ -28,18 +28,18 @@ fatal = true
 
 # Setup: init DB
 [[test.step]]
-conary = "system init --profile ${REMI_DISTRO}"
+conary = "system init"
 
 [test.step.assert]
 exit_code = 0
 
 # Setup: remove default repos to avoid slow syncs
 [[test.step]]
-run = "${CONARY_BIN} repo remove remi --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove ${REPO_NAME} --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove arch-core --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove arch-extra --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove arch-multilib --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove fedora-44 --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove ubuntu-26.04 --db-path ${DB_PATH} 2>/dev/null; true"
+run = "${CONARY_BIN} repo remove ${REPO_NAME} --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove ${REPO_NAME} --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove arch-core --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove arch-extra --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove arch-multilib --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove fedora-44 --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove ubuntu-26.04 --db-path ${DB_PATH} 2>/dev/null; true"
 
 # Setup: add Remi repo (needed for trust and federation tests that reference REPO_NAME)
 [[test.step]]
-conary = "repo add ${REPO_NAME} ${REMI_ENDPOINT} --default-strategy remi --remi-endpoint ${REMI_ENDPOINT} --remi-distro ${REMI_DISTRO} --no-gpg-check"
+conary = "repo add ${REPO_NAME} ${REMI_ENDPOINT} --package-format json --default-strategy remi --remi-endpoint ${REMI_ENDPOINT} --remi-distro ${REMI_DISTRO}"
 
 [test.step.assert]
 exit_code = 0
@@ -52,7 +52,7 @@ exit_code = 0
 
 # Setup: install fixture CCS (always available, no distro repo needed)
 [[test.step]]
-conary = "ccs install ${FIXTURE_V1_CCS} --yes --allow-unsigned --sandbox never --reinstall"
+conary = "ccs install ${FIXTURE_V1_CCS} --yes --policy ${FIXTURE_CCS_POLICY} --sandbox always --reinstall"
 
 [test.step.assert]
 exit_code = 0
@@ -179,7 +179,7 @@ timeout = 120
 group = "D"
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/cap-net-raw/output/cap-net-raw.ccs --yes --allow-unsigned --allow-capabilities --sandbox never --reinstall"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/cap-net-raw/output/cap-net-raw.ccs --yes --policy ${FIXTURE_CCS_POLICY} --sandbox always --reinstall"
 
 [test.step.assert]
 exit_code = 0
@@ -438,44 +438,6 @@ conary = "trust status ${REPO_NAME}"
 exit_code = 0
 stdout_contains_all = ["TUF enabled: yes", "Trusted keys: 1"]
 stdout_not_contains = "panic"
-
-# --------------------------------------------------------------------------
-# T234: Trust disable --force
-# --------------------------------------------------------------------------
-
-[[test]]
-id = "T234"
-name = "trust_disable"
-description = "Disable TUF for the repository with an explicit force flag"
-timeout = 30
-group = "D"
-depends_on = ["T233"]
-
-[[test.step]]
-conary = "trust disable ${REPO_NAME} --force"
-
-[test.step.assert]
-exit_code = 0
-stdout_contains = "TUF verification disabled for: ${REPO_NAME}"
-
-# --------------------------------------------------------------------------
-# T235: Trust enable
-# --------------------------------------------------------------------------
-
-[[test]]
-id = "T235"
-name = "trust_enable"
-description = "Re-enable TUF verification after bootstrap metadata is stored"
-timeout = 30
-group = "D"
-depends_on = ["T234"]
-
-[[test.step]]
-conary = "trust enable ${REPO_NAME}"
-
-[test.step.assert]
-exit_code = 0
-stdout_contains = "TUF verification enabled for: ${REPO_NAME}"
 
 # ==========================================================================
 # SYSTEM OPERATIONS (T236-T245)

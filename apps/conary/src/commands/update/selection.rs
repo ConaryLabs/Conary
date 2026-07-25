@@ -12,54 +12,34 @@ use conary_core::repository::{
     LatestSignal, PackageSelector, SelectionOptions,
     dependency_model::RepositoryDependencyFlavor,
     resolution_policy::{ResolutionPolicy, SelectionMode},
-    versioning::{VersionScheme, compare_mixed_repo_versions, resolve_package_version_scheme},
+    versioning::{compare_mixed_repo_versions, resolve_package_version_scheme},
 };
 use std::cmp::Ordering;
-use tracing::{debug, warn};
+use tracing::debug;
 
 /// Check whether the repository version is strictly newer than the installed version.
 ///
-/// Returns `true` if `repo_version` parses and compares greater than `installed_version`.
-/// Returns `false` (and logs a warning) when either version fails to parse or when the
-/// repository version is the same or older.
-fn is_repo_version_newer(trove: &Trove, repo: &Repository, package: &RepositoryPackage) -> bool {
-    let Some(ordering) = compare_mixed_repo_versions(
-        trove_version_scheme(trove),
+/// Returns `true` only when the repository version is strictly newer.
+/// Mixed schemes and malformed versions are typed errors.
+fn is_repo_version_newer(trove: &Trove, package: &RepositoryPackage) -> Result<bool> {
+    let installed_scheme = trove.version_scheme;
+    let repository_scheme = resolve_package_version_scheme(package);
+    let ordering = compare_mixed_repo_versions(
+        installed_scheme,
         &trove.version,
-        resolve_package_version_scheme(package, repo).unwrap_or(VersionScheme::Rpm),
+        repository_scheme,
         &package.version,
-    ) else {
-        warn!(
-            "Could not compare versions for {}: {} vs {}, skipping",
-            trove.name, package.version, trove.version
-        );
-        return false;
-    };
+    )?;
 
     if ordering != Ordering::Less {
         debug!(
             "Skipping {} {} (installed {} is same or newer)",
             trove.name, package.version, trove.version
         );
-        return false;
+        return Ok(false);
     }
 
-    true
-}
-
-fn trove_version_scheme(trove: &Trove) -> VersionScheme {
-    match trove.version_scheme.as_deref() {
-        Some("debian") => VersionScheme::Debian,
-        Some("arch") => VersionScheme::Arch,
-        Some("rpm") | None => VersionScheme::Rpm,
-        Some(other) => {
-            warn!(
-                "Unknown installed version scheme '{}' for {}, falling back to RPM",
-                other, trove.name
-            );
-            VersionScheme::Rpm
-        }
-    }
+    Ok(true)
 }
 
 #[allow(dead_code)]
@@ -197,8 +177,7 @@ pub(super) fn select_update_candidate(
     for candidate in PackageSelector::search_packages(conn, &trove.name, &options)? {
         let same_source =
             candidate_matches_installed_source(trove, &candidate.package, &candidate.repository);
-        let newer_in_scheme =
-            is_repo_version_newer(trove, &candidate.repository, &candidate.package);
+        let newer_in_scheme = is_repo_version_newer(trove, &candidate.package)?;
         let allow_cross_source_latest = policy.selection_mode == SelectionMode::Latest
             && !same_source
             && candidate_has_positive_latest_signal(
@@ -428,6 +407,7 @@ mod tests {
     use conary_core::repository::resolution_policy::{
         DependencyMixingPolicy, ResolutionPolicy, SelectionMode,
     };
+    use conary_core::repository::versioning::VersionScheme;
 
     fn seed_latest_mode_update_fixture(conn: &rusqlite::Connection) -> Trove {
         let mut fedora_repo = Repository::new(
@@ -480,10 +460,10 @@ mod tests {
             "1.0.0-1.fc44".to_string(),
             TroveType::Package,
             InstallSource::Repository,
+            conary_core::repository::versioning::VersionScheme::Rpm,
         );
         installed.architecture = Some("x86_64".to_string());
         installed.source_distro = Some("fedora-44".to_string());
-        installed.version_scheme = Some("rpm".to_string());
         installed.installed_from_repository_id = Some(fedora_repo_id);
         installed.insert(conn).unwrap();
 
@@ -491,13 +471,13 @@ mod tests {
             fedora_repo_id,
             "demo".to_string(),
             "1.1.0-1.fc44".to_string(),
+            conary_core::repository::versioning::VersionScheme::Rpm,
             "sha256:fedora-demo".to_string(),
             123,
             "https://example.test/fedora/demo-1.1.0-1.fc44.rpm".to_string(),
         );
         fedora_candidate.architecture = Some("x86_64".to_string());
         fedora_candidate.distro = Some("fedora-44".to_string());
-        fedora_candidate.version_scheme = Some("rpm".to_string());
         fedora_candidate.canonical_id = Some(canonical_id);
         fedora_candidate.insert(conn).unwrap();
 
@@ -505,13 +485,13 @@ mod tests {
             arch_repo_id,
             "demo".to_string(),
             "1.2.0-1".to_string(),
+            conary_core::repository::versioning::VersionScheme::Arch,
             "sha256:arch-demo".to_string(),
             123,
             "https://example.test/arch/demo-1.2.0-1.pkg.tar.zst".to_string(),
         );
         arch_candidate.architecture = Some("x86_64".to_string());
         arch_candidate.distro = Some("arch".to_string());
-        arch_candidate.version_scheme = Some("arch".to_string());
         arch_candidate.canonical_id = Some(canonical_id);
         arch_candidate.insert(conn).unwrap();
 
@@ -536,10 +516,10 @@ mod tests {
             "1.0.0".to_string(),
             TroveType::Package,
             InstallSource::Repository,
+            conary_core::repository::versioning::VersionScheme::Rpm,
         );
         installed.architecture = Some("x86_64".to_string());
         installed.source_distro = Some("fedora-44".to_string());
-        installed.version_scheme = Some("rpm".to_string());
         installed.installed_from_repository_id = Some(repo_id);
         installed.insert(conn).unwrap();
 
@@ -547,13 +527,13 @@ mod tests {
             repo_id,
             "openssl".to_string(),
             "1.0.1".to_string(),
+            conary_core::repository::versioning::VersionScheme::Rpm,
             "sha256:openssl".to_string(),
             123,
             "https://example.test/security/openssl-1.0.1.ccs".to_string(),
         );
         candidate.architecture = Some("x86_64".to_string());
         candidate.distro = Some("fedora-44".to_string());
-        candidate.version_scheme = Some("rpm".to_string());
         candidate.is_security_update = candidate_is_security_update;
         if candidate_is_security_update {
             candidate.severity = Some("important".to_string());
@@ -566,60 +546,48 @@ mod tests {
 
     #[test]
     fn test_is_repo_version_newer_uses_debian_scheme() {
-        let mut repo = Repository::new(
-            "debian-main".to_string(),
-            "https://deb.example.test".to_string(),
-        );
-        repo.default_strategy_distro = Some("ubuntu-24.04".to_string());
-
-        let mut trove = Trove::new_with_source(
+        let trove = Trove::new_with_source(
             "demo".to_string(),
             "1.0~beta1".to_string(),
             TroveType::Package,
             InstallSource::Repository,
+            conary_core::repository::versioning::VersionScheme::Debian,
         );
-        trove.version_scheme = Some("debian".to_string());
 
-        let mut candidate = RepositoryPackage::new(
+        let candidate = RepositoryPackage::new(
             1,
             "demo".to_string(),
             "1.0".to_string(),
+            conary_core::repository::versioning::VersionScheme::Debian,
             "sha256:demo".to_string(),
             1,
             "https://deb.example.test/demo_1.0_amd64.deb".to_string(),
         );
-        candidate.version_scheme = Some("debian".to_string());
 
-        assert!(is_repo_version_newer(&trove, &repo, &candidate));
+        assert!(is_repo_version_newer(&trove, &candidate).unwrap());
     }
 
     #[test]
     fn test_is_repo_version_newer_uses_arch_scheme() {
-        let mut repo = Repository::new(
-            "arch-core".to_string(),
-            "https://arch.example.test".to_string(),
-        );
-        repo.default_strategy_distro = Some("arch".to_string());
-
-        let mut trove = Trove::new_with_source(
+        let trove = Trove::new_with_source(
             "demo".to_string(),
             "1.0-1".to_string(),
             TroveType::Package,
             InstallSource::Repository,
+            conary_core::repository::versioning::VersionScheme::Arch,
         );
-        trove.version_scheme = Some("arch".to_string());
 
-        let mut candidate = RepositoryPackage::new(
+        let candidate = RepositoryPackage::new(
             1,
             "demo".to_string(),
             "1.0-2".to_string(),
+            conary_core::repository::versioning::VersionScheme::Arch,
             "sha256:demo".to_string(),
             1,
             "https://arch.example.test/demo-1.0-2.pkg.tar.zst".to_string(),
         );
-        candidate.version_scheme = Some("arch".to_string());
 
-        assert!(is_repo_version_newer(&trove, &repo, &candidate));
+        assert!(is_repo_version_newer(&trove, &candidate).unwrap());
     }
 
     #[test]
@@ -638,22 +606,22 @@ mod tests {
             repo_id,
             "phase4-runtime-fixture".to_string(),
             "1.0.1".to_string(),
+            conary_core::repository::versioning::VersionScheme::Debian,
             "sha256:fixture".to_string(),
             1110,
             "http://127.0.0.1:18087/phase4-runtime-fixture_1.0.1_amd64.deb".to_string(),
         );
         package.architecture = Some("amd64".to_string());
         package.distro = Some("ubuntu".to_string());
-        package.version_scheme = Some("debian".to_string());
         package.insert(&conn).unwrap();
 
         let mut installed = Trove::new(
             "phase4-runtime-fixture".to_string(),
             "1.0.0".to_string(),
             TroveType::Package,
+            conary_core::repository::versioning::VersionScheme::Debian,
         );
         installed.architecture = Some("amd64".to_string());
-        installed.version_scheme = Some("debian".to_string());
 
         let selected = select_update_candidate(
             &conn,
@@ -667,7 +635,7 @@ mod tests {
 
         assert_eq!(selected.package.version, "1.0.1");
         assert_eq!(selected.repository.name, "slice-d-local-update");
-        assert_eq!(selected.package.version_scheme.as_deref(), Some("debian"));
+        assert_eq!(selected.package.version_scheme, VersionScheme::Debian);
     }
 
     #[test]
@@ -844,6 +812,7 @@ mod tests {
             7,
             "openssl".to_string(),
             "3.2.1-1.fc44".to_string(),
+            VersionScheme::Rpm,
             "sha256:openssl-fixed".to_string(),
             4096,
             "https://example.test/openssl-3.2.1-1.fc44.ccs".to_string(),

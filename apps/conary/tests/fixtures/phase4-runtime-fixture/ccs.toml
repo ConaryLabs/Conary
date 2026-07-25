@@ -1,6 +1,9 @@
 [package]
 name = "phase4-runtime-fixture"
 version = "1.0.0"
+version_scheme = "conary"
+release = "1"
+kind = "package"
 description = "Phase 4 runtime fixture for config, label, trigger, and shell coverage"
 license = "MIT"
 
@@ -12,10 +15,6 @@ libc = "gnu"
 [provides]
 capabilities = ["phase4-runtime-fixture"]
 binaries = ["/usr/bin/phase4-runtime-fixture"]
-
-[requires]
-capabilities = []
-packages = []
 
 [components]
 default = ["runtime", "config"]

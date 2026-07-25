@@ -22,14 +22,28 @@ pub enum TakeoverLevel {
     Generation,
 }
 
+/// Explicit native package-manager authority for mixed-manager hosts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub enum NativePackageManager {
+    Rpm,
+    Dpkg,
+    Pacman,
+}
+
+impl From<NativePackageManager> for conary_core::packages::SystemPackageManager {
+    fn from(value: NativePackageManager) -> Self {
+        match value {
+            NativePackageManager::Rpm => Self::Rpm,
+            NativePackageManager::Dpkg => Self::Dpkg,
+            NativePackageManager::Pacman => Self::Pacman,
+        }
+    }
+}
+
 #[derive(Subcommand)]
 pub enum SystemCommands {
     /// Initialize a new Conary database
     Init {
-        /// Exact supported host profile for seeded repositories
-        #[arg(long, value_name = "PROFILE", value_parser = super::repo::parse_public_profile_id)]
-        profile: String,
-
         #[command(flatten)]
         db: DbArgs,
     },
@@ -96,6 +110,10 @@ pub enum SystemCommands {
         #[command(flatten)]
         db: DbArgs,
 
+        /// Select native authority when more than one package database is populated
+        #[arg(long, value_enum, conflicts_with = "convert")]
+        package_manager: Option<NativePackageManager>,
+
         /// Copy files to CAS for full management (enables rollback)
         /// Used by: default (package adopt), --system
         #[arg(long, conflicts_with_all = ["status", "convert", "sync_hook", "from_sync_hook"])]
@@ -146,6 +164,10 @@ pub enum SystemCommands {
         /// Disable CDC chunking during conversion, requires --convert
         #[arg(long, requires = "convert")]
         no_chunking: bool,
+
+        /// Private CCS authority key used to sign converted packages
+        #[arg(long, value_name = "PATH", requires = "convert")]
+        key: Option<String>,
 
         /// Install/remove system PM sync hooks
         #[arg(long, conflicts_with_all = ["system", "status", "refresh", "convert"])]
@@ -302,6 +324,10 @@ pub enum SystemCommands {
         /// Show what would be done without making changes
         #[arg(long)]
         dry_run: bool,
+
+        /// Select native authority when more than one package database is populated
+        #[arg(long, value_enum)]
+        package_manager: Option<NativePackageManager>,
 
         #[command(flatten)]
         db: DbArgs,

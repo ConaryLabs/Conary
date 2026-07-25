@@ -33,17 +33,6 @@ use crate::error::{Error, Result};
 use crate::recipe::format::BuildStage;
 use std::collections::{HashMap, HashSet, VecDeque};
 
-/// Controls how bootstrap edges are selected when breaking cycles
-#[derive(Debug, Clone)]
-pub enum BootstrapMode {
-    /// Use the built-in LFS/Gentoo-based heuristics (default)
-    Auto,
-    /// Use only the provided edges, ignoring built-in heuristics
-    Manual(Vec<(String, String)>),
-    /// Use the provided edges first, fall back to built-in heuristics
-    Augmented(Vec<(String, String)>),
-}
-
 /// A directed graph representing recipe dependencies
 #[derive(Debug, Default)]
 pub struct RecipeGraph {
@@ -317,129 +306,6 @@ impl RecipeGraph {
         dependents
     }
 
-    /// Built-in bootstrap edge patterns based on LFS/Gentoo experience
-    const DEFAULT_BOOTSTRAP_PATTERNS: &'static [(&'static str, &'static str)] = &[
-        // glibc normally depends on gcc, but in stage0 we use cross-gcc
-        ("glibc", "gcc"),
-        // Same pattern for musl
-        ("musl", "gcc"),
-        // libstdc++ needs glibc, but stage1 can use minimal glibc
-        ("libstdc++", "glibc"),
-        // Perl/Python have chicken-egg with system libs
-        ("perl", "glibc"),
-        ("python", "glibc"),
-    ];
-
-    /// Suggest bootstrap edges to break circular dependencies
-    ///
-    /// This analyzes cycles in the graph and suggests which edges to break
-    /// based on the provided `BootstrapMode`:
-    ///
-    /// - `Auto`: uses built-in LFS/Gentoo heuristics
-    /// - `Manual(edges)`: uses only the provided edges
-    /// - `Augmented(edges)`: tries provided edges first, then falls back to heuristics
-    ///
-    /// Returns a list of (from, to) edges that could be marked as bootstrap edges.
-    pub fn suggest_bootstrap_edges(&self, mode: &BootstrapMode) -> Vec<(String, String)> {
-        let cycles = self.find_cycles();
-        let mut suggestions = Vec::new();
-
-        let (custom_patterns, use_defaults): (Vec<(&str, &str)>, bool) = match mode {
-            BootstrapMode::Auto => (Vec::new(), true),
-            BootstrapMode::Manual(edges) => {
-                let patterns: Vec<(&str, &str)> = edges
-                    .iter()
-                    .map(|(a, b)| (a.as_str(), b.as_str()))
-                    .collect();
-                (patterns, false)
-            }
-            BootstrapMode::Augmented(edges) => {
-                let patterns: Vec<(&str, &str)> = edges
-                    .iter()
-                    .map(|(a, b)| (a.as_str(), b.as_str()))
-                    .collect();
-                (patterns, true)
-            }
-        };
-
-        for cycle in cycles {
-            let mut matched = false;
-
-            // Try custom patterns first
-            for (from, to) in &custom_patterns {
-                if cycle.contains(&from.to_string()) && cycle.contains(&to.to_string()) {
-                    let edge = (from.to_string(), to.to_string());
-                    if !suggestions.contains(&edge) {
-                        suggestions.push(edge);
-                    }
-                    matched = true;
-                }
-            }
-
-            // Try built-in patterns if allowed and no custom match
-            if !matched && use_defaults {
-                for (from, to) in Self::DEFAULT_BOOTSTRAP_PATTERNS {
-                    if cycle.contains(&from.to_string()) && cycle.contains(&to.to_string()) {
-                        let edge = (from.to_string(), to.to_string());
-                        if !suggestions.contains(&edge) {
-                            suggestions.push(edge);
-                        }
-                        matched = true;
-                    }
-                }
-            }
-
-            // If no pattern matched, suggest breaking at the "least critical" edge
-            // Heuristic: break the edge from the recipe with fewest dependents
-            if !matched && cycle.len() >= 2 {
-                let mut best_break = None;
-                let mut best_score = 0;
-
-                for i in 0..cycle.len() {
-                    let from = &cycle[i];
-                    let to = &cycle[(i + 1) % cycle.len()];
-
-                    // Score by number of dependents (more dependents = more critical = less likely to break)
-                    let score = self.reverse_edges.get(from).map_or(0, |deps| deps.len());
-
-                    if best_break.is_none() || score < best_score {
-                        best_break = Some((from.clone(), to.clone()));
-                        best_score = score;
-                    }
-                }
-
-                if let Some(edge) = best_break {
-                    suggestions.push(edge);
-                }
-            }
-        }
-
-        suggestions
-    }
-
-    /// Auto-break detected cycles using suggested bootstrap edges
-    ///
-    /// Uses `BootstrapMode::Auto` (built-in heuristics). For custom control,
-    /// use `auto_break_cycles_with_mode()`.
-    ///
-    /// Returns the edges that were marked.
-    pub fn auto_break_cycles(&mut self) -> Vec<(String, String)> {
-        self.auto_break_cycles_with_mode(&BootstrapMode::Auto)
-    }
-
-    /// Auto-break detected cycles using the specified bootstrap mode
-    ///
-    /// Returns the edges that were marked.
-    pub fn auto_break_cycles_with_mode(&mut self, mode: &BootstrapMode) -> Vec<(String, String)> {
-        let suggestions = self.suggest_bootstrap_edges(mode);
-
-        for (from, to) in &suggestions {
-            self.mark_bootstrap_edge(from, to);
-        }
-
-        suggestions
-    }
-
     /// Clear all bootstrap edges
     pub fn clear_bootstrap_edges(&mut self) {
         self.bootstrap_edges.clear();
@@ -484,9 +350,11 @@ impl BootstrapPlan {
     /// 1. Identifies circular dependencies and how to break them
     /// 2. Determines which packages need to be built in multiple passes
     /// 3. Organizes builds into stages (stage0, stage1, final)
-    pub fn from_graph(graph: &mut RecipeGraph) -> Result<Self> {
-        // Find and break cycles
-        let bootstrap_edges = graph.auto_break_cycles();
+    pub fn from_graph(graph: &RecipeGraph) -> Result<Self> {
+        // Bootstrap edges are explicit build inputs. A cycle without an
+        // explicitly marked edge is an error; package names and graph shape
+        // never authorize Conary to discard a dependency.
+        let bootstrap_edges = graph.bootstrap_edges.iter().cloned().collect();
 
         // Get topological order with cycles broken
         let build_order = graph.topological_sort()?;
@@ -502,13 +370,11 @@ impl BootstrapPlan {
         let stage0_recipes: Vec<String> = build_order
             .iter()
             .filter(|r| {
-                let deps = graph.dependencies(r).map_or(0, |d| d.len());
-                deps == 0
-                    || (deps == 1
-                        && graph
-                            .dependencies(r)
-                            .expect("recipe from build_order must exist in graph")
-                            .contains("linux-headers"))
+                let dependencies = graph
+                    .dependencies(r)
+                    .expect("recipe from build_order must exist in graph");
+                let deps = dependencies.len();
+                deps == 0 || (deps == 1 && dependencies.contains("linux-headers"))
             })
             .cloned()
             .collect();
@@ -768,34 +634,13 @@ mod tests {
     }
 
     #[test]
-    fn test_suggest_bootstrap_edges_glibc_gcc() {
-        let mut graph = RecipeGraph::new();
-        // gcc <-> glibc cycle
-        graph.add_recipe("gcc", &["glibc"]);
-        graph.add_recipe("glibc", &["gcc"]);
-
-        let suggestions = graph.suggest_bootstrap_edges(&BootstrapMode::Auto);
-
-        // Should suggest breaking glibc -> gcc (known pattern)
-        assert!(suggestions.contains(&("glibc".to_string(), "gcc".to_string())));
-    }
-
-    #[test]
-    fn test_auto_break_cycles() {
+    fn bootstrap_plan_rejects_cycle_without_explicit_edge() {
         let mut graph = RecipeGraph::new();
         graph.add_recipe("gcc", &["glibc"]);
         graph.add_recipe("glibc", &["gcc"]);
 
-        // Should fail before breaking
-        assert!(graph.topological_sort().is_err());
-
-        // Auto-break
-        let broken = graph.auto_break_cycles();
-        assert!(!broken.is_empty());
-
-        // Should succeed after breaking
-        let order = graph.topological_sort().unwrap();
-        assert_eq!(order.len(), 2);
+        let err = BootstrapPlan::from_graph(&graph).unwrap_err();
+        assert!(err.to_string().contains("Circular dependency"));
     }
 
     #[test]
@@ -819,7 +664,7 @@ mod tests {
         graph.add_recipe("binutils", &["glibc"]);
         graph.add_recipe("gcc", &["glibc", "binutils"]);
 
-        let plan = BootstrapPlan::from_graph(&mut graph).unwrap();
+        let plan = BootstrapPlan::from_graph(&graph).unwrap();
 
         // Should have at least one phase
         assert!(!plan.phases.is_empty());
@@ -839,11 +684,14 @@ mod tests {
         graph.add_recipe("gcc", &["glibc", "binutils"]);
         graph.add_recipe("glibc", &["gcc", "linux-headers"]); // cycle with gcc
         graph.add_recipe("binutils", &["glibc"]);
+        graph.mark_bootstrap_edge("glibc", "gcc");
 
-        let plan = BootstrapPlan::from_graph(&mut graph).unwrap();
+        let plan = BootstrapPlan::from_graph(&graph).unwrap();
 
-        // Should have identified bootstrap edges
-        assert!(!plan.bootstrap_edges.is_empty());
+        assert_eq!(
+            plan.bootstrap_edges,
+            vec![("glibc".to_string(), "gcc".to_string())]
+        );
 
         // Should be able to get all recipes
         let all = plan.all_recipes();
@@ -859,7 +707,7 @@ mod tests {
         graph.add_recipe("glibc", &["gcc-pass1", "linux-headers"]);
         graph.add_recipe("app", &["glibc"]);
 
-        let plan = BootstrapPlan::from_graph(&mut graph).unwrap();
+        let plan = BootstrapPlan::from_graph(&graph).unwrap();
 
         // linux-headers and binutils-pass1 have no deps, should be stage0
         let lh_phase = plan.phase_for_recipe("linux-headers").unwrap();

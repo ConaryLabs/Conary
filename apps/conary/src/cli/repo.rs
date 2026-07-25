@@ -3,6 +3,7 @@
 
 use super::DbArgs;
 use clap::{Subcommand, ValueEnum};
+use conary_core::repository::OpenPgpTrustRoot;
 
 pub(super) fn parse_public_profile_id(value: &str) -> Result<String, String> {
     conary_core::repository::supported_profiles::profile_by_public_id(value)
@@ -24,6 +25,58 @@ pub enum CliSecurityAdvisorySupport {
     Supported,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum CliRepositoryFormat {
+    Rpm,
+    Deb,
+    Arch,
+    Json,
+}
+
+impl From<CliRepositoryFormat> for conary_core::repository::RepositoryFormat {
+    fn from(value: CliRepositoryFormat) -> Self {
+        match value {
+            CliRepositoryFormat::Rpm => Self::Fedora,
+            CliRepositoryFormat::Deb => Self::Debian,
+            CliRepositoryFormat::Arch => Self::Arch,
+            CliRepositoryFormat::Json => Self::Json,
+        }
+    }
+}
+
+fn parse_openpgp_root(value: &str) -> Result<OpenPgpTrustRoot, String> {
+    let (fingerprint, url) = value.split_once('=').ok_or_else(|| {
+        "expected an exact OpenPGP trust root in FINGERPRINT=URL form".to_string()
+    })?;
+    OpenPgpTrustRoot::new(url.to_string(), fingerprint.to_string()).map_err(|error| {
+        format!("invalid OpenPGP trust root '{value}': {error}; expected FINGERPRINT=URL")
+    })
+}
+
+fn parse_openpgp_fingerprint(value: &str) -> Result<String, String> {
+    if !matches!(value.len(), 40 | 64)
+        || !value.bytes().all(|byte| byte.is_ascii_hexdigit())
+        || value.bytes().any(|byte| byte.is_ascii_lowercase())
+    {
+        return Err(
+            "expected exactly 40 or 64 uppercase hexadecimal fingerprint digits".to_string(),
+        );
+    }
+    Ok(value.to_string())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum CliArchDatabaseSignature {
+    Required,
+    Optional,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum CliArchKeyringFormat {
+    OpenPgp,
+    AlpmPackageZstd,
+}
+
 #[derive(Subcommand)]
 pub enum RepoCommands {
     /// Add a repository
@@ -33,6 +86,29 @@ pub enum RepoCommands {
 
         /// Repository URL (for metadata)
         url: String,
+
+        /// Exact package metadata grammar served by this repository
+        ///
+        /// Required for non-static repositories. Static Conary repositories
+        /// declare their own signed metadata contract.
+        #[arg(long, value_enum)]
+        package_format: Option<CliRepositoryFormat>,
+
+        /// Exact Debian suite/codename (required for --package-format=deb)
+        #[arg(long)]
+        distribution: Option<String>,
+
+        /// Exact Debian component (required for --package-format=deb)
+        #[arg(long)]
+        component: Option<String>,
+
+        /// Exact package-manager architecture (required for rpm and deb)
+        #[arg(long)]
+        architecture: Option<String>,
+
+        /// Exact Arch repository database name (required for arch)
+        #[arg(long)]
+        database: Option<String>,
 
         #[command(flatten)]
         db: DbArgs,
@@ -54,20 +130,60 @@ pub enum RepoCommands {
         #[arg(long)]
         disabled: bool,
 
-        /// URL or path to GPG public key for signature verification
-        #[arg(long)]
-        gpg_key: Option<String>,
+        /// Debian Release signer in exact FINGERPRINT=URL form; repeatable
+        #[arg(
+            long = "debian-release-key",
+            value_name = "FINGERPRINT=URL",
+            value_parser = parse_openpgp_root
+        )]
+        debian_release_keys: Vec<OpenPgpTrustRoot>,
 
-        /// Disable GPG signature checking for this repository
-        #[arg(long)]
-        no_gpg_check: bool,
+        /// RPM repository-metadata signer in exact FINGERPRINT=URL form; repeatable
+        #[arg(
+            long = "rpm-metadata-key",
+            value_name = "FINGERPRINT=URL",
+            value_parser = parse_openpgp_root
+        )]
+        rpm_metadata_keys: Vec<OpenPgpTrustRoot>,
 
-        /// Require all packages to have valid GPG signatures (strict mode)
-        #[arg(long)]
-        gpg_strict: bool,
+        /// Exact HTTPS metalink authenticating rpm-md repomd.xml
+        #[arg(long, value_name = "URL", conflicts_with = "rpm_metadata_keys")]
+        rpm_metalink: Option<String>,
+
+        /// RPM package signer in exact FINGERPRINT=URL form; repeatable
+        #[arg(
+            long = "rpm-package-key",
+            value_name = "FINGERPRINT=URL",
+            value_parser = parse_openpgp_root
+        )]
+        rpm_package_keys: Vec<OpenPgpTrustRoot>,
+
+        /// Exact Arch keyring URL containing masters, certifications, and packager keys
+        #[arg(long, value_name = "URL")]
+        arch_keyring: Option<String>,
+
+        /// Exact Arch keyring source grammar
+        #[arg(long, value_enum)]
+        arch_keyring_format: Option<CliArchKeyringFormat>,
+
+        /// Trusted Arch master-key fingerprint; repeatable
+        #[arg(
+            long = "arch-master-key",
+            value_name = "FINGERPRINT",
+            value_parser = parse_openpgp_fingerprint
+        )]
+        arch_master_keys: Vec<String>,
+
+        /// Distinct trusted Arch master certifications required for a packager key
+        #[arg(long, value_name = "COUNT")]
+        arch_packager_key_threshold: Option<usize>,
+
+        /// Whether this Arch repository requires a detached database signature
+        #[arg(long, value_enum)]
+        arch_database_signature: Option<CliArchDatabaseSignature>,
 
         /// Static repository root key fingerprint; repeat for multi-key roots
-        #[arg(long = "fingerprint", value_name = "64-HEX", conflicts_with_all = ["gpg_key", "no_gpg_check", "gpg_strict"])]
+        #[arg(long = "fingerprint", value_name = "64-HEX")]
         fingerprints: Vec<String>,
 
         /// Assume yes to interactive static repository trust prompts
@@ -83,8 +199,7 @@ pub enum RepoCommands {
         /// When no per-package routing entry exists, use this strategy:
         /// - remi: Convert packages via Remi server (requires --remi-endpoint and --remi-distro)
         /// - binary: Download pre-built packages directly (default behavior)
-        /// - legacy: Use repository_packages table (same as binary)
-        #[arg(long, value_name = "STRATEGY", value_parser = ["remi", "binary", "legacy"])]
+        #[arg(long, value_name = "STRATEGY", value_parser = ["remi", "binary"])]
         default_strategy: Option<String>,
 
         /// Remi server endpoint URL (required when --default-strategy=remi)
@@ -160,35 +275,5 @@ pub enum RepoCommands {
         /// Force sync even if recently synced
         #[arg(short, long)]
         force: bool,
-    },
-
-    /// Import a GPG key for a repository
-    #[command(name = "key-import")]
-    KeyImport {
-        /// Repository name to associate the key with
-        repository: String,
-
-        /// Path to GPG public key file, or URL to fetch from
-        key: String,
-
-        #[command(flatten)]
-        db: DbArgs,
-    },
-
-    /// List imported GPG keys
-    #[command(name = "key-list")]
-    KeyList {
-        #[command(flatten)]
-        db: DbArgs,
-    },
-
-    /// Remove a GPG key for a repository
-    #[command(name = "key-remove")]
-    KeyRemove {
-        /// Repository name whose key to remove
-        repository: String,
-
-        #[command(flatten)]
-        db: DbArgs,
     },
 }

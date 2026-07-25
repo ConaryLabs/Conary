@@ -2,12 +2,12 @@
 use super::*;
 use crate::server::native_publish::test_support::seed_native_publication;
 use conary_core::ccs::convert::ScriptletBundleSummary;
-use conary_core::db::models::{CONVERSION_VERSION, ConvertedPackage};
+use conary_core::db::models::{CONVERSION_VERSION, ChunkAccess, ConvertedPackage};
 
 fn create_test_db() -> (tempfile::NamedTempFile, rusqlite::Connection) {
     let temp_file = tempfile::NamedTempFile::new().unwrap();
     let conn = rusqlite::Connection::open(temp_file.path()).unwrap();
-    conary_core::db::schema::migrate(&conn).unwrap();
+    conary_core::db::schema::ensure_current(&conn).unwrap();
     (temp_file, conn)
 }
 
@@ -78,7 +78,7 @@ fn native_manifest_lookup_reports_ambiguous_releases() {
 }
 
 #[test]
-fn package_publication_manifest_includes_scriptlets_without_private_path() {
+fn converted_manifest_includes_typed_lifecycle_summary() {
     let temp = tempfile::TempDir::new().unwrap();
     let db_path = temp.path().join("remi.db");
     conary_core::db::init(&db_path).unwrap();
@@ -87,7 +87,7 @@ fn package_publication_manifest_includes_scriptlets_without_private_path() {
     std::fs::write(&ccs_path, b"ccs").unwrap();
 
     let conn = conary_core::db::open(&db_path).unwrap();
-    let mut converted = ConvertedPackage::new_server(
+    let mut converted = ConvertedPackage::new_repository(
         "fedora".to_string(),
         "pkg".to_string(),
         "1.0".to_string(),
@@ -101,13 +101,13 @@ fn package_publication_manifest_includes_scriptlets_without_private_path() {
     converted.package_architecture = Some("x86_64".to_string());
     let summary = ScriptletBundleSummary {
         scriptlet_fidelity: "native-free".to_string(),
-        target_compatibility: "compatible".to_string(),
-        publication_status: "public".to_string(),
-        review_artifact_path: Some("/tmp/private-review-secret".to_string()),
         ..ScriptletBundleSummary::default()
     };
     converted.set_scriptlet_metadata(&summary).unwrap();
     converted.insert(&conn).unwrap();
+    ChunkAccess::new("sha256:chunk".to_string(), 3)
+        .upsert(&conn)
+        .unwrap();
 
     let manifest =
         match check_converted(&db_path, "fedora", "pkg", Some("1.0"), Some("x86_64")).unwrap() {
@@ -118,21 +118,21 @@ fn package_publication_manifest_includes_scriptlets_without_private_path() {
 
     let scriptlets = manifest.scriptlets.as_ref().unwrap();
     assert_eq!(scriptlets.scriptlet_fidelity, "native-free");
-    assert!(scriptlets.review_artifact_available);
-    assert!(!json.contains("review_artifact_path"));
-    assert!(!json.contains("private-review-secret"));
+    assert_eq!(manifest.chunks[0].size, 3);
+    assert_eq!(manifest.chunks[0].offset, 0);
+    assert!(!json.contains("publication_status"));
 }
 
 #[test]
-fn check_converted_returns_review_refusal_for_current_private_row() {
+fn malformed_current_conversion_metadata_is_an_internal_data_error() {
     let temp = tempfile::tempdir().unwrap();
     let db_path = temp.path().join("test.db");
     let conn = rusqlite::Connection::open(&db_path).unwrap();
-    conary_core::db::schema::migrate(&conn).unwrap();
+    conary_core::db::schema::ensure_current(&conn).unwrap();
     let ccs_path = temp.path().join("pkg.ccs");
     std::fs::write(&ccs_path, b"fake ccs").unwrap();
 
-    let mut converted = ConvertedPackage::new_server(
+    let mut converted = ConvertedPackage::new_repository(
         "fedora".to_string(),
         "pkg".to_string(),
         "1.0".to_string(),
@@ -144,56 +144,17 @@ fn check_converted_returns_review_refusal_for_current_private_row() {
         ccs_path.to_string_lossy().to_string(),
     );
     converted
-        .set_scriptlet_metadata(&ScriptletBundleSummary {
-            publication_status: "private-review".to_string(),
-            scriptlet_fidelity: "review-required".to_string(),
-            target_compatibility: "review-required".to_string(),
-            review_reason_codes: vec!["review-class-debconf".to_string()],
-            ..Default::default()
-        })
+        .set_scriptlet_metadata(&ScriptletBundleSummary::default())
         .unwrap();
     converted.insert(&conn).unwrap();
+    conn.execute(
+        "UPDATE converted_packages SET scriptlet_summary_json = '{broken' WHERE original_checksum = ?1",
+        ["sha256:source"],
+    )
+    .unwrap();
 
-    let lookup = check_converted(&db_path, "fedora", "pkg", Some("1.0"), None).unwrap();
-
-    assert!(matches!(lookup, ConvertedManifestLookup::ReviewRequired(_)));
-}
-
-#[test]
-fn converted_download_lookup_refuses_blocked_rows() {
-    let temp = tempfile::tempdir().unwrap();
-    let db_path = temp.path().join("test.db");
-    let conn = rusqlite::Connection::open(&db_path).unwrap();
-    conary_core::db::schema::migrate(&conn).unwrap();
-    let ccs_path = temp.path().join("pkg.ccs");
-    std::fs::write(&ccs_path, b"fake ccs").unwrap();
-
-    let mut converted = ConvertedPackage::new_server(
-        "fedora".to_string(),
-        "pkg".to_string(),
-        "1.0".to_string(),
-        "rpm".to_string(),
-        "sha256:source".to_string(),
-        &["abc".to_string()],
-        8,
-        "sha256:content".to_string(),
-        ccs_path.to_string_lossy().to_string(),
-    );
-    converted
-        .set_scriptlet_metadata(&ScriptletBundleSummary {
-            publication_status: "blocked".to_string(),
-            scriptlet_fidelity: "blocked".to_string(),
-            target_compatibility: "blocked".to_string(),
-            blocked_reason_codes: vec!["blocked-class-network".to_string()],
-            ..Default::default()
-        })
-        .unwrap();
-    converted.insert(&conn).unwrap();
-
-    let lookup =
-        converted_ccs_path_for_download(&db_path, "fedora", "pkg", Some("1.0"), None).unwrap();
-
-    assert!(matches!(lookup, ConvertedDownloadLookup::Blocked(_)));
+    assert!(check_converted(&db_path, "fedora", "pkg", Some("1.0"), None).is_err());
+    assert!(converted_ccs_path_for_download(&db_path, "fedora", "pkg", Some("1.0"), None).is_err());
 }
 
 #[test]
@@ -209,7 +170,7 @@ fn converted_ccs_path_for_download_rejects_stale_conversion_records() {
     std::fs::write(&ccs_path, b"stale ccs payload").unwrap();
 
     let conn = conary_core::db::open(&db_path).unwrap();
-    let mut converted = ConvertedPackage::new_server(
+    let mut converted = ConvertedPackage::new_repository(
         "fedora".to_string(),
         "p11-kit-trust".to_string(),
         "0.25.8-1.fc44".to_string(),

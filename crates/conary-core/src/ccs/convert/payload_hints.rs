@@ -2,6 +2,7 @@
 
 use crate::packages::common::PackageMetadata;
 use crate::packages::traits::ExtractedFile;
+use crate::payload::PayloadNodeKind;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -41,15 +42,18 @@ impl PayloadHints {
             for parent in payload_parent_paths(path) {
                 hints.directory_paths.insert(parent);
             }
-            if let Some(target) = &file.symlink_target {
+            if let PayloadNodeKind::Symlink { target } = &file.node.kind {
                 hints
                     .symlink_targets
                     .insert(path.to_string(), target.clone());
             }
-            let mode = file.mode as u32;
+            let mode = file.node.mode;
             hints.file_modes.insert(path.to_string(), mode);
-            if file.symlink_target.is_none() && mode & 0o111 != 0 {
+            if file.node.kind.is_regular() && mode & 0o111 != 0 {
                 hints.executable_paths.insert(path.to_string());
+            }
+            if file.node.kind.is_directory() {
+                hints.directory_paths.insert(path.to_string());
             }
             if let Some(unit) = systemd_unit_name(path) {
                 hints.systemd_units.insert(unit.to_string());
@@ -165,11 +169,12 @@ mod tests {
     fn file(path: &str) -> ExtractedFile {
         ExtractedFile {
             path: path.to_string(),
+            node: crate::payload::PayloadNode::regular(0o644),
             content: Vec::new(),
-            size: 0,
-            mode: 0o644,
-            sha256: None,
-            symlink_target: None,
+            content_authority: Some(crate::payload::PayloadContentAuthority {
+                sha256: crate::hash::sha256(&[]),
+                size: 0,
+            }),
         }
     }
 

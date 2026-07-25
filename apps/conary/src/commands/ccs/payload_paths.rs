@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use conary_core::ccs::CcsPackage;
 use conary_core::ccs::manifest::FileCapability;
 use conary_core::packages::traits::{ExtractedFile, PackageFormat};
+use conary_core::payload::PayloadNodeKind;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::OsString;
 use std::path::{Component as PathComponent, Path, PathBuf};
@@ -36,25 +37,20 @@ pub(super) fn sanitize_package_relative_path(path: &str) -> Result<PathBuf> {
     Ok(normalized)
 }
 
-fn deployed_mode(mode: i32) -> (i32, bool) {
+fn deployed_mode(mode: u32) -> (u32, bool) {
     let stripped = mode & !0o6000;
     (stripped, stripped != mode)
 }
 
-fn is_symlink_mode(mode: i32) -> bool {
-    (mode & 0o170000) == 0o120000
-}
-
 fn is_extracted_symlink(file: &ExtractedFile) -> bool {
-    is_symlink_mode(file.mode) || file.symlink_target.is_some()
+    matches!(file.node.kind, PayloadNodeKind::Symlink { .. })
 }
 
 fn symlink_target_for_file(file: &ExtractedFile) -> Result<String> {
-    if let Some(target) = &file.symlink_target {
+    if let PayloadNodeKind::Symlink { target } = &file.node.kind {
         return Ok(target.clone());
     }
-
-    String::from_utf8(file.content.clone()).context("invalid symlink target in package payload")
+    anyhow::bail!("payload node {} is not a symlink", file.path)
 }
 
 struct DeploymentFile {
@@ -270,11 +266,17 @@ fn path_traversal_error(message: String) -> anyhow::Error {
 }
 
 fn identical_regular_deployment(existing: &ExtractedFile, current: &ExtractedFile) -> bool {
-    !is_extracted_symlink(existing)
-        && !is_extracted_symlink(current)
-        && existing.sha256 == current.sha256
-        && existing.size == current.size
-        && deployed_mode(existing.mode).0 == deployed_mode(current.mode).0
+    if !matches!(existing.node.kind, PayloadNodeKind::Regular { .. })
+        || !matches!(current.node.kind, PayloadNodeKind::Regular { .. })
+    {
+        return false;
+    }
+    let mut existing_node = existing.node.clone();
+    let mut current_node = current.node.clone();
+    existing_node.mode = deployed_mode(existing_node.mode).0;
+    current_node.mode = deployed_mode(current_node.mode).0;
+    existing.content_authority == current.content_authority
+        && existing_node == current_node
         && existing.content == current.content
 }
 
@@ -432,10 +434,8 @@ pub(crate) fn normalize_ccs_extracted_files(
     let mut normalized = Vec::with_capacity(deployment_files.len());
     for mut deployment in deployment_files {
         deployment.file.path = deployment_path_to_package_path(&deployment.relative_path)?;
-        if deployment.symlink_target.is_some() {
-            deployment.file.symlink_target = deployment.symlink_target;
-        } else {
-            deployment.file.mode = deployed_mode(deployment.file.mode).0;
+        if deployment.symlink_target.is_none() {
+            deployment.file.node.mode = deployed_mode(deployment.file.node.mode).0;
         }
         normalized.push(deployment.file);
     }
@@ -451,6 +451,7 @@ mod tests {
     };
     use conary_core::ccs::manifest::FileCapability;
     use conary_core::packages::traits::ExtractedFile;
+    use conary_core::payload::{PayloadContentAuthority, PayloadNode};
     use std::path::PathBuf;
 
     fn file_capability(path: &str) -> FileCapability {
@@ -527,11 +528,12 @@ mod tests {
             root.path(),
             vec![ExtractedFile {
                 path: "/usr/lib64/libform.so.6".to_string(),
+                node: PayloadNode::regular(0o644),
                 content: b"fixture".to_vec(),
-                sha256: Some("fixture-hash".to_string()),
-                size: 7,
-                mode: 0o100644,
-                symlink_target: None,
+                content_authority: Some(PayloadContentAuthority {
+                    sha256: conary_core::hash::sha256(b"fixture"),
+                    size: 7,
+                }),
             }],
         )
         .unwrap();

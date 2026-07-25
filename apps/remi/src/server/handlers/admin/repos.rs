@@ -12,6 +12,8 @@ use tokio::sync::RwLock;
 use crate::server::ServerState;
 use crate::server::admin_service::{self, CreateRepoInput, UpdateRepoInput};
 use crate::server::auth::{Scope, TokenScopes, json_error};
+use conary_core::db::models::RepositoryOwnership;
+use conary_core::repository::{RepositoryFormat, RepositoryParserConfig, RepositoryTrustPolicy};
 
 use super::{check_scope, validate_path_param};
 
@@ -24,8 +26,9 @@ pub struct CreateRepoRequest {
     pub content_url: Option<String>,
     pub enabled: Option<bool>,
     pub priority: Option<i32>,
-    pub gpg_check: Option<bool>,
     pub metadata_expire: Option<i32>,
+    pub parser: RepositoryParserConfig,
+    pub trust: Option<RepositoryTrustPolicy>,
 }
 
 /// Request body for replacing a repository's mutable configuration.
@@ -36,8 +39,9 @@ pub struct UpdateRepoRequest {
     pub content_url: Option<String>,
     pub enabled: Option<bool>,
     pub priority: Option<i32>,
-    pub gpg_check: Option<bool>,
     pub metadata_expire: Option<i32>,
+    pub parser: RepositoryParserConfig,
+    pub trust: Option<RepositoryTrustPolicy>,
 }
 
 /// Response body for repository endpoints.
@@ -49,10 +53,13 @@ pub struct RepoResponse {
     pub content_url: Option<String>,
     pub enabled: bool,
     pub priority: i32,
-    pub gpg_check: bool,
+    pub trust: Option<RepositoryTrustPolicy>,
     pub metadata_expire: i32,
     pub last_sync: Option<String>,
     pub created_at: Option<String>,
+    pub package_format: RepositoryFormat,
+    pub parser: Option<RepositoryParserConfig>,
+    pub managed_by: &'static str,
 }
 
 /// Query parameters for refresh endpoints.
@@ -62,20 +69,33 @@ pub struct RefreshQuery {
     pub force: bool,
 }
 
-impl From<conary_core::db::models::Repository> for RepoResponse {
-    fn from(r: conary_core::db::models::Repository) -> Self {
-        Self {
-            id: r.id.unwrap_or(0),
+impl TryFrom<conary_core::db::models::Repository> for RepoResponse {
+    type Error = anyhow::Error;
+
+    fn try_from(r: conary_core::db::models::Repository) -> Result<Self, Self::Error> {
+        Ok(Self {
+            id: r.id.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "repository '{}' was loaded for admin serving without a persisted ID",
+                    r.name
+                )
+            })?,
             name: r.name,
             url: r.url,
             content_url: r.content_url,
             enabled: r.enabled,
             priority: r.priority,
-            gpg_check: r.gpg_check,
+            trust: r.trust_policy,
             metadata_expire: r.metadata_expire,
             last_sync: r.last_sync,
             created_at: r.created_at,
-        }
+            package_format: r.package_format,
+            parser: r.parser_config,
+            managed_by: match r.managed_by {
+                RepositoryOwnership::Operator => "operator",
+                RepositoryOwnership::RemiConfig => "remi-config",
+            },
+        })
     }
 }
 
@@ -92,8 +112,17 @@ pub async fn list_repos(
 
     match admin_service::list_repos(&state).await {
         Ok(repos) => {
-            let response: Vec<RepoResponse> = repos.into_iter().map(RepoResponse::from).collect();
-            Json(response).into_response()
+            match repos
+                .into_iter()
+                .map(RepoResponse::try_from)
+                .collect::<anyhow::Result<Vec<_>>>()
+            {
+                Ok(response) => Json(response).into_response(),
+                Err(error) => {
+                    tracing::error!("Failed to build repository response: {error}");
+                    json_error(500, "Failed to list repositories", "INTERNAL_ERROR")
+                }
+            }
         }
         Err(e) => {
             tracing::error!("Failed to list repos: {e}");
@@ -148,8 +177,9 @@ pub async fn create_repo(
         content_url: body.content_url,
         enabled: body.enabled.unwrap_or(true),
         priority: body.priority.unwrap_or(0),
-        gpg_check: body.gpg_check.unwrap_or(true),
         metadata_expire: body.metadata_expire.unwrap_or(3600),
+        parser: body.parser,
+        trust: body.trust,
     };
 
     match admin_service::create_repo(&state, input).await {
@@ -157,7 +187,13 @@ pub async fn create_repo(
             let guard = state.read().await;
             guard.publish_event("repo.created", serde_json::json!({"name": &name}));
             drop(guard);
-            (StatusCode::CREATED, Json(RepoResponse::from(repo))).into_response()
+            match RepoResponse::try_from(repo) {
+                Ok(response) => (StatusCode::CREATED, Json(response)).into_response(),
+                Err(error) => {
+                    tracing::error!("Failed to build repository response: {error}");
+                    json_error(500, "Failed to create repository", "INTERNAL_ERROR")
+                }
+            }
         }
         Err(admin_service::ServiceError::BadRequest(msg)) => json_error(400, &msg, "BAD_REQUEST"),
         Err(admin_service::ServiceError::Conflict(msg)) => json_error(409, &msg, "CONFLICT"),
@@ -184,7 +220,13 @@ pub async fn get_repo(
     }
 
     match admin_service::get_repo(&state, &name).await {
-        Ok(Some(repo)) => Json(RepoResponse::from(repo)).into_response(),
+        Ok(Some(repo)) => match RepoResponse::try_from(repo) {
+            Ok(response) => Json(response).into_response(),
+            Err(error) => {
+                tracing::error!("Failed to build repository response: {error}");
+                json_error(500, "Failed to get repository", "INTERNAL_ERROR")
+            }
+        },
         Ok(None) => json_error(404, "Repository not found", "NOT_FOUND"),
         Err(e) => {
             tracing::error!("Failed to get repo: {e}");
@@ -229,8 +271,9 @@ pub async fn update_repo(
         content_url: body.content_url,
         enabled: body.enabled,
         priority: body.priority,
-        gpg_check: body.gpg_check,
         metadata_expire: body.metadata_expire,
+        parser: body.parser,
+        trust: body.trust,
     };
 
     match admin_service::update_repo(&state, &name, input).await {
@@ -238,7 +281,13 @@ pub async fn update_repo(
             let guard = state.read().await;
             guard.publish_event("repo.updated", serde_json::json!({"name": &repo.name}));
             drop(guard);
-            Json(RepoResponse::from(repo)).into_response()
+            match RepoResponse::try_from(repo) {
+                Ok(response) => Json(response).into_response(),
+                Err(error) => {
+                    tracing::error!("Failed to build repository response: {error}");
+                    json_error(500, "Failed to update repository", "INTERNAL_ERROR")
+                }
+            }
         }
         Ok(None) => json_error(404, "Repository not found", "NOT_FOUND"),
         Err(admin_service::ServiceError::BadRequest(msg)) => json_error(400, &msg, "BAD_REQUEST"),
@@ -394,7 +443,8 @@ mod tests {
             "name": "fedora",
             "url": "https://93.184.216.34/fedora",
             "enabled": true,
-            "priority": 10
+            "priority": 10,
+            "parser": {"package_format": "json"}
         });
         let resp = app
             .oneshot(
@@ -456,7 +506,8 @@ mod tests {
         let app4 = rebuild_app(&db_path);
         let update_body = serde_json::json!({
             "url": "https://example.org/fedora",
-            "priority": 20
+            "priority": 20,
+            "parser": {"package_format": "json"}
         });
         let resp = app4
             .oneshot(
@@ -584,7 +635,8 @@ mod tests {
 
         let create_body = serde_json::json!({
             "name": "bad-repo",
-            "url": "http://localhost:8080/repo"
+            "url": "http://localhost:8080/repo",
+            "parser": {"package_format": "json"}
         });
         let resp = app
             .oneshot(
@@ -607,7 +659,8 @@ mod tests {
 
         let create_body = serde_json::json!({
             "name": "fedora",
-            "url": "https://93.184.216.34/fedora"
+            "url": "https://93.184.216.34/fedora",
+            "parser": {"package_format": "json"}
         });
         let create_resp = app
             .oneshot(
@@ -626,7 +679,8 @@ mod tests {
         let app2 = rebuild_app(&db_path);
         let update_body = serde_json::json!({
             "url": "https://93.184.216.34/fedora",
-            "content_url": "http://10.0.0.42/content"
+            "content_url": "http://10.0.0.42/content",
+            "parser": {"package_format": "json"}
         });
         let resp = app2
             .oneshot(
@@ -649,7 +703,8 @@ mod tests {
 
         let create_body = serde_json::json!({
             "name": "fedora",
-            "url": "https://93.184.216.34/fedora"
+            "url": "https://93.184.216.34/fedora",
+            "parser": {"package_format": "json"}
         });
         let create_resp = app
             .oneshot(
@@ -666,8 +721,9 @@ mod tests {
         assert_eq!(create_resp.status(), StatusCode::CREATED);
 
         let update_body = serde_json::json!({
-            "name": "ignored-by-old-contract",
-            "url": "https://93.184.216.34/fedora"
+            "name": "removed-create-only-field",
+            "url": "https://93.184.216.34/fedora",
+            "parser": {"package_format": "json"}
         });
         let response = rebuild_app(&db_path)
             .oneshot(

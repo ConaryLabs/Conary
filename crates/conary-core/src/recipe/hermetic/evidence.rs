@@ -1,22 +1,47 @@
 // conary-core/src/recipe/hermetic/evidence.rs
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 
 use super::divergence::DivergenceReport;
+use crate::security::command_risk::CommandRiskSeverity;
 
-pub const HERMETIC_EVIDENCE_SCHEMA_V1: u32 = 1;
+pub const HERMETIC_EVIDENCE_SCHEMA: HermeticEvidenceSchema = HermeticEvidenceSchema;
 pub const COMMAND_RISK_CLASSIFIER_VERSION: &str =
     crate::security::command_risk::COMMAND_RISK_CLASSIFIER_VERSION;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HermeticEvidenceSchema;
+
+impl Serialize for HermeticEvidenceSchema {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_u32(2)
+    }
+}
+
+impl<'de> Deserialize<'de> for HermeticEvidenceSchema {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        match u32::deserialize(deserializer)? {
+            2 => Ok(Self),
+            version => Err(de::Error::custom(format!(
+                "unsupported hermetic evidence schema {version}; expected 2"
+            ))),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HermeticBuildEvidence {
-    pub schema_version: u32,
+    pub schema_version: HermeticEvidenceSchema,
     pub build_input: BuildInputIdentity,
     pub dependency_lock: DependencyLock,
-    pub ecosystem_policy: EcosystemPolicyReport,
     pub command_risk: BuildCommandRiskReport,
     pub reproducibility: ReproducibilityRecord,
-    #[serde(default)]
     pub divergence: DivergenceReport,
     pub diagnostics: Vec<String>,
 }
@@ -25,28 +50,22 @@ pub struct HermeticBuildEvidence {
 pub struct BuildInputIdentity {
     pub recipe: RecipeIdentity,
     pub source: SourceIdentity,
-    #[serde(default)]
     pub additional_sources: Vec<SourceArchiveIdentity>,
-    #[serde(default)]
     pub patches: Vec<InputFileIdentity>,
-    #[serde(default)]
     pub local_tree: Option<LocalTreeIdentity>,
-    #[serde(default)]
-    pub ecosystem_dependencies: Vec<EcosystemDependencyIdentity>,
     pub builder_environment: BuilderEnvironmentIdentity,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "kind", rename_all = "kebab-case")]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum RecipeIdentity {
     ExplicitRecipe {
         path: String,
         hash: String,
     },
-    GeneratedRecipe {
-        generator: String,
-        canonical_hash: String,
-        inference_trace_hash: String,
+    ForeignPackageConversion {
+        format: String,
+        contract_hash: String,
     },
 }
 
@@ -98,13 +117,6 @@ pub struct InputFileIdentity {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct EcosystemDependencyIdentity {
-    pub ecosystem: String,
-    pub evidence_path: String,
-    pub evidence_hash: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BuilderEnvironmentIdentity {
     pub kind: BuilderEnvironmentKind,
     pub sysroot_hash: Option<String>,
@@ -121,7 +133,6 @@ pub enum BuilderEnvironmentKind {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct DependencyLock {
-    #[serde(default)]
     pub repository_dependencies: Vec<LockedRepositoryDependency>,
 }
 
@@ -136,44 +147,21 @@ pub struct LockedRepositoryDependency {
     pub content_identity: String,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-pub enum PolicyStatus {
-    Clean,
-    Review,
-    Blocked,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct EcosystemPolicyReport {
-    pub ecosystem: String,
-    pub status: PolicyStatus,
-    pub identities: Vec<EcosystemDependencyIdentity>,
-    pub diagnostics: Vec<String>,
-}
-
-impl EcosystemPolicyReport {
-    pub fn clean(ecosystem: impl Into<String>) -> Self {
-        Self {
-            ecosystem: ecosystem.into(),
-            status: PolicyStatus::Clean,
-            identities: Vec::new(),
-            diagnostics: Vec::new(),
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BuildCommandRiskReport {
-    pub status: PolicyStatus,
+    /// Highest diagnostic severity recorded by the classifier.
+    ///
+    /// This field is evidence only and never grants or denies build,
+    /// execution, mutation, trust, or publication.
+    pub highest_severity: CommandRiskSeverity,
     pub classifier_version: String,
     pub entries: Vec<BuildCommandRiskEntry>,
 }
 
 impl BuildCommandRiskReport {
-    pub fn clean() -> Self {
+    pub fn no_findings() -> Self {
         Self {
-            status: PolicyStatus::Clean,
+            highest_severity: CommandRiskSeverity::None,
             classifier_version: COMMAND_RISK_CLASSIFIER_VERSION.to_string(),
             entries: Vec::new(),
         }
@@ -185,7 +173,7 @@ pub struct BuildCommandRiskEntry {
     pub phase: String,
     pub command: String,
     pub reason_code: String,
-    pub severity: PolicyStatus,
+    pub severity: CommandRiskSeverity,
     pub evidence: String,
 }
 
@@ -203,7 +191,7 @@ mod tests {
     #[test]
     fn hermetic_evidence_serializes_stable_schema_version() {
         let evidence = HermeticBuildEvidence {
-            schema_version: HERMETIC_EVIDENCE_SCHEMA_V1,
+            schema_version: HERMETIC_EVIDENCE_SCHEMA,
             build_input: BuildInputIdentity {
                 recipe: RecipeIdentity::ExplicitRecipe {
                     path: "recipe.toml".to_string(),
@@ -216,7 +204,6 @@ mod tests {
                 additional_sources: vec![],
                 patches: vec![],
                 local_tree: None,
-                ecosystem_dependencies: vec![],
                 builder_environment: BuilderEnvironmentIdentity {
                     kind: BuilderEnvironmentKind::Pristine,
                     sysroot_hash: Some("sha256:sysroot".to_string()),
@@ -225,8 +212,7 @@ mod tests {
                 },
             },
             dependency_lock: DependencyLock::default(),
-            ecosystem_policy: EcosystemPolicyReport::clean("cargo"),
-            command_risk: BuildCommandRiskReport::clean(),
+            command_risk: BuildCommandRiskReport::no_findings(),
             reproducibility: ReproducibilityRecord {
                 source_date_epoch: Some(1),
                 path_remap_count: 1,
@@ -238,67 +224,34 @@ mod tests {
 
         let json = serde_json::to_value(&evidence).unwrap();
 
-        assert_eq!(json["schema_version"], 1);
+        assert_eq!(json["schema_version"], 2);
         assert_eq!(json["build_input"]["source"]["kind"], "archive");
-        assert_eq!(json["ecosystem_policy"]["status"], "clean");
-        assert_eq!(json["command_risk"]["status"], "clean");
+        assert_eq!(json["command_risk"]["highest_severity"], "none");
         assert_eq!(json["divergence"]["status"], "no-host-record");
     }
 
     #[test]
-    fn hermetic_evidence_defaults_missing_divergence_for_older_evidence() {
-        let json = serde_json::json!({
-            "schema_version": HERMETIC_EVIDENCE_SCHEMA_V1,
-            "build_input": {
-                "recipe": {
-                    "kind": "explicit-recipe",
-                    "path": "recipe.toml",
-                    "hash": "sha256:recipe"
-                },
-                "source": {
-                    "kind": "archive",
-                    "url": "https://example.invalid/pkg.tar.gz",
-                    "checksum": "sha256:source"
-                },
-                "builder_environment": {
-                    "kind": "pristine",
-                    "sysroot_hash": "sha256:sysroot",
-                    "toolchain_hash": null,
-                    "diagnostics": []
-                }
-            },
-            "dependency_lock": {
-                "repository_dependencies": []
-            },
-            "ecosystem_policy": {
-                "ecosystem": "unknown",
-                "status": "clean",
-                "identities": [],
-                "diagnostics": []
-            },
-            "command_risk": {
-                "status": "clean",
-                "classifier_version": COMMAND_RISK_CLASSIFIER_VERSION,
-                "entries": []
-            },
-            "reproducibility": {
-                "source_date_epoch": null,
-                "path_remap_count": 0,
-                "env_keys": []
-            },
-            "diagnostics": []
-        });
-
-        let evidence: HermeticBuildEvidence = serde_json::from_value(json).unwrap();
-
-        assert_eq!(
-            evidence.divergence.status,
-            super::super::divergence::DivergenceStatus::NoHostRecord
-        );
+    fn hermetic_evidence_rejects_obsolete_schema() {
+        let error =
+            serde_json::from_value::<HermeticEvidenceSchema>(serde_json::json!(1)).unwrap_err();
+        assert!(error.to_string().contains("expected 2"));
     }
 
     #[test]
-    fn build_input_identity_defaults_omitted_optional_inputs() {
+    fn schema_two_rejects_removed_generated_recipe_identity() {
+        let error = serde_json::from_value::<RecipeIdentity>(serde_json::json!({
+            "kind": "generated-recipe",
+            "generator": "conary-recipe-inference",
+            "canonical_hash": "sha256:recipe",
+            "inference_trace_hash": "sha256:trace"
+        }))
+        .unwrap_err();
+
+        assert!(error.to_string().contains("unknown variant"));
+    }
+
+    #[test]
+    fn build_input_identity_rejects_omitted_exact_inputs() {
         let json = serde_json::json!({
             "recipe": {
                 "kind": "explicit-recipe",
@@ -318,12 +271,8 @@ mod tests {
             }
         });
 
-        let input: BuildInputIdentity = serde_json::from_value(json).unwrap();
-
-        assert!(input.additional_sources.is_empty());
-        assert!(input.patches.is_empty());
-        assert_eq!(input.local_tree, None);
-        assert!(input.ecosystem_dependencies.is_empty());
+        let error = serde_json::from_value::<BuildInputIdentity>(json).unwrap_err();
+        assert!(error.to_string().contains("additional_sources"));
     }
 
     #[test]
@@ -332,7 +281,8 @@ mod tests {
 
         assert_copy::<LocalTreeMode>();
         assert_copy::<BuilderEnvironmentKind>();
-        assert_copy::<PolicyStatus>();
+        assert_copy::<HermeticEvidenceSchema>();
+        assert_copy::<CommandRiskSeverity>();
 
         let local_tree = LocalTreeIdentity {
             tree_hash: "sha256:tree".to_string(),

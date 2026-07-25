@@ -49,13 +49,11 @@ pub const ROOT_SYMLINKS: &[(&str, &str)] = &[
 /// Metadata for a single generation snapshot.
 ///
 /// Serialized to `.conary-gen.json` inside each generation directory.
-/// Fields added over time use `serde(default)` / `skip_serializing_if`
-/// so older metadata files deserialize without errors.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GenerationMetadata {
     pub generation: i64,
-    /// "composefs" or "reflink" (for backwards compat with older generations)
-    #[serde(default)]
+    /// Current generation storage format. Only `composefs` is valid.
     pub format: String,
     /// Size of the EROFS image in bytes (composefs format only)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -64,7 +62,6 @@ pub struct GenerationMetadata {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cas_objects_referenced: Option<i64>,
     /// Whether this generation is ready for fs-verity-enforced composefs mounts.
-    #[serde(default)]
     pub fsverity_enabled: bool,
     /// Hex-encoded fs-verity digest of the EROFS image itself
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -73,7 +70,7 @@ pub struct GenerationMetadata {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub artifact_manifest_sha256: Option<String>,
     /// Number of regular files in the image carrying `security.capability`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub security_capability_xattr_count: Option<i64>,
     pub created_at: String,
     pub package_count: i64,
@@ -82,6 +79,7 @@ pub struct GenerationMetadata {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct GenerationMetadataSignature {
     algorithm: String,
     signature: String,
@@ -108,6 +106,7 @@ impl GenerationMetadata {
         gen_dir: &Path,
         signing_key_path: Option<&Path>,
     ) -> Result<()> {
+        self.validate_current_contract()?;
         let path = gen_dir.join(GENERATION_METADATA_FILE);
         crate::filesystem::durable::write_json_atomic(&path, self)?;
 
@@ -147,6 +146,7 @@ impl GenerationMetadata {
         let path = gen_dir.join(GENERATION_METADATA_FILE);
         let json = std::fs::read_to_string(path)?;
         let metadata: Self = serde_json::from_str(&json)?;
+        metadata.validate_current_contract()?;
         verify_generation_metadata_signature(
             &metadata,
             gen_dir,
@@ -154,6 +154,16 @@ impl GenerationMetadata {
             signing_key_path,
         )?;
         Ok(metadata)
+    }
+
+    fn validate_current_contract(&self) -> Result<()> {
+        if self.format != GENERATION_FORMAT {
+            return Err(crate::error::Error::ParseError(format!(
+                "generation {} uses unsupported format {:?}; current metadata requires {:?}",
+                self.generation, self.format, GENERATION_FORMAT
+            )));
+        }
+        Ok(())
     }
 }
 
@@ -338,33 +348,47 @@ pub fn gc_roots_dir() -> PathBuf {
     crate::runtime_root::ConaryRuntimeRoot::default().gc_roots_dir()
 }
 
-/// Read the running kernel version from `/proc/sys/kernel/osrelease`.
+/// Resolve one exact kernel release from `gen_dir/usr/lib/modules/`.
 ///
-/// Falls back to `None` if the file cannot be read (e.g. in tests or containers
-/// without a mounted procfs).
-pub(crate) fn running_kernel_version() -> Option<String> {
-    std::fs::read_to_string("/proc/sys/kernel/osrelease")
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-}
-
-/// Detect kernel version(s) by scanning `gen_dir/usr/lib/modules/` for subdirectories.
-///
-/// Used when a generation has a deployed file tree (reflink format) and
-/// by the bootstrap image builder to discover the kernel in the sysroot.
-/// For composefs generations, use `detect_kernel_version_from_troves` in the builder instead.
-pub fn detect_kernel_version(gen_dir: &Path) -> Option<String> {
+/// Used by the bootstrap image builder to discover the kernel in a deployed
+/// sysroot. Multiple releases require an explicit selection instead of
+/// filesystem iteration order deciding which kernel boots.
+pub fn detect_kernel_version(gen_dir: &Path) -> crate::Result<Option<String>> {
     let modules_dir = gen_dir.join("usr/lib/modules");
-    let entries = std::fs::read_dir(modules_dir).ok()?;
-
-    for entry in entries.flatten() {
-        if entry.file_type().ok()?.is_dir() {
-            return Some(entry.file_name().to_string_lossy().into_owned());
+    let entries = match std::fs::read_dir(&modules_dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    let mut releases = Vec::new();
+    for entry in entries {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            let release = entry.file_name().into_string().map_err(|_| {
+                crate::Error::InvalidPath(format!(
+                    "kernel module directory under {} is not UTF-8",
+                    modules_dir.display()
+                ))
+            })?;
+            if release.is_empty() || release.contains(['/', '\\', '\0']) {
+                return Err(crate::Error::InvalidPath(format!(
+                    "kernel module release {release:?} is invalid"
+                )));
+            }
+            releases.push(release);
         }
     }
-
-    None
+    releases.sort();
+    releases.dedup();
+    match releases.as_slice() {
+        [] => Ok(None),
+        [release] => Ok(Some(release.clone())),
+        _ => Err(crate::Error::InvalidPath(format!(
+            "sysroot {} contains multiple kernel module releases {:?}; select one exact kernel before building the image",
+            gen_dir.display(),
+            releases
+        ))),
+    }
 }
 
 /// Check if a path should be excluded from generation trees.
@@ -479,8 +503,7 @@ mod tests {
     }
 
     #[test]
-    fn test_metadata_backwards_compat() {
-        // Old-format metadata without composefs fields should deserialize fine
+    fn generation_metadata_rejects_abandoned_shape() {
         let tmp = TempDir::new().unwrap();
         let old_json = r#"{
             "generation": 10,
@@ -491,16 +514,33 @@ mod tests {
         }"#;
         std::fs::write(tmp.path().join(GENERATION_METADATA_FILE), old_json).unwrap();
 
-        let loaded = GenerationMetadata::read_from_with_key_paths(tmp.path(), None, None).unwrap();
-        assert_eq!(loaded.generation, 10);
-        assert_eq!(loaded.format, ""); // serde(default) gives empty string
-        assert_eq!(loaded.erofs_size, None);
-        assert_eq!(loaded.cas_objects_referenced, None);
-        assert!(!loaded.fsverity_enabled); // serde(default) gives false
-        assert_eq!(loaded.erofs_verity_digest, None);
-        assert_eq!(loaded.artifact_manifest_sha256, None);
-        assert_eq!(loaded.security_capability_xattr_count, None);
-        assert_eq!(loaded.summary, "old generation");
+        let error =
+            GenerationMetadata::read_from_with_key_paths(tmp.path(), None, None).unwrap_err();
+        assert!(format!("{error:#}").contains("missing field `format`"));
+    }
+
+    #[test]
+    fn generation_metadata_rejects_abandoned_reflink_format() {
+        let tmp = TempDir::new().unwrap();
+        let metadata = GenerationMetadata {
+            generation: 10,
+            format: "reflink".to_string(),
+            erofs_size: None,
+            cas_objects_referenced: None,
+            fsverity_enabled: false,
+            erofs_verity_digest: None,
+            artifact_manifest_sha256: None,
+            security_capability_xattr_count: None,
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            package_count: 50,
+            kernel_version: None,
+            summary: "abandoned generation".to_string(),
+        };
+
+        let error = metadata
+            .write_to_with_key_paths(tmp.path(), None)
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("unsupported format"));
     }
 
     #[test]

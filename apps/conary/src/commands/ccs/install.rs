@@ -5,7 +5,7 @@
 //! Commands for installing CCS packages with signature verification,
 //! dependency checking, and hook execution.
 
-mod capability_policy;
+mod capability_declaration;
 mod command;
 mod component_selection;
 mod dependency;
@@ -25,5 +25,5 @@ mod command_reinstall_tests;
 #[cfg(test)]
 mod test_support;
 
-pub(crate) use capability_policy::enforce_ccs_capability_policy;
-pub use command::{cmd_ccs_install, cmd_ccs_install_with_replay_options};
+pub(crate) use capability_declaration::validate_ccs_capability_declaration;
+pub use command::cmd_ccs_install;

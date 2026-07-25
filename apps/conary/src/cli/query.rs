@@ -138,6 +138,10 @@ pub enum QueryCommands {
         /// Emit machine-readable JSON
         #[arg(long)]
         json: bool,
+
+        /// Trust policy file required when PACKAGE_PATH is a CCS archive
+        #[arg(long, value_name = "PATH")]
+        policy: Option<String>,
     },
 
     /// Show delta update statistics

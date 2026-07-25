@@ -1,3 +1,5 @@
+// conary-core/tests/canonical.rs
+
 //! Integration tests for canonical package identity system
 //!
 //! These tests exercise the full pipeline: schema setup, canonical package
@@ -15,7 +17,7 @@ fn setup_test_db() -> (NamedTempFile, Connection) {
     let temp = NamedTempFile::new().unwrap();
     let conn = Connection::open(temp.path()).unwrap();
     conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
-    conary_core::db::schema::migrate(&conn).unwrap();
+    conary_core::db::schema::ensure_current(&conn).unwrap();
     (temp, conn)
 }
 

@@ -3,7 +3,10 @@
 //! Normalized repository-native capability tables.
 
 use crate::error::Result;
+use crate::repository::distro::version_scheme_from_db;
+use crate::repository::versioning::VersionScheme;
 use rusqlite::{Connection, Row, params};
+use std::io;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepositoryProvide {
@@ -13,8 +16,8 @@ pub struct RepositoryProvide {
     pub version: Option<String>,
     pub kind: String,
     pub raw: Option<String>,
-    /// Native version comparison scheme (rpm, debian, arch) for the provide version text.
-    pub version_scheme: Option<String>,
+    /// Exact version comparison contract for this normalized provide.
+    pub version_scheme: VersionScheme,
 }
 
 impl RepositoryProvide {
@@ -24,6 +27,7 @@ impl RepositoryProvide {
         version: Option<String>,
         kind: String,
         raw: Option<String>,
+        version_scheme: VersionScheme,
     ) -> Self {
         Self {
             id: None,
@@ -32,14 +36,8 @@ impl RepositoryProvide {
             version,
             kind,
             raw,
-            version_scheme: None,
+            version_scheme,
         }
-    }
-
-    /// Create a provide with an explicit version scheme.
-    pub fn with_version_scheme(mut self, scheme: String) -> Self {
-        self.version_scheme = Some(scheme);
-        self
     }
 
     pub fn insert(&mut self, conn: &Connection) -> Result<i64> {
@@ -53,7 +51,7 @@ impl RepositoryProvide {
                 &self.version,
                 &self.kind,
                 &self.raw,
-                &self.version_scheme,
+                self.version_scheme.as_str(),
             ],
         )?;
         let id = conn.last_insert_rowid();
@@ -79,7 +77,7 @@ impl RepositoryProvide {
                 &provide.version,
                 &provide.kind,
                 &provide.raw,
-                &provide.version_scheme,
+                provide.version_scheme.as_str(),
             ])?;
         }
 
@@ -169,7 +167,7 @@ impl RepositoryProvide {
                     version: row.get(3)?,
                     kind: row.get(4)?,
                     raw: row.get(5)?,
-                    version_scheme: row.get(6)?,
+                    version_scheme: version_scheme_from_row(row, 6)?,
                 };
                 let pkg_name: String = row.get(7)?;
                 Ok((provide, pkg_name))
@@ -227,9 +225,23 @@ impl RepositoryProvide {
             version: row.get(3)?,
             kind: row.get(4)?,
             raw: row.get(5)?,
-            version_scheme: row.get(6)?,
+            version_scheme: version_scheme_from_row(row, 6)?,
         })
     }
+}
+
+fn version_scheme_from_row(row: &Row<'_>, column: usize) -> rusqlite::Result<VersionScheme> {
+    let raw: String = row.get(column)?;
+    version_scheme_from_db(Some(&raw)).ok_or_else(|| {
+        rusqlite::Error::FromSqlConversionFailure(
+            column,
+            rusqlite::types::Type::Text,
+            Box::new(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("unsupported repository provide version scheme '{raw}'"),
+            )),
+        )
+    })
 }
 
 #[cfg(test)]
@@ -241,7 +253,7 @@ mod tests {
     fn test_db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
-        schema::migrate(&conn).unwrap();
+        schema::ensure_current(&conn).unwrap();
         conn
     }
 
@@ -252,8 +264,8 @@ mod tests {
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO repository_packages (repository_id, name, version, checksum, size, download_url)
-             VALUES (1, 'pkg', '1.0', 'sha256:test', 1, 'https://example.test/pkg')",
+            "INSERT INTO repository_packages (repository_id, name, version, checksum, size, download_url, version_scheme)
+             VALUES (1, 'pkg', '1.0', 'sha256:test', 1, 'https://example.test/pkg', 'rpm')",
             [],
         )
         .unwrap();
@@ -270,13 +282,14 @@ mod tests {
             None,
             "package".to_string(),
             Some("mail-transport-agent".to_string()),
+            VersionScheme::Rpm,
         );
         provide.insert(&conn).unwrap();
 
         let found = RepositoryProvide::find_by_repository_package(&conn, 1).unwrap();
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].capability, "mail-transport-agent");
-        assert!(found[0].version_scheme.is_none());
+        assert_eq!(found[0].version_scheme, VersionScheme::Rpm);
     }
 
     #[test]
@@ -290,13 +303,13 @@ mod tests {
             Some("2.34".to_string()),
             "soname".to_string(),
             None,
-        )
-        .with_version_scheme("rpm".to_string());
+            VersionScheme::Rpm,
+        );
         provide.insert(&conn).unwrap();
 
         let found = RepositoryProvide::find_by_repository_package(&conn, 1).unwrap();
         assert_eq!(found.len(), 1);
-        assert_eq!(found[0].version_scheme.as_deref(), Some("rpm"));
+        assert_eq!(found[0].version_scheme, VersionScheme::Rpm);
     }
 
     #[test]
@@ -304,11 +317,23 @@ mod tests {
         let conn = test_db();
         seed_repo_and_package(&conn);
 
-        let mut p1 =
-            RepositoryProvide::new(1, "foo".to_string(), None, "package".to_string(), None);
+        let mut p1 = RepositoryProvide::new(
+            1,
+            "foo".to_string(),
+            None,
+            "package".to_string(),
+            None,
+            VersionScheme::Rpm,
+        );
         p1.insert(&conn).unwrap();
-        let mut p2 =
-            RepositoryProvide::new(1, "foo".to_string(), None, "virtual".to_string(), None);
+        let mut p2 = RepositoryProvide::new(
+            1,
+            "foo".to_string(),
+            None,
+            "virtual".to_string(),
+            None,
+            VersionScheme::Rpm,
+        );
         p2.insert(&conn).unwrap();
 
         let pkg_only =
@@ -328,10 +353,17 @@ mod tests {
             None,
             "soname".to_string(),
             Some("libssl.so.3()(64bit)".to_string()),
+            VersionScheme::Rpm,
         );
         typed.insert(&conn).unwrap();
-        let mut package =
-            RepositoryProvide::new(1, "openssl".to_string(), None, "package".to_string(), None);
+        let mut package = RepositoryProvide::new(
+            1,
+            "openssl".to_string(),
+            None,
+            "package".to_string(),
+            None,
+            VersionScheme::Rpm,
+        );
         package.insert(&conn).unwrap();
 
         let untyped = RepositoryProvide::find_by_cli_exact_query(&conn, "libssl.so.3").unwrap();
@@ -356,6 +388,7 @@ mod tests {
             None,
             "soname".to_string(),
             Some("libssl.so.3()(64bit)".to_string()),
+            VersionScheme::Rpm,
         );
         typed.insert(&conn).unwrap();
 
@@ -376,8 +409,14 @@ mod tests {
         let conn = test_db();
         seed_repo_and_package(&conn);
 
-        let mut provide =
-            RepositoryProvide::new(1, "cap".to_string(), None, "virtual".to_string(), None);
+        let mut provide = RepositoryProvide::new(
+            1,
+            "cap".to_string(),
+            None,
+            "virtual".to_string(),
+            None,
+            VersionScheme::Rpm,
+        );
         provide.insert(&conn).unwrap();
 
         RepositoryProvide::delete_by_package(&conn, 1).unwrap();
@@ -390,8 +429,14 @@ mod tests {
         let conn = test_db();
         seed_repo_and_package(&conn);
 
-        let mut provide =
-            RepositoryProvide::new(1, "cap".to_string(), None, "virtual".to_string(), None);
+        let mut provide = RepositoryProvide::new(
+            1,
+            "cap".to_string(),
+            None,
+            "virtual".to_string(),
+            None,
+            VersionScheme::Rpm,
+        );
         provide.insert(&conn).unwrap();
 
         RepositoryProvide::delete_by_repository(&conn, 1).unwrap();
