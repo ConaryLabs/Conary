@@ -82,7 +82,9 @@ copy_elf_closure() {
   )
 }
 
-for command_name in sh bash mkdir getent groupadd useradd; do
+copy_elf_closure /bin/sh
+
+for command_name in bash mkdir getent groupadd useradd; do
   command_path="$(command -v "${command_name}")"
   copy_elf_closure "${command_path}"
 done

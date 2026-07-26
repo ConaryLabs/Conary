@@ -122,6 +122,7 @@ const SCRIPTLET_EXECUTOR_V1_SYSCALLS: &[&str] = &[
     "umask",
     "uname",
     "unlinkat",
+    "vfork",
     "wait4",
     "waitid",
     "write",
@@ -691,6 +692,18 @@ mod tests {
 
         build_seccomp_filter(&caps, EnforcementMode::Enforce)
             .expect("scriptlet-v1 must compile for the current architecture");
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn scriptlet_v1_allows_dash_exact_vfork_process_creation() {
+        let caps = scriptlet_executor_v1_capabilities();
+
+        assert!(
+            caps.allow.iter().any(|syscall| syscall == "vfork"),
+            "x86_64 /bin/sh may be dash, whose exact helper-launch ABI uses vfork"
+        );
+        assert_eq!(syscall_name_to_number("vfork"), Some(libc::SYS_vfork));
     }
 
     #[test]

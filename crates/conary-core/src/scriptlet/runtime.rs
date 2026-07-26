@@ -44,13 +44,14 @@ fn check_scriptlet_status(phase: &str, status: ExitStatus, context: &str) -> Res
         info!("{} scriptlet completed successfully{}", phase, context);
         Ok(())
     } else {
-        let code = status.code().unwrap_or(-1);
+        let failure = match (status.code(), status.signal()) {
+            (Some(code), _) => format!("failed with exit code {code}"),
+            (None, Some(signal)) => format!("terminated by signal {signal}"),
+            (None, None) => "terminated without an exit code or signal".to_string(),
+        };
         Err(Error::scriptlet(
             ScriptletFailureKind::ScriptExited,
-            format!(
-                "{} scriptlet failed with exit code {}{}",
-                phase, code, context
-            ),
+            format!("{phase} scriptlet {failure}{context}"),
         ))
     }
 }
@@ -153,6 +154,18 @@ fn scriptlet_seccomp_unavailable(reason: &str) -> Result<seccompiler::BpfProgram
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn signal_terminated_scriptlet_reports_the_exact_signal() {
+        let status = ExitStatus::from_raw(libc::SIGSYS);
+        let error = check_scriptlet_status("post-install", status, " (package: example)")
+            .expect_err("signal termination must fail the scriptlet");
+
+        assert!(error.to_string().contains(&format!(
+            "post-install scriptlet terminated by signal {} (package: example)",
+            libc::SIGSYS
+        )));
+    }
 
     #[test]
     fn scriptlet_seccomp_is_mandatory() {
