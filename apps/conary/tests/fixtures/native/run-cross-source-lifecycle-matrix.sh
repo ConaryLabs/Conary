@@ -140,16 +140,19 @@ for source_format in "${source_formats[@]}"; do
 
   case "${source_format}" in
     rpm)
+      source_profile="fedora-44"
       version_scheme="rpm"
       v1_version="1.0.0-1"
       v2_version="1.0.1-1"
       ;;
     deb)
+      source_profile="ubuntu-26.04"
       version_scheme="debian"
       v1_version="1.0.0-1"
       v2_version="1.0.1-1"
       ;;
     arch)
+      source_profile="arch"
       version_scheme="arch"
       v1_version="1.0.0-1"
       v2_version="1.0.1-1"
@@ -173,6 +176,7 @@ for source_format in "${source_formats[@]}"; do
     --db-path "${db}" \
     --sandbox always \
     --no-deps \
+    --from "${source_profile}" \
     --yes
   test "$(
     sqlite3 "${db}" \
@@ -189,6 +193,7 @@ for source_format in "${source_formats[@]}"; do
     --db-path "${db}" \
     --sandbox always \
     --no-deps \
+    --from "${source_profile}" \
     --yes
   test "$(
     sqlite3 "${db}" \
