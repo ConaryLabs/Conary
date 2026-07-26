@@ -15,7 +15,7 @@ mapfile -t PRODUCTS < <(bash "$MATRIX" products)
 
 usage() {
     cat <<'EOF'
-Usage: scripts/release.sh [conary|remi|conaryd|conary-test|all] [--dry-run]
+Usage: scripts/release.sh [conary|remi|conaryd|conary-test|all] [OPTIONS]
 
 Analyze conventional commits since the latest product release tag and bump versions.
   conary       - conary CLI + owned crates + packaging
@@ -23,7 +23,11 @@ Analyze conventional commits since the latest product release tag and bump versi
   conaryd      - daemon service app
   conary-test  - integration harness + conary-mcp
   all          - all release tracks
-  --dry-run    Show what would happen without making changes
+
+Options:
+  --dry-run                  Show what would happen without making changes.
+  --prepare-only             Update and stage release files without committing or tagging.
+  --target PRODUCT=VERSION   Use an explicit exact target for one selected product.
 EOF
     exit 1
 }
@@ -39,6 +43,10 @@ is_product() {
     done
 
     return 1
+}
+
+is_release_version() {
+    [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
 }
 
 matrix_field() {
@@ -219,7 +227,9 @@ generate_changelog() {
     local date
     local line
     local subject
+    local description
     local -a features=()
+    local -a changed=()
     local -a fixes=()
     local -a security=()
     local -a perf=()
@@ -235,16 +245,19 @@ generate_changelog() {
         while IFS= read -r line; do
             [[ -n "$line" ]] || continue
             subject="${line#* }"
+            description="${subject#*: }"
 
-            if [[ "$subject" =~ ^feat!?: ]]; then
-                features+=("- ${subject#*: }")
-            elif [[ "$subject" =~ ^fix: ]]; then
-                fixes+=("- ${subject#*: }")
-            elif [[ "$subject" =~ ^security: ]]; then
-                security+=("- ${subject#*: }")
-            elif [[ "$subject" =~ ^perf: ]]; then
-                perf+=("- ${subject#*: }")
-            elif [[ "$subject" =~ ^(refactor|test|chore|docs): ]]; then
+            if [[ "$subject" =~ ^feat(\(.+\))?!?: ]]; then
+                features+=("- ${description}")
+            elif [[ "$subject" =~ ^refactor(\(.+\))?!?: ]]; then
+                changed+=("- ${description}")
+            elif [[ "$subject" =~ ^fix(\(.+\))?!?: ]]; then
+                fixes+=("- ${description}")
+            elif [[ "$subject" =~ ^security(\(.+\))?!?: ]]; then
+                security+=("- ${description}")
+            elif [[ "$subject" =~ ^perf(\(.+\))?!?: ]]; then
+                perf+=("- ${description}")
+            elif [[ "$subject" =~ ^(test|chore|docs)(\(.+\))?!?: ]]; then
                 :
             else
                 other+=("- ${subject}")
@@ -254,6 +267,11 @@ generate_changelog() {
         if [[ ${#features[@]} -gt 0 ]]; then
             printf '### Added\n'
             printf '%s\n' "${features[@]}"
+            printf '\n'
+        fi
+        if [[ ${#changed[@]} -gt 0 ]]; then
+            printf '### Changed\n'
+            printf '%s\n' "${changed[@]}"
             printf '\n'
         fi
         if [[ ${#fixes[@]} -gt 0 ]]; then
@@ -385,28 +403,91 @@ regenerate_conary_man_page() {
 
 main() {
     local DRY_RUN=false
+    local PREPARE_ONLY=false
     local -a RELEASE_GROUPS=()
+    local -A TARGET_VERSIONS=()
     local arg
+    local target_product
 
-    for arg in "$@"; do
+    append_release_group() {
+        local candidate="$1"
+        local existing
+
+        for existing in "${RELEASE_GROUPS[@]}"; do
+            if [[ "$existing" == "$candidate" ]]; then
+                return
+            fi
+        done
+        RELEASE_GROUPS+=("$candidate")
+    }
+
+    register_target() {
+        local spec="$1"
+        local product="${spec%%=*}"
+        local version="${spec#*=}"
+
+        if [[ "$product" == "$spec" || -z "$product" || -z "$version" ]]; then
+            die "release target must use PRODUCT=VERSION"
+        fi
+        is_product "$product" || die "unknown release target product: $product"
+        is_release_version "$version" ||
+            die "release target for ${product} must be an exact MAJOR.MINOR.PATCH version"
+        if [[ -n "${TARGET_VERSIONS[$product]:-}" && "${TARGET_VERSIONS[$product]}" != "$version" ]]; then
+            die "conflicting release targets for ${product}"
+        fi
+        TARGET_VERSIONS["$product"]="$version"
+    }
+
+    while [[ $# -gt 0 ]]; do
+        arg="$1"
         case "$arg" in
             --dry-run)
                 DRY_RUN=true
                 ;;
+            --prepare-only)
+                PREPARE_ONLY=true
+                ;;
+            --target)
+                shift
+                [[ $# -gt 0 ]] || die "--target requires PRODUCT=VERSION"
+                register_target "$1"
+                ;;
+            --target=*)
+                register_target "${arg#--target=}"
+                ;;
             all)
-                RELEASE_GROUPS=("${PRODUCTS[@]}")
+                for target_product in "${PRODUCTS[@]}"; do
+                    append_release_group "$target_product"
+                done
                 ;;
             *)
                 if is_product "$arg"; then
-                    RELEASE_GROUPS+=("$arg")
+                    append_release_group "$arg"
                 else
                     usage
                 fi
                 ;;
         esac
+        shift
     done
 
     [[ ${#RELEASE_GROUPS[@]} -gt 0 ]] || usage
+    if [[ "$DRY_RUN" == "true" && "$PREPARE_ONLY" == "true" ]]; then
+        die "--dry-run and --prepare-only cannot be combined"
+    fi
+
+    for target_product in "${!TARGET_VERSIONS[@]}"; do
+        local selected=false
+        local release_group
+        for release_group in "${RELEASE_GROUPS[@]}"; do
+            if [[ "$release_group" == "$target_product" ]]; then
+                selected=true
+                break
+            fi
+        done
+        [[ "$selected" == "true" ]] ||
+            die "release target provided for unselected product: ${target_product}"
+    done
 
     local product
     for product in "${RELEASE_GROUPS[@]}"; do
@@ -457,21 +538,33 @@ main() {
         printf '  Owned manifest baseline: %s\n' "$manifest_version"
         printf '  Current: %s\n' "$current_tag"
 
-        level="$(determine_bump "$product" "$local_history_tag")"
-        if [[ "$level" == "none" ]]; then
-            if [[ -n "$local_history_tag" ]]; then
-                printf '  No version-bumping commits since %s. Skipping.\n' "$local_history_tag"
-            else
-                printf '  No version-bumping commits found in product scope. Skipping.\n'
+        if [[ -n "${TARGET_VERSIONS[$product]:-}" ]]; then
+            new_version="${TARGET_VERSIONS[$product]}"
+            version_lt "$history_version" "$new_version" ||
+                die "explicit release target ${new_version} must be greater than published history baseline ${history_version} for ${product}"
+            if [[ -n "$local_history_tag" && -z "$(commits_for_product "$product" "$local_history_tag")" ]]; then
+                die "explicit release target for ${product} has no scoped changes since ${local_history_tag}"
             fi
-            print_owned_paths "${owned_paths[@]}"
-            printf '  Bundle: %s\n' "$bundle_name"
-            printf '  Deploy mode: %s\n' "$deploy_mode"
-            printf '\n'
-            continue
+            level="explicit"
+            printf '  Target authority: explicit\n'
+        else
+            level="$(determine_bump "$product" "$local_history_tag")"
+            if [[ "$level" == "none" ]]; then
+                if [[ -n "$local_history_tag" ]]; then
+                    printf '  No version-bumping commits since %s. Skipping.\n' "$local_history_tag"
+                else
+                    printf '  No version-bumping commits found in product scope. Skipping.\n'
+                fi
+                print_owned_paths "${owned_paths[@]}"
+                printf '  Bundle: %s\n' "$bundle_name"
+                printf '  Deploy mode: %s\n' "$deploy_mode"
+                printf '\n'
+                continue
+            fi
+            new_version="$(bump_version "$current_version" "$level")"
+            printf '  Target authority: conventional commits (%s)\n' "$level"
         fi
 
-        new_version="$(bump_version "$current_version" "$level")"
         if version_lt "$new_version" "$manifest_version"; then
             die "computed release target ${new_version} would be lower than owned manifest version ${manifest_version} for ${product}"
         fi
@@ -535,6 +628,10 @@ main() {
             # Force-add this one exact artifact so the release tag carries the
             # CLI surface generated for the version being published.
             git add -f -- apps/conary/man/conary.1
+        fi
+        if [[ "$PREPARE_ONLY" == "true" ]]; then
+            printf '  [PREPARED] Updated %s without commit or tag\n\n' "$new_tag"
+            continue
         fi
         git commit -m "chore: release ${new_tag}"
         git tag -a "$new_tag" -m "Release ${new_tag}"

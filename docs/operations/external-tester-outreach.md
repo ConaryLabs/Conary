@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-25
-revision: 3
+last_updated: 2026-07-26
+revision: 4
 status: postponed
 target_release: v0.13.0
 summary: Postponed multi-venue launch packet for the first cross-distro tester loop
@@ -11,11 +11,10 @@ summary: Postponed multi-venue launch packet for the first cross-distro tester l
 > **POSTPONED; NO NEW DATE IS ASSIGNED:** the current qualifying milestone is
 > 0/10. The two earlier supported-host reports remain useful adoption and
 > onboarding evidence, but neither installed a source package whose format
-> differed from the host's native format. Immutable `v0.12.0` is therefore a
-> historical safety baseline, not the release for this launch packet. Do not
-> publish the copy below until the cross-distro implementation has an immutable
-> release, exact artifact and deployment proof, and the existing external
-> cached-history and venue-eligibility gates are closed.
+> differed from the host's native format. Intended release `v0.13.0` remains a
+> candidate, not a published tester baseline. Do not publish the copy below
+> until the cross-distro implementation has exact artifact and deployment
+> proof and the external cached-history and venue-eligibility gates are closed.
 
 `v0.13.0` is the intended release for this packet. Treat that tag and every
 link below as a candidate until the release artifact matrix records the

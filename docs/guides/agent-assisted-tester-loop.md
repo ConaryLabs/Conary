@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-07-25
-revision: 11
-summary: Pin the agent-supervised cross-distro package tester loop to v0.12.0
+last_updated: 2026-07-26
+revision: 12
+summary: Pin the agent-supervised cross-distro package tester loop to v0.13.0
 ---
 
 # Agent-Assisted Tester Loop
@@ -14,7 +14,7 @@ stays responsible for approving every command that mutates system state.
 Use a disposable VM, a snapshot, or a non-critical host. Do not run this loop
 first on an irreplaceable daily driver.
 
-This guide is pinned to `v0.12.0`. Do not begin the loop unless that release
+This guide is pinned to `v0.13.0`. Do not begin the loop unless that release
 page publishes the package for this host plus `SHA256SUMS`, and do not continue
 when the downloaded package fails checksum verification.
 
@@ -26,19 +26,19 @@ Paste this into the agent running inside the VM or snapshot:
 I want you to help me run the Conary first external tester loop on this host.
 
 Read this guide first:
-https://github.com/ConaryLabs/Conary/blob/v0.12.0/docs/guides/agent-assisted-tester-loop.md
+https://github.com/ConaryLabs/Conary/blob/v0.13.0/docs/guides/agent-assisted-tester-loop.md
 
 Goal: install, inspect, update-preview, and remove a package whose source
 format differs from this host's native package format with pinned Conary
-v0.12.0, then draft a pre-alpha tester feedback issue. You are testing the user-facing
+v0.13.0, then draft a pre-alpha tester feedback issue. You are testing the user-facing
 cross-distro package-manager flow, not developing Conary itself.
 
 Safety rules:
 - Stop immediately if this is not a VM, snapshot, or explicitly non-critical
   host.
 - Confirm distro, architecture, kernel, and sudo before installing anything.
-- Use only the pinned v0.12.0 release from
-  https://github.com/ConaryLabs/Conary/releases/tag/v0.12.0 and confirm its
+- Use only the pinned v0.13.0 release from
+  https://github.com/ConaryLabs/Conary/releases/tag/v0.13.0 and confirm its
   release page provides the package for this host plus SHA256SUMS.
 - Verify SHA256SUMS for every downloaded artifact before installation.
 - Run dry-run commands before live commands when the loop provides both.
@@ -64,7 +64,7 @@ Stop and do not install Conary if any of these are true:
 - the host is not Fedora 44, Ubuntu 26.04 LTS, or Arch Linux;
 - the host is not `x86_64`;
 - `sudo -v` fails;
-- the pinned `v0.12.0` release page does not provide the package for this host
+- the pinned `v0.13.0` release page does not provide the package for this host
   plus `SHA256SUMS`;
 - downloaded artifact checksums do not match `SHA256SUMS`;
 - the agent or human cannot explain what a live mutation command is about to
@@ -100,45 +100,45 @@ support. Those only matter for generation-model features outside this test.
 Create a clean work directory:
 
 ```bash
-mkdir -p "$HOME/conary-preview-v0.12.0"
-cd "$HOME/conary-preview-v0.12.0"
+mkdir -p "$HOME/conary-preview-v0.13.0"
+cd "$HOME/conary-preview-v0.13.0"
 ```
 
 Download `SHA256SUMS` and the package for the current distro from:
 
 ```text
-https://github.com/ConaryLabs/Conary/releases/tag/v0.12.0
+https://github.com/ConaryLabs/Conary/releases/tag/v0.13.0
 ```
 
 Use exactly one package. Fedora 44:
 
 ```bash
-base="https://github.com/ConaryLabs/Conary/releases/download/v0.12.0"
+base="https://github.com/ConaryLabs/Conary/releases/download/v0.13.0"
 curl -fLO "$base/SHA256SUMS"
-curl -fLO "$base/conary-0.12.0-1.fc44.x86_64.rpm"
+curl -fLO "$base/conary-0.13.0-1.fc44.x86_64.rpm"
 ```
 
 Ubuntu 26.04 LTS:
 
 ```bash
-base="https://github.com/ConaryLabs/Conary/releases/download/v0.12.0"
+base="https://github.com/ConaryLabs/Conary/releases/download/v0.13.0"
 curl -fLO "$base/SHA256SUMS"
-curl -fLO "$base/conary_0.12.0-1_amd64.deb"
+curl -fLO "$base/conary_0.13.0-1_amd64.deb"
 ```
 
 Arch Linux:
 
 ```bash
-base="https://github.com/ConaryLabs/Conary/releases/download/v0.12.0"
+base="https://github.com/ConaryLabs/Conary/releases/download/v0.13.0"
 curl -fLO "$base/SHA256SUMS"
-curl -fLO "$base/conary-0.12.0-1-x86_64.pkg.tar.zst"
+curl -fLO "$base/conary-0.13.0-1-x86_64.pkg.tar.zst"
 ```
 
 Downloaded package names:
 
-- Fedora 44: `conary-0.12.0-1.fc44.x86_64.rpm`
-- Ubuntu 26.04 LTS: `conary_0.12.0-1_amd64.deb`
-- Arch Linux: `conary-0.12.0-1-x86_64.pkg.tar.zst`
+- Fedora 44: `conary-0.13.0-1.fc44.x86_64.rpm`
+- Ubuntu 26.04 LTS: `conary_0.13.0-1_amd64.deb`
+- Arch Linux: `conary-0.13.0-1-x86_64.pkg.tar.zst`
 
 Verify the downloaded package against `SHA256SUMS`:
 
@@ -155,19 +155,19 @@ Ask the human before running the matching install command.
 Fedora 44:
 
 ```bash
-sudo dnf install ./conary-0.12.0-1.fc44.x86_64.rpm
+sudo dnf install ./conary-0.13.0-1.fc44.x86_64.rpm
 ```
 
 Ubuntu 26.04 LTS:
 
 ```bash
-sudo apt install ./conary_0.12.0-1_amd64.deb
+sudo apt install ./conary_0.13.0-1_amd64.deb
 ```
 
 Arch Linux:
 
 ```bash
-sudo pacman -U ./conary-0.12.0-1-x86_64.pkg.tar.zst
+sudo pacman -U ./conary-0.13.0-1-x86_64.pkg.tar.zst
 ```
 
 Then record:
