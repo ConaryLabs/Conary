@@ -885,5 +885,6 @@ fn active_manifest_live_mutation_commands_acknowledge_mutation_and_protect_lifec
     }
 }
 
+mod dependabot;
 mod manifests;
 mod workflow;

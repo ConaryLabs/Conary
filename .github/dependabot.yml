@@ -1,0 +1,16 @@
+version: 2
+
+updates:
+  - package-ecosystem: "npm"
+    directories:
+      - "/site"
+      - "/web"
+    schedule:
+      interval: "weekly"
+    groups:
+      frontend-security-updates:
+        applies-to: "security-updates"
+        patterns:
+          - "*"
+      shared-frontend-versions:
+        group-by: "dependency-name"
