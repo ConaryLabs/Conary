@@ -92,7 +92,8 @@ version_owned_manifests_for() {
         conary-test)
             printf '%s\n' \
                 'apps/conary-test/Cargo.toml' \
-                'crates/conary-mcp/Cargo.toml'
+                'crates/conary-mcp/Cargo.toml' \
+                'crates/conary-agent-contract/Cargo.toml'
             ;;
         *) return 1 ;;
     esac
@@ -136,6 +137,7 @@ bump_scope_paths_for() {
                 'apps/conary-test/' \
                 'crates/conary-core/' \
                 'crates/conary-mcp/' \
+                'crates/conary-agent-contract/' \
                 'scripts/test-release-matrix.sh' \
                 '.github/workflows/release-build.yml' \
                 '.github/workflows/deploy-and-verify.yml'

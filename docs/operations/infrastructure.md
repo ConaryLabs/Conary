@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-25
-revision: 16
+last_updated: 2026-07-26
+revision: 17
 summary: Non-secret infrastructure, agent-operations transport, release, Remi deploy, TLS renewal, remote development, and Forge staging guidance for Conary contributors and coding assistants
 ---
 
@@ -265,6 +265,12 @@ old process. That can fail with `Text file busy`.
 - Run `./scripts/release.sh [conary|remi|conaryd|conary-test|all]` to inspect
   the current release baseline, bump owned versions, update release state, and
   create canonical tags
+- When the product decision is intentionally different from conventional-commit
+  inference, pass an exact typed target such as
+  `--target remi=0.8.0`. The script validates that the product is selected,
+  the version is an increasing `MAJOR.MINOR.PATCH`, and scoped changes exist.
+- Use `--prepare-only` for an issue-backed release PR that must update and
+  stage multiple product tracks without creating commits or tags before merge.
 - The supported release tracks are:
   - `conary`
   - `remi`

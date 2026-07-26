@@ -1,6 +1,6 @@
 [package]
 name = "conary-test"
-version = "0.8.0"
+version = "0.9.0"
 # Canonical release track: conary-test-v*
 edition = "2024"
 rust-version = "1.96"

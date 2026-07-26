@@ -69,6 +69,7 @@ create_release_fixture() {
         "$repo/crates/conary-core" \
         "$repo/crates/conary-bootstrap" \
         "$repo/crates/conary-mcp" \
+        "$repo/crates/conary-agent-contract" \
         "$repo/packaging/rpm" \
         "$repo/packaging/arch" \
         "$repo/packaging/deb/debian" \
@@ -86,6 +87,10 @@ create_release_fixture() {
     write_cargo_manifest "$repo/apps/conaryd/Cargo.toml" "conaryd" "0.5.0"
     write_cargo_manifest "$repo/apps/conary-test/Cargo.toml" "conary-test" "0.7.0"
     write_cargo_manifest "$repo/crates/conary-mcp/Cargo.toml" "conary-mcp" "0.7.0"
+    write_cargo_manifest \
+        "$repo/crates/conary-agent-contract/Cargo.toml" \
+        "conary-agent-contract" \
+        "0.7.0"
 
     printf 'fn main() {}\n' > "$repo/apps/conary/build.rs"
     printf '.TH conary 1 "" "conary 0.7.0"\n' > "$repo/apps/conary/man/conary.1"
@@ -191,10 +196,11 @@ commit_empty() {
 run_release_dry_run() {
     local repo="$1"
     local product="$2"
+    shift 2
 
     (
         cd "$repo"
-        ./scripts/release.sh "$product" --dry-run
+        ./scripts/release.sh "$product" --dry-run "$@"
     )
 }
 
@@ -202,12 +208,13 @@ run_release() {
     local repo="$1"
     local product="$2"
     local stale_man="${RELEASE_FIXTURE_STALE_MAN:-0}"
+    shift 2
 
     (
         cd "$repo"
         export PATH="$repo/test-bin:$PATH"
         export RELEASE_FIXTURE_STALE_MAN="$stale_man"
-        ./scripts/release.sh "$product"
+        ./scripts/release.sh "$product" "$@"
     )
 }
 
@@ -450,6 +457,81 @@ test_release_dry_run_conary_test_uses_owned_manifest_baseline() {
     output="$(run_release_dry_run "$repo" conary-test)"
     assert_contains "$output" "Current: conary-test-v0.7.0" "conary-test should respect owned manifest versions"
     assert_contains "$output" "Tag: conary-test-v0.7.1" "conary-test should bump from the owned-manifest baseline"
+}
+
+test_release_dry_run_accepts_explicit_target() {
+    local repo
+    local output
+
+    repo="$(create_release_fixture)"
+    tag_head "$repo" "remi-v0.5.0"
+    commit_change "$repo" "apps/remi/changes.txt" "fix(remi): tighten deploy flow"
+    commit_change "$repo" "apps/remi/changes.txt" "refactor(remi): hard-cut service schema"
+
+    output="$(run_release_dry_run "$repo" remi --target remi=0.6.0)"
+    assert_contains "$output" "Target authority: explicit" "explicit target should own the release decision"
+    assert_contains "$output" "Tag: remi-v0.6.0" "explicit target should select the exact canonical tag"
+    assert_contains "$output" "### Fixed" "scoped fixes should be categorized in release notes"
+    assert_contains "$output" "- tighten deploy flow" "scoped fix prefixes should be removed"
+    assert_contains "$output" "### Changed" "refactors should be categorized in release notes"
+    assert_contains "$output" "- hard-cut service schema" "scoped refactor prefixes should be removed"
+}
+
+test_release_prepare_only_updates_all_conary_test_manifests() {
+    local repo
+    local committed_head
+    local output
+    local staged_files
+
+    repo="$(create_release_fixture)"
+    tag_head "$repo" "conary-test-v0.7.0"
+    commit_change "$repo" "apps/conary-test/changes.txt" "feat(test): add exact lifecycle proof"
+    committed_head="$(git -C "$repo" rev-parse HEAD)"
+
+    run_release "$repo" conary-test --prepare-only --target conary-test=0.9.0
+
+    assert_eq "0.9.0" \
+        "$(run_repo_matrix "$repo" max-owned-version conary-test)" \
+        "prepare-only should update the complete conary-test version set"
+    run_repo_matrix "$repo" assert-owned-version conary-test 0.9.0
+    assert_eq "$committed_head" "$(git -C "$repo" rev-parse HEAD)" \
+        "prepare-only should not create a commit"
+    assert_eq "" "$(git -C "$repo" tag --list conary-test-v0.9.0)" \
+        "prepare-only should not create a tag"
+    staged_files="$(git -C "$repo" diff --cached --name-only)"
+    assert_contains "$staged_files" \
+        "crates/conary-agent-contract/Cargo.toml" \
+        "prepare-only should stage the agent contract version"
+
+    output="$(run_release_dry_run "$repo" conary-test --target conary-test=0.9.0)"
+    assert_contains "$output" \
+        "Tag: conary-test-v0.9.0" \
+        "prepared explicit target should remain reproducible before publication"
+}
+
+test_release_rejects_target_for_unselected_product() {
+    local repo
+    local output
+    local status
+
+    repo="$(create_release_fixture)"
+    tag_head "$repo" "remi-v0.5.0"
+    commit_change "$repo" "apps/remi/changes.txt" "fix(remi): tighten deploy flow"
+
+    set +e
+    output="$(
+        cd "$repo"
+        ./scripts/release.sh remi --dry-run --target conary=0.8.0 2>&1
+    )"
+    status=$?
+    set -e
+
+    if [[ "$status" -eq 0 ]]; then
+        fail "release target for an unselected product should fail"
+    fi
+    assert_contains "$output" \
+        "release target provided for unselected product: conary" \
+        "unselected explicit target should fail clearly"
 }
 
 test_release_conary_regenerates_and_stages_man_page() {
@@ -777,6 +859,9 @@ main() {
         test_release_dry_run_remi_prefers_highest_numeric_history
         test_release_dry_run_conaryd_canonical_history
         test_release_dry_run_conary_test_uses_owned_manifest_baseline
+        test_release_dry_run_accepts_explicit_target
+        test_release_prepare_only_updates_all_conary_test_manifests
+        test_release_rejects_target_for_unselected_product
         test_release_conary_regenerates_and_stages_man_page
         test_release_conary_rejects_stale_generated_man_page
         test_check_release_matrix_rejects_beta_maturity_drift

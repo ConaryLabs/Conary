@@ -4,6 +4,91 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v0.13.0] - 2026-07-26
+
+### Added
+- Preserve exact RPM, Debian/dpkg, and Arch/ALPM dependency, payload,
+  configuration, helper, trigger, activation, boot, and security authority
+  through conversion and selected-root transactions.
+- Prove every RPM, DEB, and Arch source-format lifecycle across Fedora 44,
+  Ubuntu 26.04, and Arch targets without source package-manager runtime
+  fallback.
+- Add read-only single-package adoption preview and typed canonical mapping
+  exchange.
+
+### Changed
+- Hard-cut the database to the current schema epoch and replace migration,
+  legacy replay, compatibility aliases, bypasses, and review-queue authority
+  with current typed contracts.
+- Replace syscall and string guessing with the stable
+  `scriptlet-boundary-v2` selected-root isolation contract.
+- Decompose large source hubs into focused ownership modules and reconcile
+  assistant-facing documentation and routing.
+
+### Fixed
+- Preserve exact Debian configure identity, target shell ABI,
+  rollback/generation root domains, and stable host-tool test fixtures.
+- Patch both frontend dependency roots and enforce complete Dependabot
+  ownership.
+
+### Security
+- Stream and bound package, payload, and CAS verification; deny semantic
+  host-control and escape classes; and retain fail-closed source trust and
+  target capability validation.
+
+## [remi-v0.8.0] - 2026-07-26
+
+### Added
+- Add exact repository manifests, canonical map exchange, current native
+  publication/conversion storage, and recoverable deployment inspection and
+  repopulation proof.
+
+### Changed
+- Retire the old schema epoch, scriptlet-evidence queue,
+  reconciliation/review routes, heuristic publication gates, and
+  compatibility paths.
+- Make deployment snapshot or retire the prior database, reconcile all
+  configured sources, prewarm conversions for every public profile, and roll
+  back configuration, source, and database state together on failure.
+
+### Security
+- Require typed source parser and trust configuration, bounded streaming
+  storage, exact signed CCS bytes, and fail-closed public serving.
+
+## [conaryd-v0.7.0] - 2026-07-26
+
+### Added
+- Execute package jobs through current Conary CLI contracts and expose
+  risk-tiered mutation intent.
+
+### Changed
+- Adopt the current schema epoch, exact lifecycle authority, focused daemon
+  route ownership, and current package transaction contracts.
+
+### Security
+- Preserve fail-closed daemon write authorization and live-mutation
+  acknowledgement boundaries.
+
+## [conary-test-v0.9.0] - 2026-07-26
+
+### Added
+- Add the Fedora 44, Ubuntu 26.04, and Arch Cartesian cross-source lifecycle
+  matrix with source package-manager executables masked during converted
+  runtime.
+- Add stateless MCP discovery and resources, bootstrap inspection and smoke
+  paths, typed workflow and dependency policy tests, and exact fixture
+  ownership.
+
+### Changed
+- Decompose large harness, configuration, runner, and service test hubs and
+  move `conary-test`, `conary-mcp`, and `conary-agent-contract` onto one owned
+  release version.
+- Stabilize executable host-tool fixtures for parallel CI.
+
+### Security
+- Keep agent operations typed and evidence-bearing, preserve redaction
+  metadata, and reject malformed stateless MCP requests.
+
 ## [remi-v0.7.1] - 2026-07-24
 
 ### Other
