@@ -61,6 +61,7 @@ struct WorkspaceTestJob {
 #[derive(Debug, Deserialize)]
 struct WorkflowStep {
     name: Option<String>,
+    uses: Option<String>,
     run: Option<String>,
     #[serde(rename = "continue-on-error", default)]
     continue_on_error: bool,
@@ -214,15 +215,28 @@ fn workspace_gate_provisions_the_exact_namespace_test_boundary() {
 
     let namespace = named_step(&job.steps, "Enable exact ownership-test namespaces");
     assert_eq!(
-        namespace.run.as_deref(),
-        Some(
-            "sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0\nunshare --user --map-root-user --mount --propagation private /bin/true\n"
-        )
+        namespace.uses.as_deref(),
+        Some("./.github/actions/setup-exact-ownership-tests")
     );
+    assert_eq!(namespace.run, None);
     assert!(!namespace.continue_on_error);
     assert_eq!(namespace.condition, None);
 
     let tests = named_step(&job.steps, "Run workspace tests");
+    let namespace_index = job
+        .steps
+        .iter()
+        .position(|step| step.name.as_deref() == Some("Enable exact ownership-test namespaces"))
+        .expect("namespace setup step should exist");
+    let tests_index = job
+        .steps
+        .iter()
+        .position(|step| step.name.as_deref() == Some("Run workspace tests"))
+        .expect("workspace test step should exist");
+    assert!(
+        namespace_index < tests_index,
+        "namespace setup must run before workspace tests"
+    );
     assert_eq!(
         tests.run.as_deref(),
         Some("cargo test --workspace --exclude conary-test --verbose")

@@ -7,6 +7,8 @@ cd "$repo_root"
 release_build=".github/workflows/release-build.yml"
 deploy_workflow=".github/workflows/deploy-and-verify.yml"
 merge_workflow=".github/workflows/merge-validation.yml"
+pr_workflow=".github/workflows/pr-gate.yml"
+exact_ownership_action=".github/actions/setup-exact-ownership-tests/action.yml"
 artifact_matrix="docs/operations/release-artifact-matrix.md"
 feedback_template=".github/ISSUE_TEMPLATE/pre_alpha_feedback.md"
 site_preview_release="site/src/lib/preview-release.ts"
@@ -151,6 +153,11 @@ validate_deploy_routing_pairs() {
 }
 
 for required_file in \
+    "$release_build" \
+    "$deploy_workflow" \
+    "$merge_workflow" \
+    "$pr_workflow" \
+    "$exact_ownership_action" \
     "$artifact_matrix" \
     "$feedback_template" \
     "$site_preview_release" \
@@ -227,6 +234,19 @@ require_match "$release_build" 'cargo clippy --workspace --all-targets -- -D war
 require_match "$release_build" 'cargo test --workspace --exclude conary-test --verbose' 'release workspace test validation'
 require_match "$release_build" 'cargo test -p conary-test --verbose' 'release conary-test validation'
 require_match "$release_build" 'cargo test --doc --workspace --verbose' 'release doctest validation'
+require_match "$exact_ownership_action" '^        set -euo pipefail$' 'fail-closed exact ownership namespace setup'
+require_match "$exact_ownership_action" 'sudo sysctl -w kernel\.apparmor_restrict_unprivileged_userns=0' 'AppArmor user-namespace enablement'
+require_match "$exact_ownership_action" 'unshare --user --map-root-user --mount --propagation private /bin/true' 'exact ownership namespace proof'
+require_literal_count "$exact_ownership_action" 'sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0' 1 'centralized AppArmor namespace setup'
+require_literal_count "$exact_ownership_action" 'unshare --user --map-root-user --mount --propagation private /bin/true' 1 'centralized namespace proof'
+for workflow in "$pr_workflow" "$merge_workflow" "$release_build"; do
+    require_literal_count "$workflow" 'uses: ./.github/actions/setup-exact-ownership-tests' 1 'shared exact ownership setup'
+    forbid_match "$workflow" 'apparmor_restrict_unprivileged_userns|unshare --user' 'inline exact ownership namespace setup'
+done
+namespace_before_tests_pattern='uses: \./\.github/actions/setup-exact-ownership-tests[\s\S]*cargo test --workspace --exclude conary-test --verbose'
+require_job_match "$pr_workflow" workspace-tests "$namespace_before_tests_pattern" 'PR workspace tests exact ownership setup order'
+require_job_match "$merge_workflow" workspace-tests "$namespace_before_tests_pattern" 'merge workspace tests exact ownership setup order'
+require_job_match "$release_build" workspace-validation "$namespace_before_tests_pattern" 'release workspace validation exact ownership setup order'
 require_match "$release_build" 'build-ccs:[\s\S]*needs: \[prepare, workspace-validation\]' 'ccs build should need workspace validation'
 require_match "$release_build" 'build-remi:[\s\S]*needs: \[prepare, workspace-validation\]' 'remi build should need workspace validation'
 require_match "$release_build" 'publish-remi:[\s\S]*needs: \[prepare, workspace-validation, build-remi\]' 'remi publish should need workspace validation'

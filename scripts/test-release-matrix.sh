@@ -234,6 +234,7 @@ create_release_policy_fixture() {
     repo="$(mktemp -d "${REPO_ROOT}/.tmp-release-matrix-test.XXXXXX")"
     mkdir -p \
         "$repo/scripts" \
+        "$repo/.github/actions/setup-exact-ownership-tests" \
         "$repo/.github/ISSUE_TEMPLATE" \
         "$repo/.github/workflows" \
         "$repo/docs/operations" \
@@ -247,6 +248,9 @@ create_release_policy_fixture() {
     cp "$REPO_ROOT/.github/workflows/release-build.yml" "$repo/.github/workflows/release-build.yml"
     cp "$REPO_ROOT/.github/workflows/deploy-and-verify.yml" "$repo/.github/workflows/deploy-and-verify.yml"
     cp "$REPO_ROOT/.github/workflows/merge-validation.yml" "$repo/.github/workflows/merge-validation.yml"
+    cp "$REPO_ROOT/.github/workflows/pr-gate.yml" "$repo/.github/workflows/pr-gate.yml"
+    cp "$REPO_ROOT/.github/actions/setup-exact-ownership-tests/action.yml" \
+        "$repo/.github/actions/setup-exact-ownership-tests/action.yml"
     cp "$REPO_ROOT/.github/ISSUE_TEMPLATE/pre_alpha_feedback.md" "$repo/.github/ISSUE_TEMPLATE/pre_alpha_feedback.md"
     cp "$REPO_ROOT/docs/operations/release-artifact-matrix.md" "$repo/docs/operations/release-artifact-matrix.md"
     cp "$REPO_ROOT/site/src/lib/preview-release.ts" "$repo/site/src/lib/preview-release.ts"
@@ -715,6 +719,47 @@ test_check_release_matrix_rejects_missing_live_version_assertion() {
     assert_check_release_matrix_fails "$repo" "live tag preparation must match every owned manifest"
 }
 
+test_check_release_matrix_requires_shared_namespace_setup_in_every_workspace_lane() {
+    local repo
+    local workflow
+
+    for workflow in pr-gate.yml merge-validation.yml release-build.yml; do
+        repo="$(create_release_policy_fixture)"
+        replace_fixture_text_once \
+            "$repo/.github/workflows/$workflow" \
+            '        uses: ./.github/actions/setup-exact-ownership-tests' \
+            '        run: echo "exact ownership setup removed"'
+
+        assert_check_release_matrix_fails "$repo" "shared exact ownership setup"
+    done
+}
+
+test_check_release_matrix_rejects_unproven_namespace_action() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/actions/setup-exact-ownership-tests/action.yml" \
+        '        unshare --user --map-root-user --mount --propagation private /bin/true' \
+        '        /bin/true'
+
+    assert_check_release_matrix_fails "$repo" "exact ownership namespace proof"
+}
+
+test_check_release_matrix_rejects_namespace_setup_after_workspace_tests() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/release-build.yml" \
+        '        uses: ./.github/actions/setup-exact-ownership-tests' \
+        '        run: echo "namespace setup delayed"'
+    replace_fixture_text_once \
+        "$repo/.github/workflows/release-build.yml" \
+        '        run: cargo test --workspace --exclude conary-test --verbose' \
+        $'        run: cargo test --workspace --exclude conary-test --verbose\n      - name: Delayed exact ownership setup\n        uses: ./.github/actions/setup-exact-ownership-tests'
+
+    assert_check_release_matrix_fails "$repo" "release workspace validation exact ownership setup order"
+}
+
 test_check_release_matrix_rejects_non_failing_artifact_upload() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -874,6 +919,9 @@ main() {
         test_check_release_matrix_rejects_unpinned_ccs_toolchain
         test_check_release_matrix_rejects_unpinned_arch_toolchain
         test_check_release_matrix_rejects_missing_live_version_assertion
+        test_check_release_matrix_requires_shared_namespace_setup_in_every_workspace_lane
+        test_check_release_matrix_rejects_unproven_namespace_action
+        test_check_release_matrix_rejects_namespace_setup_after_workspace_tests
         test_check_release_matrix_rejects_non_failing_artifact_upload
         test_check_release_matrix_rejects_missing_exact_ccs_asset_assertion
         test_check_release_matrix_rejects_unpinned_tester_guide_link
