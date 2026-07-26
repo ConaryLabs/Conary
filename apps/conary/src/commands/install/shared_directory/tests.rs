@@ -502,6 +502,30 @@ fn rollback_capture_precedes_a_later_batch_symlink_target_mutation() {
 }
 
 #[test]
+fn rollback_capture_excludes_only_generation_ephemeral_directory_claims() {
+    let (_db_root, db_path) = crate::commands::test_helpers::create_test_db();
+    let conn = conary_core::db::open(db_path).unwrap();
+    let owner = insert_trove(&conn, "root-layout");
+    for path in ["/dev", "/usr"] {
+        FileEntry::new(path.to_string(), resolved_directory(0o755), None, owner)
+            .insert(&conn)
+            .unwrap();
+    }
+    let selected_root = tempfile::tempdir().unwrap();
+    physical_directory(selected_root.path(), "/usr");
+
+    let captured =
+        capture_existing_directory_materializations(&conn, selected_root.path()).unwrap();
+
+    assert_eq!(captured.len(), 1);
+    assert_eq!(captured[0].path, "/usr");
+    assert!(
+        classify_root_path("/dev").unwrap() == RootPathDomain::EphemeralMountOrUser,
+        "the exclusion must remain bound to the exact generation root-domain contract"
+    );
+}
+
+#[test]
 fn pinned_upstream_directory_sources_are_exact() {
     assert_eq!(UPSTREAM_DIRECTORY_MATERIALIZATION_INPUTS.len(), 4);
     let mut formats = BTreeSet::new();

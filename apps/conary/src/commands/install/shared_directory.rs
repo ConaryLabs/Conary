@@ -7,6 +7,7 @@ use anyhow::{Result, anyhow};
 use conary_core::db::models::{
     DirectoryClaim, ExistingDirectoryMaterialization, FileEntry, InstallSource, Trove,
 };
+use conary_core::generation::root_manifest::{RootPathDomain, classify_root_path};
 use conary_core::payload::PayloadNodeKind;
 use conary_core::repository::dependency_model::PackageRelationRemovalMode;
 use conary_core::transaction::PackageRelationRemoval;
@@ -245,6 +246,9 @@ pub(crate) fn capture_existing_directory_materializations(
 ) -> Result<Vec<FileEntry>> {
     let mut captured = BTreeMap::new();
     for anchor in FileEntry::find_all_ordered(conn)? {
+        if classify_root_path(&anchor.path)? == RootPathDomain::EphemeralMountOrUser {
+            continue;
+        }
         let claims = DirectoryClaim::find_retaining_path(conn, &anchor.path)?;
         if claims.is_empty() {
             if matches!(anchor.node.source.kind, PayloadNodeKind::Directory) {
