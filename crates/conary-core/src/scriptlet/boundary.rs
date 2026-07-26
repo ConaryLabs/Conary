@@ -453,7 +453,7 @@ mod tests {
         std::fs::create_dir(root.path().join("ordinary-mkdir"))
             .expect("ordinary filesystem ABI stays available");
         assert_eq!(
-            unsafe { libc::unshare(libc::CLONE_NEWNS) },
+            unsafe { libc::kill(libc::getpid(), 0) },
             -1,
             "host-boundary control syscall must be rejected"
         );
